@@ -2,16 +2,18 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use rust_decimal::Decimal;
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Affiliate {
     pub id: Uuid,
     pub tenant_id: Uuid,
     pub user_id: Uuid,
     pub code: String,
-    pub commission_rate: serde_json::Value,
+    pub commission_rate: Decimal,
     pub commission_type: String,
-    pub total_earned: serde_json::Value,
-    pub total_paid: serde_json::Value,
+    pub total_earned: Decimal,
+    pub total_paid: Decimal,
     pub referral_count: i32,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
@@ -25,7 +27,7 @@ pub struct Referral {
     pub referred_tenant_id: Option<Uuid>,
     pub referred_email: Option<String>,
     pub status: String,
-    pub commission_amount: serde_json::Value,
+    pub commission_amount: Decimal,
     pub paid_at: Option<DateTime<Utc>>,
     pub notes: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -36,7 +38,7 @@ pub struct Referral {
 pub struct CommissionPayout {
     pub id: Uuid,
     pub affiliate_id: Uuid,
-    pub amount: serde_json::Value,
+    pub amount: Decimal,
     pub status: String,
     pub payment_method: Option<String>,
     pub paid_at: Option<DateTime<Utc>>,
@@ -75,10 +77,10 @@ pub struct AffiliateProduct {
     pub tenant_id: Uuid,
     pub name: String,
     pub description: Option<String>,
-    pub price: serde_json::Value,
-    pub commission_rate: serde_json::Value,
+    pub price: Decimal,
+    pub commission_rate: Decimal,
     pub commission_type: String,
-    pub commission_amount: serde_json::Value,
+    pub commission_amount: Decimal,
     pub tag_id: Option<Uuid>,
     pub image_url: Option<String>,
     pub checkout_url: Option<String>,

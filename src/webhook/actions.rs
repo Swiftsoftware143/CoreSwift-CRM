@@ -476,19 +476,19 @@ pub async fn route_action(
             let mut sets: Vec<String> = vec![];
             let mut param_idx = 1;
 
-            if let Some(name) = body.get("business_name").and_then(|v| v.as_str()) {
+            if let Some(_name) = body.get("business_name").and_then(|v| v.as_str()) {
                 sets.push(format!("business_name = ${}", param_idx));
                 param_idx += 1;
             }
-            if let Some(state) = body.get("current_state").and_then(|v| v.as_str()) {
+            if let Some(_state) = body.get("current_state").and_then(|v| v.as_str()) {
                 sets.push(format!("current_state = ${}", param_idx));
                 param_idx += 1;
             }
-            if let Some(sub) = body.get("subscription_active").and_then(|v| v.as_bool()) {
+            if let Some(_sub) = body.get("subscription_active").and_then(|v| v.as_bool()) {
                 sets.push(format!("subscription_active = ${}", param_idx));
                 param_idx += 1;
             }
-            if let Some(stripe) = body.get("stripe_customer_id").and_then(|v| v.as_str()) {
+            if let Some(_stripe) = body.get("stripe_customer_id").and_then(|v| v.as_str()) {
                 sets.push(format!("stripe_customer_id = ${}", param_idx));
                 param_idx += 1;
             }

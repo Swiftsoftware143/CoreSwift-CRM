@@ -8,13 +8,11 @@ use axum::{
     extract::{State, Path, Json, Request},
     http::StatusCode,
     response::IntoResponse,
-    middleware::Next,
 };
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::errors::ApiResult;
 use super::models::*;
 use super::actions;
 
@@ -81,7 +79,7 @@ pub async fn handle_webhook(
             .bind(webhook.id)
             .bind(&action)
             .bind(json!({"params": params, "data": data}))
-            .bind(status as i32)
+            .bind(status)
             .execute(&s.db).await;
 
             (StatusCode::from_u16(status as u16).unwrap_or(StatusCode::OK), Json(json!({

@@ -3,7 +3,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use chrono::{Utc, Days, TimeDelta};
+use chrono::{Utc, TimeDelta};
 use serde_json::json;
 use uuid::Uuid;
 use std::str::FromStr;
@@ -343,7 +343,7 @@ pub async fn add_trigger(
     Path(id): Path<Uuid>,
     Json(r): Json<AddTriggerRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tid = parse_tenant(&c)?;
+    let _tid = parse_tenant(&c)?;
     let trigger = sqlx::query_as::<_, CampaignTrigger>(
         r#"INSERT INTO email_campaign_triggers (id, campaign_id, tag_id, trigger_type)
            VALUES ($1, $2, $3, $4)
@@ -399,7 +399,7 @@ pub async fn enroll_contact(
     Path(id): Path<Uuid>,
     Json(r): Json<EnrollContactRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tid = parse_tenant(&c)?;
+    let _tid = parse_tenant(&c)?;
 
     // Get total steps
     let total_steps: i32 = sqlx::query_scalar::<_, i32>(
@@ -648,7 +648,7 @@ async fn sync_tag_to_funnelswift(
             let mut filters = std::collections::HashMap::new();
             filters.insert("name".into(), tag_name.to_string());
             match funnelswift::pull_entity(&credentials, "tags", &filters).await {
-                Ok(tags) => {
+                Ok(_tags) => {
                     log_sync(db, tenant_id, tag_name, action, "synced", None).await;
                     Ok("funnelswift".into())
                 }

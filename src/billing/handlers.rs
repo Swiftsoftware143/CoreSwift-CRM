@@ -1,6 +1,7 @@
 use axum::{extract::{State, Path, Json, Extension, Query}, http::StatusCode, response::IntoResponse};
 use serde_json::{json, Value};
 use uuid::Uuid;
+use rust_decimal::Decimal;
 use crate::AppState;
 use crate::errors::{AppError, ApiResult};
 use crate::auth::models::Claims;
@@ -48,8 +49,8 @@ pub async fn create_plan(State(s): State<AppState>, Extension(c): Extension<Clai
     .bind(&r.name)
     .bind(&r.slug)
     .bind(&r.description)
-    .bind(Value::from(r.price_monthly))
-    .bind(Value::from(r.price_yearly))
+    .bind(Decimal::from_f64_retain(r.price_monthly).unwrap_or(Decimal::ZERO))
+    .bind(Decimal::from_f64_retain(r.price_yearly).unwrap_or(Decimal::ZERO))
     .bind(&r.features)
     .bind(&r.checkout_url)
     .fetch_one(&s.db)
@@ -87,8 +88,8 @@ pub async fn update_plan(State(s): State<AppState>, Extension(c): Extension<Clai
         .await?
         .ok_or(AppError::NotFound(format!("Plan {id} not found")))?;
 
-    let price_monthly = r.price_monthly.map(Value::from).or(Some(existing.price_monthly));
-    let price_yearly = r.price_yearly.map(Value::from).or(Some(existing.price_yearly));
+    let price_monthly = r.price_monthly.and_then(Decimal::from_f64_retain).unwrap_or(existing.price_monthly);
+    let price_yearly = r.price_yearly.and_then(Decimal::from_f64_retain).unwrap_or(existing.price_yearly);
 
     let plan = sqlx::query_as::<_, Plan>(
         r#"UPDATE plans SET

@@ -134,7 +134,8 @@ pub async fn pull_data(
 
 /// Get app metadata (labels, available entities, etc.)
 pub fn get_app_meta(slug: &str) -> Option<serde_json::Value> {
-    let connector = match slug {
+    
+    match slug {
         "adaswift" => Some(adaswift::get_meta()),
         "cheatlayer" => Some(cheatlayer::get_meta()),
         "funnelswift" => Some(funnelswift::get_meta()),
@@ -142,6 +143,5 @@ pub fn get_app_meta(slug: &str) -> Option<serde_json::Value> {
         "missedcall-responder" => Some(missedcall_responder::get_meta()),
         "multi-directory" => Some(multi_directory::get_meta()),
         _ => None,
-    };
-    connector
+    }
 }

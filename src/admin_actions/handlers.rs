@@ -1,15 +1,16 @@
 //! Chat action handlers — single endpoint to orchestrate multi-app flows
 
-use axum::{extract::{State, Json, Extension}, http::StatusCode, response::IntoResponse};
+use axum::{extract::{State, Json, Extension}, response::IntoResponse};
 use serde_json::json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use rust_decimal::Decimal;
 use crate::AppState;
 use crate::errors::{AppError, ApiResult};
 use crate::auth::Claims;
 use crate::affiliates::models::*;
-use crate::auth::models::{RegisterRequest, User};
+use crate::auth::models::User;
 
 #[derive(Debug, Deserialize)]
 pub struct ChatActionRequest {
@@ -49,7 +50,7 @@ pub async fn execute_chat_action(
     Json(r): Json<ChatActionRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
-    let is_admin = c.role == "owner" || c.role == "admin";
+    let _is_admin = c.role == "owner" || c.role == "admin";
 
     let result: Result<axum::response::Response, AppError> = match r.intent.as_str() {
         "create_affiliate" => handle_create_affiliate(&s, tenant_id, r.params).await.map(IntoResponse::into_response),
@@ -155,7 +156,7 @@ pub async fn list_intents() -> ApiResult<impl IntoResponse> {
 
 async fn handle_create_affiliate(
     s: &AppState,
-    tenant_id: Uuid,
+    _tenant_id: Uuid,
     params: serde_json::Value,
 ) -> ApiResult<impl IntoResponse> {
     // Collect fields with prompts for missing ones
@@ -212,7 +213,7 @@ async fn handle_create_affiliate(
         let slug = format!("{}-{}", name.to_lowercase().replace(' ', "-"), &Uuid::new_v4().to_string()[..8]);
 
         // Create tenant first via the auth flow
-        use crate::auth::handlers;
+        
         // We'll create tenant + user directly
         let new_tenant_id = Uuid::new_v4();
         sqlx::query("INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)")
@@ -258,7 +259,7 @@ async fn handle_create_affiliate(
     .bind(user_tenant_id)
     .bind(user_id)
     .bind(&code)
-    .bind(json!(rate))
+    .bind(Decimal::try_from(rate).unwrap_or(Decimal::new(10, 1)))
     .fetch_one(&s.db)
     .await?;
 
@@ -286,7 +287,7 @@ async fn handle_create_affiliate(
 
 async fn handle_create_affiliate_funnelswift(
     s: &AppState,
-    tenant_id: Uuid,
+    _tenant_id: Uuid,
     params: serde_json::Value,
 ) -> ApiResult<impl IntoResponse> {
     let name = params.get("name").and_then(|v| v.as_str());
@@ -937,7 +938,7 @@ pub async fn list_all_portfolio_companies(
         email: Option<String>,
         description: Option<String>,
         is_active: bool,
-        created_at: chrono::NaiveDateTime,
+        created_at: chrono::DateTime<chrono::Utc>,
     }
 
     let companies = sqlx::query_as::<_, PortfolioRow>(

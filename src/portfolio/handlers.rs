@@ -3,7 +3,7 @@
 //! Portfolio companies represent sub-companies under a tenant. They
 //! are used for multi-entity CRM management, integration targets, etc.
 
-use axum::{extract::{State, Path, Extension, Json}, http::StatusCode, response::IntoResponse};
+use axum::{extract::{State, Path, Extension, Json}, http::{StatusCode, HeaderMap}, response::IntoResponse};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -127,6 +127,53 @@ pub async fn list_targets(
     .fetch_all(&s.db)
     .await?;
     Ok(Json(json!({"integration_targets": targets})))
+}
+
+/// POST /api/portfolio/internal — internal sync, no JWT
+pub async fn internal_create(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<impl IntoResponse> {
+    let key = headers.get("x-internal-key").and_then(|v| v.to_str().ok()).unwrap_or("");
+    if key != s.config.internal_sync_key {
+        return Err(AppError::Unauthorized);
+    }
+
+    let tenant_id = req.get("tenant_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .ok_or_else(|| AppError::Validation("tenant_id required".into()))?;
+
+    let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("Company").to_string();
+    let slug = req.get("slug").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| name.to_lowercase().replace(' ', "-"));
+    let email = req.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let description = req.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let id = Uuid::new_v4();
+
+    // Ensure tenant exists (FK constraint)
+    sqlx::query(
+        "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING"
+    )
+    .bind(tenant_id)
+    .bind(&name)
+    .bind(&slug)
+    .execute(&s.db)
+    .await.ok();
+
+    sqlx::query(
+        "INSERT INTO portfolio_companies (id, tenant_id, name, slug, email, description, settings) VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb) ON CONFLICT (id) DO NOTHING"
+    )
+    .bind(id)
+    .bind(tenant_id)
+    .bind(&name)
+    .bind(&slug)
+    .bind(&email)
+    .bind(&description)
+    .execute(&s.db)
+    .await?;
+
+    Ok(Json(json!({"status": "synced", "id": id.to_string()})))
 }
 
 /// POST /api/portfolio/{id}/targets — create an integration target for a portfolio company

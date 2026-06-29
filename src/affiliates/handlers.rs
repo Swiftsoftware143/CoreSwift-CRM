@@ -1,4 +1,5 @@
 use axum::{extract::{State, Path, Json, Extension, Query}, http::StatusCode, response::IntoResponse};
+use rust_decimal::Decimal;
 use serde_json::json;
 use uuid::Uuid;
 use crate::AppState;
@@ -36,7 +37,7 @@ pub async fn create_profile(State(s): State<AppState>, Extension(c): Extension<C
            VALUES ($1, $2, $3, $4, $5, $6) RETURNING *"#
     )
     .bind(Uuid::new_v4()).bind(tid).bind(uid).bind(&code)
-    .bind(json!(rate)).bind(&ctype)
+    .bind(Decimal::try_from(rate).unwrap_or(Decimal::new(10, 1))).bind(&ctype)
     .fetch_one(&s.db).await?;
 
     Ok((StatusCode::CREATED, Json(json!(aff))))
@@ -68,7 +69,7 @@ pub async fn update_profile(State(s): State<AppState>, Extension(c): Extension<C
             updated_at = NOW()
            WHERE tenant_id = $4 AND user_id = $5 RETURNING *"#
     )
-    .bind(r.commission_rate.map(|v| json!(v)))
+    .bind(r.commission_rate.map(|v| Decimal::try_from(v).unwrap_or(Decimal::new(10, 1))))
     .bind(r.commission_type)
     .bind(r.is_active)
     .bind(tid).bind(uid)
@@ -152,17 +153,17 @@ pub async fn get_stats(State(s): State<AppState>, Extension(c): Extension<Claims
         .bind(aff.id).fetch_one(&s.db).await?;
     let converted_refs = count_or_zero(converted_refs);
 
-    let pending_amount: f64 = sqlx::query_scalar::<_, Option<serde_json::Value>>(
-        "SELECT COALESCE(SUM(commission_amount), '0'::jsonb) FROM referrals WHERE affiliate_id = $1 AND status = 'commissioned'"
+    let pending_amount: f64 = sqlx::query_scalar::<_, Option<rust_decimal::Decimal>>(
+        "SELECT COALESCE(SUM(commission_amount), 0) FROM referrals WHERE affiliate_id = $1 AND status = 'commissioned'"
     ).bind(aff.id).fetch_one(&s.db).await
-        .map(|v| v.and_then(|v2| v2.as_f64()).unwrap_or(0.0)).unwrap_or(0.0);
+        .map(|v| v.map(|d| d.to_string().parse::<f64>().unwrap_or(0.0)).unwrap_or(0.0)).unwrap_or(0.0);
 
     let stats = AffiliateStats {
         total_referrals: total_refs,
         pending_referrals: pending_refs,
         converted_referrals: converted_refs,
-        total_earned: aff.total_earned.as_f64().unwrap_or(0.0),
-        total_paid: aff.total_paid.as_f64().unwrap_or(0.0),
+        total_earned: aff.total_earned.to_string().parse::<f64>().unwrap_or(0.0),
+        total_paid: aff.total_paid.to_string().parse::<f64>().unwrap_or(0.0),
         pending_payout: pending_amount,
     };
 
@@ -239,10 +240,10 @@ pub async fn create_product(State(s): State<AppState>, Extension(c): Extension<C
     .bind(tid)
     .bind(&r.name)
     .bind(&r.description)
-    .bind(json!(r.price))
-    .bind(json!(r.commission_rate.unwrap_or(10.0)))
+    .bind(Decimal::try_from(r.price).unwrap_or(Decimal::ZERO))
+    .bind(Decimal::try_from(r.commission_rate.unwrap_or(10.0)).unwrap_or(Decimal::new(10, 1)))
     .bind(r.commission_type.as_deref().unwrap_or("percentage"))
-    .bind(json!(r.commission_amount.unwrap_or(0.0)))
+    .bind(Decimal::try_from(r.commission_amount.unwrap_or(0.0)).unwrap_or(Decimal::ZERO))
     .bind(r.tag_id)
     .bind(&r.image_url)
     .bind(&r.checkout_url)
@@ -275,10 +276,10 @@ pub async fn update_product(State(s): State<AppState>, Extension(c): Extension<C
     )
     .bind(&r.name)
     .bind(&r.description)
-    .bind(r.price.map(|v| json!(v)))
-    .bind(r.commission_rate.map(|v| json!(v)))
+    .bind(r.price.map(|v| Decimal::try_from(v).unwrap_or(Decimal::ZERO)))
+    .bind(r.commission_rate.map(|v| Decimal::try_from(v).unwrap_or(Decimal::new(10, 1))))
     .bind(r.commission_type.as_deref())
-    .bind(r.commission_amount.map(|v| json!(v)))
+    .bind(r.commission_amount.map(|v| Decimal::try_from(v).unwrap_or(Decimal::ZERO)))
     .bind(r.tag_id)
     .bind(&r.image_url)
     .bind(&r.checkout_url)

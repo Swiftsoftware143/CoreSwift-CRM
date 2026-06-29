@@ -22,6 +22,7 @@ pub struct AppConfig {
     pub session_cache_ttl: u64,
     pub db_min_connections: u32,
     pub db_max_connections: u32,
+    pub internal_sync_key: String,
 }
 
 impl AppConfig {
@@ -103,6 +104,9 @@ impl AppConfig {
             .parse::<u32>()
             .map_err(|e| anyhow::anyhow!("Invalid DB_MAX_CONNECTIONS: {}", e))?;
 
+        let internal_sync_key = env::var("INTERNAL_SYNC_KEY")
+            .unwrap_or_else(|_| "".to_string());
+
         Ok(AppConfig {
             host,
             port,
@@ -118,6 +122,7 @@ impl AppConfig {
             session_cache_ttl,
             db_min_connections,
             db_max_connections,
+            internal_sync_key,
         })
     }
 }

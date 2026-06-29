@@ -8,6 +8,7 @@ use crate::AppState;
 
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
+        .route("/internal", axum::routing::post(handlers::internal_create))
         .route("/", axum::routing::get(handlers::list))
         .route("/", axum::routing::post(handlers::create))
         .route("/:id", axum::routing::get(handlers::get))

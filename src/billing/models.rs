@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use rust_decimal::Decimal;
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Plan {
@@ -8,8 +9,8 @@ pub struct Plan {
     pub name: String,
     pub slug: String,
     pub description: Option<String>,
-    pub price_monthly: serde_json::Value,
-    pub price_yearly: serde_json::Value,
+    pub price_monthly: Decimal,
+    pub price_yearly: Decimal,
     pub features: serde_json::Value,
     pub checkout_url: Option<String>,
     pub is_active: bool,

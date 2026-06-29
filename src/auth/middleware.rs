@@ -18,6 +18,8 @@ use super::models::Claims;
 /// For routes that require authentication, attach via
 /// `axum::middleware::from_fn_with_state(state, auth_middleware)`.
 ///
+/// Skips auth for internal sync endpoints (validated by x-internal-key header).
+///
 /// # Errors
 ///
 /// Returns `401 Unauthorized` if the token is missing, malformed, or expired.
@@ -26,6 +28,12 @@ pub async fn auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Result<Response, AppError> {
+    // Skip auth for internal sync routes — validated by x-internal-key header
+    let path = req.uri().path();
+    if path.ends_with("/internal") {
+        return Ok(next.run(req).await);
+    }
+
     let auth_header = req
         .headers()
         .get("Authorization")
