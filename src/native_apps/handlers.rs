@@ -66,7 +66,7 @@ pub async fn connect_app(
     let existing = sqlx::query_scalar::<_, i32>(
         "SELECT COUNT(*) FROM app_connections WHERE tenant_id = $1 AND app_slug = $2"
     )
-    .bind(tenant_id)
+    .bind(account_id)
     .bind(&app_slug)
     .fetch_one(&s.db)
     .await
@@ -81,7 +81,7 @@ pub async fn connect_app(
         )
         .bind(&r.credentials)
         .bind(&config)
-        .bind(tenant_id)
+        .bind(account_id)
         .bind(&app_slug)
         .execute(&s.db)
         .await?;
@@ -91,7 +91,7 @@ pub async fn connect_app(
             "INSERT INTO app_connections (id, tenant_id, app_slug, credentials, config, status) VALUES ($1, $2, $3, $4, $5, 'connected')"
         )
         .bind(Uuid::new_v4())
-        .bind(tenant_id)
+        .bind(account_id)
         .bind(&app_slug)
         .bind(&r.credentials)
         .bind(&config)
@@ -117,7 +117,7 @@ pub async fn disconnect_app(
     let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let r = sqlx::query("DELETE FROM app_connections WHERE tenant_id = $1 AND app_slug = $2")
-        .bind(tenant_id)
+        .bind(account_id)
         .bind(&app_slug)
         .execute(&s.db)
         .await?;
@@ -144,7 +144,7 @@ pub async fn app_status(
     let conn = sqlx::query_as::<_, (String, Option<bool>, Option<String>, Option<chrono::DateTime<chrono::Utc>>, serde_json::Value, serde_json::Value)>(
         "SELECT status, last_test_ok, error_message, last_test_at, credentials, config FROM app_connections WHERE tenant_id = $1 AND app_slug = $2"
     )
-    .bind(tenant_id)
+    .bind(account_id)
     .bind(&app_slug)
     .fetch_optional(&s.db)
     .await?;
@@ -210,7 +210,7 @@ pub async fn pull_from_app(
     let row = sqlx::query_as::<_, (serde_json::Value,)>(
         "SELECT credentials FROM app_connections WHERE tenant_id = $1 AND app_slug = $2 AND status = 'connected'"
     )
-    .bind(tenant_id)
+    .bind(account_id)
     .bind(&app_slug)
     .fetch_optional(&s.db)
     .await?
@@ -223,7 +223,7 @@ pub async fn pull_from_app(
         "INSERT INTO app_sync_logs (id, tenant_id, app_slug, direction, entity_type, status, started_at) VALUES ($1, $2, $3, 'pull', $4, 'running', NOW())"
     )
     .bind(sync_id)
-    .bind(tenant_id)
+    .bind(account_id)
     .bind(&app_slug)
     .bind(&r.entity_type)
     .execute(&s.db)
@@ -277,7 +277,7 @@ pub async fn push_to_app(
     let row = sqlx::query_as::<_, (serde_json::Value,)>(
         "SELECT credentials FROM app_connections WHERE tenant_id = $1 AND app_slug = $2 AND status = 'connected'"
     )
-    .bind(tenant_id)
+    .bind(account_id)
     .bind(&app_slug)
     .fetch_optional(&s.db)
     .await?
@@ -289,7 +289,7 @@ pub async fn push_to_app(
         "INSERT INTO app_sync_logs (id, tenant_id, app_slug, direction, entity_type, status, started_at) VALUES ($1, $2, $3, 'push', $4, 'running', NOW())"
     )
     .bind(sync_id)
-    .bind(tenant_id)
+    .bind(account_id)
     .bind(&app_slug)
     .bind(&r.entity_type)
     .execute(&s.db)
@@ -336,7 +336,7 @@ pub async fn sync_history(
     let rows = sqlx::query(
         "SELECT id, app_slug, direction, entity_type, records_processed, records_succeeded, records_failed, status, started_at, completed_at FROM app_sync_logs WHERE tenant_id = $1 AND app_slug = $2 ORDER BY started_at DESC LIMIT 50"
     )
-    .bind(tenant_id)
+    .bind(account_id)
     .bind(&app_slug)
     .fetch_all(&s.db)
     .await?;
@@ -453,7 +453,7 @@ pub async fn create_ada_campaign_trigger(
            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *"#
     )
     .bind(Uuid::new_v4())
-    .bind(tenant_id)
+    .bind(account_id)
     .bind(&r.name)
     .bind(&r.trigger_on)
     .bind(&r.ada_campaign_id)
@@ -486,7 +486,7 @@ pub async fn list_ada_campaign_triggers(
     let rows = sqlx::query(
         "SELECT * FROM ada_campaign_triggers WHERE tenant_id = $1 ORDER BY created_at DESC"
     )
-    .bind(tenant_id)
+    .bind(account_id)
     .fetch_all(&s.db)
     .await?;
 
@@ -516,7 +516,7 @@ pub async fn delete_ada_campaign_trigger(
 
     let r = sqlx::query("DELETE FROM ada_campaign_triggers WHERE id = $1 AND tenant_id = $2")
         .bind(id)
-        .bind(tenant_id)
+        .bind(account_id)
         .execute(&s.db)
         .await?;
 

@@ -17,7 +17,7 @@ pub async fn list(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let companies = sqlx::query_as::<_, PortfolioCompany>(
         "SELECT id, tenant_id, name, slug, email, description, settings, is_active, created_at, updated_at FROM portfolio_companies WHERE tenant_id = $1 ORDER BY name"
     )
@@ -33,7 +33,7 @@ pub async fn create(
     Extension(c): Extension<Claims>,
     Json(req): Json<CreatePortfolioRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     if req.name.is_empty() {
         return Err(AppError::Validation("Name is required".into()));
     }
@@ -58,7 +58,7 @@ pub async fn get(
     Extension(c): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let company = sqlx::query_as::<_, PortfolioCompany>(
         "SELECT id, tenant_id, name, slug, email, description, settings, is_active, created_at, updated_at FROM portfolio_companies WHERE id = $1 AND tenant_id = $2"
     )
@@ -77,7 +77,7 @@ pub async fn update(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdatePortfolioRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let company = sqlx::query_as::<_, PortfolioCompany>(
         "UPDATE portfolio_companies SET name = COALESCE($1, name), slug = COALESCE($2, slug), email = COALESCE($3, email), description = COALESCE($4, description), settings = COALESCE($5, settings), updated_at = NOW() WHERE id = $6 AND tenant_id = $7 RETURNING *"
     )
@@ -100,7 +100,7 @@ pub async fn delete(
     Extension(c): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let result = sqlx::query("DELETE FROM portfolio_companies WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tenant_id)
@@ -118,7 +118,7 @@ pub async fn list_targets(
     Extension(c): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let targets = sqlx::query_as::<_, IntegrationTarget>(
         "SELECT id, tenant_id, portfolio_company_id, user_id, name, provider, webhook_url, api_key, events, is_active, created_at, updated_at FROM integration_targets WHERE portfolio_company_id = $1 AND tenant_id = $2 ORDER BY name"
     )
@@ -183,7 +183,7 @@ pub async fn create_target(
     Path(id): Path<Uuid>,
     Json(req): Json<CreateTargetRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     if req.name.is_empty() || req.webhook_url.is_empty() {
         return Err(AppError::Validation("Name and webhook_url are required".into()));
     }

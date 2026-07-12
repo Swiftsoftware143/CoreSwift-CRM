@@ -20,7 +20,7 @@ pub async fn list_pipelines(
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let pipelines = sqlx::query_as::<_, Pipeline>(
         "SELECT * FROM pipelines WHERE tenant_id = $1 AND is_active = true ORDER BY name"
-    ).bind(tenant_id).fetch_all(&state.db).await?;
+    ).bind(account_id).fetch_all(&state.db).await?;
 
     let mut result = Vec::new();
     for pipeline in pipelines {
@@ -42,8 +42,8 @@ pub async fn create_pipeline(
         return Err(AppError::Validation("Pipeline name is required".to_string()));
     }
     let pipeline = sqlx::query_as::<_, Pipeline>(
-        r#"INSERT INTO pipelines (id, tenant_id, name, description, is_default) VALUES ($1,$2,$3,$4,$5) RETURNING *"#
-    ).bind(Uuid::new_v4()).bind(tenant_id).bind(&req.name).bind(&req.description)
+        r#"INSERT INTO pipelines (id, account_id, name, description, is_default) VALUES ($1,$2,$3,$4,$5) RETURNING *"#
+    ).bind(Uuid::new_v4()).bind(account_id).bind(&req.name).bind(&req.description)
     .bind(req.is_default.unwrap_or(false)).fetch_one(&state.db).await?;
     Ok((StatusCode::CREATED, Json(json!(pipeline))))
 }
@@ -55,8 +55,8 @@ pub async fn get_pipeline(
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let pipeline = sqlx::query_as::<_, Pipeline>(
-        "SELECT * FROM pipelines WHERE id = $1 AND tenant_id = $2"
-    ).bind(id).bind(tenant_id).fetch_optional(&state.db).await?
+        "SELECT * FROM pipelines WHERE id = $1 AND account_id = $2"
+    ).bind(id).bind(account_id).fetch_optional(&state.db).await?
     .ok_or(AppError::NotFound(format!("Pipeline {} not found", id)))?;
     let stages = sqlx::query_as::<_, PipelineStage>(
         "SELECT * FROM pipeline_stages WHERE pipeline_id = $1 ORDER BY position"
@@ -74,15 +74,15 @@ pub async fn update_pipeline(
     let pipeline = sqlx::query_as::<_, Pipeline>(
         r#"UPDATE pipelines SET name = COALESCE($1,name), description = COALESCE($2,description),
             is_default = COALESCE($3,is_default), is_active = COALESCE($4,is_active), updated_at = NOW()
-           WHERE id = $5 AND tenant_id = $6 RETURNING *"#
+           WHERE id = $5 AND account_id = $6 RETURNING *"#
     ).bind(&req.name).bind(&req.description).bind(req.is_default).bind(req.is_active)
-    .bind(id).bind(tenant_id).fetch_optional(&state.db).await?
+    .bind(id).bind(account_id).fetch_optional(&state.db).await?
     .ok_or(AppError::NotFound(format!("Pipeline {} not found", id)))?;
 
     // Log audit event
     audit::logger::log_event(
         &state.db,
-        tenant_id,
+        account_id,
         Some(Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?),
         "pipeline.updated",
         "pipeline",
@@ -100,8 +100,8 @@ pub async fn delete_pipeline(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let r = sqlx::query("DELETE FROM pipelines WHERE id = $1 AND tenant_id = $2")
-        .bind(id).bind(tenant_id).execute(&state.db).await?;
+    let r = sqlx::query("DELETE FROM pipelines WHERE id = $1 AND account_id = $2")
+        .bind(id).bind(account_id).execute(&state.db).await?;
     if r.rows_affected() == 0 {
         return Err(AppError::NotFound(format!("Pipeline {} not found", id)));
     }
@@ -114,8 +114,8 @@ pub async fn list_stages(
     Path(pipeline_id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    sqlx::query("SELECT 1 FROM pipelines WHERE id = $1 AND tenant_id = $2")
-        .bind(pipeline_id).bind(tenant_id).fetch_optional(&state.db).await?
+    sqlx::query("SELECT 1 FROM pipelines WHERE id = $1 AND account_id = $2")
+        .bind(pipeline_id).bind(account_id).fetch_optional(&state.db).await?
         .ok_or(AppError::NotFound(format!("Pipeline {} not found", pipeline_id)))?;
     let stages = sqlx::query_as::<_, PipelineStage>(
         "SELECT * FROM pipeline_stages WHERE pipeline_id = $1 ORDER BY position"
@@ -130,8 +130,8 @@ pub async fn create_stage(
     Json(req): Json<CreateStageRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    sqlx::query("SELECT 1 FROM pipelines WHERE id = $1 AND tenant_id = $2")
-        .bind(pipeline_id).bind(tenant_id).fetch_optional(&state.db).await?
+    sqlx::query("SELECT 1 FROM pipelines WHERE id = $1 AND account_id = $2")
+        .bind(pipeline_id).bind(account_id).fetch_optional(&state.db).await?
         .ok_or(AppError::NotFound(format!("Pipeline {} not found", pipeline_id)))?;
     let stage = sqlx::query_as::<_, PipelineStage>(
         r#"INSERT INTO pipeline_stages (id, pipeline_id, name, description, color, position, probability)
@@ -149,8 +149,8 @@ pub async fn update_stage(
     Json(req): Json<UpdateStageRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    sqlx::query("SELECT 1 FROM pipelines WHERE id = $1 AND tenant_id = $2")
-        .bind(pipeline_id).bind(tenant_id).fetch_optional(&state.db).await?
+    sqlx::query("SELECT 1 FROM pipelines WHERE id = $1 AND account_id = $2")
+        .bind(pipeline_id).bind(account_id).fetch_optional(&state.db).await?
         .ok_or(AppError::NotFound(format!("Pipeline {} not found", pipeline_id)))?;
     let stage = sqlx::query_as::<_, PipelineStage>(
         r#"UPDATE pipeline_stages SET name = COALESCE($1,name), description = COALESCE($2,description),
@@ -172,8 +172,8 @@ pub async fn delete_stage(
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let r = sqlx::query(
-        "DELETE FROM pipeline_stages WHERE id = $1 AND pipeline_id IN (SELECT id FROM pipelines WHERE tenant_id = $2)"
-    ).bind(stage_id).bind(tenant_id).execute(&state.db).await?;
+        "DELETE FROM pipeline_stages WHERE id = $1 AND pipeline_id IN (SELECT id FROM pipelines WHERE account_id = $2)"
+    ).bind(stage_id).bind(account_id).execute(&state.db).await?;
     if r.rows_affected() == 0 {
         return Err(AppError::NotFound(format!("Stage {} not found", stage_id)));
     }
@@ -195,8 +195,8 @@ pub async fn move_opportunity(
     .ok_or(AppError::NotFound(format!("Stage {} not found", stage_id)))?;
 
     let opp = sqlx::query_as::<_, OpportunityFull>(
-        "SELECT * FROM opportunities WHERE id = $1 AND tenant_id = $2"
-    ).bind(opportunity_id).bind(tenant_id).fetch_optional(&state.db).await?
+        "SELECT * FROM opportunities WHERE id = $1 AND account_id = $2"
+    ).bind(opportunity_id).bind(account_id).fetch_optional(&state.db).await?
     .ok_or(AppError::NotFound(format!("Opportunity {} not found", opportunity_id)))?;
 
     let prev_stage = opp.stage_id;
@@ -220,8 +220,8 @@ pub async fn pipeline_analytics(
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let pipeline = sqlx::query_as::<_, Pipeline>(
-        "SELECT * FROM pipelines WHERE id = $1 AND tenant_id = $2"
-    ).bind(pipeline_id).bind(tenant_id).fetch_optional(&state.db).await?
+        "SELECT * FROM pipelines WHERE id = $1 AND account_id = $2"
+    ).bind(pipeline_id).bind(account_id).fetch_optional(&state.db).await?
     .ok_or(AppError::NotFound(format!("Pipeline {} not found", pipeline_id)))?;
 
     let stages = sqlx::query_as::<_, PipelineStage>(
@@ -229,38 +229,38 @@ pub async fn pipeline_analytics(
     ).bind(pipeline_id).fetch_all(&state.db).await?;
 
     let total_opps: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM opportunities WHERE pipeline_id = $1 AND tenant_id = $2"
-    ).bind(pipeline_id).bind(tenant_id).fetch_one(&state.db).await.unwrap_or(0);
+        "SELECT COUNT(*) FROM opportunities WHERE pipeline_id = $1 AND account_id = $2"
+    ).bind(pipeline_id).bind(account_id).fetch_one(&state.db).await.unwrap_or(0);
 
     let total_value: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(value), 0) FROM opportunities WHERE pipeline_id = $1 AND tenant_id = $2"
-    ).bind(pipeline_id).bind(tenant_id).fetch_one(&state.db).await.unwrap_or(0.0);
+        "SELECT COALESCE(SUM(value), 0) FROM opportunities WHERE pipeline_id = $1 AND account_id = $2"
+    ).bind(pipeline_id).bind(account_id).fetch_one(&state.db).await.unwrap_or(0.0);
 
     let won_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM opportunities WHERE pipeline_id = $1 AND tenant_id = $2 AND status = 'won'"
-    ).bind(pipeline_id).bind(tenant_id).fetch_one(&state.db).await.unwrap_or(0);
+        "SELECT COUNT(*) FROM opportunities WHERE pipeline_id = $1 AND account_id = $2 AND status = 'won'"
+    ).bind(pipeline_id).bind(account_id).fetch_one(&state.db).await.unwrap_or(0);
 
     let won_value: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(value), 0) FROM opportunities WHERE pipeline_id = $1 AND tenant_id = $2 AND status = 'won'"
-    ).bind(pipeline_id).bind(tenant_id).fetch_one(&state.db).await.unwrap_or(0.0);
+        "SELECT COALESCE(SUM(value), 0) FROM opportunities WHERE pipeline_id = $1 AND account_id = $2 AND status = 'won'"
+    ).bind(pipeline_id).bind(account_id).fetch_one(&state.db).await.unwrap_or(0.0);
 
     let lost_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM opportunities WHERE pipeline_id = $1 AND tenant_id = $2 AND status = 'lost'"
-    ).bind(pipeline_id).bind(tenant_id).fetch_one(&state.db).await.unwrap_or(0);
+        "SELECT COUNT(*) FROM opportunities WHERE pipeline_id = $1 AND account_id = $2 AND status = 'lost'"
+    ).bind(pipeline_id).bind(account_id).fetch_one(&state.db).await.unwrap_or(0);
 
     let lost_value: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(value), 0) FROM opportunities WHERE pipeline_id = $1 AND tenant_id = $2 AND status = 'lost'"
-    ).bind(pipeline_id).bind(tenant_id).fetch_one(&state.db).await.unwrap_or(0.0);
+        "SELECT COALESCE(SUM(value), 0) FROM opportunities WHERE pipeline_id = $1 AND account_id = $2 AND status = 'lost'"
+    ).bind(pipeline_id).bind(account_id).fetch_one(&state.db).await.unwrap_or(0.0);
 
     let mut stage_analytics = Vec::new();
     for stage in &stages {
         let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM opportunities WHERE stage_id = $1 AND tenant_id = $2"
-        ).bind(stage.id).bind(tenant_id).fetch_one(&state.db).await.unwrap_or(0);
+            "SELECT COUNT(*) FROM opportunities WHERE stage_id = $1 AND account_id = $2"
+        ).bind(stage.id).bind(account_id).fetch_one(&state.db).await.unwrap_or(0);
 
         let stage_value: f64 = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(value), 0) FROM opportunities WHERE stage_id = $1 AND tenant_id = $2"
-        ).bind(stage.id).bind(tenant_id).fetch_one(&state.db).await.unwrap_or(0.0);
+            "SELECT COALESCE(SUM(value), 0) FROM opportunities WHERE stage_id = $1 AND account_id = $2"
+        ).bind(stage.id).bind(account_id).fetch_one(&state.db).await.unwrap_or(0.0);
 
         let avg_time: f64 = sqlx::query_scalar(
             r#"SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (sh2.created_at - sh1.created_at)) / 86400.0), 0)

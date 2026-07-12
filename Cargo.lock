@@ -464,6 +464,7 @@ dependencies = [
  "governor",
  "http",
  "jsonwebtoken",
+ "nonzero_ext",
  "rand",
  "redis",
  "reqwest",

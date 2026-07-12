@@ -47,7 +47,7 @@ pub async fn list(
            ORDER BY created_at DESC
            LIMIT $2 OFFSET $3"#,
     )
-    .bind(tenant_id)
+    .bind(account_id)
     .bind(per_page)
     .bind(offset)
     .fetch_all(&state.db)
@@ -80,7 +80,7 @@ pub async fn search(
            ORDER BY created_at DESC
            LIMIT $3 OFFSET $4"#,
     )
-    .bind(tenant_id)
+    .bind(account_id)
     .bind(&pattern)
     .bind(per_page)
     .bind(offset)
@@ -111,7 +111,7 @@ pub async fn create(
            RETURNING *"#,
     )
     .bind(Uuid::new_v4())
-    .bind(tenant_id)
+    .bind(account_id)
     .bind(&req.email)
     .bind(&req.phone)
     .bind(&req.first_name)
@@ -146,7 +146,7 @@ pub async fn get(
         "SELECT * FROM contacts WHERE id = $1 AND tenant_id = $2",
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(account_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound(format!("Contact {} not found", id)))?;
@@ -204,7 +204,7 @@ pub async fn update(
     .bind(&req.metadata)
     .bind(req.is_active)
     .bind(id)
-    .bind(tenant_id)
+    .bind(account_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound(format!("Contact {} not found", id)))?;
@@ -212,7 +212,7 @@ pub async fn update(
     // Log audit event
     audit::logger::log_event(
         &state.db,
-        tenant_id,
+        account_id,
         Some(Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?),
         "contact.updated",
         "contact",
@@ -235,7 +235,7 @@ pub async fn delete(
 
     let result = sqlx::query("DELETE FROM contacts WHERE id = $1 AND tenant_id = $2")
         .bind(id)
-        .bind(tenant_id)
+        .bind(account_id)
         .execute(&state.db)
         .await?;
 

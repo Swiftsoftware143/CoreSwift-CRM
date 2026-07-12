@@ -17,7 +17,7 @@ use super::models::*;
 #[derive(Debug, Clone, sqlx::FromRow, Serialize)]
 pub struct OpportunityFull {
     pub id: Uuid,
-    pub tenant_id: Uuid,
+    pub account_id: Uuid,
     pub pipeline_id: Uuid,
     pub stage_id: Uuid,
     pub contact_id: Option<Uuid>,
@@ -84,7 +84,7 @@ pub async fn list(
     let offset = (page - 1) * per_page;
     let opps = sqlx::query_as::<_, OpportunityFull>(
         "SELECT * FROM opportunities WHERE pipeline_id = $1 AND tenant_id = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4"
-    ).bind(pipeline_id).bind(tenant_id).bind(per_page).bind(offset).fetch_all(&state.db).await?;
+    ).bind(pipeline_id).bind(account_id).bind(per_page).bind(offset).fetch_all(&state.db).await?;
     Ok(Json(json!({ "opportunities": opps, "page": page, "per_page": per_page })))
 }
 
@@ -104,10 +104,10 @@ pub async fn create(
     .ok_or(AppError::BadRequest("Pipeline has no stages".to_string()))?;
 
     let opp = sqlx::query_as::<_, OpportunityFull>(
-        r#"INSERT INTO opportunities (id, tenant_id, pipeline_id, stage_id, contact_id, company_id,
+        r#"INSERT INTO opportunities (id, account_id, pipeline_id, stage_id, contact_id, company_id,
             name, description, value, currency, probability, expected_close_date, metadata)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *"#
-    ).bind(Uuid::new_v4()).bind(tenant_id).bind(pipeline_id).bind(first_stage.id)
+    ).bind(Uuid::new_v4()).bind(account_id).bind(pipeline_id).bind(first_stage.id)
     .bind(req.contact_id).bind(req.company_id).bind(&req.name).bind(&req.description)
     .bind(req.value).bind(&req.currency).bind(req.probability).bind(req.expected_close_date)
     .bind(&req.metadata).fetch_one(&state.db).await?;
@@ -127,8 +127,8 @@ pub async fn get(
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let opp = sqlx::query_as::<_, OpportunityFull>(
-        "SELECT * FROM opportunities WHERE id = $1 AND pipeline_id = $2 AND tenant_id = $3"
-    ).bind(id).bind(pipeline_id).bind(tenant_id).fetch_optional(&state.db).await?
+        "SELECT * FROM opportunities WHERE id = $1 AND pipeline_id = $2 AND account_id = $3"
+    ).bind(id).bind(pipeline_id).bind(account_id).fetch_optional(&state.db).await?
     .ok_or(AppError::NotFound(format!("Opportunity {} not found", id)))?;
     Ok(Json(json!(opp)))
 }
@@ -146,17 +146,17 @@ pub async fn update(
             contact_id = COALESCE($5,contact_id), company_id = COALESCE($6,company_id),
             probability = COALESCE($7,probability), expected_close_date = COALESCE($8,expected_close_date),
             metadata = COALESCE($9,metadata), is_active = COALESCE($10,is_active), updated_at = NOW()
-           WHERE id = $11 AND pipeline_id = $12 AND tenant_id = $13 RETURNING *"#
+           WHERE id = $11 AND pipeline_id = $12 AND account_id = $13 RETURNING *"#
     ).bind(&req.name).bind(&req.description).bind(req.value).bind(&req.currency)
     .bind(req.contact_id).bind(req.company_id).bind(req.probability).bind(req.expected_close_date)
-    .bind(&req.metadata).bind(req.is_active).bind(id).bind(pipeline_id).bind(tenant_id)
+    .bind(&req.metadata).bind(req.is_active).bind(id).bind(pipeline_id).bind(account_id)
     .fetch_optional(&state.db).await?
     .ok_or(AppError::NotFound(format!("Opportunity {} not found", id)))?;
 
     // Log audit event
     audit::logger::log_event(
         &state.db,
-        tenant_id,
+        account_id,
         Some(Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?),
         "opportunity.updated",
         "opportunity",
@@ -174,8 +174,8 @@ pub async fn delete(
     Path((pipeline_id, id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let r = sqlx::query("DELETE FROM opportunities WHERE id = $1 AND pipeline_id = $2 AND tenant_id = $3")
-        .bind(id).bind(pipeline_id).bind(tenant_id).execute(&state.db).await?;
+    let r = sqlx::query("DELETE FROM opportunities WHERE id = $1 AND pipeline_id = $2 AND account_id = $3")
+        .bind(id).bind(pipeline_id).bind(account_id).execute(&state.db).await?;
     if r.rows_affected() == 0 {
         return Err(AppError::NotFound(format!("Opportunity {} not found", id)));
     }

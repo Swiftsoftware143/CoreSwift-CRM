@@ -10,7 +10,7 @@ use crate::AppState;
 use crate::errors::{AppError, ApiResult};
 use crate::auth::Claims;
 use crate::affiliates::models::*;
-use crate::auth::models::User;
+use crate::auth::models::TeamMember;
 
 #[derive(Debug, Deserialize)]
 pub struct ChatActionRequest {
@@ -49,7 +49,7 @@ pub async fn execute_chat_action(
     Extension(c): Extension<Claims>,
     Json(r): Json<ChatActionRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let _is_admin = c.role == "owner" || c.role == "admin";
 
     let result: Result<axum::response::Response, AppError> = match r.intent.as_str() {
@@ -198,7 +198,7 @@ async fn handle_create_affiliate(
     let rate = commission_rate.unwrap();
 
     // Check if user already exists
-    let existing_user = sqlx::query_as::<_, User>(
+    let existing_user = sqlx::query_as::<_, TeamMember>(
         "SELECT * FROM users WHERE email = $1"
     )
     .bind(email)
@@ -206,7 +206,7 @@ async fn handle_create_affiliate(
     .await?;
 
     let (user_id, user_tenant_id) = if let Some(user) = existing_user {
-        // User exists — use their tenant
+        // TeamMember exists — use their tenant
         (user.id, user.tenant_id)
     } else {
         // Create a new tenant and user for the affiliate
@@ -894,7 +894,7 @@ pub async fn impersonate(
     let now = chrono::Utc::now().timestamp() as usize;
     let imp_claims = Claims {
         sub: c.sub.clone(),
-        tid: target_tenant_id.to_string(),
+        aid: target_tenant_id.to_string(),
         role: "impersonated".to_string(),
         exp: now + 900, // 15 minutes
         iat: now,

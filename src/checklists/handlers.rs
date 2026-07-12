@@ -49,7 +49,7 @@ pub async fn list_templates(
                ORDER BY created_at DESC
                LIMIT $3 OFFSET $4"#,
         )
-        .bind(tenant_id)
+        .bind(account_id)
         .bind(trigger_type)
         .bind(per_page)
         .bind(offset)
@@ -62,7 +62,7 @@ pub async fn list_templates(
                ORDER BY created_at DESC
                LIMIT $2 OFFSET $3"#,
         )
-        .bind(tenant_id)
+        .bind(account_id)
         .bind(per_page)
         .bind(offset)
         .fetch_all(&state.db)
@@ -95,7 +95,7 @@ pub async fn create_template(
            RETURNING *"#,
     )
     .bind(Uuid::new_v4())
-    .bind(tenant_id)
+    .bind(account_id)
     .bind(&req.name)
     .bind(&req.description)
     .bind(&req.trigger_type)
@@ -120,7 +120,7 @@ pub async fn get_template(
         "SELECT * FROM checklist_templates WHERE id = $1 AND tenant_id = $2",
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(account_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound(format!("Template {} not found", id)))?;
@@ -164,7 +164,7 @@ pub async fn update_template(
     .bind(req.days_per_stage)
     .bind(req.is_active)
     .bind(id)
-    .bind(tenant_id)
+    .bind(account_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound(format!("Template {} not found", id)))?;
@@ -183,7 +183,7 @@ pub async fn delete_template(
 
     let result = sqlx::query("DELETE FROM checklist_templates WHERE id = $1 AND tenant_id = $2")
         .bind(id)
-        .bind(tenant_id)
+        .bind(account_id)
         .execute(&state.db)
         .await?;
 
@@ -209,7 +209,7 @@ pub async fn start_checklist(
     let template = sqlx::query_as::<_, (Uuid, i32, i32)>(
         "SELECT id, stage_count, days_per_stage FROM checklist_templates WHERE tenant_id = $1 AND is_active = true ORDER BY created_at DESC LIMIT 1"
     )
-    .bind(tenant_id)
+    .bind(account_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound("No active checklist templates found".to_string()))?;
@@ -223,7 +223,7 @@ pub async fn start_checklist(
            RETURNING *"#,
     )
     .bind(Uuid::new_v4())
-    .bind(tenant_id)
+    .bind(account_id)
     .bind(template_id)
     .bind(&entity_type)
     .bind(entity_id)
@@ -286,7 +286,7 @@ pub async fn update_progress(
     )
     .bind(action_taken)
     .bind(stage)
-    .bind(tenant_id)
+    .bind(account_id)
     .execute(&state.db)
     .await?;
 
@@ -337,7 +337,7 @@ pub async fn list_instances(
                ORDER BY created_at DESC
                LIMIT $4 OFFSET $5"#,
         )
-        .bind(tenant_id)
+        .bind(account_id)
         .bind(entity_type)
         .bind(entity_id)
         .bind(per_page)
@@ -351,7 +351,7 @@ pub async fn list_instances(
                ORDER BY created_at DESC
                LIMIT $2 OFFSET $3"#,
         )
-        .bind(tenant_id)
+        .bind(account_id)
         .bind(per_page)
         .bind(offset)
         .fetch_all(&state.db)
@@ -374,7 +374,7 @@ pub async fn get_instance(
         "SELECT * FROM checklist_instances WHERE id = $1 AND tenant_id = $2",
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(account_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound(format!("Instance {} not found", id)))?;

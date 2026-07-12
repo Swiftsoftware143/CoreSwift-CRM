@@ -21,7 +21,7 @@ use super::middleware;
 ///
 /// Every signup creates their own isolated tenant (account).
 /// Admins and tenants are both full account holders — no distinction.
-/// Provide tenant_name/slug to customize, or one is auto-generated from email.
+/// Provide account_name/slug to customize, or one is auto-generated from email.
 /// Provide invite_token to join an existing tenant as a team member.
 pub async fn register(
     State(state): State<AppState>,
@@ -43,7 +43,7 @@ pub async fn register(
     }
 
     // Determine tenant
-    let tenant_id = resolve_tenant(&state, &req).await?;
+    let tenant_id = resolve_account(&state, &req).await?;
 
     // Check for duplicate user
     let existing = sqlx::query_scalar::<_, i64>(
@@ -75,7 +75,7 @@ pub async fn register(
 
     let role = if is_first_user { "owner" } else { "member" };
 
-    let user = sqlx::query_as::<_, User>(
+    let user = sqlx::query_as::<_, TeamMember>(
         r#"INSERT INTO users (id, tenant_id, email, password_hash, name, role)
            VALUES ($1, $2, $3, $4, $5, $6)
            RETURNING *"#,
@@ -90,7 +90,7 @@ pub async fn register(
     .await?;
 
     // Fetch tenant info
-    let tenant = sqlx::query_as::<_, Tenant>(
+    let tenant = sqlx::query_as::<_, crate::account::models::Account>(
         "SELECT id, name, slug, is_active FROM tenants WHERE id = $1"
     )
     .bind(tenant_id)
@@ -119,8 +119,8 @@ pub async fn register(
             refresh_token,
             token_type: "Bearer".to_string(),
             expires_in,
-            user: user.into(),
-            tenant: TenantResponse {
+            team_member: user.into(),
+            account: AccountResponse {
                 id: tenant.id,
                 name: tenant.name,
                 slug: tenant.slug,
@@ -136,7 +136,7 @@ pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let user = sqlx::query_as::<_, User>(
+    let user = sqlx::query_as::<_, TeamMember>(
         "SELECT * FROM users WHERE email = $1 AND is_active = true",
     )
     .bind(&req.email)
@@ -161,7 +161,7 @@ pub async fn login(
         refresh_token,
         token_type: "Bearer".to_string(),
         expires_in,
-        user: user.into(),
+        team_member: user.into(),
     })))
 }
 
@@ -175,7 +175,7 @@ pub async fn refresh(
     let user_id = Uuid::parse_str(&claims.sub)
         .map_err(|_| AppError::Unauthorized)?;
 
-    let user = sqlx::query_as::<_, User>(
+    let user = sqlx::query_as::<_, TeamMember>(
         "SELECT * FROM users WHERE id = $1 AND is_active = true",
     )
     .bind(user_id)
@@ -212,7 +212,7 @@ pub async fn me(
     let user_id = Uuid::parse_str(&claims.sub)
         .map_err(|_| AppError::Unauthorized)?;
 
-    let user = sqlx::query_as::<_, User>(
+    let user = sqlx::query_as::<_, TeamMember>(
         "SELECT * FROM users WHERE id = $1 AND is_active = true",
     )
     .bind(user_id)
@@ -221,7 +221,7 @@ pub async fn me(
     .ok_or(AppError::Unauthorized)?;
 
     Ok(Json(json!({
-        "user": UserResponse::from(user),
+        "team_member": TeamMemberResponse::from(user),
     })))
 }
 
@@ -236,7 +236,7 @@ pub async fn create_invite(
         return Err(AppError::Forbidden);
     }
 
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let token = uuid::Uuid::new_v4().to_string();
 
     sqlx::query(
@@ -267,7 +267,7 @@ pub async fn list_invites(
         return Err(AppError::Forbidden);
     }
 
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let invites = sqlx::query_as::<_, (serde_json::Value,)>(
         "SELECT id, token, role, accepted, expires_at, created_at FROM tenant_invites WHERE tenant_id = $1 ORDER BY created_at DESC"
     )
@@ -317,8 +317,8 @@ pub async fn logout(
 /// Resolve the tenant for registration — create new account or join via invite.
 ///
 /// Every person gets their own isolated tenant (account).
-/// If no tenant_name/slug provided, auto-generates one from email.
-async fn resolve_tenant(
+/// If no account_name/slug provided, auto-generates one from email.
+async fn resolve_account(
     state: &AppState,
     req: &RegisterRequest,
 ) -> Result<Uuid, AppError> {
@@ -341,8 +341,8 @@ async fn resolve_tenant(
         return Ok(invite.0);
     }
 
-    if let (Some(name), Some(slug)) = (&req.tenant_name, &req.tenant_slug) {
-        let tenant = sqlx::query_as::<_, Tenant>(
+    if let (Some(name), Some(slug)) = (&req.account_name, &req.account_slug) {
+        let tenant = sqlx::query_as::<_, crate::account::models::Account>(
             r#"INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3) RETURNING *"#,
         )
         .bind(Uuid::new_v4())
@@ -365,7 +365,7 @@ async fn resolve_tenant(
         let slug = format!("{}-{}", local_part, &uuid::Uuid::new_v4().to_string()[..8]);
         let name = format!("{}'s Workspace", req.name);
 
-        let tenant = sqlx::query_as::<_, Tenant>(
+        let tenant = sqlx::query_as::<_, crate::account::models::Account>(
             r#"INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3) RETURNING *"#,
         )
         .bind(Uuid::new_v4())
@@ -427,14 +427,14 @@ fn verify_password(password: &str, hash: &str) -> Result<bool, AppError> {
 }
 
 /// Generate access and refresh tokens for a user.
-fn generate_tokens(user: &User, state: &AppState) -> Result<(String, String, i64), AppError> {
+fn generate_tokens(user: &TeamMember, state: &AppState) -> Result<(String, String, i64), AppError> {
     let now = Utc::now().timestamp() as usize;
     let access_exp = now + state.config.jwt_access_expiry as usize;
     let refresh_exp = now + state.config.jwt_refresh_expiry as usize;
 
     let access_claims = Claims {
         sub: user.id.to_string(),
-        tid: user.tenant_id.to_string(),
+        aid: user.tenant_id.to_string(),
         role: user.role.clone(),
         exp: access_exp,
         iat: now,
@@ -443,7 +443,7 @@ fn generate_tokens(user: &User, state: &AppState) -> Result<(String, String, i64
 
     let refresh_claims = Claims {
         sub: user.id.to_string(),
-        tid: user.tenant_id.to_string(),
+        aid: user.tenant_id.to_string(),
         role: user.role.clone(),
         exp: refresh_exp,
         iat: now,
