@@ -1,6 +1,7 @@
 //! Authentication module — JWT-based auth with Argon2 password hashing.
 //!
-//! Provides register, login, refresh, logout, and current-user endpoints.
+//! Provides register, login, refresh, logout, invite management, and current-user endpoints.
+//! Users are "team members" belonging to an "account" (tenant in DB).
 
 pub mod models;
 pub mod middleware;

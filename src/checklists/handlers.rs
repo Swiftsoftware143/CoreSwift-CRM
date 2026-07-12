@@ -36,7 +36,7 @@ pub async fn list_templates(
     Extension(claims): Extension<Claims>,
     Query(params): Query<ListTemplatesParams>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid)
+    let account_id = Uuid::parse_str(&claims.aid)
         .map_err(|_| AppError::Unauthorized)?;
 
     let (page, per_page) = validate_pagination(params.page, params.per_page);
@@ -78,7 +78,7 @@ pub async fn create_template(
     Extension(claims): Extension<Claims>,
     Json(req): Json<CreateTemplateRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid)
+    let account_id = Uuid::parse_str(&claims.aid)
         .map_err(|_| AppError::Unauthorized)?;
 
     if req.name.is_empty() {
@@ -113,7 +113,7 @@ pub async fn get_template(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid)
+    let account_id = Uuid::parse_str(&claims.aid)
         .map_err(|_| AppError::Unauthorized)?;
 
     let template = sqlx::query_as::<_, ChecklistTemplate>(
@@ -142,7 +142,7 @@ pub async fn update_template(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateTemplateRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid)
+    let account_id = Uuid::parse_str(&claims.aid)
         .map_err(|_| AppError::Unauthorized)?;
 
     let template = sqlx::query_as::<_, ChecklistTemplate>(
@@ -178,7 +178,7 @@ pub async fn delete_template(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid)
+    let account_id = Uuid::parse_str(&claims.aid)
         .map_err(|_| AppError::Unauthorized)?;
 
     let result = sqlx::query("DELETE FROM checklist_templates WHERE id = $1 AND tenant_id = $2")
@@ -202,7 +202,7 @@ pub async fn start_checklist(
     Extension(claims): Extension<Claims>,
     Path((entity_type, entity_id)): Path<(String, Uuid)>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid)
+    let account_id = Uuid::parse_str(&claims.aid)
         .map_err(|_| AppError::Unauthorized)?;
 
     // Find matching active template
@@ -264,7 +264,7 @@ pub async fn update_progress(
     Path(id): Path<Uuid>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid)
+    let account_id = Uuid::parse_str(&claims.aid)
         .map_err(|_| AppError::Unauthorized)?;
 
     let stage = req.get("stage_order")
@@ -324,7 +324,7 @@ pub async fn list_instances(
     Extension(claims): Extension<Claims>,
     Query(params): Query<ListInstancesParams>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid)
+    let account_id = Uuid::parse_str(&claims.aid)
         .map_err(|_| AppError::Unauthorized)?;
 
     let (page, per_page) = validate_pagination(params.page, params.per_page);
@@ -367,7 +367,7 @@ pub async fn get_instance(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid)
+    let account_id = Uuid::parse_str(&claims.aid)
         .map_err(|_| AppError::Unauthorized)?;
 
     let instance = sqlx::query_as::<_, ChecklistInstance>(

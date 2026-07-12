@@ -11,7 +11,7 @@ fn count_or_zero(v: Option<i64>) -> i64 { v.unwrap_or(0) }
 
 /// POST /api/affiliates/profile — Create affiliate profile
 pub async fn create_profile(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<CreateAffiliateRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
     // Check if already exists
@@ -45,7 +45,7 @@ pub async fn create_profile(State(s): State<AppState>, Extension(c): Extension<C
 
 /// GET /api/affiliates/profile — Get affiliate profile
 pub async fn get_profile(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
     let aff = sqlx::query_as::<_, Affiliate>("SELECT * FROM affiliates WHERE tenant_id = $1 AND user_id = $2")
@@ -58,7 +58,7 @@ pub async fn get_profile(State(s): State<AppState>, Extension(c): Extension<Clai
 
 /// PATCH /api/affiliates/profile — Update affiliate profile
 pub async fn update_profile(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<UpdateAffiliateRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
     let aff = sqlx::query_as::<_, Affiliate>(
@@ -80,7 +80,7 @@ pub async fn update_profile(State(s): State<AppState>, Extension(c): Extension<C
 
 /// GET /api/affiliates/referrals — List referrals for this affiliate
 pub async fn list_referrals(State(s): State<AppState>, Extension(c): Extension<Claims>, Query(p): Query<serde_json::Value>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
     let (page, per_page) = validate_pagination(p.get("page").and_then(|v| v.as_i64()), p.get("per_page").and_then(|v| v.as_i64()));
     let offset = (page - 1) * per_page;
@@ -107,7 +107,7 @@ pub async fn list_referrals(State(s): State<AppState>, Extension(c): Extension<C
 
 /// GET /api/affiliates/payouts — List commission payouts
 pub async fn list_payouts(State(s): State<AppState>, Extension(c): Extension<Claims>, Query(p): Query<serde_json::Value>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
     let (page, per_page) = validate_pagination(p.get("page").and_then(|v| v.as_i64()), p.get("per_page").and_then(|v| v.as_i64()));
     let offset = (page - 1) * per_page;
@@ -133,7 +133,7 @@ pub async fn list_payouts(State(s): State<AppState>, Extension(c): Extension<Cla
 
 /// GET /api/affiliates/stats — Aggregated affiliate stats
 pub async fn get_stats(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
     let aff = sqlx::query_as::<_, Affiliate>("SELECT * FROM affiliates WHERE tenant_id = $1 AND user_id = $2")
@@ -172,7 +172,7 @@ pub async fn get_stats(State(s): State<AppState>, Extension(c): Extension<Claims
 
 /// POST /api/affiliates/redeem/{code} — Apply an affiliate code to current tenant
 pub async fn redeem_code(State(s): State<AppState>, Extension(c): Extension<Claims>, Path(code): Path<String>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let aff = sqlx::query_as::<_, Affiliate>("SELECT * FROM affiliates WHERE code = $1 AND is_active = true")
         .bind(&code)
@@ -191,7 +191,7 @@ pub async fn redeem_code(State(s): State<AppState>, Extension(c): Extension<Clai
     let existing = count_or_zero(existing);
 
     if existing > 0 {
-        return Err(AppError::Duplicate("Tenant already referred by this affiliate".to_string()));
+        return Err(AppError::Duplicate("Account already referred by this affiliate".to_string()));
     }
 
     let referral = sqlx::query_as::<_, Referral>(
@@ -212,7 +212,7 @@ pub async fn redeem_code(State(s): State<AppState>, Extension(c): Extension<Clai
 
 /// GET /api/affiliates/products — List affiliate products (public for FunnelSwift)
 pub async fn list_products(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let products = sqlx::query_as::<_, AffiliateProduct>(
         "SELECT * FROM affiliate_products WHERE tenant_id = $1 ORDER BY sort_order ASC, name ASC"
@@ -226,7 +226,7 @@ pub async fn list_products(State(s): State<AppState>, Extension(c): Extension<Cl
 
 /// POST /api/affiliates/products — Create a product
 pub async fn create_product(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<CreateProductRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     if r.name.is_empty() {
         return Err(AppError::Validation("Product name is required".into()));
@@ -256,7 +256,7 @@ pub async fn create_product(State(s): State<AppState>, Extension(c): Extension<C
 
 /// PATCH /api/affiliates/products/{id} — Update a product
 pub async fn update_product(State(s): State<AppState>, Extension(c): Extension<Claims>, Path(id): Path<Uuid>, Json(r): Json<UpdateProductRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let product = sqlx::query_as::<_, AffiliateProduct>(
         r#"UPDATE affiliate_products SET
@@ -296,7 +296,7 @@ pub async fn update_product(State(s): State<AppState>, Extension(c): Extension<C
 
 /// DELETE /api/affiliates/products/{id} — Delete a product
 pub async fn delete_product(State(s): State<AppState>, Extension(c): Extension<Claims>, Path(id): Path<Uuid>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let r = sqlx::query("DELETE FROM affiliate_products WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tid)
@@ -308,7 +308,7 @@ pub async fn delete_product(State(s): State<AppState>, Extension(c): Extension<C
 
 /// GET /api/affiliates/products/tags — Get products grouped by tag (for FunnelSwift display)
 pub async fn products_by_tag(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let products = sqlx::query_as::<_, (serde_json::Value,)>(
         r#"SELECT ap.*, t.name as tag_name, t.color as tag_color
@@ -329,7 +329,7 @@ pub async fn products_by_tag(State(s): State<AppState>, Extension(c): Extension<
 
 /// GET /api/affiliates/my-products — Get products I'm promoting + products available
 pub async fn list_my_products(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
     let aff_id: Uuid = sqlx::query_scalar::<_, Uuid>(
@@ -375,7 +375,7 @@ pub async fn list_my_products(State(s): State<AppState>, Extension(c): Extension
 
 /// POST /api/affiliates/my-products/select — Start promoting a product
 pub async fn select_product(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<SelectProductRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
     let aff_id: Uuid = sqlx::query_scalar::<_, Uuid>(
@@ -416,7 +416,7 @@ pub async fn select_product(State(s): State<AppState>, Extension(c): Extension<C
 
 /// POST /api/affiliates/my-products/unselect — Stop promoting a product
 pub async fn unselect_product(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<SelectProductRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
     let aff_id: Uuid = sqlx::query_scalar::<_, Uuid>(

@@ -27,5 +27,3 @@ pub struct ThemeConfig {
     pub font_family: Option<String>,
     pub border_radius: Option<String>,
 }
-
-

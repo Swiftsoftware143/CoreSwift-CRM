@@ -79,7 +79,7 @@ pub async fn list(
     Path(pipeline_id): Path<Uuid>,
     Query(params): Query<OppListParams>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let (page, per_page) = validate_pagination(params.page, params.per_page);
     let offset = (page - 1) * per_page;
     let opps = sqlx::query_as::<_, OpportunityFull>(
@@ -94,7 +94,7 @@ pub async fn create(
     Path(pipeline_id): Path<Uuid>,
     Json(req): Json<CreateOpportunityRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     if req.name.is_empty() {
         return Err(AppError::Validation("Opportunity name is required".to_string()));
     }
@@ -125,7 +125,7 @@ pub async fn get(
     Extension(claims): Extension<Claims>,
     Path((pipeline_id, id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let opp = sqlx::query_as::<_, OpportunityFull>(
         "SELECT * FROM opportunities WHERE id = $1 AND pipeline_id = $2 AND tenant_id = $3"
     ).bind(id).bind(pipeline_id).bind(tenant_id).fetch_optional(&state.db).await?
@@ -139,7 +139,7 @@ pub async fn update(
     Path((pipeline_id, id)): Path<(Uuid, Uuid)>,
     Json(req): Json<UpdateOpportunityRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let opp = sqlx::query_as::<_, OpportunityFull>(
         r#"UPDATE opportunities SET name = COALESCE($1,name), description = COALESCE($2,description),
             value = COALESCE($3,value), currency = COALESCE($4,currency),
@@ -173,7 +173,7 @@ pub async fn delete(
     Extension(claims): Extension<Claims>,
     Path((pipeline_id, id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let r = sqlx::query("DELETE FROM opportunities WHERE id = $1 AND pipeline_id = $2 AND tenant_id = $3")
         .bind(id).bind(pipeline_id).bind(tenant_id).execute(&state.db).await?;
     if r.rows_affected() == 0 {

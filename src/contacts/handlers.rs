@@ -35,7 +35,7 @@ pub async fn list(
     Extension(claims): Extension<Claims>,
     Query(params): Query<ContactListParams>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid)
+    let account_id = Uuid::parse_str(&claims.aid)
         .map_err(|_| AppError::Unauthorized)?;
 
     let (page, per_page) = validate_pagination(params.page, params.per_page);
@@ -62,7 +62,7 @@ pub async fn search(
     Extension(claims): Extension<Claims>,
     Query(params): Query<ContactSearchParams>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid)
+    let account_id = Uuid::parse_str(&claims.aid)
         .map_err(|_| AppError::Unauthorized)?;
 
     if params.q.is_empty() {
@@ -96,7 +96,7 @@ pub async fn create(
     Extension(claims): Extension<Claims>,
     Json(req): Json<CreateContactRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid)
+    let account_id = Uuid::parse_str(&claims.aid)
         .map_err(|_| AppError::Unauthorized)?;
 
     if req.first_name.is_empty() || req.last_name.is_empty() {
@@ -139,7 +139,7 @@ pub async fn get(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid)
+    let account_id = Uuid::parse_str(&claims.aid)
         .map_err(|_| AppError::Unauthorized)?;
 
     let contact = sqlx::query_as::<_, Contact>(
@@ -161,7 +161,7 @@ pub async fn update(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateContactRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid)
+    let account_id = Uuid::parse_str(&claims.aid)
         .map_err(|_| AppError::Unauthorized)?;
 
     let existing_id = id;
@@ -230,7 +230,7 @@ pub async fn delete(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid)
+    let account_id = Uuid::parse_str(&claims.aid)
         .map_err(|_| AppError::Unauthorized)?;
 
     let result = sqlx::query("DELETE FROM contacts WHERE id = $1 AND tenant_id = $2")

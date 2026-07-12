@@ -136,7 +136,7 @@ pub async fn delete_plan(State(s): State<AppState>, Extension(c): Extension<Clai
 
 /// GET /api/billing/subscription — Get current tenant's subscription
 pub async fn get_subscription(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let sub = sqlx::query_as::<_, TenantPlan>(
         "SELECT * FROM tenant_plans WHERE tenant_id = $1"
@@ -158,7 +158,7 @@ pub async fn get_subscription(State(s): State<AppState>, Extension(c): Extension
 
 /// POST /api/billing/subscription — Create subscription
 pub async fn create_subscription(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<CreateSubscriptionRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
     if c.role != "client_admin" && c.role != "agency_admin" {
@@ -180,7 +180,7 @@ pub async fn create_subscription(State(s): State<AppState>, Extension(c): Extens
     ).bind(tid).fetch_one(&s.db).await?);
 
     if count > 0 {
-        return Err(AppError::Duplicate("Tenant already has a subscription".to_string()));
+        return Err(AppError::Duplicate("Account already has a subscription".to_string()));
     }
 
     let sub = sqlx::query_as::<_, TenantPlan>(
@@ -198,7 +198,7 @@ pub async fn create_subscription(State(s): State<AppState>, Extension(c): Extens
 
 /// PATCH /api/billing/subscription — Update subscription
 pub async fn update_subscription(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<UpdateSubscriptionRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
     if c.role != "client_admin" && c.role != "agency_admin" {
@@ -230,7 +230,7 @@ pub async fn update_subscription(State(s): State<AppState>, Extension(c): Extens
 
 /// POST /api/billing/subscription/cancel — Cancel subscription (downgrades to free)
 pub async fn cancel_subscription(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
     if c.role != "client_admin" && c.role != "agency_admin" {
@@ -268,7 +268,7 @@ pub async fn cancel_subscription(State(s): State<AppState>, Extension(c): Extens
 
 /// GET /api/billing/features — Get effective features for current tenant
 pub async fn get_features(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let row = sqlx::query_as::<_, (Uuid, String, Option<String>, serde_json::Value, serde_json::Value)>(
         r#"SELECT p.id, p.slug, p.checkout_url, p.features, COALESCE(tp.feature_overrides, '{}'::jsonb)
@@ -296,14 +296,14 @@ pub async fn get_features(State(s): State<AppState>, Extension(c): Extension<Cla
 
 /// GET /api/billing/credits/balance — Get available credit balance
 pub async fn get_credit_balance(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let summary = credits::get_credit_summary(&s.db, tid).await;
     Ok(Json(summary))
 }
 
 /// GET /api/billing/credits/usage — Get detailed transaction history
 pub async fn get_credit_usage(State(s): State<AppState>, Extension(c): Extension<Claims>, Query(p): Query<Value>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let (page, per_page) = validate_pagination(p.get("page").and_then(|v| v.as_i64()), p.get("per_page").and_then(|v| v.as_i64()));
     let offset = (page - 1) * per_page;
 
@@ -320,7 +320,7 @@ pub async fn get_credit_usage(State(s): State<AppState>, Extension(c): Extension
 
 /// POST /api/billing/credits/buy — Purchase additional credits (placeholder for Stripe/checkout)
 pub async fn buy_credits(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<Value>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let amount = r.get("amount").and_then(|v| v.as_i64()).unwrap_or(0);
     if amount <= 0 {

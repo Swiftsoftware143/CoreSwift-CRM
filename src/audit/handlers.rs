@@ -20,7 +20,7 @@ pub struct AuditEntry {
 
 /// GET /api/audit — List audit logs for tenant (filterable)
 pub async fn list(State(s): State<AppState>, Extension(c): Extension<Claims>, Query(params): Query<serde_json::Value>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let (page, per_page) = validate_pagination(params.get("page").and_then(|v| v.as_i64()), params.get("per_page").and_then(|v| v.as_i64()));
     let offset = (page - 1) * per_page;
 
@@ -69,7 +69,7 @@ pub async fn list(State(s): State<AppState>, Extension(c): Extension<Claims>, Qu
 
 /// GET /api/audit/{id} — Get single audit log entry
 pub async fn get(State(s): State<AppState>, Extension(c): Extension<Claims>, Path(id): Path<Uuid>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let entry = sqlx::query_as::<_, AuditEntry>(
         "SELECT * FROM audit_logs WHERE id = $1 AND tenant_id = $2"

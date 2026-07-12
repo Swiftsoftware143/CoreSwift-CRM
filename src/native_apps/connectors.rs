@@ -67,7 +67,7 @@ pub static NATIVE_APPS: &[AppConnector] = &[
     AppConnector {
         slug: "multi-directory",
         name: "Multi-Directory App",
-        description: "Multi-tenant business directory system with automated follow-up sequences across directories. Admin-only — internal tool.",
+        description: "Multi-account business directory system with automated follow-up sequences across directories. Admin-only — internal tool.",
         auth_type: "api_key",
         auth_fields: &["api_key", "base_url"],
         access_level: "admin",

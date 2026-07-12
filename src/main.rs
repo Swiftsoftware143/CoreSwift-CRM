@@ -1,5 +1,6 @@
-//! CRM Swift — Multi-tenant Lead Management Operating System
+//! CRM Swift — Multi-account Lead Management Operating System
 //!
+//! Each "account" is backed by a DB tenant. "Team members" are users under an account.
 //! This is the main entry point for the Axum-based REST API server.
 //! The server provides a fully-featured CRM with contacts, pipelines,
 //! lead scoring, automation, and integration capabilities.
@@ -8,7 +9,7 @@ mod config;
 mod db;
 mod errors;
 pub mod auth;
-pub mod tenants;
+pub mod account;
 pub mod contacts;
 pub mod companies;
 pub mod pipelines;
@@ -118,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
         // Auth routes (no auth required)
         .nest("/api/auth", auth::router())
         // Protected routes
-        .nest("/api/tenants", tenants::router(state.clone()))
+        .nest("/api/account", account::router(state.clone()))
         .nest("/api/contacts", contacts::router(state.clone()))
         .nest("/api/companies", companies::router(state.clone()))
         .nest("/api/pipelines", pipelines::router(state.clone()))

@@ -1,4 +1,4 @@
-//! Auth models: User, Claims, TokenResponse, and request/response types.
+//! Auth models: TeamMember, Account, Claims, TokenResponse, and request/response types.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -7,11 +7,11 @@ use uuid::Uuid;
 /// JWT claims struct stored in access/refresh tokens.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    /// User ID (subject)
+    /// Team member ID (subject)
     pub sub: String,
-    /// Tenant ID
-    pub tid: String,
-    /// Role within their tenant: owner | admin | member
+    /// Account ID (formerly tenant_id)
+    pub aid: String,
+    /// Role within their account: account_owner | admin | member
     pub role: String,
     /// Expiration timestamp (UTC epoch seconds)
     pub exp: usize,
@@ -19,9 +19,9 @@ pub struct Claims {
     pub iat: usize,
 }
 
-/// User model — database row.
+/// TeamMember model — database row (from `users` table).
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct User {
+pub struct TeamMember {
     pub id: Uuid,
     pub tenant_id: Uuid,
     pub email: String,
@@ -34,11 +34,11 @@ pub struct User {
     pub updated_at: DateTime<Utc>,
 }
 
-/// User response sent to clients (excludes password_hash).
+/// TeamMember response sent to clients (excludes password_hash).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserResponse {
+pub struct TeamMemberResponse {
     pub id: Uuid,
-    pub tenant_id: Uuid,
+    pub account_id: Uuid,
     pub email: String,
     pub name: String,
     pub role: String,
@@ -47,11 +47,11 @@ pub struct UserResponse {
     pub created_at: DateTime<Utc>,
 }
 
-impl From<User> for UserResponse {
-    fn from(u: User) -> Self {
+impl From<TeamMember> for TeamMemberResponse {
+    fn from(u: TeamMember) -> Self {
         Self {
             id: u.id,
-            tenant_id: u.tenant_id,
+            account_id: u.tenant_id,
             email: u.email,
             name: u.name,
             role: u.role,
@@ -69,40 +69,40 @@ pub struct TokenResponse {
     pub refresh_token: String,
     pub token_type: String,
     pub expires_in: i64,
-    pub user: UserResponse,
+    pub team_member: TeamMemberResponse,
 }
 
 /// Register request body.
 ///
-/// Every person who signs up gets their own account (separate tenant).
-/// Admins and tenants are both account holders — no difference in architecture.
-/// Pass tenant_name and tenant_slug to customize the tenant name,
-/// or pass invite_token to join an existing tenant via invite.
+/// Every person who signs up gets their own account (separate tenant in DB).
+/// Team members can join an existing account via invite.
+/// Pass account_name and account_slug to customize the account name,
+/// or pass invite_token to join an existing account via invite.
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
     pub name: String,
     pub email: String,
     pub password: String,
-    pub tenant_name: Option<String>,
-    pub tenant_slug: Option<String>,
+    pub account_name: Option<String>,
+    pub account_slug: Option<String>,
     pub invite_token: Option<String>,
 }
 
-/// Register response with tenant info included.
+/// Register response with account info included.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterResponse {
     pub access_token: String,
     pub refresh_token: String,
     pub token_type: String,
     pub expires_in: i64,
-    pub user: UserResponse,
-    pub tenant: TenantResponse,
+    pub team_member: TeamMemberResponse,
+    pub account: AccountResponse,
     pub next_steps: Vec<String>,
 }
 
-/// Tenant info for response.
+/// Account info for response (from `tenants` table).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TenantResponse {
+pub struct AccountResponse {
     pub id: Uuid,
     pub name: String,
     pub slug: String,
@@ -122,9 +122,9 @@ pub struct RefreshRequest {
     pub refresh_token: String,
 }
 
-/// Tenant model reference for auth handlers.
+/// Account model reference for auth handlers (from `tenants` table).
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct Tenant {
+pub struct Account {
     pub id: Uuid,
     pub name: String,
     pub slug: String,

@@ -1,4 +1,4 @@
-//! Auth middleware: JWT verification and tenant extraction.
+//! Auth middleware: JWT verification and account extraction.
 //!
 //! Provides `auth_middleware` for protected routes and utility functions
 //! for token creation and role checking.
@@ -13,7 +13,7 @@ use crate::AppState;
 use crate::errors::AppError;
 use super::models::Claims;
 
-/// Auth middleware that extracts user context from JWT bearer token.
+/// Auth middleware that extracts team member context from JWT bearer token.
 ///
 /// For routes that require authentication, attach via
 /// `axum::middleware::from_fn_with_state(state, auth_middleware)`.
@@ -81,9 +81,9 @@ pub fn create_access_token(claims: &Claims, secret: &str) -> Result<String, AppE
 
 /// Check if user has sufficient role level.
 ///
-/// Role hierarchy: user < team_member < client_admin < agency_admin
+/// Role hierarchy: member < admin < account_owner < agency_admin
 pub fn require_role(actual: &str, minimum: &str) -> bool {
-    let levels = ["user", "team_member", "client_admin", "agency_admin"];
+    let levels = ["member", "admin", "account_owner", "agency_admin"];
 
     let actual_idx = levels.iter().position(|&r| r == actual).unwrap_or(0);
     let min_idx = levels.iter().position(|&r| r == minimum).unwrap_or(0);

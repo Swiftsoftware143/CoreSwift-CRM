@@ -11,7 +11,7 @@ use super::engine;
 
 /// GET /api/monitoring/health — Get account health for current tenant
 pub async fn get_health(State(s): State<AppState>, Extension(c): Extension<Claims>, Query(p): Query<serde_json::Value>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let entity_type = p.get("entity_type").and_then(|v| v.as_str()).unwrap_or("tenant");
     let entity_id = p.get("entity_id").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok());
@@ -34,7 +34,7 @@ pub async fn get_health(State(s): State<AppState>, Extension(c): Extension<Claim
 
 /// POST /api/monitoring/health — Record a health signal
 pub async fn update_health_signal(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<SignalRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let value = r.value.unwrap_or(1);
 
     engine::record_signal(&s.db, tid, &r.entity_type, r.entity_id, &r.signal, value).await;
@@ -44,7 +44,7 @@ pub async fn update_health_signal(State(s): State<AppState>, Extension(c): Exten
 
 /// GET /api/monitoring/thresholds
 pub async fn list_thresholds(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let thresholds = sqlx::query_as::<_, HealthThreshold>(
         "SELECT * FROM health_thresholds WHERE tenant_id = $1 ORDER BY name ASC"
     ).bind(tid).fetch_all(&s.db).await?;
@@ -53,7 +53,7 @@ pub async fn list_thresholds(State(s): State<AppState>, Extension(c): Extension<
 
 /// POST /api/monitoring/thresholds
 pub async fn create_threshold(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<CreateThresholdRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     if !["lt","gt","eq","lte","gte"].contains(&r.operator.as_str()) {
         return Err(AppError::Validation("operator must be lt, gt, eq, lte, or gte".to_string()));
     }
@@ -73,7 +73,7 @@ pub async fn create_threshold(State(s): State<AppState>, Extension(c): Extension
 
 /// PATCH /api/monitoring/thresholds/{id}
 pub async fn update_threshold(State(s): State<AppState>, Extension(c): Extension<Claims>, Path(id): Path<Uuid>, Json(r): Json<UpdateThresholdRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let t = sqlx::query_as::<_, HealthThreshold>(
         r#"UPDATE health_thresholds SET name=COALESCE($1,name), value=COALESCE($2,value), risk_level=COALESCE($3,risk_level), intervention_action=COALESCE($4,intervention_action), is_active=COALESCE($5,is_active) WHERE id=$6 AND tenant_id=$7 RETURNING *"#
     ).bind(&r.name).bind(r.value).bind(&r.risk_level).bind(&r.intervention_action).bind(r.is_active).bind(id).bind(tid)
@@ -83,7 +83,7 @@ pub async fn update_threshold(State(s): State<AppState>, Extension(c): Extension
 
 /// DELETE /api/monitoring/thresholds/{id}
 pub async fn delete_threshold(State(s): State<AppState>, Extension(c): Extension<Claims>, Path(id): Path<Uuid>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     sqlx::query("DELETE FROM health_thresholds WHERE id=$1 AND tenant_id=$2").bind(id).bind(tid).execute(&s.db).await?;
     Ok(Json(json!({"message": "Deleted"})))
 }

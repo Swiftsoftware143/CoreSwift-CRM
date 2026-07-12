@@ -17,7 +17,7 @@ pub async fn list_pipelines(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let pipelines = sqlx::query_as::<_, Pipeline>(
         "SELECT * FROM pipelines WHERE tenant_id = $1 AND is_active = true ORDER BY name"
     ).bind(tenant_id).fetch_all(&state.db).await?;
@@ -37,7 +37,7 @@ pub async fn create_pipeline(
     Extension(claims): Extension<Claims>,
     Json(req): Json<CreatePipelineRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     if req.name.is_empty() {
         return Err(AppError::Validation("Pipeline name is required".to_string()));
     }
@@ -53,7 +53,7 @@ pub async fn get_pipeline(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let pipeline = sqlx::query_as::<_, Pipeline>(
         "SELECT * FROM pipelines WHERE id = $1 AND tenant_id = $2"
     ).bind(id).bind(tenant_id).fetch_optional(&state.db).await?
@@ -70,7 +70,7 @@ pub async fn update_pipeline(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdatePipelineRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let pipeline = sqlx::query_as::<_, Pipeline>(
         r#"UPDATE pipelines SET name = COALESCE($1,name), description = COALESCE($2,description),
             is_default = COALESCE($3,is_default), is_active = COALESCE($4,is_active), updated_at = NOW()
@@ -99,7 +99,7 @@ pub async fn delete_pipeline(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let r = sqlx::query("DELETE FROM pipelines WHERE id = $1 AND tenant_id = $2")
         .bind(id).bind(tenant_id).execute(&state.db).await?;
     if r.rows_affected() == 0 {
@@ -113,7 +113,7 @@ pub async fn list_stages(
     Extension(claims): Extension<Claims>,
     Path(pipeline_id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     sqlx::query("SELECT 1 FROM pipelines WHERE id = $1 AND tenant_id = $2")
         .bind(pipeline_id).bind(tenant_id).fetch_optional(&state.db).await?
         .ok_or(AppError::NotFound(format!("Pipeline {} not found", pipeline_id)))?;
@@ -129,7 +129,7 @@ pub async fn create_stage(
     Path(pipeline_id): Path<Uuid>,
     Json(req): Json<CreateStageRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     sqlx::query("SELECT 1 FROM pipelines WHERE id = $1 AND tenant_id = $2")
         .bind(pipeline_id).bind(tenant_id).fetch_optional(&state.db).await?
         .ok_or(AppError::NotFound(format!("Pipeline {} not found", pipeline_id)))?;
@@ -148,7 +148,7 @@ pub async fn update_stage(
     Path((pipeline_id, stage_id)): Path<(Uuid, Uuid)>,
     Json(req): Json<UpdateStageRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     sqlx::query("SELECT 1 FROM pipelines WHERE id = $1 AND tenant_id = $2")
         .bind(pipeline_id).bind(tenant_id).fetch_optional(&state.db).await?
         .ok_or(AppError::NotFound(format!("Pipeline {} not found", pipeline_id)))?;
@@ -170,7 +170,7 @@ pub async fn delete_stage(
     Extension(claims): Extension<Claims>,
     Path((_pipeline_id, stage_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let r = sqlx::query(
         "DELETE FROM pipeline_stages WHERE id = $1 AND pipeline_id IN (SELECT id FROM pipelines WHERE tenant_id = $2)"
     ).bind(stage_id).bind(tenant_id).execute(&state.db).await?;
@@ -187,7 +187,7 @@ pub async fn move_opportunity(
     Json(_req): Json<MoveOpportunityRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let stage = sqlx::query_as::<_, PipelineStage>(
         "SELECT * FROM pipeline_stages WHERE id = $1 AND pipeline_id = $2"
@@ -218,7 +218,7 @@ pub async fn pipeline_analytics(
     Extension(claims): Extension<Claims>,
     Path(pipeline_id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let pipeline = sqlx::query_as::<_, Pipeline>(
         "SELECT * FROM pipelines WHERE id = $1 AND tenant_id = $2"
     ).bind(pipeline_id).bind(tenant_id).fetch_optional(&state.db).await?

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct Tenant {
+pub struct Account {
     pub id: Uuid,
     pub name: String,
     pub slug: String,
@@ -18,7 +18,7 @@ pub struct Tenant {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CreateTenantRequest {
+pub struct CreateAccountRequest {
     pub name: String,
     pub slug: String,
     pub logo_url: Option<String>,
@@ -28,7 +28,7 @@ pub struct CreateTenantRequest {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct UpdateTenantRequest {
+pub struct UpdateAccountRequest {
     pub name: Option<String>,
     pub slug: Option<String>,
     pub logo_url: Option<String>,

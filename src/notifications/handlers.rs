@@ -17,7 +17,7 @@ pub struct Notification {
 
 /// GET /api/notifications
 pub async fn list(State(s): State<AppState>, Extension(c): Extension<Claims>, Query(p): Query<serde_json::Value>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
     let (page, per_page) = validate_pagination(p.get("page").and_then(|v| v.as_i64()), p.get("per_page").and_then(|v| v.as_i64()));
     let offset = (page - 1) * per_page;
@@ -56,7 +56,7 @@ pub async fn list(State(s): State<AppState>, Extension(c): Extension<Claims>, Qu
 
 /// POST /api/notifications/{id}/read
 pub async fn mark_read(State(s): State<AppState>, Extension(c): Extension<Claims>, Path(id): Path<Uuid>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
     sqlx::query("UPDATE notifications SET read=true WHERE id=$1 AND tenant_id=$2 AND user_id=$3")
         .bind(id).bind(tid).bind(uid).execute(&s.db).await?;
@@ -65,7 +65,7 @@ pub async fn mark_read(State(s): State<AppState>, Extension(c): Extension<Claims
 
 /// POST /api/notifications/read-all
 pub async fn mark_all_read(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
     sqlx::query("UPDATE notifications SET read=true WHERE tenant_id=$1 AND user_id=$2 AND read=false")
         .bind(tid).bind(uid).execute(&s.db).await?;
@@ -74,7 +74,7 @@ pub async fn mark_all_read(State(s): State<AppState>, Extension(c): Extension<Cl
 
 /// GET /api/notifications/unread-count
 pub async fn unread_count(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
     let count: i64 = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT COUNT(*) FROM notifications WHERE tenant_id=$1 AND user_id=$2 AND read=false"

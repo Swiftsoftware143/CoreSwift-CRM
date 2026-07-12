@@ -9,7 +9,7 @@ use crate::ai::engine;
 
 /// POST /api/ai/prioritize — Score and rank all contacts by priority
 pub async fn prioritize(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<PrioritizeRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Pull contacts joined with health scores, last activity, and risk level
     let contacts = sqlx::query_as::<_, (Uuid, String, String, i32, Option<i32>, Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
@@ -62,7 +62,7 @@ pub async fn prioritize(State(s): State<AppState>, Extension(c): Extension<Claim
 
 /// POST /api/ai/predict — Predict win probability for a specific contact
 pub async fn predict(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<PredictRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Gather signals
     let positive = sqlx::query_scalar::<_, Option<i64>>(
@@ -99,21 +99,21 @@ pub async fn predict(State(s): State<AppState>, Extension(c): Extension<Claims>,
 
 /// POST /api/ai/recommend — Get segmentation and campaign recommendations
 pub async fn recommend(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<CampaignRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let rec = engine::recommend_campaign(&s.db, tid, &r.campaign_goal).await;
     Ok(Json(json!(rec)))
 }
 
 /// POST /api/ai/campaign — Legacy alias for recommend
 pub async fn campaign(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<CampaignRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let rec = engine::recommend_campaign(&s.db, tid, &r.campaign_goal).await;
     Ok(Json(json!(rec)))
 }
 
 /// POST /api/ai/message — AI-compose a follow-up message for a specific context
 pub async fn compose_message(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<ComposeMessageRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Get contact info for personalization
     let contact = sqlx::query_as::<_, (String, String, Option<String>)>(
@@ -181,21 +181,21 @@ pub async fn compose_message(State(s): State<AppState>, Extension(c): Extension<
 
 /// POST /api/ai/channel — AI-suggest the best channel for follow-up
 pub async fn suggest_channel(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<ChannelRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let suggestion = engine::suggest_channel(&s.db, tid, r.contact_id, &r.context).await;
     Ok(Json(json!(suggestion)))
 }
 
 /// POST /api/ai/timing — AI-suggest optimal send time
 pub async fn suggest_timing(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<TimingRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let suggestion = engine::suggest_timing(&s.db, tid, r.contact_id).await;
     Ok(Json(json!(suggestion)))
 }
 
 /// POST /api/ai/risk — Assess churn risk for a single contact
 pub async fn assess_churn_risk(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<ChurnRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let assessment = engine::assess_churn_risk(&s.db, tid, r.contact_id).await;
     Ok(Json(json!(assessment)))
 }

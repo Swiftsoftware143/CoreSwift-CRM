@@ -16,7 +16,7 @@ pub async fn list(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let companies = sqlx::query_as::<_, Company>(
         "SELECT * FROM companies WHERE tenant_id = $1 AND is_active = true ORDER BY name"
     ).bind(tenant_id).fetch_all(&state.db).await?;
@@ -28,7 +28,7 @@ pub async fn create(
     Extension(claims): Extension<Claims>,
     Json(req): Json<CreateCompanyRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     if req.name.is_empty() {
         return Err(AppError::Validation("Company name is required".to_string()));
     }
@@ -51,7 +51,7 @@ pub async fn get(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let company = sqlx::query_as::<_, Company>(
         "SELECT * FROM companies WHERE id = $1 AND tenant_id = $2"
     ).bind(id).bind(tenant_id).fetch_optional(&state.db).await?
@@ -65,7 +65,7 @@ pub async fn update(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateCompanyRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let company = sqlx::query_as::<_, Company>(
         r#"UPDATE companies SET name = COALESCE($1, name), domain = COALESCE($2, domain),
             industry = COALESCE($3, industry), size = COALESCE($4, size),
@@ -103,7 +103,7 @@ pub async fn delete(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let r = sqlx::query("DELETE FROM companies WHERE id = $1 AND tenant_id = $2")
         .bind(id).bind(tenant_id).execute(&state.db).await?;
     if r.rows_affected() == 0 {

@@ -35,8 +35,8 @@ pub async fn connect_app(
     Path(app_slug): Path<String>,
     Json(r): Json<ConnectAppRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
-    let is_admin = c.role == "owner" || c.role == "admin";
+    let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    let is_admin = c.role == "account_owner" || c.role == "admin";
 
     // Look up the app definition
     let app = connectors::NATIVE_APPS.iter().find(|a| a.slug == app_slug)
@@ -114,7 +114,7 @@ pub async fn disconnect_app(
     Extension(c): Extension<Claims>,
     Path(app_slug): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let r = sqlx::query("DELETE FROM app_connections WHERE tenant_id = $1 AND app_slug = $2")
         .bind(tenant_id)
@@ -136,7 +136,7 @@ pub async fn app_status(
     Extension(c): Extension<Claims>,
     Path(app_slug): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let app_meta = connectors::get_app_meta(&app_slug)
         .ok_or_else(|| AppError::NotFound(format!("App '{}' not found", app_slug)))?;
@@ -181,7 +181,7 @@ pub async fn test_connection(
     Path(app_slug): Path<String>,
     Json(r): Json<ConnectAppRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let _is_admin = c.role == "owner" || c.role == "admin";
+    let _is_admin = c.role == "account_owner" || c.role == "admin";
 
     let app = connectors::NATIVE_APPS.iter().find(|a| a.slug == app_slug)
         .ok_or_else(|| AppError::NotFound(format!("App '{}' not found", app_slug)))?;
@@ -204,7 +204,7 @@ pub async fn pull_from_app(
     Path(app_slug): Path<String>,
     Json(r): Json<PullRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Fetch the connection credentials
     let row = sqlx::query_as::<_, (serde_json::Value,)>(
@@ -272,7 +272,7 @@ pub async fn push_to_app(
     Path(app_slug): Path<String>,
     Json(r): Json<PushRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let row = sqlx::query_as::<_, (serde_json::Value,)>(
         "SELECT credentials FROM app_connections WHERE tenant_id = $1 AND app_slug = $2 AND status = 'connected'"
@@ -331,7 +331,7 @@ pub async fn sync_history(
     Extension(c): Extension<Claims>,
     Path(app_slug): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let rows = sqlx::query(
         "SELECT id, app_slug, direction, entity_type, records_processed, records_succeeded, records_failed, status, started_at, completed_at FROM app_sync_logs WHERE tenant_id = $1 AND app_slug = $2 ORDER BY started_at DESC LIMIT 50"
@@ -437,7 +437,7 @@ pub async fn create_ada_campaign_trigger(
     Extension(c): Extension<Claims>,
     Json(r): Json<AdaCampaignRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     if r.name.is_empty() || r.ada_campaign_id.is_empty() {
         return Err(AppError::Validation("Name and ada_campaign_id are required".into()));
@@ -481,7 +481,7 @@ pub async fn list_ada_campaign_triggers(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let rows = sqlx::query(
         "SELECT * FROM ada_campaign_triggers WHERE tenant_id = $1 ORDER BY created_at DESC"
@@ -512,7 +512,7 @@ pub async fn delete_ada_campaign_trigger(
     Extension(c): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let r = sqlx::query("DELETE FROM ada_campaign_triggers WHERE id = $1 AND tenant_id = $2")
         .bind(id)

@@ -60,7 +60,7 @@ pub struct UpdateTemplateRequest {
 
 /// GET /api/comms/messages — List outbound messages
 pub async fn list_messages(State(s): State<AppState>, Extension(c): Extension<Claims>, Query(p): Query<Value>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let (page, per_page) = validate_pagination(p.get("page").and_then(|v| v.as_i64()), p.get("per_page").and_then(|v| v.as_i64()));
     let offset = (page - 1) * per_page;
 
@@ -89,7 +89,7 @@ pub async fn list_messages(State(s): State<AppState>, Extension(c): Extension<Cl
 
 /// POST /api/comms/messages — Send a message immediately
 pub async fn send(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<SendRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     if !["email", "sms"].contains(&r.channel.as_str()) {
         return Err(AppError::Validation("channel must be 'email' or 'sms'".to_string()));
@@ -123,7 +123,7 @@ pub async fn send(State(s): State<AppState>, Extension(c): Extension<Claims>, Js
 
 /// GET /api/comms/messages/{id} — Get message delivery status
 pub async fn get_message(State(s): State<AppState>, Extension(c): Extension<Claims>, Path(id): Path<Uuid>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let msg = sqlx::query_as::<_, OutboundMessage>("SELECT * FROM outbound_messages WHERE id = $1 AND tenant_id = $2")
         .bind(id).bind(tid)
         .fetch_optional(&s.db).await?
@@ -133,7 +133,7 @@ pub async fn get_message(State(s): State<AppState>, Extension(c): Extension<Clai
 
 /// GET /api/comms/templates — List message templates
 pub async fn list_templates(State(s): State<AppState>, Extension(c): Extension<Claims>, Query(p): Query<Value>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let (page, per_page) = validate_pagination(p.get("page").and_then(|v| v.as_i64()), p.get("per_page").and_then(|v| v.as_i64()));
     let offset = (page - 1) * per_page;
 
@@ -146,7 +146,7 @@ pub async fn list_templates(State(s): State<AppState>, Extension(c): Extension<C
 
 /// POST /api/comms/templates — Create message template
 pub async fn create_template(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<CreateTemplateRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     if r.name.is_empty() || r.body.is_empty() {
         return Err(AppError::Validation("name and body are required".to_string()));
     }
@@ -167,7 +167,7 @@ pub async fn create_template(State(s): State<AppState>, Extension(c): Extension<
 
 /// PATCH /api/comms/templates/{id} — Update template
 pub async fn update_template(State(s): State<AppState>, Extension(c): Extension<Claims>, Path(id): Path<Uuid>, Json(r): Json<UpdateTemplateRequest>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let tmpl = sqlx::query_as::<_, MessageTemplate>(
         r#"UPDATE message_templates SET
             subject = COALESCE($1, subject),
@@ -183,7 +183,7 @@ pub async fn update_template(State(s): State<AppState>, Extension(c): Extension<
 
 /// DELETE /api/comms/templates/{id} — Delete template
 pub async fn delete_template(State(s): State<AppState>, Extension(c): Extension<Claims>, Path(id): Path<Uuid>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     sqlx::query("DELETE FROM message_templates WHERE id = $1 AND tenant_id = $2")
         .bind(id).bind(tid).execute(&s.db).await?;
     Ok(Json(json!({"message": "Template deleted"})))
@@ -191,7 +191,7 @@ pub async fn delete_template(State(s): State<AppState>, Extension(c): Extension<
 
 /// GET /api/comms/providers — Get communication provider config
 pub async fn get_providers(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let config = sqlx::query_scalar::<_, Option<serde_json::Value>>(
         "SELECT settings->'communications' FROM tenants WHERE id = $1"
     ).bind(tid).fetch_optional(&s.db).await?;
@@ -213,7 +213,7 @@ pub async fn get_providers(State(s): State<AppState>, Extension(c): Extension<Cl
 
 /// PATCH /api/comms/providers — Update communication provider config
 pub async fn update_providers(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(settings): Json<Value>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let _ = sqlx::query(
         r#"UPDATE tenants SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{communications}', $1::jsonb), updated_at = NOW() WHERE id = $2"#
     )

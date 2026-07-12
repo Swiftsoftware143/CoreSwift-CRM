@@ -18,7 +18,7 @@ pub async fn ingest(
     headers: axum::http::HeaderMap,
     Json(body): Json<IngestPayload>,
 ) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     if body.event_type.is_empty() {
         return Err(AppError::Validation("event_type is required".to_string()));
@@ -81,7 +81,7 @@ pub async fn list_events(
     Extension(c): Extension<Claims>,
     Query(p): Query<Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let (page, per_page) = validate_pagination(p.get("page").and_then(|v| v.as_i64()), p.get("per_page").and_then(|v| v.as_i64()));
     let offset = (page - 1) * per_page;
 
@@ -119,7 +119,7 @@ pub async fn list_events(
 
 /// GET /api/events/{id} — Get single event
 pub async fn get_event(State(s): State<AppState>, Extension(c): Extension<Claims>, Path(id): Path<Uuid>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let event = sqlx::query_as::<_, Event>("SELECT * FROM events WHERE id = $1 AND tenant_id = $2")
         .bind(id).bind(tid)
         .fetch_optional(&s.db).await?
@@ -131,7 +131,7 @@ pub async fn get_event(State(s): State<AppState>, Extension(c): Extension<Claims
 
 /// GET /api/events/delayed — List pending delayed actions
 pub async fn list_delayed(State(s): State<AppState>, Extension(c): Extension<Claims>, Query(p): Query<Value>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let (page, per_page) = validate_pagination(p.get("page").and_then(|v| v.as_i64()), p.get("per_page").and_then(|v| v.as_i64()));
     let offset = (page - 1) * per_page;
 
@@ -152,7 +152,7 @@ pub async fn schedule_delayed(
     Extension(c): Extension<Claims>,
     Json(r): Json<ScheduleDelayedRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     if !["timeout", "no_event", "no_action"].contains(&r.condition_type.as_str()) {
         return Err(AppError::Validation("condition_type must be 'timeout', 'no_event', or 'no_action'".to_string()));
@@ -190,7 +190,7 @@ pub async fn schedule_delayed(
 
 /// DELETE /api/events/delayed/{id} — Cancel a delayed action
 pub async fn cancel_delayed(State(s): State<AppState>, Extension(c): Extension<Claims>, Path(id): Path<Uuid>) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.tid).map_err(|_| AppError::Unauthorized)?;
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     sqlx::query("UPDATE delayed_actions SET cancelled = true, updated_at = NOW() WHERE id = $1 AND tenant_id = $2")
         .bind(id).bind(tid)
         .execute(&s.db).await?;

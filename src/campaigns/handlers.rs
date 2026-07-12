@@ -679,7 +679,7 @@ async fn log_sync(
 }
 
 fn parse_tenant(c: &Claims) -> Result<Uuid, AppError> {
-    Uuid::from_str(&c.tid).map_err(|_| AppError::Unauthorized)
+    Uuid::from_str(&c.aid).map_err(|_| AppError::Unauthorized)
 }
 
 fn parse_user(c: &Claims) -> Option<Uuid> {

@@ -738,7 +738,7 @@ pub async fn route_action(
                 .to_string();
 
             sqlx::query(
-                "INSERT INTO users (id, tenant_id, email, password_hash, name, role) VALUES ($1, $2, $3, $4, $5, 'owner')"
+                "INSERT INTO users (id, tenant_id, email, password_hash, name, role) VALUES ($1, $2, $3, $4, $5, 'account_owner')"
             )
             .bind(uid).bind(new_tid).bind(email).bind(&pw_hash).bind(name)
             .execute(db).await
@@ -912,7 +912,7 @@ pub async fn route_action(
             .fetch_optional(db).await
             .map_err(|e| format!("DB error: {}", e))?;
             Ok((200, json!({
-                "tenant": tenant,
+                "account": tenant,
                 "webhook_token_count": webhook_count.0,
                 "plan": plan_info
             })))
