@@ -4,9 +4,9 @@
 //! It runs scheduled workflows with credit tracking, custom workflow builder,
 //! and portfolio management.
 //!
-//! Tenants connect their WorkflowSwift instance and can trigger/pull workflows.
+//! Accounts connect their WorkflowSwift instance and can trigger/pull workflows.
 //!
-//! Access: Admin + Tenant
+//! Access: Admin + Account
 
 use std::collections::HashMap;
 
@@ -95,7 +95,7 @@ pub fn get_meta() -> serde_json::Value {
         "description": "n8n-based workflow automation engine with Supabase backend",
         "auth_type": "api_key",
         "auth_fields": ["api_key", "base_url"],
-        "access_level": "admin_tenant",
+        "access_level": "admin_account",
         "entities": { "push": ["workflow", "trigger"], "pull": ["workflows", "runs", "credits"] },
         "features": [
             "Trigger n8n workflows from CRM automation rules",

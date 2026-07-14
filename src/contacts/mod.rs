@@ -4,6 +4,7 @@
 
 pub mod models;
 pub mod handlers;
+pub mod internal_handler;
 
 use axum::{Router, middleware};
 use crate::AppState;

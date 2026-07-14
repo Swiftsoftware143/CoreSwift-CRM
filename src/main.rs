@@ -11,11 +11,13 @@ mod errors;
 pub mod auth;
 pub mod account;
 pub mod contacts;
+pub mod contacts_internal;
 pub mod companies;
 pub mod pipelines;
 pub mod tags;
 pub mod scoring;
 pub mod lists;
+pub mod lists_internal;
 pub mod automation;
 pub mod integrations;
 pub mod analytics;
@@ -39,6 +41,7 @@ pub mod webhook;
 pub mod dashboard;
 pub mod portfolio;
 pub mod inbound;
+pub mod telnyx;
 pub mod worker;
 
 use axum::{
@@ -125,11 +128,13 @@ async fn main() -> anyhow::Result<()> {
         // Protected routes
         .nest("/api/account", account::router(state.clone()))
         .nest("/api/contacts", contacts::router(state.clone()))
+        .nest("/api/internal/contacts", contacts_internal::router())
         .nest("/api/companies", companies::router(state.clone()))
         .nest("/api/pipelines", pipelines::router(state.clone()))
         .nest("/api/tags", tags::router(state.clone()))
         .nest("/api/scoring", scoring::router(state.clone()))
         .nest("/api/lists", lists::router(state.clone()))
+        .nest("/api/internal/lists", lists_internal::router())
         .nest("/api/automation", automation::router(state.clone()))
         .nest("/api/integrations", integrations::router(state.clone()))
         .nest("/api/analytics", analytics::router(state.clone()))
@@ -163,6 +168,8 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/monitoring", monitoring::router(state.clone()))
         // In-app notifications
         .nest("/api/notifications", notifications::router(state.clone()))
+        // Telnyx SMS/Voice integration
+        .nest("/api/telnyx", telnyx::router(state.clone()))
         // Layer stack (inner to outer = last to first in call order)
         .layer(CompressionLayer::new())
         .layer(axum::middleware::from_fn(security_headers_middleware))
