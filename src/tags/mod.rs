@@ -1,5 +1,6 @@
 pub mod models;
 pub mod handlers;
+pub mod internal_handler;
 pub mod triggers;
 
 use axum::{Router, middleware};

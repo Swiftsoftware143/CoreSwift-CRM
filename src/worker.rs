@@ -13,6 +13,7 @@ use tokio_cron_scheduler::{Job, JobScheduler};
 
 // Import AI engine for intelligent decision-making
 use crate::ai::engine;
+use crate::communications::providers;
 
 /// Start the background worker scheduler.
 /// Call this once during server startup.
@@ -59,11 +60,22 @@ pub async fn start_worker(db: PgPool) -> Result<(), Box<dyn std::error::Error + 
     })?;
     sched.add(job4).await?;
 
+    // Job 5: Every 30 seconds — process queued outbound messages (welcome emails etc.)
+    let db5 = db.clone();
+    let job5 = Job::new_async("0/30 * * * * *", move |_uuid, _lock| {
+        let db = db5.clone();
+        Box::pin(async move {
+            deliver_queued_messages(&db).await;
+        })
+    })?;
+    sched.add(job5).await?;
+
     sched.start().await?;
-    tracing::info!("Flawless Follow-up background worker started (4 cron jobs)");
+    tracing::info!("Flawless Follow-up background worker started (5 cron jobs)");
 
     Ok(())
 }
+
 
 /// Evaluate all pending delayed actions that are past their execute_at time.
 /// This is the core "If-Not-Then" engine — checks conditions and fires actions.
@@ -327,5 +339,58 @@ async fn check_abandoned_directory_signups(db: &PgPool) {
         }))
         .bind(template_slug)
         .execute(db).await;
+    }
+}
+
+/// Process queued email messages from outbound_messages table.
+/// Polls for 'queued' messages with channel='email', sends via configured provider.
+async fn deliver_queued_messages(db: &PgPool) {
+    let messages = match sqlx::query_as::<_, (Uuid, Uuid, String, String, Option<String>, String)>(
+        r#"SELECT id, tenant_id, to_address, body, subject, channel
+           FROM outbound_messages
+           WHERE status = 'queued' AND channel = 'email'
+           ORDER BY created_at ASC
+           LIMIT 10"#
+    ).fetch_all(db).await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to fetch queued messages");
+            return;
+        }
+    };
+
+    if messages.is_empty() {
+        return;
+    }
+
+    tracing::info!("Processing {} queued messages", messages.len());
+
+    for (msg_id, tenant_id, to_address, body, subject, _channel) in &messages {
+        // Mark as sending
+        let _ = sqlx::query(
+            "UPDATE outbound_messages SET status = 'sending' WHERE id = $1"
+        ).bind(msg_id).execute(db).await;
+
+        // Load delivery config from tenant settings
+        let cfg = crate::communications::providers::load_delivery_config(
+            db, *msg_id, *tenant_id, "email", to_address,
+            subject.clone(), body,
+        ).await;
+
+        // Deliver
+        let (ok, err) = crate::communications::providers::deliver(&cfg).await;
+
+        if ok {
+            let _ = sqlx::query(
+                "UPDATE outbound_messages SET status = 'sent', sent_at = NOW() WHERE id = $1"
+            ).bind(msg_id).execute(db).await;
+            tracing::info!(msg = %msg_id, "Email delivered successfully");
+        } else {
+            let err_msg = err.unwrap_or_else(|| "Unknown error".to_string());
+            let _ = sqlx::query(
+                "UPDATE outbound_messages SET status = 'failed', error_message = $2 WHERE id = $1"
+            ).bind(msg_id).bind(&err_msg).execute(db).await;
+            tracing::warn!(msg = %msg_id, error = %err_msg, "Email delivery failed");
+        }
     }
 }

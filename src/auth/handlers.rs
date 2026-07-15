@@ -91,7 +91,7 @@ pub async fn register(
 
     // Fetch tenant info
     let tenant = sqlx::query_as::<_, crate::account::models::Account>(
-        "SELECT id, name, slug, is_active FROM tenants WHERE id = $1"
+        "SELECT id, name, slug, logo_url, primary_color, accent_color, custom_domain, settings, is_active, created_at, updated_at FROM tenants WHERE id = $1"
     )
     .bind(tenant_id)
     .fetch_one(&state.db)
@@ -100,7 +100,37 @@ pub async fn register(
     // Generate tokens
     let (access_token, refresh_token, expires_in) = generate_tokens(&user, &state)?;
 
-    // Build next steps
+
+    // Queue welcome email with login credentials
+    let welcome_body = format!(
+        "Welcome to CoreSwift CRM!\n\n
+         Your account has been created.\n
+         Account: {}\n
+         Email: {}\n
+         Login here: https://app.coreswiftcrm.com/login\n\n
+         Next steps:\n
+         - Connect your apps\n
+         - Import your contacts\n
+         - Set up your pipelines\n
+         - Invite your team\n\n
+         CoreSwift CRM Team"
+        , tenant.name, req.email
+    );
+    let _ = sqlx::query(
+        r#"INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)"#
+    )
+    .bind(Uuid::new_v4())
+    .bind(tenant_id)
+    .bind("email")
+    .bind(&req.email)
+    .bind("Welcome to CoreSwift CRM")
+    .bind(&welcome_body)
+    .bind("queued")
+    .execute(&state.db)
+    .await
+        .map_err(|e| { tracing::warn!(error = %e, "Welcome email queue failed"); e })
+    .ok();
     let mut next_steps = vec![
         "Connect your apps — POST /api/native/apps/{slug}/connect".to_string(),
         "Create contacts — POST /api/contacts".to_string(),
@@ -358,6 +388,19 @@ async fn resolve_account(
             }
             AppError::Database(e)
         })?;
+        // Auto-assign Free Plan to new tenant
+        {
+            let free_plan_id = uuid::Uuid::parse_str("ebbdca8c-6ad7-48cb-b580-d321b536671a").unwrap();
+            let _ = sqlx::query(
+                r#"INSERT INTO tenant_plans (tenant_id, plan_id, status, billing_cycle)
+                   VALUES ($1, $2, 'active', 'monthly')
+                   ON CONFLICT (tenant_id) DO NOTHING"#
+            )
+            .bind(tenant.id)
+            .bind(free_plan_id)
+            .execute(&state.db)
+            .await;
+        }
         Ok(tenant.id)
     } else {
         // Auto-generate tenant from email — each admin gets their own tenant
@@ -376,6 +419,19 @@ async fn resolve_account(
         .map_err(|e| {
             AppError::Database(e)
         })?;
+        // Auto-assign Free Plan to new tenant
+        {
+            let free_plan_id = uuid::Uuid::parse_str("ebbdca8c-6ad7-48cb-b580-d321b536671a").unwrap();
+            let _ = sqlx::query(
+                r#"INSERT INTO tenant_plans (tenant_id, plan_id, status, billing_cycle)
+                   VALUES ($1, $2, 'active', 'monthly')
+                   ON CONFLICT (tenant_id) DO NOTHING"#
+            )
+            .bind(tenant.id)
+            .bind(free_plan_id)
+            .execute(&state.db)
+            .await;
+        }
         Ok(tenant.id)
     }
 }
