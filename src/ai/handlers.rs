@@ -19,7 +19,7 @@ pub async fn prioritize(State(s): State<AppState>, Extension(c): Extension<Claim
                   ah.risk_level,
                   ah.last_active_at
            FROM contacts c
-           LEFT JOIN contact_scores cs ON cs.contact_id = c.id
+           LEFT JOIN scores cs ON cs.contact_id = c.id
            LEFT JOIN account_health ah ON ah.entity_id = c.id AND ah.entity_type = 'contact'
            WHERE c.tenant_id = $1
            ORDER BY ah.score ASC NULLS LAST, cs.total_score DESC NULLS LAST

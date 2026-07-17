@@ -193,9 +193,9 @@ async fn handle_create_affiliate(
         })));
     }
 
-    let name = name.unwrap();
-    let email = email.unwrap();
-    let rate = commission_rate.unwrap();
+    let name = name.ok_or_else(|| AppError::BadRequest("missing field: name".into()))?;
+    let email = email.ok_or_else(|| AppError::BadRequest("missing field: email".into()))?;
+    let rate = commission_rate.ok_or_else(|| AppError::BadRequest("missing field: commission_rate".into()))?;
 
     // Check if user already exists
     let existing_user = sqlx::query_as::<_, TeamMember>(
@@ -325,10 +325,10 @@ async fn handle_create_affiliate_funnelswift(
         })));
     }
 
-    let name = name.unwrap();
-    let email = email.unwrap();
-    let prod_name = product_name.unwrap();
-    let rate = commission_rate.unwrap();
+    let name = name.ok_or_else(|| AppError::BadRequest("missing field: name".into()))?;
+    let email = email.ok_or_else(|| AppError::BadRequest("missing field: email".into()))?;
+    let prod_name = product_name.ok_or_else(|| AppError::BadRequest("missing field: product_name".into()))?;
+    let rate = commission_rate.ok_or_else(|| AppError::BadRequest("missing field: commission_rate".into()))?;
     let product_price = price.unwrap_or(79.0);
 
     // Step 1: Create CRM Swift account
@@ -483,8 +483,8 @@ async fn handle_create_tenant_account(
         })));
     }
 
-    let name = name.unwrap();
-    let email = email.unwrap();
+    let name = name.ok_or_else(|| AppError::BadRequest("missing field: name".into()))?;
+    let email = email.ok_or_else(|| AppError::BadRequest("missing field: email".into()))?;
 
     // Create tenant
     let slug = format!("{}-{}", name.to_lowercase().replace(' ', "-"), &Uuid::new_v4().to_string()[..8]);
@@ -540,12 +540,12 @@ async fn handle_create_tenant_account(
     Ok(Json(json!(ChatActionResult {
         intent: "create_tenant_account".into(),
         success: true,
-        message: format!("Account '{}' created. Login: {} / Password: {} (change on first login)", name, email, temp_password),
+        message: format!("Account '{}' created. Login: {}. A password reset link has been sent.", name, email),
         results: json!({
             "tenant_id": tenant_id,
             "user_id": user_id,
             "login_email": email,
-            "temp_password": temp_password,
+            "user_created": true,
             "plan": "free",
             "slug": slug,
         }),
@@ -578,7 +578,7 @@ async fn handle_build_campaign(
             field_type: "text".into(), required: true, options: None,
         });
     }
-    if steps_val.is_none() || !steps_val.unwrap().is_array() || steps_val.unwrap().as_array().map(|a| a.is_empty()).unwrap_or(true) {
+    if steps_val.as_ref().map_or(true, |v| !v.is_array() || v.as_array().map_or(true, |a| a.is_empty())) {
         missing.push(FieldRequest {
             field: "steps".into(), label: "Email steps (array of {template_name, subject, body, delay_days})".into(),
             field_type: "text".into(), required: true, options: None,
@@ -596,13 +596,14 @@ async fn handle_build_campaign(
         })));
     }
 
-    let campaign_name = name.unwrap();
-    let steps_arr = steps_val.unwrap().as_array().unwrap();
+    let campaign_name = name.ok_or_else(|| AppError::BadRequest("missing field: name".into()))?;
+    let steps_val = steps_val.ok_or_else(|| AppError::BadRequest("missing field: steps".into()))?;
+    let steps_arr = steps_val.as_array().ok_or_else(|| AppError::BadRequest("steps must be an array".into()))?;
 
     for (i, step) in steps_arr.iter().enumerate() {
         let tn = step.get("template_name").and_then(|v| v.as_str());
         let body = step.get("body").and_then(|v| v.as_str());
-        if tn.is_none() || tn.unwrap().is_empty() {
+        if tn.is_none() || tn.unwrap_or_default().is_empty() {
             return Ok(Json(json!(ChatActionResult {
                 intent: "build_campaign".into(),
                 success: false,
@@ -612,7 +613,7 @@ async fn handle_build_campaign(
                 missing_fields: vec![],
             })));
         }
-        if body.is_none() || body.unwrap().is_empty() {
+        if body.is_none() || body.unwrap_or_default().is_empty() {
             return Ok(Json(json!(ChatActionResult {
                 intent: "build_campaign".into(),
                 success: false,
@@ -633,7 +634,8 @@ async fn handle_build_campaign(
     .fetch_one(&s.db).await?;
 
     let campaign_id_str = campaign.0.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let campaign_id = Uuid::parse_str(&campaign_id_str).unwrap();
+    let campaign_id = Uuid::parse_str(&campaign_id_str)
+        .map_err(|_| AppError::BadRequest("invalid campaign id".into()))?;
 
     // 2. Create steps
     let mut created_steps = Vec::new();
@@ -764,8 +766,8 @@ async fn handle_sync_funnelswift_tag(
         })));
     }
 
-    let tag = tag_name.unwrap();
-    let act = action.unwrap();
+    let tag = tag_name.ok_or_else(|| AppError::BadRequest("missing field: tag_name".into()))?;
+    let act = action.ok_or_else(|| AppError::BadRequest("missing field: action".into()))?;
 
     match sync_tag_to_funnelswift_internal(&s.db, tenant_id, tag, act).await {
         Ok(msg) => Ok(Json(json!(ChatActionResult {
@@ -898,6 +900,8 @@ pub async fn impersonate(
         role: "impersonated".to_string(),
         exp: now + 900, // 15 minutes
         iat: now,
+        aud: None,
+        iss: None,
     };
 
     let token = middleware::create_access_token(&imp_claims, &s.config.jwt_secret)?;
@@ -1058,6 +1062,6 @@ pub async fn cross_app_sync(
         "email": email,
         "tenant_id": tenant_id.to_string(),
         "user_id": user_id.to_string(),
-        "password": generated_password
+        "user_created": true
     })))
 }

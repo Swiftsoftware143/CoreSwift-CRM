@@ -42,6 +42,7 @@ pub mod dashboard;
 pub mod portfolio;
 pub mod inbound;
 pub mod telnyx;
+pub mod webhooks;
 pub mod worker;
 
 use axum::{
@@ -55,7 +56,7 @@ use tower_http::{
     cors::CorsLayer,
     trace::TraceLayer,
     compression::CompressionLayer,
-
+    services::ServeDir,
 };
 use tracing_subscriber::EnvFilter;
 use std::time::Duration;
@@ -123,6 +124,8 @@ async fn main() -> anyhow::Result<()> {
         // Health check (no auth required)
         .route("/api/health", get(health_check))
         .route("/api/ready", get(ready_check))
+        // Serve SPA at root
+        .nest_service("/", ServeDir::new("public"))
         // Auth routes (no auth required)
         .nest("/api/auth", auth::router())
         // Protected routes
@@ -137,7 +140,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/internal/lists", lists_internal::router())
         .nest("/api/internal/tags", tags::internal_handler::router())
         .nest("/api/analytics", analytics::router(state.clone()))
-        .nest("/api/ai", ai::router())
+        .nest("/api/ai", ai::router(state.clone()))
         // Billing (plan tiers, feature toggles)
         .nest("/api/campaigns", campaigns::router(state.clone()))
         .nest("/api/billing", billing::router(state.clone()))
@@ -169,6 +172,8 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/notifications", notifications::router(state.clone()))
         // Telnyx SMS/Voice integration
         .nest("/api/telnyx", telnyx::router(state.clone()))
+        // Cross-app webhooks — receive tag sync events from satellite apps
+        .nest("/api/v1/webhooks", webhooks::cross_app_tag_sync::router())
         // Layer stack (inner to outer = last to first in call order)
         .layer(CompressionLayer::new())
         .layer(axum::middleware::from_fn(security_headers_middleware))

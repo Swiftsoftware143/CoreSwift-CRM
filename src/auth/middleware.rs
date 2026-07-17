@@ -30,7 +30,7 @@ pub async fn auth_middleware(
 ) -> Result<Response, AppError> {
     // Skip auth for internal sync routes — validated by x-internal-key header
     let path = req.uri().path();
-    if path.ends_with("/internal") {
+    if path.ends_with("/internal") || path.contains("/internal/") {
         return Ok(next.run(req).await);
     }
 
@@ -55,8 +55,10 @@ pub fn verify_token(token: &str, secret: &str) -> Result<Claims, AppError> {
 
     let decoding_key = DecodingKey::from_secret(secret.as_bytes());
     let mut validation = Validation::new(Algorithm::HS256);
-    validation.leeway = 30; // 30-second clock skew tolerance
+    validation.leeway = 30;
     validation.validate_exp = true;
+    validation.set_issuer(&["coreswift"]);
+    validation.set_audience(&["coreswift-api"]);
 
     let token_data = decode::<Claims>(token, &decoding_key, &validation)
         .map_err(|e| {

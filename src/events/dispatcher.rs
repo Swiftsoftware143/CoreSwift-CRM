@@ -99,10 +99,10 @@ async fn execute_action(
         "tag_contact" | "add_tag" => {
             if let (Some(eid), Some(tag_name)) = (entity_id, action_config.get("tag_name").and_then(|v| v.as_str())) {
                 let _ = sqlx::query(
-                    r#"INSERT INTO tag_assignments (id, tag_id, entity_type, entity_id)
+                    r#"INSERT INTO tag_assignments (id, tag_id, entity_type, entity_id, tenant_id)
                        SELECT uuid_generate_v4(), t.id, 'contact', $1
                        FROM tags t WHERE t.tenant_id = $2 AND t.name = $3
-                       ON CONFLICT (tag_id, entity_type, entity_id) DO NOTHING"#
+                       ON CONFLICT (tag_id, entity_type, entity_id, tenant_id) DO NOTHING"#
                 )
                 .bind(eid).bind(tenant_id).bind(tag_name)
                 .execute(db).await;

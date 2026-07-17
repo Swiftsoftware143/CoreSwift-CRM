@@ -8,7 +8,7 @@ description = "CRM Swift — Multi-tenant Lead Management Operating System"
 # Web framework
 axum = { version = "0.7", features = ["macros"] }
 tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip", "set-header"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip", "set-header", "fs"] }
 tokio = { version = "1", features = ["full", "signal"] }
 
 # Database

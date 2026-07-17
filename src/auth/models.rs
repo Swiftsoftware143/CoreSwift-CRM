@@ -17,6 +17,10 @@ pub struct Claims {
     pub exp: usize,
     /// Issued at timestamp (UTC epoch seconds)
     pub iat: usize,
+    /// Audience
+    pub aud: Option<String>,
+    /// Issuer
+    pub iss: Option<String>,
 }
 
 /// TeamMember model — database row (from `users` table).

@@ -19,7 +19,7 @@ pub async fn execute_action(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid,
 async fn exec_add_tag(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, entity_type: &str, entity_id: Uuid) -> Result<(), AppError> {
     let tid_str = rule.action_config.get("tag_id").and_then(|v| v.as_str()).ok_or(AppError::Validation("Missing tag_id".into()))?;
     let tag_id = Uuid::parse_str(tid_str).map_err(|_| AppError::Validation("Invalid tag_id".into()))?;
-    let exists: bool = sqlx::query_scalar("SELECT COUNT(*) FROM tag_assignments WHERE tag_id=$1 AND entity_type=$2::entity_type AND entity_id=$3").bind(tag_id).bind(entity_type).bind(entity_id).fetch_one(db).await.unwrap_or(0) > 0;
+    let exists: bool = sqlx::query_scalar("SELECT COUNT(*) FROM tag_assignments WHERE tag_id=$1 AND entity_type=$2::entity_type AND entity_id=$3 AND tenant_id=$4").bind(tag_id).bind(entity_type).bind(entity_id).bind(tenant_id).fetch_one(db).await.unwrap_or(0) > 0;
     if !exists { sqlx::query("INSERT INTO tag_assignments(id,tag_id,entity_type,entity_id,tenant_id) VALUES($1,$2,$3::entity_type,$4,$5)").bind(Uuid::new_v4()).bind(tag_id).bind(entity_type).bind(entity_id).bind(tenant_id).execute(db).await?; }
     Ok(())
 }

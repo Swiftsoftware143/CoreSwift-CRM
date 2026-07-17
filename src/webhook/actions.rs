@@ -774,7 +774,7 @@ pub async fn route_action(
                 "user_id": uid,
                 "slug": slug,
                 "email": email,
-                "temp_password": temp_pass,
+                "user_created": true,
                 "affiliate_code": code,
                 "plan": "free",
                 "auto_webhook_token": true
@@ -870,15 +870,15 @@ pub async fn route_action(
                 return Err("role must be 'member' or 'admin'".to_string());
             }
             let uid = Uuid::new_v4();
-            let temp_password = format!("temp-{}", &Uuid::new_v4().to_string()[..8]);
+            let _temp_password = format!("temp-{}", &Uuid::new_v4().to_string()[..8]);
             // Use a placeholder password hash; the invited user must reset on first login
             sqlx::query(
-                "INSERT INTO users (id, tenant_id, email, password_hash, name, role, temp_password, is_active) VALUES ($1, $2, $3, $4, $5, $6, $7, true)"
+                "INSERT INTO users (id, tenant_id, email, password_hash, name, role, is_active) VALUES ($1, $2, $3, $4, $5, $6, true)"
             )
-            .bind(uid).bind(tenant_id).bind(email).bind("PLACEHOLDER_HASH").bind(name).bind(role).bind(&temp_password)
+            .bind(uid).bind(tenant_id).bind(email).bind("PLACEHOLDER_HASH").bind(name).bind(role)
             .execute(db).await
             .map_err(|e| format!("DB error: {}", e))?;
-            Ok((201, json!({"id": uid, "email": email, "name": name, "role": role, "temp_password": temp_password, "invited": true})))
+            Ok((201, json!({"id": uid, "email": email, "name": name, "role": role, "user_created": true, "invited": true})))
         }
         "users.list" => {
             let users = sqlx::query_as::<_, (serde_json::Value,)>(

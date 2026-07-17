@@ -155,7 +155,7 @@ pub async fn internal_assign_tag(
 
     // assigned_by is nullable FK to users — use None for system operations
     sqlx::query(
-        "INSERT INTO tag_assignments (id, tag_id, entity_type, entity_id, tenant_id, assigned_by) VALUES ($1, $2, $3, $4, $5, NULL) ON CONFLICT (tag_id, entity_type, entity_id) DO NOTHING"
+        "INSERT INTO tag_assignments (id, tag_id, entity_type, entity_id, tenant_id, assigned_by) VALUES ($1, $2, $3, $4, $5, NULL) ON CONFLICT (tag_id, entity_type, entity_id, tenant_id) DO NOTHING"
     )
     .bind(Uuid::new_v4())
     .bind(tag_id)
