@@ -13,7 +13,6 @@ use tokio_cron_scheduler::{Job, JobScheduler};
 
 // Import AI engine for intelligent decision-making
 use crate::ai::engine;
-use crate::communications::providers;
 
 /// Start the background worker scheduler.
 /// Call this once during server startup.
@@ -62,18 +61,96 @@ pub async fn start_worker(db: PgPool) -> Result<(), Box<dyn std::error::Error + 
 
     // Job 5: Every 30 seconds — process queued outbound messages (welcome emails etc.)
     let db5 = db.clone();
-    let job5 = Job::new_async("0/30 * * * * *", move |_uuid, _lock| {
+    let _job5 = Job::new_async("0/30 * * * * *", move |_uuid, _lock| {
         let db = db5.clone();
         Box::pin(async move {
             deliver_queued_messages(&db).await;
         })
     })?;
-    sched.add(job5).await?;
+    sched.add(_job5).await?;
+    // Job 6: Every 30 seconds — process notification queue items
+    let db6 = db.clone();
+    let job6 = Job::new_async("0/30 * * * * *", move |_uuid, _lock| {
+        let db = db6.clone();
+        Box::pin(async move {
+            process_notification_queue(&db).await;
+        })
+    })?;
+    sched.add(job6).await?;
 
     sched.start().await?;
-    tracing::info!("Flawless Follow-up background worker started (5 cron jobs)");
+    tracing::info!("Flawless Follow-up background worker started (6 cron jobs)");
 
     Ok(())
+}
+
+/// Process queued notification items — polls notification_queue and sends via comms providers.
+async fn process_notification_queue(db: &PgPool) {
+    let items = match sqlx::query_as::<_, (Uuid, Uuid, String, String, Option<String>, String)>(
+        r#"SELECT id, tenant_id, channel, to_address, subject, body
+           FROM notification_queue
+           WHERE status = 'queued'
+           ORDER BY created_at ASC
+           LIMIT 10"#
+    ).fetch_all(db).await {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to fetch notification queue items");
+            return;
+        }
+    };
+
+    if items.is_empty() {
+        return;
+    }
+
+    tracing::info!("Processing {} notification queue items", items.len());
+
+    for (item_id, tenant_id, channel, to_address, subject, body) in &items {
+        // Mark as sending
+        let _ = sqlx::query(
+            "UPDATE notification_queue SET status = 'sending' WHERE id = $1"
+        ).bind(item_id).execute(db).await;
+
+        // For in_app notifications, insert into the notifications table
+        if channel == "in_app" {
+            // to_address contains user_id
+            if let Ok(user_id) = Uuid::parse_str(to_address) {
+                let _ = sqlx::query(
+                    r#"INSERT INTO notifications (id, tenant_id, user_id, message)
+                       VALUES ($1, $2, $3, $4)"#
+                )
+                .bind(Uuid::new_v4()).bind(tenant_id).bind(user_id).bind(body)
+                .execute(db).await;
+            }
+            let _ = sqlx::query(
+                "UPDATE notification_queue SET status = 'sent', sent_at = NOW() WHERE id = $1"
+            ).bind(item_id).execute(db).await;
+            continue;
+        }
+
+        // Load delivery config from tenant settings
+        let cfg = crate::communications::providers::load_delivery_config(
+            db, *item_id, *tenant_id, channel, to_address,
+            subject.clone(), body,
+        ).await;
+
+        // Deliver
+        let (ok, err) = crate::communications::providers::deliver(&cfg).await;
+
+        if ok {
+            let _ = sqlx::query(
+                "UPDATE notification_queue SET status = 'sent', sent_at = NOW() WHERE id = $1"
+            ).bind(item_id).execute(db).await;
+            tracing::info!(item = %item_id, channel = %channel, "Notification delivered successfully");
+        } else {
+            let err_msg = err.unwrap_or_else(|| "Unknown error".to_string());
+            let _ = sqlx::query(
+                "UPDATE notification_queue SET status = 'failed', error_message = $2 WHERE id = $1"
+            ).bind(item_id).bind(&err_msg).execute(db).await;
+            tracing::warn!(item = %item_id, error = %err_msg, "Notification delivery failed");
+        }
+    }
 }
 
 

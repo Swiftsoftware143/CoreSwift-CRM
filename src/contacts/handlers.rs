@@ -90,7 +90,7 @@ pub async fn search(
     Ok(Json(json!({ "contacts": contacts, "query": params.q, "page": page, "per_page": per_page })))
 }
 
-/// POST /api/contacts — Create a new contact.
+/// POST /api/contacts — Create a new contact (dedup by email).
 pub async fn create(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -103,6 +103,64 @@ pub async fn create(
         return Err(AppError::Validation("First name and last name are required".to_string()));
     }
 
+    // If email is provided, check for existing contact with same email for this tenant
+    if let Some(ref email) = req.email {
+        if !email.is_empty() {
+            let existing = sqlx::query_as::<_, Contact>(
+                "SELECT * FROM contacts WHERE tenant_id = $1 AND email = $2 LIMIT 1",
+            )
+            .bind(account_id)
+            .bind(email)
+            .fetch_optional(&state.db)
+            .await?;
+
+            if let Some(existing_contact) = existing {
+                // Merge: UPDATE existing with any NEW non-null fields from the request
+                let merged = sqlx::query_as::<_, Contact>(
+                    r#"UPDATE contacts SET
+                        phone = COALESCE($1, phone),
+                        first_name = COALESCE($2, first_name),
+                        last_name = COALESCE($3, last_name),
+                        title = COALESCE($4, title),
+                        company_id = COALESCE($5, company_id),
+                        gender = COALESCE($6, gender),
+                        address_line1 = COALESCE($7, address_line1),
+                        address_line2 = COALESCE($8, address_line2),
+                        city = COALESCE($9, city),
+                        state = COALESCE($10, state),
+                        postal_code = COALESCE($11, postal_code),
+                        country = COALESCE($12, country),
+                        notes = COALESCE($13, notes),
+                        metadata = COALESCE($14, metadata),
+                        updated_at = NOW()
+                       WHERE id = $15 AND tenant_id = $16
+                       RETURNING *"#,
+                )
+                .bind(&req.phone)
+                .bind(&req.first_name)
+                .bind(&req.last_name)
+                .bind(&req.title)
+                .bind(req.company_id)
+                .bind(&req.gender)
+                .bind(&req.address_line1)
+                .bind(&req.address_line2)
+                .bind(&req.city)
+                .bind(&req.state)
+                .bind(&req.postal_code)
+                .bind(&req.country)
+                .bind(&req.notes)
+                .bind(&req.metadata)
+                .bind(existing_contact.id)
+                .bind(account_id)
+                .fetch_one(&state.db)
+                .await?;
+
+                return Ok((StatusCode::OK, Json(json!(merged))));
+            }
+        }
+    }
+
+    // No existing contact found — INSERT as normal
     let contact = sqlx::query_as::<_, Contact>(
         r#"INSERT INTO contacts (id, tenant_id, email, phone, first_name, last_name, title,
             company_id, gender, address_line1, address_line2, city, state, postal_code, country,
@@ -163,6 +221,26 @@ pub async fn update(
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid)
         .map_err(|_| AppError::Unauthorized)?;
+
+    // If email is being changed, check that no OTHER contact already has that email for this tenant
+    if let Some(ref email) = req.email {
+        if !email.is_empty() {
+            let existing = sqlx::query_as::<_, Contact>(
+                "SELECT * FROM contacts WHERE tenant_id = $1 AND email = $2 AND id != $3 LIMIT 1",
+            )
+            .bind(account_id)
+            .bind(email)
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?;
+
+            if existing.is_some() {
+                return Err(AppError::Duplicate(
+                    "Another contact with this email already exists".to_string()
+                ));
+            }
+        }
+    }
 
     let existing_id = id;
     let contact = sqlx::query_as::<_, Contact>(

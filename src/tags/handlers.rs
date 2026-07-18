@@ -1,6 +1,7 @@
 use axum::{extract::{State, Path, Json, Extension}, http::StatusCode, response::IntoResponse};
 use serde_json::json;
 use uuid::Uuid;
+use sqlx::Row;
 use crate::AppState;
 use crate::errors::{AppError, ApiResult};
 use crate::auth::models::Claims;
@@ -35,7 +36,41 @@ pub async fn delete_category(State(s): State<AppState>, Extension(c): Extension<
 
 pub async fn list_tags(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    Ok(Json(json!({"tags": sqlx::query_as::<_,Tag>("SELECT * FROM tags WHERE tenant_id=$1 AND is_active=true ORDER BY name").bind(t).fetch_all(&s.db).await?})))
+    let tags = sqlx::query_as::<_,Tag>("SELECT * FROM tags WHERE tenant_id=$1 AND is_active=true ORDER BY name").bind(t).fetch_all(&s.db).await?;
+
+    // Fetch contact counts via tag_assignments
+    let contact_rows = sqlx::query("SELECT tag_id, COUNT(*)::int8 FROM tag_assignments WHERE tenant_id=$1 AND entity_type='contact' GROUP BY tag_id")
+        .bind(t).fetch_all(&s.db).await.unwrap_or_default();
+
+    // Fetch workflow counts: search JSONB trigger_config/action_config for tag_id references
+    // Checks both 'tag_ids' array and 'tag_id' single value
+    let workflow_rows = sqlx::query(
+        "SELECT t.id, (SELECT COUNT(*)::int8 FROM automation_rules a WHERE a.tenant_id=$1 AND a.is_active=true AND (a.trigger_config->'tag_ids' ? t.id::text OR a.trigger_config->>'tag_id' = t.id::text OR a.action_config->'tag_ids' ? t.id::text OR a.action_config->>'tag_id' = t.id::text))::int8 FROM tags t WHERE t.tenant_id=$1 AND t.is_active=true"
+    ).bind(t).fetch_all(&s.db).await.unwrap_or_default();
+
+    // Fetch integration counts: search JSONB config for tag_id references
+    let integration_rows = sqlx::query(
+        "SELECT t.id, (SELECT COUNT(*)::int8 FROM integrations i WHERE i.tenant_id=$1 AND i.is_active=true AND (i.config->'tag_ids' ? t.id::text))::int8 FROM tags t WHERE t.tenant_id=$1 AND t.is_active=true"
+    ).bind(t).fetch_all(&s.db).await.unwrap_or_default();
+
+    // Build maps
+    let mut contact_counts = std::collections::HashMap::new();
+    for row in contact_rows { if let Some(id) = row.try_get::<Uuid,_>(0).ok() { let c: i64 = row.get(1); contact_counts.insert(id, c); } }
+    let mut workflow_counts = std::collections::HashMap::new();
+    for row in workflow_rows { if let Some(id) = row.try_get::<Uuid,_>(0).ok() { let c: i64 = row.get(1); workflow_counts.insert(id, c); } }
+    let mut integration_counts = std::collections::HashMap::new();
+    for row in integration_rows { if let Some(id) = row.try_get::<Uuid,_>(0).ok() { let c: i64 = row.get(1); integration_counts.insert(id, c); } }
+
+    let result: Vec<TagWithCounts> = tags.into_iter().map(|tag| TagWithCounts {
+        id: tag.id, tenant_id: tag.tenant_id, category_id: tag.category_id,
+        name: tag.name, color: tag.color, parent_id: tag.parent_id,
+        is_active: tag.is_active, created_at: tag.created_at, updated_at: tag.updated_at,
+        contact_count: *contact_counts.get(&tag.id).unwrap_or(&0),
+        workflow_count: *workflow_counts.get(&tag.id).unwrap_or(&0),
+        integration_count: *integration_counts.get(&tag.id).unwrap_or(&0),
+    }).collect();
+
+    Ok(Json(json!(result)))
 }
 pub async fn create_tag(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<CreateTagRequest>) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;

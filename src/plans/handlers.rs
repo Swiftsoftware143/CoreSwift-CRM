@@ -52,8 +52,8 @@ pub async fn create(
 
     let plan = sqlx::query_as::<_, Plan>(
         r#"INSERT INTO plans (id, name, description, price_monthly, price_yearly,
-           max_contacts, max_deals, max_users, max_storage_mb, features, payment_link, sort_order, max_industries)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *"#,
+           max_contacts, max_deals, max_users, max_storage_mb, features, payment_link, payment_provider, sort_order, max_industries)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *"#,
     )
     .bind(Uuid::new_v4())
     .bind(&r.name)
@@ -66,6 +66,7 @@ pub async fn create(
     .bind(r.max_storage_mb.unwrap_or(100))
     .bind(r.features.unwrap_or(serde_json::Value::Object(Default::default())))
     .bind(&r.payment_link)
+    .bind(&r.payment_provider)
     .bind(r.sort_order.unwrap_or(0))
     .bind(r.max_industries.unwrap_or(1))
     .fetch_one(&s.db)
@@ -116,11 +117,12 @@ pub async fn update(
            max_storage_mb = COALESCE($8, max_storage_mb),
            features = COALESCE($9, features),
            payment_link = COALESCE($10, payment_link),
-           is_active = COALESCE($11, is_active),
-           sort_order = COALESCE($12, sort_order),
-           max_industries = COALESCE($13, max_industries),
+           payment_provider = COALESCE($11, payment_provider),
+           is_active = COALESCE($12, is_active),
+           sort_order = COALESCE($13, sort_order),
+           max_industries = COALESCE($14, max_industries),
            updated_at = NOW()
-           WHERE id = $14 RETURNING *"#,
+           WHERE id = $15 RETURNING *"#,
     )
     .bind(&r.name)
     .bind(&r.description)
@@ -132,6 +134,7 @@ pub async fn update(
     .bind(r.max_storage_mb)
     .bind(&r.features)
     .bind(&r.payment_link)
+    .bind(&r.payment_provider)
     .bind(r.is_active)
     .bind(r.sort_order)
     .bind(r.max_industries)

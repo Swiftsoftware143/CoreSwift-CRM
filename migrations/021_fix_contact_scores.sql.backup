@@ -1,0 +1,15 @@
+-- 021_fix_contact_scores.sql
+-- Align contact_scores columns with Rust model
+
+-- Rename calculated_at to created_at for Rust model compatibility
+ALTER TABLE contact_scores RENAME COLUMN calculated_at TO created_at;
+
+-- Add missing columns if they don't already exist
+ALTER TABLE contact_scores ADD COLUMN IF NOT EXISTS last_event_type VARCHAR(100);
+ALTER TABLE contact_scores ADD COLUMN IF NOT EXISTS last_event_at TIMESTAMPTZ;
+ALTER TABLE contact_scores ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+
+-- Add last_event_at and updated_at to score_history too
+ALTER TABLE score_history ADD COLUMN IF NOT EXISTS score_id UUID;
+ALTER TABLE score_history ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE;
+ALTER TABLE score_history ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;

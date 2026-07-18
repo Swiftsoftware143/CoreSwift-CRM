@@ -67,7 +67,15 @@ pub async fn internal_create_tag(
     .bind(&name)
     .bind(&color)
     .execute(&s.db)
-    .await?;
+    .await
+    .map_err(|e| {
+        if let sqlx::Error::Database(ref d) = e {
+            if d.constraint() == Some("tags_tenant_id_name_key") {
+                return AppError::Duplicate(format!("Tag '{}' exists", name));
+            }
+        }
+        AppError::Database(e)
+    })?;
 
     Ok((StatusCode::CREATED, Json(json!({
         "status": "created",

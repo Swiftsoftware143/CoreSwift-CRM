@@ -19,6 +19,7 @@ pub struct Plan {
     pub max_storage_mb: i32,
     pub features: serde_json::Value,
     pub payment_link: Option<String>,
+    pub payment_provider: Option<String>,
     pub is_active: bool,
     pub sort_order: i32,
     pub max_industries: Option<i32>,
@@ -39,6 +40,7 @@ pub struct CreatePlanRequest {
     pub max_storage_mb: Option<i32>,
     pub features: Option<serde_json::Value>,
     pub payment_link: Option<String>,
+    pub payment_provider: Option<String>,
     pub sort_order: Option<i32>,
     pub max_industries: Option<i32>,
 }
@@ -56,6 +58,7 @@ pub struct UpdatePlanRequest {
     pub max_storage_mb: Option<i32>,
     pub features: Option<serde_json::Value>,
     pub payment_link: Option<String>,
+    pub payment_provider: Option<String>,
     pub is_active: Option<bool>,
     pub sort_order: Option<i32>,
     pub max_industries: Option<i32>,

@@ -14,9 +14,9 @@ pub async fn list_rules(State(s): State<AppState>, Extension(c): Extension<Claim
 pub async fn create_rule(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<CreateRuleRequest>) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     if r.name.is_empty() { return Err(AppError::Validation("Name required".into())); }
-    let valid_t = ["TagAdded","TagRemoved","StageChanged","ScoreChanged","ListAdded","ListRemoved"];
+    let valid_t = ["TagAdded","TagRemoved","StageChanged","ScoreChanged","ListAdded","ListRemoved","tag.assigned","tag.unassigned"];
     if !valid_t.contains(&r.trigger_type.as_str()) { return Err(AppError::Validation("Invalid trigger_type".into())); }
-    let valid_a = ["AddTag","RemoveTag","MovePipeline","AddToList","RemoveFromList","Webhook","NotifyUser"];
+    let valid_a = ["AddTag","RemoveTag","MovePipeline","AddToList","RemoveFromList","Webhook","NotifyUser","send_email","send_sms","pipeline.move","scoring.update"];
     if !valid_a.contains(&r.action_type.as_str()) { return Err(AppError::Validation("Invalid action_type".into())); }
     Ok((StatusCode::CREATED, Json(json!(sqlx::query_as::<_,AutomationRule>("INSERT INTO automation_rules(id,tenant_id,name,description,trigger_type,trigger_config,action_type,action_config) VALUES($1,$2,$3,$4,$5::trigger_type,$6,$7::action_type,$8) RETURNING *")
         .bind(Uuid::new_v4()).bind(t).bind(&r.name).bind(&r.description).bind(&r.trigger_type).bind(&r.trigger_config).bind(&r.action_type).bind(&r.action_config).fetch_one(&s.db).await?))))

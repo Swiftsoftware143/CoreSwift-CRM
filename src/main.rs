@@ -12,6 +12,7 @@ pub mod auth;
 pub mod account;
 pub mod contacts;
 pub mod contacts_internal;
+pub mod tenants_internal;
 pub mod companies;
 pub mod pipelines;
 pub mod tags;
@@ -40,9 +41,13 @@ pub mod rate_limiter;
 pub mod webhook;
 pub mod dashboard;
 pub mod portfolio;
+pub mod bookings;
 pub mod inbound;
 pub mod telnyx;
 pub mod webhooks;
+pub mod round_robin;
+pub mod google_calendar;
+pub mod tracked_links;
 pub mod worker;
 
 use axum::{
@@ -138,6 +143,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/scoring", scoring::router(state.clone()))
         .nest("/api/lists", lists::router(state.clone()))
         .nest("/api/internal/lists", lists_internal::router())
+        .nest("/api/internal/tenants", tenants_internal::router())
         .nest("/api/internal/tags", tags::internal_handler::router())
         .nest("/api/analytics", analytics::router(state.clone()))
         .nest("/api/ai", ai::router(state.clone()))
@@ -160,6 +166,12 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/dashboard", dashboard::router(state.clone()))
         // Portfolio — multi-entity portfolio companies
         .nest("/api/portfolio", portfolio::router(state.clone()))
+        .nest("/api/bookings", bookings::router(state.clone()))
+        .nest("/api/bookings/internal", bookings::internal_router())
+        // Alternative internal calendar creation path (outside auth middleware)
+        .nest("/api/internal/bookings", bookings::internal_router())
+        // Round-robin lead assignment
+        .nest("/api/round-robin", round_robin::router(state.clone()))
         // Inbound webhook — receive events from satellite apps
         .nest("/inbound", inbound::router())
         // Admin chat actions — run the entire business from Telegram
@@ -174,6 +186,16 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/telnyx", telnyx::router(state.clone()))
         // Cross-app webhooks — receive tag sync events from satellite apps
         .nest("/api/v1/webhooks", webhooks::cross_app_tag_sync::router())
+        // Google Calendar sync — OAuth2, push/pull events
+        .nest("/api/google-calendar", google_calendar::router(state.clone()))
+        // Automation rules (tag triggers, webhooks, etc)
+        .nest("/api/automation", automation::router(state.clone()))
+        // Tracked links
+        .nest("/api/tracked-links", tracked_links::router(state.clone()))
+        // Public redirect for tracked links (no auth)
+        .nest("/track", tracked_links::public_router())
+        // Public booking endpoints (no auth)
+        .nest("/api/public/bookings", bookings::public_router())
         // Layer stack (inner to outer = last to first in call order)
         .layer(CompressionLayer::new())
         .layer(axum::middleware::from_fn(security_headers_middleware))

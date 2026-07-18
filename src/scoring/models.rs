@@ -48,20 +48,72 @@ pub struct ScoreEventRequest {
     pub description: Option<String>,
 }
 
-pub const COLD_MAX: i32 = 25;
-pub const WARM_MAX: i32 = 50;
-pub const QUALIFIED_MAX: i32 = 100;
+pub const INTERESTED_MAX: i32 = 39;
+pub const QUALIFIED_MAX: i32 = 69;
+pub const HOT_MAX: i32 = 89;
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ScoringWebhook {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub name: String,
+    pub url: String,
+    pub min_score: i32,
+    pub max_score: Option<i32>,
+    pub event_type: Option<String>,
+    pub headers: serde_json::Value,
+    pub is_active: bool,
+    pub last_fired_at: Option<DateTime<Utc>>,
+    pub failure_count: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateWebhookRequest {
+    pub name: String,
+    pub url: String,
+    pub min_score: i32,
+    pub max_score: Option<i32>,
+    pub event_type: Option<String>,
+    pub headers: Option<serde_json::Value>,
+}
 
 pub fn score_category(score: i32) -> &'static str {
-    if score <= COLD_MAX {
-        "cold"
-    } else if score <= WARM_MAX {
-        "warm"
+    if score <= INTERESTED_MAX {
+        "interested"
     } else if score <= QUALIFIED_MAX {
         "qualified"
-    } else {
+    } else if score <= HOT_MAX {
         "hot"
+    } else {
+        "sold"
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ScoringThreshold {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub pipeline_id: Uuid,
+    pub min_score: i32,
+    pub max_score: Option<i32>,
+    pub target_stage_id: Uuid,
+    pub action: String,
+    pub action_config: serde_json::Value,
+    pub is_active: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateThresholdRequest {
+    pub pipeline_id: Uuid,
+    pub min_score: i32,
+    pub max_score: Option<i32>,
+    pub target_stage_id: Uuid,
+    pub action: Option<String>,
+    pub action_config: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]

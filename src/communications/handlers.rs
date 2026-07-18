@@ -91,8 +91,8 @@ pub async fn list_messages(State(s): State<AppState>, Extension(c): Extension<Cl
 pub async fn send(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<SendRequest>) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
-    if !["email", "sms"].contains(&r.channel.as_str()) {
-        return Err(AppError::Validation("channel must be 'email' or 'sms'".to_string()));
+    if !["email", "sms", "whatsapp"].contains(&r.channel.as_str()) {
+        return Err(AppError::Validation("channel must be 'email', 'sms', or 'whatsapp'".to_string()));
     }
     if r.to.is_empty() || r.body.is_empty() {
         return Err(AppError::Validation("to and body are required".to_string()));
@@ -150,8 +150,8 @@ pub async fn create_template(State(s): State<AppState>, Extension(c): Extension<
     if r.name.is_empty() || r.body.is_empty() {
         return Err(AppError::Validation("name and body are required".to_string()));
     }
-    if !["email", "sms"].contains(&r.channel.as_str()) {
-        return Err(AppError::Validation("channel must be 'email' or 'sms'".to_string()));
+    if !["email", "sms", "whatsapp"].contains(&r.channel.as_str()) {
+        return Err(AppError::Validation("channel must be 'email', 'sms', or 'whatsapp'".to_string()));
     }
 
     let tmpl = sqlx::query_as::<_, MessageTemplate>(

@@ -27,6 +27,8 @@ pub struct DeliveryConfig {
     pub smtp_password: Option<String>,
     pub from_email: Option<String>,
     pub from_name: Option<String>,
+    pub whatsapp_phone_number_id: Option<String>,
+    pub whatsapp_api_token: Option<String>,
 }
 
 /// Attempt delivery via the configured provider chain.
@@ -35,6 +37,7 @@ pub async fn deliver(cfg: &DeliveryConfig) -> (bool, Option<String>) {
     match cfg.channel.as_str() {
         "email" => deliver_email(cfg).await,
         "sms" => deliver_sms(cfg).await,
+        "whatsapp" => deliver_whatsapp(cfg).await,
         _ => (false, Some(format!("Unknown channel: {}", cfg.channel))),
     }
 }
@@ -138,6 +141,57 @@ async fn deliver_via_smtp(cfg: &DeliveryConfig) -> (bool, Option<String>) {
     }
 }
 
+/// Send WhatsApp via Meta/WhatsApp Business Cloud API
+async fn deliver_whatsapp(cfg: &DeliveryConfig) -> (bool, Option<String>) {
+    let phone_number_id = match &cfg.whatsapp_phone_number_id {
+        Some(id) => id,
+        None => return (false, Some("WhatsApp phone number ID not configured".to_string())),
+    };
+    let api_token = match &cfg.whatsapp_api_token {
+        Some(t) => t,
+        None => return (false, Some("WhatsApp API token not configured".to_string())),
+    };
+
+    let url = format!("https://graph.facebook.com/v21.0/{}/messages", phone_number_id);
+    let payload = serde_json::json!({
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": &cfg.to,
+        "type": "text",
+        "text": {
+            "preview_url": false,
+            "body": &cfg.body
+        }
+    });
+
+    let client = reqwest::Client::new();
+    match client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", api_token))
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.is_success() || status == 200 || status == 201 {
+                tracing::info!(msg = %cfg.msg_id, "WhatsApp delivery successful");
+                (true, None)
+            } else {
+                let body = resp.text().await.unwrap_or_default();
+                tracing::warn!(msg = %cfg.msg_id, status = %status, body = %body, "WhatsApp delivery failed");
+                (false, Some(format!("WhatsApp returned {}", status)))
+            }
+        }
+        Err(e) => {
+            tracing::warn!(msg = %cfg.msg_id, error = %e, "WhatsApp request failed");
+            (false, Some(format!("WhatsApp error: {}", e)))
+        }
+    }
+}
+
 /// Send SMS via Telnyx REST API
 async fn deliver_sms(cfg: &DeliveryConfig) -> (bool, Option<String>) {
     let api_key = match &cfg.telnyx_api_key {
@@ -209,6 +263,8 @@ pub async fn load_delivery_config(
         mailgun_domain: comms.get("mailgun_domain").and_then(|v| v.as_str()).map(|s| s.to_string()),
         mailgun_api_key: comms.get("mailgun_api_key").and_then(|v| v.as_str()).map(|s| s.to_string()),
         telnyx_api_key: comms.get("telnyx_api_key").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        whatsapp_phone_number_id: comms.get("whatsapp_phone_number_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        whatsapp_api_token: comms.get("whatsapp_api_token").and_then(|v| v.as_str()).map(|s| s.to_string()),
         smtp_host: comms.get("smtp_host").and_then(|v| v.as_str()).map(|s| s.to_string()),
         smtp_port: comms.get("smtp_port").and_then(|v| v.as_u64()).map(|p| p as u16),
         smtp_username: comms.get("smtp_username").and_then(|v| v.as_str()).map(|s| s.to_string()),

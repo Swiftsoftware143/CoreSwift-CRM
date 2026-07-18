@@ -163,6 +163,7 @@ tr:hover td{background:rgba(59,130,246,.03)}
 .mb-8{margin-bottom:8px}
 .link{color:var(--accent);cursor:pointer;font-size:13px}
 .link:hover{text-decoration:underline}
+.help-icon:hover{background:var(--accent);color:#fff}
 </style>
 </head>
 <body>
@@ -199,8 +200,6 @@ tr:hover td{background:rgba(59,130,246,.03)}
       <a href="#" onclick="showPage('contacts')" data-page="contacts">👥 Contacts</a>
       <a href="#" onclick="showPage('pipelines')" data-page="pipelines">🔄 Pipelines</a>
       <a href="#" onclick="showPage('tags')" data-page="tags">🏷 Tags</a>
-      <a href="#" onclick="showPage('tagautomation')" data-page="tagautomation">⚡ Tag Automation</a>
-      <a href="#" onclick="showPage('trackedlinks')" data-page="trackedlinks">🔗 Tracked Links</a>
       <a href="#" onclick="showPage('lists')" data-page="lists">📋 Lists</a>
       <a href="#" onclick="showPage('scoring')" data-page="scoring">🏷 Scoring</a>
       <a href="#" onclick="showPage('bookings')" data-page="bookings">📅 Bookings</a>
@@ -253,13 +252,15 @@ function api(path,opts={}){
   });
 }
 
+function help(text){
+  return '<span class="help-icon" title="'+esc(text)+'" style="cursor:help;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:var(--border);color:var(--text2);font-size:10px;margin-left:6px;font-weight:700">?</span>';
+}
+
 function $(id){return document.getElementById(id)}
 function show(el){if(typeof el==='string')el=$(el);if(el)el.style.display=''}
 function hide(el){if(typeof el==='string')el=$(el);if(el)el.style.display='none'}
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function plural(n,s){return n+' '+s+(n!==1?'s':'')}
-function hint(t){return '<span class="hint-icon" title="'+esc(t)+'" style="cursor:help;display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:var(--border);color:var(--text2);font-size:9px;margin-left:4px;font-weight:700;vertical-align:middle">i</span>';}
-
 
 function showToast(msg,type='success'){
   const t=document.createElement('div');
@@ -326,8 +327,6 @@ function showPage(page){
     case 'templates':renderTemplates();break;
     case 'notifrules':renderNotificationRules();break;
     case 'integrations':renderIntegrations();break;
-    case 'tagautomation':renderTagAutomation();break;
-    case 'trackedlinks':renderTrackedLinks();break;
     case 'plans':renderPlans();break;
     case 'features':renderFeatureToggles();break;
     case 'seo':renderSEO();break;
@@ -340,10 +339,10 @@ function showPage(page){
 /* ===== DASHBOARD ===== */
 async function renderDashboard(){
   const mc=$('main-content');
-  mc.innerHTML='<div class="top-bar"><h1>📊 Dashboard'+'</h1></div><div style="text-align:center;padding:48px;color:var(--text2)">Loading...</div>';
+  mc.innerHTML='<div class="top-bar"><h1>📊 Dashboard'+help('Key metrics from your pipeline activity — refreshed on page load.')+'</h1></div><div style="text-align:center;padding:48px;color:var(--text2)">Loading...</div>';
   try{
     const stats=await api('/dashboard/stats');
-    mc.innerHTML='<div class="top-bar"><h1>📊 Dashboard'+'</h1></div>'
+    mc.innerHTML='<div class="top-bar"><h1>📊 Dashboard'+help('Key metrics from your pipeline activity — refreshed on page load.')+'</h1></div>'
       +'<div class="kpi-grid">'
       +'<div class="kpi-card"><div class="kpi-value">'+plural(stats.total_contacts||0,'contact')+'</div><div class="kpi-label">Total Contacts</div></div>'
       +'<div class="kpi-card"><div class="kpi-value">'+plural(stats.new_30_days||0,'new')+'</div><div class="kpi-label">Added (30 days)</div></div>'
@@ -383,7 +382,7 @@ async function renderContacts(reload){
     +'<div class="search-bar">'
     +'<input type="text" id="contact-search" value="'+esc(contactSearch)+'" placeholder="Search by name, email, phone..." onkeydown="if(event.key===String.fromCharCode(69,110,116,101,114)){contactSearch=this.value;renderContacts(true)}">'
     +'<button class="btn btn-secondary" onclick="contactSearch=$(\'contact-search\').value;renderContacts(true)">🔍 Search</button>'
-    
+    +help('Search by name or email. Same email = same contact — duplicates are merged automatically.')
     +'</div>'
     +'<div class="card" style="padding:0;overflow-x:auto"><table>'
     +'<tr><th>Name</th><th>Email</th><th>Phone</th><th>Tags</th><th>Actions</th></tr>'
@@ -443,7 +442,7 @@ function showContactForm(existing){
     +'<form id="contact-form">'
     +'<label>First Name</label><input name="first_name" value="'+esc(d.first_name||'')+'" required placeholder="John">'
     +'<label>Last Name</label><input name="last_name" value="'+esc(d.last_name||'')+'" placeholder="Doe">'
-    +'<label>Email'+'</label><input name="email" type="email" value="'+esc(d.email||'')+'" placeholder="john@company.com">'
+    +'<label>Email'+help('Email is the unique identifier. Contacts with the same email will be merged.')+'</label><input name="email" type="email" value="'+esc(d.email||'')+'" placeholder="john@company.com">'
     +'<label>Phone</label><input name="phone" type="tel" value="'+esc(d.phone||'')+'" placeholder="(555) 123-4567">'
     +'<label>Company</label><input name="company_name" value="'+esc(d.company||d.company_name||'')+'" placeholder="Acme Inc">'
     +'<label>Notes</label><textarea name="notes" rows="3" placeholder="Notes about this contact">'+esc(d.notes||'')+'</textarea>'
@@ -510,7 +509,7 @@ function renderPipelineKanban(){
   const stageBar=stages.map(s=>'<div class="bar-segment" style="background:'+esc(s.color||'#6b7280')+'" title="'+esc(s.name)+'"></div>').join('');
   mc.innerHTML='<div class="pipeline-header">'
     +'<div style="display:flex;align-items:center;gap:12px">'
-    +'<h1 style="font-size:20px;font-weight:700">'+esc(pipeline.name||'Pipeline')+'</h1>'
+    +'<h1 style="font-size:20px;font-weight:700">'+esc(pipeline.name||'Pipeline')+help('Drag deals between stages to update their pipeline status.')+'</h1>'
     +'<select onchange="switchPipeline(this.value)" style="width:auto;padding:6px 12px;font-size:13px">'
     +Object.values(pipelineCache).map(p=>{const pi=p.pipeline||p;return '<option value="'+pi.id+'" '+(pi.id===selectedPipelineId?'selected':'')+'>'+esc(pi.name||'')+'</option>';}).join('')
     +'</select></div>'
@@ -567,11 +566,11 @@ async function renderTags(){
     if(!Array.isArray(tg))tg=tg?.data||tg?.tags||[];
     mc.innerHTML='<div class="top-bar"><h1>🏷 Tags</h1><button class="btn btn-primary" onclick="showTagForm()">+ New Tag</button></div>'
       +'<div class="card" style="padding:0;overflow-x:auto"><table>'
-      +'<tr><th>Name</th><th>Workflows</th><th>Integrations</th><th>Contacts</th></tr>'
+      +'<tr><th>Name</th><th>Color</th><th>Type</th><th>Contacts</th></tr>'
       +tg.map(t=>'<tr>'
         +'<td style="font-weight:600"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:'+esc(t.color||'#6b7280')+';margin-right:8px"></span>'+esc(t.name||'')+'</td>'
-        +'<td>'+(t.workflow_count||0)+'</td>'
-        +'<td>'+(t.integration_count||0)+'</td>'
+        +'<td><span style="color:'+esc(t.color||'#6b7280')+'">'+esc(t.color||'Default')+'</span></td>'
+        +'<td><span class="badge badge-'+(t.is_system?'success':'info')+'">'+(t.is_system?'System':'Custom')+'</span></td>'
         +'<td>'+(t.contact_count||0)+'</td>'
         +'</tr>').join('')
       +'</table>'
@@ -654,7 +653,7 @@ async function saveList(btn){
 /* ===== PHASE 4: COMMS SETTINGS ===== */
 async function renderCommsSettings(){
   const mc=$('main-content');
-  mc.innerHTML='<div class="top-bar"><h1>✉️ Comms Settings'+'</h1></div><div style="text-align:center;padding:40px;color:var(--text2)">Loading...</div>';
+  mc.innerHTML='<div class="top-bar"><h1>✉️ Comms Settings'+help('Configure your communication providers. Test each provider after entering credentials.')+'</h1></div><div style="text-align:center;padding:40px;color:var(--text2)">Loading...</div>';
   try{
     const cfg=await api('/comms/providers');
     const p=cfg||{};
@@ -760,13 +759,11 @@ async function renderSettings(){
       +'<label>Primary Color</label><input name="primary_color" type="color" value="'+(acc.primary_color||'#3b82f6')+'" style="height:40px;padding:4px;cursor:pointer">'
       +'<label>Accent Color</label><input name="accent_color" type="color" value="'+(acc.accent_color||'#8b5cf6')+'" style="height:40px;padding:4px;cursor:pointer">'
       +'<label>Custom Domain</label><input name="custom_domain" value="'+esc(acc.custom_domain||'')+'" placeholder="crm.yourcompany.com">'
-      +'<label style="margin-top:16px;font-weight:600">Plan'+'</label>'
+      +'<label style="margin-top:16px;font-weight:600">Plan'+help('Your current subscription plan. Contact admin to upgrade.')+'</label>'
       +'<input name="plan_name" value="'+esc(planName)+'" disabled style="opacity:.7;cursor:not-allowed">'
       +'</form>'
       +'<div class="actions" style="margin-top:8px"><button class="btn btn-primary" onclick="saveTenantSettings(this)">Save Company Settings</button></div>'
       +'</div>'
-      +''
-      +'<div class="card" style="margin-top:24px"><div class="card-header"><h3>📚 Guides</h3></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;padding:8px 0"><div class="card" style="border:1px solid var(--border);border-radius:8px;overflow:hidden"><div style="padding:12px;background:var(--accent);color:white;font-weight:600">👑 Admin Guide</div><div style="padding:12px;font-size:13px;line-height:1.6"><strong>Managing your system:</strong><br>&bull; Contacts: email is the unique identifier -- same email merges automatically<br>&bull; Pipelines: drag deals between stages to update status<br>&bull; Scoring: rules run on pipeline events; thresholds trigger actions<br>&bull; Bookings: connect Google Calendar for real-time availability<br>&bull; Round Robin: assign new leads to team members automatically<br>&bull; Reviews: approve or reject customer feedback<br>&bull; Comms: configure Mailgun, SMTP, Telnyx, or WhatsApp<br>&bull; Templates: use variables like {{contact.name}}, {{contact.email}}<br>&bull; Notification Rules: auto-fire on events, scores, or bookings<br>&bull; Integrations: API keys stored encrypted per tenant</div></div><div class="card" style="border:1px solid var(--border);border-radius:8px;overflow:hidden"><div style="padding:12px;background:var(--green);color:white;font-weight:600">👤 User Guide</div><div style="padding:12px;font-size:13px;line-height:1.6"><strong>Your daily workflow:</strong><br>&bull; Dashboard: see pipeline metrics at a glance<br>&bull; Contacts: search by name or email; add new leads here<br>&bull; Pipelines: move deals through stages; click a deal to see details<br>&bull; Bookings: view available slots and create appointments<br>&bull; Reviews: monitor customer feedback from bookings<br>&bull; Messages: check sent emails, SMS, and WhatsApp history<br>&bull; My Profile: update your name, email, phone in Settings</div></div><div class="card" style="border:1px solid var(--border);border-radius:8px;overflow:hidden"><div style="padding:12px;background:var(--yellow);color:white;font-weight:600">💡 Inline Tips</div><div style="padding:12px;font-size:13px;line-height:1.6"><strong>Quick tips throughout the app:</strong><br>&bull; Use the sidebar to navigate between sections<br>&bull; Green badges mean active/enabled<br>&bull; Hover over i icons next to labels for field-level help<br>&bull; Most pages have an &quot;+ Add&quot; button in the top bar<br>&bull; Pipeline: drag &amp; drop cards between columns<br>&bull; All changes save automatically in forms<br>&bull; Need help? Contact your admin</div></div></div></div>'
       +'<div class="card" style="margin-top:12px;border-color:var(--red)"><div class="card-header"><h3 style="color:var(--red)">☠️ Danger Zone</h3></div>'
       +'<p style="font-size:13px;color:var(--text2);margin-bottom:12px">Once you deactivate your account, all data will be inaccessible. This action can be reversed by contacting support.</p>'
       +'<button class="btn btn-danger" onclick="confirmDeactivateAccount()">🚫 Deactivate Account</button>'
@@ -812,177 +809,6 @@ async function confirmDeactivateAccount(){
   }catch(e){showToast(e.message,String.fromCharCode(101,114,114,111,114))}
 }
 
-/* ===== TAG AUTOMATION ===== */
-async function renderTagAutomation(){
-  const mc=$('main-content');
-  mc.innerHTML='<div class="top-bar"><h1>⚡ Tag Automation Rules</h1><button class="btn btn-primary" onclick="showTagAutoForm()">+ New Rule</button></div><div style="text-align:center;padding:48px;color:var(--text2)">Loading...</div>';
-  try{
-    const rules=await api('/rules');
-    const rarr=Array.isArray(rules)?rules:(rules?.rules||[]);
-    const tgrules=rarr.filter(r=>r.trigger_type==='TagAdded'||r.trigger_type==='TagRemoved'||r.trigger_type==='tag.assigned'||r.trigger_type==='tag.unassigned');
-    const tagMap={};
-    try{
-      const tg=await api('/tags');
-      if(Array.isArray(tg))tg.forEach(t=>{tagMap[t.id]=t.name});
-    }catch(e){}
-    mc.innerHTML='<div class="top-bar"><h1>⚡ Tag Automation Rules</h1><button class="btn btn-primary" onclick="showTagAutoForm()">+ New Rule</button></div>'
-      +'<div class="card" style="padding:0;overflow-x:auto"><table>'
-      +'<tr><th>Trigger</th><th>Tag</th><th>Action</th><th>Status</th><th>Last Run</th><th></th></tr>'
-      +(tgrules.length?tgrules.map(r=>{
-        const tagId=r.trigger_config?.tag_id||'';
-        const tagName=tagId?(tagMap[tagId]||tagId.substring(0,8)+'...'):'—';
-        const triggerLabel=r.trigger_type==='TagAdded'||r.trigger_type==='tag.assigned'?'🏷 Assigned':r.trigger_type==='TagRemoved'||r.trigger_type==='tag.unassigned'?'🏷 Unassigned':r.trigger_type;
-        const actionLabels={'AddTag':'➕ Add Tag','RemoveTag':'➖ Remove Tag','MovePipeline':'🔄 Move Pipeline','pipeline.move':'🔄 Move Pipeline','AddToList':'📋 Add to List','RemoveFromList':'📋 Remove from List','Webhook':'📡 Webhook','NotifyUser':'🔔 Notify User','send_email':'✉️ Send Email','send_sms':'💬 Send SMS','scoring.update':'🏷 Update Score'};
-        const actionLabel=actionLabels[r.action_type]||r.action_type;
-        return '<tr><td style="font-weight:600">'+triggerLabel+'</td><td><span class="badge badge-info">'+esc(tagName)+'</span></td><td>'+actionLabel+'</td><td>'+(r.is_enabled||r.is_active?'<span class="badge badge-active">Active</span>':'<span class="badge badge-inactive">Inactive</span>')+'</td><td style="font-size:12px;color:var(--text2)">'+(r.last_executed_at?new Date(r.last_executed_at).toLocaleString():'Never')+'</td><td><button class="btn btn-danger btn-sm" onclick="deleteTagAuto(\''+r.id+'\')">🗑</button></td></tr>';
-      }).join(''):'<tr><td colspan="6"><div class="empty-state"><div class="icon">⚡</div><p>No tag automation rules.</p></div></td></tr>')
-      +'</table></div>';
-  }catch(e){mc.innerHTML='<div class="top-bar"><h1>⚡ Tag Automation</h1></div><div class="empty-state"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
-}
-
-function showTagAutoForm(){
-  const ov=document.createElement('div');ov.className='modal-overlay';ov.onclick=function(e){if(e.target===this)this.remove()};
-  ov.innerHTML='<div class="modal" style="max-width:650px"><h2>⚡ New Tag Automation Rule</h2><form id="tag-auto-form">'
-    +'<label>Name</label><input name="name" required placeholder="e.g. Send welcome when Hot Lead assigned">'
-    +'<label>Trigger</label><select name="trigger_type"><option value="tag.assigned">🏷 Tag Assigned</option><option value="tag.unassigned">🏷 Tag Unassigned</option></select>'
-    +'<label>Tag</label><select name="tag_id" id="tag-auto-select"><option value="">— Select Tag —</option></select>'
-    +'<label>Action</label><select name="action_type" id="tag-auto-action" onchange="tagAutoActionChange(this.value)"><option value="send_email">✉️ Send Email</option><option value="send_sms">💬 Send SMS</option><option value="webhook">📡 Webhook</option><option value="pipeline.move">🔄 Move Pipeline Stage</option><option value="scoring.update">🏷 Update Score</option></select>'
-    +'<div id="tag-auto-params"></div>'
-    +'<label style="margin-top:16px"><input type="checkbox" name="is_enabled" value="true" checked> Active</label>'
-    +'</form><div class="actions"><button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button><button class="btn btn-primary" onclick="saveTagAuto(this)">Create Rule</button></div></div>';
-  document.body.appendChild(ov);
-  api('/tags').then(tg=>{
-    const sl=$('tag-auto-select');
-    if(Array.isArray(tg))tg.forEach(t=>{sl.innerHTML+='<option value="'+t.id+'">'+esc(t.name)+'</option>'});
-  }).catch(()=>{});
-  tagAutoActionChange('send_email');
-}
-
-function tagAutoActionChange(actionType){
-  const div=$('tag-auto-params');
-  if(!div)return;
-  div.innerHTML='';
-  if(actionType==='send_email'||actionType==='send_sms'){
-    div.innerHTML='<label>Template Name (optional)</label><input name="template_name" placeholder="Welcome Template">'
-      +'<label>Custom Subject (email)</label><input name="subject" placeholder="Subject line">'
-      +'<label>Message Body (overrides template)</label><textarea name="body" rows="3" placeholder="Message content..."></textarea>';
-  }else if(actionType==='webhook'){
-    div.innerHTML='<label>Webhook URL</label><input name="url" type="url" required placeholder="https://hooks.example.com/event">'
-      +'<label>Headers (JSON)</label><textarea name="headers" rows="2" placeholder=\'{"Authorization":"Bearer xxx"}\'></textarea>';
-  }else if(actionType==='pipeline.move'){
-    div.innerHTML='<label>Pipeline Stage ID</label><input name="stage_id" required placeholder="UUID of target pipeline stage">';
-  }else if(actionType==='scoring.update'){
-    div.innerHTML='<label>Points</label><input name="points" type="number" value="10" placeholder="e.g. 10 or -5">';
-  }
-}
-
-async function saveTagAuto(btn){
-  const form=btn.closest(String.fromCharCode(46,109,111,100,97,108)).querySelector('#tag-auto-form');
-  const fd=new FormData(form);
-  const triggerType=fd.get('trigger_type');
-  const tagId=fd.get('tag_id');
-  const actionType=fd.get('action_type');
-  if(!triggerType||!tagId||!actionType){showToast('Please fill all required fields','error');return}
-  let actionConfig={};
-  if(actionType==='send_email'||actionType==='send_sms'){
-    if(fd.get('template_name'))actionConfig.template_name=fd.get('template_name');
-    if(fd.get('subject'))actionConfig.subject=fd.get('subject');
-    if(fd.get('body'))actionConfig.body=fd.get('body');
-  }else if(actionType==='webhook'){
-    const url=fd.get('url');
-    if(!url){showToast('Webhook URL is required','error');return}
-    actionConfig.url=url;
-    try{if(fd.get('headers'))actionConfig.headers=JSON.parse(fd.get('headers'))}catch(e){showToast('Invalid JSON headers','error');return}
-  }else if(actionType==='pipeline.move'){
-    actionConfig.stage_id=fd.get('stage_id');
-  }else if(actionType==='scoring.update'){
-    actionConfig.points=parseInt(fd.get('points'))||0;
-  }
-  btn.textContent='Saving...';btn.disabled=true;
-  try{
-    await api('/rules',{method:'POST',body:JSON.stringify({
-      name:fd.get('name'),
-      trigger_type:triggerType,
-      trigger_config:{tag_id:tagId},
-      action_type:actionType,
-      action_config:actionConfig
-    })});
-    showToast('Rule created ✓');
-    btn.closest('.modal-overlay').remove();
-    renderTagAutomation();
-  }catch(e){showToast(e.message,String.fromCharCode(101,114,114,111,114))}
-  btn.textContent='Create Rule';btn.disabled=false;
-}
-
-async function deleteTagAuto(id){
-  if(!confirm(String.fromCharCode(68,101,108,101,116,101,32,116,104,105,115,32,114,117,108,101,63)))return;
-  try{await api('/rules/'+id,{method:String.fromCharCode(68,69,76,69,84,69)});showToast('Deleted ✓');renderTagAutomation();}catch(e){showToast(e.message,String.fromCharCode(101,114,114,111,114))}
-}
-
-/* ===== TRACKED LINKS ===== */
-async function renderTrackedLinks(){
-  const mc=$('main-content');
-  mc.innerHTML='<div class="top-bar"><h1>🔗 Tracked Links</h1><button class="btn btn-primary" onclick="showTrackedLinkForm()">+ New Link</button></div><div style="text-align:center;padding:48px;color:var(--text2)">Loading...</div>';
-  try{
-    const r=await api('/tracked-links');
-    const links=Array.isArray(r)?r:(r?.links||[]);
-    mc.innerHTML='<div class="top-bar"><h1>🔗 Tracked Links</h1><button class="btn btn-primary" onclick="showTrackedLinkForm()">+ New Link</button></div>'
-      +'<div class="card" style="padding:0;overflow-x:auto"><table>'
-      +'<tr><th>Tag</th><th>Target URL</th><th>Tracking URL</th><th>Clicks</th><th>Created</th><th></th></tr>'
-      +(links.length?links.map(l=>'<tr><td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:'+esc(l.tag_color||'#6b7280')+';margin-right:6px"></span>'+esc(l.tag_name||'—')+'</td><td style="font-size:12px;color:var(--text2);max-width:200px;overflow:hidden;text-overflow:ellipsis">'+esc(l.target_url)+'</td><td style="font-size:12px"><code style="background:var(--surface2);padding:2px 6px;border-radius:4px">/track/'+esc(l.slug)+'</code> <button class="btn btn-sm btn-secondary" onclick="copyToClip(\'/track/'+esc(l.slug)+'\')">📋</button></td><td style="font-weight:600;font-size:16px">'+l.click_count+'</td><td style="font-size:12px;color:var(--text2)">'+new Date(l.created_at).toLocaleDateString()+'</td><td><button class="btn btn-danger btn-sm" onclick="deleteTrackedLink(\''+l.id+'\')">🗑</button></td></tr>').join(''):'<tr><td colspan="6"><div class="empty-state"><div class="icon">🔗</div><p>No tracked links.</p></div></td></tr>')
-      +'</table></div>';
-  }catch(e){mc.innerHTML='<div class="top-bar"><h1>🔗 Tracked Links</h1></div><div class="empty-state"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
-}
-
-function showTrackedLinkForm(){
-  const ov=document.createElement('div');ov.className='modal-overlay';ov.onclick=function(e){if(e.target===this)this.remove()};
-  ov.innerHTML='<div class="modal" style="max-width:550px"><h2>🔗 New Tracked Link</h2><form id="tlink-form">'
-    +'<label>Tag</label><select name="tag_id" id="tlink-tag-select" required><option value="">— Select Tag —</option></select>'
-    +'<label>Target URL</label><input name="target_url" type="url" required placeholder="https://example.com/landing-page">'
-    +'</form><div class="actions"><button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button><button class="btn btn-primary" onclick="saveTrackedLink(this)">Generate</button></div>'
-    +'<div id="tlink-result" style="display:none;margin-top:12px"><label style="color:var(--green);font-weight:600">✅ Tracking URL Generated</label><input id="tlink-url" readonly style="font-family:monospace" onclick="this.select();navigator.clipboard.writeText(this.value)"><p style="font-size:12px;color:var(--text2);margin-top:4px">Put in email: &lt;a href=&quot;...&quot;&gt;Link Text&lt;/a&gt;</p></div></div>';
-  document.body.appendChild(ov);
-  api('/tags').then(tg=>{
-    const sl=$('tlink-tag-select');
-    if(Array.isArray(tg))tg.forEach(t=>{sl.innerHTML+='<option value="'+t.id+'">'+esc(t.name)+'</option>'});
-  }).catch(()=>{});
-}
-
-async function saveTrackedLink(btn){
-  const form=btn.closest('.modal-overlay').querySelector('#tlink-form');
-  const fd=new FormData(form);
-  const tagId=fd.get('tag_id');
-  const targetUrl=fd.get('target_url');
-  if(!tagId||!targetUrl){showToast('Tag and URL are required','error');return}
-  btn.textContent='Generating...';btn.disabled=true;
-  try{
-    const res=await api('/tracked-links',{method:'POST',body:JSON.stringify({tag_id:tagId,target_url:targetUrl})});
-    showToast('Tracked link created ✓');
-    const resultDiv=$('tlink-result');
-    if(resultDiv){
-      resultDiv.style.display='';
-      const urlField=$('tlink-url');
-      if(urlField){
-        const fullUrl=window.location.origin+res.tracking_url+'?contact_id={contact_id}';
-        urlField.value=fullUrl;
-        urlField.select();
-        navigator.clipboard.writeText(fullUrl);
-      }
-    }
-  }catch(e){showToast(e.message,String.fromCharCode(101,114,114,111,114))}
-  btn.textContent='Generate';btn.disabled=false;
-}
-
-async function deleteTrackedLink(id){
-  if(!confirm(String.fromCharCode(68,101,108,101,116,101,32,116,104,105,115,32,108,105,110,107,63)))return;
-  try{await api('/tracked-links/'+id,{method:String.fromCharCode(68,69,76,69,84,69)});showToast('Deleted ✓');renderTrackedLinks();}catch(e){showToast(e.message,String.fromCharCode(101,114,114,111,114))}
-}
-
-function copyToClip(text){
-  navigator.clipboard.writeText(window.location.origin+text);
-  showToast('Copied ✓');
-}
-
 /* ===== INIT ===== */
 async function loadUser(){
   try{
@@ -1020,7 +846,7 @@ async function renderScoring(){
     const db=dist?.distribution||[];
     const total=dist?.total||0;
     const catMap={interested:'🤝',qualified:'✅',hot:'🔥',sold:'🎯'};
-    mc.innerHTML='<div class="top-bar"><h1>🏷 Scoring Engine'+'</h1><button class="btn btn-primary" onclick="showScoringRuleForm()">+ Add Rule</button></div>'
+    mc.innerHTML='<div class="top-bar"><h1>🏷 Scoring Engine'+help('Score rules run automatically when pipeline events fire. Thresholds trigger actions like email alerts.')+'</h1><button class="btn btn-primary" onclick="showScoringRuleForm()">+ Add Rule</button></div>'
       +'<div class="kpi-grid">'+db.map(d=>'<div class="kpi-card"><div class="kpi-label">'+(catMap[d[0]]||d[0])+' '+d[0]+'</div><div class="kpi-value">'+d[1]+'</div></div>').join('')+'<div class="kpi-card"><div class="kpi-label">📊 Total</div><div class="kpi-value">'+total+'</div></div></div>'
       +'<div class="card" style="margin-top:16px"><div class="card-header"><h3>📋 Scoring Rules</h3></div>'
       +(rarr.length?'<table><tr><th>Name</th><th>Event</th><th>Points</th><th>Dir</th><th>Active</th><th></th></tr>'+rarr.map(r=>'<tr><td style="font-weight:600">'+esc(r.name)+'</td><td>'+esc(r.event_type)+'</td><td>'+r.points+'</td><td>'+(r.direction===String.fromCharCode(115,117,98,116,114,97,99,116)?'<span style="color:var(--red)">−</span>':'<span style="color:var(--green)">+</span>')+'</td><td>'+(r.is_active?'<span class="badge badge-active">Active</span>':'<span style="color:var(--text2)">Off</span>')+'</td><td><button class="btn btn-danger btn-sm" onclick="deleteScoringRule(\x27+r.id+\x27)">🗑</button></td></tr>').join('')+'</table>':'<div class="empty-state"><div class="icon">🏷</div><p>No scoring rules yet</p></div>')+'</div>'
@@ -1078,9 +904,9 @@ async function renderBookings(){
     const books=await api('/bookings/bookings');
     const clist=Array.isArray(cals)?cals:[];
     const blist=Array.isArray(books)?books:[];
-    mc.innerHTML='<div class="top-bar"><h1>📅 Booking Calendars'+'</h1><button class="btn btn-primary" onclick="showCalendarForm()">+ Add Calendar</button></div>'
+    mc.innerHTML='<div class="top-bar"><h1>📅 Booking Calendars'+help('Bookable slots are based on calendar availability. Connect Google Calendar in Integrations.')+'</h1><button class="btn btn-primary" onclick="showCalendarForm()">+ Add Calendar</button></div>'
       +'<div class="card"><div class="card-header"><h3>📆 Calendars</h3></div>'
-      +(clist.length?'<table><tr><th>Name</th><th>Slug</th><th>Google Calendar'+'</th><th></th></tr>'+clist.map(c=>'<tr><td style="font-weight:600">'+esc(c.name)+'</td><td style="color:var(--text2)">'+esc(c.slug)+'</td><td>'+(c.google_refresh_token?'<span class="badge badge-active">Connected</span> <button class="btn btn-secondary btn-sm" onclick="syncGoogleCalendar(\x27+c.id+\x27)">🔄 Sync</button>':'<a class="link" href="/api/google-calendar/connect-url?calendar_id='+c.id+'" target="_blank">🔗 Connect</a>')+'</td><td><button class="btn btn-danger btn-sm" onclick="deleteCalendar(\x27+c.id+\x27)">🗑</button></td></tr>').join('')+'</table>':'<div class="empty-state"><div class="icon">📆</div><p>No calendars</p></div>')+'</div>'
+      +(clist.length?'<table><tr><th>Name</th><th>Slug</th><th>Google Calendar'+help('Connect your Google Calendar to show real-time availability and sync bookings as events.')+'</th><th></th></tr>'+clist.map(c=>'<tr><td style="font-weight:600">'+esc(c.name)+'</td><td style="color:var(--text2)">'+esc(c.slug)+'</td><td>'+(c.google_refresh_token?'<span class="badge badge-active">Connected</span> <button class="btn btn-secondary btn-sm" onclick="syncGoogleCalendar(\x27+c.id+\x27)">🔄 Sync</button>':'<a class="link" href="/api/google-calendar/connect-url?calendar_id='+c.id+'" target="_blank">🔗 Connect</a>')+'</td><td><button class="btn btn-danger btn-sm" onclick="deleteCalendar(\x27+c.id+\x27)">🗑</button></td></tr>').join('')+'</table>':'<div class="empty-state"><div class="icon">📆</div><p>No calendars</p></div>')+'</div>'
       +'<div class="card" style="margin-top:12px"><div class="card-header"><h3>📋 Recent Bookings</h3></div>'
       +(blist.length?'<table><tr><th>Contact</th><th>Calendar</th><th>Range</th><th>Status</th><th></th></tr>'+blist.slice(0,20).map(b=>'<tr><td style="font-weight:600">'+esc(b.contact_name||b.contact_id||'—')+'</td><td>'+esc(b.calendar_slug||'—')+'</td><td style="font-size:12px;color:var(--text2)">'+new Date(b.start_date||b.created_at).toLocaleDateString()+(b.end_date?' - '+new Date(b.end_date).toLocaleDateString():'')+'</td><td><span class="badge '+(b.status===String.fromCharCode(97,99,116,105,118,101)||b.status===String.fromCharCode(99,111,110,102,105,114,109,101,100)?'badge-active':'')+'">'+esc(b.status||'pending')+'</span></td><td><button class="btn btn-danger btn-sm" onclick="cancelBooking(\x27+b.id+\x27)">Cancel</button></td></tr>').join('')+'</table>':'<div class="empty-state"><div class="icon">📋</div><p>No bookings</p></div>')+'</div>';
   }catch(e){mc.innerHTML='<div class="top-bar"><h1>📅 Bookings</h1></div><div class="empty-state"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
@@ -1112,7 +938,7 @@ async function cancelBooking(id){
 let selectedRRTeam=null;
 async function renderRoundRobin(){
   const mc=$('main-content');
-  mc.innerHTML='<div class="top-bar"><h1>🔄 Round Robin'+'</h1><button class="btn btn-primary" onclick="showRRTeamForm()">+ Add Team</button></div><div id="rr-content"><p style="text-align:center;padding:40px;color:var(--text2)">Loading...</p></div>';
+  mc.innerHTML='<div class="top-bar"><h1>🔄 Round Robin'+help('Distribute new leads across your team automatically. Configure assignment strategy below.')+'</h1><button class="btn btn-primary" onclick="showRRTeamForm()">+ Add Team</button></div><div id="rr-content"><p style="text-align:center;padding:40px;color:var(--text2)">Loading...</p></div>';
   try{
     const teams=await api('/round-robin/teams');
     const tlist=Array.isArray(teams)?teams:[];
@@ -1192,12 +1018,12 @@ async function deleteWebhook(id){
 /* ===== REVIEWS ===== */
 async function renderReviews(){
   const mc=$('main-content');
-  mc.innerHTML='<div class="top-bar"><h1>⭐ Reviews'+'</h1><button class="btn btn-primary" onclick="showReviewForm()">+ Add Review</button></div><div id="reviews-content"><p style="text-align:center;padding:40px;color:var(--text2)">Loading...</p></div>';
+  mc.innerHTML='<div class="top-bar"><h1>⭐ Reviews'+help('Manage and approve customer reviews collected from your booking flow.')+'</h1><button class="btn btn-primary" onclick="showReviewForm()">+ Add Review</button></div><div id="reviews-content"><p style="text-align:center;padding:40px;color:var(--text2)">Loading...</p></div>';
   try{
     const rv=await api('/reviews');
     const rlist=Array.isArray(rv)?rv:[];
     const stars=(n)=>'<span style="color:var(--yellow)">'+'★'.repeat(Math.min(n,5))+'</span><span style="color:#3a3e4e">'+'★'.repeat(5-Math.min(n,5))+'</span>';
-    mc.innerHTML='<div class="top-bar"><h1>⭐ Reviews'+'</h1><button class="btn btn-primary" onclick="showReviewForm()">+ Add Review</button></div>'
+    mc.innerHTML='<div class="top-bar"><h1>⭐ Reviews'+help('Manage and approve customer reviews collected from your booking flow.')+'</h1><button class="btn btn-primary" onclick="showReviewForm()">+ Add Review</button></div>'
       +'<div class="card"><div class="card-header"><h3>📝 All Reviews</h3></div>'
       +(rlist.length?'<table><tr><th>Business</th><th>Author</th><th>Rating</th><th>Content</th><th>Status</th><th></th></tr>'+rlist.map(r=>'<tr><td style="font-weight:600">'+esc(r.business_name||'—')+'</td><td>'+esc(r.author_name||'—')+'</td><td>'+stars(r.rating||0)+'</td><td style="font-size:12px;color:var(--text2);max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc((r.content||'').substring(0,80))+'</td><td>'+(r.is_approved?'<span class="badge badge-active">Approved</span>':'<span style="color:var(--yellow)">Pending</span>')+'</td><td><button class="btn btn-secondary btn-sm" onclick="toggleReviewStatus(\x27+r.id+\x27,'+!r.is_approved+')">'+(r.is_approved?'Reject':'Approve')+'</button> <button class="btn btn-danger btn-sm" onclick="deleteReview(\x27+r.id+\x27)">🗑</button></td></tr>').join('')+'</table>':'<div class="empty-state"><div class="icon">⭐</div><p>No reviews</p></div>')+'</div>';
   }catch(e){mc.innerHTML='<div class="top-bar"><h1>⭐ Reviews</h1></div><div class="empty-state"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
@@ -1335,11 +1161,11 @@ function renderLegal(){
 /* ===== PHASE 4: MESSAGE LOG ===== */
 function renderMessageLog(){
   const mc=$('main-content');
-  mc.innerHTML='<div class="top-bar"><h1>📨 Message Log'+'</h1></div><div class="card"><div class="card-header"><h3>Outbound Messages</h3></div><p style="text-align:center;padding:40px;color:var(--text2)">Loading...</p></div>';
+  mc.innerHTML='<div class="top-bar"><h1>📨 Message Log'+help('View all outbound emails, SMS, and WhatsApp messages sent by the system.')+'</h1></div><div class="card"><div class="card-header"><h3>Outbound Messages</h3></div><p style="text-align:center;padding:40px;color:var(--text2)">Loading...</p></div>';
   api('/comms/messages?per_page=50').then(r=>{
     const msgs=r.messages||[];
     const chIcon = ch => ({email:'✉️',sms:'💬',whatsapp:'📱'})[ch]||'📨';
-    mc.innerHTML='<div class="top-bar"><h1>📨 Message Log'+'</h1></div>'
+    mc.innerHTML='<div class="top-bar"><h1>📨 Message Log'+help('View all outbound emails, SMS, and WhatsApp messages sent by the system.')+'</h1></div>'
     +'<div class="card"><div class="card-header"><h3>Outbound Messages</h3><span style="font-size:12px;color:var(--text2)">'+r.total+' total</span></div>'
     +(msgs.length?'<table><tr><th>Channel</th><th>To</th><th>Subject</th><th>Status</th><th>Sent</th></tr>'+msgs.map(m=>'<tr><td>'+chIcon(m.channel)+' '+esc(m.channel)+'</td><td>'+esc(m.to_address)+'</td><td>'+esc(m.subject||'—')+'</td><td>'+(m.status==='sent'?'<span class="badge badge-active">Sent</span>':m.status==='failed'?'<span class="badge badge-inactive">Failed</span>':'<span class="badge badge-pending">'+esc(m.status)+'</span>')+'</td><td style="font-size:11px;color:var(--text2)">'+(m.sent_at?new Date(m.sent_at).toLocaleString():'—')+'</td></tr>').join('')+'</table>':'<div class="empty-state"><div class="icon">📨</div><p>No messages sent yet</p></div>')+'</div>';
   }).catch(e=>{mc.innerHTML='<div class="top-bar"><h1>📨 Message Log</h1></div><div class="empty-state"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'});
@@ -1348,11 +1174,11 @@ function renderMessageLog(){
 /* ===== PHASE 4: TEMPLATES ===== */
 function renderTemplates(){
   const mc=$('main-content');
-  mc.innerHTML='<div class="top-bar"><h1>📝 Templates'+'</h1><button class="btn btn-primary" onclick="showTemplateForm()">+ Add Template</button></div><div class="card"><div class="card-header"><h3>Message Templates</h3></div><p style="text-align:center;padding:40px;color:var(--text2)">Loading...</p></div>';
+  mc.innerHTML='<div class="top-bar"><h1>📝 Templates'+help('Message templates support variables like {{contact.name}}, {{contact.email}}, {{deal.value}}')+'</h1><button class="btn btn-primary" onclick="showTemplateForm()">+ Add Template</button></div><div class="card"><div class="card-header"><h3>Message Templates</h3></div><p style="text-align:center;padding:40px;color:var(--text2)">Loading...</p></div>';
   api('/comms/templates?per_page=50').then(r=>{
     const tpls=r.templates||[];
     const chIcon = ch => ({email:'✉️',sms:'💬',whatsapp:'📱'})[ch]||'📨';
-    mc.innerHTML='<div class="top-bar"><h1>📝 Templates'+'</h1><button class="btn btn-primary" onclick="showTemplateForm()">+ Add Template</button></div>'
+    mc.innerHTML='<div class="top-bar"><h1>📝 Templates'+help('Message templates support variables like {{contact.name}}, {{contact.email}}, {{deal.value}}')+'</h1><button class="btn btn-primary" onclick="showTemplateForm()">+ Add Template</button></div>'
     +'<div class="card"><div class="card-header"><h3>Message Templates</h3></div>'
     +(tpls.length?'<table><tr><th>Name</th><th>Channel</th><th>Subject</th><th>Body</th><th></th></tr>'+tpls.map(t=>'<tr><td style="font-weight:600">'+esc(t.name)+'</td><td>'+chIcon(t.channel)+' '+esc(t.channel)+'</td><td>'+esc(t.subject||'—')+'</td><td style="font-size:12px;color:var(--text2);max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc((t.body||'').substring(0,60))+'</td><td><button class="btn btn-danger btn-sm" onclick="deleteTemplate(\''+esc(t.id)+'\')">🗑</button></td></tr>').join('')+'</table>':'<div class="empty-state"><div class="icon">📝</div><p>No templates — create one</p></div>')+'</div>';
   }).catch(e=>{mc.innerHTML='<div class="top-bar"><h1>📝 Templates</h1></div><div class="empty-state"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'});
@@ -1376,10 +1202,10 @@ async function deleteTemplate(id){
 /* ===== PHASE 4: NOTIFICATION RULES ===== */
 function renderNotificationRules(){
   const mc=$('main-content');
-  mc.innerHTML='<div class="top-bar"><h1>🔔 Notification Rules'+'</h1><button class="btn btn-primary" onclick="showNotifRuleForm()">+ Add Rule</button></div><p style="text-align:center;padding:40px;color:var(--text2)">Loading...</p>';
+  mc.innerHTML='<div class="top-bar"><h1>🔔 Notification Rules'+help('Auto-fire emails, SMS, or WhatsApp messages when pipeline events, score thresholds, or booking changes happen.')+'</h1><button class="btn btn-primary" onclick="showNotifRuleForm()">+ Add Rule</button></div><p style="text-align:center;padding:40px;color:var(--text2)">Loading...</p>';
   api('/notifications/rules?per_page=50').then(r=>{
     const rules=r.rules||[];
-    mc.innerHTML='<div class="top-bar"><h1>🔔 Notification Rules'+'</h1><button class="btn btn-primary" onclick="showNotifRuleForm()">+ Add Rule</button></div>'
+    mc.innerHTML='<div class="top-bar"><h1>🔔 Notification Rules'+help('Auto-fire emails, SMS, or WhatsApp messages when pipeline events, score thresholds, or booking changes happen.')+'</h1><button class="btn btn-primary" onclick="showNotifRuleForm()">+ Add Rule</button></div>'
     +'<div class="card"><div class="card-header"><h3>Auto-Triggers</h3></div>'
     +(rules.length?'<table><tr><th>Trigger</th><th>Action</th><th>Template</th><th>Status</th><th></th></tr>'+rules.map(r=>'<tr><td style="font-weight:600">'+esc(r.trigger_event)+'</td><td>'+esc(r.action)+'</td><td>'+esc(r.template_name||'—')+'</td><td>'+(r.is_active?'<span class="badge badge-active">Active</span>':'<span class="badge badge-inactive">Inactive</span>')+'</td><td><button class="btn btn-secondary btn-sm" onclick="toggleNotifRule(\''+esc(r.id)+'\','+!r.is_active+')">'+(r.is_active?'Disable':'Enable')+'</button> <button class="btn btn-danger btn-sm" onclick="deleteNotifRule(\''+esc(r.id)+'\')">🗑</button></td></tr>').join('')+'</table>':'<div class="empty-state"><div class="icon">🔔</div><p>No rules — pipeline moves, scoring thresholds, and booking events won\'t auto-send</p></div>')+'</div>';
   }).catch(e=>{mc.innerHTML='<div class="top-bar"><h1>🔔 Notification Rules</h1></div><div class="empty-state"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'});
@@ -1407,7 +1233,7 @@ async function deleteNotifRule(id){
 function renderIntegrations(){
   const mc=$('main-content');
 
-  mc.innerHTML='<div class="top-bar"><h1>🔌 Integration Center'+'</h1></div>'
+  mc.innerHTML='<div class="top-bar"><h1>🔌 Integration Center'+help('Connect your third-party services and satellite apps. API keys are stored encrypted per tenant.')+'</h1></div>'
 
     // Satellite Apps
     +'<div class="card" style="margin-bottom:16px"><div class="card-header"><h3>🚀 Satellite Apps</h3><span style="font-size:12px;color:var(--text2)">Native — built by us</span></div>'
@@ -1591,6 +1417,5 @@ function render(){
 
 render();
 </script>
-
 </body>
 </html>
