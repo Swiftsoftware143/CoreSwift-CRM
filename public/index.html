@@ -182,10 +182,45 @@ tr:hover td{background:rgba(59,130,246,.03)}
       <input name="password" type="password" required placeholder="Your password">
       <button type="submit" class="btn btn-primary" style="width:100%;margin-top:16px;justify-content:center" id="auth-btn">Sign In</button>
     </form>
+    <div style="text-align:center;margin-top:12px">
+      <span class="link" onclick="showForgotPassword()" id="forgot-link">Forgot Password?</span>
+    </div>
     <p style="text-align:center;margin-top:16px;font-size:13px;color:var(--text2)">
       <span id="auth-toggle-text">Don't have an account?</span>
       <span class="link" onclick="toggleAuth()" id="auth-toggle-link">Sign Up</span>
     </p>
+  </div>
+</div>
+
+<!-- Forgot Password Modal -->
+<div id="forgot-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeForgot()">
+  <div class="modal" style="max-width:420px">
+    <div id="forgot-step-email">
+      <h2>Reset Password</h2>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:16px">Enter your email and we'll send you a reset link.</p>
+      <label>Email</label>
+      <input id="forgot-email" type="email" placeholder="you@company.com" style="margin-bottom:12px">
+      <div id="forgot-error" class="error" style="display:none"></div>
+      <div id="forgot-success" class="success" style="display:none"></div>
+      <div class="actions">
+        <button class="btn btn-secondary" onclick="closeForgot()">Cancel</button>
+        <button class="btn btn-primary" id="forgot-btn" onclick="submitForgot()">Send Reset Link</button>
+      </div>
+    </div>
+    <div id="forgot-step-reset" style="display:none">
+      <h2>Set New Password</h2>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:16px">Enter the code from your email and your new password.</p>
+      <label>Reset Code</label>
+      <input id="reset-token" type="text" placeholder="Paste the code from your email">
+      <label>New Password</label>
+      <input id="reset-password" type="password" placeholder="Minimum 8 characters">
+      <div id="reset-error" class="error" style="display:none"></div>
+      <div id="reset-success" class="success" style="display:none"></div>
+      <div class="actions">
+        <button class="btn btn-secondary" onclick="closeForgot()">Cancel</button>
+        <button class="btn btn-primary" id="reset-btn" onclick="submitReset()">Reset Password</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -282,6 +317,81 @@ function toggleAuth(){
   $('name-field').style.display=isLogin?'none':'';
   $('auth-toggle-text').textContent=isLogin?"Don't have an account?":"Already have an account?";
   $('auth-toggle-link').textContent=isLogin?'Sign Up':'Sign In';
+}
+
+/* ===== FORGOT/RESET PASSWORD ===== */
+function showForgotPassword(){
+  $('forgot-modal').style.display='flex';
+  $('forgot-step-email').style.display='';
+  $('forgot-step-reset').style.display='none';
+  $('forgot-error').style.display='none';
+  $('forgot-success').style.display='none';
+  $('reset-error').style.display='none';
+  $('reset-success').style.display='none';
+  $('forgot-email').value='';
+}
+function closeForgot(){
+  $('forgot-modal').style.display='none';
+}
+
+async function submitForgot(){
+  const email=$('forgot-email').value.trim();
+  const btn=$('forgot-btn');
+  if(!email||!email.includes('@')){
+    $('forgot-error').textContent='Please enter a valid email';
+    $('forgot-error').style.display='';
+    return;
+  }
+  $('forgot-error').style.display='none';
+  $('forgot-success').style.display='none';
+  btn.textContent='Sending...';btn.disabled=true;
+  try{
+    await fetch('/api/auth/forgot-password',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email})
+    });
+    // Always show success regardless of whether email exists (security)
+    $('forgot-success').textContent='If that email is registered, a reset link has been sent.';
+    $('forgot-success').style.display='';
+    $('forgot-btn').textContent='Send Another';
+    $('forgot-btn').disabled=false;
+    // Show the reset step so they can paste the code
+    setTimeout(()=>{
+      $('forgot-step-email').style.display='none';
+      $('forgot-step-reset').style.display='';
+    },1500);
+  }catch(e){
+    $('forgot-error').textContent=e.message;
+    $('forgot-error').style.display='';
+    btn.textContent='Send Reset Link';btn.disabled=false;
+  }
+}
+
+async function submitReset(){
+  const token=$('reset-token').value.trim();
+  const password=$('reset-password').value;
+  const btn=$('reset-btn');
+  $('reset-error').style.display='none';
+  $('reset-success').style.display='none';
+  if(!token){$('reset-error').textContent='Please enter the reset code';$('reset-error').style.display='';return}
+  if(password.length<8){$('reset-error').textContent='Password must be at least 8 characters';$('reset-error').style.display='';return}
+  btn.textContent='Resetting...';btn.disabled=true;
+  try{
+    await fetch('/api/auth/reset-password',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({token,password})
+    });
+    $('reset-success').textContent='Password reset successfully! You can now sign in with your new password.';
+    $('reset-success').style.display='';
+    btn.textContent='Done';btn.disabled=true;
+    setTimeout(()=>{closeForgot()},2000);
+  }catch(e){
+    $('reset-error').textContent=e.message;
+    $('reset-error').style.display='';
+    btn.textContent='Reset Password';btn.disabled=false;
+  }
 }
 
 async function handleAuth(e){
