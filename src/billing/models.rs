@@ -13,6 +13,8 @@ pub struct Plan {
     pub price_yearly: Decimal,
     pub features: serde_json::Value,
     pub checkout_url: Option<String>,
+    pub payment_provider: Option<String>,
+    pub thank_you_url: Option<String>,
     pub is_active: bool,
     pub sort_order: i32,
     pub created_at: DateTime<Utc>,
@@ -28,6 +30,8 @@ pub struct CreatePlanRequest {
     pub price_yearly: f64,
     pub features: serde_json::Value,
     pub checkout_url: Option<String>,
+    pub payment_provider: Option<String>,
+    pub thank_you_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +42,8 @@ pub struct UpdatePlanRequest {
     pub price_yearly: Option<f64>,
     pub features: Option<serde_json::Value>,
     pub checkout_url: Option<String>,
+    pub payment_provider: Option<String>,
+    pub thank_you_url: Option<String>,
     pub is_active: Option<bool>,
 }
 
@@ -83,6 +89,8 @@ pub struct PlanSummary {
     pub name: String,
     pub slug: String,
     pub checkout_url: Option<String>,
+    pub payment_provider: Option<String>,
+    pub thank_you_url: Option<String>,
 }
 
 /// Merge overrides into plan features, override wins

@@ -12,6 +12,10 @@ use serde_json::json;
 use uuid::Uuid;
 use chrono::Utc;
 
+use rand::Rng;
+use argon2::{Argon2, PasswordHasher};
+use password_hash::SaltString;
+
 use crate::AppState;
 use crate::errors::{AppError, ApiResult};
 use super::models::*;
@@ -513,4 +517,142 @@ fn generate_tokens(user: &TeamMember, state: &AppState) -> Result<(String, Strin
     let refresh_token = middleware::create_access_token(&refresh_claims, &state.config.jwt_secret)?;
 
     Ok((access_token, refresh_token, state.config.jwt_access_expiry))
+}
+
+/// POST /api/auth/forgot-password — Send password reset email
+#[derive(serde::Deserialize)]
+pub struct ForgotPasswordRequest {
+    pub email: String,
+}
+
+pub async fn forgot_password(
+    State(state): State<AppState>,
+    Json(req): Json<ForgotPasswordRequest>,
+) -> ApiResult<impl IntoResponse> {
+    if req.email.is_empty() || !req.email.contains('@') {
+        return Err(AppError::Validation("Valid email is required".to_string()));
+    }
+
+    // Look up user
+    let user = sqlx::query_as::<_, UserRow>(
+        "SELECT id, name, email FROM users WHERE email = $1"
+    )
+    .bind(&req.email)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let user = match user {
+        Some(u) => u,
+        None => {
+            // Don't reveal whether email exists — return success either way
+            return Ok(Json(json!({"message": "If that email is registered, a reset link has been sent."})));
+        }
+    };
+
+    // Create reset token (expires in 1 hour)
+    let token = Uuid::new_v4().to_string();
+    let expires_at = Utc::now() + chrono::Duration::hours(1);
+
+    sqlx::query(
+        "INSERT INTO password_resets (id, user_id, token, expires_at) VALUES ($1, $2, $3, $4)"
+    )
+    .bind(Uuid::new_v4())
+    .bind(user.id)
+    .bind(&token)
+    .bind(expires_at)
+    .execute(&state.db)
+    .await?;
+
+    // Queue reset email via outbound_messages
+    let reset_url = format!("https://app.coreswiftcrm.com/auth/reset-password?token={}", token);
+    let body = format!(
+        "Hi {},\n\nWe received a request to reset your password for CoreSwift CRM.\n\nClick the link below to reset your password:\n{}\n\nThis link expires in 1 hour.\n\nIf you did not request this, please ignore this email.\n\n- CoreSwift CRM Team",
+        user.name, reset_url
+    );
+
+    sqlx::query(
+        r#"INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status)
+           VALUES ($1, $2, 'email', $3, $4, $5, 'queued')"#
+    )
+    .bind(Uuid::new_v4())
+    .bind(Uuid::nil()) // no tenant context for forgot-password emails
+    .bind(&req.email)
+    .bind("Password Reset Request - CoreSwift CRM")
+    .bind(&body)
+    .execute(&state.db)
+    .await?;
+
+    Ok(Json(json!({"message": "If that email is registered, a reset link has been sent."})))
+}
+
+/// POST /api/auth/reset-password — Reset password using token
+#[derive(serde::Deserialize)]
+pub struct ResetPasswordRequest {
+    pub token: String,
+    pub password: String,
+}
+
+pub async fn reset_password(
+    State(state): State<AppState>,
+    Json(req): Json<ResetPasswordRequest>,
+) -> ApiResult<impl IntoResponse> {
+    if req.password.len() < 8 {
+        return Err(AppError::Validation("Password must be at least 8 characters".to_string()));
+    }
+
+    // Find valid reset token
+    let reset = sqlx::query_as::<_, PasswordResetRow>(
+        "SELECT id, user_id, expires_at, used FROM password_resets WHERE token = $1"
+    )
+    .bind(&req.token)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::Validation("Invalid or expired reset token".to_string()))?;
+
+    if reset.used {
+        return Err(AppError::Validation("Token has already been used".to_string()));
+    }
+
+    if Utc::now() > reset.expires_at {
+        return Err(AppError::Validation("Token has expired".to_string()));
+    }
+
+    // Hash the new password
+    let salt = SaltString::generate(&mut rand::thread_rng());
+    let password_hash = Argon2::default()
+        .hash_password(req.password.as_bytes(), &salt)
+        .map_err(|e| AppError::Internal(format!("Password hashing failed: {}", e)))?
+        .to_string();
+
+    // Update user password
+    sqlx::query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2")
+        .bind(&password_hash)
+        .bind(reset.user_id)
+        .execute(&state.db)
+        .await?;
+
+    // Mark token as used
+    sqlx::query("UPDATE password_resets SET used = true WHERE id = $1")
+        .bind(reset.id)
+        .execute(&state.db)
+        .await?;
+
+    Ok(Json(json!({"message": "Password has been reset successfully."})))
+}
+
+// ── Internal row types ──
+
+#[derive(Debug, sqlx::FromRow)]
+struct UserRow {
+    id: Uuid,
+    name: String,
+    email: String,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct PasswordResetRow {
+    id: Uuid,
+    user_id: Uuid,
+    expires_at: chrono::DateTime<Utc>,
+    used: bool,
 }

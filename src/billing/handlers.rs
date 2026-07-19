@@ -42,8 +42,8 @@ pub async fn create_plan(State(s): State<AppState>, Extension(c): Extension<Clai
     }
 
     let plan = sqlx::query_as::<_, Plan>(
-        r#"INSERT INTO plans (id, name, slug, description, price_monthly, price_yearly, features, checkout_url)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *"#
+        r#"INSERT INTO plans (id, name, slug, description, price_monthly, price_yearly, features, checkout_url, payment_provider, thank_you_url)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *"#
     )
     .bind(Uuid::new_v4())
     .bind(&r.name)
@@ -53,6 +53,8 @@ pub async fn create_plan(State(s): State<AppState>, Extension(c): Extension<Clai
     .bind(Decimal::from_f64_retain(r.price_yearly).unwrap_or(Decimal::ZERO))
     .bind(&r.features)
     .bind(&r.checkout_url)
+    .bind(&r.payment_provider)
+    .bind(&r.thank_you_url)
     .fetch_one(&s.db)
     .await
     .map_err(|e| {
@@ -99,9 +101,11 @@ pub async fn update_plan(State(s): State<AppState>, Extension(c): Extension<Clai
             price_yearly = $4,
             features = COALESCE($5, features),
             checkout_url = COALESCE($6, checkout_url),
-            is_active = COALESCE($7, is_active),
+            payment_provider = COALESCE($7, payment_provider),
+            thank_you_url = COALESCE($8, thank_you_url),
+            is_active = COALESCE($9, is_active),
             updated_at = NOW()
-           WHERE id = $8 RETURNING *"#
+           WHERE id = $10 RETURNING *"#
     )
     .bind(&r.name)
     .bind(&r.description)
@@ -109,6 +113,8 @@ pub async fn update_plan(State(s): State<AppState>, Extension(c): Extension<Clai
     .bind(price_yearly)
     .bind(&r.features)
     .bind(&r.checkout_url)
+    .bind(&r.payment_provider)
+    .bind(&r.thank_you_url)
     .bind(r.is_active)
     .bind(id)
     .fetch_one(&s.db)
@@ -270,8 +276,8 @@ pub async fn cancel_subscription(State(s): State<AppState>, Extension(c): Extens
 pub async fn get_features(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let row = sqlx::query_as::<_, (Uuid, String, Option<String>, serde_json::Value, serde_json::Value)>(
-        r#"SELECT p.id, p.slug, p.checkout_url, p.features, COALESCE(tp.feature_overrides, '{}'::jsonb)
+    let row = sqlx::query_as::<_, (Uuid, String, Option<String>, Option<String>, Option<String>, serde_json::Value, serde_json::Value)>(
+        r#"SELECT p.id, p.slug, p.checkout_url, p.payment_provider, p.thank_you_url, p.features, COALESCE(tp.feature_overrides, '{}'::jsonb)
            FROM tenant_plans tp
            JOIN plans p ON tp.plan_id = p.id
            WHERE tp.tenant_id = $1 AND tp.status IN ('active', 'trialing')"#
@@ -280,7 +286,7 @@ pub async fn get_features(State(s): State<AppState>, Extension(c): Extension<Cla
     .fetch_optional(&s.db)
     .await?;
 
-    let (plan_id, plan_slug, checkout_url, plan_features, overrides) = match row {
+    let (plan_id, plan_slug, checkout_url, payment_provider, thank_you_url, plan_features, overrides) = match row {
         Some(r) => r,
         None => return Err(AppError::NotFound("No active subscription — assign a plan first".to_string())),
     };
@@ -288,7 +294,7 @@ pub async fn get_features(State(s): State<AppState>, Extension(c): Extension<Cla
     let (features, limits) = merge_features(&plan_features, &overrides);
 
     Ok(Json(json!(FeaturesResponse {
-        plan: PlanSummary { id: plan_id, name: plan_slug.clone(), slug: plan_slug, checkout_url },
+        plan: PlanSummary { id: plan_id, name: plan_slug.clone(), slug: plan_slug, checkout_url, payment_provider, thank_you_url },
         features,
         limits,
     })))
