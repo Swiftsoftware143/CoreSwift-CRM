@@ -27,5 +27,8 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/credits/balance", axum::routing::get(handlers::get_credit_balance))
         .route("/credits/usage", axum::routing::get(handlers::get_credit_usage))
         .route("/credits/buy", axum::routing::post(handlers::buy_credits))
+        // Stripe/PayPal checkout
+        .route("/checkout/create", axum::routing::post(handlers::create_checkout_session))
+        .route("/checkout/sessions", axum::routing::get(handlers::list_checkout_sessions))
         .layer(middleware::from_fn_with_state(state.clone(), crate::auth::middleware::auth_middleware))
 }

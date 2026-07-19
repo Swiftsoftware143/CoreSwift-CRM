@@ -1,4 +1,5 @@
 use axum::{extract::{State, Path, Json, Extension, Query}, http::StatusCode, response::IntoResponse};
+use sqlx::Row;
 use serde_json::{json, Value};
 use uuid::Uuid;
 use rust_decimal::Decimal;
@@ -351,4 +352,461 @@ pub async fn buy_credits(State(s): State<AppState>, Extension(c): Extension<Clai
     tracing::info!(tenant = %tid, credits = %amount, price = %price, "Credits purchased");
 
     Ok(Json(json!({"message": format!("{} credits added to account", amount), "amount": amount, "charged": price})))
+}
+
+// ──────────────────────────────────────────────
+// Stripe/PayPal Checkout
+// ──────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+pub struct CreateCheckoutRequest {
+    pub provider_type: String,          // "stripe" or "paypal"
+    pub plan_id: Option<Uuid>,
+    pub amount: Option<f64>,
+    pub currency: Option<String>,
+    pub success_url: Option<String>,
+    pub cancel_url: Option<String>,
+    pub metadata: Option<Value>,
+}
+
+/// POST /api/billing/checkout/create — Create a Stripe/PayPal checkout session
+pub async fn create_checkout_session(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(r): Json<CreateCheckoutRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    let provider_type = r.provider_type.to_lowercase();
+
+    if provider_type != "stripe" && provider_type != "paypal" {
+        return Err(AppError::Validation("provider_type must be 'stripe' or 'paypal'".to_string()));
+    }
+
+    // Get the API key for this provider
+    let api_key = sqlx::query_scalar::<_, String>(
+        "SELECT api_key FROM provider_keys WHERE tenant_id = $1 AND provider = $2 AND is_active = true"
+    )
+    .bind(tenant_id)
+    .bind(&provider_type)
+    .fetch_optional(&s.db)
+    .await?
+    .ok_or_else(|| AppError::Validation(format!("No active {} API key configured", provider_type)))?;
+
+    // Determine amount and plan info
+    let (amount, currency, purchasable_type, purchasable_id) = if let Some(pid) = r.plan_id {
+        let plan = sqlx::query_as::<_, Plan>("SELECT * FROM plans WHERE id = $1")
+            .bind(pid)
+            .fetch_optional(&s.db)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Plan not found".to_string()))?;
+        (plan.price_monthly, "USD".to_string(), "plan".to_string(), Some(pid))
+    } else {
+        let amt = Decimal::from_f64_retain(r.amount.unwrap_or(0.0)).unwrap_or(Decimal::ZERO);
+        (amt, r.currency.unwrap_or_else(|| "USD".to_string()), "credits".to_string(), None)
+    };
+
+    let return_url = r.success_url.unwrap_or_default();
+    let metadata = r.metadata.unwrap_or_else(|| json!({}));
+
+    // Call Stripe/PayPal API
+    let provider_session = match provider_type.as_str() {
+        "stripe" => create_stripe_session(&api_key, amount, &currency, &purchasable_type, &return_url, &metadata).await?,
+        "paypal" => create_paypal_session(&api_key, amount, &currency, &purchasable_type, &return_url, &metadata).await?,
+        _ => return Err(AppError::Validation("Invalid provider".to_string())),
+    };
+
+    let provider_session_id = provider_session["id"].as_str().unwrap_or("").to_string();
+    let checkout_url = provider_session["url"].as_str().unwrap_or("").to_string();
+
+    // Store checkout session
+    let session_id = Uuid::new_v4();
+    sqlx::query(
+        r#"INSERT INTO checkout_sessions (id, tenant_id, user_id, provider_type, provider_session_id, purchasable_type, purchasable_id, amount, currency, metadata, return_url)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#
+    )
+    .bind(session_id)
+    .bind(tenant_id)
+    .bind(c.sub.parse::<Uuid>().ok())
+    .bind(&provider_type)
+    .bind(&provider_session_id)
+    .bind(&purchasable_type)
+    .bind(purchasable_id)
+    .bind(amount)
+    .bind(&currency)
+    .bind(&metadata)
+    .bind(&return_url)
+    .execute(&s.db)
+    .await?;
+
+    Ok(Json(json!({
+        "id": session_id,
+        "provider_session_id": provider_session_id,
+        "checkout_url": checkout_url,
+        "provider_type": provider_type,
+    })))
+}
+
+/// GET /api/billing/checkout/sessions — List checkout sessions for this tenant
+pub async fn list_checkout_sessions(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    let sessions = sqlx::query_as::<_, CheckoutSessionSummary>(
+        r#"SELECT id, provider_type, provider_session_id, status, amount, currency, purchasable_type, created_at
+           FROM checkout_sessions
+           WHERE tenant_id = $1
+           ORDER BY created_at DESC LIMIT 50"#
+    )
+    .bind(tenant_id)
+    .fetch_all(&s.db)
+    .await?;
+
+    Ok(Json(json!(sessions)))
+}
+
+// ──────────────────────────────────────────────
+// Stripe/PayPal Webhooks (public, no auth)
+// ──────────────────────────────────────────────
+
+/// POST /api/billing/webhooks/stripe — Stripe webhook
+pub async fn stripe_webhook(
+    State(s): State<AppState>,
+    Json(payload): Json<Value>,
+) -> ApiResult<impl IntoResponse> {
+    let event_type = payload.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
+    tracing::info!("Stripe webhook: event_type={}", event_type);
+
+    if event_type == "checkout.session.completed" {
+        if let Some(data) = payload.get("data").and_then(|d| d.get("object")) {
+            let provider_session_id = data.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let customer_email = data.get("customer_details")
+                .and_then(|d| d.get("email"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let customer_name = data.get("customer_details")
+                .and_then(|d| d.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("Valued Customer");
+
+            // Update checkout session status
+            let row = sqlx::query(
+                "UPDATE checkout_sessions SET status = 'completed', webhook_received_at = NOW(), updated_at = NOW() WHERE provider_session_id = $1 AND status = 'pending' RETURNING tenant_id, metadata"
+            )
+            .bind(provider_session_id)
+            .fetch_optional(&s.db)
+            .await?;
+
+            if let Some(r) = row {
+                let tenant_id: Uuid = r.get("tenant_id");
+                let metadata: Value = r.get("metadata");
+
+                let email = if !customer_email.is_empty() {
+                    customer_email
+                } else {
+                    metadata.get("customer_email").and_then(|v| v.as_str()).unwrap_or("")
+                };
+
+                if !email.is_empty() {
+                    if let Err(e) = deliver_credentials(&s.db, email, customer_name, tenant_id).await {
+                        tracing::error!("Credential delivery failed: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Json(json!({"received": true})))
+}
+
+/// POST /api/billing/webhooks/paypal — PayPal webhook
+pub async fn paypal_webhook(
+    State(s): State<AppState>,
+    Json(payload): Json<Value>,
+) -> ApiResult<impl IntoResponse> {
+    let event_type = payload.get("event_type").and_then(|v| v.as_str()).unwrap_or("unknown");
+    tracing::info!("PayPal webhook: event_type={}", event_type);
+
+    match event_type {
+        "CHECKOUT.ORDER.APPROVED" | "PAYMENT.CAPTURE.COMPLETED" => {
+            if let Some(resource) = payload.get("resource") {
+                let provider_session_id = resource.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let payer = payload.get("resource").and_then(|r| r.get("payer"));
+                let customer_email = payer.and_then(|p| p.get("email_address")).and_then(|v| v.as_str()).unwrap_or("");
+                let customer_name = payer.and_then(|p| p.get("name"))
+                    .and_then(|n| n.get("given_name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Valued Customer");
+
+                let row = sqlx::query(
+                    "UPDATE checkout_sessions SET status = 'completed', webhook_received_at = NOW(), updated_at = NOW() WHERE provider_session_id = $1 AND status = 'pending' RETURNING tenant_id, metadata"
+                )
+                .bind(provider_session_id)
+                .fetch_optional(&s.db)
+                .await?;
+
+                if let Some(r) = row {
+                    let tenant_id: Uuid = r.get("tenant_id");
+                    let metadata: Value = r.get("metadata");
+
+                    let email = if !customer_email.is_empty() {
+                        customer_email
+                    } else {
+                        metadata.get("customer_email").and_then(|v| v.as_str()).unwrap_or("")
+                    };
+
+                    if !email.is_empty() {
+                        if let Err(e) = deliver_credentials(&s.db, email, customer_name, tenant_id).await {
+                            tracing::error!("Credential delivery failed: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+        _ => tracing::debug!("Unhandled PayPal event: {}", event_type),
+    }
+
+    Ok(Json(json!({"received": true})))
+}
+
+// ──────────────────────────────────────────────
+// Credential Delivery
+// ──────────────────────────────────────────────
+
+use rand::Rng;
+
+async fn deliver_credentials(
+    db: &sqlx::PgPool,
+    email: &str,
+    customer_name: &str,
+    tenant_id: Uuid,
+) -> Result<(), String> {
+    // Look up existing user
+    let existing_user = sqlx::query_as::<_, UserRow>(
+        "SELECT id, email, password_hash, name FROM users WHERE email = $1"
+    )
+    .bind(email)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| format!("DB error: {}", e))?;
+
+    if let Some(user) = existing_user {
+        let has_password = !user.password_hash.is_empty() && user.password_hash != " ";
+
+        if has_password {
+            // Existing user — queue purchase confirmation
+            let body = format!(
+                "Hi {},\n\nYour payment has been received successfully.\n\nLogin at: https://app.coreswiftcrm.com/login\n\nThank you for your business!\n- CoreSwift CRM Team",
+                user.name
+            );
+            sqlx::query(
+                r#"INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status)
+                   VALUES ($1, $2, 'email', $3, $4, $5, 'queued')"#
+            )
+            .bind(Uuid::new_v4())
+            .bind(tenant_id)
+            .bind(email)
+            .bind("Payment Received — Thank You! - CoreSwift CRM")
+            .bind(&body)
+            .execute(db)
+            .await
+            .map_err(|e| format!("Failed to queue email: {}", e))?;
+        } else {
+            // User exists but no password — generate and queue welcome
+            let temp_password = generate_temp_password();
+            let hash = hash_password(&temp_password);
+            sqlx::query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2")
+                .bind(&hash)
+                .bind(user.id)
+                .execute(db)
+                .await
+                .map_err(|e| format!("Failed to update password: {}", e))?;
+
+            let body = format!(
+                "Welcome to CoreSwift CRM, {}!\n\nYour account has been activated.\n\nEmail: {}\nPassword: {}\n\nLogin at: https://app.coreswiftcrm.com/login\n\nBest regards,\nThe CoreSwift CRM Team",
+                user.name, email, temp_password
+            );
+            sqlx::query(
+                r#"INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status)
+                   VALUES ($1, $2, 'email', $3, $4, $5, 'queued')"#
+            )
+            .bind(Uuid::new_v4())
+            .bind(tenant_id)
+            .bind(email)
+            .bind("Welcome to CoreSwift CRM!")
+            .bind(&body)
+            .execute(db)
+            .await
+            .map_err(|e| format!("Failed to queue welcome email: {}", e))?;
+        }
+    } else {
+        // New user — create user + tenant
+        let user_id = Uuid::new_v4();
+        let temp_password = generate_temp_password();
+        let hash = hash_password(&temp_password);
+
+        // Check if tenant exists
+        let tenant = sqlx::query_as::<_, TenantRow>(
+            "SELECT id, name FROM tenants WHERE id = $1"
+        )
+        .bind(tenant_id)
+        .fetch_optional(db)
+        .await
+        .map_err(|e| format!("DB error: {}", e))?;
+
+        let (tid, tname) = if let Some(t) = tenant {
+            (t.id, t.name)
+        } else {
+            let tid = Uuid::new_v4();
+            sqlx::query("INSERT INTO tenants (id, name, slug, created_at, updated_at) VALUES ($1, $2, $3, NOW(), NOW())")
+                .bind(tid)
+                .bind(customer_name)
+                .bind(&format!("cust-{}", &tid.to_string()[..8]))
+                .execute(db)
+                .await
+                .map_err(|e| format!("Failed to create tenant: {}", e))?;
+            (tid, customer_name.to_string())
+        };
+
+        sqlx::query(
+            "INSERT INTO users (id, tenant_id, email, password_hash, name, role) VALUES ($1, $2, $3, $4, $5, 'owner')"
+        )
+        .bind(user_id)
+        .bind(tid)
+        .bind(email)
+        .bind(&hash)
+        .bind(customer_name)
+        .execute(db)
+        .await
+        .map_err(|e| format!("Failed to create user: {}", e))?;
+
+        let body = format!(
+            "Welcome to CoreSwift CRM, {}!\n\nYour account has been created.\n\nAccount: {}\nEmail: {}\nPassword: {}\n\nLogin at: https://app.coreswiftcrm.com/login\n\nNext steps:\n- Connect your apps\n- Import your contacts\n- Set up your pipelines\n- Invite your team\n\nCoreSwift CRM Team",
+            customer_name, tname, email, temp_password
+        );
+        sqlx::query(
+            r#"INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status)
+               VALUES ($1, $2, 'email', $3, $4, $5, 'queued')"#
+        )
+        .bind(Uuid::new_v4())
+        .bind(tid)
+        .bind(email)
+        .bind("Welcome to CoreSwift CRM!")
+        .bind(&body)
+        .execute(db)
+        .await
+        .map_err(|e| format!("Failed to queue welcome email: {}", e))?;
+    }
+
+    Ok(())
+}
+
+fn generate_temp_password() -> String {
+    let chars: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$%&";
+    let mut rng = rand::thread_rng();
+    (0..14).map(|_| {
+        let idx = rng.gen_range(0..chars.len());
+        chars[idx] as char
+    }).collect()
+}
+
+fn hash_password(password: &str) -> String {
+    use argon2::{Argon2, PasswordHasher};
+    use password_hash::SaltString;
+    let salt = SaltString::generate(&mut rand::thread_rng());
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .expect("argon2 hashing failed")
+        .to_string()
+}
+
+// ──────────────────────────────────────────────
+// Stripe/PayPal API helpers
+// ──────────────────────────────────────────────
+
+async fn create_stripe_session(
+    api_key: &str,
+    amount: Decimal,
+    currency: &str,
+    _purchasable_type: &str,
+    return_url: &str,
+    metadata: &Value,
+) -> Result<Value, AppError> {
+    let client = reqwest::Client::new();
+    let amount_cents = (amount * Decimal::new(100, 0)).round();
+    let amount_str = amount_cents.to_string();
+
+    let mut params = std::collections::HashMap::new();
+    let currency_lower = currency.to_lowercase();
+    params.insert("mode", "payment");
+    params.insert("success_url", return_url);
+    params.insert("cancel_url", return_url);
+    params.insert("line_items[0][price_data][currency]", &currency_lower);
+    params.insert("line_items[0][price_data][product_data][name]", "CoreSwift CRM Purchase");
+    params.insert("line_items[0][price_data][unit_amount]", &amount_str);
+    params.insert("line_items[0][quantity]", "1");
+
+    if let Some(obj) = metadata.as_object() {
+        for (k, v) in obj {
+            if let Some(s) = v.as_str() {
+                params.insert("metadata[0]", s);
+            }
+        }
+    }
+
+    let resp = client
+        .post("https://api.stripe.com/v1/checkout/sessions")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("Stripe API error: {}", e)))?;
+
+    let body: Value = resp.json().await
+        .map_err(|e| AppError::Internal(format!("Stripe parse error: {}", e)))?;
+
+    let session_id = body.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let url = body.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    Ok(json!({"id": session_id, "url": url}))
+}
+
+async fn create_paypal_session(
+    _api_key: &str,
+    _amount: Decimal,
+    _currency: &str,
+    _purchasable_type: &str,
+    _return_url: &str,
+    _metadata: &Value,
+) -> Result<Value, AppError> {
+    // TODO: Implement PayPal order creation
+    Err(AppError::Internal("PayPal checkout not yet implemented in CoreSwift".to_string()))
+}
+
+// ── Data types ──
+
+#[derive(Debug, sqlx::FromRow, serde::Serialize)]
+struct CheckoutSessionSummary {
+    id: Uuid,
+    provider_type: String,
+    provider_session_id: Option<String>,
+    status: String,
+    amount: Decimal,
+    currency: String,
+    purchasable_type: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct UserRow {
+    id: Uuid,
+    email: String,
+    password_hash: String,
+    name: String,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct TenantRow {
+    id: Uuid,
+    name: String,
 }
