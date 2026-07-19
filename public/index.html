@@ -218,6 +218,7 @@ tr:hover td{background:rgba(59,130,246,.03)}
       <a href="#" onclick="showPage('features')" data-page="features">🎛 Feature Gating</a>
       <a href="#" onclick="showPage('comms')" data-page="comms">✉️ Provider Config</a>
       <a href="#" onclick="showPage('templates')" data-page="templates">📝 Templates</a>
+      <a href="#" onclick="showPage('email-templates')" data-page="email-templates">📧 Email Templates</a>
       <a href="#" onclick="showPage('webhooks')" data-page="webhooks">📡 Webhooks</a>
       <a href="#" onclick="showPage('seo')" data-page="seo">🌐 SEO & Pages</a>
       <a href="#" onclick="showPage('legal')" data-page="legal">⚖️ Legal</a>
@@ -261,6 +262,7 @@ function plural(n,s){return n+' '+s+(n!==1?'s':'')}
 function hint(t){return '<span class="hint-icon" title="'+esc(t)+'" style="cursor:help;display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:var(--border);color:var(--text2);font-size:9px;margin-left:4px;font-weight:700;vertical-align:middle">i</span>';}
 
 
+function showError(id,msg){const el=document.getElementById(id);if(el){el.textContent=msg;el.style.display='block'}}
 function showToast(msg,type='success'){
   const t=document.createElement('div');
   t.className='toast toast-'+type;
@@ -324,6 +326,7 @@ function showPage(page){
     case 'portfolio':renderPortfolio();break;
     case 'messagelog':renderMessageLog();break;
     case 'templates':renderTemplates();break;
+    case 'email-templates':renderEmailTemplates();break;
     case 'notifrules':renderNotificationRules();break;
     case 'integrations':renderIntegrations();break;
     case 'tagautomation':renderTagAutomation();break;
@@ -1530,7 +1533,7 @@ const FEATURE_PAGE_MAP = {
 let currentPlan = 'free';
 
 function checkFeatureGate(pageName){
-  const adminPages = ['portfolio','plans','features','comms','seo','legal','settings'];
+  const adminPages = ['portfolio','plans','features','comms','templates','email-templates','webhooks','seo','legal','settings'];
   if(adminPages.includes(pageName)) return true;
 
   let plan = (user && user.plan) ? user.plan.toLowerCase() : 'free';
@@ -1587,6 +1590,157 @@ function render(){
     show('login-page');
     hide('app');
   }
+}
+
+/* ===== EMAIL TEMPLATES ADMIN ===== */
+function renderEmailTemplates(){
+  const main=document.getElementById('main-content');
+  main.innerHTML=
+    '<div class="top-bar"><h1>📧 Email Templates</h1><div><button class="btn-primary" onclick="showEmailTemplateForm({})">+ Add Template</button></div></div>'
+    +'<div id="et-list">Loading...</div>';
+  loadEmailTemplates();
+}
+
+function loadEmailTemplates(){
+  api('/email-templates').then(r=>{
+    const items=r.items||[];
+    const etList=document.getElementById('et-list');
+    if(!items.length){
+      etList.innerHTML='<div class="empty">No email templates yet. Add one to get started.</div>';
+      return;
+    }
+    let html='<table><thead><tr><th>Name</th><th>Subject</th><th>Type</th><th>Default</th><th>Actions</th></tr></thead><tbody>';
+    items.forEach(t=>{
+      const isDefault=t.is_default?'<span class="badge badge-active">✓ Default</span>':'<span class="badge badge-pending">Custom</span>';
+      html+='<tr>'
+        +'<td><strong>'+esc(t.name)+'</strong></td>'
+        +'<td style="color:var(--text2)">'+esc(t.subject||'')+'</td>'
+        +'<td><span class="badge" style="background:rgba(79,134,247,.12);color:var(--accent)">'+esc(t.template_type||'')+'</span></td>'
+        +'<td>'+isDefault+'</td>'
+        +'<td>'
+        +'<button class="btn-secondary btn-sm" onclick="showEmailTemplateForm('+JSON.stringify(t).replace(/"/g,'&quot;')+')">✏️</button> '
+        +'<button class="btn-danger btn-sm" onclick="deleteEmailTemplate(\''+t.id+'\')">🗑️</button>'
+        +'</td></tr>';
+    });
+    html+='</tbody></table>';
+    etList.innerHTML=html;
+  }).catch(e=>{
+    document.getElementById('et-list').innerHTML='<div class="error">Failed to load templates: '+e+'</div>';
+  });
+}
+
+function showEmailTemplateForm(template){
+  const isNew=!template.id;
+  const title=isNew?'New Email Template':'Edit: '+template.name;
+  const htmlMode=template.is_html!==false;
+
+  const modal=document.createElement('div');
+  modal.className='modal-overlay';
+  modal.onclick=e=>{if(e.target===modal)modal.remove()};
+  modal.innerHTML=
+    '<div class="modal" style="max-width:700px">'
+    +'<h2>'+title+'</h2>'
+    +'<div id="et-form-error" class="error" style="display:none"></div>'
+    +'<label>Name</label>'
+    +'<input id="et-name" value="'+esc(template.name||'')+'" placeholder="e.g. Welcome Email">'
+    +'<label>Template Type</label>'
+    +'<select id="et-type">'
+      +'<option value="welcome" '+(template.template_type==='welcome'?'selected':'')+'>Welcome</option>'
+      +'<option value="purchase_confirmed" '+(template.template_type==='purchase_confirmed'?'selected':'')+'>Purchase Confirmed</option>'
+      +'<option value="password_reset" '+(template.template_type==='password_reset'?'selected':'')+'>Password Reset</option>'
+      +'<option value="custom" '+(template.template_type&&!['welcome','purchase_confirmed','password_reset'].includes(template.template_type)?'selected':'')+'>Custom</option>'
+    +'</select>'
+    +'<div id="et-custom-type-wrap" style="display:'+(template.template_type&&!['welcome','purchase_confirmed','password_reset'].includes(template.template_type)?'block':'none')+'">'
+    +'<label>Custom Type</label>'
+    +'<input id="et-custom-type" value="'+esc(template.template_type||'')+'">'
+    +'</div>'
+    +'<label>Subject</label>'
+    +'<input id="et-subject" value="'+esc(template.subject||'')+'" placeholder="Subject line">'
+    +'<label>Content Mode</label>'
+    +'<div style="display:flex;gap:12px;margin:8px 0">'
+    +'<label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="et-html-mode" value="html" '+(htmlMode?'checked':'')+' onchange="toggleEmailHtmlMode(true)"> HTML</label>'
+    +'<label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="et-html-mode" value="text" '+(!htmlMode?'checked':'')+' onchange="toggleEmailHtmlMode(false)"> Plain Text</label>'
+    +'</div>'
+    +'<label>Merge Fields <span style="color:var(--text2);font-weight:400;font-size:11px">(click to insert at cursor)</span></label>'
+    +'<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">'
+      +'<button class="btn-secondary btn-sm" onclick="insertMergeField(\'et-body\',\'{{name}}\')">{{name}} 👤</button>'
+      +'<button class="btn-secondary btn-sm" onclick="insertMergeField(\'et-body\',\'{{email}}\')">{{email}} 📧</button>'
+      +'<button class="btn-secondary btn-sm" onclick="insertMergeField(\'et-body\',\'{{password}}\')">{{password}} 🔐</button>'
+      +'<button class="btn-secondary btn-sm" onclick="insertMergeField(\'et-body\',\'{{app_url}}\')">{{app_url}} 🔗</button>'
+      +'<button class="btn-secondary btn-sm" onclick="insertMergeField(\'et-body\',\'{{plan_name}}\')">{{plan_name}} 📋</button>'
+      +'<button class="btn-secondary btn-sm" onclick="insertMergeField(\'et-body\',\'{{token}}\')">{{token}} 🎫</button>'
+      +'<button class="btn-secondary btn-sm" onclick="insertMergeField(\'et-body\',\'{{account_name}}\')">{{account_name}} 🏢</button>'
+    +'</div>'
+    +'<label>Body (plain text)</label>'
+    +'<textarea id="et-body" rows="8">'+esc(template.body||'')+'</textarea>'
+    +'<div id="et-html-wrap" style="display:'+(htmlMode?'block':'none')+'">'
+    +'<label>HTML Body</label>'
+    +'<textarea id="et-html-body" rows="10" style="font-family:monospace;font-size:13px">'+esc(template.html_body||'')+'</textarea>'
+    +'</div>'
+    +'<label style="display:flex;align-items:center;gap:8px;margin-top:12px">'
+    +'<input type="checkbox" id="et-is-default" '+(template.is_default?'checked':'')+'> Is Default Template</label>'
+    +'<div class="actions">'
+    +'<button class="btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
+    +'<button class="btn-primary" onclick="saveEmailTemplate(\''+(template.id||'')+'\')">💾 Save</button>'
+    +'</div></div>';
+  document.body.appendChild(modal);
+}
+
+function toggleEmailHtmlMode(isHtml){
+  const wrap=document.getElementById('et-html-wrap');
+  if(wrap)wrap.style.display=isHtml?'block':'none';
+}
+
+function insertMergeField(textareaId,field){
+  const ta=document.getElementById(textareaId);
+  if(!ta)return;
+  const start=ta.selectionStart;
+  const end=ta.selectionEnd;
+  ta.value=ta.value.substring(0,start)+field+ta.value.substring(end);
+  ta.focus();
+  ta.selectionStart=ta.selectionEnd=start+field.length;
+}
+
+function saveEmailTemplate(id){
+  const name=document.getElementById('et-name').value.trim();
+  if(!name){showError('et-form-error','Name is required');return;}
+
+  let templateType=document.getElementById('et-type').value;
+  if(templateType==='custom'){
+    templateType=document.getElementById('et-custom-type').value.trim();
+    if(!templateType){showError('et-form-error','Custom type is required');return;}
+  }
+
+  const isHtml=document.querySelector('input[name="et-html-mode"]:checked')?.value==='html';
+
+  const data={
+    name:name,
+    subject:document.getElementById('et-subject').value.trim(),
+    body:document.getElementById('et-body').value,
+    html_body:isHtml?document.getElementById('et-html-body').value:'',
+    is_html:isHtml,
+    is_default:document.getElementById('et-is-default').checked,
+    template_type:templateType
+  };
+
+  const method=id?'PUT':'POST';
+  const url=id?'/email-templates/'+id:'/email-templates';
+
+  api(url,{method:method,body:JSON.stringify(data)}).then(()=>{
+    document.querySelector('.modal-overlay')?.remove();
+    loadEmailTemplates();
+  }).catch(e=>{
+    showError('et-form-error','Save failed: '+e);
+  });
+}
+
+function deleteEmailTemplate(id){
+  if(!confirm('Delete this email template?'))return;
+  api('/email-templates/'+id,{method:'DELETE'}).then(()=>{
+    loadEmailTemplates();
+  }).catch(e=>{
+    alert('Delete failed: '+e);
+  });
 }
 
 render();

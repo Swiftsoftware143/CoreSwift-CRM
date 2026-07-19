@@ -48,6 +48,8 @@ pub mod webhooks;
 pub mod round_robin;
 pub mod google_calendar;
 pub mod tracked_links;
+pub mod email_templates;
+pub mod email;
 pub mod worker;
 
 use axum::{
@@ -192,6 +194,8 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/automation", automation::router(state.clone()))
         // Tracked links
         .nest("/api/tracked-links", tracked_links::router(state.clone()))
+        // Email Templates CRUD (admin only)
+        .nest("/api/email-templates", email_templates::router(state.clone()))
         // Public redirect for tracked links (no auth)
         .nest("/track", tracked_links::public_router())
         // Stripe/PayPal webhooks (no auth)

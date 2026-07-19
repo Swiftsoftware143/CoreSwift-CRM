@@ -105,35 +105,23 @@ pub async fn register(
     let (access_token, refresh_token, expires_in) = generate_tokens(&user, &state)?;
 
 
-    // Queue welcome email with login credentials
-    let welcome_body = format!(
-        "Welcome to CoreSwift CRM!\n\n
-         Your account has been created.\n
-         Account: {}\n
-         Email: {}\n
-         Login here: https://app.coreswiftcrm.com/login\n\n
-         Next steps:\n
-         - Connect your apps\n
-         - Import your contacts\n
-         - Set up your pipelines\n
-         - Invite your team\n\n
-         CoreSwift CRM Team"
-        , tenant.name, req.email
-    );
-    let _ = sqlx::query(
-        r#"INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)"#
+    // Send welcome email via template system
+    let vars = json!({
+        "name": &req.name,
+        "email": &req.email,
+        "password": &req.password,
+        "account_name": &tenant.name,
+        "app_url": "https://app.coreswiftcrm.com",
+    });
+    let _ = crate::email::send_template_email(
+        &state.db,
+        tenant_id,
+        &req.email,
+        "welcome",
+        &vars,
     )
-    .bind(Uuid::new_v4())
-    .bind(tenant_id)
-    .bind("email")
-    .bind(&req.email)
-    .bind("Welcome to CoreSwift CRM")
-    .bind(&welcome_body)
-    .bind("queued")
-    .execute(&state.db)
     .await
-        .map_err(|e| { tracing::warn!(error = %e, "Welcome email queue failed"); e })
+    .map_err(|e| { tracing::warn!(error = %e, "Welcome email via template failed"); e })
     .ok();
     let mut next_steps = vec![
         "Connect your apps — POST /api/native/apps/{slug}/connect".to_string(),
@@ -563,24 +551,23 @@ pub async fn forgot_password(
     .execute(&state.db)
     .await?;
 
-    // Queue reset email via outbound_messages
-    let reset_url = format!("https://app.coreswiftcrm.com/auth/reset-password?token={}", token);
-    let body = format!(
-        "Hi {},\n\nWe received a request to reset your password for CoreSwift CRM.\n\nClick the link below to reset your password:\n{}\n\nThis link expires in 1 hour.\n\nIf you did not request this, please ignore this email.\n\n- CoreSwift CRM Team",
-        user.name, reset_url
-    );
+    // Send reset email via template system
+    let vars = json!({
+        "name": user.name,
+        "token": token,
+        "app_url": "https://app.coreswiftcrm.com",
+    });
 
-    sqlx::query(
-        r#"INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status)
-           VALUES ($1, $2, 'email', $3, $4, $5, 'queued')"#
+    let _ = crate::email::send_template_email(
+        &state.db,
+        Uuid::nil(),
+        &req.email,
+        "password_reset",
+        &vars,
     )
-    .bind(Uuid::new_v4())
-    .bind(Uuid::nil()) // no tenant context for forgot-password emails
-    .bind(&req.email)
-    .bind("Password Reset Request - CoreSwift CRM")
-    .bind(&body)
-    .execute(&state.db)
-    .await?;
+    .await
+    .map_err(|e| { tracing::warn!(error = %e, "Failed to send password reset email via template"); e })
+    .ok();
 
     Ok(Json(json!({"message": "If that email is registered, a reset link has been sent."})))
 }

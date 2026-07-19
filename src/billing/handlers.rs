@@ -594,23 +594,15 @@ async fn deliver_credentials(
         let has_password = !user.password_hash.is_empty() && user.password_hash != " ";
 
         if has_password {
-            // Existing user — queue purchase confirmation
-            let body = format!(
-                "Hi {},\n\nYour payment has been received successfully.\n\nLogin at: https://app.coreswiftcrm.com/login\n\nThank you for your business!\n- CoreSwift CRM Team",
-                user.name
-            );
-            sqlx::query(
-                r#"INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status)
-                   VALUES ($1, $2, 'email', $3, $4, $5, 'queued')"#
-            )
-            .bind(Uuid::new_v4())
-            .bind(tenant_id)
-            .bind(email)
-            .bind("Payment Received — Thank You! - CoreSwift CRM")
-            .bind(&body)
-            .execute(db)
-            .await
-            .map_err(|e| format!("Failed to queue email: {}", e))?;
+            // Existing user — queue purchase confirmation via template
+            let vars = json!({
+                "name": user.name,
+                "plan_name": "your plan",
+                "app_url": "https://app.coreswiftcrm.com",
+            });
+            let _ = crate::email::send_template_email(db, tenant_id, email, "purchase_confirmed", &vars)
+                .await
+                .map_err(|e| format!("Failed to queue purchase confirmation via template: {}", e))?;
         } else {
             // User exists but no password — generate and queue welcome
             let temp_password = generate_temp_password();
@@ -622,22 +614,15 @@ async fn deliver_credentials(
                 .await
                 .map_err(|e| format!("Failed to update password: {}", e))?;
 
-            let body = format!(
-                "Welcome to CoreSwift CRM, {}!\n\nYour account has been activated.\n\nEmail: {}\nPassword: {}\n\nLogin at: https://app.coreswiftcrm.com/login\n\nBest regards,\nThe CoreSwift CRM Team",
-                user.name, email, temp_password
-            );
-            sqlx::query(
-                r#"INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status)
-                   VALUES ($1, $2, 'email', $3, $4, $5, 'queued')"#
-            )
-            .bind(Uuid::new_v4())
-            .bind(tenant_id)
-            .bind(email)
-            .bind("Welcome to CoreSwift CRM!")
-            .bind(&body)
-            .execute(db)
-            .await
-            .map_err(|e| format!("Failed to queue welcome email: {}", e))?;
+            let vars = json!({
+                "name": user.name,
+                "email": email,
+                "password": temp_password,
+                "app_url": "https://app.coreswiftcrm.com",
+            });
+            let _ = crate::email::send_template_email(db, tenant_id, email, "welcome", &vars)
+                .await
+                .map_err(|e| format!("Failed to queue welcome via template: {}", e))?;
         }
     } else {
         // New user — create user + tenant
@@ -680,22 +665,16 @@ async fn deliver_credentials(
         .await
         .map_err(|e| format!("Failed to create user: {}", e))?;
 
-        let body = format!(
-            "Welcome to CoreSwift CRM, {}!\n\nYour account has been created.\n\nAccount: {}\nEmail: {}\nPassword: {}\n\nLogin at: https://app.coreswiftcrm.com/login\n\nNext steps:\n- Connect your apps\n- Import your contacts\n- Set up your pipelines\n- Invite your team\n\nCoreSwift CRM Team",
-            customer_name, tname, email, temp_password
-        );
-        sqlx::query(
-            r#"INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status)
-               VALUES ($1, $2, 'email', $3, $4, $5, 'queued')"#
-        )
-        .bind(Uuid::new_v4())
-        .bind(tid)
-        .bind(email)
-        .bind("Welcome to CoreSwift CRM!")
-        .bind(&body)
-        .execute(db)
-        .await
-        .map_err(|e| format!("Failed to queue welcome email: {}", e))?;
+        let vars = json!({
+                "name": customer_name,
+                "email": email,
+                "password": temp_password,
+                "account_name": &tname,
+                "app_url": "https://app.coreswiftcrm.com",
+            });
+        let _ = crate::email::send_template_email(db, tid, email, "welcome", &vars)
+            .await
+            .map_err(|e| format!("Failed to queue welcome via template: {}", e))?;
     }
 
     Ok(())
