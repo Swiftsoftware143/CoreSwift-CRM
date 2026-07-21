@@ -11,4 +11,5 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/:key_prefix/:event_type", axum::routing::post(handlers::receive))
         .route("/v2/:key_prefix/:event_type", axum::routing::post(handlers::receive_v2))
+        .route("/v3/:key_prefix/:event_type", axum::routing::post(handlers::receive_v3_contact_sync))
 }
