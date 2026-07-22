@@ -69,6 +69,19 @@ Three default templates are seeded on first migration:
 - **Purchase Confirmation** — sent on successful payment receipt
 - **Password Reset** — sent with reset token and link
 
+## MultiDirectory Integration (Booking Slots)
+
+CoreSwift powers the **Booking CTA slot** on MultiDirectory business listing pages.
+
+**Flow:**
+1. Business owner enables Booking integration in their MultiDirectory dashboard (Integrations tab)
+2. They select a CTA label from a controlled dropdown: "Book Appointment", "Schedule a Consultation", "Book Now", "Reserve a Table", "Claim Your Slot", "Book a Tour"
+3. The CTA button renders on the business's public listing page
+4. Clicking opens CoreSwift's booking widget/modal (inline date picker + time slot selection)
+5. Booking data flows into CoreSwift's contact and deal tracking pipelines
+
+**Controlled vocabulary only** — business owners cannot type custom CTA text. This keeps directory branding consistent.
+
 ## Route Mapping
 
 | Frontend Page | Route | Methods |
