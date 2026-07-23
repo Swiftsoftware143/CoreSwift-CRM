@@ -102,6 +102,24 @@ CoreSwift powers the **Booking CTA slot** on MultiDirectory business listing pag
 - Health check: `curl http://localhost:8084/api/health`
 - Database: `docker exec -it swift-postgres-1 psql -U swift -d coreswift`
 
+## Affiliate Product Auto-Sync
+
+CoreSwift plans are automatically synced to FunnelSwift's `affiliate_products` table so they appear as commissionable products in the affiliate portal.
+
+**How it works:**
+
+| Action | What happens |
+|--------|-------------|
+| **Plan created** | `POST /api/v1/internal/sync-affiliate-plan` fires with `action: create`, `source_app: coreswift` |
+| **Plan updated** | Same endpoint with `action: update` |
+| **Plan deleted** | Same endpoint with `action: deactivate` — marks the affiliate product inactive |
+
+The sync fires asynchronously (tokio::spawn) — the plan CRUD returns immediately. FunnelSwift must be reachable at the `FUNNELSWIFT_URL` configured in the environment (default: `http://localhost:8080`).
+
+**Environment variable:** `FUNNELSWIFT_URL` (optional, default `http://localhost:8080`)
+
+This ensures every plan changes is reflected in the affiliate system without manual intervention.
+
 ## Deployment
 
 ```bash

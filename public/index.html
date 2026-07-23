@@ -1855,6 +1855,56 @@ function deleteEmailTemplate(id){
 
 render();
 </script>
+<script>
+window.appGuidePages = {
+  "dashboard": {
+    title: "Dashboard",
+    desc: "Your CoreSwift CRM command center. See recent activity, pipeline stats, and upcoming tasks.",
+    actions: ["View recent contacts and activities", "Monitor pipeline health", "Jump to any module from the sidebar"]
+  },
+  "contacts": {
+    title: "Contacts",
+    desc: "Manage your contact records. View, search, filter, and organize everyone in your CRM.",
+    actions: ["Search contacts by name, email, or company", "Add new contacts manually or via import", "Edit contact details and custom fields"]
+  },
+  "companies": {
+    title: "Companies",
+    desc: "Company and account records. Track organizations, their contacts, deals, and activity history.",
+    actions: ["View all companies in your CRM", "Add new companies with complete profiles", "See linked contacts and open deals"]
+  },
+  "deals": {
+    title: "Deals",
+    desc: "Track sales opportunities through your pipeline stages. Monitor value, probability, and progress.",
+    actions: ["Create deals and assign to pipelines", "Move deals through stages", "Track deal value and close dates"]
+  },
+  "pipelines": {
+    title: "Pipelines",
+    desc: "Custom sales pipelines with stages. Define your sales process and move deals through it.",
+    actions: ["Create and configure pipeline stages", "Assign deals to pipelines", "Reorder pipeline stages"]
+  },
+  "activities": {
+    title: "Activities",
+    desc: "Log and review all activities — calls, emails, meetings — linked to contacts, companies, or deals.",
+    actions: ["Log new activities with type and notes", "Filter activities by contact or date", "View activity timeline"]
+  },
+  "campaigns": {
+    title: "Campaigns",
+    desc: "Marketing campaigns linked to your CRM. Track outreach, responses, and conversion.",
+    actions: ["Create email and SMS campaigns", "Track campaign performance", "Review responses per campaign"]
+  },
+  "portfolio": {
+    title: "Portfolio",
+    desc: "Manage portfolio companies and entities that share your CoreSwift infrastructure.",
+    actions: ["View and manage portfolio companies", "Configure cross-app integrations", "Monitor sync status between apps"]
+  },
+  "guide": {
+    title: "Guide",
+    desc: "Your inline guide to CoreSwift. Every page has a guide like this one explaining what it does.",
+    actions: ["Click the ? button on any page to open its guide", "Dismiss guides you don't need", "Re-open from the button anytime"]
+  }
+};
+</script>
+<script src="/inline-guide-widget.js"></script>
 
 </body>
 </html>

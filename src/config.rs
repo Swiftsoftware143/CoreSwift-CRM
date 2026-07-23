@@ -23,6 +23,7 @@ pub struct AppConfig {
     pub db_min_connections: u32,
     pub db_max_connections: u32,
     pub internal_sync_key: String,
+    pub funnelswift_url: String,
 }
 
 impl AppConfig {
@@ -107,6 +108,9 @@ impl AppConfig {
         let internal_sync_key = env::var("INTERNAL_SYNC_KEY")
             .unwrap_or_else(|_| "".to_string());
 
+        let funnelswift_url = env::var("FUNNELSWIFT_URL")
+            .unwrap_or_else(|_| "http://localhost:8080".to_string());
+
         Ok(AppConfig {
             host,
             port,
@@ -123,6 +127,7 @@ impl AppConfig {
             db_min_connections,
             db_max_connections,
             internal_sync_key,
+            funnelswift_url,
         })
     }
 }
