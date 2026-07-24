@@ -1339,38 +1339,31 @@ async function saveSmsProvider(btn){
 }
 
 /* ===== SETTINGS ===== */
-/* ===== SETTINGS (Phase 4) ===== */
-let settingsTab='profile';
-
 async function renderSettings(){
-  switchSettingsTab('profile');
-}
-
-function switchSettingsTab(tab){
-  settingsTab=tab;
-  document.querySelectorAll('.settings-tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===tab));
-  if(tab==='profile')renderProfileSettings();
-  else if(tab==='theme')renderThemeSettings();
-  else if(tab==='billing')renderBillingSettings();
-}
-
-function settingsHeader(){
-  const tabs=['profile','theme','billing'];
-  return '<div style="display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:8px">'
-    +tabs.map(t=>'<button class="btn btn-sm settings-tab" data-tab="'+t+'" onclick="switchSettingsTab(\'\x27+t+\x27\')" style="background:'+(settingsTab===t?'var(--accent)':'var(--surface2)')+';color:'+(settingsTab===t?'#fff':'var(--text)')+';border:none;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px">'
-      +({profile:'👤 Profile',theme:'🎨 Theme',billing:'💳 Billing & Plan'})[t]+'</button>').join('')
-    +'</div>';
-}
-
-async function renderProfileSettings(){
   const mc=$('main-content');
-  mc.innerHTML='<div class="top-bar"><h1>⚙️ Settings</h1></div>'+settingsHeader()
-    +'<div style="text-align:center;padding:48px;color:var(--text2)">Loading...</div>';
   try{
     const acct=await api('/account');
     const acc=Array.isArray(acct)?acct[0]||{}:acct;
-    if(acc.primary_color)applyThemeColors(acc.primary_color,acc.accent_color||'#10B981');
-    mc.innerHTML='<div class="top-bar"><h1>⚙️ Settings</h1></div>'+settingsHeader()
+    let sub=null;
+    try{sub=await api('/billing/subscription')}catch(e){}
+    const features=sub?.features||{};
+    const hasPrivateEmail=features.private_email===true;
+
+    let bottomCard='';
+    if(hasPrivateEmail){
+      bottomCard='<div class="card" style="margin-top:16px" id="private-email-card">'
+        +'<div class="card-header"><h3>📬 Private Email</h3></div>'
+        +'<div style="display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:16px">'
+        +'<button class="email-tab active" onclick="switchEmailTab(\'domains\')" id="tab-domains">🌐 Domains'
+        +'<span style="font-size:10px;margin-left:6px;opacity:.7">('+features.max_domains+' max)</span></button>'
+        +'<button class="email-tab" onclick="switchEmailTab(\'mailboxes\')" id="tab-mailboxes">📧 Mailboxes'
+        +'<span style="font-size:10px;margin-left:6px;opacity:.7">('+features.max_mailboxes+' max)</span></button>'
+        +'</div>'
+        +'<div id="email-tab-content"></div>'
+        +'</div>';
+    }
+
+    mc.innerHTML='<div class="top-bar"><h1>⚙️ Settings</h1></div>'
       +'<div class="card"><div class="card-header"><h3>👤 Profile</h3></div>'
       +'<form id="settings-form">'
       +'<label>Name</label><input name="name" value="'+esc(acc.name||user?.name||'')+'" placeholder="Your name">'
@@ -1379,119 +1372,245 @@ async function renderProfileSettings(){
       +'<label>Company</label><input name="company_name" value="'+esc(acc.company_name||'')+'" placeholder="Company">'
       +'</form>'
       +'<div class="actions" style="margin-top:8px"><button class="btn btn-primary" onclick="saveSettings(this)">Save Changes</button></div>'
-      +'</div>';
-  }catch(e){mc.innerHTML='<div class="top-bar"><h1>⚙️ Settings</h1></div>'+settingsHeader()+'<div class="empty-state"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
+      +'</div>'
+      +bottomCard;
+
+    if(hasPrivateEmail){
+      // Load domain limits for badge display
+      window._peFeatures=features;
+      window._peSub=sub;
+      switchEmailTab('domains');
+    }
+  }catch(e){mc.innerHTML='<div class="top-bar"><h1>⚙️ Settings</h1></div><div class="empty-state"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
 }
 
-async function saveSettings(btn){
-  const form=document.getElementById('settings-form');if(!form)return;
+// Tab styles injected via JS for matching accent color
+(function(){
+  if(document.getElementById('email-tab-styles'))return;
+  const s=document.createElement('style');
+  s.id='email-tab-styles';
+  s.textContent=`
+    .email-tab{background:none;border:none;color:var(--text2);padding:10px 18px;font-size:13px;font-weight:500;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .2s;border-radius:0;display:inline-flex;align-items:center}
+    .email-tab:hover{color:var(--text)}
+    .email-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+    .email-tab-content{min-height:200px}
+    .domain-row,.mailbox-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);font-size:13px}
+    .domain-row:last-child,.mailbox-row:last-child{border-bottom:none}
+    .limit-bar{height:4px;background:var(--surface2);border-radius:2px;margin-top:8px;overflow:hidden}
+    .limit-bar-fill{height:100%;background:var(--accent);border-radius:2px;transition:width .3s}
+  `;
+  document.head.appendChild(s);
+})();
+
+function switchEmailTab(tab){
+  document.querySelectorAll('.email-tab').forEach(b=>b.classList.remove('active'));
+  const btn=document.getElementById('tab-'+tab);
+  if(btn)btn.classList.add('active');
+  if(tab==='domains')renderEmailDomains();
+  else renderEmailMailboxes();
+}
+
+async function renderEmailDomains(){
+  const ct=$('email-tab-content');
+  if(!ct)return;
+  ct.innerHTML='<div style="text-align:center;padding:24px;color:var(--text2)">Loading domains...</div>';
+  try{
+    const domains=await api('/private-email/domains');
+    const f=window._peFeatures||{};
+    const max=f.max_domains||0;
+    const used=Array.isArray(domains)?domains.length:0;
+    const pct=Math.min(100,max>0?(used/max*100):0);
+
+    let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+      +'<span style="font-size:12px;color:var(--text2)">'+used+' of '+max+' domains used</span>'
+      +'<button class="btn btn-primary btn-sm" onclick="showAddDomain()" '+(used>=max?'disabled':'')+'>+ Add Domain</button>'
+      +'</div>'
+      +'<div class="limit-bar"><div class="limit-bar-fill" style="width:'+pct+'%"></div></div>';
+
+    if(!Array.isArray(domains)||domains.length===0){
+      html+='<div class="empty-state" style="padding:32px"><div class="icon">🌐</div><p>No domains configured</p><p style="font-size:12px;color:var(--text2);margin-top:4px">Add a Mailgun domain to provision email addresses</p></div>';
+    }else{
+      html+='<div style="margin-top:12px">';
+      for(const d of domains){
+        html+='<div class="domain-row">'
+          +'<div><div style="font-weight:600">'+esc(d.domain)+'</div>'
+          +'<div style="font-size:11px;color:var(--text2)">Region: '+esc(d.mailgun_region||'us').toUpperCase()+' · '
+          +(d.verified?'<span class="badge badge-success">Verified</span>':'<span class="badge badge-warning">Pending</span>')
+          +'</div></div>'
+          +'<div style="display:flex;align-items:center;gap:12px">'
+          +'<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);margin:0;cursor:pointer">'
+          +'<input type="checkbox" '+(d.catch_all_enabled?'checked':'')+' onchange="toggleCatchAll(\''+d.id+'\',this.checked)" '
+          +(f.catch_all_enabled?'':'disabled')+'> Catch-all</label>'
+          +'<button class="btn btn-danger btn-sm" onclick="deleteDomain(\''+d.id+'\',\''+esc(d.domain)+'\')">Delete</button>'
+          +'</div></div>';
+      }
+      html+='</div>';
+    }
+    ct.innerHTML=html;
+  }catch(e){ct.innerHTML='<div class="empty-state" style="padding:32px"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
+}
+
+async function renderEmailMailboxes(){
+  const ct=$('email-tab-content');
+  if(!ct)return;
+  ct.innerHTML='<div style="text-align:center;padding:24px;color:var(--text2)">Loading mailboxes...</div>';
+  try{
+    const [boxes,domains]=await Promise.all([
+      api('/private-email/boxes'),
+      api('/private-email/domains')
+    ]);
+    const f=window._peFeatures||{};
+    const max=f.max_mailboxes||0;
+    const used=Array.isArray(boxes)?boxes.filter(b=>b.status==='active').length:0;
+    const pct=Math.min(100,max>0?(used/max*100):0);
+
+    let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+      +'<span style="font-size:12px;color:var(--text2)">'+used+' of '+max+' mailboxes used</span>'
+      +'<button class="btn btn-primary btn-sm" onclick="showAddMailbox()" '+(used>=max?'disabled':'')+'>+ Add Mailbox</button>'
+      +'</div>'
+      +'<div class="limit-bar"><div class="limit-bar-fill" style="width:'+pct+'%"></div></div>';
+
+    if(!Array.isArray(boxes)||boxes.length===0){
+      html+='<div class="empty-state" style="padding:32px"><div class="icon">📧</div><p>No mailboxes provisioned</p><p style="font-size:12px;color:var(--text2);margin-top:4px">Add a domain first, then provision mailboxes</p></div>';
+    }else{
+      html+='<div style="margin-top:12px">';
+      for(const b of boxes){
+        const domainName=(Array.isArray(domains)?domains.find(d=>d.id===b.domain_id):null)?.domain||'';
+        html+='<div class="mailbox-row">'
+          +'<div><div style="font-weight:600">'+esc(b.email_address)+'</div>'
+          +'<div style="font-size:11px;color:var(--text2)">Domain: '+esc(domainName||'—')+' · '
+          +'<span class="badge badge-'+(b.status==='active'?'success':b.status==='suspended'?'warning':'error')+'">'+esc(b.status)+'</span>'
+          +'</div></div>'
+          +'<div style="display:flex;gap:6px">'
+          +'<button class="btn btn-secondary btn-sm" onclick="editSignature(\''+b.id+'\',\''+esc(b.signature||'')+'\')">Sig</button>'
+          +'<button class="btn btn-danger btn-sm" onclick="deprovisionMailbox(\''+b.id+'\',\''+esc(b.email_address)+'\')">Remove</button>'
+          +'</div></div>';
+      }
+      html+='</div>';
+    }
+    ct.innerHTML=html;
+  }catch(e){ct.innerHTML='<div class="empty-state" style="padding:32px"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
+}
+
+// ---- Domain CRUD ----
+function showAddDomain(){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  overlay.innerHTML='<div class="modal"><h2>Add Mailgun Domain</h2>'
+    +'<form id="domain-form">'
+    +'<label>Domain</label><input name="domain" required placeholder="mail.example.com">'
+    +'<label>Mailgun API Key</label><input name="mailgun_api_key" type="password" required placeholder="key-...">'
+    +'<label>Region</label><select name="mailgun_region"><option value="us">US</option><option value="eu">EU</option></select>'
+    +'<p style="font-size:11px;color:var(--text2);margin-top:8px">This domain must already be configured in your Mailgun account. We will verify it.</p>'
+    +'</form>'
+    +'<div class="actions"><button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
+    +'<button class="btn btn-primary" onclick="saveDomain(this)">Add Domain</button></div></div>';
+  document.body.appendChild(overlay);
+}
+
+async function saveDomain(btn){
+  const form=btn.closest('.modal').querySelector('#domain-form');
   const fd=new FormData(form);
+  btn.textContent='Verifying...';btn.disabled=true;
+  try{
+    await api('/private-email/domains',{method:'POST',body:JSON.stringify({
+      domain:fd.get('domain'),mailgun_api_key:fd.get('mailgun_api_key'),mailgun_region:fd.get('mailgun_region')
+    })});
+    showToast('Domain added ✓');
+    btn.closest('.modal-overlay').remove();
+    switchEmailTab('domains');
+  }catch(e){showToast(e.message,'error')}
+  btn.textContent='Add Domain';btn.disabled=false;
+}
+
+async function deleteDomain(id,name){
+  if(!confirm('Delete domain '+name+'? This will deprovision all mailboxes on this domain.'))return;
+  try{await api('/private-email/domains/'+id,{method:'DELETE'});showToast('Domain removed ✓');switchEmailTab('domains')}
+  catch(e){showToast(e.message,'error')}
+}
+
+async function toggleCatchAll(id,enabled){
+  try{
+    await api('/private-email/domains/'+id,{method:'PATCH',body:JSON.stringify({catch_all_enabled:enabled})});
+    showToast(enabled?'Catch-all enabled ✓':'Catch-all disabled ✓');
+  }catch(e){showToast(e.message,'error');switchEmailTab('domains')}
+}
+
+// ---- Mailbox CRUD ----
+function showAddMailbox(){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  overlay.innerHTML='<div class="modal"><h2>Provision Mailbox</h2>'
+    +'<form id="mailbox-form">'
+    +'<label>Domain</label><select name="domain_id" id="mb-domain-select" required><option value="">Loading...</option></select>'
+    +'<label>Email Address</label><div style="display:flex;gap:4px;align-items:center">'
+    +'<input name="local_part" required placeholder="info" style="flex:1"><span style="color:var(--text2)">@</span>'
+    +'<span id="mb-domain-suffix" style="color:var(--text2)">domain</span></div>'
+    +'</form>'
+    +'<div class="actions"><button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
+    +'<button class="btn btn-primary" onclick="saveMailbox(this)">Provision</button></div></div>';
+  document.body.appendChild(overlay);
+
+  // Load domains into select
+  api('/private-email/domains').then(domains=>{
+    const sel=document.getElementById('mb-domain-select');
+    if(!sel)return;
+    sel.innerHTML='<option value="">Select domain</option>'
+      +(Array.isArray(domains)?domains.map(d=>'<option value="'+d.id+'">'+esc(d.domain)+'</option>').join(''):'');
+    sel.onchange=function(){
+      const opt=sel.options[sel.selectedIndex];
+      const suffix=document.getElementById('mb-domain-suffix');
+      if(suffix)suffix.textContent=opt.textContent||'domain';
+    };
+  }).catch(()=>{});
+}
+
+async function saveMailbox(btn){
+  const form=btn.closest('.modal').querySelector('#mailbox-form');
+  const fd=new FormData(form);
+  btn.textContent='Provisioning...';btn.disabled=true;
+  try{
+    await api('/private-email/boxes',{method:'POST',body:JSON.stringify({
+      domain_id:fd.get('domain_id'),local_part:fd.get('local_part')
+    })});
+    showToast('Mailbox provisioned ✓');
+    btn.closest('.modal-overlay').remove();
+    switchEmailTab('mailboxes');
+  }catch(e){showToast(e.message,'error')}
+  btn.textContent='Provision';btn.disabled=false;
+}
+
+async function deprovisionMailbox(id,email){
+  if(!confirm('Deprovision '+email+'?'))return;
+  try{await api('/private-email/boxes/'+id,{method:'DELETE'});showToast('Mailbox deprovisioned ✓');switchEmailTab('mailboxes')}
+  catch(e){showToast(e.message,'error')}
+}
+
+function editSignature(id,currentSig){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  overlay.innerHTML='<div class="modal"><h2>Edit Signature</h2>'
+    +'<label>Email Signature</label>'
+    +'<textarea id="sig-input" rows="4" placeholder="Sent from CoreSwift CRM">'+esc(currentSig)+'</textarea>'
+    +'<div class="actions"><button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
+    +'<button class="btn btn-primary" onclick="saveSignature(\''+id+'\',this)">Save</button></div></div>';
+  document.body.appendChild(overlay);
+}
+
+async function saveSignature(id,btn){
+  const sig=document.getElementById('sig-input')?.value||'';
   btn.textContent='Saving...';btn.disabled=true;
   try{
-    await api('/account',{method:'PATCH',body:JSON.stringify({name:fd.get('name'),email:fd.get('email'),phone:fd.get('phone'),company_name:fd.get('company_name')})});
-    showToast('Settings saved ✓');
+    await api('/private-email/boxes/'+id,{method:'PATCH',body:JSON.stringify({signature:sig})});
+    showToast('Signature saved ✓');
+    btn.closest('.modal-overlay').remove();
+    switchEmailTab('mailboxes');
   }catch(e){showToast(e.message,'error')}
-  btn.textContent='Save Changes';btn.disabled=false;
+  btn.textContent='Save';btn.disabled=false;
 }
-
-
-async function renderThemeSettings(){
-  const mc=$('main-content');
-  mc.innerHTML='<div class="top-bar"><h1>🎨 Theme</h1></div>'+settingsHeader()
-    +'<div style="text-align:center;padding:48px;color:var(--text2)">Loading...</div>';
-  try{
-    const acct=await api('/account');
-    const acc=Array.isArray(acct)?acct[0]||{}:acct;
-    const pColor=acc.primary_color||'#3B82F6';
-    const aColor=acc.accent_color||'#10B981';
-    const presets=[
-      {p:'#3B82F6',a:'#10B981',l:'Default Blue'},
-      {p:'#6366F1',a:'#8B5CF6',l:'Indigo'},
-      {p:'#8B5CF6',a:'#D946EF',l:'Purple'},
-      {p:'#EC4899',a:'#F43F5E',l:'Rose'},
-      {p:'#F43F5E',a:'#F97316',l:'Fiery'},
-      {p:'#F97316',a:'#FBBF24',l:'Warm Sun'},
-      {p:'#10B981',a:'#059669',l:'Forest'},
-      {p:'#06B6D4',a:'#0891B2',l:'Teal'},
-      {p:'#1E293B',a:'#334155',l:'Dark'},
-    ];
-    mc.innerHTML='<div class="top-bar"><h1>🎨 Theme</h1></div>'+settingsHeader()
-      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">'
-      +'<div class="card"><div class="card-header"><h3>🎨 Presets</h3></div>'
-      +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">'
-      +presets.map((pr,i)=>{
-        const sel=(pr.p===pColor&&pr.a===aColor);
-        return '<div style="text-align:center;cursor:pointer" onclick="setTheme(\'\x27+pr.p+\x27\',\'\x27+pr.a+\x27\')">'
-          +'<div class="theme-preview-card '+(sel?'selected':'')+'" style="background:linear-gradient(135deg,'+pr.p+','+pr.a+')"></div>'
-          +'<div style="font-size:10px;color:var(--text2);margin-top:2px">'+pr.l+'</div></div>';
-      }).join('')
-      +'</div></div>'
-      +'<div class="card"><div class="card-header"><h3>🎨 Custom</h3></div>'
-      +'<label>Primary Color</label><input id="custom-primary" type="color" value="'+pColor+'" onchange="previewTheme()">'
-      +'<label>Accent Color</label><input id="custom-accent" type="color" value="'+aColor+'" onchange="previewTheme()">'
-      +'<label>Gradient Preview</label>'
-      +'<div id="theme-preview" style="height:60px;border-radius:8px;background:linear-gradient(135deg,'+pColor+','+aColor+');margin-bottom:8px"></div>'
-      +'<div class="actions"><button class="btn btn-primary" onclick="saveTheme()">Save Theme</button></div>'
-      +'</div></div>';
-  }catch(e){mc.innerHTML='<div class="top-bar"><h1>🎨 Theme</h1></div>'+settingsHeader()+'<div class="empty-state"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
-}
-
-function previewTheme(){
-  const p=document.getElementById('custom-primary')?.value||'#3B82F6';
-  const a=document.getElementById('custom-accent')?.value||'#10B981';
-  const prev=document.getElementById('theme-preview');
-  if(prev)prev.style.background='linear-gradient(135deg,'+p+','+a+')';
-  applyThemeColors(p,a);
-}
-
-function applyThemeColors(p,a){
-  document.documentElement.style.setProperty('--user-primary',p);
-  document.documentElement.style.setProperty('--user-accent',a);
-  document.documentElement.style.setProperty('--user-gradient','linear-gradient(135deg,'+p+','+a+')');
-  document.documentElement.style.setProperty('--sidebar-gradient','linear-gradient(180deg,color-mix(in srgb,'+p+' 95%,#000),color-mix(in srgb,'+p+' 80%,#000))');
-}
-
-async function saveTheme(){
-  const p=document.getElementById('custom-primary')?.value||'#3B82F6';
-  const a=document.getElementById('custom-accent')?.value||'#10B981';
-  const acct=await api('/account');
-  const acc=Array.isArray(acct)?acct[0]||{}:acct;
-  try{
-    await api('/account/'+acc.id,{method:'PATCH',body:JSON.stringify({primary_color:p,accent_color:a})});
-    showToast('Theme saved ✓');
-  }catch(e){showToast(e.message,'error')}
-}
-
-function setTheme(p,a){
-  document.getElementById('custom-primary').value=p;
-  document.getElementById('custom-accent').value=a;
-  previewTheme();
-}
-
-async function renderBillingSettings(){
-  const mc=$('main-content');
-  mc.innerHTML='<div class="top-bar"><h1>⚙️ Settings</h1></div>'+settingsHeader()
-    +'<div style="text-align:center;padding:48px;color:var(--text2)">Loading...</div>';
-  try{
-    let sub=null,plans=[];
-    try{sub=await api('/billing/subscription')}catch(e){}
-    try{const r=await api('/billing/plans');plans=Array.isArray(r)?r:(r?.data||r?.plans||[])}catch(e){}
-    const features=sub?.features||{};
-    mc.innerHTML='<div class="top-bar"><h1>⚙️ Settings</h1></div>'+settingsHeader()
-      +'<div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">'
-      +'<div class="kpi-card"><div class="kpi-value">'+esc(sub?.plan_name||'Free')+'</div><div class="kpi-label">Current Plan</div></div>'
-      +'<div class="kpi-card"><div class="kpi-value">'+(sub?.credits_remaining||'--')+'</div><div class="kpi-label">Credits Remaining</div></div>'
-      +'<div class="kpi-card"><div class="kpi-value">'+(sub?.credits_used||0)+'</div><div class="kpi-label">Credits Used</div></div>'
-      +'</div>'
-      +'<div class="card"><div class="card-header"><h3>💳 Subscription</h3></div>'
-      +'<p style="font-size:13px;color:var(--text2);margin-bottom:12px">You are on the <strong>'+esc(sub?.plan_name||'Free')+'</strong> plan.</p>'
-      +(sub?.next_billing_date?'<p style="font-size:13px;color:var(--text2);margin-bottom:12px">Next billing: '+new Date(sub.next_billing_date).toLocaleDateString()+'</p>':'')
-      +(sub?.status?'<p style="font-size:13px;color:var(--text2)">Status: <span class="badge badge-success">'+esc(sub.status)+'</span></p>':'')
-      +'</div>'
-      +(plans.length>0?'<div class="card" style="margin-top:12px"><div class="card-header"><h3>📋 Available Plans</h3></div><table>'
-        +'<tr><th>Plan</th><th>Price</th><th>Contacts</th><th>Features</th></tr>'
-        +plans.map(p=>'<tr><td style="font-weight:600">'+esc(p.name||'')+'</td>'
-          +'<td>'+(p.price?'
 
 async function saveSettings(btn){
   const form=document.getElementById('settings-form');
@@ -1505,7 +1624,6 @@ async function saveSettings(btn){
   }catch(e){showToast(e.message,'error')}
   btn.textContent='Save Changes';btn.disabled=false;
 }
-
 /* ===== INIT ===== */
 async function loadUser(){
   try{
