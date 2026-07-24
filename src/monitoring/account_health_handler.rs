@@ -61,12 +61,10 @@ pub struct ProfileHealthStatus {
 // ---------------------------------------------------------------------------
 
 /// Manually trigger a full health check across all at-risk accounts.
-///
 /// Three scans:
 ///   1. SaaS users registered via event_logs with no activity in 24h
 ///   2. Trial accounts (tenant_plans.status = 'trialing') within 3 days of expiration
 ///   3. business_profiles with saas unit, trial-like states, and no recent activity
-///
 /// For each at-risk account, creates a health signal, and schedules churn-prevention
 /// actions (delayed_actions / followup_queue entries).
 pub async fn run_health_check(
@@ -208,7 +206,7 @@ pub async fn run_health_check(
             "days_remaining": days_left,
             "stage_title": format!("Your trial ends in {} days — convert now", days_left)
         }))
-        .bind(trial_ends_at.unwrap_or_else(|| Utc::now()))
+        .bind(trial_ends_at.unwrap_or_else(Utc::now))
         .execute(&s.db)
         .await;
 
@@ -286,13 +284,11 @@ pub async fn run_health_check(
 // ---------------------------------------------------------------------------
 
 /// Record a usage milestone for a business profile.
-///
 /// Milestone types:
 ///   first_automation  — first automated rule triggered
 ///   first_contact     — first contact created
 ///   first_pipeline    — first pipeline stage reached
 ///   first_campaign    — first campaign sent
-///
 /// If `first_automation`, triggers a congratulatory delayed_action.
 pub async fn record_milestone(
     State(s): State<AppState>,
@@ -395,7 +391,6 @@ pub async fn record_milestone(
 // ---------------------------------------------------------------------------
 
 /// Get the full health status for a business profile.
-///
 /// Returns:
 ///   - The account_health record (if any)
 ///   - Recent event_logs entries

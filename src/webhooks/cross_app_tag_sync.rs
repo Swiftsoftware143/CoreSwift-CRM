@@ -7,7 +7,7 @@
 use axum::{extract::State, http::{HeaderMap, StatusCode}, Json};
 use axum::response::IntoResponse;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 use uuid::Uuid;
 
 use crate::AppState;
@@ -130,7 +130,7 @@ pub async fn handle_tag_sync(
             .bind(&last_name)
             .bind(&email)
             .bind(&company)
-            .bind(&format!("funnelswift:{}", req.source_app))
+            .bind(format!("funnelswift:{}", req.source_app))
             .execute(&s.db)
             .await?;
             is_new = true;
@@ -161,7 +161,7 @@ pub async fn handle_tag_sync(
             .bind(&first_name)
             .bind(&last_name)
             .bind(&company)
-            .bind(&format!("funnelswift:{}", req.source_app))
+            .bind(format!("funnelswift:{}", req.source_app))
             .execute(&s.db)
             .await?;
             is_new = true;
@@ -249,7 +249,7 @@ async fn create_or_get_tag(db: &sqlx::PgPool, tenant_id: Uuid, tag_name: &str) -
     .bind(tag_name)
     .fetch_optional(db)
     .await
-    .map_err(|e| AppError::Database(e))?;
+    .map_err(AppError::Database)?;
 
     if let Some((id,)) = existing {
         Ok(id)
@@ -264,7 +264,7 @@ async fn create_or_get_tag(db: &sqlx::PgPool, tenant_id: Uuid, tag_name: &str) -
         .bind(default_color(tag_name))
         .execute(db)
         .await
-        .map_err(|e| AppError::Database(e))?;
+        .map_err(AppError::Database)?;
         Ok(id)
     }
 }
@@ -290,7 +290,7 @@ async fn create_or_get_list(db: &sqlx::PgPool, tenant_id: Uuid, list_name: &str)
     .bind(list_name)
     .fetch_optional(db)
     .await
-    .map_err(|e| AppError::Database(e))?;
+    .map_err(AppError::Database)?;
 
     if let Some((id,)) = existing {
         Ok(id)
@@ -302,10 +302,10 @@ async fn create_or_get_list(db: &sqlx::PgPool, tenant_id: Uuid, list_name: &str)
         .bind(id)
         .bind(tenant_id)
         .bind(list_name)
-        .bind(format!("Auto-created by FunnelSwift tag sync"))
+        .bind("Auto-created by FunnelSwift tag sync".to_string())
         .execute(db)
         .await
-        .map_err(|e| AppError::Database(e))?;
+        .map_err(AppError::Database)?;
         Ok(id)
     }
 }

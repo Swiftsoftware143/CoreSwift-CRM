@@ -12,7 +12,6 @@ use serde_json::json;
 use uuid::Uuid;
 use chrono::Utc;
 
-use rand::Rng;
 use argon2::{Argon2, PasswordHasher};
 use password_hash::SaltString;
 
@@ -22,7 +21,6 @@ use super::models::*;
 use super::middleware;
 
 /// POST /api/auth/register — Create a new account.
-///
 /// Every signup creates their own isolated tenant (account).
 /// Admins and tenants are both full account holders — no distinction.
 /// Provide account_name/slug to customize, or one is auto-generated from email.
@@ -337,7 +335,6 @@ pub async fn logout(
 // ========== Private helpers ==========
 
 /// Resolve the tenant for registration — create new account or join via invite.
-///
 /// Every person gets their own isolated tenant (account).
 /// If no account_name/slug provided, auto-generates one from email.
 async fn resolve_account(

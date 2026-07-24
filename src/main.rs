@@ -51,6 +51,7 @@ pub mod tracked_links;
 pub mod email_templates;
 pub mod email;
 pub mod worker;
+pub mod tag_provision_handler;
 
 use axum::{
     routing::get,
@@ -139,6 +140,8 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/account", account::router(state.clone()))
         .nest("/api/contacts", contacts::router(state.clone()))
         .nest("/api/internal/contacts", contacts_internal::router())
+        // FunnelSwift tag provision webhook — auto-provision free-tier contacts
+        .route("/api/v1/internal/tag-provision", axum::routing::post(tag_provision_handler::handle_tag_provision))
         .nest("/api/companies", companies::router(state.clone()))
         .nest("/api/pipelines", pipelines::router(state.clone()))
         .nest("/api/tags", tags::router(state.clone()))

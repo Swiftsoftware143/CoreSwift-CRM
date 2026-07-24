@@ -39,7 +39,7 @@ pub async fn internal_add_member(
     .bind(tenant_id)
     .execute(&s.db)
     .await
-    .map_err(|e| AppError::Database(e))?;
+    .map_err(AppError::Database)?;
 
     Ok((StatusCode::CREATED, Json(json!({"status": "added", "list_id": list_id.to_string(), "contact_id": contact_id.to_string()}))))
 }

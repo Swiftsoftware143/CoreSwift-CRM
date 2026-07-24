@@ -8,7 +8,6 @@ use super::models::*;
 use super::dispatcher;
 
 /// POST /api/events/ingest/{source} — Receive webhook from any external service
-///
 /// Normalizes incoming events from landing pages, directories, SaaS platforms.
 /// source can be anything: "landing-page", "directory", "saas-app", "n8n"
 pub async fn ingest(

@@ -182,7 +182,6 @@ async fn evaluate_pending_delayed_actions(db: &PgPool) {
 /// Mirrors Case A/C from Steve Rosenberg's schema:
 ///   SELECT ... WHERE current_state = 'active' AND subscription_active = FALSE
 ///     AND last_activity_at < NOW() - INTERVAL '24 hours'
-///
 /// Queries business_profiles table directly (your exact schema query).
 async fn check_inactive_trials(db: &PgPool) {
     // Query 1: Native CRM Swift tables (already existing)

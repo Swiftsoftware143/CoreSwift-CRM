@@ -55,11 +55,11 @@ pub async fn list_tags(State(s): State<AppState>, Extension(c): Extension<Claims
 
     // Build maps
     let mut contact_counts = std::collections::HashMap::new();
-    for row in contact_rows { if let Some(id) = row.try_get::<Uuid,_>(0).ok() { let c: i64 = row.get(1); contact_counts.insert(id, c); } }
+    for row in contact_rows { if let Ok(id) = row.try_get::<Uuid,_>(0) { let c: i64 = row.get(1); contact_counts.insert(id, c); } }
     let mut workflow_counts = std::collections::HashMap::new();
-    for row in workflow_rows { if let Some(id) = row.try_get::<Uuid,_>(0).ok() { let c: i64 = row.get(1); workflow_counts.insert(id, c); } }
+    for row in workflow_rows { if let Ok(id) = row.try_get::<Uuid,_>(0) { let c: i64 = row.get(1); workflow_counts.insert(id, c); } }
     let mut integration_counts = std::collections::HashMap::new();
-    for row in integration_rows { if let Some(id) = row.try_get::<Uuid,_>(0).ok() { let c: i64 = row.get(1); integration_counts.insert(id, c); } }
+    for row in integration_rows { if let Ok(id) = row.try_get::<Uuid,_>(0) { let c: i64 = row.get(1); integration_counts.insert(id, c); } }
 
     let result: Vec<TagWithCounts> = tags.into_iter().map(|tag| TagWithCounts {
         id: tag.id, tenant_id: tag.tenant_id, category_id: tag.category_id,

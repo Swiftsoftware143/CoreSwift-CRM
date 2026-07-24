@@ -1,7 +1,6 @@
 //! Internal tenant lookup — no JWT, validated by x-internal-key
 use axum::{extract::State, http::HeaderMap, Json};
 use axum::response::IntoResponse;
-use axum::http::StatusCode;
 use serde_json::json;
 use uuid::Uuid;
 

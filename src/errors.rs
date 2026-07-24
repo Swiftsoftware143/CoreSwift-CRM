@@ -10,7 +10,6 @@ use axum::{
 use serde_json::json;
 
 /// Domain error type for the CRM application.
-///
 /// Each variant maps to an appropriate HTTP status code via `IntoResponse`.
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -109,7 +108,6 @@ impl IntoResponse for AppError {
 pub type ApiResult<T> = Result<T, AppError>;
 
 /// Validates pagination parameters, returning `(page, per_page)` with defaults.
-///
 /// - `page` defaults to 1
 /// - `per_page` defaults to 50, max 100
 pub fn validate_pagination(page: Option<i64>, per_page: Option<i64>) -> (i64, i64) {

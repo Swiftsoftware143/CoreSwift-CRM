@@ -3,7 +3,6 @@ use uuid::Uuid;
 
 /// Log an audit event to the database.
 /// This is the centralized audit logger that all modules should call.
-///
 /// Fails silently (logs a warning) — audit should never break the main flow.
 #[allow(clippy::too_many_arguments)]
 pub async fn log_event(

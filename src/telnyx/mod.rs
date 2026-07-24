@@ -12,17 +12,14 @@ use axum::{Router, middleware};
 use crate::AppState;
 
 /// Build the Telnyx route tree.
-///
 /// Public routes (no auth):
 ///   POST /api/telnyx/webhook — Telnyx webhook receiver (unauthenticated)
-///
 /// Protected routes:
 ///   POST /api/telnyx/send-sms  — Send SMS
 ///   GET  /api/telnyx/numbers    — List purchased numbers
 ///   POST /api/telnyx/numbers    — Purchase/assign a number
 ///   DELETE /api/telnyx/numbers/:id — Release/unassign a number
 ///   GET  /api/telnyx/available   — Search available numbers
-///
 /// Admin routes:
 ///   GET  /api/telnyx/config      — Get global Telnyx config
 ///   PUT  /api/telnyx/config      — Save/update Telnyx config

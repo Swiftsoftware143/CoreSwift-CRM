@@ -14,14 +14,10 @@ use crate::errors::AppError;
 use super::models::Claims;
 
 /// Auth middleware that extracts team member context from JWT bearer token.
-///
 /// For routes that require authentication, attach via
 /// `axum::middleware::from_fn_with_state(state, auth_middleware)`.
-///
 /// Skips auth for internal sync endpoints (validated by x-internal-key header).
-///
 /// # Errors
-///
 /// Returns `401 Unauthorized` if the token is missing, malformed, or expired.
 pub async fn auth_middleware(
     State(state): State<AppState>,
@@ -82,7 +78,6 @@ pub fn create_access_token(claims: &Claims, secret: &str) -> Result<String, AppE
 }
 
 /// Check if user has sufficient role level.
-///
 /// Role hierarchy: member < admin < account_owner < agency_admin
 pub fn require_role(actual: &str, minimum: &str) -> bool {
     let levels = ["member", "admin", "account_owner", "agency_admin"];

@@ -8,7 +8,6 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::AppState;
 
 /// Get available merge fields for a given template type.
 /// Returns a list of field names that can be used in templates.
@@ -37,7 +36,6 @@ pub fn render_template(template: &str, vars: &serde_json::Value) -> String {
 }
 
 /// Send a templated email using stored email_templates.
-///
 /// This queues an `outbound_messages` row for async delivery.
 /// - Looks up template by template_type (account-scoped or default)
 /// - Falls back to hardcoded inline content if no DB template found
@@ -184,7 +182,7 @@ async fn send_inline(
         }
         _ => {
             let subject = format!("{} Notification", app_name);
-            let body = format!("{} Notification:\n\n{}", app_name, vars.to_string());
+            let body = format!("{} Notification:\n\n{}", app_name, vars);
             queue_outbound_message(db, tenant_id, to, &subject, &body, "", false).await
         }
     }

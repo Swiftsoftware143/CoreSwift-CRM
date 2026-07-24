@@ -1,6 +1,6 @@
 use axum::{
     extract::{State, Path, Json, Extension, Query},
-    http::{StatusCode, Uri, HeaderMap},
+    http::{StatusCode, Uri},
     response::{IntoResponse, Redirect},
 };
 use serde_json::json;

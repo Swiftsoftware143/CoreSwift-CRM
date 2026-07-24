@@ -77,7 +77,6 @@ pub struct TokenResponse {
 }
 
 /// Register request body.
-///
 /// Every person who signs up gets their own account (separate tenant in DB).
 /// Team members can join an existing account via invite.
 /// Pass account_name and account_slug to customize the account name,

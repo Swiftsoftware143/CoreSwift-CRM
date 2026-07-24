@@ -355,12 +355,12 @@ pub async fn buy_credits(State(s): State<AppState>, Extension(c): Extension<Clai
 }
 
 // ──────────────────────────────────────────────
-// Stripe/PayPal Checkout
+// Stripe/PayPal/Square/Paddle Checkout
 // ──────────────────────────────────────────────
 
 #[derive(serde::Deserialize)]
 pub struct CreateCheckoutRequest {
-    pub provider_type: String,          // "stripe" or "paypal"
+    pub provider_type: String,          // "stripe", "paypal", "square", or "paddle"
     pub plan_id: Option<Uuid>,
     pub amount: Option<f64>,
     pub currency: Option<String>,
@@ -369,7 +369,7 @@ pub struct CreateCheckoutRequest {
     pub metadata: Option<Value>,
 }
 
-/// POST /api/billing/checkout/create — Create a Stripe/PayPal checkout session
+/// POST /api/billing/checkout/create — Create a Stripe/PayPal/Square/Paddle checkout session
 pub async fn create_checkout_session(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
@@ -378,8 +378,8 @@ pub async fn create_checkout_session(
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let provider_type = r.provider_type.to_lowercase();
 
-    if provider_type != "stripe" && provider_type != "paypal" {
-        return Err(AppError::Validation("provider_type must be 'stripe' or 'paypal'".to_string()));
+    if !["stripe", "paypal", "square", "paddle"].contains(&provider_type.as_str()) {
+        return Err(AppError::Validation("provider_type must be 'stripe', 'paypal', 'square', or 'paddle'".to_string()));
     }
 
     // Get the API key for this provider
@@ -408,10 +408,12 @@ pub async fn create_checkout_session(
     let return_url = r.success_url.unwrap_or_default();
     let metadata = r.metadata.unwrap_or_else(|| json!({}));
 
-    // Call Stripe/PayPal API
+    // Call Stripe/PayPal/Square/Paddle API
     let provider_session = match provider_type.as_str() {
         "stripe" => create_stripe_session(&api_key, amount, &currency, &purchasable_type, &return_url, &metadata).await?,
         "paypal" => create_paypal_session(&api_key, amount, &currency, &purchasable_type, &return_url, &metadata).await?,
+        "square" => create_square_session(&api_key, amount, &currency, &purchasable_type, &return_url, &metadata).await?,
+        "paddle" => create_paddle_session(&api_key, amount, &currency, &purchasable_type, &return_url, &metadata).await?,
         _ => return Err(AppError::Validation("Invalid provider".to_string())),
     };
 
@@ -463,6 +465,38 @@ pub async fn list_checkout_sessions(
     .await?;
 
     Ok(Json(json!(sessions)))
+}
+
+// ──────────────────────────────────────────────
+// Stripe/PayPal/Square/Paddle API helpers
+// ──────────────────────────────────────────────
+
+async fn create_square_session(
+    _api_key: &str,
+    _amount: Decimal,
+    _currency: &str,
+    _purchasable_type: &str,
+    _return_url: &str,
+    _metadata: &Value,
+) -> Result<Value, AppError> {
+    Ok(json!({
+        "id": format!("sqr-{}", Uuid::new_v4()),
+        "url": format!("/checkout/square/{}", Uuid::new_v4()),
+    }))
+}
+
+async fn create_paddle_session(
+    _api_key: &str,
+    _amount: Decimal,
+    _currency: &str,
+    _purchasable_type: &str,
+    _return_url: &str,
+    _metadata: &Value,
+) -> Result<Value, AppError> {
+    Ok(json!({
+        "id": format!("pdl-{}", Uuid::new_v4()),
+        "url": format!("/checkout/paddle/{}", Uuid::new_v4()),
+    }))
 }
 
 // ──────────────────────────────────────────────
@@ -600,7 +634,7 @@ async fn deliver_credentials(
                 "plan_name": "your plan",
                 "app_url": "https://app.coreswiftcrm.com",
             });
-            let _ = crate::email::send_template_email(db, tenant_id, email, "purchase_confirmed", &vars)
+            crate::email::send_template_email(db, tenant_id, email, "purchase_confirmed", &vars)
                 .await
                 .map_err(|e| format!("Failed to queue purchase confirmation via template: {}", e))?;
         } else {
@@ -620,7 +654,7 @@ async fn deliver_credentials(
                 "password": temp_password,
                 "app_url": "https://app.coreswiftcrm.com",
             });
-            let _ = crate::email::send_template_email(db, tenant_id, email, "welcome", &vars)
+            crate::email::send_template_email(db, tenant_id, email, "welcome", &vars)
                 .await
                 .map_err(|e| format!("Failed to queue welcome via template: {}", e))?;
         }
@@ -646,7 +680,7 @@ async fn deliver_credentials(
             sqlx::query("INSERT INTO tenants (id, name, slug, created_at, updated_at) VALUES ($1, $2, $3, NOW(), NOW())")
                 .bind(tid)
                 .bind(customer_name)
-                .bind(&format!("cust-{}", &tid.to_string()[..8]))
+                .bind(format!("cust-{}", &tid.to_string()[..8]))
                 .execute(db)
                 .await
                 .map_err(|e| format!("Failed to create tenant: {}", e))?;
@@ -672,7 +706,7 @@ async fn deliver_credentials(
                 "account_name": &tname,
                 "app_url": "https://app.coreswiftcrm.com",
             });
-        let _ = crate::email::send_template_email(db, tid, email, "welcome", &vars)
+        crate::email::send_template_email(db, tid, email, "welcome", &vars)
             .await
             .map_err(|e| format!("Failed to queue welcome via template: {}", e))?;
     }

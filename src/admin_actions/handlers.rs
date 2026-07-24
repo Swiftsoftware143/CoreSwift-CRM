@@ -578,7 +578,7 @@ async fn handle_build_campaign(
             field_type: "text".into(), required: true, options: None,
         });
     }
-    if steps_val.as_ref().map_or(true, |v| !v.is_array() || v.as_array().map_or(true, |a| a.is_empty())) {
+    if steps_val.as_ref().is_none_or(|v| !v.is_array() || v.as_array().is_none_or(|a| a.is_empty())) {
         missing.push(FieldRequest {
             field: "steps".into(), label: "Email steps (array of {template_name, subject, body, delay_days})".into(),
             field_type: "text".into(), required: true, options: None,

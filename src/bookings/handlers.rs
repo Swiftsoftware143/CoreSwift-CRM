@@ -66,7 +66,7 @@ pub async fn internal_create_calendar(
     }
 
     // tenant_id is extracted from the request body for internal endpoints
-    let _tenant_id = Uuid::parse_str(&body.metadata.as_ref()
+    let _tenant_id = Uuid::parse_str(body.metadata.as_ref()
         .and_then(|m| m.get("tenant_id"))
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("metadata.tenant_id required for internal creation".into()))?)
@@ -105,7 +105,6 @@ pub async fn internal_create_calendar(
 
 /// Internal default slot creation — creates a default "Appointment Booking" slot
 /// for a given calendar. Validated by x-internal-key header, no JWT.
-///
 /// Accepts: { tenant_id, calendar_slug, slot_name, total_slots, default_duration_days }
 pub async fn internal_create_default_slot(
     State(s): State<AppState>,
@@ -569,7 +568,7 @@ pub async fn public_create_booking(
         "slot_position": slot_position,
         "start_date": start_date.to_string(),
         "end_date": end_date.to_string(),
-        "tag": slot.coreswift_tag_template.as_ref().map(|t| t.replace("{city}", &cal.metadata.as_ref()
+        "tag": slot.coreswift_tag_template.as_ref().map(|t| t.replace("{city}", cal.metadata.as_ref()
             .and_then(|m| m.get("city_slug")).and_then(|v| v.as_str()).unwrap_or("")))
     })))
 }
