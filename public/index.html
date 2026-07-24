@@ -1358,6 +1358,7 @@ async function renderSettings(){
         +'<span style="font-size:10px;margin-left:6px;opacity:.7">('+features.max_domains+' max)</span></button>'
         +'<button class="email-tab" onclick="switchEmailTab(\'mailboxes\')" id="tab-mailboxes">📧 Mailboxes'
         +'<span style="font-size:10px;margin-left:6px;opacity:.7">('+features.max_mailboxes+' max)</span></button>'
+        +'<button class="email-tab" onclick="switchEmailTab(\'keys\')" id="tab-keys">🔑 Keys</button>'
         +'</div>'
         +'<div id="email-tab-content"></div>'
         +'</div>';
@@ -1407,7 +1408,8 @@ function switchEmailTab(tab){
   const btn=document.getElementById('tab-'+tab);
   if(btn)btn.classList.add('active');
   if(tab==='domains')renderEmailDomains();
-  else renderEmailMailboxes();
+  else if(tab==='mailboxes')renderEmailMailboxes();
+  else if(tab==='keys')renderEmailKeys();
 }
 
 async function renderEmailDomains(){
@@ -1500,13 +1502,37 @@ function showAddDomain(){
   overlay.innerHTML='<div class="modal"><h2>Add Mailgun Domain</h2>'
     +'<form id="domain-form">'
     +'<label>Domain</label><input name="domain" required placeholder="mail.example.com">'
-    +'<label>Mailgun API Key</label><input name="mailgun_api_key" type="password" required placeholder="key-...">'
+    +'<label>API Key</label><select name="api_key_id" id="domain-key-select"><option value="">Enter new key below...</option></select>'
+    +'<label>Or enter new API Key</label><input name="mailgun_api_key" type="password" placeholder="key-... (or select saved key above)">'
+    +'<label>Key Name (optional)</label><input name="label" placeholder="e.g. Marketing Mailgun (saved for reuse)">'
     +'<label>Region</label><select name="mailgun_region"><option value="us">US</option><option value="eu">EU</option></select>'
-    +'<p style="font-size:11px;color:var(--text2);margin-top:8px">This domain must already be configured in your Mailgun account. We will verify it.</p>'
+    +'<p style="font-size:11px;color:var(--text2);margin-top:8px">Pick a saved key or enter a new one. New keys are auto-saved with your label for future reuse. Domain must already be set up in Mailgun.</p>'
     +'</form>'
     +'<div class="actions"><button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
     +'<button class="btn btn-primary" onclick="saveDomain(this)">Add Domain</button></div></div>';
   document.body.appendChild(overlay);
+
+  // Load saved keys into dropdown
+  api('/private-email/keys').then(keys=>{
+    const sel=document.getElementById('domain-key-select');
+    if(!sel)return;
+    if(Array.isArray(keys)&&keys.length>0){
+      sel.innerHTML='<option value="">Enter new key below...</option>'
+        +keys.map(k=>'<option value="'+k.id+'">'+esc(k.label||'Unnamed')+' ('+esc(k.provider||'mailgun')+')</option>').join('');
+    }
+  }).catch(()=>{});
+
+  // Toggle key input based on dropdown selection
+  setTimeout(()=>{
+    const sel=document.getElementById('domain-key-select');
+    const keyInput=document.querySelector('#domain-form input[name=\'mailgun_api_key\']');
+    if(sel&&keyInput){
+      sel.onchange=function(){
+        if(sel.value){keyInput.removeAttribute('required');keyInput.placeholder='Using saved key — no need to enter'}
+        else{keyInput.setAttribute('required','required');keyInput.placeholder='key-...'}
+      };
+    }
+  },100);
 }
 
 async function saveDomain(btn){
@@ -1515,7 +1541,7 @@ async function saveDomain(btn){
   btn.textContent='Verifying...';btn.disabled=true;
   try{
     await api('/private-email/domains',{method:'POST',body:JSON.stringify({
-      domain:fd.get('domain'),mailgun_api_key:fd.get('mailgun_api_key'),mailgun_region:fd.get('mailgun_region')
+      domain:fd.get('domain'),mailgun_api_key:fd.get('mailgun_api_key')||null,api_key_id:fd.get('api_key_id')||null,label:fd.get('label')||null,mailgun_region:fd.get('mailgun_region')
     })});
     showToast('Domain added ✓');
     btn.closest('.modal-overlay').remove();
@@ -1610,6 +1636,72 @@ async function saveSignature(id,btn){
     switchEmailTab('mailboxes');
   }catch(e){showToast(e.message,'error')}
   btn.textContent='Save';btn.disabled=false;
+}
+
+async function renderEmailKeys(){
+  const ct=$('email-tab-content');
+  if(!ct)return;
+  ct.innerHTML='<div style="text-align:center;padding:24px;color:var(--text2)">Loading keys...</div>';
+  try{
+    const keys=await api('/private-email/keys');
+    let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+      +'<span style="font-size:12px;color:var(--text2)">Saved API keys — reusable across domains and integrations</span>'
+      +'<button class="btn btn-primary btn-sm" onclick="showAddKey()">+ Add Key</button>'
+      +'</div>';
+
+    if(!Array.isArray(keys)||keys.length===0){
+      html+='<div class="empty-state" style="padding:32px"><div class="icon">🔑</div><p>No saved API keys</p><p style="font-size:12px;color:var(--text2);margin-top:4px">Save your Mailgun, SMTP, or other service API keys here with a name. Reuse them when adding domains or integrations.</p></div>';
+    }else{
+      html+='<div style="margin-top:12px">';
+      for(const k of keys){
+        const providerLabel=k.provider||'mailgun';
+        html+='<div class="domain-row">'
+          +'<div><div style="font-weight:600">'+esc(k.label||'Unnamed')+'</div>'
+          +'<div style="font-size:11px;color:var(--text2)">Provider: '+esc(providerLabel.toUpperCase())+'</div></div>'
+          +'<div><button class="btn btn-danger btn-sm" onclick="deleteApiKey(\''+k.id+'\',\''+esc(k.label)+'\')">Delete</button></div>'
+          +'</div>';
+      }
+      html+='</div>';
+    }
+    ct.innerHTML=html;
+  }catch(e){ct.innerHTML='<div class="empty-state" style="padding:32px"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
+}
+
+function showAddKey(){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  overlay.innerHTML='<div class="modal"><h2>Add API Key</h2>'
+    +'<form id="apikey-form">'
+    +'<label>Name / Label</label><input name="label" required placeholder="e.g. Marketing Mailgun, SendGrid, SMTP">'
+    +'<label>Provider</label><select name="provider"><option value="mailgun">Mailgun</option><option value="sendgrid">SendGrid</option><option value="smtp">SMTP</option><option value="twilio">Twilio</option><option value="other">Other</option></select>'
+    +'<label>API Key</label><input name="api_key" type="password" required placeholder="Paste your API key">'
+    +'<p style="font-size:11px;color:var(--text2);margin-top:8px">🔒 Your key is encrypted with AES-256-GCM and never stored in plaintext.</p>'
+    +'</form>'
+    +'<div class="actions"><button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
+    +'<button class="btn btn-primary" onclick="saveApiKey(this)">Save Key</button></div></div>';
+  document.body.appendChild(overlay);
+}
+
+async function saveApiKey(btn){
+  const form=btn.closest('.modal').querySelector('#apikey-form');
+  const fd=new FormData(form);
+  btn.textContent='Saving...';btn.disabled=true;
+  try{
+    await api('/private-email/keys',{method:'POST',body:JSON.stringify({
+      label:fd.get('label'),provider:fd.get('provider'),api_key:fd.get('api_key')
+    })});
+    showToast('API key saved ✓');
+    btn.closest('.modal-overlay').remove();
+    switchEmailTab('keys');
+  }catch(e){showToast(e.message,'error')}
+  btn.textContent='Save Key';btn.disabled=false;
+}
+
+async function deleteApiKey(id,label){
+  if(!confirm('Delete API key "'+label+'"? Any domains using this key will still work but will not be able to reuse it.'))return;
+  try{await api('/private-email/keys/'+id,{method:'DELETE'});showToast('Key deleted ✓');switchEmailTab('keys')}
+  catch(e){showToast(e.message,'error')}
 }
 
 async function saveSettings(btn){
@@ -1969,6 +2061,72 @@ async function renderSettings(){
   }catch(e){mc.innerHTML='<div class="top-bar"><h1>⚙️ Settings</h1></div><div class="empty-state"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
 }
 
+async function renderEmailKeys(){
+  const ct=$('email-tab-content');
+  if(!ct)return;
+  ct.innerHTML='<div style="text-align:center;padding:24px;color:var(--text2)">Loading keys...</div>';
+  try{
+    const keys=await api('/private-email/keys');
+    let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+      +'<span style="font-size:12px;color:var(--text2)">Saved API keys — reusable across domains and integrations</span>'
+      +'<button class="btn btn-primary btn-sm" onclick="showAddKey()">+ Add Key</button>'
+      +'</div>';
+
+    if(!Array.isArray(keys)||keys.length===0){
+      html+='<div class="empty-state" style="padding:32px"><div class="icon">🔑</div><p>No saved API keys</p><p style="font-size:12px;color:var(--text2);margin-top:4px">Save your Mailgun, SMTP, or other service API keys here with a name. Reuse them when adding domains or integrations.</p></div>';
+    }else{
+      html+='<div style="margin-top:12px">';
+      for(const k of keys){
+        const providerLabel=k.provider||'mailgun';
+        html+='<div class="domain-row">'
+          +'<div><div style="font-weight:600">'+esc(k.label||'Unnamed')+'</div>'
+          +'<div style="font-size:11px;color:var(--text2)">Provider: '+esc(providerLabel.toUpperCase())+'</div></div>'
+          +'<div><button class="btn btn-danger btn-sm" onclick="deleteApiKey(\''+k.id+'\',\''+esc(k.label)+'\')">Delete</button></div>'
+          +'</div>';
+      }
+      html+='</div>';
+    }
+    ct.innerHTML=html;
+  }catch(e){ct.innerHTML='<div class="empty-state" style="padding:32px"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
+}
+
+function showAddKey(){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  overlay.innerHTML='<div class="modal"><h2>Add API Key</h2>'
+    +'<form id="apikey-form">'
+    +'<label>Name / Label</label><input name="label" required placeholder="e.g. Marketing Mailgun, SendGrid, SMTP">'
+    +'<label>Provider</label><select name="provider"><option value="mailgun">Mailgun</option><option value="sendgrid">SendGrid</option><option value="smtp">SMTP</option><option value="twilio">Twilio</option><option value="other">Other</option></select>'
+    +'<label>API Key</label><input name="api_key" type="password" required placeholder="Paste your API key">'
+    +'<p style="font-size:11px;color:var(--text2);margin-top:8px">🔒 Your key is encrypted with AES-256-GCM and never stored in plaintext.</p>'
+    +'</form>'
+    +'<div class="actions"><button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
+    +'<button class="btn btn-primary" onclick="saveApiKey(this)">Save Key</button></div></div>';
+  document.body.appendChild(overlay);
+}
+
+async function saveApiKey(btn){
+  const form=btn.closest('.modal').querySelector('#apikey-form');
+  const fd=new FormData(form);
+  btn.textContent='Saving...';btn.disabled=true;
+  try{
+    await api('/private-email/keys',{method:'POST',body:JSON.stringify({
+      label:fd.get('label'),provider:fd.get('provider'),api_key:fd.get('api_key')
+    })});
+    showToast('API key saved ✓');
+    btn.closest('.modal-overlay').remove();
+    switchEmailTab('keys');
+  }catch(e){showToast(e.message,'error')}
+  btn.textContent='Save Key';btn.disabled=false;
+}
+
+async function deleteApiKey(id,label){
+  if(!confirm('Delete API key "'+label+'"? Any domains using this key will still work but will not be able to reuse it.'))return;
+  try{await api('/private-email/keys/'+id,{method:'DELETE'});showToast('Key deleted ✓');switchEmailTab('keys')}
+  catch(e){showToast(e.message,'error')}
+}
+
 async function saveSettings(btn){
   const form=document.getElementById('settings-form');
   if(!form)return;
@@ -2216,6 +2374,72 @@ async function renderSettings(){
   }catch(e){mc.innerHTML='<div class="top-bar"><h1>⚙️ Settings</h1></div><div class="empty-state"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
 }
 
+async function renderEmailKeys(){
+  const ct=$('email-tab-content');
+  if(!ct)return;
+  ct.innerHTML='<div style="text-align:center;padding:24px;color:var(--text2)">Loading keys...</div>';
+  try{
+    const keys=await api('/private-email/keys');
+    let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+      +'<span style="font-size:12px;color:var(--text2)">Saved API keys — reusable across domains and integrations</span>'
+      +'<button class="btn btn-primary btn-sm" onclick="showAddKey()">+ Add Key</button>'
+      +'</div>';
+
+    if(!Array.isArray(keys)||keys.length===0){
+      html+='<div class="empty-state" style="padding:32px"><div class="icon">🔑</div><p>No saved API keys</p><p style="font-size:12px;color:var(--text2);margin-top:4px">Save your Mailgun, SMTP, or other service API keys here with a name. Reuse them when adding domains or integrations.</p></div>';
+    }else{
+      html+='<div style="margin-top:12px">';
+      for(const k of keys){
+        const providerLabel=k.provider||'mailgun';
+        html+='<div class="domain-row">'
+          +'<div><div style="font-weight:600">'+esc(k.label||'Unnamed')+'</div>'
+          +'<div style="font-size:11px;color:var(--text2)">Provider: '+esc(providerLabel.toUpperCase())+'</div></div>'
+          +'<div><button class="btn btn-danger btn-sm" onclick="deleteApiKey(\''+k.id+'\',\''+esc(k.label)+'\')">Delete</button></div>'
+          +'</div>';
+      }
+      html+='</div>';
+    }
+    ct.innerHTML=html;
+  }catch(e){ct.innerHTML='<div class="empty-state" style="padding:32px"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
+}
+
+function showAddKey(){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  overlay.innerHTML='<div class="modal"><h2>Add API Key</h2>'
+    +'<form id="apikey-form">'
+    +'<label>Name / Label</label><input name="label" required placeholder="e.g. Marketing Mailgun, SendGrid, SMTP">'
+    +'<label>Provider</label><select name="provider"><option value="mailgun">Mailgun</option><option value="sendgrid">SendGrid</option><option value="smtp">SMTP</option><option value="twilio">Twilio</option><option value="other">Other</option></select>'
+    +'<label>API Key</label><input name="api_key" type="password" required placeholder="Paste your API key">'
+    +'<p style="font-size:11px;color:var(--text2);margin-top:8px">🔒 Your key is encrypted with AES-256-GCM and never stored in plaintext.</p>'
+    +'</form>'
+    +'<div class="actions"><button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
+    +'<button class="btn btn-primary" onclick="saveApiKey(this)">Save Key</button></div></div>';
+  document.body.appendChild(overlay);
+}
+
+async function saveApiKey(btn){
+  const form=btn.closest('.modal').querySelector('#apikey-form');
+  const fd=new FormData(form);
+  btn.textContent='Saving...';btn.disabled=true;
+  try{
+    await api('/private-email/keys',{method:'POST',body:JSON.stringify({
+      label:fd.get('label'),provider:fd.get('provider'),api_key:fd.get('api_key')
+    })});
+    showToast('API key saved ✓');
+    btn.closest('.modal-overlay').remove();
+    switchEmailTab('keys');
+  }catch(e){showToast(e.message,'error')}
+  btn.textContent='Save Key';btn.disabled=false;
+}
+
+async function deleteApiKey(id,label){
+  if(!confirm('Delete API key "'+label+'"? Any domains using this key will still work but will not be able to reuse it.'))return;
+  try{await api('/private-email/keys/'+id,{method:'DELETE'});showToast('Key deleted ✓');switchEmailTab('keys')}
+  catch(e){showToast(e.message,'error')}
+}
+
 async function saveSettings(btn){
   const form=document.getElementById('settings-form');
   if(!form)return;
@@ -2284,6 +2508,72 @@ render();
       +'<span class="badge badge-info">📋 Multi-Directory</span>'
       +'</div></div>';
   }catch(e){mc.innerHTML='<div class="top-bar"><h1>⚙️ Settings</h1></div>'+settingsHeader()+'<div class="empty-state"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
+}
+
+async function renderEmailKeys(){
+  const ct=$('email-tab-content');
+  if(!ct)return;
+  ct.innerHTML='<div style="text-align:center;padding:24px;color:var(--text2)">Loading keys...</div>';
+  try{
+    const keys=await api('/private-email/keys');
+    let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+      +'<span style="font-size:12px;color:var(--text2)">Saved API keys — reusable across domains and integrations</span>'
+      +'<button class="btn btn-primary btn-sm" onclick="showAddKey()">+ Add Key</button>'
+      +'</div>';
+
+    if(!Array.isArray(keys)||keys.length===0){
+      html+='<div class="empty-state" style="padding:32px"><div class="icon">🔑</div><p>No saved API keys</p><p style="font-size:12px;color:var(--text2);margin-top:4px">Save your Mailgun, SMTP, or other service API keys here with a name. Reuse them when adding domains or integrations.</p></div>';
+    }else{
+      html+='<div style="margin-top:12px">';
+      for(const k of keys){
+        const providerLabel=k.provider||'mailgun';
+        html+='<div class="domain-row">'
+          +'<div><div style="font-weight:600">'+esc(k.label||'Unnamed')+'</div>'
+          +'<div style="font-size:11px;color:var(--text2)">Provider: '+esc(providerLabel.toUpperCase())+'</div></div>'
+          +'<div><button class="btn btn-danger btn-sm" onclick="deleteApiKey(\''+k.id+'\',\''+esc(k.label)+'\')">Delete</button></div>'
+          +'</div>';
+      }
+      html+='</div>';
+    }
+    ct.innerHTML=html;
+  }catch(e){ct.innerHTML='<div class="empty-state" style="padding:32px"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
+}
+
+function showAddKey(){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  overlay.innerHTML='<div class="modal"><h2>Add API Key</h2>'
+    +'<form id="apikey-form">'
+    +'<label>Name / Label</label><input name="label" required placeholder="e.g. Marketing Mailgun, SendGrid, SMTP">'
+    +'<label>Provider</label><select name="provider"><option value="mailgun">Mailgun</option><option value="sendgrid">SendGrid</option><option value="smtp">SMTP</option><option value="twilio">Twilio</option><option value="other">Other</option></select>'
+    +'<label>API Key</label><input name="api_key" type="password" required placeholder="Paste your API key">'
+    +'<p style="font-size:11px;color:var(--text2);margin-top:8px">🔒 Your key is encrypted with AES-256-GCM and never stored in plaintext.</p>'
+    +'</form>'
+    +'<div class="actions"><button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
+    +'<button class="btn btn-primary" onclick="saveApiKey(this)">Save Key</button></div></div>';
+  document.body.appendChild(overlay);
+}
+
+async function saveApiKey(btn){
+  const form=btn.closest('.modal').querySelector('#apikey-form');
+  const fd=new FormData(form);
+  btn.textContent='Saving...';btn.disabled=true;
+  try{
+    await api('/private-email/keys',{method:'POST',body:JSON.stringify({
+      label:fd.get('label'),provider:fd.get('provider'),api_key:fd.get('api_key')
+    })});
+    showToast('API key saved ✓');
+    btn.closest('.modal-overlay').remove();
+    switchEmailTab('keys');
+  }catch(e){showToast(e.message,'error')}
+  btn.textContent='Save Key';btn.disabled=false;
+}
+
+async function deleteApiKey(id,label){
+  if(!confirm('Delete API key "'+label+'"? Any domains using this key will still work but will not be able to reuse it.'))return;
+  try{await api('/private-email/keys/'+id,{method:'DELETE'});showToast('Key deleted ✓');switchEmailTab('keys')}
+  catch(e){showToast(e.message,'error')}
 }
 
 async function saveSettings(btn){
@@ -2636,6 +2926,72 @@ async function renderSettings(){
   }catch(e){mc.innerHTML='<div class="top-bar"><h1>⚙️ Settings</h1></div><div class="empty-state"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
 }
 
+async function renderEmailKeys(){
+  const ct=$('email-tab-content');
+  if(!ct)return;
+  ct.innerHTML='<div style="text-align:center;padding:24px;color:var(--text2)">Loading keys...</div>';
+  try{
+    const keys=await api('/private-email/keys');
+    let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+      +'<span style="font-size:12px;color:var(--text2)">Saved API keys — reusable across domains and integrations</span>'
+      +'<button class="btn btn-primary btn-sm" onclick="showAddKey()">+ Add Key</button>'
+      +'</div>';
+
+    if(!Array.isArray(keys)||keys.length===0){
+      html+='<div class="empty-state" style="padding:32px"><div class="icon">🔑</div><p>No saved API keys</p><p style="font-size:12px;color:var(--text2);margin-top:4px">Save your Mailgun, SMTP, or other service API keys here with a name. Reuse them when adding domains or integrations.</p></div>';
+    }else{
+      html+='<div style="margin-top:12px">';
+      for(const k of keys){
+        const providerLabel=k.provider||'mailgun';
+        html+='<div class="domain-row">'
+          +'<div><div style="font-weight:600">'+esc(k.label||'Unnamed')+'</div>'
+          +'<div style="font-size:11px;color:var(--text2)">Provider: '+esc(providerLabel.toUpperCase())+'</div></div>'
+          +'<div><button class="btn btn-danger btn-sm" onclick="deleteApiKey(\''+k.id+'\',\''+esc(k.label)+'\')">Delete</button></div>'
+          +'</div>';
+      }
+      html+='</div>';
+    }
+    ct.innerHTML=html;
+  }catch(e){ct.innerHTML='<div class="empty-state" style="padding:32px"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
+}
+
+function showAddKey(){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  overlay.innerHTML='<div class="modal"><h2>Add API Key</h2>'
+    +'<form id="apikey-form">'
+    +'<label>Name / Label</label><input name="label" required placeholder="e.g. Marketing Mailgun, SendGrid, SMTP">'
+    +'<label>Provider</label><select name="provider"><option value="mailgun">Mailgun</option><option value="sendgrid">SendGrid</option><option value="smtp">SMTP</option><option value="twilio">Twilio</option><option value="other">Other</option></select>'
+    +'<label>API Key</label><input name="api_key" type="password" required placeholder="Paste your API key">'
+    +'<p style="font-size:11px;color:var(--text2);margin-top:8px">🔒 Your key is encrypted with AES-256-GCM and never stored in plaintext.</p>'
+    +'</form>'
+    +'<div class="actions"><button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
+    +'<button class="btn btn-primary" onclick="saveApiKey(this)">Save Key</button></div></div>';
+  document.body.appendChild(overlay);
+}
+
+async function saveApiKey(btn){
+  const form=btn.closest('.modal').querySelector('#apikey-form');
+  const fd=new FormData(form);
+  btn.textContent='Saving...';btn.disabled=true;
+  try{
+    await api('/private-email/keys',{method:'POST',body:JSON.stringify({
+      label:fd.get('label'),provider:fd.get('provider'),api_key:fd.get('api_key')
+    })});
+    showToast('API key saved ✓');
+    btn.closest('.modal-overlay').remove();
+    switchEmailTab('keys');
+  }catch(e){showToast(e.message,'error')}
+  btn.textContent='Save Key';btn.disabled=false;
+}
+
+async function deleteApiKey(id,label){
+  if(!confirm('Delete API key "'+label+'"? Any domains using this key will still work but will not be able to reuse it.'))return;
+  try{await api('/private-email/keys/'+id,{method:'DELETE'});showToast('Key deleted ✓');switchEmailTab('keys')}
+  catch(e){showToast(e.message,'error')}
+}
+
 async function saveSettings(btn){
   const form=document.getElementById('settings-form');
   if(!form)return;
@@ -2852,6 +3208,72 @@ async function renderSettings(){
       +'<div class="actions" style="margin-top:8px"><button class="btn btn-primary" onclick="saveSettings(this)">Save Changes</button></div>'
       +'</div>';
   }catch(e){mc.innerHTML='<div class="top-bar"><h1>⚙️ Settings</h1></div><div class="empty-state"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
+}
+
+async function renderEmailKeys(){
+  const ct=$('email-tab-content');
+  if(!ct)return;
+  ct.innerHTML='<div style="text-align:center;padding:24px;color:var(--text2)">Loading keys...</div>';
+  try{
+    const keys=await api('/private-email/keys');
+    let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+      +'<span style="font-size:12px;color:var(--text2)">Saved API keys — reusable across domains and integrations</span>'
+      +'<button class="btn btn-primary btn-sm" onclick="showAddKey()">+ Add Key</button>'
+      +'</div>';
+
+    if(!Array.isArray(keys)||keys.length===0){
+      html+='<div class="empty-state" style="padding:32px"><div class="icon">🔑</div><p>No saved API keys</p><p style="font-size:12px;color:var(--text2);margin-top:4px">Save your Mailgun, SMTP, or other service API keys here with a name. Reuse them when adding domains or integrations.</p></div>';
+    }else{
+      html+='<div style="margin-top:12px">';
+      for(const k of keys){
+        const providerLabel=k.provider||'mailgun';
+        html+='<div class="domain-row">'
+          +'<div><div style="font-weight:600">'+esc(k.label||'Unnamed')+'</div>'
+          +'<div style="font-size:11px;color:var(--text2)">Provider: '+esc(providerLabel.toUpperCase())+'</div></div>'
+          +'<div><button class="btn btn-danger btn-sm" onclick="deleteApiKey(\''+k.id+'\',\''+esc(k.label)+'\')">Delete</button></div>'
+          +'</div>';
+      }
+      html+='</div>';
+    }
+    ct.innerHTML=html;
+  }catch(e){ct.innerHTML='<div class="empty-state" style="padding:32px"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
+}
+
+function showAddKey(){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  overlay.innerHTML='<div class="modal"><h2>Add API Key</h2>'
+    +'<form id="apikey-form">'
+    +'<label>Name / Label</label><input name="label" required placeholder="e.g. Marketing Mailgun, SendGrid, SMTP">'
+    +'<label>Provider</label><select name="provider"><option value="mailgun">Mailgun</option><option value="sendgrid">SendGrid</option><option value="smtp">SMTP</option><option value="twilio">Twilio</option><option value="other">Other</option></select>'
+    +'<label>API Key</label><input name="api_key" type="password" required placeholder="Paste your API key">'
+    +'<p style="font-size:11px;color:var(--text2);margin-top:8px">🔒 Your key is encrypted with AES-256-GCM and never stored in plaintext.</p>'
+    +'</form>'
+    +'<div class="actions"><button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
+    +'<button class="btn btn-primary" onclick="saveApiKey(this)">Save Key</button></div></div>';
+  document.body.appendChild(overlay);
+}
+
+async function saveApiKey(btn){
+  const form=btn.closest('.modal').querySelector('#apikey-form');
+  const fd=new FormData(form);
+  btn.textContent='Saving...';btn.disabled=true;
+  try{
+    await api('/private-email/keys',{method:'POST',body:JSON.stringify({
+      label:fd.get('label'),provider:fd.get('provider'),api_key:fd.get('api_key')
+    })});
+    showToast('API key saved ✓');
+    btn.closest('.modal-overlay').remove();
+    switchEmailTab('keys');
+  }catch(e){showToast(e.message,'error')}
+  btn.textContent='Save Key';btn.disabled=false;
+}
+
+async function deleteApiKey(id,label){
+  if(!confirm('Delete API key "'+label+'"? Any domains using this key will still work but will not be able to reuse it.'))return;
+  try{await api('/private-email/keys/'+id,{method:'DELETE'});showToast('Key deleted ✓');switchEmailTab('keys')}
+  catch(e){showToast(e.message,'error')}
 }
 
 async function saveSettings(btn){
