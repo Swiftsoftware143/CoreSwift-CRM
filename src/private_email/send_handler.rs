@@ -119,3 +119,35 @@ pub async fn send_email(
         "subject": req.subject,
     })))
 }
+
+/// Low-level send via Mailgun — used by auto-reply engine.
+/// Takes decrypted API key directly (no DB lookups).
+pub async fn send_via_mailgun(
+    base_url: &str,
+    api_key: &str,
+    domain: &str,
+    from_address: &str,
+    to: &str,
+    subject: &str,
+    body_html: &str,
+) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v3/{}/messages", base_url, domain))
+        .basic_auth("api", Some(api_key))
+        .form(&[
+            ("from", from_address),
+            ("to", to),
+            ("subject", subject),
+            ("html", body_html),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Mailgun send error: {}", e))?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Mailgun send failed: {}", body));
+    }
+    Ok(())
+}

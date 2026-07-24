@@ -37,7 +37,10 @@ pub struct PrivateEmailBox {
 #[derive(Debug, Deserialize)]
 pub struct AddDomainRequest {
     pub domain: String,
-    pub mailgun_api_key: String,
+    pub label: Option<String>,
+    #[serde(default)]
+    pub mailgun_api_key: Option<String>,
+    pub api_key_id: Option<Uuid>,
     #[serde(default = "default_region")]
     pub mailgun_region: String,
 }
