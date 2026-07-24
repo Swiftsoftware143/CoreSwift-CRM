@@ -50,6 +50,9 @@ nonzero_ext = "0.3"
 tokio-cron-scheduler = "0.11"
 
 # Random
+aes-gcm = "0.10"
+base64 = "0.22"
+sha2 = "0.10"
 rand = "0.8"
 
 # Decimal type for NUMERIC columns

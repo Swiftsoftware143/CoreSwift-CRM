@@ -65,6 +65,7 @@ pub struct ProfileHealthStatus {
 ///   1. SaaS users registered via event_logs with no activity in 24h
 ///   2. Trial accounts (tenant_plans.status = 'trialing') within 3 days of expiration
 ///   3. business_profiles with saas unit, trial-like states, and no recent activity
+///
 /// For each at-risk account, creates a health signal, and schedules churn-prevention
 /// actions (delayed_actions / followup_queue entries).
 pub async fn run_health_check(

@@ -129,7 +129,7 @@ pub async fn apply_thresholds(
             }
             "assign_tag" => {
                 if let Some(tag_name) = t.action_config.get("tag_name").and_then(|v| v.as_str()) {
-                    if let Ok(tag) = sqlx::query_as::<_, (Uuid,)>(
+                    if let Ok(Some((tag_id,))) = sqlx::query_as::<_, (Uuid,)>(
                         "SELECT id FROM tags WHERE tenant_id = $1 AND name = $2 LIMIT 1"
                     )
                     .bind(tenant_id)
@@ -137,17 +137,15 @@ pub async fn apply_thresholds(
                     .fetch_optional(db)
                     .await
                     {
-                        if let Some((tag_id,)) = tag {
-                            let _ = sqlx::query(
-                                "INSERT INTO tag_assignments (id, tag_id, entity_type, entity_id, tenant_id) VALUES ($1, $2, 'contact', $3, $4) ON CONFLICT (tag_id, entity_type, entity_id, tenant_id) DO NOTHING"
-                            )
-                            .bind(Uuid::new_v4())
-                            .bind(tag_id)
-                            .bind(contact_id)
-                            .bind(tenant_id)
-                            .execute(db)
-                            .await;
-                        }
+                        let _ = sqlx::query(
+                            "INSERT INTO tag_assignments (id, tag_id, entity_type, entity_id, tenant_id) VALUES ($1, $2, 'contact', $3, $4) ON CONFLICT (tag_id, entity_type, entity_id, tenant_id) DO NOTHING"
+                        )
+                        .bind(Uuid::new_v4())
+                        .bind(tag_id)
+                        .bind(contact_id)
+                        .bind(tenant_id)
+                        .execute(db)
+                        .await;
                     }
                 }
             }

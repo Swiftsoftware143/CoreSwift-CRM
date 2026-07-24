@@ -52,6 +52,7 @@ pub mod email_templates;
 pub mod email;
 pub mod worker;
 pub mod tag_provision_handler;
+pub mod private_email;
 
 use axum::{
     routing::get,
@@ -199,8 +200,12 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/tracked-links", tracked_links::router(state.clone()))
         // Email Templates CRUD (admin only)
         .nest("/api/email-templates", email_templates::router(state.clone()))
+        // Private email boxes (Mailgun integration, plan-gated)
+        .nest("/api/private-email", private_email::router(state.clone()))
         // Public redirect for tracked links (no auth)
         .nest("/track", tracked_links::public_router())
+        // Mailgun inbound webhook (no auth — called by Mailgun)
+        .route("/api/v1/webhooks/mailgun/inbound", axum::routing::post(private_email::webhook_handler::inbound_webhook))
         // Stripe/PayPal webhooks (no auth)
         .route("/api/billing/webhooks/stripe", axum::routing::post(billing::handlers::stripe_webhook))
         .route("/api/billing/webhooks/paypal", axum::routing::post(billing::handlers::paypal_webhook))

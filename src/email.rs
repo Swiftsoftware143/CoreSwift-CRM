@@ -191,6 +191,7 @@ async fn send_inline(
 // ---- Data types ----
 
 #[derive(Debug, sqlx::FromRow)]
+#[allow(dead_code)]
 struct EmailTemplateRow {
     id: Uuid,
     name: String,

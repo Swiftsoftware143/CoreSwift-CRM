@@ -617,7 +617,7 @@ async fn deliver_credentials(
 ) -> Result<(), String> {
     // Look up existing user
     let existing_user = sqlx::query_as::<_, UserRow>(
-        "SELECT id, email, password_hash, name FROM users WHERE email = $1"
+        "SELECT id, password_hash, name FROM users WHERE email = $1"
     )
     .bind(email)
     .fetch_optional(db)
@@ -760,7 +760,7 @@ async fn create_stripe_session(
     params.insert("line_items[0][quantity]", "1");
 
     if let Some(obj) = metadata.as_object() {
-        for (k, v) in obj {
+        for (_k, v) in obj {
             if let Some(s) = v.as_str() {
                 params.insert("metadata[0]", s);
             }
@@ -813,7 +813,6 @@ struct CheckoutSessionSummary {
 #[derive(Debug, sqlx::FromRow)]
 struct UserRow {
     id: Uuid,
-    email: String,
     password_hash: String,
     name: String,
 }

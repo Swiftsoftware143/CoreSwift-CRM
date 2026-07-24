@@ -520,7 +520,7 @@ pub async fn forgot_password(
 
     // Look up user
     let user = sqlx::query_as::<_, UserRow>(
-        "SELECT id, name, email FROM users WHERE email = $1"
+        "SELECT id, name FROM users WHERE email = $1"
     )
     .bind(&req.email)
     .fetch_optional(&state.db)
@@ -630,7 +630,6 @@ pub async fn reset_password(
 struct UserRow {
     id: Uuid,
     name: String,
-    email: String,
 }
 
 #[derive(Debug, sqlx::FromRow)]
