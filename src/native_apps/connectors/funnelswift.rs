@@ -98,7 +98,7 @@ pub fn get_meta() -> serde_json::Value {
         "auth_type": "api_key",
         "auth_fields": ["api_key", "webhook_secret"],
         "access_level": "admin_tenant",
-        "entities": { "push": ["lead", "contact", "funnel", "tag", "product_selection"], "pull": ["leads", "contacts", "funnels", "tags", "my_products"] },
+        "entities": { "push": ["lead", "contact", "funnel", "tag", "product_selection"], "pull": ["leads", "contacts", "funnels", "tags", "affiliate_products", "my_products"] },
         "features": ["Push leads from CRM into FunnelSwift funnels", "Pull completed funnels back into CRM as contacts", "Affiliates select products to promote from FunnelSwift back-end", "Push product selections to sync with CRM Swift tags"]
     })
 }

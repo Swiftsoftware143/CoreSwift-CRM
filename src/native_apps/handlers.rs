@@ -443,7 +443,7 @@ pub async fn create_ada_campaign_trigger(
         return Err(AppError::Validation("Name and ada_campaign_id are required".into()));
     }
 
-    let valid_triggers = ["user_created", "contact_created", "account_activated", "scan_complete", "referral_confirmed"];
+    let valid_triggers = ["user_created", "contact_created", "account_activated", "scan_complete", "referral_confirmed", "commission_earned", "payout_processed", "affiliate_activated"];
     if !valid_triggers.contains(&r.trigger_on.as_str()) {
         return Err(AppError::Validation(format!("Invalid trigger. Must be one of: {:?}", valid_triggers)));
     }

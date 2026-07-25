@@ -135,6 +135,89 @@ pub async fn route_action(
             Ok((200, json!({"opportunities": opportunities})))
         }
 
+        // ── Affiliates ──
+        "affiliates.profile" => {
+            let profile = sqlx::query_as::<_, (serde_json::Value,)>(
+                "SELECT id, code, commission_rate, commission_type, total_earned, total_paid, referral_count, is_active FROM affiliates WHERE tenant_id = $1"
+            )
+            .bind(tenant_id)
+            .fetch_optional(db).await
+            .map_err(|e| format!("DB error: {}", e))?;
+            Ok((200, json!({"profile": profile})))
+        }
+        "affiliates.referrals" => {
+            let referrals = sqlx::query_as::<_, (serde_json::Value,)>(
+                "SELECT r.*, a.code as affiliate_code FROM referrals r JOIN affiliates a ON a.id = r.affiliate_id WHERE a.tenant_id = $1 ORDER BY r.created_at DESC LIMIT 50"
+            )
+            .bind(tenant_id)
+            .fetch_all(db).await
+            .map_err(|e| format!("DB error: {}", e))?;
+            Ok((200, json!({"referrals": referrals})))
+        }
+        "affiliates.stats" => {
+            let stats = sqlx::query_as::<_, (serde_json::Value,)>(
+                "SELECT id, total_earned, total_paid, referral_count FROM affiliates WHERE tenant_id = $1"
+            )
+            .bind(tenant_id)
+            .fetch_optional(db).await
+            .map_err(|e| format!("DB error: {}", e))?;
+            Ok((200, json!({"stats": stats})))
+        }
+
+        // ── Affiliate Products ──
+        "affiliate_products.list" => {
+            let products = sqlx::query_as::<_, (serde_json::Value,)>(
+                "SELECT ap.*, t.name as tag_name FROM affiliate_products ap LEFT JOIN tags t ON t.id = ap.tag_id WHERE ap.tenant_id = $1 AND ap.is_active = true ORDER BY ap.sort_order ASC"
+            )
+            .bind(tenant_id)
+            .fetch_all(db).await
+            .map_err(|e| format!("DB error: {}", e))?;
+            Ok((200, json!({"products": products})))
+        }
+        "affiliate_products.my" => {
+            let affiliate_id = params.and_then(|p| p.get("affiliate_id").and_then(|v| v.as_str()))
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .ok_or("affiliate_id required")?;
+            let products = sqlx::query_as::<_, (serde_json::Value,)>(
+                "SELECT ap.*, aps.is_active as promoting, aps.promo_link
+                 FROM affiliate_product_selections aps
+                 JOIN affiliate_products ap ON ap.id = aps.product_id
+                 WHERE aps.affiliate_id = $1 AND ap.is_active = true"
+            )
+            .bind(affiliate_id)
+            .fetch_all(db).await
+            .map_err(|e| format!("DB error: {}", e))?;
+            Ok((200, json!({"products": products})))
+        }
+        "affiliate_products.select" => {
+            let body = data.ok_or("data required")?;
+            let aff_id = body.get("affiliate_id").and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok()).ok_or("affiliate_id required")?;
+            let prod_id = body.get("product_id").and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok()).ok_or("product_id required")?;
+            sqlx::query(
+                "INSERT INTO affiliate_product_selections (id, affiliate_id, product_id, is_active) VALUES ($1, $2, $3, true) ON CONFLICT (affiliate_id, product_id) DO UPDATE SET is_active = true, updated_at = NOW()"
+            )
+            .bind(Uuid::new_v4()).bind(aff_id).bind(prod_id)
+            .execute(db).await
+            .map_err(|e| format!("DB error: {}", e))?;
+            Ok((200, json!({"selected": true})))
+        }
+        "affiliate_products.unselect" => {
+            let body = data.ok_or("data required")?;
+            let aff_id = body.get("affiliate_id").and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok()).ok_or("affiliate_id required")?;
+            let prod_id = body.get("product_id").and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok()).ok_or("product_id required")?;
+            sqlx::query(
+                "UPDATE affiliate_product_selections SET is_active = false WHERE affiliate_id = $1 AND product_id = $2"
+            )
+            .bind(aff_id).bind(prod_id)
+            .execute(db).await
+            .map_err(|e| format!("DB error: {}", e))?;
+            Ok((200, json!({"unselected": true})))
+        }
+
         // ── Communications ──
         "comms.send" => {
             let body = data.ok_or("data required")?;

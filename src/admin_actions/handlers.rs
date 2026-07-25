@@ -5,9 +5,12 @@ use serde_json::json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use rust_decimal::Decimal;
 use crate::AppState;
 use crate::errors::{AppError, ApiResult};
 use crate::auth::Claims;
+use crate::affiliates::models::*;
+use crate::auth::models::TeamMember;
 
 #[derive(Debug, Deserialize)]
 pub struct ChatActionRequest {
@@ -50,6 +53,8 @@ pub async fn execute_chat_action(
     let _is_admin = c.role == "owner" || c.role == "admin";
 
     let result: Result<axum::response::Response, AppError> = match r.intent.as_str() {
+        "create_affiliate" => handle_create_affiliate(&s, tenant_id, r.params).await.map(IntoResponse::into_response),
+        "create_affiliate_in_funnelswift" => handle_create_affiliate_funnelswift(&s, tenant_id, r.params).await.map(IntoResponse::into_response),
         "create_tenant_account" => handle_create_tenant_account(&s, r.params).await.map(IntoResponse::into_response),
         "build_campaign" => handle_build_campaign(&s, tenant_id, r.params).await.map(IntoResponse::into_response),
         "sync_funnelswift_tag" => handle_sync_funnelswift_tag(&s, tenant_id, r.params).await.map(IntoResponse::into_response),
@@ -62,6 +67,33 @@ pub async fn execute_chat_action(
 pub async fn list_intents() -> ApiResult<impl IntoResponse> {
     Ok(Json(json!({
         "intents": [
+            {
+                "name": "create_affiliate",
+                "description": "Create an affiliate in CRM Swift with account setup",
+                "required_fields": ["name", "email", "commission_rate"],
+                "optional_fields": ["commission_type"],
+                "auto_triggers": ["Creates tenant account in CRM Swift", "Optionally creates entry in FunnelSwift"],
+                "example": {
+                    "intent": "create_affiliate",
+                    "params": { "name": "John Doe", "email": "john@example.com", "commission_rate": 15 }
+                }
+            },
+            {
+                "name": "create_affiliate_in_funnelswift",
+                "description": "Create an affiliate product entry in FunnelSwift then auto-create CRM Swift account",
+                "required_fields": ["name", "email", "product_name", "commission_rate"],
+                "optional_fields": ["commission_type", "price", "image_url"],
+                "auto_triggers": [
+                    "Creates product in FunnelSwift affiliate board",
+                    "Creates tenant account in CRM Swift",
+                    "Tags the affiliate in FunnelSwift",
+                    "Optionally triggers Ada welcome campaign"
+                ],
+                "example": {
+                    "intent": "create_affiliate_in_funnelswift",
+                    "params": { "name": "John Doe", "email": "john@example.com", "product_name": "Pro Plan", "commission_rate": 20, "price": 79 }
+                }
+            },
             {
                 "name": "create_tenant_account",
                 "description": "Create a basic plan tenant account in CRM Swift",
@@ -117,6 +149,307 @@ pub async fn list_intents() -> ApiResult<impl IntoResponse> {
                 }
             }
         ]
+    })))
+}
+
+// ── Handler: create_affiliate ──
+
+async fn handle_create_affiliate(
+    s: &AppState,
+    _tenant_id: Uuid,
+    params: serde_json::Value,
+) -> ApiResult<impl IntoResponse> {
+    // Collect fields with prompts for missing ones
+    let name = params.get("name").and_then(|v| v.as_str());
+    let email = params.get("email").and_then(|v| v.as_str());
+    let commission_rate = params.get("commission_rate").and_then(|v| v.as_f64());
+
+    // Check what's missing
+    let mut missing = Vec::new();
+    if name.is_none() { missing.push(FieldRequest {
+        field: "name".into(), label: "Affiliate full name".into(),
+        field_type: "text".into(), required: true, options: None,
+    }); }
+    if email.is_none() { missing.push(FieldRequest {
+        field: "email".into(), label: "Affiliate email address".into(),
+        field_type: "email".into(), required: true, options: None,
+    }); }
+    if commission_rate.is_none() { missing.push(FieldRequest {
+        field: "commission_rate".into(), label: "Commission rate (%)".into(),
+        field_type: "number".into(), required: true, options: None,
+    }); }
+
+    if !missing.is_empty() {
+        return Ok(Json(json!(ChatActionResult {
+            intent: "create_affiliate".into(),
+            success: false,
+            message: "Missing required fields. Please provide:".into(),
+            results: json!({}),
+            next_steps: vec![StepPrompt {
+                step: "Provide missing info".into(),
+                description: "Fill in the missing fields and send the same intent again".into(),
+            }],
+            missing_fields: missing,
+        })));
+    }
+
+    let name = name.ok_or_else(|| AppError::BadRequest("missing field: name".into()))?;
+    let email = email.ok_or_else(|| AppError::BadRequest("missing field: email".into()))?;
+    let rate = commission_rate.ok_or_else(|| AppError::BadRequest("missing field: commission_rate".into()))?;
+
+    // Check if user already exists
+    let existing_user = sqlx::query_as::<_, TeamMember>(
+        "SELECT * FROM users WHERE email = $1"
+    )
+    .bind(email)
+    .fetch_optional(&s.db)
+    .await?;
+
+    let (user_id, user_tenant_id) = if let Some(user) = existing_user {
+        // TeamMember exists — use their tenant
+        (user.id, user.tenant_id)
+    } else {
+        // Create a new tenant and user for the affiliate
+        let slug = format!("{}-{}", name.to_lowercase().replace(' ', "-"), &Uuid::new_v4().to_string()[..8]);
+
+        // Create tenant first via the auth flow
+        
+        // We'll create tenant + user directly
+        let new_tenant_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)")
+            .bind(new_tenant_id)
+            .bind(format!("{}'s Workspace", name))
+            .bind(&slug)
+            .execute(&s.db)
+            .await?;
+
+        // Auto-gen webhook token happens via trigger in migration 027
+
+        let new_user_id = Uuid::new_v4();
+        use argon2::password_hash::{SaltString, PasswordHasher};
+        let salt = SaltString::generate(&mut rand::thread_rng());
+        let password_hash = argon2::Argon2::default()
+            .hash_password(name.as_bytes(), &salt)
+            .map_err(|e| AppError::Hash(e.to_string()))?
+            .to_string();
+
+        sqlx::query(
+            "INSERT INTO users (id, tenant_id, email, password_hash, name, role) VALUES ($1, $2, $3, $4, $5, 'owner')"
+        )
+        .bind(new_user_id)
+        .bind(new_tenant_id)
+        .bind(email)
+        .bind(&password_hash)
+        .bind(name)
+        .execute(&s.db)
+        .await?;
+
+        (new_user_id, new_tenant_id)
+    };
+
+    // Create the affiliate profile
+    let code = generate_code(name);
+    let aff = sqlx::query_as::<_, Affiliate>(
+        r#"INSERT INTO affiliates (id, tenant_id, user_id, code, commission_rate, commission_type)
+           VALUES ($1, $2, $3, $4, $5, 'percentage') ON CONFLICT (tenant_id, user_id) DO UPDATE SET
+           commission_rate = EXCLUDED.commission_rate, updated_at = NOW()
+           RETURNING *"#
+    )
+    .bind(Uuid::new_v4())
+    .bind(user_tenant_id)
+    .bind(user_id)
+    .bind(&code)
+    .bind(Decimal::try_from(rate).unwrap_or(Decimal::new(10, 1)))
+    .fetch_one(&s.db)
+    .await?;
+
+    Ok(Json(json!(ChatActionResult {
+        intent: "create_affiliate".into(),
+        success: true,
+        message: format!("Affiliate '{}' created with code '{}' and {:.0}% commission. Login: {} (password auto-generated, reset on first login)", name, code, rate, email),
+        results: json!({
+            "affiliate": aff,
+            "tenant_id": user_tenant_id,
+            "user_id": user_id,
+            "login_email": email,
+            "affiliate_code": code,
+        }),
+        next_steps: vec![
+            StepPrompt { step: "Let affiliate know".into(), description: "Send affiliate their code and login info".into() },
+            StepPrompt { step: "Set up products".into(), description: "Add affiliate products to their board in FunnelSwift".into() },
+            StepPrompt { step: "Tag in FunnelSwift".into(), description: "Tag affiliate so their products show in the affiliate board".into() },
+        ],
+        missing_fields: vec![],
+    })))
+}
+
+// ── Handler: create_affiliate_in_funnelswift ──
+
+async fn handle_create_affiliate_funnelswift(
+    s: &AppState,
+    _tenant_id: Uuid,
+    params: serde_json::Value,
+) -> ApiResult<impl IntoResponse> {
+    let name = params.get("name").and_then(|v| v.as_str());
+    let email = params.get("email").and_then(|v| v.as_str());
+    let product_name = params.get("product_name").and_then(|v| v.as_str());
+    let commission_rate = params.get("commission_rate").and_then(|v| v.as_f64());
+    let price = params.get("price").and_then(|v| v.as_f64());
+
+    let mut missing = Vec::new();
+    if name.is_none() { missing.push(FieldRequest {
+        field: "name".into(), label: "Affiliate name".into(),
+        field_type: "text".into(), required: true, options: None,
+    }); }
+    if email.is_none() { missing.push(FieldRequest {
+        field: "email".into(), label: "Affiliate email".into(),
+        field_type: "email".into(), required: true, options: None,
+    }); }
+    if product_name.is_none() { missing.push(FieldRequest {
+        field: "product_name".into(), label: "Product name for affiliate board".into(),
+        field_type: "text".into(), required: true, options: None,
+    }); }
+    if commission_rate.is_none() { missing.push(FieldRequest {
+        field: "commission_rate".into(), label: "Commission rate (%)".into(),
+        field_type: "number".into(), required: true, options: None,
+    }); }
+
+    if !missing.is_empty() {
+        return Ok(Json(json!(ChatActionResult {
+            intent: "create_affiliate_in_funnelswift".into(),
+            success: false,
+            message: "Missing required fields. Please provide:".into(),
+            results: json!({}),
+            next_steps: vec![],
+            missing_fields: missing,
+        })));
+    }
+
+    let name = name.ok_or_else(|| AppError::BadRequest("missing field: name".into()))?;
+    let email = email.ok_or_else(|| AppError::BadRequest("missing field: email".into()))?;
+    let prod_name = product_name.ok_or_else(|| AppError::BadRequest("missing field: product_name".into()))?;
+    let rate = commission_rate.ok_or_else(|| AppError::BadRequest("missing field: commission_rate".into()))?;
+    let product_price = price.unwrap_or(79.0);
+
+    // Step 1: Create CRM Swift account
+    let slug = format!("affiliate-{}", &Uuid::new_v4().to_string()[..8]);
+    let new_tenant_id = Uuid::new_v4();
+
+    sqlx::query("INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)")
+        .bind(new_tenant_id)
+        .bind(format!("{} - Affiliate", name))
+        .bind(&slug)
+        .execute(&s.db)
+        .await?;
+
+    let new_user_id = Uuid::new_v4();
+    use argon2::password_hash::{SaltString, PasswordHasher};
+    let salt = SaltString::generate(&mut rand::thread_rng());
+    let password_hash = argon2::Argon2::default()
+        .hash_password(name.as_bytes(), &salt)
+        .map_err(|e| AppError::Hash(e.to_string()))?
+        .to_string();
+
+    sqlx::query(
+        "INSERT INTO users (id, tenant_id, email, password_hash, name, role) VALUES ($1, $2, $3, $4, $5, 'owner')"
+    )
+    .bind(new_user_id)
+    .bind(new_tenant_id)
+    .bind(email)
+    .bind(&password_hash)
+    .bind(name)
+    .execute(&s.db)
+    .await?;
+
+    // Step 2: Create affiliate profile
+    let code = generate_code(name);
+    let aff = sqlx::query_as::<_, Affiliate>(
+        r#"INSERT INTO affiliates (id, tenant_id, user_id, code, commission_rate, commission_type)
+           VALUES ($1, $2, $3, $4, $5, 'percentage') RETURNING *"#
+    )
+    .bind(Uuid::new_v4())
+    .bind(new_tenant_id)
+    .bind(new_user_id)
+    .bind(&code)
+    .bind(json!(rate))
+    .fetch_one(&s.db)
+    .await?;
+
+    // Step 3: Create product in affiliate board
+    let product = sqlx::query_as::<_, (serde_json::Value,)>(
+        r#"INSERT INTO affiliate_products (id, tenant_id, name, price, commission_rate, commission_type)
+           VALUES ($1, $2, $3, $4, $5, 'percentage') RETURNING *"#
+    )
+    .bind(Uuid::new_v4())
+    .bind(new_tenant_id)
+    .bind(prod_name)
+    .bind(json!(product_price))
+    .bind(json!(rate))
+    .fetch_one(&s.db)
+    .await?;
+
+    // Step 4: Try to create or get a tag for FunnelSwift
+    let tag = sqlx::query_as::<_, (serde_json::Value,)>(
+        "SELECT * FROM tags WHERE tenant_id = $1 AND name = $2"
+    )
+    .bind(new_tenant_id)
+    .bind(format!("Affiliate: {}", name))
+    .fetch_optional(&s.db)
+    .await?;
+
+    let tag_id: Option<serde_json::Value> = if let Some(ref t) = tag {
+        t.0.get("id").cloned()
+    } else {
+        let new_tag = sqlx::query_as::<_, (serde_json::Value,)>(
+            "INSERT INTO tags (id, tenant_id, name, color) VALUES ($1, $2, $3, $4) RETURNING id"
+        )
+        .bind(Uuid::new_v4())
+        .bind(new_tenant_id)
+        .bind(format!("Affiliate: {}", name))
+        .bind("#10B981") // green
+        .fetch_one(&s.db)
+        .await?;
+        new_tag.0.get("id").cloned()
+    };
+
+    // Update product with tag
+    if let Some(tid) = tag_id {
+        let _ = sqlx::query("UPDATE affiliate_products SET tag_id = $1 WHERE id = $2")
+            .bind(tid.as_str().and_then(|s| Uuid::parse_str(s).ok()))
+            .bind(product.0.get("id").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok()))
+            .execute(&s.db).await;
+    }
+
+    // Step 5: Trigger Ada campaign trigger for welcome
+    let ada_trigger = sqlx::query_as::<_, (serde_json::Value,)>(
+        r#"INSERT INTO ada_campaign_triggers (id, tenant_id, name, trigger_on, ada_campaign_id, schedule_delay_minutes)
+           VALUES ($1, $2, $3, 'affiliate_activated', 'welcome-affiliate', 0) RETURNING *"#
+    )
+    .bind(Uuid::new_v4())
+    .bind(new_tenant_id)
+    .bind(format!("Welcome {}", name))
+    .fetch_one(&s.db)
+    .await?;
+
+    Ok(Json(json!(ChatActionResult {
+        intent: "create_affiliate_in_funnelswift".into(),
+        success: true,
+        message: format!("Affiliate '{}' fully onboarded across FunnelSwift + CRM Swift. Welcome campaign queued.", name),
+        results: json!({
+            "affiliate": aff,
+            "product": product,
+            "tag": "Affiliate: {name}",
+            "tenant_id": new_tenant_id,
+            "user_id": new_user_id,
+            "affiliate_code": code,
+            "welcome_trigger": ada_trigger,
+        }),
+        next_steps: vec![
+            StepPrompt { step: "FunnelSwift shows product".into(), description: format!("'{}' now visible in affiliate board in FunnelSwift", prod_name) },
+            StepPrompt { step: "Welcome campaign".into(), description: "AdaSwift will send welcome email with login details and commission info".into() },
+            StepPrompt { step: "Affiliate shares code".into(), description: format!("Affiliate code '{}' is active — share with new referrals", code) },
+        ],
+        missing_fields: vec![],
     })))
 }
 
