@@ -200,8 +200,9 @@ pub async fn handle_tag_sync(
     }
 
     // Add contact to a "FunnelSwift Leads" list (create if needed)
-    let list_name = "FunnelSwift Leads";
-    let list_id = create_or_get_list(&s.db, tenant_id, list_name).await?;
+    // Assign to software-specific list (e.g., "FunnelSwift Clients", "MissedCall Clients")
+    let list_name = format!("{} Clients", capitalize_source(req.source_app.as_str()));
+    let list_id = create_or_get_list(&s.db, tenant_id, list_name.as_str()).await?;
 
     let _ = sqlx::query(
         "INSERT INTO list_members (id, list_id, contact_id, tenant_id) VALUES ($1, $2, $3, $4) ON CONFLICT (list_id, contact_id) DO NOTHING"
@@ -355,4 +356,23 @@ pub fn router() -> axum::Router<AppState> {
     use axum::routing::post;
     axum::Router::new()
         .route("/cross-app/tag-sync", post(handle_tag_sync))
+}
+
+/// Capitalize source app name for display (e.g., "funnelswift" → "FunnelSwift")
+fn capitalize_source(source: &str) -> String {
+    match source {
+        "funnelswift" => "FunnelSwift".into(),
+        "missedcallrespondr" => "MissedCall".into(),
+        "incentiveswift" => "IncentiveSwift".into(),
+        "workflowswift" => "WorkflowSwift".into(),
+        "coreswift" => "CoreSwift".into(),
+        "adaswift" => "ADASwift".into(),
+        _ => {
+            let mut chars = source.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+            }
+        }
+    }
 }
