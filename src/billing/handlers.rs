@@ -546,6 +546,23 @@ pub async fn stripe_webhook(
                         tracing::error!("Credential delivery failed: {}", e);
                     }
                 }
+
+                // FunnelSwift affiliate conversion webhook (fire-and-forget)
+                let provider_id = provider_session_id.to_string();
+                tokio::spawn(async move {
+                    let funnelswift_url = std::env::var("FUNNELSWIFT_URL").unwrap_or_default();
+                    if !funnelswift_url.is_empty() {
+                        let _ = reqwest::Client::new()
+                            .post(format!("{}/api/v1/webhooks/conversion", funnelswift_url))
+                            .json(&serde_json::json!({
+                                "source_app": "coreswift",
+                                "provider_session_id": provider_id,
+                            }))
+                            .timeout(std::time::Duration::from_secs(5))
+                            .send()
+                            .await;
+                    }
+                });
             }
         }
     }
