@@ -63,6 +63,13 @@ reqwest = { version = "0.12", features = ["json"] }
 
 # HTTP headers
 http = "1"
+# Email provider abstraction (mig 056)
+async-trait = "0.1"
+hmac = "0.12"
+hex = "0.4"
+lettre = { version = "0.11", default-features = false, features = ["tokio1-native-tls", "builder", "smtp-transport"] }
+serde_urlencoded = "0.7"
+url = "2"
 
 [profile.release]
 opt-level = 3

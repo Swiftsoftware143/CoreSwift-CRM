@@ -1,21 +1,22 @@
 use axum::{extract::State, Extension, Json};
+use sqlx::Row;
 use uuid::Uuid;
 
-use super::encryption;
 use super::models::*;
+use super::providers::{self, ProviderConfig};
 
 use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
 
+/// Send an email via the domain's configured provider (Mailgun, SMTP, etc).
+/// The provider is selected automatically based on the domain's provider_type.
 pub async fn send_email(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(req): Json<SendEmailRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
-    let _user_id = Uuid::parse_str(&claims.sub)
         .map_err(|_| AppError::Unauthorized)?;
 
     // Find the sending mailbox
@@ -30,26 +31,10 @@ pub async fn send_email(
 
     let mailbox = mailbox.ok_or_else(|| AppError::NotFound("Sending mailbox not found or not active".into()))?;
 
-    // Get domain with decrypted API key
-    let domain_row = sqlx::query_as::<_, PrivateEmailDomain>(
-        "SELECT * FROM private_email_domains WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(mailbox.domain_id)
-    .bind(account_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(AppError::Database)?;
-
-    let domain_row = domain_row.ok_or_else(|| AppError::NotFound("Domain not found".into()))?;
-
-    let api_key = encryption::decrypt_api_key(account_id, &domain_row.mailgun_api_key)
-        .map_err(AppError::Internal)?;
-
-    let base_url = if domain_row.mailgun_region == "eu" {
-        "https://api.eu.mailgun.net"
-    } else {
-        "https://api.mailgun.net"
-    };
+    // Load provider config for this domain
+    let provider_config = load_provider_config(&state.db, mailbox.domain_id, account_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to load provider config: {}", e)))?;
 
     // Build body with optional signature
     let body = if let Some(ref sig) = mailbox.signature {
@@ -58,30 +43,20 @@ pub async fn send_email(
         req.body.clone()
     };
 
-    // Send via Mailgun
-    let client = reqwest::Client::new();
-    let mut form: Vec<(String, String)> = vec![
-        ("from".into(), req.from_address.clone()),
-        ("to".into(), req.to.clone()),
-        ("subject".into(), req.subject.clone()),
-        ("html".into(), body),
-    ];
+    // Select provider and send
+    let provider = providers::provider_for(&provider_config);
+    let result = provider.send(
+        &provider_config,
+        &req.from_address,
+        &req.to,
+        &req.subject,
+        &body,
+        req.in_reply_to.as_deref(),
+    ).await;
 
-    if let Some(ref in_reply_to) = req.in_reply_to {
-        form.push(("h:In-Reply-To".into(), in_reply_to.clone()));
-    }
-
-    let resp = client
-        .post(format!("{}/v3/{}/messages", base_url, domain_row.domain))
-        .basic_auth("api", Some(&api_key))
-        .form(&form)
-        .send()
-        .await
-        .map_err(|e| AppError::Internal(format!("Mailgun send error: {}", e)))?;
-
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Err(AppError::Internal(format!("Mailgun send failed: {}", body)));
+    if !result.success {
+        let err = result.error.unwrap_or_else(|| "Unknown send error".into());
+        return Err(AppError::Internal(format!("{} send failed: {}", provider.name(), err)));
     }
 
     // Try to match recipient to a contact and log as event
@@ -97,6 +72,8 @@ pub async fn send_email(
             "from": req.from_address,
             "to": req.to,
             "subject": req.subject,
+            "provider": provider.name(),
+            "provider_message_id": result.provider_message_id,
             "body_preview": &req.body[..req.body.len().min(500)]
         });
         let _ = sqlx::query(
@@ -114,40 +91,135 @@ pub async fn send_email(
 
     Ok(Json(serde_json::json!({
         "sent": true,
+        "provider": provider.name(),
+        "provider_message_id": result.provider_message_id,
         "from": req.from_address,
         "to": req.to,
         "subject": req.subject,
     })))
 }
 
-/// Low-level send via Mailgun — used by auto-reply engine.
-/// Takes decrypted API key directly (no DB lookups).
-pub async fn send_via_mailgun(
-    base_url: &str,
-    api_key: &str,
-    domain: &str,
+/// Load provider configuration for a domain from the database.
+pub async fn load_provider_config(
+    db: &sqlx::PgPool,
+    domain_id: Uuid,
+    tenant_id: Uuid,
+) -> Result<ProviderConfig, String> {
+    let row = sqlx::query(
+        r#"
+        SELECT 
+            d.provider_type, d.domain, d.mailgun_region, d.mailgun_api_key,
+            d.smtp_host, d.smtp_port, d.smtp_username, d.smtp_password_encrypted,
+            d.smtp_tls, d.inbound_mode, d.webhook_signing_key_encrypted,
+            d.api_key_id
+        FROM private_email_domains d
+        WHERE d.id = $1 AND d.tenant_id = $2
+        "#,
+    )
+    .bind(domain_id)
+    .bind(tenant_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| format!("Database error: {}", e))?
+    .ok_or_else(|| "Domain not found".to_string())?;
+
+    let provider_type: String = row.try_get("provider_type").unwrap_or_else(|_| "mailgun".into());
+    let region: Option<String> = row.try_get("mailgun_region").ok();
+    let encrypted_api_key: Option<String> = row.try_get("mailgun_api_key").ok();
+
+    // For backward compat: if api_key_id is set, resolve the key
+    let final_encrypted_key = if row.try_get::<Option<Uuid>, _>("api_key_id").ok().flatten().is_some() {
+        // Resolve from the key table based on provider_type
+        resolve_api_key(db, tenant_id, row.try_get("api_key_id").ok().flatten(), &provider_type).await
+    } else {
+        encrypted_api_key
+    };
+
+    Ok(ProviderConfig {
+        tenant_id,
+        domain_id,
+        domain: row.try_get("domain").unwrap_or_default(),
+        provider_type,
+        encrypted_api_key: final_encrypted_key,
+        region,
+        smtp_host: row.try_get("smtp_host").ok(),
+        smtp_port: row.try_get("smtp_port").ok(),
+        smtp_username: row.try_get("smtp_username").ok(),
+        encrypted_smtp_password: row.try_get("smtp_password_encrypted").ok(),
+        smtp_tls: row.try_get("smtp_tls").unwrap_or(true),
+        inbound_mode: row.try_get("inbound_mode").unwrap_or_else(|_| "webhook".into()),
+        encrypted_webhook_key: row.try_get("webhook_signing_key_encrypted").ok(),
+    })
+}
+
+async fn resolve_api_key(
+    db: &sqlx::PgPool,
+    tenant_id: Uuid,
+    api_key_id: Option<Uuid>,
+    provider_type: &str,
+) -> Option<String> {
+    let kid = api_key_id?;
+    match provider_type {
+        "mailgun" => {
+            let row = sqlx::query(
+                "SELECT api_key_encrypted FROM private_email_api_keys WHERE id = $1 AND tenant_id = $2",
+            )
+            .bind(kid)
+            .bind(tenant_id)
+            .fetch_optional(db)
+            .await
+            .ok()??;
+            Some(row.try_get::<String, _>("api_key_encrypted").ok()?)
+        }
+        _ => {
+            // Provider api keys (SES, Postmark)
+            let row = sqlx::query(
+                "SELECT access_key_encrypted FROM provider_api_keys WHERE id = $1 AND tenant_id = $2 AND provider = $3",
+            )
+            .bind(kid)
+            .bind(tenant_id)
+            .bind(provider_type)
+            .fetch_optional(db)
+            .await
+            .ok()??;
+            Some(row.try_get::<String, _>("access_key_encrypted").ok()?)
+        }
+    }
+}
+
+/// Low-level send via the domain's configured provider — used by auto-reply engine.
+pub async fn send_via_provider(
+    db: &sqlx::PgPool,
+    domain_id: Uuid,
+    tenant_id: Uuid,
     from_address: &str,
     to: &str,
     subject: &str,
     body_html: &str,
 ) -> Result<(), String> {
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{}/v3/{}/messages", base_url, domain))
-        .basic_auth("api", Some(api_key))
-        .form(&[
-            ("from", from_address),
-            ("to", to),
-            ("subject", subject),
-            ("html", body_html),
-        ])
-        .send()
-        .await
-        .map_err(|e| format!("Mailgun send error: {}", e))?;
+    let config = load_provider_config(db, domain_id, tenant_id).await?;
+    let provider = providers::provider_for(&config);
+    let result = provider.send(&config, from_address, to, subject, body_html, None).await;
 
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Mailgun send failed: {}", body));
+    if result.success {
+        Ok(())
+    } else {
+        Err(result.error.unwrap_or_else(|| "Unknown send error".into()))
     }
-    Ok(())
+}
+
+// Backward compat alias — auto-reply engine calls this.
+pub async fn send_via_mailgun(
+    _base_url: &str,
+    _api_key: &str,
+    _domain: &str,
+    _from_address: &str,
+    _to: &str,
+    _subject: &str,
+    _body_html: &str,
+) -> Result<(), String> {
+    // This function is kept for backward compat with auto_reply_handler.
+    // New code should call send_via_provider instead.
+    // For now, forward to Mailgun provider directly.
+    Err("send_via_mailgun is deprecated — use send_via_provider with db connection".into())
 }

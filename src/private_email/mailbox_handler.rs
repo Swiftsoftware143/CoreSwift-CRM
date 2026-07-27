@@ -47,23 +47,30 @@ pub async fn provision_mailbox(
         return Err(AppError::BadRequest("Email address already exists".into()));
     }
 
-    // Create mailbox in Mailgun
-    let api_key = encryption::decrypt_api_key(account_id, &domain.mailgun_api_key)
-        .map_err(AppError::Internal)?;
+    // If provider is Mailgun, create mailbox and route via API
+    // For SMTP/SES/Postmark, skip API calls — user brings their own DNS/mailbox
+    let mailgun_id: Option<String> = if domain.provider_type == "mailgun" {
+        let api_key = encryption::decrypt_api_key(account_id, &domain.mailgun_api_key)
+            .map_err(AppError::Internal)?;
 
-    let base_url = if domain.mailgun_region == "eu" {
-        "https://api.eu.mailgun.net"
+        let base_url = if domain.mailgun_region == "eu" {
+            "https://api.eu.mailgun.net"
+        } else {
+            "https://api.mailgun.net"
+        };
+
+        // Create the mailbox via Mailgun API
+        let mg_id = create_mailgun_mailbox(base_url, &api_key, &domain.domain, &req.local_part).await
+            .map_err(AppError::Internal)?;
+
+        // Create route for inbound forwarding
+        let _route_id = create_mailgun_route(base_url, &api_key, &domain.domain).await
+            .map_err(AppError::Internal)?;
+
+        Some(mg_id)
     } else {
-        "https://api.mailgun.net"
+        None
     };
-
-    // Create the mailbox via Mailgun API
-    let mailgun_id = create_mailgun_mailbox(base_url, &api_key, &domain.domain, &req.local_part).await
-        .map_err(AppError::Internal)?;
-
-    // Create route for inbound forwarding
-    let _route_id = create_mailgun_route(base_url, &api_key, &domain.domain).await
-        .map_err(AppError::Internal)?;
 
     let row = sqlx::query_as::<_, PrivateEmailBox>(
         r#"
