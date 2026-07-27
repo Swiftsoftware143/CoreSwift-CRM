@@ -78,8 +78,31 @@ pub async fn start_worker(db: PgPool) -> Result<(), Box<dyn std::error::Error + 
     })?;
     sched.add(job6).await?;
 
+    // Job 7: Daily at 3:00 AM — purge expired email data
+    let db7 = db.clone();
+    let job7 = Job::new_async("0 0 3 * * *", move |_uuid, _lock| {
+        let db = db7.clone();
+        Box::pin(async move {
+            let summary = crate::private_email::purge::purge_expired_emails(&db, None).await;
+            tracing::info!(
+                tenants_checked = summary.tenants_checked,
+                tenants_purged = summary.tenants_purged,
+                messages_deleted = summary.messages_deleted,
+                events_deleted = summary.events_deleted,
+                errors = summary.errors.len(),
+                "Daily email data purge completed"
+            );
+            if !summary.errors.is_empty() {
+                for err in &summary.errors {
+                    tracing::warn!("Purge error: {}", err);
+                }
+            }
+        })
+    })?;
+    sched.add(job7).await?;
+
     sched.start().await?;
-    tracing::info!("Flawless Follow-up background worker started (6 cron jobs)");
+    tracing::info!("Flawless Follow-up background worker started (7 cron jobs)");
 
     Ok(())
 }

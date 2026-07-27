@@ -3,6 +3,62 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+// ── Data Retention Types ──
+
+/// Response returned when querying a tenant's retention settings.
+#[derive(Debug, Clone, Serialize)]
+pub struct RetentionResponse {
+    pub tenant_id: Uuid,
+    pub retention_days: i32,
+    pub last_purged_at: Option<DateTime<Utc>>,
+}
+
+/// Request body for setting a tenant's email retention period.
+/// Minimum: 30 days, Maximum: 3650 days (10 years).
+#[derive(Debug, Deserialize)]
+pub struct SetRetentionRequest {
+    #[serde(default = "default_retention")]
+    pub retention_days: i32,
+}
+
+fn default_retention() -> i32 { 365 }
+
+/// Request body for triggering a manual purge.
+#[derive(Debug, Deserialize)]
+pub struct PurgeTriggerRequest {
+    /// If provided, limits the purge to a single tenant.
+    /// If omitted (agency_admin only), purges all tenants.
+    pub tenant_id: Option<Uuid>,
+}
+
+/// Summary of what the purge task accomplished.
+#[derive(Debug, Clone, Serialize)]
+pub struct PurgeSummaryResponse {
+    pub tenants_checked: i64,
+    pub tenants_purged: i64,
+    pub messages_deleted: i64,
+    pub events_deleted: i64,
+    pub errors: Vec<String>,
+}
+
+impl Default for PurgeSummaryResponse {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PurgeSummaryResponse {
+    pub fn new() -> Self {
+        Self {
+            tenants_checked: 0,
+            tenants_purged: 0,
+            messages_deleted: 0,
+            events_deleted: 0,
+            errors: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct PrivateEmailDomain {
     pub id: Uuid,
