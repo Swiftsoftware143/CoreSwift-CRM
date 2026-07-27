@@ -1,6 +1,7 @@
 use axum::{Router, middleware};
 use crate::AppState;
 
+pub mod admin_handler;
 pub mod domain_handler;
 pub mod mailbox_handler;
 pub mod send_handler;
@@ -10,6 +11,7 @@ pub mod encryption;
 pub mod feature_gate;
 pub mod api_keys_handler;
 pub mod auto_reply_handler;
+pub mod providers;
 
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
@@ -34,5 +36,9 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/auto-replies", axum::routing::post(auto_reply_handler::create_auto_reply))
         .route("/auto-replies/:id", axum::routing::patch(auto_reply_handler::update_auto_reply))
         .route("/auto-replies/:id", axum::routing::delete(auto_reply_handler::delete_auto_reply))
+        // Admin controls (agency_admin only)
+        .route("/admin/limits", axum::routing::get(admin_handler::list_all_overrides))
+        .route("/admin/limits/:tenant_id", axum::routing::get(admin_handler::get_tenant_limits))
+        .route("/admin/limits/:tenant_id", axum::routing::patch(admin_handler::set_tenant_limits))
         .layer(middleware::from_fn_with_state(state.clone(), crate::auth::middleware::auth_middleware))
 }

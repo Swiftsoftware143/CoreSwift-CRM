@@ -20,73 +20,12 @@ pub async fn add_domain(
 
     feature_gate::check_domain_limit(&state.db, account_id).await?;
 
-    // Resolve API key: from existing saved key, or encrypt a new one
-    let (encrypted_key, api_key_id): (String, Option<Uuid>) = if let Some(kid) = req.api_key_id {
-        // Use existing saved key
-        let row = sqlx::query_as::<_, (String,)>(
-            "SELECT api_key_encrypted FROM private_email_api_keys WHERE id = $1 AND tenant_id = $2"
-        )
-        .bind(kid)
-        .bind(account_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(AppError::Database)?
-        .ok_or_else(|| AppError::NotFound("Saved API key not found".into()))?;
-        (row.0, Some(kid))
-    } else if let Some(ref raw_key) = req.mailgun_api_key {
-        // Encrypt and optionally save as named key
-        let encrypted = encryption::encrypt_api_key(account_id, raw_key)
-            .map_err(AppError::Internal)?;
-        let label = req.label.clone().unwrap_or_else(|| req.domain.clone());
-        // Save as a named key for future reuse
-        let kid = sqlx::query_as::<_, (Uuid,)>(
-            r#"
-            INSERT INTO private_email_api_keys (tenant_id, label, provider, api_key_encrypted)
-            VALUES ($1, $2, 'mailgun', $3)
-            ON CONFLICT DO NOTHING
-            RETURNING id
-            "#,
-        )
-        .bind(account_id)
-        .bind(&label)
-        .bind(&encrypted)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(AppError::Database)?;
-        (encrypted, kid.map(|(id,)| id))
-    } else {
-        return Err(AppError::BadRequest("Either mailgun_api_key or api_key_id is required".into()));
-    };
+    let label = req.label.clone().unwrap_or_else(|| req.domain.clone());
 
-    // Decrypt to validate
-    let raw_key = encryption::decrypt_api_key(account_id, &encrypted_key)
-        .map_err(AppError::Internal)?;
-
-    // Validate Mailgun API key by checking the domain exists
-    let key_valid = validate_mailgun_domain(&raw_key, &req.domain, &req.mailgun_region).await;
-    if !key_valid {
-        return Err(AppError::BadRequest("Invalid Mailgun API key or domain not configured in Mailgun".into()));
+    match req.provider_type.as_str() {
+        "smtp" => add_smtp_domain(&state, account_id, &req, &label).await,
+        _ => add_mailgun_domain(&state, account_id, &req, &label).await,
     }
-
-    let label = req.label.unwrap_or_else(|| req.domain.clone());
-    let row = sqlx::query_as::<_, PrivateEmailDomain>(
-        r#"
-        INSERT INTO private_email_domains (tenant_id, domain, mailgun_api_key, mailgun_region, label, api_key_id)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING *
-        "#,
-    )
-    .bind(account_id)
-    .bind(&req.domain)
-    .bind(&encrypted_key)
-    .bind(&req.mailgun_region)
-    .bind(&label)
-    .bind(api_key_id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(AppError::Database)?;
-
-    Ok(Json(serde_json::to_value(&row).unwrap()))
 }
 
 pub async fn list_domains(
@@ -189,4 +128,115 @@ async fn validate_mailgun_domain(api_key: &str, domain: &str, region: &str) -> b
         Ok(resp) => resp.status().is_success(),
         Err(_) => false,
     }
+}
+
+async fn add_mailgun_domain(
+    state: &AppState,
+    account_id: Uuid,
+    req: &AddDomainRequest,
+    label: &str,
+) -> ApiResult<Json<serde_json::Value>> {
+    let (encrypted_key, api_key_id): (String, Option<Uuid>) = if let Some(kid) = req.api_key_id {
+        let row = sqlx::query_as::<_, (String,)>(
+            "SELECT api_key_encrypted FROM private_email_api_keys WHERE id = $1 AND tenant_id = $2"
+        )
+        .bind(kid)
+        .bind(account_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::Database)?
+        .ok_or_else(|| AppError::NotFound("Saved API key not found".into()))?;
+        (row.0, Some(kid))
+    } else if let Some(ref raw_key) = req.mailgun_api_key {
+        let encrypted = encryption::encrypt_api_key(account_id, raw_key)
+            .map_err(AppError::Internal)?;
+        let kid = sqlx::query_as::<_, (Uuid,)>(
+            r#"
+            INSERT INTO private_email_api_keys (tenant_id, label, provider, api_key_encrypted)
+            VALUES ($1, $2, 'mailgun', $3)
+            ON CONFLICT DO NOTHING
+            RETURNING id
+            "#,
+        )
+        .bind(account_id)
+        .bind(label)
+        .bind(&encrypted)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::Database)?;
+        (encrypted, kid.map(|(id,)| id))
+    } else {
+        return Err(AppError::BadRequest("Either mailgun_api_key or api_key_id is required".into()));
+    };
+
+    let raw_key = encryption::decrypt_api_key(account_id, &encrypted_key)
+        .map_err(AppError::Internal)?;
+
+    let key_valid = validate_mailgun_domain(&raw_key, &req.domain, &req.mailgun_region).await;
+    if !key_valid {
+        return Err(AppError::BadRequest("Invalid Mailgun API key or domain not configured in Mailgun".into()));
+    }
+
+    let row = sqlx::query_as::<_, PrivateEmailDomain>(
+        r#"
+        INSERT INTO private_email_domains (tenant_id, domain, mailgun_api_key, mailgun_region, label, api_key_id, provider_type)
+        VALUES ($1, $2, $3, $4, $5, $6, 'mailgun')
+        RETURNING *
+        "#,
+    )
+    .bind(account_id)
+    .bind(&req.domain)
+    .bind(&encrypted_key)
+    .bind(&req.mailgun_region)
+    .bind(label)
+    .bind(api_key_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    Ok(Json(serde_json::to_value(&row).unwrap()))
+}
+
+async fn add_smtp_domain(
+    state: &AppState,
+    account_id: Uuid,
+    req: &AddDomainRequest,
+    label: &str,
+) -> ApiResult<Json<serde_json::Value>> {
+    let smtp_host = req.smtp_host.as_deref().ok_or_else(|| AppError::BadRequest("smtp_host is required for SMTP provider".into()))?;
+    let smtp_username = req.smtp_username.as_deref().ok_or_else(|| AppError::BadRequest("smtp_username is required for SMTP provider".into()))?;
+    let smtp_password = req.smtp_password.as_deref().ok_or_else(|| AppError::BadRequest("smtp_password is required for SMTP provider".into()))?;
+
+    let encrypted_smtp_password = encryption::encrypt_api_key(account_id, smtp_password)
+        .map_err(AppError::Internal)?;
+
+    // Store empty mailgun_api_key for backward compat (column is NOT NULL)
+    let empty_key = encryption::encrypt_api_key(account_id, "")
+        .map_err(AppError::Internal)?;
+
+    let row = sqlx::query_as::<_, PrivateEmailDomain>(
+        r#"
+        INSERT INTO private_email_domains (
+            tenant_id, domain, mailgun_api_key, mailgun_region, label,
+            provider_type, smtp_host, smtp_port, smtp_username, smtp_password_encrypted, smtp_tls,
+            inbound_mode
+        )
+        VALUES ($1, $2, $3, 'us', $4, 'smtp', $5, $6, $7, $8, $9, 'none')
+        RETURNING *
+        "#,
+    )
+    .bind(account_id)
+    .bind(&req.domain)
+    .bind(&empty_key)
+    .bind(label)
+    .bind(smtp_host)
+    .bind(req.smtp_port.unwrap_or(587))
+    .bind(smtp_username)
+    .bind(&encrypted_smtp_password)
+    .bind(req.smtp_tls)
+    .fetch_one(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    Ok(Json(serde_json::to_value(&row).unwrap()))
 }

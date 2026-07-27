@@ -2,8 +2,22 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::models::PrivateEmailPlanFeatures;
+use super::models::{PrivateEmailPlanFeatures, TenantEmailLimits};
 use crate::errors::AppError;
+
+/// Fetch any tenant-specific email limit overrides (returns None if none set).
+pub async fn get_tenant_limits(
+    pool: &PgPool,
+    tenant_id: Uuid,
+) -> Result<Option<TenantEmailLimits>, AppError> {
+    sqlx::query_as::<_, TenantEmailLimits>(
+        "SELECT * FROM tenant_email_limits WHERE tenant_id = $1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(AppError::Database)
+}
 
 /// Check if private email is enabled for a tenant's plan,
 /// returning the feature limits. Returns None if feature is disabled.
@@ -45,7 +59,14 @@ pub async fn check_domain_limit(pool: &PgPool, tenant_id: Uuid) -> Result<(), Ap
         .await?
         .ok_or_else(|| AppError::BadRequest("Private Email not available on your plan".into()))?;
 
-    if features.max_domains == 0 {
+    // Check for admin override first
+    let max_domains = if let Some(limits) = get_tenant_limits(pool, tenant_id).await? {
+        limits.max_domains.unwrap_or(features.max_domains)
+    } else {
+        features.max_domains
+    };
+
+    if max_domains == 0 {
         return Err(AppError::BadRequest("Domain provisioning not available on your plan".into()));
     }
 
@@ -57,10 +78,10 @@ pub async fn check_domain_limit(pool: &PgPool, tenant_id: Uuid) -> Result<(), Ap
     .await
     .map_err(AppError::Database)?;
 
-    if features.max_domains > 0 && count.0 >= features.max_domains as i64 {
+    if max_domains > 0 && count.0 >= max_domains as i64 {
         return Err(AppError::BadRequest(format!(
             "Domain limit reached ({}/{})",
-            count.0, features.max_domains
+            count.0, max_domains
         )));
     }
 
@@ -73,7 +94,14 @@ pub async fn check_mailbox_limit(pool: &PgPool, tenant_id: Uuid) -> Result<(), A
         .await?
         .ok_or_else(|| AppError::BadRequest("Private Email not available on your plan".into()))?;
 
-    if features.max_mailboxes == 0 {
+    // Check for admin override first
+    let max_mailboxes = if let Some(limits) = get_tenant_limits(pool, tenant_id).await? {
+        limits.max_mailboxes.unwrap_or(features.max_mailboxes)
+    } else {
+        features.max_mailboxes
+    };
+
+    if max_mailboxes == 0 {
         return Err(AppError::BadRequest("Mailbox provisioning not available on your plan".into()));
     }
 
@@ -85,10 +113,10 @@ pub async fn check_mailbox_limit(pool: &PgPool, tenant_id: Uuid) -> Result<(), A
     .await
     .map_err(AppError::Database)?;
 
-    if features.max_mailboxes > 0 && count.0 >= features.max_mailboxes as i64 {
+    if max_mailboxes > 0 && count.0 >= max_mailboxes as i64 {
         return Err(AppError::BadRequest(format!(
             "Mailbox limit reached ({}/{})",
-            count.0, features.max_mailboxes
+            count.0, max_mailboxes
         )));
     }
 

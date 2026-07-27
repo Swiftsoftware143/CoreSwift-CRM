@@ -237,9 +237,6 @@ async fn fire_single_rule(
     rule: &AutoReplyRow,
     recipient: &str,
 ) {
-   
-    use super::encryption;
-
     let subject = rule.subject.clone().unwrap_or_else(|| " ".into());
 
     let mailbox = if let Some(mb_id) = rule.mailbox_id {
@@ -257,45 +254,13 @@ async fn fire_single_rule(
 
     let from_address = match &mailbox {
         Some((addr, _)) => addr.clone(),
-        None => return, // no active mailbox to send from
+        None => return,
     };
 
     let domain_id = mailbox.as_ref().map(|(_, d)| *d).unwrap_or(rule.domain_id);
 
-    let domain = sqlx::query_as::<_, (String, String, String)>(
-        "SELECT domain, mailgun_api_key, mailgun_region FROM private_email_domains WHERE id = $1"
-    )
-    .bind(domain_id)
-    .fetch_optional(pool)
-    .await;
-
-    let (mg_domain, encrypted_key, region) = match domain {
-        Ok(Some(d)) => d,
-        _ => return,
-    };
-
-    let tenant_id = rule.tenant_id;
-    let api_key = match encryption::decrypt_api_key(tenant_id, &encrypted_key) {
-        Ok(k) => k,
-        Err(_) => return,
-    };
-
-    let base_url = if region == "eu" {
-        "https://api.eu.mailgun.net"
-    } else {
-        "https://api.mailgun.net"
-    };
-
-    let client = reqwest::Client::new();
-    let _ = client
-        .post(format!("{}/v3/{}/messages", base_url, mg_domain))
-        .basic_auth("api", Some(&api_key))
-        .form(&[
-            ("from", &from_address),
-            ("to", &recipient.to_string()),
-            ("subject", &subject),
-            ("html", &rule.body_html),
-        ])
-        .send()
-        .await;
+    // Use provider-agnostic send
+    let _ = super::send_handler::send_via_provider(
+        pool, domain_id, rule.tenant_id, &from_address, recipient, &subject, &rule.body_html,
+    ).await;
 }

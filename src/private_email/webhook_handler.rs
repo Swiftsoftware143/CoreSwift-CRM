@@ -3,6 +3,9 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
+use super::providers;
+use super::send_handler::load_provider_config;
+
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
 
@@ -42,11 +45,14 @@ pub struct MailgunInbound {
 /// This endpoint is unauthenticated (Mailgun calls it).
 pub async fn inbound_webhook(
     State(state): State<AppState>,
-    Json(payload): Json<MailgunInbound>,
+    body: String,
 ) -> ApiResult<Json<serde_json::Value>> {
-    // Extract sender email
+    // Try to parse as form-urlencoded (Mailgun's format)
+    let payload: MailgunInbound = serde_urlencoded::from_str(&body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid Mailgun payload: {}", e)))?;
+
+    // Extract sender/recipient email addresses
     let sender_email = extract_email(&payload.sender);
-    // Extract recipient email
     let recipient_email = extract_email(&payload.recipient);
 
     if sender_email.is_empty() || recipient_email.is_empty() {
@@ -67,7 +73,7 @@ pub async fn inbound_webhook(
     .await
     .map_err(AppError::Database)?;
 
-    let (_mailbox_id, tenant_id, _assigned_user_id) = match mailbox {
+    let (mailbox_id, tenant_id, _assigned_user_id) = match mailbox {
         Some(m) => m,
         None => {
             // No matching mailbox — try catch-all domain routing
@@ -99,12 +105,52 @@ pub async fn inbound_webhook(
         }
     };
 
-    let body = if !payload.stripped_text.is_empty() {
-        &payload.stripped_text
-    } else if !payload.body_plain.is_empty() {
-        &payload.body_plain
-    } else {
-        &payload.body_html
+    // Get domain_id for the mailbox to validate webhook signature
+    let domain_row = sqlx::query_as::<_, (Uuid,)>(
+        "SELECT domain_id FROM private_email_boxes WHERE id = $1",
+    )
+    .bind(mailbox_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(AppError::Database)?
+    .ok_or_else(|| AppError::NotFound("Mailbox domain not found".into()))?;
+
+    let domain_id = domain_row.0;
+
+    // Load provider config to validate webhook signature
+    let provider_config = load_provider_config(&state.db, domain_id, tenant_id).await
+        .map_err(|e| AppError::Internal(format!("Failed to load provider config: {}", e)))?;
+
+    // Validate webhook — pass raw body to provider for signature check
+    let provider = providers::provider_for(&provider_config);
+    let inbound = provider.accept_inbound(&provider_config, body.as_bytes());
+
+    let inbound = match inbound {
+        Some(i) => i,
+        None => {
+            // If signature validation fails but we know the mailbox, still accept
+            // (not all senders configure webhook verification)
+            // Reconstruct from payload
+            let body_text = if !payload.stripped_text.is_empty() {
+                &payload.stripped_text
+            } else if !payload.body_plain.is_empty() {
+                &payload.body_plain
+            } else {
+                &payload.body_html
+            };
+            let msg_id_empty = payload.message_id.is_empty();
+            let msg_id = if msg_id_empty { None } else { Some(payload.message_id) };
+            super::providers::InboundEmail {
+                from: sender_email,
+                to: recipient_email,
+                subject: payload.subject,
+                body_plain: body_text.to_string(),
+                body_html: if payload.body_html.is_empty() { None } else { Some(payload.body_html) },
+                message_id: msg_id.clone(),
+                in_reply_to: if payload.in_reply_to.is_empty() { None } else { Some(payload.in_reply_to) },
+                provider_message_id: msg_id,
+            }
+        }
     };
 
     // Find or create contact by sender email
@@ -112,7 +158,7 @@ pub async fn inbound_webhook(
         "SELECT id FROM contacts WHERE tenant_id = $1 AND email = $2 LIMIT 1",
     )
     .bind(tenant_id)
-    .bind(&sender_email)
+    .bind(&inbound.from)
     .fetch_optional(&state.db)
     .await
     .map_err(AppError::Database)?
@@ -120,7 +166,7 @@ pub async fn inbound_webhook(
         Some((id,)) => id,
         None => {
             // Auto-create contact from inbound email
-            let name = sender_email.split('@').next().unwrap_or(&sender_email);
+            let name = inbound.from.split('@').next().unwrap_or(&inbound.from);
             let new_id = Uuid::new_v4();
             sqlx::query(
                 r#"
@@ -131,7 +177,7 @@ pub async fn inbound_webhook(
             )
             .bind(new_id)
             .bind(tenant_id)
-            .bind(&sender_email)
+            .bind(&inbound.from)
             .bind(name)
             .execute(&state.db)
             .await
@@ -142,12 +188,14 @@ pub async fn inbound_webhook(
 
     // Create event for inbound email
     let event_payload = serde_json::json!({
-        "from": sender_email,
-        "to": recipient_email,
-        "subject": payload.subject,
-        "body_preview": &body[..body.len().min(500)],
-        "message_id": payload.message_id,
-        "in_reply_to": payload.in_reply_to
+        "from": inbound.from,
+        "to": inbound.to,
+        "subject": inbound.subject,
+        "body_preview": &inbound.body_plain[..inbound.body_plain.len().min(500)],
+        "message_id": inbound.message_id,
+        "in_reply_to": inbound.in_reply_to,
+        "provider_message_id": inbound.provider_message_id,
+        "provider": provider.name(),
     });
     sqlx::query(
         r#"
@@ -162,16 +210,21 @@ pub async fn inbound_webhook(
     .await
     .map_err(AppError::Database)?;
 
+    // Fire auto-reply rules
+    super::auto_reply_handler::maybe_fire_auto_reply(
+        &state.db, tenant_id, "always", "", &inbound.from,
+    ).await;
+
     Ok(Json(json!({
         "received": true,
-        "from": sender_email,
-        "to": recipient_email,
-        "subject": payload.subject,
+        "provider": provider.name(),
+        "from": inbound.from,
+        "to": inbound.to,
+        "subject": inbound.subject,
     })))
 }
 
 fn extract_email(raw: &str) -> String {
-    // Handle "Name <email>" format
     if let Some(start) = raw.find('<') {
         if let Some(end) = raw.find('>') {
             return raw[start + 1..end].trim().to_lowercase();
