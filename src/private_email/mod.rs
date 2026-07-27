@@ -12,6 +12,7 @@ pub mod feature_gate;
 pub mod api_keys_handler;
 pub mod auto_reply_handler;
 pub mod providers;
+pub mod purge;
 
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
@@ -40,5 +41,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/admin/limits", axum::routing::get(admin_handler::list_all_overrides))
         .route("/admin/limits/:tenant_id", axum::routing::get(admin_handler::get_tenant_limits))
         .route("/admin/limits/:tenant_id", axum::routing::patch(admin_handler::set_tenant_limits))
+        // Retention settings
+        .route("/admin/limits/:tenant_id/retention", axum::routing::get(admin_handler::get_retention))
+        .route("/admin/limits/:tenant_id/retention", axum::routing::patch(admin_handler::set_retention))
+        // Manual purge trigger
+        .route("/admin/purge/run", axum::routing::post(admin_handler::trigger_purge))
         .layer(middleware::from_fn_with_state(state.clone(), crate::auth::middleware::auth_middleware))
 }
