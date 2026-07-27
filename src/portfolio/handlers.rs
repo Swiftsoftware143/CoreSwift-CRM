@@ -162,7 +162,7 @@ pub async fn internal_create(
     .await.ok();
 
     sqlx::query(
-        "INSERT INTO portfolio_companies (id, tenant_id, name, slug, email, description, settings) VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb) ON CONFLICT (id) DO NOTHING"
+        "INSERT INTO portfolio_companies (id, tenant_id, name, slug, email, description, domain, settings) VALUES ($1, $2, $3, $4, $5, $6, $7, '{}'::jsonb) ON CONFLICT (id) DO NOTHING"
     )
     .bind(id)
     .bind(tenant_id)
