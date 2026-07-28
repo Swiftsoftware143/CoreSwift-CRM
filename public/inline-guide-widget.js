@@ -95,7 +95,7 @@
       '#ig-actions-title{font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin:0 0 6px}' +
       '#ig-actions{list-style:none;padding:0;margin:0}' +
       '#ig-actions li{font-size:13px;color:#374151;padding:5px 0 5px 20px;position:relative}' +
-      '#ig-actions li::before{content:"\2192";position:absolute;left:2px;color:#4f46e5;font-weight:700}' +
+      '#ig-actions li::before{content:"\u2192";position:absolute;left:2px;color:#4f46e5;font-weight:700}' +
       '#ig-dismiss{display:block;margin-top:12px;padding:8px 14px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#6b7280;font-size:13px;cursor:pointer;text-align:center;width:100%}' +
       '#ig-dismiss:hover{background:#f9fafb}' +
       '</style>' +
