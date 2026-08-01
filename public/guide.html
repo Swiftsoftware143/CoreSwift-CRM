@@ -1,0 +1,1247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CoreSwift CRM  User Guide</title>
+<style>
+  :root {
+    --primary: #1d4ed8; --primary-light: #3b82f6; --primary-dark: #1e3a8a; --primary-bg: #eff6ff;
+    --g50: #f9fafb; --g100: #f3f4f6; --g200: #e5e7eb; --g300: #d1d5db; --g400: #9ca3af;
+    --g500: #6b7280; --g600: #4b5563; --g700: #374151; --g800: #1f2937; --g900: #111827;
+    --green: #059669; --green-bg: #ecfdf5; --amber: #d97706; --amber-bg: #fffbeb;
+    --red: #dc2626; --red-bg: #fef2f2; --purple: #7c3aed; --purple-bg: #f5f3ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    background: var(--g50); color: var(--g800); line-height: 1.6;
+  }
+  .header {
+    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+    color: #fff; padding: 0; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  }
+  .header-inner { max-width: 1200px; margin: 0 auto; padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem; }
+  .header-logo {
+    width: 44px; height: 44px; background: #fff; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.4rem; font-weight: 800; color: var(--primary); flex-shrink: 0;
+  }
+  .header-title h1 { font-size: 1.4rem; font-weight: 700; }
+  .header-title .sub { font-size: 0.85rem; opacity: 0.85; font-weight: 400; }
+  .header-badge {
+    margin-left: auto; background: rgba(255,255,255,0.2); padding: 0.3rem 0.8rem;
+    border-radius: 20px; font-size: 0.8rem; font-weight: 500; white-space: nowrap;
+  }
+  .nav-bar { background: #fff; border-bottom: 1px solid var(--g200); position: sticky; top: 68px; z-index: 99; overflow-x: auto; }
+  .nav-inner { max-width: 1200px; margin: 0 auto; display: flex; gap: 0; padding: 0 1rem; }
+  .nav-inner a {
+    display: block; padding: 0.75rem 1.1rem; font-size: 0.88rem; font-weight: 500;
+    color: var(--g600); text-decoration: none; white-space: nowrap;
+    border-bottom: 3px solid transparent; transition: all .15s;
+  }
+  .nav-inner a:hover, .nav-inner a.active { color: var(--primary); border-bottom-color: var(--primary); }
+  .container { max-width: 1000px; margin: 2rem auto; padding: 0 1.5rem; }
+  .hero {
+    background: linear-gradient(135deg, var(--primary-bg) 0%, #dbeafe 100%);
+    border-radius: 16px; padding: 2.5rem 3rem; margin-bottom: 2.5rem; border: 1px solid #bfdbfe;
+  }
+  .hero h2 { font-size: 1.8rem; color: var(--primary-dark); margin-bottom: 0.5rem; }
+  .hero p { color: var(--g600); max-width: 700px; font-size: 1.05rem; }
+  section { margin-bottom: 3rem; }
+  .sec-title {
+    font-size: 1.5rem; font-weight: 700; color: var(--g900);
+    padding-bottom: 0.5rem; border-bottom: 3px solid var(--primary); margin-bottom: 1.5rem;
+    display: flex; align-items: center; gap: 0.5rem;
+  }
+  .sec-num {
+    background: var(--primary); color: #fff; width: 30px; height: 30px; border-radius: 8px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 0.85rem; font-weight: 600; flex-shrink: 0;
+  }
+  .card {
+    background: #fff; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.25rem;
+    border: 1px solid var(--g200); box-shadow: 0 1px 3px rgba(0,0,0,0.05); transition: box-shadow .2s;
+  }
+  .card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+  .card h3 { font-size: 1.1rem; font-weight: 600; color: var(--g800); margin-bottom: 0.75rem; }
+  .card h4 { font-size: 0.95rem; font-weight: 600; color: var(--primary); margin-bottom: 0.5rem; }
+  .card p, .card li { color: var(--g600); font-size: 0.95rem; }
+  .card ul { padding-left: 1.5rem; margin: 0.5rem 0; }
+  .card ul li { margin-bottom: 0.3rem; }
+  code {
+    background: var(--g100); padding: 0.15rem 0.4rem; border-radius: 4px;
+    font-size: 0.88em; color: var(--primary-dark);
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  }
+  pre {
+    background: var(--g800); color: #e5e7eb; padding: 1rem 1.25rem; border-radius: 8px;
+    overflow-x: auto; font-size: 0.85rem; line-height: 1.5; margin: 0.75rem 0;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  }
+  .callout { padding: 1rem 1.25rem; border-radius: 10px; margin: 1rem 0; border-left: 4px solid; }
+  .callout.tip { background: var(--green-bg); border-color: var(--green); }
+  .callout.tip strong { color: var(--green); }
+  .callout.info { background: var(--primary-bg); border-color: var(--primary-light); }
+  .callout.info strong { color: var(--primary); }
+  .callout.warn { background: var(--amber-bg); border-color: var(--amber); }
+  .callout.warn strong { color: var(--amber); }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem; margin: 1rem 0;
+  }
+  .stat {
+    background: #fff; border: 1px solid var(--g200); border-radius: 10px;
+    padding: 1.25rem; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .stat .val { font-size: 1.75rem; font-weight: 700; color: var(--primary); }
+  .stat .lbl { font-size: 0.85rem; color: var(--g500); margin-top: 0.25rem; }
+  .stat .ico { font-size: 1.5rem; margin-bottom: 0.3rem; }
+  .twrap { overflow-x: auto; margin: 0.75rem 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+  th { background: var(--g100); color: var(--g700); font-weight: 600; text-align: left; padding: 0.6rem 0.8rem; border-bottom: 2px solid var(--g200); }
+  td { padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--g100); }
+  tr:hover td { background: var(--g50); }
+  .steps { counter-reset: step; }
+  .step {
+    counter-increment: step;
+    padding: 1rem 1.25rem 1rem 3.5rem; position: relative;
+    margin-bottom: 0.75rem; background: #fff; border: 1px solid var(--g200); border-radius: 10px;
+  }
+  .step::before {
+    content: counter(step);
+    position: absolute; left: 0.9rem; top: 1.1rem;
+    width: 26px; height: 26px; background: var(--primary); color: #fff;
+    font-weight: 700; font-size: 0.8rem; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step strong { color: var(--g800); }
+  .step p { color: var(--g600); margin-top: 0.2rem; }
+  .mlist {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 0.75rem; margin: 1rem 0;
+  }
+  .mi {
+    background: #fff; border: 1px solid var(--g200); border-radius: 10px;
+    padding: 1rem; display: flex; align-items: center; gap: 0.75rem; transition: border-color .15s;
+  }
+  .mi:hover { border-color: var(--primary-light); }
+  .mico {
+    width: 36px; height: 36px; background: var(--primary-bg); border-radius: 8px;
+    display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0;
+  }
+  .mtxt { font-weight: 500; font-size: 0.92rem; color: var(--g700); }
+  .mdesc { font-size: 0.8rem; color: var(--g400); }
+  .tag {
+    display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px;
+    font-size: 0.78rem; font-weight: 500; color: #fff; margin: 0.1rem;
+  }
+  .tblue { background: #3b82f6; }
+  .tgreen { background: #059669; }
+  .tamber { background: #d97706; }
+  .tred { background: #dc2626; }
+  .tpurple { background: #7c3aed; }
+  .tgray { background: #6b7280; }
+  .foot {
+    background: var(--g800); color: var(--g400); text-align: center;
+    padding: 2rem; font-size: 0.85rem; margin-top: 3rem;
+  }
+  .foot a { color: var(--primary-light); text-decoration: none; }
+  @media (max-width: 768px) {
+    .header-inner { padding: 0.75rem 1rem; flex-wrap: wrap; }
+    .header-title h1 { font-size: 1.1rem; }
+    .header-badge { font-size: 0.7rem; padding: 0.2rem 0.6rem; }
+    .hero { padding: 1.5rem; }
+    .hero h2 { font-size: 1.3rem; }
+    .nav-inner a { padding: 0.6rem 0.8rem; font-size: 0.82rem; }
+    .container { padding: 0 1rem; }
+    .grid { grid-template-columns: repeat(2, 1fr); }
+    .mlist { grid-template-columns: 1fr; }
+    .step { padding-left: 3rem; }
+  }
+  @media (max-width: 480px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header class="header">
+  <div class="header-inner">
+    <div class="header-logo">CS</div>
+    <div>
+      <h1>CoreSwift CRM</h1>
+      <div class="sub">Customer Relationship Management Platform</div>
+    </div>
+    <span class="header-badge">v0.1.0 &middot; API /api/</span>
+  </div>
+</header>
+<nav class="nav-bar">
+  <div class="nav-inner">
+    <a href="#getting-started">Getting Started</a>
+    <a href="#dashboard">Dashboard</a>
+    <a href="#sales">Sales</a>
+    <a href="#marketing">Marketing</a>
+    <a href="#operations">Operations</a>
+    <a href="#automation-features">Automation</a>
+    <a href="#tags-lists">Tags &amp; Lists</a>
+    <a href="#webhooks">Webhooks</a>
+    <a href="#settings">Settings</a>
+  </div>
+</nav>
+<div class="container">
+
+<div class="hero">
+  <h2>Welcome to CoreSwift CRM</h2>
+  <p>A modern, multi-tenant Customer Relationship Management platform built to manage contacts, companies, sales pipelines, opportunities, tags, lists, and webhook integrations  all in one place.</p>
+</div>
+
+<!-- ======= 1. GETTING STARTED ======= -->
+<section id="getting-started">
+  <h2 class="sec-title"><span class="sec-num">1</span> Getting Started</h2>
+  <div class="card">
+    <h3>Login to CoreSwift CRM</h3>
+    <p>Navigate to:</p>
+    <pre>https://coreswiftcrm.com</pre>
+    <p>Enter your email and password.</p>
+    <div class="callout info"><strong>Demo Account</strong>  <code>swiftsoftware143@yahoo.com</code> / <code>SwiftAdmin2026!</code></div>
+    <p>On success, you receive a JWT access token and refresh token. The app stores these for all API calls. You'll be redirected to the Dashboard.</p>
+  </div>
+  <div class="card">
+    <h3>Navigation</h3>
+    <div class="mlist">
+      <div class="mi"><div class="mico">??</div><div><div class="mtxt">Dashboard</div><div class="mdesc">Stats and activity</div></div></div>
+      <div class="mi"><div class="mico">??</div><div><div class="mtxt">Contacts</div><div class="mdesc">People management</div></div></div>
+      <div class="mi"><div class="mico">??</div><div><div class="mtxt">Companies</div><div class="mdesc">Organizations</div></div></div>
+      <div class="mi"><div class="mico">??</div><div><div class="mtxt">Pipelines</div><div class="mdesc">Sales stages</div></div></div>
+      <div class="mi"><div class="mico">??</div><div><div class="mtxt">Opportunities</div><div class="mdesc">Deals &amp; values</div></div></div>
+      <div class="mi"><div class="mico">???</div><div><div class="mtxt">Tags</div><div class="mdesc">Labels &amp; categories</div></div></div>
+      <div class="mi"><div class="mico">??</div><div><div class="mtxt">Lists</div><div class="mdesc">Saved contact groups</div></div></div>
+      <div class="mi"><div class="mico">??</div><div><div class="mtxt">Webhooks</div><div class="mdesc">API integrations</div></div></div>
+      <div class="mi"><div class="mico">??</div><div><div class="mtxt">Settings</div><div class="mdesc">Account &amp; API keys</div></div></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>API Overview</h3>
+    <p>All endpoints sit under <code>/api/</code>:</p>
+    <ul>
+      <li><strong>Public:</strong> <code>auth/login</code>, <code>auth/register</code>, <code>auth/forgot-password</code>, <code>auth/reset-password</code></li>
+      <li><strong>Protected:</strong> All others require <code>Authorization: Bearer &lt;token&gt;</code></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ======= 2. DASHBOARD ======= -->
+<section id="dashboard">
+  <h2 class="sec-title"><span class="sec-num">2</span> Dashboard</h2>
+  <div class="card">
+    <h3>Stats Cards</h3>
+    <p>At-a-glance CRM metrics fetched via <code>GET /api/dashboard/stats</code>:</p>
+    <div class="grid">
+      <div class="stat"><div class="ico">??</div><div class="val"></div><div class="lbl">Total Contacts</div></div>
+      <div class="stat"><div class="ico">??</div><div class="val"></div><div class="lbl">Open Opps</div></div>
+      <div class="stat"><div class="ico">??</div><div class="val"></div><div class="lbl">Active Pipelines</div></div>
+      <div class="stat"><div class="ico">???</div><div class="val"></div><div class="lbl">Tags</div></div>
+      <div class="stat"><div class="ico">??</div><div class="val">$</div><div class="lbl">Open Deal Value</div></div>
+      <div class="stat"><div class="ico">?</div><div class="val">$</div><div class="lbl">Won Deal Value</div></div>
+    </div>
+    <pre>GET /api/dashboard/stats
+Authorization: Bearer &lt;token&gt;
+
+Response:
+{
+  "contacts": 42,
+  "companies": 15,
+  "deals": 28,
+  "won": 12
+}</pre>
+  </div>
+  <div class="card">
+    <h3>Pipeline Summary</h3>
+    <p>Below the stats cards, each active pipeline shows opportunity counts per stage, giving a visual funnel of where deals are concentrated. Default pipelines are highlighted.</p>
+  </div>
+  <div class="card">
+    <h3>Global Search</h3>
+    <p>Search all entities at once:</p>
+    <pre>GET /api/dashboard/search/query?q=david</pre>
+    <p>Matches across contacts (name/email/phone), companies (name/email), and opportunities (name). Returns top 10 per type.</p>
+  </div>
+</section>
+
+<!-- ======= 3. CONTACTS ======= -->
+<section id="contacts">
+  <h2 class="sec-title"><span class="sec-num">3</span> Contacts</h2>
+  <div class="card">
+    <h3>Contact Fields</h3>
+    <div class="twrap">
+      <table>
+        <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>first_name</code></td><td>String</td><td>Required</td></tr>
+          <tr><td><code>last_name</code></td><td>String</td><td>Required</td></tr>
+          <tr><td><code>email</code></td><td>String (opt)</td><td>Email address</td></tr>
+          <tr><td><code>phone</code></td><td>String (opt)</td><td>Phone number</td></tr>
+          <tr><td><code>company</code></td><td>String (opt)</td><td>Free-text company</td></tr>
+          <tr><td><code>job_title</code></td><td>String (opt)</td><td>Job title</td></tr>
+          <tr><td><code>city/state/country</code></td><td>String (opt)</td><td>Location</td></tr>
+          <tr><td><code>source</code></td><td>String (opt)</td><td>Acquisition source</td></tr>
+          <tr><td><code>score</code></td><td>Integer</td><td>Auto-calculated lead score</td></tr>
+          <tr><td><code>metadata</code></td><td>JSON (opt)</td><td>Custom data</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Adding a Contact</h3>
+    <div class="steps">
+      <div class="step"><strong>Navigate to Contacts</strong><p>Click <strong>Contacts</strong> in the sidebar.</p></div>
+      <div class="step"><strong>Click "Add Contact"</strong><p>A form modal opens.</p></div>
+      <div class="step"><strong>Fill in details</strong><p>First / last name required. Email or phone recommended.</p></div>
+      <div class="step"><strong>Save</strong><p>Click <strong>Create Contact</strong>.</p></div>
+    </div>
+    <pre>POST /api/contacts
+Authorization: Bearer &lt;token&gt;
+Content-Type: application/json
+
+{
+  "first_name": "John",
+  "last_name": "Doe",
+  "email": "john@example.com",
+  "phone": "+1234567890",
+  "company": "Acme Corp",
+  "source": "Website"
+}</pre>
+  </div>
+  <div class="card">
+    <h3>Edit, Delete &amp; Search</h3>
+    <ul>
+      <li><strong>Edit</strong>  Edit icon ? <code>PUT /api/contacts/:id</code></li>
+      <li><strong>Delete</strong>  Soft delete ? <code>DELETE /api/contacts/:id</code></li>
+      <li><strong>View</strong>  Click name to see tags, lists, and associated opportunities</li>
+      <li><strong>Search</strong>  <code>GET /api/contacts/search?q=john</code> (name/email/phone)</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Assigning Tags</h3>
+    <div class="steps">
+      <div class="step"><strong>Open contact detail</strong><p>Click on the contact's name.</p></div>
+      <div class="step"><strong>Tags section</strong><p>Existing tags shown as colored pills.</p></div>
+      <div class="step"><strong>Click "Assign Tag"</strong><p>Select from the dropdown grouped by category.</p></div>
+      <div class="step"><strong>Confirm</strong><p>Uses <code>POST /api/tags/assign</code>. Remove via <code>POST /api/tags/unassign</code>.</p></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Lead Scoring</h3>
+    <p>Score rules fire automatically:</p>
+    <div class="twrap">
+      <table>
+        <thead><tr><th>Rule</th><th>Points</th><th>Direction</th></tr></thead>
+        <tbody>
+          <tr><td>Email Opened</td><td>+5</td><td>Add</td></tr>
+          <tr><td>Email Clicked</td><td>+15</td><td>Add</td></tr>
+          <tr><td>Email Replied</td><td>+25</td><td>Add</td></tr>
+          <tr><td>Booked a Call</td><td>+50</td><td>Add</td></tr>
+          <tr><td>Proposal Requested</td><td>+75</td><td>Add</td></tr>
+          <tr><td>No Activity 30 Days</td><td>-20</td><td>Subtract</td></tr>
+          <tr><td>Unsubscribed</td><td>-100</td><td>Subtract</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ======= 4. COMPANIES ======= -->
+<section id="companies">
+  <h2 class="sec-title"><span class="sec-num">4</span> Companies</h2>
+  <div class="card">
+    <h3>Company Fields</h3>
+    <div class="twrap">
+      <table>
+        <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>name</code></td><td>String</td><td>Required</td></tr>
+          <tr><td><code>website</code></td><td>String (opt)</td><td>Company URL</td></tr>
+          <tr><td><code>phone</code></td><td>String (opt)</td><td>Main phone</td></tr>
+          <tr><td><code>email</code></td><td>String (opt)</td><td>Contact email</td></tr>
+          <tr><td><code>industry</code></td><td>String (opt)</td><td>e.g. Technology, Healthcare</td></tr>
+          <tr><td><code>size</code></td><td>String (opt)</td><td>1-10, 11-50, 51-200, 201-1000, 1000+</td></tr>
+          <tr><td><code>city/state/country</code></td><td>String (opt)</td><td>HQ location</td></tr>
+          <tr><td><code>description</code></td><td>Text (opt)</td><td>Free text</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Managing Companies</h3>
+    <div class="steps">
+      <div class="step"><strong>Go to Companies</strong><p>Click <strong>Companies</strong> in the sidebar.</p></div>
+      <div class="step"><strong>Add a Company</strong><p>Name required. Optionally set industry/size.</p><pre>POST /api/companies
+Content-Type: application/json
+
+{ "name": "Acme Corp", "industry": "Technology", "size": "51-200" }</pre></div>
+      <div class="step"><strong>Link Contacts</strong><p>From the company detail, view and add associated contacts.</p></div>
+      <div class="step"><strong>Edit or Delete</strong><p>Soft delete (<code>is_active = false</code>).</p></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Companies &amp; Opportunities</h3>
+    <p>Link a company to an opportunity via <code>company_id</code> to track all deals per organization.</p>
+    <div class="callout tip"><strong>Tip:</strong> Use <code>industry</code> and <code>size</code> for segmentation and reporting.</div>
+  </div>
+</section>
+
+<!-- ======= 5. PIPELINES ======= -->
+<section id="pipelines">
+  <h2 class="sec-title"><span class="sec-num">5</span> Pipelines</h2>
+  <div class="card">
+    <h3>Understanding Pipelines</h3>
+    <p>A Pipeline is a sales process composed of sequential Stages. Opportunities move through these stages toward close.</p>
+    <div class="callout info"><strong>Default Pipelines:</strong> Every new tenant gets <strong>Sales Pipeline</strong> (7 stages) and <strong>Client Onboarding</strong> (5 stages).</div>
+  </div>
+  <div class="card">
+    <h3>Sales Pipeline Stages</h3>
+    <div class="twrap">
+      <table>
+        <thead><tr><th>Stage</th><th>Color</th><th>Order</th><th>Probability</th></tr></thead>
+        <tbody>
+          <tr><td>New Lead</td><td><span class="tag tgray">Gray</span></td><td>0</td><td>5%</td></tr>
+          <tr><td>Contacted</td><td><span class="tag tblue">Blue</span></td><td>1</td><td>10%</td></tr>
+          <tr><td>Qualified</td><td><span class="tag tpurple">Purple</span></td><td>2</td><td>25%</td></tr>
+          <tr><td>Appointment Set</td><td><span class="tag tamber">Amber</span></td><td>3</td><td>40%</td></tr>
+          <tr><td>Proposal Sent</td><td><span class="tag tgreen">Green</span></td><td>4</td><td>60%</td></tr>
+          <tr><td>Won</td><td><span class="tag" style="background:#059669">Dark Green</span></td><td>5</td><td>100%</td></tr>
+          <tr><td>Lost</td><td><span class="tag tred">Red</span></td><td>6</td><td>0%</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Client Onboarding Stages</h3>
+    <div class="twrap">
+      <table>
+        <thead><tr><th>Stage</th><th>Color</th><th>Order</th><th>Probability</th></tr></thead>
+        <tbody>
+          <tr><td>New Client</td><td><span class="tag tgray">Gray</span></td><td>0</td><td>10%</td></tr>
+          <tr><td>Documents Received</td><td><span class="tag tblue">Blue</span></td><td>1</td><td>25%</td></tr>
+          <tr><td>Setup In Progress</td><td><span class="tag tpurple">Purple</span></td><td>2</td><td>50%</td></tr>
+          <tr><td>Active</td><td><span class="tag tgreen">Green</span></td><td>3</td><td>100%</td></tr>
+          <tr><td>Retention</td><td><span class="tag" style="background:#059669">Dark Green</span></td><td>4</td><td>100%</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Creating a Pipeline</h3>
+    <div class="steps">
+      <div class="step"><strong>Go to Pipelines</strong><p>Click <strong>Pipelines</strong> in the sidebar.</p></div>
+      <div class="step"><strong>Click "New Pipeline"</strong><p>Enter a name and optional description.</p></div>
+      <div class="step"><strong>Add Stages</strong><p>Each stage needs name, color, sort order, probability. Drag to reorder.</p></div>
+      <div class="step"><strong>Save</strong><p>The pipeline appears in the dashboard and opportunity screens.</p></div>
+    </div>
+    <pre>POST /api/pipelines
+Authorization: Bearer &lt;token&gt;
+
+{ "name": "Support Pipeline", "description": "Support lifecycle", "is_default": false }</pre>
+  </div>
+  <div class="card">
+    <h3>Stage Configuration</h3>
+    <p>Each stage supports:</p>
+    <ul>
+      <li><strong>Name</strong>  Display label</li>
+      <li><strong>Color</strong>  Hex color (e.g. <code>#3B82F6</code>)</li>
+      <li><strong>Sort Order</strong>  Integer position</li>
+      <li><strong>Probability</strong>  Win % (0-100)</li>
+      <li><strong>is_won</strong>  Mark as closed-won stage</li>
+      <li><strong>is_lost</strong>  Mark as closed-lost stage</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ======= 6. OPPORTUNITIES ======= -->
+<section id="opportunities">
+  <h2 class="sec-title"><span class="sec-num">6</span> Opportunities</h2>
+  <div class="card">
+    <h3>What is an Opportunity?</h3>
+    <p>An Opportunity (deal/tracker) represents a potential sale or business outcome progressing through a pipeline. Each opportunity is tied to a specific pipeline and stage.</p>
+    <div class="twrap">
+      <table>
+        <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>name</code></td><td>String</td><td>Required. Deal name</td></tr>
+          <tr><td><code>pipeline_id</code></td><td>UUID</td><td>Required. Which pipeline it belongs to</td></tr>
+          <tr><td><code>stage_id</code></td><td>UUID</td><td>Required. Current stage within the pipeline</td></tr>
+          <tr><td><code>value</code></td><td>Float (opt)</td><td>Deal value / amount</td></tr>
+          <tr><td><code>currency</code></td><td>String (opt)</td><td>e.g. USD, EUR</td></tr>
+          <tr><td><code>probability</code></td><td>Integer (opt)</td><td>Override win probability</td></tr>
+          <tr><td><code>expected_close_date</code></td><td>Date (opt)</td><td>Expected close date</td></tr>
+          <tr><td><code>contact_id</code></td><td>UUID (opt)</td><td>Associated contact</td></tr>
+          <tr><td><code>company_id</code></td><td>UUID (opt)</td><td>Associated company</td></tr>
+          <tr><td><code>source</code></td><td>String (opt)</td><td>e.g. Website, Referral</td></tr>
+          <tr><td><code>notes</code></td><td>Text (opt)</td><td>Internal notes</td></tr>
+          <tr><td><code>is_won</code></td><td>Boolean</td><td>Marked as won</td></tr>
+          <tr><td><code>is_lost</code></td><td>Boolean</td><td>Marked as lost</td></tr>
+          <tr><td><code>lost_reason</code></td><td>String (opt)</td><td>Why the deal was lost</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Creating an Opportunity</h3>
+    <div class="steps">
+      <div class="step"><strong>Go to the Pipeline</strong><p>Open the pipeline where you want to add a deal.</p></div>
+      <div class="step"><strong>Click "+ Add Opportunity"</strong><p>A form slides in.</p></div>
+      <div class="step"><strong>Set deal details</strong><p>Name is required. Set value, stage, expected close date. Optionally link a contact and/or company.</p></div>
+      <div class="step"><strong>Save</strong><p>The opportunity appears in the correct stage column.</p></div>
+    </div>
+    <pre>POST /api/opportunities
+Authorization: Bearer &lt;token&gt;
+
+{
+  "pipeline_id": "uuid-of-pipeline",
+  "stage_id": "uuid-of-stage",
+  "name": "Enterprise Deal - Acme Corp",
+  "value": 50000.0,
+  "currency": "USD",
+  "probability": 60,
+  "expected_close_date": "2026-08-15",
+  "contact_id": "uuid-of-contact",
+  "company_id": "uuid-of-company",
+  "source": "Referral",
+  "notes": "Initial call went well"
+}</pre>
+  </div>
+  <div class="card">
+    <h3>Moving Deals Through the Pipeline</h3>
+    <p>To advance an opportunity to the next stage:</p>
+    <ul>
+      <li><strong>Drag-and-drop</strong>  Drag an opportunity card from one stage column to another</li>
+      <li><strong>Change stage dropdown</strong>  Use the stage selector on the opportunity detail panel</li>
+    </ul>
+    <p>Both actions use:</p>
+    <pre>PATCH /api/opportunities/:id
+Authorization: Bearer &lt;token&gt;
+
+{ "stage_id": "uuid-of-next-stage" }</pre>
+    <p>You can also update value, probability, expected close date, and notes in the same request.</p>
+  </div>
+  <div class="card">
+    <h3>Winning &amp; Losing Deals</h3>
+    <p>When a deal reaches a <strong>Won</strong> or <strong>Lost</strong> stage, CoreSwift automatically sets the corresponding boolean flags:</p>
+    <ul>
+      <li><strong>Won:</strong> <code>is_won = true</code>  adds value to the "Won Deal Value" dashboard stat</li>
+      <li><strong>Lost:</strong> <code>is_lost = true</code>  optionally record a <code>lost_reason</code> for analysis</li>
+    </ul>
+    <div class="callout tip"><strong>Tip:</strong> Track lost reasons to analyze patterns and improve your sales process.</div>
+  </div>
+  <div class="card">
+    <h3>Opportunity Analytics</h3>
+    <p>The dashboard aggregates:</p>
+    <ul>
+      <li><strong>Total Deal Value</strong>  Sum of all open (not won/lost) opportunities</li>
+      <li><strong>Won Deal Value</strong>  Sum of all won opportunities</li>
+      <li><strong>Pipeline Stage Counts</strong>  Number of opportunities per stage per pipeline</li>
+    </ul>
+    <p>All computed server-side from <code>opportunities</code> table queries.</p>
+  </div>
+</section>
+
+<!-- ======= 7. SALES ======= -->
+<section id="sales">
+  <h2 class="sec-title"><span class="sec-num">7</span> Sales</h2>
+
+  <div class="card">
+    <h3>Sales Group Overview</h3>
+    <p>The Sales group in the sidebar accordion menu contains four modules: <strong>Contacts</strong>, <strong>Companies</strong>, <strong>Pipelines</strong>, and <strong>Deals</strong>. The group is collapsed by default &mdash; click <strong>Sales</strong> in the sidebar to expand it.</p>
+    <div class="callout tip"><strong>Tip:</strong> Accordion menus keep your sidebar clean. Collapse groups you don't frequently use.</div>
+  </div>
+  <div class="card">
+    <h3>Contacts</h3>
+    <p>Full contact management with search (<code>/api/contacts</code>), pagination (20/page), add/edit modals, and status tracking.</p>
+    <pre>GET /api/contacts
+POST /api/contacts
+PATCH /api/contacts/:id</pre>
+  </div>
+  <div class="card">
+    <h3>Companies</h3>
+    <p>Track organizations with name, domain, industry, and contact count. Searchable and paginated.</p>
+    <pre>GET /api/companies
+POST /api/companies
+PATCH /api/companies/:id</pre>
+  </div>
+  <div class="card">
+    <h3>Pipelines &amp; Deals</h3>
+    <p>Manage sales pipelines with custom stages. Track deals through pipeline stages with value, probability, and stage tracking.</p>
+    <pre>GET /api/pipelines
+POST /api/pipelines
+GET /api/pipelines/deals
+POST /api/pipelines/deals</pre>
+  </div>
+</section>
+
+<!-- ======= 8. MARKETING ======= -->
+<section id="marketing">
+  <h2 class="sec-title"><span class="sec-num">8</span> Marketing</h2>
+
+  <div class="card">
+    <h3>Marketing Group Overview</h3>
+    <p>Contains Campaigns, Email Sequences, Automation Rules, and Checklists. Expand by clicking <strong>Marketing</strong> in the sidebar.</p>
+  </div>
+
+  <div class="card">
+    <h3>Campaigns</h3>
+    <p>Create and manage marketing campaigns. Each campaign has a type (email, SMS, multi-channel), status (draft/active), and sent count. Activate campaigns from the list view.</p>
+    <pre>GET /api/campaigns
+POST /api/campaigns
+PATCH /api/campaigns/:id
+POST /api/campaigns/:id/activate
+POST /api/campaigns/:id/pause</pre>
+  </div>
+
+  <div class="card">
+    <h3>Email Sequences</h3>
+    <p>Build automated email sequences with multiple steps. Each sequence can have triggers, enrollments, and step-based delays. View step count, enrollment numbers, and activate/pause from the UI.</p>
+    <pre>GET /api/campaigns
+GET /api/campaigns/:id               (includes steps)
+GET /api/campaigns/:id/enrollments   (view enrolled contacts)</pre>
+  </div>
+
+  <div class="card">
+    <h3>Automation Rules</h3>
+    <p>Create trigger-based automation rules. Configure triggers (tag added, score changes, list membership changes) and actions (add/remove tag, move stage, add/remove from list). Each rule has a trigger config and action config stored as JSON.</p>
+    <p><strong>Available triggers:</strong> <code>tag_added</code>, <code>score_change</code>, <code>list_added</code>, <code>deal_stage</code></p>
+    <p><strong>Available actions:</strong> <code>add_tag</code>, <code>remove_tag</code>, <code>move_stage</code>, <code>add_to_list</code>, <code>remove_from_list</code></p>
+    <pre>GET /api/automation/rules
+POST /api/automation/rules
+PATCH /api/automation/rules/:id
+DELETE /api/automation/rules/:id</pre>
+    <div class="callout info"><strong>Trigger Config Example:</strong> <code>{"tag_id": "uuid"}</code> for tag-based triggers, <code>{"category": "overall", "min_score": 70}</code> for score-based.</div>
+  </div>
+
+  <div class="card">
+    <h3>Checklists</h3>
+    <p>Define checklist templates with stages for onboarding and process management. Each stage has an order, title, optional message template reference, and delay in hours. View instances and track progress.</p>
+    <pre>GET /api/checklists/templates
+POST /api/checklists/templates
+PATCH /api/checklists/templates/:id
+DELETE /api/checklists/templates/:id
+GET /api/checklists/instances</pre>
+  </div>
+</section>
+
+<!-- ======= 9. OPERATIONS ======= -->
+<section id="operations">
+  <h2 class="sec-title"><span class="sec-num">9</span> Operations</h2>
+
+  <div class="card">
+    <h3>Operations Group Overview</h3>
+    <p>Contains Activities, Portfolio, Call Logs, and Lists. Expand by clicking <strong>Operations</strong> in the sidebar.</p>
+  </div>
+
+  <div class="card">
+    <h3>Activities &amp; Events</h3>
+    <p>View logged activities and system events. Shows type, description, related entity, and date. Pulls from both <code>/api/activities</code> and <code>/api/events</code>.</p>
+    <pre>GET /api/activities
+GET /api/events</pre>
+  </div>
+
+  <div class="card">
+    <h3>Portfolio</h3>
+    <p>View all portfolio companies across your user ecosystem. Searchable by name, slug, or domain. Shows status, plan assignment, and active/inactive state.</p>
+    <pre>GET /api/portfolio</pre>
+  </div>
+
+  <div class="card">
+    <h3>Call Logs</h3>
+    <p>View inbound and outbound call records from Telnyx integration. Shows caller, called number, duration, disposition, cost, and timestamp.</p>
+    <pre>GET /api/telnyx/call-logs</pre>
+  </div>
+
+  <div class="card">
+    <h3>Lists</h3>
+    <p>Create and manage contact lists. Each list shows member count and can be used for campaign targeting. View members inline from the list detail.</p>
+    <pre>GET /api/lists
+POST /api/lists
+PATCH /api/lists/:id
+DELETE /api/lists/:id
+GET /api/lists/:id/members
+POST /api/lists/:id/members</pre>
+  </div>
+</section>
+
+<!-- ======= 10. AUTOMATION FEATURES ======= -->
+<section id="automation-features">
+  <h2 class="sec-title"><span class="sec-num">10</span> Automation Features</h2>
+
+  <div class="card">
+    <h3>Automation Group Overview</h3>
+    <p>The Automation group (sidebar icon 🤖) contains Agency Sequences, Directory Onboarding, Health Monitor, Message Templates, and Nurture Campaigns. These are the strategy engine features that power intelligent follow-up and client management.</p>
+  </div>
+
+  <div class="card">
+    <h3>Agency Sequences</h3>
+    <p>Dashboard overview of all automated sequences running across your agency users. Shows active rules, total rules, total executions, and a detailed table of each rule with trigger/action preview.</p>
+    <pre>GET /api/automation/rules?agency=true</pre>
+  </div>
+
+  <div class="card">
+    <h3>Directory Onboarding</h3>
+    <p>Track directory checklist progress for new listings and profiles. Shows entity, template name, progress bar, status (in_progress/completed), and start date. Uses checklist instances filtered for directory onboarding.</p>
+    <pre>GET /api/checklists/instances?directory=true</pre>
+  </div>
+
+  <div class="card">
+    <h3>Health Monitor</h3>
+    <p>Monitor account health scores for contacts and companies. Click "Run Health Check" to trigger an analysis, which categorizes entities as Healthy (score 70+), At Risk (40-69), or Critical (below 40). View score history and risk levels.</p>
+    <pre>POST /api/monitoring/account-health/check
+GET /api/monitoring/health</pre>
+  </div>
+
+  <div class="card">
+    <h3>Message Templates</h3>
+    <p>Create reusable message templates for email and SMS communications. Each template has a name, channel (email/SMS), subject, body content, and optional variables definition. Templates can be referenced by checklist stages and automation rules.</p>
+    <pre>GET /api/comms/templates
+POST /api/comms/templates
+PATCH /api/comms/templates/:id
+DELETE /api/comms/templates/:id</pre>
+  </div>
+
+  <div class="card">
+    <h3>Nurture Campaigns</h3>
+    <p>View contact enrollments in nurture email sequences. For each campaign, shows enrolled contacts, their current step, status (pending/active/completed), and enrollment date. Monitor engagement and progression through your nurture flows.</p>
+    <pre>GET /api/campaigns/:id/enrollments</pre>
+  </div>
+</section>
+
+<!-- ======= 11. SETTINGS & ADMIN ======= -->
+<section id="settings-admin">
+  <h2 class="sec-title"><span class="sec-num">11</span> Settings &amp; Administration</h2>
+
+  <div class="card">
+    <h3>Settings (All Users)</h3>
+    <p>The Settings page has three tabs:</p>
+    <ul>
+      <li><strong>General</strong> &mdash; Application name, favicon emoji, footer text</li>
+      <li><strong>SEO</strong> &mdash; Page title, meta description, keywords, Open Graph tags for Facebook/LinkedIn/Discord previews</li>
+      <li><strong>Branding</strong> &mdash; Custom accent color, background color, surface color (hex values)</li>
+    </ul>
+    <div class="callout info"><strong>Persistence:</strong> Settings are stored in localStorage and persist across sessions.</div>
+  </div>
+
+  <div class="card">
+    <h3>Admin Section (Agency Admin Only)</h3>
+    <p>The Admin section at the bottom of the sidebar is only visible to users with the <code>agency_admin</code> role. Expand it by clicking the Admin header. Contains:</p>
+    <ul>
+      <li><strong>Users</strong> &mdash; Manage all user accounts. View details, assign plans, impersonate, activate/suspend.</li>
+      <li><strong>Plans</strong> &mdash; Create and manage subscription plans with 18 toggleable feature flags. Set pricing, contact/deal/user limits.</li>
+      <li><strong>Audit Log</strong> &mdash; Track administrative actions and system events.</li>
+      <li><strong>Telnyx Config</strong> &mdash; Configure Telnyx API keys for SMS and voice services. View available phone numbers.</li>
+      <li><strong>Feature Management</strong> &mdash; View and toggle all available feature flags that can be assigned to plans.</li>
+      <li><strong>System Health</strong> &mdash; Server health dashboard showing API and database status.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>Admin: Tenants</h3>
+    <p>Search through all users by name or slug. Click <strong>View</strong> to see user details, user list, plan assignment dropdown, and impersonate/activate/suspend actions.</p>
+    <pre>GET /api/admin/tenants
+PATCH /api/admin/tenants/:id
+GET /api/admin/tenants/:id/users
+PATCH /api/admin/tenants/:id/plan
+POST /api/admin/impersonate</pre>
+  </div>
+
+  <div class="card">
+    <h3>Admin: Plans &amp; Features</h3>
+    <p>Plans control what features users can access. Each plan has:</p>
+    <ul>
+      <li><strong>Pricing:</strong> Monthly and yearly price, with optional payment link</li>
+      <li><strong>Limits:</strong> Max contacts, deals, and users (set to -1 for unlimited)</li>
+      <li><strong>Feature Toggles:</strong> 18 individual feature flags that enable/disable capabilities</li>
+    </ul>
+    <p><strong>Available features:</strong> API Access, AI Assistant, Campaigns, White Label, Portfolio, Automation, SMS, Email Sequences, Checklists, Directory Onboarding, Account Health, CRM Migration, Call Logs, Message Templates, Nurture Campaigns, Agency Sequences, Lists, Advanced Reports</p>
+    <pre>GET /api/billing/plans
+POST /api/billing/plans
+PATCH /api/billing/plans/:id
+DELETE /api/billing/plans/:id
+GET /api/billing/features</pre>
+  </div>
+
+  <div class="card">
+    <h3>Admin: Telnyx Configuration</h3>
+    <p>Configure Telnyx integration for SMS and voice. Enter API key (stored securely), messaging profile ID, and webhook secret. View available phone numbers after saving.</p>
+    <pre>GET /api/telnyx/config
+PUT /api/telnyx/config
+GET /api/telnyx/available</pre>
+  </div>
+
+  <div class="card">
+    <h3>Admin: Impersonation</h3>
+    <p>From a user's detail view, click <strong>Impersonate User</strong> to log in as that user. An orange banner appears at the top indicating impersonation mode. Click <strong>Back to Admin</strong> to exit.</p>
+    <div class="callout warn"><strong>Note:</strong> All actions taken while impersonating are logged with the admin's identity.</div>
+  </div>
+
+  <div class="card">
+    <h3>Free Access &amp; Upgrades</h3>
+    <p>CoreSwift CRM offers free access with a limited feature set. To unlock additional features, upgrade in-app through the Plans page. Feature availability is determined by your plan's feature flags.</p>
+    <div class="callout tip"><strong>Tip:</strong> The free plan includes basic CRM features. Upgrade to access automation, campaigns, SMS, and advanced capabilities.</div>
+  </div>
+</section>
+
+<!-- ======= 12. TAGS & LISTS ======= -->
+<section id="tags-lists">
+  <h2 class="sec-title"><span class="sec-num">12</span> Tags &amp; Lists</h2>
+
+  <div class="card">
+    <h3>Tags Overview</h3>
+    <p>Tags are colored labels used to categorize contacts and companies. They support filtering, segmentation, and reporting.</p>
+    <div class="callout info"><strong>Default Tag Categories:</strong> Sources, Status, Behavior  each with pre-seeded tags.</div>
+    <div class="twrap">
+      <table>
+        <thead><tr><th>Category</th><th>Default Tags</th></tr></thead>
+        <tbody>
+          <tr><td>Sources</td><td><span class="tag tblue">Facebook</span> <span class="tag tblue">Google</span> <span class="tag tgray">TikTok</span></td></tr>
+          <tr><td>Status</td><td><span class="tag tred">Hot Lead</span> <span class="tag tgray">Cold Lead</span></td></tr>
+          <tr><td>Behavior</td><td><span class="tag tgreen">Engaged</span> <span class="tag tred">Unresponsive</span></td></tr>
+          <tr><td>Uncategorized</td><td><span class="tag tamber">Booked Call</span> <span class="tag tblue">Newsletter</span> <span class="tag tgreen">Client</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Managing Tags</h3>
+    <div class="steps">
+      <div class="step"><strong>Go to Tags</strong><p>Click <strong>Tags</strong> in the sidebar.</p></div>
+      <div class="step"><strong>Create a Tag</strong><p>Fill in name, select a category (or none), pick a color.</p><pre>POST /api/tags
+Content-Type: application/json
+
+{ "name": "VIP", "color": "#F59E0B", "category_id": "optional-uuid" }</pre></div>
+      <div class="step"><strong>Assign to Contacts/Companies</strong><p>Open any contact or company detail and click "Assign Tag".</p></div>
+      <div class="step"><strong>Filter by Tag</strong><p>Use the tag filter in the contacts and companies list views.</p></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Tag Categories</h3>
+    <p>Tag Categories group related tags together. Categories don't affect functionality but help organize large numbers of tags. Each tag can belong to one category or none.</p>
+  </div>
+
+  <div class="card">
+    <h3>Lists Overview</h3>
+    <p>Lists are saved groups of contacts for targeted campaigns, email sends, or segmentation.</p>
+    <div class="twrap">
+      <table>
+        <thead><tr><th>Type</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Static</strong></td><td>Manually add/remove contacts. You pick each member.</td></tr>
+          <tr><td><strong>Dynamic</strong></td><td>Rule-based. Contacts automatically join/leave based on criteria (score, tags, source, etc.).</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Default pre-seeded lists:</p>
+    <ul>
+      <li><strong>Newsletter Subscribers</strong> (static)</li>
+      <li><strong>Cold Leads</strong> (dynamic  low score)</li>
+      <li><strong>Hot Leads</strong> (dynamic  high score)</li>
+      <li><strong>Retargeting Audience</strong> (dynamic)</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Managing Lists</h3>
+    <div class="steps">
+      <div class="step"><strong>Go to Lists</strong><p>Click <strong>Lists</strong> in the sidebar.</p></div>
+      <div class="step"><strong>Create a List</strong><p>Name, description, and choose <code>static</code> or <code>dynamic</code>. For dynamic, set rules.</p><pre>POST /api/lists
+Content-Type: application/json
+
+{ "name": "Q3 Campaign", "list_type": "static", "description": "Targets for Q3 email blast" }</pre></div>
+      <div class="step"><strong>Add Members (Static)</strong><p>Search for contacts and add them:</p><pre>POST /api/lists/:id/members
+{ "contact_id": "uuid-of-contact" }</pre></div>
+      <div class="step"><strong>Use the List</strong><p>Lists appear as filterable segments in contacts view and can be used for campaign targeting.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ======= 13. WEBHOOKS ======= -->
+<section id="webhooks">
+  <h2 class="sec-title"><span class="sec-num">13</span> Webhooks</h2>
+
+  <div class="card">
+    <h3>Webhook Overview</h3>
+    <p>CoreSwift CRM supports both incoming and outgoing webhooks for integration with satellite apps and external systems.</p>
+    <div class="callout info"><strong>Satellite Apps:</strong> FunnelSwift, IncentiveSwift, WorkflowSwift, and MissedCall Respondr can push data into CoreSwift via inbound webhooks.</div>
+  </div>
+
+  <div class="card">
+    <h3>Inbound Webhooks (Receiving Data)</h3>
+    <p>Other apps can send events to CoreSwift using authenticated webhook endpoints. Events are verified with satellite API keys.</p>
+    <pre>POST /ihook/:key_prefix/:event_type
+X-Satellite-Key: &lt;full-api-key&gt;
+Content-Type: application/json
+
+{ "payload": "data" }</pre>
+    <p>Or the v2 endpoint:</p>
+    <pre>POST /ihook-v2/:key_prefix/:event_type
+X-Satellite-Key: &lt;full-api-key&gt;</pre>
+    <p><strong>Supported event types from satellite apps:</strong></p>
+    <div class="twrap">
+      <table>
+        <thead><tr><th>Source App</th><th>Event</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td>FunnelSwift</td><td><code>lead.created</code> / <code>lead.updated</code></td><td>Creates or updates a contact in CoreSwift</td></tr>
+          <tr><td>FunnelSwift</td><td><code>affiliate.commission</code></td><td>Records affiliate commission event</td></tr>
+          <tr><td>IncentiveSwift</td><td><code>entry.created</code></td><td>Creates contact from giveaway entry</td></tr>
+          <tr><td>IncentiveSwift</td><td><code>raffle.winner</code></td><td>Records raffle winner</td></tr>
+          <tr><td>IncentiveSwift</td><td><code>loyalty.reward</code></td><td>Records loyalty reward</td></tr>
+          <tr><td>WorkflowSwift</td><td><code>workflow.completed</code></td><td>Logs completed workflow</td></tr>
+          <tr><td>WorkflowSwift</td><td><code>instance.advanced</code></td><td>Logs workflow instance progression</td></tr>
+          <tr><td>MissedCall</td><td><code>call.missed</code></td><td>Creates contact from missed call</td></tr>
+          <tr><td>MissedCall</td><td><code>followup.created</code></td><td>Logs follow-up creation</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Outgoing Webhook Endpoints (Sending Data)</h3>
+    <p>You can configure endpoints that CoreSwift will POST events to. Configure these in the Webhooks section:</p>
+    <pre>POST /api/webhooks
+Authorization: Bearer &lt;token&gt;
+
+{
+  "name": "Slack Notifier",
+  "url": "https://hooks.slack.com/services/xxx",
+  "events": ["contact.created", "opportunity.won"],
+  "retry_count": 3,
+  "timeout_ms": 5000
+}</pre>
+    <p>List configured webhooks:</p>
+    <pre>GET /api/webhooks
+Authorization: Bearer &lt;token&gt;
+
+Response: { "webhooks": [...] }</pre>
+  </div>
+
+  <div class="card">
+    <h3>Integration Targets</h3>
+    <p>For portfolio-level integrations, CoreSwift supports <strong>Integration Targets</strong>  named connections to external systems with webhook URLs and API keys:</p>
+    <pre>POST /api/integration-targets
+Authorization: Bearer &lt;token&gt;
+
+{
+  "name": "Mailchimp Sync",
+  "provider": "mailchimp",
+  "webhook_url": "https://mailchimp.com/webhook",
+  "portfolio_company_id": "optional-uuid"
+}</pre>
+  </div>
+
+  <div class="card">
+    <h3>Testing a Webhook</h3>
+    <p>Use the simple test endpoint to verify connectivity:</p>
+    <pre>POST /simple-hook
+Content-Type: application/json
+
+{ "test": true }
+Response: { "ok": true }</pre>
+  </div>
+</section>
+
+<!-- ======= 14. ACCOUNT SETTINGS ======= -->
+<section id="settings">
+  <h2 class="sec-title"><span class="sec-num">14</span> Account Settings</h2>
+
+  <div class="card">
+    <h3>Account Settings</h3>
+    <p>Under <strong>Settings &gt; Account</strong>, you can view and update your profile:</p>
+    <ul>
+      <li><strong>Name</strong>  Your display name</li>
+      <li><strong>Email</strong>  Login email (contact support to change)</li>
+      <li><strong>Role</strong>  <code>admin</code> (full access) or <code>member</code> (limited)</li>
+    </ul>
+    <p>View your account:</p>
+    <pre>GET /api/auth/me
+Authorization: Bearer &lt;token&gt;</pre>
+  </div>
+
+  <div class="card">
+    <h3>Change Password</h3>
+    <div class="steps">
+      <div class="step"><strong>Go to Settings &gt; Password</strong><p>Click the password tab.</p></div>
+      <div class="step"><strong>Enter current password</strong><p>For security verification.</p></div>
+      <div class="step"><strong>Enter new password</strong><p>Must be at least 8 characters.</p></div>
+      <div class="step"><strong>Confirm and Save</strong><p>Your token remains valid. Next login uses the new password.</p></div>
+    </div>
+    <pre>PUT /api/auth/password
+Authorization: Bearer &lt;token&gt;
+
+{ "current_password": "SwiftAdmin2026!", "new_password": "NewSecurePass123!" }</pre>
+    <div class="callout warn"><strong>Forgot your password?</strong> Use the forgot-password flow on the login screen: <code>POST /api/auth/forgot-password</code> with your email. Check your inbox for a reset link.</div>
+  </div>
+
+  <div class="card">
+    <h3>Organization Settings</h3>
+    <p>Your organization has its own profile:</p>
+    <ul>
+      <li><strong>Name</strong>  Your company/org name</li>
+      <li><strong>Slug</strong>  URL-friendly identifier</li>
+    </ul>
+    <pre>GET /api/tenants   ? View details
+PUT /api/tenants   ? Update name</pre>
+  </div>
+
+  <div class="card">
+    <h3>API Keys</h3>
+    <p>API keys allow satellite apps to authenticate when sending data to CoreSwift via webhooks. Each key has:</p>
+    <ul>
+      <li><strong>Key Prefix</strong>  First 4 characters (used in webhook URLs)</li>
+      <li><strong>Full Key</strong>  Shown once at creation; stored as an Argon2 hash</li>
+      <li><strong>Source App</strong>  Which app this key is for (funnelswift, incentiveswift, etc.)</li>
+      <li><strong>Status</strong>  Active or Disabled</li>
+      <li><strong>Last Used</strong>  Timestamp of most recent usage</li>
+    </ul>
+    <p>Manage API keys from <strong>Settings &gt; API Keys</strong>. Satellite API keys are stored in the <code>satellite_api_keys</code> table with hashed keys for security.</p>
+  </div>
+
+  <div class="card">
+    <h3>Portal &amp; Portfolio Companies</h3>
+    <p>For agency-level accounts, CoreSwift supports:</p>
+    <ul>
+      <li><strong>Portfolio Companies</strong>  Track multi-tenant clients under your agency (<code>GET/POST /api/portfolio-companies</code>)</li>
+      <li><strong>Cross-App Sync</strong>  Push data between apps: <code>POST /api/admin/portfolio-sync</code></li>
+      <li><strong>Impersonation</strong>  Admin can impersonate a user: <code>POST /api/admin/impersonate</code></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ======= 15. THEMES &amp; APPEARANCE ======= -->
+<section id="themes">
+  <h2 class="sec-title"><span class="sec-num">15</span> Themes &amp; Appearance</h2>
+  <div class="card">
+    <h3>Personalize Your Workspace</h3>
+    <p>CoreSwift lets you choose from 9 preset themes or create your own custom color scheme. The theme affects the sidebar gradient, button colors, card accents, and overall look of your workspace.</p>
+  </div>
+  <div class="card">
+    <h3>Preset Themes</h3>
+    <table>
+      <thead><tr><th>Theme</th><th>Vibe</th><th>Sidebar</th></tr></thead>
+      <tbody>
+        <tr><td>Indigo</td><td>Professional, default</td><td>Indigo gradient</td></tr>
+        <tr><td>Emerald</td><td>Growth, sales-focused</td><td>Green gradient</td></tr>
+        <tr><td>Rose</td><td>Warm, relationship-driven</td><td>Rose/pink gradient</td></tr>
+        <tr><td>Amber</td><td>Sunny, casual</td><td>Yellow/orange gradient</td></tr>
+        <tr><td>Purple</td><td>Creative, modern</td><td>Purple gradient</td></tr>
+        <tr><td>Cyan</td><td>Clean, tech</td><td>Cyan/blue gradient</td></tr>
+        <tr><td>Slate</td><td>Minimal, dark sidebarr</td><td>Gray gradient</td></tr>
+        <tr><td>Violet</td><td>Bold, premium</td><td>Deep violet gradient</td></tr>
+        <tr><td>Teal</td><td>Executive, calm</td><td>Teal gradient</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="card">
+    <h3>Custom Theme</h3>
+    <p>In <strong>Settings &gt; Appearance</strong>, you can customize your theme by setting:</p>
+    <ul>
+      <li><strong>Primary Color</strong> — The main accent color used for buttons, links, and active elements</li>
+      <li><strong>Sidebar Start</strong> — Top color of the sidebar gradient</li>
+      <li><strong>Sidebar End</strong> — Bottom color of the sidebar gradient</li>
+    </ul>
+    <p>Themes apply instantly as you select them. No page reload needed. All team members in the same workspace can set their own theme independently.</p>
+  </div>
+</section>
+
+<!-- ======= 16. DEAL REMINDERS & OVERDUES ======= -->
+<section id="reminders">
+  <h2 class="sec-title"><span class="sec-num">16</span> Deal Reminders</h2>
+  <div class="card">
+    <h3>Set Reminders on Any Deal</h3>
+    <p>From any deal detail view, you can set a reminder to follow up. When the reminder is due, it appears as an overdue badge on the dashboard reminder panel — no email notifications, just an in-app nudge.</p>
+  </div>
+  <div class="card">
+    <h3>Reminder Options</h3>
+    <ul>
+      <li><strong>1 Hour</strong> — Quick follow-up, e.g. after a call</li>
+      <li><strong>3 Hours</strong> — Same-day follow-up</li>
+      <li><strong>Tomorrow</strong> — Next business day check-in</li>
+      <li><strong>3 Days</strong> — Short-term nurture reminder</li>
+      <li><strong>1 Week</strong> — Weekly check-in</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Overdue Reminders</h3>
+    <p>The dashboard shows an <strong>Overdue</strong> count for reminders that have passed. Click the count to view all overdue items. Reminders are scoped to your workspace and user.</p>
+  </div>
+</section>
+
+<!-- ======= 17. REVENUE FORECAST ======= -->
+<section id="forecast">
+  <h2 class="sec-title"><span class="sec-num">17</span> Revenue Forecast</h2>
+  <div class="card">
+    <h3>Pipeline Forecast View</h3>
+    <p>The Forecast page shows your projected revenue based on deals in your pipeline. It calculates a weighted pipeline value by multiplying each deal's value by its stage probability.</p>
+  </div>
+  <div class="card">
+    <h3>How It Works</h3>
+    <ul>
+      <li><strong>Total Pipeline Value</strong> — Sum of all deal values across all stages</li>
+      <li><strong>Weighted Pipeline Value</strong> — Sum of (deal value × stage probability) for each deal</li>
+      <li><strong>Bar Chart by Stage</strong> — Visual breakdown of total deal value per stage, with the won stage highlighted</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Interpretation</h3>
+    <p>The weighted pipeline value gives a realistic estimate of expected revenue. For example, if you have $10,000 in the Discovery stage (30% probability) and $15,000 in the Negotiation stage (70% probability), your weighted forecast is $3,000 + $10,500 = $13,500.</p>
+  </div>
+</section>
+
+<!-- ======= 18. ACTIVITY TIMELINE ======= -->
+<section id="timeline">
+  <h2 class="sec-title"><span class="sec-num">18</span> Activity Timeline</h2>
+  <div class="card">
+    <h3>Deal Activity History</h3>
+    <p>Each deal has an activity timeline that records every change made — stage moves, value updates, tag changes, contact links, and notes. This gives full audit trail visibility into how a deal has progressed.</p>
+  </div>
+  <div class="card">
+    <h3>Viewing the Timeline</h3>
+    <p>Open any deal detail view and scroll to the <strong>Activity Timeline</strong> section. Events are listed in reverse chronological order with timestamps, action descriptions, and the user who performed the action.</p>
+  </div>
+  <div class="card">
+    <h3>Timeline Events</h3>
+    <ul>
+      <li><strong>Stage Change</strong> — Moved from X to Y (with probability change)</li>
+      <li><strong>Value Change</strong> — Deal value updated ($500 → $1,000)</li>
+      <li><strong>Contact Linked</strong> — Contact associated with the deal</li>
+      <li><strong>Contact Created</strong> — New contact auto-created from deal</li>
+      <li><strong>Tag Added/Removed</strong> — Tags applied or removed</li>
+      <li><strong>Note Added</strong> — Notes on the deal</li>
+      <li><strong>Deal Created</strong> — Initial creation event</li>
+      <li><strong>Deal Won/Lost</strong> — Deal closed</li>
+      <li><strong>Reminder Set</strong> — Follow-up reminder created</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>API Access</h3>
+    <pre>GET /api/v1/deals/{deal_id}/timeline
+Authorization: Bearer &lt;token&gt;</pre>
+  </div>
+</section>
+
+<!-- ======= 19. CSV IMPORT / EXPORT ======= -->
+<section id="csv">
+  <h2 class="sec-title"><span class="sec-num">19</span> CSV Import &amp; Export</h2>
+  <div class="card">
+    <h3>Import Contacts from CSV</h3>
+    <p>Migrate your existing contacts from any CRM or spreadsheet with a single CSV import:</p>
+    <ol>
+      <li><strong>Go to Contacts</strong> and click the import button (upload icon).</li>
+      <li><strong>Upload your CSV</strong> via drag-and-drop or file browser.</li>
+      <li><strong>Preview</strong> — CoreSwift reads the header row and shows you a preview of how fields will be mapped.</li>
+      <li><strong>Batch Import</strong> — Click Import and the system creates contacts in bulk (up to 500 per batch).</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h3>Export to CSV</h3>
+    <p>Export your contacts, deals, or any list to CSV with one click:</p>
+    <ul>
+      <li><strong>From Contacts</strong> — Click the export button to download all contacts as CSV</li>
+      <li><strong>From Lists</strong> — Export list members to CSV</li>
+      <li><strong>From Deals</strong> — Export deal data including value, stage, contact, and close date</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Auto-Create Contact from Deal</h3>
+    <p>When creating a deal, you can simultaneously create a new contact instead of selecting an existing one. Simply fill in the name, email, and phone fields right in the deal form — CoreSwift creates the contact first, then links the deal. This saves a step and keeps your data clean.</p>
+    <blockquote>This pattern is also available in sister apps (FunnelSwift and IncentiveSwift) for seamless lead-to-deal creation.</blockquote>
+  </div>
+  <div class="card">
+    <h3>Supported CSV Columns</h3>
+    <table>
+      <thead><tr><th>Column Header</th><th>Maps To</th></tr></thead>
+      <tbody>
+        <tr><td><code>name</code></td><td>Contact Name (required)</td></tr>
+        <tr><td><code>email</code></td><td>Email Address</td></tr>
+        <tr><td><code>phone</code></td><td>Phone Number</td></tr>
+        <tr><td><code>company</code></td><td>Company Name</td></tr>
+        <tr><td><code>title</code></td><td>Job Title</td></tr>
+        <tr><td><code>notes</code></td><td>Notes / Description</td></tr>
+        <tr><td><code>tags</code></td><td>Comma-separated tag names (auto-created)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ======= FOOTER ======= -->
+<div class="foot">
+  <p><strong>CoreSwift CRM</strong> &mdash; v0.1.0</p>
+  <p>Built by <a href="https://swiftsoftware.com">SwiftSoftware</a> | <a href="https://coreswiftcrm.com">coreswiftcrm.com</a></p>
+  <p style="margin-top:0.5rem;font-size:0.8rem;opacity:0.7;">Customer Relationship Management Platform &middot; API /api/</p>
+</div>
+
+</div>
+      <hr style="border-color: var(--border); margin: 40px 0;">
+      <h2 id="affiliates">🤝 Affiliate Program</h2>
+      <div class="alert alert-success"><strong>Earn commissions!</strong> Refer other businesses to this service and earn a percentage of their subscription fees. The affiliate system is managed through FunnelSwift — ask your account manager to set up your affiliate account.</div>
+
+      <h3>How It Works</h3>
+      <ol class="step-list">
+        <li><strong>Get Your Affiliate Link</strong><p>Your affiliate manager provides a unique tracking link (or you can generate one in the FunnelSwift affiliate portal).</p></li>
+        <li><strong>Share It</strong><p>Post the link on your website, in emails, on social media, or wherever your audience is.</p></li>
+        <li><strong>They Sign Up &amp; Pay</strong><p>When someone clicks your link and later completes a paid purchase, the system tracks the conversion.</p></li>
+        <li><strong>You Earn Commission</strong><p>Commissions are calculated based on your affiliate rate and credited to your account automatically.</p></li>
+      </ol>
+
+      <h3>Products You Can Promote</h3>
+      <table>
+        <thead><tr><th>Service</th><th>Plan</th><th>Price</th><th>Commission</th></tr></thead>
+        <tbody>
+          <tr><td rowspan="3"><strong>ADASwift</strong></td><td>Pro Plan</td><td>$79/mo</td><td>10%</td></tr>
+          <tr><td>Enterprise Plan</td><td>$199/mo</td><td>10%</td></tr>
+          <tr><td>Monthly Scan</td><td>$29/mo</td><td>15%</td></tr>
+          <tr><td rowspan="2"><strong>MissedCall Respondr</strong></td><td>Pro Plan</td><td>$49/mo</td><td>10%</td></tr>
+          <tr><td>Credit Packs</td><td>$10–$40</td><td>10%</td></tr>
+          <tr><td rowspan="3"><strong>WorkflowSwift</strong></td><td>Starter Plan</td><td>$29/mo</td><td>10%</td></tr>
+          <tr><td>Professional Plan</td><td>$79/mo</td><td>10%</td></tr>
+          <tr><td>Enterprise Plan</td><td>$199/mo</td><td>10%</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Affiliate Products (All Services)</h3>
+      <p>The full list of all 13 affiliate products across all SwiftSoftware services:</p>
+      <table>
+        <thead><tr><th>Service</th><th>Product</th><th>Price</th><th>Commission</th></tr></thead>
+        <tbody>
+          <tr><td rowspan="4"><strong>ADASwift</strong></td><td>Free Plan</td><td>$0</td><td>10%</td></tr>
+          <tr><td>Pro Plan</td><td>$79/mo</td><td>10%</td></tr>
+          <tr><td>Enterprise Plan</td><td>$199/mo</td><td>10%</td></tr>
+          <tr><td>Monthly Scan</td><td>$29/mo</td><td>15%</td></tr>
+          <tr><td rowspan="5"><strong>MissedCall</strong></td><td>Free Plan</td><td>$0</td><td>10%</td></tr>
+          <tr><td>Pro Plan</td><td>$49/mo</td><td>10%</td></tr>
+          <tr><td>Credit Pack - 1,000</td><td>$10</td><td>10%</td></tr>
+          <tr><td>Credit Pack - 5,000</td><td>$40</td><td>10%</td></tr>
+          <tr><td>Phone Number</td><td>$5/mo</td><td>5%</td></tr>
+          <tr><td rowspan="4"><strong>WorkflowSwift</strong></td><td>Free Plan</td><td>$0</td><td>10%</td></tr>
+          <tr><td>Starter Plan</td><td>$29/mo</td><td>10%</td></tr>
+          <tr><td>Professional Plan</td><td>$79/mo</td><td>10%</td></tr>
+          <tr><td>Enterprise Plan</td><td>$199/mo</td><td>10%</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Conversion Tracking</h3>
+      <p>When a referred lead completes a purchase, the conversion is tracked automatically:</p>
+      <ol class="step-list">
+        <li><strong>Checkout Metadata</strong><p>The system stores <code>affiliate_id</code> and/or <code>cookie_id</code> in the checkout session metadata.</p></li>
+        <li><strong>Webhook Fires</strong><p>On successful payment, the Stripe/PayPal webhook fires a conversion event to FunnelSwift.</p></li>
+        <li><strong>Commission Recorded</strong><p>FunnelSwift records the conversion and attributes commission based on the affiliate's rate.</p></li>
+      </ol>
+      <p>This is fully automatic. As long as the affiliate link is used at checkout, nothing extra is needed.</p>
+
+      <h3>Managing Affiliates</h3>
+      <p>Affiliates are managed through the <strong>FunnelSwift Admin</strong> portal:</p>
+      <ul>
+        <li><strong>Affiliate Admin</strong> — full CRUD for affiliate products, categories, links, and conversion history</li>
+        <li><strong>Affiliates</strong> — add, edit, and manage affiliate partners with commission rates</li>
+        <li><strong>Affiliate Products</strong> — configure which products can be promoted and at what commission rate</li>
+        <li><strong>Affiliate Links</strong> — create tracking links that pair an affiliate with a specific product</li>
+      </ul>
+      <p>To access, log in to FunnelSwift and navigate to <strong>Super Admin → Affiliate Admin</strong>.</p>
+
+</body>
+</html>
+
