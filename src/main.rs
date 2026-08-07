@@ -89,6 +89,11 @@ impl std::fmt::Debug for AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Initialize jsonwebtoken crypto provider (required by jsonwebtoken v10)
+    jsonwebtoken::crypto::CryptoProvider::install_default(
+        &jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER,
+    ).ok();
+
     // Initialize tracing with structured logging
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
