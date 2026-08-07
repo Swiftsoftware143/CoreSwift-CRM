@@ -29,7 +29,7 @@ GUARD_RESULT=$("$GUARD" coreswift 2>&1) || {
 echo "$GUARD_RESULT"
 
 # --- Pull latest ---
-git pull origin master || echo "WARNING: git pull failed (may already be at HEAD)"
+git pull origin main || echo "WARNING: git pull failed (may already be at HEAD)"
 
 # --- Pre-build checks ---
 echo "=== cargo check ==="
@@ -47,7 +47,7 @@ CARGO_BUILD_JOBS=1 /root/.cargo/bin/cargo build --release
 
 # --- Deploy ---
 echo "=== Deploying ==="
-cp target/release/coreswift-crm /opt/swift/coreswift/coreswift-crm
+cp target/release/crm-swift /opt/swift/coreswift/coreswift-crm
 systemctl restart coreswift-crm
 sleep 2
 
