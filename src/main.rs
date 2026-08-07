@@ -35,6 +35,7 @@ pub mod native_apps;
 pub mod admin_actions;
 pub mod campaigns;
 pub mod industries;
+pub mod messages;
 pub mod plans;
 pub mod provider_keys;
 pub mod rate_limiter;
@@ -143,12 +144,16 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/internal/contacts", contacts_internal::router())
         // FunnelSwift tag provision webhook — auto-provision free-tier contacts
         .route("/api/v1/internal/tag-provision", axum::routing::post(tag_provision_handler::handle_tag_provision))
+        // Unified Inbox — messages webhook from MD/IS (no auth, fire-and-forget)
+        .route("/api/messages/webhook", axum::routing::post(messages::handlers::webhook_receive))
         .nest("/api/companies", companies::router(state.clone()))
         .nest("/api/pipelines", pipelines::router(state.clone()))
         .nest("/api/tags", tags::router(state.clone()))
         .nest("/api/scoring", scoring::router(state.clone()))
         .nest("/api/lists", lists::router(state.clone()))
         .nest("/api/internal/lists", lists_internal::router())
+        // Unified Inbox — protected CRUD for messages
+        .nest("/api/messages", messages::router(state.clone()))
         .nest("/api/internal/tenants", tenants_internal::router())
         .nest("/api/internal/tags", tags::internal_handler::router())
         .nest("/api/analytics", analytics::router(state.clone()))
