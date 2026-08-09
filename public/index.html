@@ -382,12 +382,13 @@ tr:hover td{background:rgba(59,130,246,.03)}
     <div class="logo">🧠<span>Core</span>Swift</div>
     <nav>
       <a href="#" onclick="showPage('dashboard')" data-page="dashboard" class="active">📊 Dashboard</a>
+      <a href="#" onclick="showPage('support-portal')" data-page="support-portal">💬 My Support</a>
       <a href="#" onclick="showPage('contacts')" data-page="contacts">👥 Contacts</a>
       <a href="#" onclick="showPage('pipelines')" data-page="pipelines">🔄 Pipelines</a>
       <a href="#" onclick="showPage('tags')" data-page="tags">🏷 Tags</a>
       <a href="#" onclick="showPage('lists')" data-page="lists">📋 Lists</a>
       <a href="#" onclick="showPage('comms')" data-page="comms">✉️ Communications</a>
-      <a href="#" onclick="showPage('tickets')" data-page="tickets">🎫 Tickets</a>
+      <a href="#" onclick="showPage('tickets')" data-page="tickets">🎫 Support</a>
       <a href="#" onclick="showPage('automation')" data-page="automation">🤖 Automation</a>
       <a href="#" onclick="showPage('settings')" data-page="settings">⚙️ Settings</a>
     </nav>
@@ -483,6 +484,7 @@ function showPage(page){
   const link=document.querySelector('.sidebar nav a[data-page="'+page+'"]');
   if(link)link.classList.add('active');
   switch(page){
+    case 'support-portal':renderSupportPortal();break;
     case 'dashboard':renderDashboard();break;
     case 'contacts':renderContacts();break;
     case 'pipelines':renderPipelines();break;
@@ -552,6 +554,89 @@ async function renderForecast(){
       +(totalForecast>0?'Focus on moving deals through stages with highest value to close more revenue.':'Start adding deals to your pipeline to see forecast insights.')
       +'</p></div>';
   }catch(e){mc.innerHTML='<div class="top-bar"><h1>📈 Revenue Forecast</h1></div><div class="empty-state"><div class="icon">⚠️</div><p>'+esc(e.message)+'</p></div>'}
+}
+
+async function renderSupportPortal(reload){
+  let mc=document.getElementById('main-content');
+  let api=baseURL();
+  try{
+    let stats=await fetchJSON(api+'/tickets/stats');
+    let d=await fetchJSON(api+'/tickets?limit=50');
+    let tickets=d.tickets||[];
+    mc.innerHTML='<div class="top-bar"><h1>💬 My Support</h1><button class="btn btn-primary" onclick="newSupportTicket()">+ New Request</button></div>'+
+      '<div style="display:flex;gap:12px;margin:16px 0">'+
+      '<div class="stat-card" style="flex:1"><div class="stat-num">'+stats.open+'</div><div class="stat-label">Open</div></div>'+
+      '<div class="stat-card" style="flex:1"><div class="stat-num">'+stats.in_progress+'</div><div class="stat-label">In Progress</div></div>'+
+      '<div class="stat-card" style="flex:1"><div class="stat-num">'+stats.resolved+'</div><div class="stat-label">Resolved</div></div>'+
+      '</div>'+
+      '<div class="card">'+
+      '<table><thead><tr><th>Subject</th><th>Status</th><th>Priority</th><th>Last Updated</th></tr></thead><tbody>'+
+      tickets.map(function(t){
+        return '<tr><td><a href="#" onclick="viewSupportTicket(\''+t.id+'\')" style="color:var(--accent)">'+esc(t.subject)+'</a></td>'+
+          '<td><span class="badge badge-'+t.status+'">'+t.status.replace(/_/g,' ')+'</span></td>'+
+          '<td><span class="badge badge-'+t.priority+'">'+t.priority+'</span></td>'+
+          '<td>'+relativeTime(t.updated_at)+'</td></tr>';
+      }).join('')||'<tr><td colspan="4" style="padding:30px;text-align:center;color:var(--text2)">No support requests yet<br><br><button class="btn btn-primary" onclick="newSupportTicket()">Open Your First Request</button></td></tr>'+
+      '</tbody></table></div>';
+  }catch(e){mc.innerHTML='<div class="top-bar"><h1>💬 My Support</h1></div><div class="empty-state"><p>'+esc(e.message)+'</p></div>'}
+}
+
+async function newSupportTicket(){
+  let html='<h3>New Support Request</h3>'+
+    '<div class="field"><label>What do you need help with?</label><input id="nt-subject" placeholder="Brief summary of your request"></div>'+
+    '<div class="field"><label>Details</label><textarea id="nt-desc" rows="4" placeholder="Describe your issue or question in detail..."></textarea></div>'+
+    '<div class="field"><label>How urgent is this?</label><select id="nt-priority"><option value="medium">Medium — normal response time</option><option value="low">Low — not urgent</option><option value="high">High — need help soon</option><option value="urgent">Urgent — critical issue</option></select></div>'+
+    '<button class="btn btn-primary" onclick="createSupportTicket()">Submit Request</button>';
+  showModal(html);
+}
+
+async function createSupportTicket(){
+  let subj=document.getElementById('nt-subject').value;
+  if(!subj) return alert('Please enter a subject');
+  let desc=document.getElementById('nt-desc').value||'';
+  let priority=document.getElementById('nt-priority').value||'medium';
+  try{
+    let d=await fetchJSON(baseURL()+'/tickets',{method:'POST',body:JSON.stringify({subject:subj,description:desc,priority:priority})});
+    closeModal();
+    showToast('Support request submitted ✓');
+    renderSupportPortal();
+  }catch(e){alert('Error: '+e.message)}
+}
+
+async function viewSupportTicket(id){
+  let d=await fetchJSON(baseURL()+'/tickets/'+id);
+  let t=d.ticket;
+  let msgs=d.messages||[];
+  let html='<h3>'+esc(t.subject)+'</h3>'+
+    '<p style="color:var(--text2);margin:8px 0">Status: <b>'+t.status.replace(/_/g,' ')+'</b> | Priority: <b>'+t.priority+'</b></p>'+
+    '<div style="margin:16px 0;padding:12px;background:var(--surface2);border-radius:8px">'+
+    '<p style="white-space:pre-wrap">'+esc(t.description||'No description')+'</p></div>'+
+    '<div style="margin:16px 0;padding:12px;background:var(--surface2);border-radius:8px;max-height:300px;overflow-y:auto">'+
+    '<b>Conversation</b><br>'+
+    (msgs.length?msgs.map(function(m){
+      var isAgent=m.sender_type==='agent';
+      return '<div style="margin:8px 0;padding:8px;background:var(--bg);border-radius:6px;border-left:3px solid '+(isAgent?'var(--accent)':'var(--green)')+'"><b style="color:'+(isAgent?'var(--accent)':'var(--green)')+'">'+(isAgent?'Support':'You')+'</b> <small style="color:var(--text2)">'+relativeTime(m.created_at)+'</small><br>'+esc(m.message)+'</div>';
+    }).join('')
+    :'<small style="color:var(--text2)">No replies yet — our team will respond shortly</small>')+'</div>'+
+    '<div style="display:flex;gap:8px;margin-top:12px">'+
+    '<input id="msg-input" placeholder="Add a reply..." style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:8px">'+
+    '<button class="btn btn-primary btn-sm" onclick="addSupportReply(\''+id+'\')">Send Reply</button></div>'+
+    (t.status!=='closed'?'<button class="btn btn-sm btn-secondary" style="margin-top:8px" onclick="closeMyTicket(\''+id+'\')">Close Request</button>':'');
+  showModal(html);
+}
+
+async function addSupportReply(id){
+  let msg=document.getElementById('msg-input').value;
+  if(!msg) return alert('Enter a message');
+  await fetchJSON(baseURL()+'/tickets/'+id+'/messages',{method:'POST',body:JSON.stringify({message:msg,sender_type:'contact'})});
+  viewSupportTicket(id);
+}
+
+async function closeMyTicket(id){
+  if(!confirm('Close this request?')) return;
+  await fetchJSON(baseURL()+'/tickets/'+id,{method:'PATCH',body:JSON.stringify({status:'closed'})});
+  closeModal();
+  renderSupportPortal();
 }
 
 async function renderDashboard(){
@@ -1351,7 +1436,7 @@ async function saveSmsProvider(btn){
 async function renderTickets(reload){
   let mc=document.getElementById('main-content');
   let api=baseURL();
-  mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1><button class="btn btn-primary" onclick="newTicketModal()">+ New Ticket</button></div><div id="ticket-stats" style="display:flex;gap:12px;margin:16px 0"></div>'+
+  mc.innerHTML='<div class="top-bar"><h1>🎫 Support</h1><button class="btn btn-primary" onclick="newTicketModal()">+ New Ticket</button></div><div id="ticket-stats" style="display:flex;gap:12px;margin:16px 0"></div>'+
     '<div class="card"><div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">'+
     '<select id="ticket-filter-status" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Statuses</option><option value="open">Open</option><option value="in_progress">In Progress</option><option value="resolved">Resolved</option><option value="closed">Closed</option></select>'+
     '<select id="ticket-filter-priority" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>'+
@@ -1380,7 +1465,7 @@ async function renderTickets(reload){
           '<td><button class="btn btn-sm btn-secondary" onclick="viewTicketModal(\''+t.id+'\')">View</button></td></tr>';
       }).join('')||'<tr><td colspan="5" style="color:var(--text2);padding:20px;text-align:center">No tickets yet</td></tr>'+
       '</tbody></table>';
-  }catch(e){mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1></div><div class="empty-state"><p>'+esc(e.message)+'</p></div>'}
+  }catch(e){mc.innerHTML='<div class="top-bar"><h1>🎫 Support</h1></div><div class="empty-state"><p>'+esc(e.message)+'</p></div>'}
 }
 
 async function newTicketModal(){
@@ -2148,7 +2233,7 @@ async function renderComms(){
 async function renderTickets(reload){
   let mc=document.getElementById('main-content');
   let api=baseURL();
-  mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1><button class="btn btn-primary" onclick="newTicketModal()">+ New Ticket</button></div><div id="ticket-stats" style="display:flex;gap:12px;margin:16px 0"></div>'+
+  mc.innerHTML='<div class="top-bar"><h1>🎫 Support</h1><button class="btn btn-primary" onclick="newTicketModal()">+ New Ticket</button></div><div id="ticket-stats" style="display:flex;gap:12px;margin:16px 0"></div>'+
     '<div class="card"><div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">'+
     '<select id="ticket-filter-status" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Statuses</option><option value="open">Open</option><option value="in_progress">In Progress</option><option value="resolved">Resolved</option><option value="closed">Closed</option></select>'+
     '<select id="ticket-filter-priority" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>'+
@@ -2177,7 +2262,7 @@ async function renderTickets(reload){
           '<td><button class="btn btn-sm btn-secondary" onclick="viewTicketModal(\''+t.id+'\')">View</button></td></tr>';
       }).join('')||'<tr><td colspan="5" style="color:var(--text2);padding:20px;text-align:center">No tickets yet</td></tr>'+
       '</tbody></table>';
-  }catch(e){mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1></div><div class="empty-state"><p>'+esc(e.message)+'</p></div>'}
+  }catch(e){mc.innerHTML='<div class="top-bar"><h1>🎫 Support</h1></div><div class="empty-state"><p>'+esc(e.message)+'</p></div>'}
 }
 
 async function newTicketModal(){
@@ -2554,7 +2639,7 @@ async function renderComms(){
 async function renderTickets(reload){
   let mc=document.getElementById('main-content');
   let api=baseURL();
-  mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1><button class="btn btn-primary" onclick="newTicketModal()">+ New Ticket</button></div><div id="ticket-stats" style="display:flex;gap:12px;margin:16px 0"></div>'+
+  mc.innerHTML='<div class="top-bar"><h1>🎫 Support</h1><button class="btn btn-primary" onclick="newTicketModal()">+ New Ticket</button></div><div id="ticket-stats" style="display:flex;gap:12px;margin:16px 0"></div>'+
     '<div class="card"><div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">'+
     '<select id="ticket-filter-status" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Statuses</option><option value="open">Open</option><option value="in_progress">In Progress</option><option value="resolved">Resolved</option><option value="closed">Closed</option></select>'+
     '<select id="ticket-filter-priority" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>'+
@@ -2583,7 +2668,7 @@ async function renderTickets(reload){
           '<td><button class="btn btn-sm btn-secondary" onclick="viewTicketModal(\''+t.id+'\')">View</button></td></tr>';
       }).join('')||'<tr><td colspan="5" style="color:var(--text2);padding:20px;text-align:center">No tickets yet</td></tr>'+
       '</tbody></table>';
-  }catch(e){mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1></div><div class="empty-state"><p>'+esc(e.message)+'</p></div>'}
+  }catch(e){mc.innerHTML='<div class="top-bar"><h1>🎫 Support</h1></div><div class="empty-state"><p>'+esc(e.message)+'</p></div>'}
 }
 
 async function newTicketModal(){
@@ -3199,7 +3284,7 @@ async function renderComms(){
 async function renderTickets(reload){
   let mc=document.getElementById('main-content');
   let api=baseURL();
-  mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1><button class="btn btn-primary" onclick="newTicketModal()">+ New Ticket</button></div><div id="ticket-stats" style="display:flex;gap:12px;margin:16px 0"></div>'+
+  mc.innerHTML='<div class="top-bar"><h1>🎫 Support</h1><button class="btn btn-primary" onclick="newTicketModal()">+ New Ticket</button></div><div id="ticket-stats" style="display:flex;gap:12px;margin:16px 0"></div>'+
     '<div class="card"><div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">'+
     '<select id="ticket-filter-status" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Statuses</option><option value="open">Open</option><option value="in_progress">In Progress</option><option value="resolved">Resolved</option><option value="closed">Closed</option></select>'+
     '<select id="ticket-filter-priority" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>'+
@@ -3228,7 +3313,7 @@ async function renderTickets(reload){
           '<td><button class="btn btn-sm btn-secondary" onclick="viewTicketModal(\''+t.id+'\')">View</button></td></tr>';
       }).join('')||'<tr><td colspan="5" style="color:var(--text2);padding:20px;text-align:center">No tickets yet</td></tr>'+
       '</tbody></table>';
-  }catch(e){mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1></div><div class="empty-state"><p>'+esc(e.message)+'</p></div>'}
+  }catch(e){mc.innerHTML='<div class="top-bar"><h1>🎫 Support</h1></div><div class="empty-state"><p>'+esc(e.message)+'</p></div>'}
 }
 
 async function newTicketModal(){
@@ -3576,7 +3661,7 @@ async function renderComms(){
 async function renderTickets(reload){
   let mc=document.getElementById('main-content');
   let api=baseURL();
-  mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1><button class="btn btn-primary" onclick="newTicketModal()">+ New Ticket</button></div><div id="ticket-stats" style="display:flex;gap:12px;margin:16px 0"></div>'+
+  mc.innerHTML='<div class="top-bar"><h1>🎫 Support</h1><button class="btn btn-primary" onclick="newTicketModal()">+ New Ticket</button></div><div id="ticket-stats" style="display:flex;gap:12px;margin:16px 0"></div>'+
     '<div class="card"><div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">'+
     '<select id="ticket-filter-status" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Statuses</option><option value="open">Open</option><option value="in_progress">In Progress</option><option value="resolved">Resolved</option><option value="closed">Closed</option></select>'+
     '<select id="ticket-filter-priority" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>'+
@@ -3605,7 +3690,7 @@ async function renderTickets(reload){
           '<td><button class="btn btn-sm btn-secondary" onclick="viewTicketModal(\''+t.id+'\')">View</button></td></tr>';
       }).join('')||'<tr><td colspan="5" style="color:var(--text2);padding:20px;text-align:center">No tickets yet</td></tr>'+
       '</tbody></table>';
-  }catch(e){mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1></div><div class="empty-state"><p>'+esc(e.message)+'</p></div>'}
+  }catch(e){mc.innerHTML='<div class="top-bar"><h1>🎫 Support</h1></div><div class="empty-state"><p>'+esc(e.message)+'</p></div>'}
 }
 
 async function newTicketModal(){
