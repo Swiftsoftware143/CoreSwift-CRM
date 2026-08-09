@@ -11,6 +11,9 @@ pub struct Ticket {
     pub priority: String,
     pub assigned_to: Option<uuid::Uuid>,
     pub contact_id: Option<uuid::Uuid>,
+    pub source: String,
+    pub contact_email: Option<String>,
+    pub contact_name: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -22,6 +25,9 @@ pub struct CreateTicketRequest {
     pub priority: Option<String>,
     pub contact_id: Option<uuid::Uuid>,
     pub assigned_to: Option<uuid::Uuid>,
+    pub source: Option<String>,
+    pub contact_email: Option<String>,
+    pub contact_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,4 +61,14 @@ pub struct TicketListQuery {
     pub contact_id: Option<uuid::Uuid>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ContactFormRequest {
+    pub tenant_id: uuid::Uuid,
+    pub subject: String,
+    pub message: String,
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub priority: Option<String>,
 }

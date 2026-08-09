@@ -15,6 +15,11 @@ pub mod handlers;
 use axum::{Router, middleware};
 use crate::AppState;
 
+pub fn public_router(state: AppState) -> Router<AppState> {
+    Router::new()
+        .route("/public/contact", axum::routing::post(handlers::public_contact_form))
+}
+
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/tickets", axum::routing::get(handlers::list_tickets).post(handlers::create_ticket))

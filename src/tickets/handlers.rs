@@ -93,8 +93,8 @@ pub async fn create_ticket(
     let description = body.description.unwrap_or_default();
 
     let ticket = sqlx::query_as::<_, Ticket>(
-        r#"INSERT INTO tickets (tenant_id, subject, description, status, priority, assigned_to, contact_id)
-           VALUES ($1, $2, $3, 'open', $4, $5, $6)
+        r#"INSERT INTO tickets (tenant_id, subject, description, status, priority, assigned_to, contact_id, source, contact_email, contact_name)
+           VALUES ($1, $2, $3, 'open', $4, $5, $6, COALESCE($7, 'manual'), $8, $9)
            RETURNING *"#
     )
     .bind(tid)
@@ -103,6 +103,9 @@ pub async fn create_ticket(
     .bind(&priority)
     .bind(&body.assigned_to)
     .bind(&body.contact_id)
+    .bind(&body.source)
+    .bind(&body.contact_email)
+    .bind(&body.contact_name)
     .fetch_one(&s.db)
     .await?;
 
@@ -249,4 +252,32 @@ pub async fn ticket_stats(
         "resolved": resolved,
         "closed": closed
     })))
+}
+
+// ── Public Contact Form (no auth) ─────────────────────────────────────
+
+/// POST /api/public/contact — creates a ticket without auth
+pub async fn public_contact_form(
+    State(s): State<AppState>,
+    Json(body): Json<super::models::ContactFormRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let priority = body.priority.unwrap_or_else(|| "medium".to_string());
+    let name = body.name.unwrap_or_else(|| "Website Visitor".to_string());
+    let email = body.email.unwrap_or_default();
+
+    let ticket = sqlx::query_as::<_, super::models::Ticket>(
+        r#"INSERT INTO tickets (tenant_id, subject, description, status, priority, source, contact_email, contact_name)
+           VALUES ($1, $2, $3, 'open', $4, 'form', $5, $6)
+           RETURNING *"#
+    )
+    .bind(body.tenant_id)
+    .bind(&body.subject)
+    .bind(&body.message)
+    .bind(&priority)
+    .bind(&email)
+    .bind(&name)
+    .fetch_one(&s.db)
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(json!(ticket))))
 }
