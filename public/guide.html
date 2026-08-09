@@ -182,6 +182,7 @@
     <a href="#sales">Sales</a>
     <a href="#marketing">Marketing</a>
     <a href="#operations">Operations</a>
+    <a href="#support-portal">Support</a>
     <a href="#automation-features">Automation</a>
     <a href="#tags-lists">Tags &amp; Lists</a>
     <a href="#webhooks">Webhooks</a>
@@ -664,6 +665,88 @@ PATCH /api/lists/:id
 DELETE /api/lists/:id
 GET /api/lists/:id/members
 POST /api/lists/:id/members</pre>
+  </div>
+</section>
+
+
+<!-- ======= 9.5. CUSTOMER SUPPORT PORTAL ======= -->
+<section id="support-portal">
+  <h2 class="sec-title"><span class="sec-num">🆘</span> Customer Support Portal</h2>
+
+  <div class="card">
+    <h3>Your Help Desk — Built In</h3>
+    <p>CoreSwift CRM includes a complete customer support ticketing system. Replace Freshdesk, Zendesk, or your overloaded email inbox. Your customers submit requests. Your team manages them. Nothing leaves the platform.</p>
+    <p><strong>No API keys. No chatbot plugins. No external subscriptions.</strong> It just works.</p>
+  </div>
+
+  <div class="card">
+    <h3>How Tickets Come In</h3>
+    <p>Tickets can arrive through multiple channels — all tracked by source so you know where every request came from:</p>
+    <table style="width:100%;border-collapse:collapse;margin-top:0.5rem">
+      <thead><tr style="background:var(--g100)"><th style="text-align:left;padding:8px;border:1px solid var(--g200)">Channel</th><th style="text-align:left;padding:8px;border:1px solid var(--g200)">Source Code</th><th style="text-align:left;padding:8px;border:1px solid var(--g200)">How</th></tr></thead>
+      <tbody>
+        <tr><td style="padding:8px;border:1px solid var(--g200)"><strong>👤 Manual</strong></td><td style="padding:8px;border:1px solid var(--g200)"><code>manual</code></td><td style="padding:8px;border:1px solid var(--g200)">Your team creates tickets in the admin Support panel</td></tr>
+        <tr><td style="padding:8px;border:1px solid var(--g200)"><strong>🌐 Contact Form</strong></td><td style="padding:8px;border:1px solid var(--g200)"><code>form</code></td><td style="padding:8px;border:1px solid var(--g200)">Drop our embed widget on any website — visitors submit tickets without logging in</td></tr>
+        <tr><td style="padding:8px;border:1px solid var(--g200)"><strong>📧 Email</strong></td><td style="padding:8px;border:1px solid var(--g200)"><code>email</code></td><td style="padding:8px;border:1px solid var(--g200)">Forward your support@ inbox to our parser — emails become tickets automatically</td></tr>
+        <tr><td style="padding:8px;border:1px solid var(--g200)"><strong>🤖 Chatbot</strong></td><td style="padding:8px;border:1px solid var(--g200)"><code>agent</code></td><td style="padding:8px;border:1px solid var(--g200)">Connect any chatbot or AI agent via our public API — tickets created programmatically</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:0.75rem;"><strong>None of these channels is privileged.</strong> A ticket created by your chatbot, your contact form, or your staff member is treated identically. No special routing, no hidden costs.</p>
+  </div>
+
+  <div class="card">
+    <h3>Embed Widget — One Line on Your Website</h3>
+    <p>Add a floating support button to any website with one script tag:</p>
+    <pre>&lt;script src="https://coreswiftcrm.com/s/YOUR_TENANT_ID/widget.js"&gt;&lt;/script&gt;</pre>
+    <p>That gives you:</p>
+    <ul>
+      <li><strong>Floating button</strong> — bottom-right corner, matches your brand</li>
+      <li><strong>Slide-out form</strong> — name, email, subject, description, priority</li>
+      <li><strong>Success confirmation</strong> — visitor knows their request was received</li>
+      <li><strong>No dependencies</strong> — vanilla JS, no framework, no CORS issues</li>
+      <li><strong>No login required</strong> — your visitors submit tickets without accounts</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>Admin Support Panel</h3>
+    <p>Your team manages everything from <strong>🎫 Support</strong> in the sidebar:</p>
+    <ul>
+      <li><strong>Full queue</strong> — all tickets, filterable by status and priority</li>
+      <li><strong>Create tickets</strong> — manually open tickets during phone calls</li>
+      <li><strong>Reply inline</strong> — threaded messages on every ticket</li>
+      <li><strong>Status workflow</strong> — open → in progress → resolved → closed</li>
+      <li><strong>Priority levels</strong> — low, medium, high, urgent</li>
+      <li><strong>Assignment</strong> — route tickets to team members</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>Customer Portal</h3>
+    <p>Your <em>end customers</em> log in and see <strong>💬 My Support</strong> — a dedicated portal showing only their requests:</p>
+    <ul>
+      <li><strong>Submit new requests</strong> — with priority selection</li>
+      <li><strong>View their history</strong> — all past tickets, statuses visible</li>
+      <li><strong>Reply to open tickets</strong> — threaded conversation with your team</li>
+      <li><strong>Tenant-scoped</strong> — customers only see their own data, never other tenants</li>
+    </ul>
+    <p>This is their personal help desk — not your admin panel. They manage their own support experience.</p>
+  </div>
+
+  <div class="card">
+    <h3>API for Integrations</h3>
+    <p>For programmatic access — connecting chatbots, Zapier, custom apps:</p>
+    <pre>POST /s/:tenant_id/ticket
+GET  /s/:tenant_id/widget.js
+POST /api/public/contact</pre>
+    <p>Set <code>source: "agent"</code> when creating tickets from chatbots or AI systems. The public endpoints require no authentication — designed for third-party consumption.</p>
+  </div>
+
+  <div class="card callout tip">
+    <h3>Pricing</h3>
+    <p><strong>Free tier:</strong> Embed widget + admin panel + customer portal included.<br>
+    <strong>Paid tier:</strong> Custom domain (use your own <code>support.yourdomain.com</code>) + email-to-ticket parsing + priority support.</p>
+    <p>Chatbot integrations are API-only on all tiers — you connect your own chatbot, we handle the ticket routing.</p>
   </div>
 </section>
 
