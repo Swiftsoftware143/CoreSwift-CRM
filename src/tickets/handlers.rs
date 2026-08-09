@@ -285,7 +285,7 @@ pub async fn public_contact_form(
 
 // ── Public: Tenant-scoped ticket submit (no auth) ─────────────────────
 
-/// POST /api/v1/support/:tenant_id/tickets — embedded form submission
+/// POST /s/:tid/ticket — embedded form submission
 pub async fn public_submit_ticket(
     State(s): State<AppState>,
     Path(tenant_id): Path<uuid::Uuid>,
@@ -314,7 +314,7 @@ pub async fn public_submit_ticket(
 
 // ── Public: Embed script (no auth) ────────────────────────────────────
 
-/// GET /api/v1/support/:tenant_id/embed.js — returns the embeddable widget
+/// GET /s/:tid/widget.js — returns the embeddable widget
 pub async fn support_embed_script(
     State(_s): State<AppState>,
     Path(tenant_id): Path<uuid::Uuid>,
@@ -355,7 +355,7 @@ pub async fn support_embed_script(
     if(!subject){{alert('Please enter a subject');return}}
     btn.disabled=true;btn.textContent='Sending...';
     var payload={{subject:subject,message:d.getElementById('cs-message').value||'',name:d.getElementById('cs-name').value||null,email:d.getElementById('cs-email').value||null,priority:d.getElementById('cs-priority').value||'medium'}};
-    fetch('https://coreswiftcrm.com/api/v1/support/'+tid+'/tickets',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(payload)}})
+    fetch('https://coreswiftcrm.com/s/'+tid+'/ticket',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(payload)}})
       .then(function(r){{return r.json()}})
       .then(function(){{d.getElementById('crm-support-form').style.display='none';d.getElementById('crm-support-thanks').className='crm-support-thanks show'}})
       .catch(function(e){{alert('Error: '+e.message);btn.disabled=false;btn.textContent='Send'}});
