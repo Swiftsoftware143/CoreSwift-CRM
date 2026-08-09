@@ -241,3 +241,97 @@ pub async fn trigger_purge(
 
     Ok(Json(serde_json::to_value(&summary).unwrap()))
 }
+
+// ── Support Email Box Configuration ──────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+pub struct SetSupportBoxRequest {
+    pub box_id: Option<Uuid>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SupportBoxConfig {
+    pub box_id: Option<Uuid>,
+    pub email_address: Option<String>,
+    pub configured: bool,
+    pub forwarding_instructions: Option<String>,
+}
+
+/// GET /api/private-email/support-box
+pub async fn get_support_box(
+    State(state): State<AppState>,
+    Extension(claims): Extension<crate::auth::models::Claims>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let tenant_id = Uuid::parse_str(&claims.aid)
+        .map_err(|_| AppError::Unauthorized)?;
+
+    let row: Option<(Option<Uuid>, Option<String>)> = sqlx::query_as(
+        r#"SELECT
+            (t.settings->>'support_email_box_id')::uuid,
+            b.email_address
+           FROM tenants t
+           LEFT JOIN private_email_boxes b ON b.id = (t.settings->>'support_email_box_id')::uuid
+           WHERE t.id = $1"#
+    )
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    let (box_id, email_address) = row.unwrap_or((None, None));
+
+    let instructions = email_address.as_ref().map(|addr| {
+        format!("Forward your support emails to {}. We handle the rest — emails become tickets automatically.", addr)
+    });
+
+    Ok(Json(serde_json::json!({
+        "box_id": box_id,
+        "email_address": email_address,
+        "configured": box_id.is_some(),
+        "forwarding_instructions": instructions,
+    })))
+}
+
+/// PUT /api/private-email/support-box
+pub async fn set_support_box(
+    State(state): State<AppState>,
+    Extension(claims): Extension<crate::auth::models::Claims>,
+    Json(body): Json<SetSupportBoxRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let tenant_id = Uuid::parse_str(&claims.aid)
+        .map_err(|_| AppError::Unauthorized)?;
+
+    if let Some(box_id) = body.box_id {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM private_email_boxes WHERE id = $1 AND tenant_id = $2)"
+        )
+        .bind(box_id)
+        .bind(tenant_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(AppError::Database)?;
+
+        if !exists {
+            return Err(AppError::BadRequest("Email box not found or not owned by this tenant".into()));
+        }
+
+        sqlx::query(
+            "UPDATE tenants SET settings = jsonb_set(COALESCE(settings, '{}'), '{support_email_box_id}', to_jsonb($1::text)) WHERE id = $2"
+        )
+        .bind(box_id.to_string())
+        .bind(tenant_id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::Database)?;
+    } else {
+        sqlx::query(
+            "UPDATE tenants SET settings = settings - 'support_email_box_id' WHERE id = $1"
+        )
+        .bind(tenant_id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::Database)?;
+    }
+
+    Ok(Json(serde_json::json!({"status": "ok"})))
+}

@@ -46,5 +46,6 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/admin/limits/:tenant_id/retention", axum::routing::patch(admin_handler::set_retention))
         // Manual purge trigger
         .route("/admin/purge/run", axum::routing::post(admin_handler::trigger_purge))
+            .route("/support-box", axum::routing::get(admin_handler::get_support_box).put(admin_handler::set_support_box))
         .layer(middleware::from_fn_with_state(state.clone(), crate::auth::middleware::auth_middleware))
 }

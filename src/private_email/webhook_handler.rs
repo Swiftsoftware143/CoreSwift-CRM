@@ -186,6 +186,36 @@ pub async fn inbound_webhook(
         }
     };
 
+    // ── Support Ticket Routing ─────────────────────────────────
+    // If the receiving mailbox is the tenant's designated support box,
+    // auto-create a ticket from this email.
+    let support_box_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT (settings->>'support_email_box_id')::uuid FROM tenants WHERE id = $1"
+    )
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    if let Some(support_id) = support_box_id {
+        if support_id == mailbox_id {
+            let contact_name = inbound.from.split('@').next().unwrap_or(&inbound.from);
+            let _ = sqlx::query_scalar::<_, Uuid>(
+                r#"INSERT INTO tickets (tenant_id, subject, description, status, priority, source, contact_email, contact_name)
+                   VALUES ($1, $2, $3, 'open', 'medium', 'email', $4, $5)
+                   RETURNING id"#
+            )
+            .bind(tenant_id)
+            .bind(&inbound.subject)
+            .bind(&inbound.body_plain)
+            .bind(&inbound.from)
+            .bind(contact_name)
+            .fetch_one(&state.db)
+            .await;
+        }
+    }
+
     // Create event for inbound email
     let event_payload = serde_json::json!({
         "from": inbound.from,
