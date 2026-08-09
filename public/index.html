@@ -387,6 +387,7 @@ tr:hover td{background:rgba(59,130,246,.03)}
       <a href="#" onclick="showPage('tags')" data-page="tags">🏷 Tags</a>
       <a href="#" onclick="showPage('lists')" data-page="lists">📋 Lists</a>
       <a href="#" onclick="showPage('comms')" data-page="comms">✉️ Communications</a>
+      <a href="#" onclick="showPage('tickets')" data-page="tickets">🎫 Tickets</a>
       <a href="#" onclick="showPage('automation')" data-page="automation">🤖 Automation</a>
       <a href="#" onclick="showPage('settings')" data-page="settings">⚙️ Settings</a>
     </nav>
@@ -471,6 +472,13 @@ async function handleAuth(e){
 
 /* ===== ROUTING ===== */
 function showPage(page){
+  document.querySelectorAll('.page').forEach(function(p){p.style.display='none'});
+  document.querySelectorAll('.sidebar nav a').forEach(function(a){a.classList.remove('active')});
+  var link=document.querySelector('.sidebar nav a[data-page="'+page+'"]');
+  if(link) link.classList.add('active');
+  var el=document.getElementById('page-'+page);
+  if(el){ el.style.display='block'; }
+  if(page==='tickets'){ loadTickets(); 
   document.querySelectorAll('.sidebar nav a').forEach(a=>a.classList.remove('active'));
   const link=document.querySelector('.sidebar nav a[data-page="'+page+'"]');
   if(link)link.classList.add('active');
@@ -483,6 +491,7 @@ function showPage(page){
     case 'lists':renderLists();break;
     case 'comms':renderComms();break;
     case 'automation':renderAutomation();break;
+    case 'tickets':renderTickets();break;
     case 'settings':renderSettings();break;
     default:renderDashboard();
   }
@@ -1339,6 +1348,99 @@ async function saveSmsProvider(btn){
 }
 
 /* ===== SETTINGS ===== */
+async function renderTickets(reload){
+  let mc=document.getElementById('main-content');
+  let api=baseURL();
+  mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1><button class="btn btn-primary" onclick="newTicketModal()">+ New Ticket</button></div><div id="ticket-stats" style="display:flex;gap:12px;margin:16px 0"></div>'+
+    '<div class="card"><div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">'+
+    '<select id="ticket-filter-status" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Statuses</option><option value="open">Open</option><option value="in_progress">In Progress</option><option value="resolved">Resolved</option><option value="closed">Closed</option></select>'+
+    '<select id="ticket-filter-priority" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>'+
+    '</div><div id="tickets-table"></div></div>';
+  try{
+    let st=document.getElementById('ticket-filter-status')?.value||'';
+    let pr=document.getElementById('ticket-filter-priority')?.value||'';
+    let url=api+'/tickets?limit=100';
+    if(st) url+='&status='+st;
+    if(pr) url+='&priority='+pr;
+    let d=await fetchJSON(url);
+    let tickets=d.tickets||[];
+    let stats=await fetchJSON(api+'/tickets/stats');
+    document.getElementById('ticket-stats').innerHTML=
+      '<div class="stat-card"><div class="stat-num">'+stats.open+'</div><div class="stat-label">Open</div></div>'+
+      '<div class="stat-card"><div class="stat-num">'+stats.in_progress+'</div><div class="stat-label">In Progress</div></div>'+
+      '<div class="stat-card"><div class="stat-num">'+stats.resolved+'</div><div class="stat-label">Resolved</div></div>'+
+      '<div class="stat-card"><div class="stat-num">'+stats.closed+'</div><div class="stat-label">Closed</div></div>';
+    document.getElementById('tickets-table').innerHTML=
+      '<table><thead><tr><th>Subject</th><th>Status</th><th>Priority</th><th>Updated</th><th></th></tr></thead><tbody>'+
+      tickets.map(function(t){
+        return '<tr><td><a href="#" onclick="viewTicketModal(\''+t.id+'\')" style="color:var(--accent)">'+esc(t.subject)+'</a></td>'+
+          '<td><span class="badge badge-'+t.status+'">'+t.status.replace(/_/g,' ')+'</span></td>'+
+          '<td><span class="badge badge-'+t.priority+'">'+t.priority+'</span></td>'+
+          '<td>'+relativeTime(t.updated_at)+'</td>'+
+          '<td><button class="btn btn-sm btn-secondary" onclick="viewTicketModal(\''+t.id+'\')">View</button></td></tr>';
+      }).join('')||'<tr><td colspan="5" style="color:var(--text2);padding:20px;text-align:center">No tickets yet</td></tr>'+
+      '</tbody></table>';
+  }catch(e){mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1></div><div class="empty-state"><p>'+esc(e.message)+'</p></div>'}
+}
+
+async function newTicketModal(){
+  let html='<h3>New Ticket</h3>'+
+    '<div class="field"><label>Subject</label><input id="nt-subject" placeholder="What is this about?"></div>'+
+    '<div class="field"><label>Description</label><textarea id="nt-desc" rows="3" placeholder="Details..."></textarea></div>'+
+    '<div class="field"><label>Priority</label><select id="nt-priority"><option value="medium">Medium</option><option value="low">Low</option><option value="high">High</option><option value="urgent">Urgent</option></select></div>'+
+    '<button class="btn btn-primary" onclick="createTicket()">Create Ticket</button>';
+  showModal(html);
+}
+
+async function createTicket(){
+  let subj=document.getElementById('nt-subject').value;
+  if(!subj) return alert('Subject is required');
+  let desc=document.getElementById('nt-desc').value||'';
+  let priority=document.getElementById('nt-priority').value||'medium';
+  try{
+    let d=await fetchJSON(baseURL()+'/tickets',{method:'POST',body:JSON.stringify({subject:subj,description:desc,priority:priority})});
+    closeModal();
+    showToast('Ticket created');
+    renderTickets();
+  }catch(e){alert('Error: '+e.message)}
+}
+
+async function viewTicketModal(id){
+  let d=await fetchJSON(baseURL()+'/tickets/'+id);
+  let t=d.ticket;
+  let msgs=d.messages||[];
+  let html='<h3>'+esc(t.subject)+'</h3>'+
+    '<p style="color:var(--text2);margin:8px 0">Status: <b>'+t.status.replace(/_/g,' ')+'</b> | Priority: <b>'+t.priority+'</b></p>'+
+    '<p style="margin-bottom:16px">'+esc(t.description||'No description')+'</p>'+
+    '<div style="margin:16px 0;padding:12px;background:var(--surface2);border-radius:8px;max-height:300px;overflow-y:auto">'+
+    '<b>Messages</b><br>'+
+    (msgs.length?msgs.map(function(m){return '<div style="margin:8px 0;padding:8px;background:var(--bg);border-radius:6px"><b style="color:var(--accent)">'+(m.sender_type==='agent'?'Agent':'Contact')+'</b> <small style="color:var(--text2)">'+relativeTime(m.created_at)+'</small><br>'+esc(m.message)+'</div>'}).join('')
+    :'<small style="color:var(--text2)">No messages yet</small>')+'</div>'+
+    '<div style="display:flex;gap:8px;margin-top:12px">'+
+    '<input id="msg-input" placeholder="Reply..." style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:8px">'+
+    '<button class="btn btn-primary btn-sm" onclick="addTicketMessage(\''+id+'\')">Send</button></div>'+
+    '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'in_progress\')">▶ Start</button>'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'resolved\')">✓ Resolve</button>'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'closed\')">✕ Close</button>'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'open\')">↩ Reopen</button>'+
+    '</div>';
+  showModal(html);
+}
+
+async function addTicketMessage(id){
+  let msg=document.getElementById('msg-input').value;
+  if(!msg) return alert('Enter a message');
+  await fetchJSON(baseURL()+'/tickets/'+id+'/messages',{method:'POST',body:JSON.stringify({message:msg,sender_type:'agent'})});
+  viewTicketModal(id);
+}
+
+async function changeTicketStatus(id,status){
+  await fetchJSON(baseURL()+'/tickets/'+id,{method:'PATCH',body:JSON.stringify({status:status})});
+  closeModal();
+  renderTickets();
+}
+
 async function renderSettings(){
   const mc=$('main-content');
   try{
@@ -2043,6 +2145,99 @@ async function renderComms(){
 }
 
 /* ===== SETTINGS ===== */
+async function renderTickets(reload){
+  let mc=document.getElementById('main-content');
+  let api=baseURL();
+  mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1><button class="btn btn-primary" onclick="newTicketModal()">+ New Ticket</button></div><div id="ticket-stats" style="display:flex;gap:12px;margin:16px 0"></div>'+
+    '<div class="card"><div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">'+
+    '<select id="ticket-filter-status" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Statuses</option><option value="open">Open</option><option value="in_progress">In Progress</option><option value="resolved">Resolved</option><option value="closed">Closed</option></select>'+
+    '<select id="ticket-filter-priority" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>'+
+    '</div><div id="tickets-table"></div></div>';
+  try{
+    let st=document.getElementById('ticket-filter-status')?.value||'';
+    let pr=document.getElementById('ticket-filter-priority')?.value||'';
+    let url=api+'/tickets?limit=100';
+    if(st) url+='&status='+st;
+    if(pr) url+='&priority='+pr;
+    let d=await fetchJSON(url);
+    let tickets=d.tickets||[];
+    let stats=await fetchJSON(api+'/tickets/stats');
+    document.getElementById('ticket-stats').innerHTML=
+      '<div class="stat-card"><div class="stat-num">'+stats.open+'</div><div class="stat-label">Open</div></div>'+
+      '<div class="stat-card"><div class="stat-num">'+stats.in_progress+'</div><div class="stat-label">In Progress</div></div>'+
+      '<div class="stat-card"><div class="stat-num">'+stats.resolved+'</div><div class="stat-label">Resolved</div></div>'+
+      '<div class="stat-card"><div class="stat-num">'+stats.closed+'</div><div class="stat-label">Closed</div></div>';
+    document.getElementById('tickets-table').innerHTML=
+      '<table><thead><tr><th>Subject</th><th>Status</th><th>Priority</th><th>Updated</th><th></th></tr></thead><tbody>'+
+      tickets.map(function(t){
+        return '<tr><td><a href="#" onclick="viewTicketModal(\''+t.id+'\')" style="color:var(--accent)">'+esc(t.subject)+'</a></td>'+
+          '<td><span class="badge badge-'+t.status+'">'+t.status.replace(/_/g,' ')+'</span></td>'+
+          '<td><span class="badge badge-'+t.priority+'">'+t.priority+'</span></td>'+
+          '<td>'+relativeTime(t.updated_at)+'</td>'+
+          '<td><button class="btn btn-sm btn-secondary" onclick="viewTicketModal(\''+t.id+'\')">View</button></td></tr>';
+      }).join('')||'<tr><td colspan="5" style="color:var(--text2);padding:20px;text-align:center">No tickets yet</td></tr>'+
+      '</tbody></table>';
+  }catch(e){mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1></div><div class="empty-state"><p>'+esc(e.message)+'</p></div>'}
+}
+
+async function newTicketModal(){
+  let html='<h3>New Ticket</h3>'+
+    '<div class="field"><label>Subject</label><input id="nt-subject" placeholder="What is this about?"></div>'+
+    '<div class="field"><label>Description</label><textarea id="nt-desc" rows="3" placeholder="Details..."></textarea></div>'+
+    '<div class="field"><label>Priority</label><select id="nt-priority"><option value="medium">Medium</option><option value="low">Low</option><option value="high">High</option><option value="urgent">Urgent</option></select></div>'+
+    '<button class="btn btn-primary" onclick="createTicket()">Create Ticket</button>';
+  showModal(html);
+}
+
+async function createTicket(){
+  let subj=document.getElementById('nt-subject').value;
+  if(!subj) return alert('Subject is required');
+  let desc=document.getElementById('nt-desc').value||'';
+  let priority=document.getElementById('nt-priority').value||'medium';
+  try{
+    let d=await fetchJSON(baseURL()+'/tickets',{method:'POST',body:JSON.stringify({subject:subj,description:desc,priority:priority})});
+    closeModal();
+    showToast('Ticket created');
+    renderTickets();
+  }catch(e){alert('Error: '+e.message)}
+}
+
+async function viewTicketModal(id){
+  let d=await fetchJSON(baseURL()+'/tickets/'+id);
+  let t=d.ticket;
+  let msgs=d.messages||[];
+  let html='<h3>'+esc(t.subject)+'</h3>'+
+    '<p style="color:var(--text2);margin:8px 0">Status: <b>'+t.status.replace(/_/g,' ')+'</b> | Priority: <b>'+t.priority+'</b></p>'+
+    '<p style="margin-bottom:16px">'+esc(t.description||'No description')+'</p>'+
+    '<div style="margin:16px 0;padding:12px;background:var(--surface2);border-radius:8px;max-height:300px;overflow-y:auto">'+
+    '<b>Messages</b><br>'+
+    (msgs.length?msgs.map(function(m){return '<div style="margin:8px 0;padding:8px;background:var(--bg);border-radius:6px"><b style="color:var(--accent)">'+(m.sender_type==='agent'?'Agent':'Contact')+'</b> <small style="color:var(--text2)">'+relativeTime(m.created_at)+'</small><br>'+esc(m.message)+'</div>'}).join('')
+    :'<small style="color:var(--text2)">No messages yet</small>')+'</div>'+
+    '<div style="display:flex;gap:8px;margin-top:12px">'+
+    '<input id="msg-input" placeholder="Reply..." style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:8px">'+
+    '<button class="btn btn-primary btn-sm" onclick="addTicketMessage(\''+id+'\')">Send</button></div>'+
+    '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'in_progress\')">▶ Start</button>'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'resolved\')">✓ Resolve</button>'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'closed\')">✕ Close</button>'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'open\')">↩ Reopen</button>'+
+    '</div>';
+  showModal(html);
+}
+
+async function addTicketMessage(id){
+  let msg=document.getElementById('msg-input').value;
+  if(!msg) return alert('Enter a message');
+  await fetchJSON(baseURL()+'/tickets/'+id+'/messages',{method:'POST',body:JSON.stringify({message:msg,sender_type:'agent'})});
+  viewTicketModal(id);
+}
+
+async function changeTicketStatus(id,status){
+  await fetchJSON(baseURL()+'/tickets/'+id,{method:'PATCH',body:JSON.stringify({status:status})});
+  closeModal();
+  renderTickets();
+}
+
 async function renderSettings(){
   const mc=$('main-content');
   try{
@@ -2356,6 +2551,99 @@ async function renderComms(){
 }
 
 /* ===== SETTINGS ===== */
+async function renderTickets(reload){
+  let mc=document.getElementById('main-content');
+  let api=baseURL();
+  mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1><button class="btn btn-primary" onclick="newTicketModal()">+ New Ticket</button></div><div id="ticket-stats" style="display:flex;gap:12px;margin:16px 0"></div>'+
+    '<div class="card"><div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">'+
+    '<select id="ticket-filter-status" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Statuses</option><option value="open">Open</option><option value="in_progress">In Progress</option><option value="resolved">Resolved</option><option value="closed">Closed</option></select>'+
+    '<select id="ticket-filter-priority" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>'+
+    '</div><div id="tickets-table"></div></div>';
+  try{
+    let st=document.getElementById('ticket-filter-status')?.value||'';
+    let pr=document.getElementById('ticket-filter-priority')?.value||'';
+    let url=api+'/tickets?limit=100';
+    if(st) url+='&status='+st;
+    if(pr) url+='&priority='+pr;
+    let d=await fetchJSON(url);
+    let tickets=d.tickets||[];
+    let stats=await fetchJSON(api+'/tickets/stats');
+    document.getElementById('ticket-stats').innerHTML=
+      '<div class="stat-card"><div class="stat-num">'+stats.open+'</div><div class="stat-label">Open</div></div>'+
+      '<div class="stat-card"><div class="stat-num">'+stats.in_progress+'</div><div class="stat-label">In Progress</div></div>'+
+      '<div class="stat-card"><div class="stat-num">'+stats.resolved+'</div><div class="stat-label">Resolved</div></div>'+
+      '<div class="stat-card"><div class="stat-num">'+stats.closed+'</div><div class="stat-label">Closed</div></div>';
+    document.getElementById('tickets-table').innerHTML=
+      '<table><thead><tr><th>Subject</th><th>Status</th><th>Priority</th><th>Updated</th><th></th></tr></thead><tbody>'+
+      tickets.map(function(t){
+        return '<tr><td><a href="#" onclick="viewTicketModal(\''+t.id+'\')" style="color:var(--accent)">'+esc(t.subject)+'</a></td>'+
+          '<td><span class="badge badge-'+t.status+'">'+t.status.replace(/_/g,' ')+'</span></td>'+
+          '<td><span class="badge badge-'+t.priority+'">'+t.priority+'</span></td>'+
+          '<td>'+relativeTime(t.updated_at)+'</td>'+
+          '<td><button class="btn btn-sm btn-secondary" onclick="viewTicketModal(\''+t.id+'\')">View</button></td></tr>';
+      }).join('')||'<tr><td colspan="5" style="color:var(--text2);padding:20px;text-align:center">No tickets yet</td></tr>'+
+      '</tbody></table>';
+  }catch(e){mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1></div><div class="empty-state"><p>'+esc(e.message)+'</p></div>'}
+}
+
+async function newTicketModal(){
+  let html='<h3>New Ticket</h3>'+
+    '<div class="field"><label>Subject</label><input id="nt-subject" placeholder="What is this about?"></div>'+
+    '<div class="field"><label>Description</label><textarea id="nt-desc" rows="3" placeholder="Details..."></textarea></div>'+
+    '<div class="field"><label>Priority</label><select id="nt-priority"><option value="medium">Medium</option><option value="low">Low</option><option value="high">High</option><option value="urgent">Urgent</option></select></div>'+
+    '<button class="btn btn-primary" onclick="createTicket()">Create Ticket</button>';
+  showModal(html);
+}
+
+async function createTicket(){
+  let subj=document.getElementById('nt-subject').value;
+  if(!subj) return alert('Subject is required');
+  let desc=document.getElementById('nt-desc').value||'';
+  let priority=document.getElementById('nt-priority').value||'medium';
+  try{
+    let d=await fetchJSON(baseURL()+'/tickets',{method:'POST',body:JSON.stringify({subject:subj,description:desc,priority:priority})});
+    closeModal();
+    showToast('Ticket created');
+    renderTickets();
+  }catch(e){alert('Error: '+e.message)}
+}
+
+async function viewTicketModal(id){
+  let d=await fetchJSON(baseURL()+'/tickets/'+id);
+  let t=d.ticket;
+  let msgs=d.messages||[];
+  let html='<h3>'+esc(t.subject)+'</h3>'+
+    '<p style="color:var(--text2);margin:8px 0">Status: <b>'+t.status.replace(/_/g,' ')+'</b> | Priority: <b>'+t.priority+'</b></p>'+
+    '<p style="margin-bottom:16px">'+esc(t.description||'No description')+'</p>'+
+    '<div style="margin:16px 0;padding:12px;background:var(--surface2);border-radius:8px;max-height:300px;overflow-y:auto">'+
+    '<b>Messages</b><br>'+
+    (msgs.length?msgs.map(function(m){return '<div style="margin:8px 0;padding:8px;background:var(--bg);border-radius:6px"><b style="color:var(--accent)">'+(m.sender_type==='agent'?'Agent':'Contact')+'</b> <small style="color:var(--text2)">'+relativeTime(m.created_at)+'</small><br>'+esc(m.message)+'</div>'}).join('')
+    :'<small style="color:var(--text2)">No messages yet</small>')+'</div>'+
+    '<div style="display:flex;gap:8px;margin-top:12px">'+
+    '<input id="msg-input" placeholder="Reply..." style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:8px">'+
+    '<button class="btn btn-primary btn-sm" onclick="addTicketMessage(\''+id+'\')">Send</button></div>'+
+    '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'in_progress\')">▶ Start</button>'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'resolved\')">✓ Resolve</button>'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'closed\')">✕ Close</button>'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'open\')">↩ Reopen</button>'+
+    '</div>';
+  showModal(html);
+}
+
+async function addTicketMessage(id){
+  let msg=document.getElementById('msg-input').value;
+  if(!msg) return alert('Enter a message');
+  await fetchJSON(baseURL()+'/tickets/'+id+'/messages',{method:'POST',body:JSON.stringify({message:msg,sender_type:'agent'})});
+  viewTicketModal(id);
+}
+
+async function changeTicketStatus(id,status){
+  await fetchJSON(baseURL()+'/tickets/'+id,{method:'PATCH',body:JSON.stringify({status:status})});
+  closeModal();
+  renderTickets();
+}
+
 async function renderSettings(){
   const mc=$('main-content');
   try{
@@ -2908,6 +3196,99 @@ async function renderComms(){
 }
 
 /* ===== SETTINGS ===== */
+async function renderTickets(reload){
+  let mc=document.getElementById('main-content');
+  let api=baseURL();
+  mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1><button class="btn btn-primary" onclick="newTicketModal()">+ New Ticket</button></div><div id="ticket-stats" style="display:flex;gap:12px;margin:16px 0"></div>'+
+    '<div class="card"><div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">'+
+    '<select id="ticket-filter-status" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Statuses</option><option value="open">Open</option><option value="in_progress">In Progress</option><option value="resolved">Resolved</option><option value="closed">Closed</option></select>'+
+    '<select id="ticket-filter-priority" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>'+
+    '</div><div id="tickets-table"></div></div>';
+  try{
+    let st=document.getElementById('ticket-filter-status')?.value||'';
+    let pr=document.getElementById('ticket-filter-priority')?.value||'';
+    let url=api+'/tickets?limit=100';
+    if(st) url+='&status='+st;
+    if(pr) url+='&priority='+pr;
+    let d=await fetchJSON(url);
+    let tickets=d.tickets||[];
+    let stats=await fetchJSON(api+'/tickets/stats');
+    document.getElementById('ticket-stats').innerHTML=
+      '<div class="stat-card"><div class="stat-num">'+stats.open+'</div><div class="stat-label">Open</div></div>'+
+      '<div class="stat-card"><div class="stat-num">'+stats.in_progress+'</div><div class="stat-label">In Progress</div></div>'+
+      '<div class="stat-card"><div class="stat-num">'+stats.resolved+'</div><div class="stat-label">Resolved</div></div>'+
+      '<div class="stat-card"><div class="stat-num">'+stats.closed+'</div><div class="stat-label">Closed</div></div>';
+    document.getElementById('tickets-table').innerHTML=
+      '<table><thead><tr><th>Subject</th><th>Status</th><th>Priority</th><th>Updated</th><th></th></tr></thead><tbody>'+
+      tickets.map(function(t){
+        return '<tr><td><a href="#" onclick="viewTicketModal(\''+t.id+'\')" style="color:var(--accent)">'+esc(t.subject)+'</a></td>'+
+          '<td><span class="badge badge-'+t.status+'">'+t.status.replace(/_/g,' ')+'</span></td>'+
+          '<td><span class="badge badge-'+t.priority+'">'+t.priority+'</span></td>'+
+          '<td>'+relativeTime(t.updated_at)+'</td>'+
+          '<td><button class="btn btn-sm btn-secondary" onclick="viewTicketModal(\''+t.id+'\')">View</button></td></tr>';
+      }).join('')||'<tr><td colspan="5" style="color:var(--text2);padding:20px;text-align:center">No tickets yet</td></tr>'+
+      '</tbody></table>';
+  }catch(e){mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1></div><div class="empty-state"><p>'+esc(e.message)+'</p></div>'}
+}
+
+async function newTicketModal(){
+  let html='<h3>New Ticket</h3>'+
+    '<div class="field"><label>Subject</label><input id="nt-subject" placeholder="What is this about?"></div>'+
+    '<div class="field"><label>Description</label><textarea id="nt-desc" rows="3" placeholder="Details..."></textarea></div>'+
+    '<div class="field"><label>Priority</label><select id="nt-priority"><option value="medium">Medium</option><option value="low">Low</option><option value="high">High</option><option value="urgent">Urgent</option></select></div>'+
+    '<button class="btn btn-primary" onclick="createTicket()">Create Ticket</button>';
+  showModal(html);
+}
+
+async function createTicket(){
+  let subj=document.getElementById('nt-subject').value;
+  if(!subj) return alert('Subject is required');
+  let desc=document.getElementById('nt-desc').value||'';
+  let priority=document.getElementById('nt-priority').value||'medium';
+  try{
+    let d=await fetchJSON(baseURL()+'/tickets',{method:'POST',body:JSON.stringify({subject:subj,description:desc,priority:priority})});
+    closeModal();
+    showToast('Ticket created');
+    renderTickets();
+  }catch(e){alert('Error: '+e.message)}
+}
+
+async function viewTicketModal(id){
+  let d=await fetchJSON(baseURL()+'/tickets/'+id);
+  let t=d.ticket;
+  let msgs=d.messages||[];
+  let html='<h3>'+esc(t.subject)+'</h3>'+
+    '<p style="color:var(--text2);margin:8px 0">Status: <b>'+t.status.replace(/_/g,' ')+'</b> | Priority: <b>'+t.priority+'</b></p>'+
+    '<p style="margin-bottom:16px">'+esc(t.description||'No description')+'</p>'+
+    '<div style="margin:16px 0;padding:12px;background:var(--surface2);border-radius:8px;max-height:300px;overflow-y:auto">'+
+    '<b>Messages</b><br>'+
+    (msgs.length?msgs.map(function(m){return '<div style="margin:8px 0;padding:8px;background:var(--bg);border-radius:6px"><b style="color:var(--accent)">'+(m.sender_type==='agent'?'Agent':'Contact')+'</b> <small style="color:var(--text2)">'+relativeTime(m.created_at)+'</small><br>'+esc(m.message)+'</div>'}).join('')
+    :'<small style="color:var(--text2)">No messages yet</small>')+'</div>'+
+    '<div style="display:flex;gap:8px;margin-top:12px">'+
+    '<input id="msg-input" placeholder="Reply..." style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:8px">'+
+    '<button class="btn btn-primary btn-sm" onclick="addTicketMessage(\''+id+'\')">Send</button></div>'+
+    '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'in_progress\')">▶ Start</button>'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'resolved\')">✓ Resolve</button>'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'closed\')">✕ Close</button>'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'open\')">↩ Reopen</button>'+
+    '</div>';
+  showModal(html);
+}
+
+async function addTicketMessage(id){
+  let msg=document.getElementById('msg-input').value;
+  if(!msg) return alert('Enter a message');
+  await fetchJSON(baseURL()+'/tickets/'+id+'/messages',{method:'POST',body:JSON.stringify({message:msg,sender_type:'agent'})});
+  viewTicketModal(id);
+}
+
+async function changeTicketStatus(id,status){
+  await fetchJSON(baseURL()+'/tickets/'+id,{method:'PATCH',body:JSON.stringify({status:status})});
+  closeModal();
+  renderTickets();
+}
+
 async function renderSettings(){
   const mc=$('main-content');
   try{
@@ -3192,6 +3573,99 @@ async function renderComms(){
 }
 
 /* ===== SETTINGS ===== */
+async function renderTickets(reload){
+  let mc=document.getElementById('main-content');
+  let api=baseURL();
+  mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1><button class="btn btn-primary" onclick="newTicketModal()">+ New Ticket</button></div><div id="ticket-stats" style="display:flex;gap:12px;margin:16px 0"></div>'+
+    '<div class="card"><div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">'+
+    '<select id="ticket-filter-status" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Statuses</option><option value="open">Open</option><option value="in_progress">In Progress</option><option value="resolved">Resolved</option><option value="closed">Closed</option></select>'+
+    '<select id="ticket-filter-priority" onchange="renderTickets()" style="width:auto;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px"><option value="">All Priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>'+
+    '</div><div id="tickets-table"></div></div>';
+  try{
+    let st=document.getElementById('ticket-filter-status')?.value||'';
+    let pr=document.getElementById('ticket-filter-priority')?.value||'';
+    let url=api+'/tickets?limit=100';
+    if(st) url+='&status='+st;
+    if(pr) url+='&priority='+pr;
+    let d=await fetchJSON(url);
+    let tickets=d.tickets||[];
+    let stats=await fetchJSON(api+'/tickets/stats');
+    document.getElementById('ticket-stats').innerHTML=
+      '<div class="stat-card"><div class="stat-num">'+stats.open+'</div><div class="stat-label">Open</div></div>'+
+      '<div class="stat-card"><div class="stat-num">'+stats.in_progress+'</div><div class="stat-label">In Progress</div></div>'+
+      '<div class="stat-card"><div class="stat-num">'+stats.resolved+'</div><div class="stat-label">Resolved</div></div>'+
+      '<div class="stat-card"><div class="stat-num">'+stats.closed+'</div><div class="stat-label">Closed</div></div>';
+    document.getElementById('tickets-table').innerHTML=
+      '<table><thead><tr><th>Subject</th><th>Status</th><th>Priority</th><th>Updated</th><th></th></tr></thead><tbody>'+
+      tickets.map(function(t){
+        return '<tr><td><a href="#" onclick="viewTicketModal(\''+t.id+'\')" style="color:var(--accent)">'+esc(t.subject)+'</a></td>'+
+          '<td><span class="badge badge-'+t.status+'">'+t.status.replace(/_/g,' ')+'</span></td>'+
+          '<td><span class="badge badge-'+t.priority+'">'+t.priority+'</span></td>'+
+          '<td>'+relativeTime(t.updated_at)+'</td>'+
+          '<td><button class="btn btn-sm btn-secondary" onclick="viewTicketModal(\''+t.id+'\')">View</button></td></tr>';
+      }).join('')||'<tr><td colspan="5" style="color:var(--text2);padding:20px;text-align:center">No tickets yet</td></tr>'+
+      '</tbody></table>';
+  }catch(e){mc.innerHTML='<div class="top-bar"><h1>🎫 Tickets</h1></div><div class="empty-state"><p>'+esc(e.message)+'</p></div>'}
+}
+
+async function newTicketModal(){
+  let html='<h3>New Ticket</h3>'+
+    '<div class="field"><label>Subject</label><input id="nt-subject" placeholder="What is this about?"></div>'+
+    '<div class="field"><label>Description</label><textarea id="nt-desc" rows="3" placeholder="Details..."></textarea></div>'+
+    '<div class="field"><label>Priority</label><select id="nt-priority"><option value="medium">Medium</option><option value="low">Low</option><option value="high">High</option><option value="urgent">Urgent</option></select></div>'+
+    '<button class="btn btn-primary" onclick="createTicket()">Create Ticket</button>';
+  showModal(html);
+}
+
+async function createTicket(){
+  let subj=document.getElementById('nt-subject').value;
+  if(!subj) return alert('Subject is required');
+  let desc=document.getElementById('nt-desc').value||'';
+  let priority=document.getElementById('nt-priority').value||'medium';
+  try{
+    let d=await fetchJSON(baseURL()+'/tickets',{method:'POST',body:JSON.stringify({subject:subj,description:desc,priority:priority})});
+    closeModal();
+    showToast('Ticket created');
+    renderTickets();
+  }catch(e){alert('Error: '+e.message)}
+}
+
+async function viewTicketModal(id){
+  let d=await fetchJSON(baseURL()+'/tickets/'+id);
+  let t=d.ticket;
+  let msgs=d.messages||[];
+  let html='<h3>'+esc(t.subject)+'</h3>'+
+    '<p style="color:var(--text2);margin:8px 0">Status: <b>'+t.status.replace(/_/g,' ')+'</b> | Priority: <b>'+t.priority+'</b></p>'+
+    '<p style="margin-bottom:16px">'+esc(t.description||'No description')+'</p>'+
+    '<div style="margin:16px 0;padding:12px;background:var(--surface2);border-radius:8px;max-height:300px;overflow-y:auto">'+
+    '<b>Messages</b><br>'+
+    (msgs.length?msgs.map(function(m){return '<div style="margin:8px 0;padding:8px;background:var(--bg);border-radius:6px"><b style="color:var(--accent)">'+(m.sender_type==='agent'?'Agent':'Contact')+'</b> <small style="color:var(--text2)">'+relativeTime(m.created_at)+'</small><br>'+esc(m.message)+'</div>'}).join('')
+    :'<small style="color:var(--text2)">No messages yet</small>')+'</div>'+
+    '<div style="display:flex;gap:8px;margin-top:12px">'+
+    '<input id="msg-input" placeholder="Reply..." style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:8px">'+
+    '<button class="btn btn-primary btn-sm" onclick="addTicketMessage(\''+id+'\')">Send</button></div>'+
+    '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'in_progress\')">▶ Start</button>'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'resolved\')">✓ Resolve</button>'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'closed\')">✕ Close</button>'+
+    '<button class="btn btn-sm btn-secondary" onclick="changeTicketStatus(\''+id+'\',\'open\')">↩ Reopen</button>'+
+    '</div>';
+  showModal(html);
+}
+
+async function addTicketMessage(id){
+  let msg=document.getElementById('msg-input').value;
+  if(!msg) return alert('Enter a message');
+  await fetchJSON(baseURL()+'/tickets/'+id+'/messages',{method:'POST',body:JSON.stringify({message:msg,sender_type:'agent'})});
+  viewTicketModal(id);
+}
+
+async function changeTicketStatus(id,status){
+  await fetchJSON(baseURL()+'/tickets/'+id,{method:'PATCH',body:JSON.stringify({status:status})});
+  closeModal();
+  renderTickets();
+}
+
 async function renderSettings(){
   const mc=$('main-content');
   try{
