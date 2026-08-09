@@ -1546,6 +1546,7 @@ async function renderSettings(){
         +'<button class="email-tab" onclick="switchEmailTab(\'mailboxes\')" id="tab-mailboxes">📧 Mailboxes'
         +'<span style="font-size:10px;margin-left:6px;opacity:.7">('+features.max_mailboxes+' max)</span></button>'
         +'<button class="email-tab" onclick="switchEmailTab(\'keys\')" id="tab-keys">🔑 Keys</button>'
+        +'<button class="email-tab" onclick="switchEmailTab(\'support\')" id="tab-support">Support</button>'
         +'</div>'
         +'<div id="email-tab-content"></div>'
         +'</div>';
@@ -1597,6 +1598,60 @@ function switchEmailTab(tab){
   if(tab==='domains')renderEmailDomains();
   else if(tab==='mailboxes')renderEmailMailboxes();
   else if(tab==='keys')renderEmailKeys();
+  else if(tab==='support')renderSupportEmailTab();
+}
+
+// ── Support Email Tab ───────────────────────────────────────
+async function renderSupportEmailTab(){
+  var c=document.getElementById('email-tab-content');
+  c.innerHTML='<div style="padding:12px;text-align:center;color:var(--text2)">Loading...</div>';
+  try{
+    var boxList=await api('/private-email/boxes');
+    var cfg=await api('/private-email/support-box');
+    var boxes=boxList.boxes||[];
+    var currentId=cfg.box_id||'';
+    var opts=boxes.map(function(b){
+      return '<option value="'+b.id+'"'+(b.id===currentId?' selected':'')+'>'+esc(b.email_address)+'</option>';
+    }).join('');
+    c.innerHTML='<div>
+'
+      +'<h4 style="margin:0 0 4px 0">Support Email Routing</h4>
+'
+      +'<p style="color:var(--text2);margin:0 0 12px 0;font-size:13px">When an email arrives at the selected mailbox, it auto-creates a support ticket.</p>
+'
+      +(boxes.length===0
+        ?'<div style="padding:20px;background:var(--surface);border-radius:8px;text-align:center;color:var(--text2)">No mailboxes yet. <a href="#" onclick="switchEmailTab(\'mailboxes\')" style="color:var(--accent)">Create one first</a>.</div>'
+        :'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+'
+          +'<select id="support-box-select" style="flex:1;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--card);color:var(--text);min-width:200px">
+'
+          +'<option value="">-- Not connected --</option>
+'
+          +opts
+          +'</select>
+'
+          +'<button class="btn btn-primary" onclick="saveSupportBox()">Save</button>
+'
+          +(currentId?'<button class="btn" style="background:var(--danger);color:#fff" onclick="disconnectSupportBox()">Disconnect</button>':'')
+          +'</div>')
+      +(cfg.configured?'<div style="margin-top:12px;padding:12px;background:var(--success-bg);border-radius:8px;border:1px solid var(--success)"><strong>Connected:</strong> <code>'+esc(cfg.email_address||'')+'</code><br><span style="color:var(--text2);font-size:13px">'+esc(cfg.forwarding_instructions||'')+'</span></div>':'')
+      +'</div>';
+  }catch(e){ c.innerHTML='<div style="padding:16px;color:var(--danger)">Error: '+esc(e.message)+'</div>'; }
+}
+async function saveSupportBox(){
+  var sel=document.getElementById('support-box-select');
+  var id=sel.value||null;
+  try{
+    await api('/private-email/support-box',{method:'PUT',body:JSON.stringify({box_id:id||null})});
+    showToast(id?'Support box connected':'Support box disconnected');
+    renderSupportEmailTab();
+  }catch(e){ showToast('Error: '+e.message); }
+}
+async function disconnectSupportBox(){
+  if(!confirm('Disconnect support email routing?'))return;
+  await api('/private-email/support-box',{method:'PUT',body:JSON.stringify({box_id:null})});
+  showToast('Support disconnected');
+  renderSupportEmailTab();
 }
 
 async function renderEmailDomains(){
