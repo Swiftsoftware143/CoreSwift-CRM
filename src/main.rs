@@ -43,6 +43,7 @@ pub mod webhook;
 pub mod dashboard;
 pub mod portfolio;
 pub mod bookings;
+pub mod tickets;
 pub mod inbound;
 pub mod telnyx;
 pub mod webhooks;
