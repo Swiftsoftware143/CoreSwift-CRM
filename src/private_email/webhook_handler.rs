@@ -47,16 +47,12 @@ pub async fn inbound_webhook(
     State(state): State<AppState>,
     body: String,
 ) -> ApiResult<Json<serde_json::Value>> {
-    // Try to parse as form-urlencoded (Mailgun's format)
-    let payload: MailgunInbound = serde_urlencoded::from_str(&body)
-        .map_err(|e| AppError::BadRequest(format!("Invalid Mailgun payload: {}", e)))?;
-
-    // Extract sender/recipient email addresses
-    let sender_email = extract_email(&payload.sender);
-    let recipient_email = extract_email(&payload.recipient);
+    // ── Step 1: Extract sender + recipient (multi-provider) ─────
+    // Try Mailgun form-urlencoded first, then JSON (SES SNS, Postmark)
+    let (sender_email, recipient_email, mailgun_payload) = try_parse_inbound(&body);
 
     if sender_email.is_empty() || recipient_email.is_empty() {
-        return Ok(Json(json!({"received": false, "error": "missing sender or recipient"})));
+        return Ok(Json(json!({"received": false, "error": "could not determine sender or recipient"})));
     }
 
     // Find which mailbox this is for (by recipient email)
@@ -128,26 +124,31 @@ pub async fn inbound_webhook(
     let inbound = match inbound {
         Some(i) => i,
         None => {
-            // If signature validation fails but we know the mailbox, still accept
+                // Signature validation failed — try reconstructing from raw parse
             // (not all senders configure webhook verification)
-            // Reconstruct from payload
-            let body_text = if !payload.stripped_text.is_empty() {
-                &payload.stripped_text
-            } else if !payload.body_plain.is_empty() {
-                &payload.body_plain
-            } else {
-                &payload.body_html
-            };
-            let msg_id_empty = payload.message_id.is_empty();
-            let msg_id = if msg_id_empty { None } else { Some(payload.message_id) };
+            let (body_text, subject, body_html, msg_id, in_reply_to) =
+                if let Some(ref p) = mailgun_payload {
+                    let text = if !p.stripped_text.is_empty() {
+                        &p.stripped_text
+                    } else if !p.body_plain.is_empty() {
+                        &p.body_plain
+                    } else {
+                        &p.body_html
+                    };
+                    let mid = if p.message_id.is_empty() { None } else { Some(p.message_id.clone()) };
+                    let irt = if p.in_reply_to.is_empty() { None } else { Some(p.in_reply_to.clone()) };
+                    (text.to_string(), p.subject.clone(), if p.body_html.is_empty() { None } else { Some(p.body_html.clone()) }, mid.clone(), irt)
+                } else {
+                    ("".to_string(), "".to_string(), None, None, None)
+                };
             super::providers::InboundEmail {
-                from: sender_email,
-                to: recipient_email,
-                subject: payload.subject,
-                body_plain: body_text.to_string(),
-                body_html: if payload.body_html.is_empty() { None } else { Some(payload.body_html) },
+                from: sender_email.clone(),
+                to: recipient_email.clone(),
+                subject,
+                body_plain: body_text,
+                body_html,
                 message_id: msg_id.clone(),
-                in_reply_to: if payload.in_reply_to.is_empty() { None } else { Some(payload.in_reply_to) },
+                in_reply_to,
                 provider_message_id: msg_id,
             }
         }
@@ -261,4 +262,36 @@ fn extract_email(raw: &str) -> String {
         }
     }
     raw.trim().to_lowercase()
+}
+
+/// Attempt to parse the inbound webhook body from multiple provider formats.
+/// Returns (sender, recipient, optional_mailgun_payload).
+fn try_parse_inbound(body: &str) -> (String, String, Option<MailgunInbound>) {
+    // Attempt 1: Mailgun form-urlencoded
+    if let Ok(payload) = serde_urlencoded::from_str::<MailgunInbound>(body) {
+        let sender = extract_email(&payload.sender);
+        let recipient = extract_email(&payload.recipient);
+        if !sender.is_empty() && !recipient.is_empty() {
+            return (sender, recipient, Some(payload));
+        }
+    }
+    // Attempt 2: JSON body (SES SNS, Postmark, custom providers)
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
+        let recipient = json.get("recipient")
+            .or_else(|| json.get("to"))
+            .or_else(|| json.get("mail").and_then(|m| m.get("recipient")))
+            .and_then(|v| v.as_str())
+            .map(extract_email)
+            .unwrap_or_default();
+        let sender = json.get("sender")
+            .or_else(|| json.get("from"))
+            .or_else(|| json.get("mail").and_then(|m| m.get("sender")))
+            .and_then(|v| v.as_str())
+            .map(extract_email)
+            .unwrap_or_default();
+        if !sender.is_empty() && !recipient.is_empty() {
+            return (sender, recipient, None);
+        }
+    }
+    (String::new(), String::new(), None)
 }
