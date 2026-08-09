@@ -281,3 +281,92 @@ pub async fn public_contact_form(
 
     Ok((StatusCode::CREATED, Json(json!(ticket))))
 }
+
+
+// ── Public: Tenant-scoped ticket submit (no auth) ─────────────────────
+
+/// POST /api/v1/support/:tenant_id/tickets — embedded form submission
+pub async fn public_submit_ticket(
+    State(s): State<AppState>,
+    Path(tenant_id): Path<uuid::Uuid>,
+    Json(body): Json<super::models::PublicTicketRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let priority = body.priority.unwrap_or_else(|| "medium".to_string());
+    let name = body.name.unwrap_or_else(|| "Website Visitor".to_string());
+    let email = body.email.unwrap_or_default();
+
+    let ticket = sqlx::query_as::<_, super::models::Ticket>(
+        r#"INSERT INTO tickets (tenant_id, subject, description, status, priority, source, contact_email, contact_name)
+           VALUES ($1, $2, $3, 'open', $4, 'form', $5, $6)
+           RETURNING *"#
+    )
+    .bind(tenant_id)
+    .bind(&body.subject)
+    .bind(&body.message)
+    .bind(&priority)
+    .bind(&email)
+    .bind(&name)
+    .fetch_one(&s.db)
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(json!({"status": "received", "ticket_id": ticket.id}))))
+}
+
+// ── Public: Embed script (no auth) ────────────────────────────────────
+
+/// GET /api/v1/support/:tenant_id/embed.js — returns the embeddable widget
+pub async fn support_embed_script(
+    State(_s): State<AppState>,
+    Path(tenant_id): Path<uuid::Uuid>,
+) -> impl IntoResponse {
+    let js = format!(
+        r#"(function(){{
+  var d=document;
+  if(d.getElementById('crm-support-root'))return;
+  var tid='{tid}';
+
+  // Styles
+  var s=d.createElement('style');
+  s.textContent='.crm-support-btn{{position:fixed;bottom:20px;right:20px;z-index:9999;background:#0ea5e9;color:#fff;border:none;border-radius:50px;padding:14px 24px;font-size:15px;font-family:-apple-system,system-ui,sans-serif;cursor:pointer;box-shadow:0 4px 20px rgba(14,165,233,0.35);transition:transform .2s,box-shadow .2s}}.crm-support-btn:hover{{transform:scale(1.05);box-shadow:0 6px 28px rgba(14,165,233,0.5)}}.crm-support-panel{{position:fixed;bottom:90px;right:20px;z-index:9998;width:360px;max-width:calc(100vw-40px);background:#fff;border-radius:16px;box-shadow:0 8px 40px rgba(0,0,0,0.15);display:none;overflow:hidden;font-family:-apple-system,system-ui,sans-serif;color:#1e293b}}.crm-support-panel.open{{display:block}}.crm-support-header{{background:#0ea5e9;color:#fff;padding:20px;font-weight:600;font-size:16px}}.crm-support-body{{padding:20px}}.crm-support-field{{margin-bottom:14px}}.crm-support-field label{{display:block;font-size:13px;font-weight:500;margin-bottom:4px;color:#475569}}.crm-support-field input,.crm-support-field textarea,.crm-support-field select{{width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;font-family:inherit;box-sizing:border-box;outline:none;transition:border .2s}}.crm-support-field input:focus,.crm-support-field textarea:focus,.crm-support-field select:focus{{border-color:#0ea5e9;box-shadow:0 0 0 3px rgba(14,165,233,0.15)}}.crm-support-field textarea{{resize:vertical;min-height:90px}}.crm-support-submit{{width:100%;background:#0ea5e9;color:#fff;border:none;border-radius:8px;padding:12px;font-size:14px;font-weight:600;cursor:pointer;transition:background .2s}}.crm-support-submit:hover{{background:#0284c7}}.crm-support-submit:disabled{{opacity:0.6;cursor:default}}.crm-support-thanks{{display:none;text-align:center;padding:40px 20px}}.crm-support-thanks.show{{display:block}}.crm-support-thanks h3{{color:#0ea5e9;margin:0 0 8px}}';
+  d.head.appendChild(s);
+
+  // Button
+  var b=d.createElement('button');
+  b.className='crm-support-btn';
+  b.textContent='💬 Support';
+  b.onclick=function(){{
+    var p=d.getElementById('crm-support-panel');
+    if(!p){{renderPanel();return}}
+    p.classList.toggle('open');
+  }};
+  d.body.appendChild(b);
+
+  function renderPanel(){{
+    var p=d.createElement('div');
+    p.id='crm-support-panel';
+    p.className='crm-support-panel open';
+    p.innerHTML='<div class="crm-support-header">How can we help?</div><div class="crm-support-body" id="crm-support-form"><div class="crm-support-field"><label>Your name</label><input id="cs-name" placeholder="Jane Smith"></div><div class="crm-support-field"><label>Email</label><input id="cs-email" type="email" placeholder="you@example.com"></div><div class="crm-support-field"><label>What do you need help with?</label><input id="cs-subject" placeholder="Brief summary"></div><div class="crm-support-field"><label>Details</label><textarea id="cs-message" placeholder="Describe your issue or question..."></textarea></div><div class="crm-support-field"><label>Priority</label><select id="cs-priority"><option value="medium">Medium — normal response</option><option value="low">Low — not urgent</option><option value="high">High — need help soon</option><option value="urgent">Urgent — critical issue</option></select></div><button class="crm-support-submit" id="cs-submit" onclick="submitSupport()">Send</button></div><div class="crm-support-thanks" id="crm-support-thanks"><h3>✓ Received!</h3><p>We will get back to you shortly.</p></div>';
+    d.body.appendChild(p);
+  }}
+
+  window.submitSupport=function(){{
+    var btn=d.getElementById('cs-submit');
+    var subject=d.getElementById('cs-subject').value;
+    if(!subject){{alert('Please enter a subject');return}}
+    btn.disabled=true;btn.textContent='Sending...';
+    var payload={{subject:subject,message:d.getElementById('cs-message').value||'',name:d.getElementById('cs-name').value||null,email:d.getElementById('cs-email').value||null,priority:d.getElementById('cs-priority').value||'medium'}};
+    fetch('https://coreswiftcrm.com/api/v1/support/'+tid+'/tickets',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(payload)}})
+      .then(function(r){{return r.json()}})
+      .then(function(){{d.getElementById('crm-support-form').style.display='none';d.getElementById('crm-support-thanks').className='crm-support-thanks show'}})
+      .catch(function(e){{alert('Error: '+e.message);btn.disabled=false;btn.textContent='Send'}});
+  }};
+}})();"#,
+        tid = tenant_id
+    );
+
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "application/javascript")],
+        js,
+    )
+}

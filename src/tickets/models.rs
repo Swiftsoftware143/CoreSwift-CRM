@@ -72,3 +72,12 @@ pub struct ContactFormRequest {
     pub email: Option<String>,
     pub priority: Option<String>,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct PublicTicketRequest {
+    pub subject: String,
+    pub message: String,
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub priority: Option<String>,
+}

@@ -18,6 +18,8 @@ use crate::AppState;
 pub fn public_router(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/public/contact", axum::routing::post(handlers::public_contact_form))
+        .route("/v1/support/:tenant_id/tickets", axum::routing::post(handlers::public_submit_ticket))
+        .route("/v1/support/:tenant_id/embed.js", axum::routing::get(handlers::support_embed_script))
 }
 
 pub fn router(state: AppState) -> Router<AppState> {
