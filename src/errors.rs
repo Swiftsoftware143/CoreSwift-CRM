@@ -25,6 +25,9 @@ pub enum AppError {
     #[error("Forbidden: insufficient permissions")]
     Forbidden,
 
+    #[error("Upgrade required: {0}")]
+    UpgradeRequired(String),
+
     /// 404 — Resource not found
     #[error("Resource not found: {0}")]
     NotFound(String),
@@ -68,6 +71,7 @@ impl IntoResponse for AppError {
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "Authentication required".to_string()),
             AppError::InvalidCredentials => (StatusCode::UNAUTHORIZED, "Invalid credentials".to_string()),
             AppError::Forbidden => (StatusCode::FORBIDDEN, "Insufficient permissions".to_string()),
+            AppError::UpgradeRequired(msg) => (StatusCode::PAYMENT_REQUIRED, msg.clone()),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             AppError::Duplicate(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::Validation(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg.clone()),

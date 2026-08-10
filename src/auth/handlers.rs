@@ -4,11 +4,12 @@
 //! or an existing tenant slug can be specified.
 
 use axum::{
-    extract::{State, Json, Request, Extension},
+    Json,
+    extract::{State, Request, Extension},
     http::StatusCode,
     response::IntoResponse,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use uuid::Uuid;
 use chrono::Utc;
 
@@ -17,6 +18,7 @@ use password_hash::SaltString;
 
 use crate::AppState;
 use crate::errors::{AppError, ApiResult};
+use crate::features;
 use super::models::*;
 use super::middleware;
 
@@ -379,8 +381,13 @@ async fn resolve_account(
         })?;
         // Auto-assign Free Plan to new tenant
         {
-            let free_plan_id = uuid::Uuid::parse_str("ebbdca8c-6ad7-48cb-b580-d321b536671a")
-                .map_err(|_| AppError::BadRequest("Invalid plan UUID".into()))?;
+            let free_plan_id = sqlx::query_scalar(
+                "SELECT id FROM plans WHERE slug = 'free' AND is_active = true LIMIT 1"
+            )
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| AppError::Database(e))?
+            .ok_or_else(|| AppError::BadRequest("Free plan not configured".into()))?;
             let _ = sqlx::query(
                 r#"INSERT INTO tenant_plans (tenant_id, plan_id, status, billing_cycle)
                    VALUES ($1, $2, 'active', 'monthly')
@@ -411,8 +418,13 @@ async fn resolve_account(
         })?;
         // Auto-assign Free Plan to new tenant
         {
-            let free_plan_id = uuid::Uuid::parse_str("ebbdca8c-6ad7-48cb-b580-d321b536671a")
-                .map_err(|_| AppError::BadRequest("Invalid plan UUID".into()))?;
+            let free_plan_id = sqlx::query_scalar(
+                "SELECT id FROM plans WHERE slug = 'free' AND is_active = true LIMIT 1"
+            )
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| AppError::Database(e))?
+            .ok_or_else(|| AppError::BadRequest("Free plan not configured".into()))?;
             let _ = sqlx::query(
                 r#"INSERT INTO tenant_plans (tenant_id, plan_id, status, billing_cycle)
                    VALUES ($1, $2, 'active', 'monthly')
@@ -639,3 +651,14 @@ struct PasswordResetRow {
     expires_at: chrono::DateTime<Utc>,
     used: bool,
 }
+
+
+pub async fn get_usage(
+    State(state): State<AppState>,
+    Extension(claims): Extension<crate::auth::models::Claims>,
+) -> Result<Json<Value>, AppError> {
+    let tid = uuid::Uuid::parse_str(&claims.aid).map_err(|_| AppError::BadRequest("Invalid account".into()))?;
+    let usage = crate::features::get_usage_json(&state.db, tid).await;
+    Ok(Json(usage))
+}
+
