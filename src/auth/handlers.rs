@@ -404,7 +404,7 @@ async fn resolve_account(state: &AppState, req: &RegisterRequest) -> Result<Uuid
         .bind(&slug)
         .fetch_one(&state.db)
         .await
-        .map_err(|e| AppError::Database(e))?;
+        .map_err(AppError::Database)?;
         // Auto-assign Free Plan to new tenant
         {
             let free_plan_id: uuid::Uuid = sqlx::query_scalar(

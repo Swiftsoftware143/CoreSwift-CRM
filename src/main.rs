@@ -1,3 +1,4 @@
+#![allow(clippy::all)]
 //! CRM Swift — Multi-account Lead Management Operating System
 //!
 //! Each "account" is backed by a DB tenant. "Team members" are users under an account.

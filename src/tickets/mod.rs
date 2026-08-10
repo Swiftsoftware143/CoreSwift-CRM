@@ -15,7 +15,7 @@ pub mod models;
 use crate::AppState;
 use axum::{middleware, Router};
 
-pub fn public_router(state: AppState) -> Router<AppState> {
+pub fn public_router(_state: AppState) -> Router<AppState> {
     Router::new()
         .route(
             "/public/contact",
