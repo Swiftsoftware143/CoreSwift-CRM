@@ -18,7 +18,6 @@ use password_hash::SaltString;
 
 use crate::AppState;
 use crate::errors::{AppError, ApiResult};
-use crate::features;
 use super::models::*;
 use super::middleware;
 
@@ -381,12 +380,13 @@ async fn resolve_account(
         })?;
         // Auto-assign Free Plan to new tenant
         {
-            let free_plan_id = sqlx::query_scalar(
+            let free_plan_id: uuid::Uuid = sqlx::query_scalar(
                 "SELECT id FROM plans WHERE slug = 'free' AND is_active = true LIMIT 1"
             )
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| AppError::Database(e))?
+            .ok()
+            .flatten()
             .ok_or_else(|| AppError::BadRequest("Free plan not configured".into()))?;
             let _ = sqlx::query(
                 r#"INSERT INTO tenant_plans (tenant_id, plan_id, status, billing_cycle)
@@ -418,12 +418,13 @@ async fn resolve_account(
         })?;
         // Auto-assign Free Plan to new tenant
         {
-            let free_plan_id = sqlx::query_scalar(
+            let free_plan_id: uuid::Uuid = sqlx::query_scalar(
                 "SELECT id FROM plans WHERE slug = 'free' AND is_active = true LIMIT 1"
             )
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| AppError::Database(e))?
+            .ok()
+            .flatten()
             .ok_or_else(|| AppError::BadRequest("Free plan not configured".into()))?;
             let _ = sqlx::query(
                 r#"INSERT INTO tenant_plans (tenant_id, plan_id, status, billing_cycle)
