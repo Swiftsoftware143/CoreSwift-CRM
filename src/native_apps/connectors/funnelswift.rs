@@ -24,7 +24,10 @@ pub async fn test(creds: &serde_json::Value) -> (bool, String) {
         Ok(resp) if resp.status().is_success() => {
             (true, "FunnelSwift connection successful".into())
         }
-        Ok(resp) => (false, format!("FunnelSwift returned status {}", resp.status())),
+        Ok(resp) => (
+            false,
+            format!("FunnelSwift returned status {}", resp.status()),
+        ),
         Err(e) => (false, format!("FunnelSwift connection failed: {}", e)),
     }
 }
@@ -36,14 +39,23 @@ pub async fn push_entity(
 ) -> Result<serde_json::Value, String> {
     let api_key = extract_key(creds)?;
     // Use api_url from credentials if provided, otherwise default
-    let api_url = creds.get("api_url")
+    let api_url = creds
+        .get("api_url")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .unwrap_or("https://api.funnelswift.app");
 
     match entity_type {
         "lead" | "contact" | "funnel" | "tag" => {
-            let url = format!("{}/v1/{}", api_url, if entity_type == "tag" { "tags" } else { entity_type });
+            let url = format!(
+                "{}/v1/{}",
+                api_url,
+                if entity_type == "tag" {
+                    "tags"
+                } else {
+                    entity_type
+                }
+            );
             let resp = reqwest::Client::new()
                 .post(&url)
                 .header("Authorization", format!("Bearer {}", api_key))
@@ -51,9 +63,14 @@ pub async fn push_entity(
                 .send()
                 .await
                 .map_err(|e| format!("FunnelSwift push failed: {}", e))?;
-            resp.json().await.map_err(|e| format!("FunnelSwift response: {}", e))
+            resp.json()
+                .await
+                .map_err(|e| format!("FunnelSwift response: {}", e))
         }
-        _ => Err(format!("FunnelSwift does not support entity type: {}", entity_type)),
+        _ => Err(format!(
+            "FunnelSwift does not support entity type: {}",
+            entity_type
+        )),
     }
 }
 
@@ -66,11 +83,15 @@ pub async fn pull_entity(
     let query = if filters.is_empty() {
         String::new()
     } else {
-        let params: Vec<String> = filters.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+        let params: Vec<String> = filters
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect();
         format!("?{}", params.join("&"))
     };
 
-    let api_url = creds.get("api_url")
+    let api_url = creds
+        .get("api_url")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .unwrap_or("https://api.funnelswift.app");
@@ -84,9 +105,14 @@ pub async fn pull_entity(
                 .send()
                 .await
                 .map_err(|e| format!("FunnelSwift pull failed: {}", e))?;
-            resp.json().await.map_err(|e| format!("FunnelSwift response: {}", e))
+            resp.json()
+                .await
+                .map_err(|e| format!("FunnelSwift response: {}", e))
         }
-        _ => Err(format!("FunnelSwift does not support pulling entity type: {}", entity_type)),
+        _ => Err(format!(
+            "FunnelSwift does not support pulling entity type: {}",
+            entity_type
+        )),
     }
 }
 
@@ -104,7 +130,8 @@ pub fn get_meta() -> serde_json::Value {
 }
 
 fn extract_key(creds: &serde_json::Value) -> Result<String, String> {
-    creds.get("api_key")
+    creds
+        .get("api_key")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| "FunnelSwift API key missing".into())

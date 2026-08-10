@@ -1,9 +1,13 @@
-use axum::{extract::{State, Path, Json, Extension, Query}, http::StatusCode, response::IntoResponse};
+use crate::auth::models::Claims;
+use crate::errors::{validate_pagination, ApiResult, AppError};
+use crate::AppState;
+use axum::{
+    extract::{Extension, Json, Path, Query, State},
+    http::StatusCode,
+    response::IntoResponse,
+};
 use serde_json::{json, Value};
 use uuid::Uuid;
-use crate::AppState;
-use crate::errors::{AppError, ApiResult, validate_pagination};
-use crate::auth::models::Claims;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
 pub struct Notification {
@@ -50,10 +54,17 @@ pub struct UpdateRuleRequest {
 }
 
 /// GET /api/notifications
-pub async fn list(State(s): State<AppState>, Extension(c): Extension<Claims>, Query(p): Query<Value>) -> ApiResult<impl IntoResponse> {
+pub async fn list(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Query(p): Query<Value>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
-    let (page, per_page) = validate_pagination(p.get("page").and_then(|v| v.as_i64()), p.get("per_page").and_then(|v| v.as_i64()));
+    let (page, per_page) = validate_pagination(
+        p.get("page").and_then(|v| v.as_i64()),
+        p.get("per_page").and_then(|v| v.as_i64()),
+    );
     let offset = (page - 1) * per_page;
 
     let read_filter = p.get("read").and_then(|v| v.as_str());
@@ -79,65 +90,111 @@ pub async fn list(State(s): State<AppState>, Extension(c): Extension<Claims>, Qu
             let n = sqlx::query_as::<_, Notification>(
                 "SELECT * FROM notifications WHERE tenant_id=$1 AND user_id=$2 ORDER BY created_at DESC LIMIT $3 OFFSET $4"
             ).bind(tid).bind(uid).bind(per_page).bind(offset).fetch_all(&s.db).await?;
-            let t: i64 = sqlx::query_scalar::<_, Option<i64>>("SELECT COUNT(*) FROM notifications WHERE tenant_id=$1 AND user_id=$2")
-                .bind(tid).bind(uid).fetch_one(&s.db).await?.unwrap_or(0);
+            let t: i64 = sqlx::query_scalar::<_, Option<i64>>(
+                "SELECT COUNT(*) FROM notifications WHERE tenant_id=$1 AND user_id=$2",
+            )
+            .bind(tid)
+            .bind(uid)
+            .fetch_one(&s.db)
+            .await?
+            .unwrap_or(0);
             (n, t)
         }
     };
 
-    Ok(Json(json!({"notifications": notifications, "total": total, "page": page, "per_page": per_page})))
+    Ok(Json(
+        json!({"notifications": notifications, "total": total, "page": page, "per_page": per_page}),
+    ))
 }
 
 /// POST /api/notifications/{id}/read
-pub async fn mark_read(State(s): State<AppState>, Extension(c): Extension<Claims>, Path(id): Path<Uuid>) -> ApiResult<impl IntoResponse> {
+pub async fn mark_read(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
     sqlx::query("UPDATE notifications SET read=true WHERE id=$1 AND tenant_id=$2 AND user_id=$3")
-        .bind(id).bind(tid).bind(uid).execute(&s.db).await?;
+        .bind(id)
+        .bind(tid)
+        .bind(uid)
+        .execute(&s.db)
+        .await?;
     Ok(Json(json!({"message": "Marked as read"})))
 }
 
 /// POST /api/notifications/read-all
-pub async fn mark_all_read(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
+pub async fn mark_all_read(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
-    sqlx::query("UPDATE notifications SET read=true WHERE tenant_id=$1 AND user_id=$2 AND read=false")
-        .bind(tid).bind(uid).execute(&s.db).await?;
+    sqlx::query(
+        "UPDATE notifications SET read=true WHERE tenant_id=$1 AND user_id=$2 AND read=false",
+    )
+    .bind(tid)
+    .bind(uid)
+    .execute(&s.db)
+    .await?;
     Ok(Json(json!({"message": "All marked as read"})))
 }
 
 /// GET /api/notifications/unread-count
-pub async fn unread_count(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
+pub async fn unread_count(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
     let count: i64 = sqlx::query_scalar::<_, Option<i64>>(
-        "SELECT COUNT(*) FROM notifications WHERE tenant_id=$1 AND user_id=$2 AND read=false"
-    ).bind(tid).bind(uid).fetch_one(&s.db).await?.unwrap_or(0);
+        "SELECT COUNT(*) FROM notifications WHERE tenant_id=$1 AND user_id=$2 AND read=false",
+    )
+    .bind(tid)
+    .bind(uid)
+    .fetch_one(&s.db)
+    .await?
+    .unwrap_or(0);
     Ok(Json(json!({"unread_count": count})))
 }
 
 // ── Notification Rules CRUD ──────────────────────────────────────────────
 
 /// GET /api/notifications/rules — List notification rules
-pub async fn list_rules(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
+pub async fn list_rules(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let rules = sqlx::query_as::<_, NotificationRule>(
-        "SELECT * FROM notification_rules WHERE tenant_id = $1 ORDER BY created_at DESC"
-    ).bind(tid).fetch_all(&s.db).await?;
+        "SELECT * FROM notification_rules WHERE tenant_id = $1 ORDER BY created_at DESC",
+    )
+    .bind(tid)
+    .fetch_all(&s.db)
+    .await?;
     Ok(Json(json!({"rules": rules})))
 }
 
 /// POST /api/notifications/rules — Create a notification rule
-pub async fn create_rule(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<CreateRuleRequest>) -> ApiResult<impl IntoResponse> {
+pub async fn create_rule(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(r): Json<CreateRuleRequest>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     if r.trigger_event.is_empty() || r.action.is_empty() {
-        return Err(AppError::Validation("trigger_event and action are required".to_string()));
+        return Err(AppError::Validation(
+            "trigger_event and action are required".to_string(),
+        ));
     }
 
     let valid_actions = ["send_email", "send_sms", "send_whatsapp", "in_app"];
     if !valid_actions.contains(&r.action.as_str()) {
-        return Err(AppError::Validation("action must be one of: send_email, send_sms, send_whatsapp, in_app".to_string()));
+        return Err(AppError::Validation(
+            "action must be one of: send_email, send_sms, send_whatsapp, in_app".to_string(),
+        ));
     }
 
     let rule = sqlx::query_as::<_, NotificationRule>(
@@ -159,7 +216,12 @@ pub async fn create_rule(State(s): State<AppState>, Extension(c): Extension<Clai
 }
 
 /// PATCH /api/notifications/rules/{id} — Update a rule
-pub async fn update_rule(State(s): State<AppState>, Extension(c): Extension<Claims>, Path(id): Path<Uuid>, Json(r): Json<UpdateRuleRequest>) -> ApiResult<impl IntoResponse> {
+pub async fn update_rule(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path(id): Path<Uuid>,
+    Json(r): Json<UpdateRuleRequest>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let rule = sqlx::query_as::<_, NotificationRule>(
@@ -171,7 +233,7 @@ pub async fn update_rule(State(s): State<AppState>, Extension(c): Extension<Clai
             config = COALESCE($5, config),
             is_active = COALESCE($6, is_active),
             updated_at = NOW()
-           WHERE id = $7 AND tenant_id = $8 RETURNING *"#
+           WHERE id = $7 AND tenant_id = $8 RETURNING *"#,
     )
     .bind(&r.trigger_event)
     .bind(&r.action)
@@ -188,17 +250,31 @@ pub async fn update_rule(State(s): State<AppState>, Extension(c): Extension<Clai
 }
 
 /// DELETE /api/notifications/rules/{id} — Delete a rule
-pub async fn delete_rule(State(s): State<AppState>, Extension(c): Extension<Claims>, Path(id): Path<Uuid>) -> ApiResult<impl IntoResponse> {
+pub async fn delete_rule(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     sqlx::query("DELETE FROM notification_rules WHERE id = $1 AND tenant_id = $2")
-        .bind(id).bind(tid).execute(&s.db).await?;
+        .bind(id)
+        .bind(tid)
+        .execute(&s.db)
+        .await?;
     Ok(Json(json!({"message": "Rule deleted"})))
 }
 
 /// GET /api/notifications/queue — List notification queue items
-pub async fn list_queue(State(s): State<AppState>, Extension(c): Extension<Claims>, Query(p): Query<Value>) -> ApiResult<impl IntoResponse> {
+pub async fn list_queue(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Query(p): Query<Value>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    let (page, per_page) = validate_pagination(p.get("page").and_then(|v| v.as_i64()), p.get("per_page").and_then(|v| v.as_i64()));
+    let (page, per_page) = validate_pagination(
+        p.get("page").and_then(|v| v.as_i64()),
+        p.get("per_page").and_then(|v| v.as_i64()),
+    );
     let offset = (page - 1) * per_page;
 
     let status_filter = p.get("status").and_then(|v| v.as_str()).unwrap_or("");
@@ -230,14 +306,23 @@ pub async fn list_queue(State(s): State<AppState>, Extension(c): Extension<Claim
             .into_iter().map(|i| serde_json::to_value(i).unwrap_or_default()).collect()
     };
 
-    Ok(Json(json!({"items": items, "page": page, "per_page": per_page})))
+    Ok(Json(
+        json!({"items": items, "page": page, "per_page": per_page}),
+    ))
 }
 
 /// POST /api/notifications/queue — Queue a notification to be sent
-pub async fn enqueue_notification(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(body): Json<Value>) -> ApiResult<impl IntoResponse> {
+pub async fn enqueue_notification(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(body): Json<Value>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let channel = body.get("channel").and_then(|v| v.as_str()).unwrap_or("email");
+    let channel = body
+        .get("channel")
+        .and_then(|v| v.as_str())
+        .unwrap_or("email");
     let to_address = body.get("to").and_then(|v| v.as_str()).unwrap_or("");
     let subject = body.get("subject").and_then(|v| v.as_str());
     let body_text = body.get("body").and_then(|v| v.as_str()).unwrap_or("");
@@ -259,5 +344,8 @@ pub async fn enqueue_notification(State(s): State<AppState>, Extension(c): Exten
     .fetch_one(&s.db)
     .await?;
 
-    Ok((StatusCode::CREATED, Json(json!({"id": item, "status": "queued"}))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({"id": item, "status": "queued"})),
+    ))
 }

@@ -1,10 +1,10 @@
 //! Unified Inbox messages module.
 
-pub mod models;
 pub mod handlers;
+pub mod models;
 
-use axum::{Router, middleware};
 use crate::AppState;
+use axum::{middleware, Router};
 
 /// Build the messages router with auth middleware for protected routes only.
 /// The webhook/webhook endpoint is registered separately in main.rs (no auth).
@@ -15,5 +15,8 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/:id", axum::routing::get(handlers::get))
         .route("/:id", axum::routing::put(handlers::update))
         .route("/:id", axum::routing::delete(handlers::delete))
-        .layer(middleware::from_fn_with_state(state.clone(), crate::auth::middleware::auth_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::middleware::auth_middleware,
+        ))
 }

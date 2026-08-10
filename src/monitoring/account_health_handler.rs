@@ -8,15 +8,19 @@
 //! These complement the existing /api/monitoring/health endpoints by focusing on
 //! trial-specific detection, milestone tracking, and churn prevention actions.
 
-use axum::{extract::{State, Path, Json}, http::StatusCode, response::IntoResponse};
+use axum::{
+    extract::{Json, Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
-use chrono::Utc;
 
-use crate::AppState;
-use crate::errors::{AppError, ApiResult};
 use super::models::AccountHealth;
+use crate::errors::{ApiResult, AppError};
+use crate::AppState;
 
 // ---------------------------------------------------------------------------
 // Request / Response types
@@ -95,7 +99,7 @@ pub async fn run_health_check(
           )
           AND ($1::uuid IS NULL OR u.tenant_id = $1)
         LIMIT 100
-        "#
+        "#,
     )
     .bind(tenant_filter)
     .fetch_all(&s.db)
@@ -115,12 +119,13 @@ pub async fn run_health_check(
             *user_id,
             "days_inactive",
             1,
-        ).await;
+        )
+        .await;
 
         // Log the event
         let _ = sqlx::query(
             r#"INSERT INTO event_logs (id, business_profile_id, event_name, metadata, created_at)
-               VALUES ($1, $2, 'churn_check.inactive_24h', $3, NOW())"#
+               VALUES ($1, $2, 'churn_check.inactive_24h', $3, NOW())"#,
         )
         .bind(Uuid::new_v4())
         .bind(profile_id)
@@ -162,7 +167,7 @@ pub async fn run_health_check(
           AND tp.trial_ends_at <= NOW() + INTERVAL '3 days'
           AND ($1::uuid IS NULL OR tp.tenant_id = $1)
         LIMIT 100
-        "#
+        "#,
     )
     .bind(tenant_filter)
     .fetch_all(&s.db)
@@ -186,7 +191,8 @@ pub async fn run_health_check(
             *contact_id,
             "days_inactive",
             0, // just signals the event, no score penalty
-        ).await;
+        )
+        .await;
 
         // Flag as churn-risky
         stats.churn_flagged += 1;
@@ -226,7 +232,7 @@ pub async fn run_health_check(
           AND bp.last_activity_at < NOW() - INTERVAL '3 days'
           AND ($1::uuid IS NULL OR u.tenant_id = $1)
         LIMIT 100
-        "#
+        "#,
     )
     .bind(tenant_filter)
     .fetch_all(&s.db)
@@ -245,11 +251,12 @@ pub async fn run_health_check(
             *user_id,
             "days_inactive",
             2,
-        ).await;
+        )
+        .await;
 
         let _ = sqlx::query(
             r#"INSERT INTO event_logs (id, business_profile_id, event_name, metadata, created_at)
-               VALUES ($1, $2, 'churn_check.stale_profile', $3, NOW())"#
+               VALUES ($1, $2, 'churn_check.stale_profile', $3, NOW())"#,
         )
         .bind(Uuid::new_v4())
         .bind(profile_id)
@@ -296,7 +303,12 @@ pub async fn record_milestone(
     Json(r): Json<MilestoneRequest>,
 ) -> ApiResult<impl IntoResponse> {
     // Validate milestone_type
-    let valid_types = ["first_automation", "first_contact", "first_pipeline", "first_campaign"];
+    let valid_types = [
+        "first_automation",
+        "first_contact",
+        "first_pipeline",
+        "first_campaign",
+    ];
     if !valid_types.contains(&r.milestone_type.as_str()) {
         return Err(AppError::Validation(format!(
             "milestone_type must be one of: {:?}",
@@ -311,7 +323,7 @@ pub async fn record_milestone(
         FROM business_profiles bp
         JOIN users u ON bp.user_id = u.id
         WHERE bp.id = $1
-        "#
+        "#,
     )
     .bind(r.business_profile_id)
     .fetch_one(&s.db)
@@ -322,7 +334,7 @@ pub async fn record_milestone(
     let event_id = Uuid::new_v4();
     let _ = sqlx::query(
         r#"INSERT INTO event_logs (id, business_profile_id, event_name, metadata, created_at)
-           VALUES ($1, $2, $3, $4, NOW())"#
+           VALUES ($1, $2, $3, $4, NOW())"#,
     )
     .bind(event_id)
     .bind(r.business_profile_id)
@@ -336,12 +348,11 @@ pub async fn record_milestone(
     .map_err(|e| AppError::Internal(format!("Failed to record milestone: {}", e)))?;
 
     // Record a health signal (positive)
-    let user_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT user_id FROM business_profiles WHERE id = $1"
-    )
-    .bind(r.business_profile_id)
-    .fetch_one(&s.db)
-    .await?;
+    let user_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT user_id FROM business_profiles WHERE id = $1")
+            .bind(r.business_profile_id)
+            .fetch_one(&s.db)
+            .await?;
 
     crate::monitoring::engine::record_signal(
         &s.db,
@@ -350,7 +361,8 @@ pub async fn record_milestone(
         user_id,
         "feature_used",
         10, // big positive signal for reaching a milestone
-    ).await;
+    )
+    .await;
 
     // If first_automation, trigger congratulatory followup
     if r.milestone_type == "first_automation" {
@@ -379,12 +391,15 @@ pub async fn record_milestone(
         );
     }
 
-    Ok((StatusCode::CREATED, Json(json!({
-        "message": "Milestone recorded",
-        "event_id": event_id,
-        "milestone_type": r.milestone_type,
-        "business_profile_id": r.business_profile_id
-    }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "message": "Milestone recorded",
+            "event_id": event_id,
+            "milestone_type": r.milestone_type,
+            "business_profile_id": r.business_profile_id
+        })),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -402,7 +417,7 @@ pub async fn profile_health_status(
 ) -> ApiResult<impl IntoResponse> {
     // Verify profile exists
     let profile = sqlx::query_as::<_, (Uuid, Uuid)>(
-        "SELECT id, user_id FROM business_profiles WHERE id = $1"
+        "SELECT id, user_id FROM business_profiles WHERE id = $1",
     )
     .bind(profile_id)
     .fetch_optional(&s.db)
@@ -413,20 +428,19 @@ pub async fn profile_health_status(
     let (_pid, user_id) = profile;
 
     // Get tenant_id from user
-    let tenant_id = sqlx::query_scalar::<_, Option<Uuid>>(
-        "SELECT tenant_id FROM users WHERE id = $1"
-    )
-    .bind(user_id)
-    .fetch_optional(&s.db)
-    .await?
-    .flatten()
-    .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
+    let tenant_id =
+        sqlx::query_scalar::<_, Option<Uuid>>("SELECT tenant_id FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(&s.db)
+            .await?
+            .flatten()
+            .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
 
     // Fetch account health record
     let health = sqlx::query_as::<_, AccountHealth>(
         r#"SELECT * FROM account_health
            WHERE tenant_id = $1 AND entity_type = 'contact' AND entity_id = $2
-           LIMIT 1"#
+           LIMIT 1"#,
     )
     .bind(tenant_id)
     .bind(user_id)
@@ -434,33 +448,35 @@ pub async fn profile_health_status(
     .await?;
 
     // Fetch recent event_logs for this profile (last 20)
-    let recent_events: Vec<serde_json::Value> = sqlx::query_as::<_, (String, serde_json::Value, chrono::DateTime<Utc>)>(
-        r#"SELECT event_name, COALESCE(metadata, '{}'::jsonb), created_at
+    let recent_events: Vec<serde_json::Value> =
+        sqlx::query_as::<_, (String, serde_json::Value, chrono::DateTime<Utc>)>(
+            r#"SELECT event_name, COALESCE(metadata, '{}'::jsonb), created_at
            FROM event_logs
            WHERE business_profile_id = $1
            ORDER BY created_at DESC
-           LIMIT 20"#
-    )
-    .bind(profile_id)
-    .fetch_all(&s.db)
-    .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch events: {}", e)))?
-    .into_iter()
-    .map(|(name, meta, ts)| {
-        json!({
-            "event_name": name,
-            "metadata": meta,
-            "created_at": ts.to_rfc3339()
+           LIMIT 20"#,
+        )
+        .bind(profile_id)
+        .fetch_all(&s.db)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to fetch events: {}", e)))?
+        .into_iter()
+        .map(|(name, meta, ts)| {
+            json!({
+                "event_name": name,
+                "metadata": meta,
+                "created_at": ts.to_rfc3339()
+            })
         })
-    })
-    .collect();
+        .collect();
 
     // Calculate trial days remaining from tenant_plans
-    let trial_info = sqlx::query_as::<_, (Option<chrono::DateTime<Utc>>,)>( // tuple of one for proper pattern match
+    let trial_info = sqlx::query_as::<_, (Option<chrono::DateTime<Utc>>,)>(
+        // tuple of one for proper pattern match
         r#"SELECT trial_ends_at
            FROM tenant_plans
            WHERE tenant_id = $1 AND status = 'trialing'
-           LIMIT 1"#
+           LIMIT 1"#,
     )
     .bind(tenant_id)
     .fetch_optional(&s.db)

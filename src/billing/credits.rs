@@ -30,8 +30,8 @@
 //! └──────────────────────────────────┴────────┴──────────────┘
 
 use sqlx::PgPool;
-use uuid::Uuid;
 use std::collections::HashMap;
+use uuid::Uuid;
 
 /// Map of action types to credit cost
 fn credit_costs() -> HashMap<&'static str, i32> {
@@ -55,7 +55,11 @@ fn credit_costs() -> HashMap<&'static str, i32> {
 
 /// Check if a tenant has enough credits for an action.
 /// Returns (has_credits, remaining, cost).
-pub async fn check_credits(db: &PgPool, tenant_id: Uuid, action_type: &str) -> Result<(bool, i32, i32), String> {
+pub async fn check_credits(
+    db: &PgPool,
+    tenant_id: Uuid,
+    action_type: &str,
+) -> Result<(bool, i32, i32), String> {
     let cost = credit_costs().get(action_type).copied().unwrap_or(1);
     let remaining = get_credits_remaining(db, tenant_id).await;
     Ok((remaining >= cost, remaining, cost))
@@ -68,8 +72,13 @@ pub async fn get_credits_remaining(db: &PgPool, tenant_id: Uuid) -> i32 {
         "SELECT COALESCE(p.monthly_credits, 0) FROM plans p
          JOIN tenant_plans tp ON tp.plan_id = p.id
          WHERE tp.tenant_id = $1 AND tp.status IN ('active', 'trialing')
-         LIMIT 1"
-    ).bind(tenant_id).fetch_one(db).await.unwrap_or(None).unwrap_or(0);
+         LIMIT 1",
+    )
+    .bind(tenant_id)
+    .fetch_one(db)
+    .await
+    .unwrap_or(None)
+    .unwrap_or(0);
 
     if allowance == 0 {
         return 0; // No plan or no credits
@@ -120,11 +129,22 @@ pub async fn consume_credits(
 pub async fn get_credit_summary(db: &PgPool, tenant_id: Uuid) -> serde_json::Value {
     let remaining = get_credits_remaining(db, tenant_id).await;
 
-    let (allowance, period_start, period_end) = sqlx::query_as::<_, (Option<i32>, Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>)>(
+    let (allowance, period_start, period_end) = sqlx::query_as::<
+        _,
+        (
+            Option<i32>,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<chrono::DateTime<chrono::Utc>>,
+        ),
+    >(
         "SELECT p.monthly_credits, tp.current_period_starts_at, tp.current_period_ends_at
          FROM plans p JOIN tenant_plans tp ON tp.plan_id = p.id
-         WHERE tp.tenant_id = $1 AND tp.status IN ('active', 'trialing') LIMIT 1"
-    ).bind(tenant_id).fetch_one(db).await.unwrap_or((None, None, None));
+         WHERE tp.tenant_id = $1 AND tp.status IN ('active', 'trialing') LIMIT 1",
+    )
+    .bind(tenant_id)
+    .fetch_one(db)
+    .await
+    .unwrap_or((None, None, None));
 
     let consumed = allowance.unwrap_or(0) - remaining;
 
@@ -134,8 +154,13 @@ pub async fn get_credit_summary(db: &PgPool, tenant_id: Uuid) -> serde_json::Val
          FROM credit_transactions
          WHERE tenant_id = $1 AND credits < 0
            AND created_at >= COALESCE($2, '1970-01-01'::timestamptz)
-         GROUP BY action_type ORDER BY total DESC"
-    ).bind(tenant_id).bind(period_start).fetch_all(db).await.unwrap_or_default();
+         GROUP BY action_type ORDER BY total DESC",
+    )
+    .bind(tenant_id)
+    .bind(period_start)
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
 
     serde_json::json!({
         "allowance": allowance.unwrap_or(0),

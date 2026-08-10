@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State, Extension},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -7,11 +7,11 @@ use axum::{
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::AppState;
+use super::engine;
+use super::models::*;
 use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
-use super::models::*;
-use super::engine;
+use crate::AppState;
 
 // ── Teams CRUD ───────────────────────────────────────────────────────────
 
@@ -21,7 +21,7 @@ pub async fn list_teams(
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let teams = sqlx::query_as::<_, RoundRobinTeam>(
-        "SELECT * FROM round_robin_teams WHERE tenant_id = $1 ORDER BY name"
+        "SELECT * FROM round_robin_teams WHERE tenant_id = $1 ORDER BY name",
     )
     .bind(tid)
     .fetch_all(&s.db)
@@ -58,7 +58,7 @@ pub async fn get_team(
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let team = sqlx::query_as::<_, RoundRobinTeam>(
-        "SELECT * FROM round_robin_teams WHERE id = $1 AND tenant_id = $2"
+        "SELECT * FROM round_robin_teams WHERE id = $1 AND tenant_id = $2",
     )
     .bind(id)
     .bind(tid)
@@ -76,7 +76,7 @@ pub async fn update_team(
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let existing = sqlx::query_as::<_, RoundRobinTeam>(
-        "SELECT * FROM round_robin_teams WHERE id = $1 AND tenant_id = $2"
+        "SELECT * FROM round_robin_teams WHERE id = $1 AND tenant_id = $2",
     )
     .bind(id)
     .bind(tid)
@@ -85,17 +85,33 @@ pub async fn update_team(
     .ok_or_else(|| AppError::NotFound("Team not found".into()))?;
 
     // Build dynamic update
-    let name = body.get("name").and_then(|v| v.as_str()).unwrap_or(&existing.name);
+    let name = body
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&existing.name);
     let description = body.get("description").and_then(|v| v.as_str());
-    let strategy = body.get("strategy").and_then(|v| v.as_str()).unwrap_or(&existing.strategy);
-    let scope_type = body.get("scope_type").and_then(|v| v.as_str()).unwrap_or(&existing.scope_type);
-    let scope_id = body.get("scope_id").and_then(|v| v.as_str()).and_then(|v| Uuid::parse_str(v).ok()).or(existing.scope_id);
-    let is_active = body.get("is_active").and_then(|v| v.as_bool()).unwrap_or(existing.is_active);
+    let strategy = body
+        .get("strategy")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&existing.strategy);
+    let scope_type = body
+        .get("scope_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&existing.scope_type);
+    let scope_id = body
+        .get("scope_id")
+        .and_then(|v| v.as_str())
+        .and_then(|v| Uuid::parse_str(v).ok())
+        .or(existing.scope_id);
+    let is_active = body
+        .get("is_active")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(existing.is_active);
 
     let team = sqlx::query_as::<_, RoundRobinTeam>(
         r#"UPDATE round_robin_teams SET name = $1, description = $2, strategy = $3,
            scope_type = $4, scope_id = $5, is_active = $6, updated_at = NOW()
-           WHERE id = $7 AND tenant_id = $8 RETURNING *"#
+           WHERE id = $7 AND tenant_id = $8 RETURNING *"#,
     )
     .bind(name)
     .bind(description)
@@ -116,13 +132,11 @@ pub async fn delete_team(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    let result = sqlx::query(
-        "DELETE FROM round_robin_teams WHERE id = $1 AND tenant_id = $2"
-    )
-    .bind(id)
-    .bind(tid)
-    .execute(&s.db)
-    .await?;
+    let result = sqlx::query("DELETE FROM round_robin_teams WHERE id = $1 AND tenant_id = $2")
+        .bind(id)
+        .bind(tid)
+        .execute(&s.db)
+        .await?;
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Team not found".into()));
     }
@@ -139,7 +153,7 @@ pub async fn list_members(
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     // Verify team belongs to tenant
     let _team = sqlx::query_as::<_, RoundRobinTeam>(
-        "SELECT * FROM round_robin_teams WHERE id = $1 AND tenant_id = $2"
+        "SELECT * FROM round_robin_teams WHERE id = $1 AND tenant_id = $2",
     )
     .bind(team_id)
     .bind(tid)
@@ -148,7 +162,7 @@ pub async fn list_members(
     .ok_or_else(|| AppError::NotFound("Team not found".into()))?;
 
     let members = sqlx::query_as::<_, RoundRobinMember>(
-        "SELECT * FROM round_robin_members WHERE team_id = $1 ORDER BY created_at"
+        "SELECT * FROM round_robin_members WHERE team_id = $1 ORDER BY created_at",
     )
     .bind(team_id)
     .fetch_all(&s.db)
@@ -165,7 +179,7 @@ pub async fn add_member(
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     // Verify team belongs to tenant
     let _team = sqlx::query_as::<_, RoundRobinTeam>(
-        "SELECT * FROM round_robin_teams WHERE id = $1 AND tenant_id = $2"
+        "SELECT * FROM round_robin_teams WHERE id = $1 AND tenant_id = $2",
     )
     .bind(team_id)
     .bind(tid)
@@ -197,7 +211,7 @@ pub async fn remove_member(
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     // Verify team belongs to tenant
     let _team = sqlx::query_as::<_, RoundRobinTeam>(
-        "SELECT * FROM round_robin_teams WHERE id = $1 AND tenant_id = $2"
+        "SELECT * FROM round_robin_teams WHERE id = $1 AND tenant_id = $2",
     )
     .bind(team_id)
     .bind(tid)
@@ -205,13 +219,11 @@ pub async fn remove_member(
     .await?
     .ok_or_else(|| AppError::NotFound("Team not found".into()))?;
 
-    let result = sqlx::query(
-        "DELETE FROM round_robin_members WHERE id = $1 AND team_id = $2"
-    )
-    .bind(member_id)
-    .bind(team_id)
-    .execute(&s.db)
-    .await?;
+    let result = sqlx::query("DELETE FROM round_robin_members WHERE id = $1 AND team_id = $2")
+        .bind(member_id)
+        .bind(team_id)
+        .execute(&s.db)
+        .await?;
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Member not found".into()));
     }
@@ -228,7 +240,7 @@ pub async fn list_assignments(
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     // Verify team belongs to tenant
     let _team = sqlx::query_as::<_, RoundRobinTeam>(
-        "SELECT * FROM round_robin_teams WHERE id = $1 AND tenant_id = $2"
+        "SELECT * FROM round_robin_teams WHERE id = $1 AND tenant_id = $2",
     )
     .bind(team_id)
     .bind(tid)
@@ -237,7 +249,7 @@ pub async fn list_assignments(
     .ok_or_else(|| AppError::NotFound("Team not found".into()))?;
 
     let assignments = sqlx::query_as::<_, RoundRobinAssignment>(
-        "SELECT * FROM round_robin_assignments WHERE team_id = $1 ORDER BY assigned_at DESC"
+        "SELECT * FROM round_robin_assignments WHERE team_id = $1 ORDER BY assigned_at DESC",
     )
     .bind(team_id)
     .fetch_all(&s.db)
@@ -251,12 +263,18 @@ pub async fn trigger_assignment(
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let _tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    let team_id = body.get("team_id").and_then(|v| v.as_str())
+    let team_id = body
+        .get("team_id")
+        .and_then(|v| v.as_str())
         .and_then(|v| Uuid::parse_str(v).ok())
         .ok_or_else(|| AppError::Validation("team_id required".into()))?;
-    let booking_id = body.get("booking_id").and_then(|v| v.as_str())
+    let booking_id = body
+        .get("booking_id")
+        .and_then(|v| v.as_str())
         .and_then(|v| Uuid::parse_str(v).ok());
-    let contact_id = body.get("contact_id").and_then(|v| v.as_str())
+    let contact_id = body
+        .get("contact_id")
+        .and_then(|v| v.as_str())
         .and_then(|v| Uuid::parse_str(v).ok());
 
     let assignment = engine::assign_lead(&s.db, team_id, booking_id, contact_id).await?;

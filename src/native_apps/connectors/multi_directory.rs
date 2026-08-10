@@ -35,7 +35,10 @@ pub async fn test(creds: &serde_json::Value) -> (bool, String) {
         Ok(resp) if resp.status().is_success() => {
             (true, "Multi-Directory connection successful".into())
         }
-        Ok(resp) => (false, format!("Multi-Directory returned status {}", resp.status())),
+        Ok(resp) => (
+            false,
+            format!("Multi-Directory returned status {}", resp.status()),
+        ),
         Err(e) => (false, format!("Multi-Directory connection failed: {}", e)),
     }
 }
@@ -57,9 +60,14 @@ pub async fn push_entity(
                 .send()
                 .await
                 .map_err(|e| format!("Directory push failed: {}", e))?;
-            resp.json().await.map_err(|e| format!("Directory response: {}", e))
+            resp.json()
+                .await
+                .map_err(|e| format!("Directory response: {}", e))
         }
-        _ => Err(format!("Multi-Directory does not support entity type: {}", entity_type)),
+        _ => Err(format!(
+            "Multi-Directory does not support entity type: {}",
+            entity_type
+        )),
     }
 }
 
@@ -73,7 +81,10 @@ pub async fn pull_entity(
     let query = if filters.is_empty() {
         String::new()
     } else {
-        let params: Vec<String> = filters.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+        let params: Vec<String> = filters
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect();
         format!("?{}", params.join("&"))
     };
 
@@ -86,9 +97,14 @@ pub async fn pull_entity(
                 .send()
                 .await
                 .map_err(|e| format!("Directory pull failed: {}", e))?;
-            resp.json().await.map_err(|e| format!("Directory response: {}", e))
+            resp.json()
+                .await
+                .map_err(|e| format!("Directory response: {}", e))
         }
-        _ => Err(format!("Multi-Directory does not support pulling entity type: {}", entity_type)),
+        _ => Err(format!(
+            "Multi-Directory does not support pulling entity type: {}",
+            entity_type
+        )),
     }
 }
 
@@ -114,7 +130,16 @@ pub fn get_meta() -> serde_json::Value {
 }
 
 fn extract_creds(creds: &serde_json::Value) -> Result<(String, String), String> {
-    let api_key = creds.get("api_key").and_then(|v| v.as_str()).ok_or("Multi-Directory API key missing")?.to_string();
-    let base_url = creds.get("base_url").and_then(|v| v.as_str()).ok_or("Multi-Directory base URL missing")?.trim_end_matches('/').to_string();
+    let api_key = creds
+        .get("api_key")
+        .and_then(|v| v.as_str())
+        .ok_or("Multi-Directory API key missing")?
+        .to_string();
+    let base_url = creds
+        .get("base_url")
+        .and_then(|v| v.as_str())
+        .ok_or("Multi-Directory base URL missing")?
+        .trim_end_matches('/')
+        .to_string();
     Ok((api_key, base_url))
 }

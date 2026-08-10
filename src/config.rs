@@ -45,8 +45,8 @@ impl AppConfig {
         let database_url = env::var("DATABASE_URL")
             .map_err(|_| anyhow::anyhow!("DATABASE_URL environment variable is required"))?;
 
-        let redis_url = env::var("REDIS_URL")
-            .unwrap_or_else(|_| "redis://localhost:6379".to_string());
+        let redis_url =
+            env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
 
         let jwt_secret = env::var("JWT_SECRET")
             .map_err(|_| anyhow::anyhow!("JWT_SECRET environment variable is required"))?;
@@ -105,11 +105,10 @@ impl AppConfig {
             .parse::<u32>()
             .map_err(|e| anyhow::anyhow!("Invalid DB_MAX_CONNECTIONS: {}", e))?;
 
-        let internal_sync_key = env::var("INTERNAL_SYNC_KEY")
-            .unwrap_or_else(|_| "".to_string());
+        let internal_sync_key = env::var("INTERNAL_SYNC_KEY").unwrap_or_else(|_| "".to_string());
 
-        let funnelswift_url = env::var("FUNNELSWIFT_URL")
-            .unwrap_or_else(|_| "http://localhost:8080".to_string());
+        let funnelswift_url =
+            env::var("FUNNELSWIFT_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
 
         Ok(AppConfig {
             host,

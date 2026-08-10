@@ -3,12 +3,16 @@
 //! Satellite apps (FunnelSwift, IncentiveSwift, WorkflowSwift, MissedCall Respondr)
 //! push data via these endpoints. Authentication is via key_prefix lookup.
 
-use axum::{extract::{Path, State, Json}, http::StatusCode, response::IntoResponse};
+use axum::{
+    extract::{Json, Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::errors::{ApiResult, AppError};
 use crate::AppState;
-use crate::errors::{AppError, ApiResult};
 
 /// POST /inbound/{key_prefix}/{event_type}
 /// Receive an event from a satellite app using API key prefix auth
@@ -43,10 +47,13 @@ pub async fn receive(
     .fetch_one(&state.db)
     .await?;
 
-    Ok((StatusCode::OK, Json(json!({
-        "status": "received",
-        "event_id": event_id.to_string()
-    }))))
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "status": "received",
+            "event_id": event_id.to_string()
+        })),
+    ))
 }
 
 /// POST /inbound/v2/{key_prefix}/{event_type}
@@ -61,7 +68,7 @@ pub async fn receive_v2(
 
 /// POST /inbound/v3/{key_prefix}/contact-sync
 /// Smart contact upsert with survey answers + auto-tagging + city-prefixed tags.
-/// 
+///
 /// Expects JSON:
 /// {
 ///   "email": "user@example.com",
@@ -85,8 +92,14 @@ pub async fn receive_v3_contact_sync(
     Json(payload): Json<Value>,
 ) -> ApiResult<impl IntoResponse> {
     // Validate event type
-    if event_type != "contact-sync" && event_type != "survey-complete" && event_type != "contact-upsert" {
-        return Err(AppError::BadRequest(format!("Unsupported event type: {}. Use contact-sync, survey-complete, or contact-upsert", event_type)));
+    if event_type != "contact-sync"
+        && event_type != "survey-complete"
+        && event_type != "contact-upsert"
+    {
+        return Err(AppError::BadRequest(format!(
+            "Unsupported event type: {}. Use contact-sync, survey-complete, or contact-upsert",
+            event_type
+        )));
     }
 
     // Look up the API key by prefix
@@ -102,14 +115,29 @@ pub async fn receive_v3_contact_sync(
 
     // Extract contact fields
     let email = payload.get("email").and_then(|v| v.as_str()).unwrap_or("");
-    let first_name = payload.get("first_name").and_then(|v| v.as_str()).unwrap_or("");
-    let last_name = payload.get("last_name").and_then(|v| v.as_str()).unwrap_or("");
+    let first_name = payload
+        .get("first_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let last_name = payload
+        .get("last_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let phone = payload.get("phone").and_then(|v| v.as_str());
     let city = payload.get("city").and_then(|v| v.as_str()).unwrap_or("");
-    let city_prefix = payload.get("city_prefix").and_then(|v| v.as_str()).unwrap_or("");
+    let city_prefix = payload
+        .get("city_prefix")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let us_state = payload.get("state").and_then(|v| v.as_str()).unwrap_or("");
-    let source = payload.get("source").and_then(|v| v.as_str()).unwrap_or("inbound");
-    let company = payload.get("company").and_then(|v| v.as_str()).unwrap_or("");
+    let source = payload
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("inbound");
+    let company = payload
+        .get("company")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let title = payload.get("title").and_then(|v| v.as_str()).unwrap_or("");
     let notes = payload.get("notes").and_then(|v| v.as_str());
 
@@ -139,7 +167,10 @@ pub async fn receive_v3_contact_sync(
 
     // Add source tracking
     metadata.insert("_source".to_string(), json!(source));
-    metadata.insert("_synced_at".to_string(), json!(chrono::Utc::now().to_rfc3339()));
+    metadata.insert(
+        "_synced_at".to_string(),
+        json!(chrono::Utc::now().to_rfc3339()),
+    );
     if !city.is_empty() {
         metadata.insert("_city".to_string(), json!(city));
     }
@@ -153,7 +184,7 @@ pub async fn receive_v3_contact_sync(
     let contact_id = if !email.is_empty() {
         // Check for existing contact by email
         let existing = sqlx::query_as::<_, (Uuid,)>(
-            "SELECT id FROM contacts WHERE tenant_id = $1 AND email = $2 LIMIT 1"
+            "SELECT id FROM contacts WHERE tenant_id = $1 AND email = $2 LIMIT 1",
         )
         .bind(tenant_id)
         .bind(email)
@@ -248,14 +279,17 @@ pub async fn receive_v3_contact_sync(
     if let Some(tags) = payload.get("tags").and_then(|v| v.as_array()) {
         for tag_name_val in tags {
             let raw_name = tag_name_val.as_str().unwrap_or("");
-            if raw_name.is_empty() { continue; }
+            if raw_name.is_empty() {
+                continue;
+            }
 
             // Apply city prefix if provided and not already prefixed
-            let final_tag_name = if !city_prefix.is_empty() && !raw_name.starts_with(&format!("{}_", city_prefix)) {
-                format!("{}_{}", city_prefix, raw_name)
-            } else {
-                raw_name.to_string()
-            };
+            let final_tag_name =
+                if !city_prefix.is_empty() && !raw_name.starts_with(&format!("{}_", city_prefix)) {
+                    format!("{}_{}", city_prefix, raw_name)
+                } else {
+                    raw_name.to_string()
+                };
 
             // Create or get tag
             let tag_id = create_tag_or_get_id(&state.db, tenant_id, &final_tag_name).await?;
@@ -295,15 +329,18 @@ pub async fn receive_v3_contact_sync(
     .fetch_one(&state.db)
     .await?;
 
-    Ok((StatusCode::OK, Json(json!({
-        "status": "synced",
-        "event_id": event_id.to_string(),
-        "contact_id": contact_id.to_string(),
-        "merged": true,
-        "tags_assigned": assigned_tags.len(),
-        "tags": assigned_tags,
-        "survey_answers_stored": survey_answers.map(|a| a.len()).unwrap_or(0),
-    }))))
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "status": "synced",
+            "event_id": event_id.to_string(),
+            "contact_id": contact_id.to_string(),
+            "merged": true,
+            "tags_assigned": assigned_tags.len(),
+            "tags": assigned_tags,
+            "survey_answers_stored": survey_answers.map(|a| a.len()).unwrap_or(0),
+        })),
+    ))
 }
 
 /// Helper: create tag if it doesn't exist, return its ID
@@ -313,13 +350,12 @@ async fn create_tag_or_get_id(
     name: &str,
 ) -> Result<Uuid, AppError> {
     // Check if tag already exists
-    let existing: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM tags WHERE tenant_id = $1 AND name = $2"
-    )
-    .bind(tenant_id)
-    .bind(name)
-    .fetch_optional(db)
-    .await?;
+    let existing: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tags WHERE tenant_id = $1 AND name = $2")
+            .bind(tenant_id)
+            .bind(name)
+            .fetch_optional(db)
+            .await?;
 
     if let Some((tag_id,)) = existing {
         return Ok(tag_id);
@@ -330,7 +366,7 @@ async fn create_tag_or_get_id(
     sqlx::query(
         "INSERT INTO tags (id, tenant_id, name, color, is_active)
          VALUES ($1, $2, $3, '#6366f1', true)
-         ON CONFLICT (tenant_id, name) DO UPDATE SET updated_at = NOW() RETURNING id"
+         ON CONFLICT (tenant_id, name) DO UPDATE SET updated_at = NOW() RETURNING id",
     )
     .bind(tag_id)
     .bind(tenant_id)

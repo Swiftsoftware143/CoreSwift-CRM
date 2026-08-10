@@ -16,8 +16,7 @@ pub async fn send_email(
     Extension(claims): Extension<Claims>,
     Json(req): Json<SendEmailRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Find the sending mailbox
     let mailbox = sqlx::query_as::<_, PrivateEmailBox>(
@@ -29,7 +28,8 @@ pub async fn send_email(
     .await
     .map_err(AppError::Database)?;
 
-    let mailbox = mailbox.ok_or_else(|| AppError::NotFound("Sending mailbox not found or not active".into()))?;
+    let mailbox = mailbox
+        .ok_or_else(|| AppError::NotFound("Sending mailbox not found or not active".into()))?;
 
     // Load provider config for this domain
     let provider_config = load_provider_config(&state.db, mailbox.domain_id, account_id)
@@ -45,18 +45,24 @@ pub async fn send_email(
 
     // Select provider and send
     let provider = providers::provider_for(&provider_config);
-    let result = provider.send(
-        &provider_config,
-        &req.from_address,
-        &req.to,
-        &req.subject,
-        &body,
-        req.in_reply_to.as_deref(),
-    ).await;
+    let result = provider
+        .send(
+            &provider_config,
+            &req.from_address,
+            &req.to,
+            &req.subject,
+            &body,
+            req.in_reply_to.as_deref(),
+        )
+        .await;
 
     if !result.success {
         let err = result.error.unwrap_or_else(|| "Unknown send error".into());
-        return Err(AppError::Internal(format!("{} send failed: {}", provider.name(), err)));
+        return Err(AppError::Internal(format!(
+            "{} send failed: {}",
+            provider.name(),
+            err
+        )));
     }
 
     // Try to match recipient to a contact and log as event
@@ -123,14 +129,27 @@ pub async fn load_provider_config(
     .map_err(|e| format!("Database error: {}", e))?
     .ok_or_else(|| "Domain not found".to_string())?;
 
-    let provider_type: String = row.try_get("provider_type").unwrap_or_else(|_| "mailgun".into());
+    let provider_type: String = row
+        .try_get("provider_type")
+        .unwrap_or_else(|_| "mailgun".into());
     let region: Option<String> = row.try_get("mailgun_region").ok();
     let encrypted_api_key: Option<String> = row.try_get("mailgun_api_key").ok();
 
     // For backward compat: if api_key_id is set, resolve the key
-    let final_encrypted_key = if row.try_get::<Option<Uuid>, _>("api_key_id").ok().flatten().is_some() {
+    let final_encrypted_key = if row
+        .try_get::<Option<Uuid>, _>("api_key_id")
+        .ok()
+        .flatten()
+        .is_some()
+    {
         // Resolve from the key table based on provider_type
-        resolve_api_key(db, tenant_id, row.try_get("api_key_id").ok().flatten(), &provider_type).await
+        resolve_api_key(
+            db,
+            tenant_id,
+            row.try_get("api_key_id").ok().flatten(),
+            &provider_type,
+        )
+        .await
     } else {
         encrypted_api_key
     };
@@ -147,7 +166,9 @@ pub async fn load_provider_config(
         smtp_username: row.try_get("smtp_username").ok(),
         encrypted_smtp_password: row.try_get("smtp_password_encrypted").ok(),
         smtp_tls: row.try_get("smtp_tls").unwrap_or(true),
-        inbound_mode: row.try_get("inbound_mode").unwrap_or_else(|_| "webhook".into()),
+        inbound_mode: row
+            .try_get("inbound_mode")
+            .unwrap_or_else(|_| "webhook".into()),
         encrypted_webhook_key: row.try_get("webhook_signing_key_encrypted").ok(),
     })
 }
@@ -199,7 +220,9 @@ pub async fn send_via_provider(
 ) -> Result<(), String> {
     let config = load_provider_config(db, domain_id, tenant_id).await?;
     let provider = providers::provider_for(&config);
-    let result = provider.send(&config, from_address, to, subject, body_html, None).await;
+    let result = provider
+        .send(&config, from_address, to, subject, body_html, None)
+        .await;
 
     if result.success {
         Ok(())

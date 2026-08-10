@@ -142,7 +142,8 @@ pub struct AffiliateProductSelection {
 /// Generate a unique affiliate code from a name
 pub fn generate_code(name: &str) -> String {
     use rand::Rng;
-    let base = name.to_lowercase()
+    let base = name
+        .to_lowercase()
         .chars()
         .filter(|c| c.is_alphanumeric())
         .take(10)

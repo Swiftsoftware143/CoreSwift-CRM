@@ -1,12 +1,16 @@
 //! Dashboard handlers — aggregate stats for tenant home view
 
-use axum::{extract::{State, Extension}, Json, response::IntoResponse};
+use axum::{
+    extract::{Extension, State},
+    response::IntoResponse,
+    Json,
+};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::AppState;
-use crate::errors::{AppError, ApiResult};
 use crate::auth::Claims;
+use crate::errors::{ApiResult, AppError};
+use crate::AppState;
 
 /// GET /api/dashboard/stats — aggregate counts for the tenant
 pub async fn stats(
@@ -15,26 +19,29 @@ pub async fn stats(
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let total_contacts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE tenant_id = $1")
-        .bind(tenant_id)
-        .fetch_one(&s.db)
-        .await
-        .unwrap_or(0);
+    let total_contacts: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap_or(0);
 
-    let total_companies: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM companies WHERE tenant_id = $1")
-        .bind(tenant_id)
-        .fetch_one(&s.db)
-        .await
-        .unwrap_or(0);
+    let total_companies: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM companies WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap_or(0);
 
-    let total_opportunities: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM opportunities WHERE tenant_id = $1")
-        .bind(tenant_id)
-        .fetch_one(&s.db)
-        .await
-        .unwrap_or(0);
+    let total_opportunities: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM opportunities WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap_or(0);
 
     let total_revenue: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(value), 0) FROM opportunities WHERE tenant_id = $1 AND is_won = true"
+        "SELECT COALESCE(SUM(value), 0) FROM opportunities WHERE tenant_id = $1 AND is_won = true",
     )
     .bind(tenant_id)
     .fetch_one(&s.db)
@@ -56,17 +63,19 @@ pub async fn search_query(
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let contacts_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE tenant_id = $1")
-        .bind(tenant_id)
-        .fetch_one(&s.db)
-        .await
-        .unwrap_or(0);
+    let contacts_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap_or(0);
 
-    let companies_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM companies WHERE tenant_id = $1")
-        .bind(tenant_id)
-        .fetch_one(&s.db)
-        .await
-        .unwrap_or(0);
+    let companies_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM companies WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap_or(0);
 
     Ok(Json(json!({
         "total_contacts": contacts_count,

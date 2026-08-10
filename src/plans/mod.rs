@@ -3,11 +3,11 @@
 //! Provides CRUD for plan tiers. All endpoints require `agency_admin` role.
 //! Plans define pricing, contact/deal/user limits, and feature toggles.
 
-pub mod models;
 pub mod handlers;
+pub mod models;
 
-use axum::{Router, middleware};
 use crate::AppState;
+use axum::{middleware, Router};
 
 /// Build the plans router with auth middleware.
 /// All routes require agency_admin role (enforced in handlers).

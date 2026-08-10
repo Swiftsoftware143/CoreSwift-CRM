@@ -1,7 +1,7 @@
 //! Message handlers: CRUD + webhook ingest with auto-routing.
 
 use axum::{
-    extract::{State, Path, Query, Json},
+    extract::{Json, Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Extension,
@@ -9,10 +9,10 @@ use axum::{
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::AppState;
-use crate::errors::{AppError, ApiResult, validate_pagination};
-use crate::auth::models::Claims;
 use super::models::*;
+use crate::auth::models::Claims;
+use crate::errors::{validate_pagination, ApiResult, AppError};
+use crate::AppState;
 
 /// GET /api/messages — list inbox messages (tenant-scoped).
 pub async fn list(
@@ -20,8 +20,7 @@ pub async fn list(
     Extension(claims): Extension<Claims>,
     Query(params): Query<MessageListParams>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let (page, per_page) = validate_pagination(params.page, params.limit);
     let offset = (page - 1) * per_page;
@@ -48,34 +47,30 @@ pub async fn list(
         .map_err(|e| AppError::Internal(e.to_string()))?
     } else {
         match status_filter.as_str() {
-            "unread" => {
-                sqlx::query_as::<_, Message>(
-                    r#"SELECT * FROM cs_messages
+            "unread" => sqlx::query_as::<_, Message>(
+                r#"SELECT * FROM cs_messages
                        WHERE tenant_id = $1 AND is_read = false AND is_archived = false
                        ORDER BY created_at DESC
                        LIMIT $2 OFFSET $3"#,
-                )
-                .bind(tenant_id)
-                .bind(per_page)
-                .bind(offset)
-                .fetch_all(&state.db)
-                .await
-                .map_err(|e| AppError::Internal(e.to_string()))?
-            }
-            "archived" => {
-                sqlx::query_as::<_, Message>(
-                    r#"SELECT * FROM cs_messages
+            )
+            .bind(tenant_id)
+            .bind(per_page)
+            .bind(offset)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?,
+            "archived" => sqlx::query_as::<_, Message>(
+                r#"SELECT * FROM cs_messages
                        WHERE tenant_id = $1 AND is_archived = true
                        ORDER BY created_at DESC
                        LIMIT $2 OFFSET $3"#,
-                )
-                .bind(tenant_id)
-                .bind(per_page)
-                .bind(offset)
-                .fetch_all(&state.db)
-                .await
-                .map_err(|e| AppError::Internal(e.to_string()))?
-            }
+            )
+            .bind(tenant_id)
+            .bind(per_page)
+            .bind(offset)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?,
             _ => {
                 // "all" — exclude archived
                 sqlx::query_as::<_, Message>(
@@ -108,18 +103,16 @@ pub async fn get(
     Extension(claims): Extension<Claims>,
     Path(message_id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let message = sqlx::query_as::<_, Message>(
-        "SELECT * FROM cs_messages WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(message_id)
-    .bind(tenant_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?
-    .ok_or(AppError::NotFound("Message not found".into()))?;
+    let message =
+        sqlx::query_as::<_, Message>("SELECT * FROM cs_messages WHERE id = $1 AND tenant_id = $2")
+            .bind(message_id)
+            .bind(tenant_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?
+            .ok_or(AppError::NotFound("Message not found".into()))?;
 
     Ok(Json(json!({ "message": message })))
 }
@@ -130,8 +123,7 @@ pub async fn create(
     Extension(claims): Extension<Claims>,
     Json(payload): Json<CreateMessageRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let message = sqlx::query_as::<_, Message>(
         r#"INSERT INTO cs_messages (tenant_id, contact_id, sender_name, sender_email,
@@ -160,8 +152,7 @@ pub async fn update(
     Path(message_id): Path<Uuid>,
     Json(payload): Json<UpdateMessageRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let message = sqlx::query_as::<_, Message>(
         r#"UPDATE cs_messages
@@ -189,17 +180,14 @@ pub async fn delete(
     Extension(claims): Extension<Claims>,
     Path(message_id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let result = sqlx::query(
-        "DELETE FROM cs_messages WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(message_id)
-    .bind(tenant_id)
-    .execute(&state.db)
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
+    let result = sqlx::query("DELETE FROM cs_messages WHERE id = $1 AND tenant_id = $2")
+        .bind(message_id)
+        .bind(tenant_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Message not found".into()));
@@ -213,7 +201,10 @@ pub async fn webhook_receive(
     State(state): State<AppState>,
     Json(payload): Json<WebhookMessagePayload>,
 ) -> impl IntoResponse {
-    let source = payload.source.clone().unwrap_or_else(|| "unknown".to_string());
+    let source = payload
+        .source
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
 
     // Determine which tenant this message belongs to.
     // For now, use the sender_email to look up the tenant.
@@ -246,7 +237,8 @@ pub async fn webhook_receive(
                     return Json(json!({
                         "ok": false,
                         "error": "No tenant found for webhook message"
-                    })).into_response();
+                    }))
+                    .into_response();
                 }
             }
         }
@@ -290,6 +282,7 @@ pub async fn webhook_receive(
         Err(e) => Json(json!({
             "ok": false,
             "error": format!("Failed to store message: {}", e)
-        })).into_response(),
+        }))
+        .into_response(),
     }
 }

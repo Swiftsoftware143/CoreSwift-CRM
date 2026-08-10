@@ -1,7 +1,7 @@
 //! Checklist handlers: CRUD for templates, instance management, progress tracking.
 
 use axum::{
-    extract::{State, Path, Query, Json},
+    extract::{Json, Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Extension,
@@ -10,10 +10,10 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::AppState;
-use crate::errors::{AppError, ApiResult, validate_pagination};
-use crate::auth::models::Claims;
 use super::models::*;
+use crate::auth::models::Claims;
+use crate::errors::{validate_pagination, ApiResult, AppError};
+use crate::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct ListTemplatesParams {
@@ -36,8 +36,7 @@ pub async fn list_templates(
     Extension(claims): Extension<Claims>,
     Query(params): Query<ListTemplatesParams>,
 ) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let (page, per_page) = validate_pagination(params.page, params.per_page);
     let offset = (page - 1) * per_page;
@@ -69,7 +68,9 @@ pub async fn list_templates(
         .await?
     };
 
-    Ok(Json(json!({ "templates": templates, "page": page, "per_page": per_page })))
+    Ok(Json(
+        json!({ "templates": templates, "page": page, "per_page": per_page }),
+    ))
 }
 
 /// POST /api/checklists/templates — Create a new checklist template.
@@ -78,11 +79,12 @@ pub async fn create_template(
     Extension(claims): Extension<Claims>,
     Json(req): Json<CreateTemplateRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     if req.name.is_empty() {
-        return Err(AppError::Validation("Template name is required".to_string()));
+        return Err(AppError::Validation(
+            "Template name is required".to_string(),
+        ));
     }
 
     if req.trigger_type.is_empty() {
@@ -113,8 +115,7 @@ pub async fn get_template(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let template = sqlx::query_as::<_, ChecklistTemplate>(
         "SELECT * FROM checklist_templates WHERE id = $1 AND tenant_id = $2",
@@ -142,8 +143,7 @@ pub async fn update_template(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateTemplateRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let template = sqlx::query_as::<_, ChecklistTemplate>(
         r#"UPDATE checklist_templates SET
@@ -178,8 +178,7 @@ pub async fn delete_template(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let result = sqlx::query("DELETE FROM checklist_templates WHERE id = $1 AND tenant_id = $2")
         .bind(id)
@@ -202,8 +201,7 @@ pub async fn start_checklist(
     Extension(claims): Extension<Claims>,
     Path((entity_type, entity_id)): Path<(String, Uuid)>,
 ) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Find matching active template
     let template = sqlx::query_as::<_, (Uuid, i32, i32)>(
@@ -250,11 +248,14 @@ pub async fn start_checklist(
         .await;
     }
 
-    Ok((StatusCode::CREATED, Json(json!({
-        "instance": instance,
-        "stage_count": stage_count,
-        "stages_initialized": stages.len(),
-    }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "instance": instance,
+            "stage_count": stage_count,
+            "stages_initialized": stages.len(),
+        })),
+    ))
 }
 
 /// PATCH /api/checklists/instances/{id}/progress — Update stage progress.
@@ -264,14 +265,15 @@ pub async fn update_progress(
     Path(id): Path<Uuid>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let stage = req.get("stage_order")
+    let stage = req
+        .get("stage_order")
         .and_then(|v| v.as_i64())
         .ok_or(AppError::Validation("stage_order required".to_string()))?;
 
-    let action_taken = req.get("action_taken")
+    let action_taken = req
+        .get("action_taken")
         .and_then(|v| v.as_str())
         .unwrap_or("completed");
 
@@ -304,7 +306,7 @@ pub async fn update_progress(
 
     if done >= total {
         let _ = sqlx::query(
-            "UPDATE checklist_instances SET completed = true, completed_at = NOW() WHERE id = $1"
+            "UPDATE checklist_instances SET completed = true, completed_at = NOW() WHERE id = $1",
         )
         .bind(id)
         .execute(&state.db)
@@ -324,41 +326,43 @@ pub async fn list_instances(
     Extension(claims): Extension<Claims>,
     Query(params): Query<ListInstancesParams>,
 ) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let (page, per_page) = validate_pagination(params.page, params.per_page);
     let offset = (page - 1) * per_page;
 
-    let instances = if let (Some(ref entity_type), Some(entity_id)) = (&params.entity_type, params.entity_id) {
-        sqlx::query_as::<_, ChecklistInstance>(
-            r#"SELECT * FROM checklist_instances
+    let instances =
+        if let (Some(ref entity_type), Some(entity_id)) = (&params.entity_type, params.entity_id) {
+            sqlx::query_as::<_, ChecklistInstance>(
+                r#"SELECT * FROM checklist_instances
                WHERE tenant_id = $1 AND entity_type = $2 AND entity_id = $3
                ORDER BY created_at DESC
                LIMIT $4 OFFSET $5"#,
-        )
-        .bind(account_id)
-        .bind(entity_type)
-        .bind(entity_id)
-        .bind(per_page)
-        .bind(offset)
-        .fetch_all(&state.db)
-        .await?
-    } else {
-        sqlx::query_as::<_, ChecklistInstance>(
-            r#"SELECT * FROM checklist_instances
+            )
+            .bind(account_id)
+            .bind(entity_type)
+            .bind(entity_id)
+            .bind(per_page)
+            .bind(offset)
+            .fetch_all(&state.db)
+            .await?
+        } else {
+            sqlx::query_as::<_, ChecklistInstance>(
+                r#"SELECT * FROM checklist_instances
                WHERE tenant_id = $1
                ORDER BY created_at DESC
                LIMIT $2 OFFSET $3"#,
-        )
-        .bind(account_id)
-        .bind(per_page)
-        .bind(offset)
-        .fetch_all(&state.db)
-        .await?
-    };
+            )
+            .bind(account_id)
+            .bind(per_page)
+            .bind(offset)
+            .fetch_all(&state.db)
+            .await?
+        };
 
-    Ok(Json(json!({ "instances": instances, "page": page, "per_page": per_page })))
+    Ok(Json(
+        json!({ "instances": instances, "page": page, "per_page": per_page }),
+    ))
 }
 
 /// GET /api/checklists/instances/{id} — Get instance with progress.
@@ -367,8 +371,7 @@ pub async fn get_instance(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let instance = sqlx::query_as::<_, ChecklistInstance>(
         "SELECT * FROM checklist_instances WHERE id = $1 AND tenant_id = $2",

@@ -1,16 +1,16 @@
 use axum::{
-    extract::{State, Path, Json, Extension},
+    extract::{Extension, Json, Path, State},
     http::StatusCode,
     response::IntoResponse,
 };
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::AppState;
-use crate::errors::{AppError, ApiResult};
-use crate::auth::models::Claims;
-use crate::audit;
 use super::models::*;
+use crate::audit;
+use crate::auth::models::Claims;
+use crate::errors::{ApiResult, AppError};
+use crate::AppState;
 
 pub async fn list(
     State(state): State<AppState>,
@@ -18,8 +18,11 @@ pub async fn list(
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let companies = sqlx::query_as::<_, Company>(
-        "SELECT * FROM companies WHERE account_id = $1 AND is_active = true ORDER BY name"
-    ).bind(account_id).fetch_all(&state.db).await?;
+        "SELECT * FROM companies WHERE account_id = $1 AND is_active = true ORDER BY name",
+    )
+    .bind(account_id)
+    .fetch_all(&state.db)
+    .await?;
     Ok(Json(json!({ "companies": companies })))
 }
 
@@ -52,10 +55,13 @@ pub async fn get(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let company = sqlx::query_as::<_, Company>(
-        "SELECT * FROM companies WHERE id = $1 AND account_id = $2"
-    ).bind(id).bind(account_id).fetch_optional(&state.db).await?
-    .ok_or(AppError::NotFound(format!("Company {} not found", id)))?;
+    let company =
+        sqlx::query_as::<_, Company>("SELECT * FROM companies WHERE id = $1 AND account_id = $2")
+            .bind(id)
+            .bind(account_id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(AppError::NotFound(format!("Company {} not found", id)))?;
     Ok(Json(json!(company)))
 }
 
@@ -75,12 +81,27 @@ pub async fn update(
             country = COALESCE($11, country), website = COALESCE($12, website),
             notes = COALESCE($13, notes), metadata = COALESCE($14, metadata),
             is_active = COALESCE($15, is_active), updated_at = NOW()
-           WHERE id = $16 AND account_id = $17 RETURNING *"#
-    ).bind(&req.name).bind(&req.domain).bind(&req.industry).bind(&req.size)
-    .bind(&req.phone).bind(&req.address_line1).bind(&req.address_line2)
-    .bind(&req.city).bind(&req.state).bind(&req.postal_code).bind(&req.country)
-    .bind(&req.website).bind(&req.notes).bind(&req.metadata).bind(req.is_active)
-    .bind(id).bind(account_id).fetch_optional(&state.db).await?
+           WHERE id = $16 AND account_id = $17 RETURNING *"#,
+    )
+    .bind(&req.name)
+    .bind(&req.domain)
+    .bind(&req.industry)
+    .bind(&req.size)
+    .bind(&req.phone)
+    .bind(&req.address_line1)
+    .bind(&req.address_line2)
+    .bind(&req.city)
+    .bind(&req.state)
+    .bind(&req.postal_code)
+    .bind(&req.country)
+    .bind(&req.website)
+    .bind(&req.notes)
+    .bind(&req.metadata)
+    .bind(req.is_active)
+    .bind(id)
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await?
     .ok_or(AppError::NotFound(format!("Company {} not found", id)))?;
 
     // Log audit event
@@ -93,7 +114,8 @@ pub async fn update(
         Some(id),
         Some(json!({"updated": true})),
         None,
-    ).await;
+    )
+    .await;
 
     Ok(Json(json!(company)))
 }
@@ -105,7 +127,10 @@ pub async fn delete(
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let r = sqlx::query("DELETE FROM companies WHERE id = $1 AND account_id = $2")
-        .bind(id).bind(account_id).execute(&state.db).await?;
+        .bind(id)
+        .bind(account_id)
+        .execute(&state.db)
+        .await?;
     if r.rows_affected() == 0 {
         return Err(AppError::NotFound(format!("Company {} not found", id)));
     }

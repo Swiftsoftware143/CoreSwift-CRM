@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use rust_decimal::Decimal;
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Plan {
@@ -94,7 +94,10 @@ pub struct PlanSummary {
 }
 
 /// Merge overrides into plan features, override wins
-pub fn merge_features(plan_features: &serde_json::Value, overrides: &serde_json::Value) -> (serde_json::Value, serde_json::Value) {
+pub fn merge_features(
+    plan_features: &serde_json::Value,
+    overrides: &serde_json::Value,
+) -> (serde_json::Value, serde_json::Value) {
     use serde_json::{Map, Value};
     let mut features = Map::new();
     let mut limits = Map::new();
@@ -112,7 +115,10 @@ pub fn merge_features(plan_features: &serde_json::Value, overrides: &serde_json:
     // Add any override-only keys
     if let Some(ov) = overrides.as_object() {
         for (k, v) in ov {
-            if !plan_features.as_object().is_some_and(|pf| pf.contains_key(k)) {
+            if !plan_features
+                .as_object()
+                .is_some_and(|pf| pf.contains_key(k))
+            {
                 if v.is_number() {
                     limits.insert(k.clone(), v.clone());
                 } else {

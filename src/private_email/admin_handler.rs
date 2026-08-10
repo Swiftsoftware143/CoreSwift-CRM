@@ -1,7 +1,10 @@
 //! Admin endpoints for tenant email limits.
 //! All routes require agency_admin or owner role.
 
-use axum::{extract::{Path, State}, Extension, Json};
+use axum::{
+    extract::{Path, State},
+    Extension, Json,
+};
 use chrono::{DateTime, Utc};
 use serde_json::Value as SerdeJson;
 use uuid::Uuid;
@@ -157,11 +160,14 @@ pub async fn get_retention(
         .map(|(d, p)| (d.unwrap_or(365), p))
         .unwrap_or((365, None));
 
-    Ok(Json(serde_json::to_value(RetentionResponse {
-        tenant_id,
-        retention_days,
-        last_purged_at,
-    }).unwrap()))
+    Ok(Json(
+        serde_json::to_value(RetentionResponse {
+            tenant_id,
+            retention_days,
+            last_purged_at,
+        })
+        .unwrap(),
+    ))
 }
 
 /// PATCH /api/v1/private-email/admin/limits/:tenant_id/retention
@@ -204,11 +210,14 @@ pub async fn set_retention(
     .await
     .map_err(AppError::Database)?;
 
-    Ok(Json(serde_json::to_value(serde_json::json!({
-        "tenant_id": tenant_id,
-        "retention_days": req.retention_days,
-        "updated": true,
-    })).unwrap()))
+    Ok(Json(
+        serde_json::to_value(serde_json::json!({
+            "tenant_id": tenant_id,
+            "retention_days": req.retention_days,
+            "updated": true,
+        }))
+        .unwrap(),
+    ))
 }
 
 // ── Purge Trigger Endpoint ──
@@ -225,8 +234,7 @@ pub async fn trigger_purge(
     // Single-tenant purge requires caller to belong to that tenant
     if let Some(tid) = req.tenant_id {
         if claims.role != "agency_admin" && claims.role != "owner" {
-            let caller_tenant = Uuid::parse_str(&claims.aid)
-                .map_err(|_| AppError::Unauthorized)?;
+            let caller_tenant = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
             if caller_tenant != tid {
                 return Err(AppError::Forbidden);
             }
@@ -262,8 +270,7 @@ pub async fn get_support_box(
     State(state): State<AppState>,
     Extension(claims): Extension<crate::auth::models::Claims>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let tenant_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let row: Option<(Option<Uuid>, Option<String>)> = sqlx::query_as(
         r#"SELECT
@@ -271,7 +278,7 @@ pub async fn get_support_box(
             b.email_address
            FROM tenants t
            LEFT JOIN private_email_boxes b ON b.id = (t.settings->>'support_email_box_id')::uuid
-           WHERE t.id = $1"#
+           WHERE t.id = $1"#,
     )
     .bind(tenant_id)
     .fetch_optional(&state.db)
@@ -298,12 +305,11 @@ pub async fn set_support_box(
     Extension(claims): Extension<crate::auth::models::Claims>,
     Json(body): Json<SetSupportBoxRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let tenant_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     if let Some(box_id) = body.box_id {
         let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM private_email_boxes WHERE id = $1 AND tenant_id = $2)"
+            "SELECT EXISTS(SELECT 1 FROM private_email_boxes WHERE id = $1 AND tenant_id = $2)",
         )
         .bind(box_id)
         .bind(tenant_id)
@@ -312,7 +318,9 @@ pub async fn set_support_box(
         .map_err(AppError::Database)?;
 
         if !exists {
-            return Err(AppError::BadRequest("Email box not found or not owned by this tenant".into()));
+            return Err(AppError::BadRequest(
+                "Email box not found or not owned by this tenant".into(),
+            ));
         }
 
         sqlx::query(
@@ -325,7 +333,7 @@ pub async fn set_support_box(
         .map_err(AppError::Database)?;
     } else {
         sqlx::query(
-            "UPDATE tenants SET settings = settings - 'support_email_box_id' WHERE id = $1"
+            "UPDATE tenants SET settings = settings - 'support_email_box_id' WHERE id = $1",
         )
         .bind(tenant_id)
         .execute(&state.db)

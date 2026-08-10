@@ -8,8 +8,8 @@
 //! This replaces n8n / Node.js cron — all baked into the single Rust binary.
 
 use sqlx::PgPool;
-use uuid::Uuid;
 use tokio_cron_scheduler::{Job, JobScheduler};
+use uuid::Uuid;
 
 // Import AI engine for intelligent decision-making
 use crate::ai::engine;
@@ -114,8 +114,11 @@ async fn process_notification_queue(db: &PgPool) {
            FROM notification_queue
            WHERE status = 'queued'
            ORDER BY created_at ASC
-           LIMIT 10"#
-    ).fetch_all(db).await {
+           LIMIT 10"#,
+    )
+    .fetch_all(db)
+    .await
+    {
         Ok(i) => i,
         Err(e) => {
             tracing::warn!(error = %e, "Failed to fetch notification queue items");
@@ -131,9 +134,10 @@ async fn process_notification_queue(db: &PgPool) {
 
     for (item_id, tenant_id, channel, to_address, subject, body) in &items {
         // Mark as sending
-        let _ = sqlx::query(
-            "UPDATE notification_queue SET status = 'sending' WHERE id = $1"
-        ).bind(item_id).execute(db).await;
+        let _ = sqlx::query("UPDATE notification_queue SET status = 'sending' WHERE id = $1")
+            .bind(item_id)
+            .execute(db)
+            .await;
 
         // For in_app notifications, insert into the notifications table
         if channel == "in_app" {
@@ -141,41 +145,60 @@ async fn process_notification_queue(db: &PgPool) {
             if let Ok(user_id) = Uuid::parse_str(to_address) {
                 let _ = sqlx::query(
                     r#"INSERT INTO notifications (id, tenant_id, user_id, message)
-                       VALUES ($1, $2, $3, $4)"#
+                       VALUES ($1, $2, $3, $4)"#,
                 )
-                .bind(Uuid::new_v4()).bind(tenant_id).bind(user_id).bind(body)
-                .execute(db).await;
+                .bind(Uuid::new_v4())
+                .bind(tenant_id)
+                .bind(user_id)
+                .bind(body)
+                .execute(db)
+                .await;
             }
             let _ = sqlx::query(
-                "UPDATE notification_queue SET status = 'sent', sent_at = NOW() WHERE id = $1"
-            ).bind(item_id).execute(db).await;
+                "UPDATE notification_queue SET status = 'sent', sent_at = NOW() WHERE id = $1",
+            )
+            .bind(item_id)
+            .execute(db)
+            .await;
             continue;
         }
 
         // Load delivery config from tenant settings
         let cfg = crate::communications::providers::load_delivery_config(
-            db, *item_id, *tenant_id, channel, to_address,
-            subject.clone(), body,
-        ).await;
+            db,
+            *item_id,
+            *tenant_id,
+            channel,
+            to_address,
+            subject.clone(),
+            body,
+        )
+        .await;
 
         // Deliver
         let (ok, err) = crate::communications::providers::deliver(&cfg).await;
 
         if ok {
             let _ = sqlx::query(
-                "UPDATE notification_queue SET status = 'sent', sent_at = NOW() WHERE id = $1"
-            ).bind(item_id).execute(db).await;
+                "UPDATE notification_queue SET status = 'sent', sent_at = NOW() WHERE id = $1",
+            )
+            .bind(item_id)
+            .execute(db)
+            .await;
             tracing::info!(item = %item_id, channel = %channel, "Notification delivered successfully");
         } else {
             let err_msg = err.unwrap_or_else(|| "Unknown error".to_string());
             let _ = sqlx::query(
-                "UPDATE notification_queue SET status = 'failed', error_message = $2 WHERE id = $1"
-            ).bind(item_id).bind(&err_msg).execute(db).await;
+                "UPDATE notification_queue SET status = 'failed', error_message = $2 WHERE id = $1",
+            )
+            .bind(item_id)
+            .bind(&err_msg)
+            .execute(db)
+            .await;
             tracing::warn!(item = %item_id, error = %err_msg, "Notification delivery failed");
         }
     }
 }
-
 
 /// Evaluate all pending delayed actions that are past their execute_at time.
 /// This is the core "If-Not-Then" engine — checks conditions and fires actions.
@@ -216,8 +239,11 @@ async fn check_inactive_trials(db: &PgPool) {
            WHERE tp.status = 'trialing'
              AND (ah.last_active_at IS NULL OR ah.last_active_at < NOW() - INTERVAL '24 hours')
              AND (ah.risk_level IS NULL OR ah.risk_level = 'healthy' OR ah.risk_level = 'at_risk')
-           LIMIT 50"#
-    ).fetch_all(db).await {
+           LIMIT 50"#,
+    )
+    .fetch_all(db)
+    .await
+    {
         Ok(i) => i,
         Err(e) => {
             tracing::warn!(error = %e, "Failed to check inactive trials");
@@ -234,8 +260,11 @@ async fn check_inactive_trials(db: &PgPool) {
              AND bp.current_state = 'active'
              AND bp.subscription_active = FALSE
              AND bp.last_activity_at < NOW() - INTERVAL '24 hours'
-           LIMIT 50"#
-    ).fetch_all(db).await {
+           LIMIT 50"#,
+    )
+    .fetch_all(db)
+    .await
+    {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(error = %e, "Failed to check inactive trials via business_profiles");
@@ -253,14 +282,19 @@ async fn check_inactive_trials(db: &PgPool) {
             *contact_id,
             "days_inactive",
             1,
-        ).await;
+        )
+        .await;
     }
 
     // Process business_profiles records — fetch tenant_id from users table
     for (_bp_id, user_id, email, _phone, business_name) in &profiles {
-        if let Some(tenant_id) = sqlx::query_scalar::<_, Option<Uuid>>(
-            "SELECT tenant_id FROM users WHERE id = $1"
-        ).bind(user_id).fetch_one(db).await.unwrap_or(None) {
+        if let Some(tenant_id) =
+            sqlx::query_scalar::<_, Option<Uuid>>("SELECT tenant_id FROM users WHERE id = $1")
+                .bind(user_id)
+                .fetch_one(db)
+                .await
+                .unwrap_or(None)
+        {
             tracing::info!(user = %user_id, business = %business_name, "Inactive trial detected (business_profiles)");
 
             // AI-powered churn assessment
@@ -274,13 +308,16 @@ async fn check_inactive_trials(db: &PgPool) {
                 *user_id,
                 "days_inactive",
                 1,
-            ).await;
+            )
+            .await;
 
             // AI-selected template based on churn risk
-            let template_slug = engine::select_template("inactive_trial", assessment.churn_probability);
+            let template_slug =
+                engine::select_template("inactive_trial", assessment.churn_probability);
 
             // AI-suggested channel
-            let channel_suggestion = engine::suggest_channel(db, tenant_id, *user_id, "inactive_trial").await;
+            let channel_suggestion =
+                engine::suggest_channel(db, tenant_id, *user_id, "inactive_trial").await;
             let channel = &channel_suggestion.recommended_channel;
 
             tracing::info!(user = %user_id, churn = %assessment.churn_probability, template = %template_slug, channel = %channel, "AI-selected follow-up strategy");
@@ -298,12 +335,20 @@ async fn check_inactive_trials(db: &PgPool) {
                 tracing::warn!(user = %user_id, churn = %assessment.churn_probability, "AI escalation: contact needs human callback");
                 let _ = sqlx::query(
                     r#"INSERT INTO notifications (id, tenant_id, user_id, message)
-                       VALUES ($1, $2, $3, $4)"#
+                       VALUES ($1, $2, $3, $4)"#,
                 )
-                .bind(Uuid::new_v4()).bind(tenant_id).bind(user_id)
-                .bind(format!("CRITICAL: {} at {:.0}% churn risk. Business: {}. Intervention: {}",
-                    email, assessment.churn_probability * 100.0, business_name, assessment.intervention))
-                .execute(db).await;
+                .bind(Uuid::new_v4())
+                .bind(tenant_id)
+                .bind(user_id)
+                .bind(format!(
+                    "CRITICAL: {} at {:.0}% churn risk. Business: {}. Intervention: {}",
+                    email,
+                    assessment.churn_probability * 100.0,
+                    business_name,
+                    assessment.intervention
+                ))
+                .execute(db)
+                .await;
             }
 
             // Also queue via delayed_actions (native) with AI-selected template
@@ -340,8 +385,11 @@ async fn recalculate_health_scores(db: &PgPool) {
            WHERE tp.status IN ('active', 'trialing')
              AND ah.risk_level != 'churned'
              AND ah.last_active_at < NOW() - INTERVAL '7 days'
-           LIMIT 100"#
-    ).fetch_all(db).await {
+           LIMIT 100"#,
+    )
+    .fetch_all(db)
+    .await
+    {
         Ok(o) => o,
         Err(e) => {
             tracing::warn!(error = %e, "Failed to scan old health records");
@@ -350,11 +398,15 @@ async fn recalculate_health_scores(db: &PgPool) {
     };
 
     for (tid, eid, days) in &old {
-        crate::monitoring::engine::record_signal(db, *tid, "contact", *eid, "days_inactive", *days).await;
+        crate::monitoring::engine::record_signal(db, *tid, "contact", *eid, "days_inactive", *days)
+            .await;
     }
 
     if !old.is_empty() {
-        tracing::info!("Health recalculation complete: {} accounts penalized", old.len());
+        tracing::info!(
+            "Health recalculation complete: {} accounts penalized",
+            old.len()
+        );
     }
 }
 
@@ -404,7 +456,8 @@ async fn check_abandoned_directory_signups(db: &PgPool) {
 
     for (bp_id, _user_id, tenant_id, email, phone, first_name, business_name) in &abandoned {
         // AI-suggested channel based on their engagement history (if any)
-        let channel_suggestion = engine::suggest_channel(db, *tenant_id, *_user_id, "abandoned_signup").await;
+        let channel_suggestion =
+            engine::suggest_channel(db, *tenant_id, *_user_id, "abandoned_signup").await;
         let channel = &channel_suggestion.recommended_channel;
         let template_slug = "directory_abandoned_15min";
 
@@ -449,8 +502,11 @@ async fn deliver_queued_messages(db: &PgPool) {
            FROM outbound_messages
            WHERE status = 'queued' AND channel = 'email'
            ORDER BY created_at ASC
-           LIMIT 10"#
-    ).fetch_all(db).await {
+           LIMIT 10"#,
+    )
+    .fetch_all(db)
+    .await
+    {
         Ok(m) => m,
         Err(e) => {
             tracing::warn!(error = %e, "Failed to fetch queued messages");
@@ -466,29 +522,43 @@ async fn deliver_queued_messages(db: &PgPool) {
 
     for (msg_id, tenant_id, to_address, body, subject, _channel) in &messages {
         // Mark as sending
-        let _ = sqlx::query(
-            "UPDATE outbound_messages SET status = 'sending' WHERE id = $1"
-        ).bind(msg_id).execute(db).await;
+        let _ = sqlx::query("UPDATE outbound_messages SET status = 'sending' WHERE id = $1")
+            .bind(msg_id)
+            .execute(db)
+            .await;
 
         // Load delivery config from tenant settings
         let cfg = crate::communications::providers::load_delivery_config(
-            db, *msg_id, *tenant_id, "email", to_address,
-            subject.clone(), body,
-        ).await;
+            db,
+            *msg_id,
+            *tenant_id,
+            "email",
+            to_address,
+            subject.clone(),
+            body,
+        )
+        .await;
 
         // Deliver
         let (ok, err) = crate::communications::providers::deliver(&cfg).await;
 
         if ok {
             let _ = sqlx::query(
-                "UPDATE outbound_messages SET status = 'sent', sent_at = NOW() WHERE id = $1"
-            ).bind(msg_id).execute(db).await;
+                "UPDATE outbound_messages SET status = 'sent', sent_at = NOW() WHERE id = $1",
+            )
+            .bind(msg_id)
+            .execute(db)
+            .await;
             tracing::info!(msg = %msg_id, "Email delivered successfully");
         } else {
             let err_msg = err.unwrap_or_else(|| "Unknown error".to_string());
             let _ = sqlx::query(
-                "UPDATE outbound_messages SET status = 'failed', error_message = $2 WHERE id = $1"
-            ).bind(msg_id).bind(&err_msg).execute(db).await;
+                "UPDATE outbound_messages SET status = 'failed', error_message = $2 WHERE id = $1",
+            )
+            .bind(msg_id)
+            .bind(&err_msg)
+            .execute(db)
+            .await;
             tracing::warn!(msg = %msg_id, error = %err_msg, "Email delivery failed");
         }
     }

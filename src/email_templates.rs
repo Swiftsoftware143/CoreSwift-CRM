@@ -2,16 +2,16 @@
 //! Supports list, get, create, update, delete with admin auth.
 
 use axum::{
-    extract::{Path, State, Query},
-    Extension, Json, Router, middleware,
+    extract::{Path, Query, State},
+    middleware, Extension, Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::AppState;
-use crate::errors::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::errors::{ApiResult, AppError};
+use crate::AppState;
 
 /// Full email template row
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -60,7 +60,11 @@ pub struct UpdateInput {
 
 /// Convenience function to require admin access
 fn require_admin(claims: &Claims) -> Result<(), AppError> {
-    if claims.role != "admin" && claims.role != "owner" && claims.role != "superadmin" && claims.role != "account_owner" {
+    if claims.role != "admin"
+        && claims.role != "owner"
+        && claims.role != "superadmin"
+        && claims.role != "account_owner"
+    {
         return Err(AppError::Forbidden);
     }
     Ok(())
@@ -88,9 +92,10 @@ pub async fn list(
         .unwrap_or_default()
     } else {
         sqlx::query_as::<_, EmailTemplate>(
-            "SELECT * FROM email_templates ORDER BY name LIMIT $1 OFFSET $2"
+            "SELECT * FROM email_templates ORDER BY name LIMIT $1 OFFSET $2",
         )
-        .bind(limit).bind(offset)
+        .bind(limit)
+        .bind(offset)
         .fetch_all(&state.db)
         .await
         .unwrap_or_default()
@@ -112,13 +117,11 @@ pub async fn get_handler(
 ) -> ApiResult<Json<Value>> {
     require_admin(&claims)?;
 
-    let item = sqlx::query_as::<_, EmailTemplate>(
-        "SELECT * FROM email_templates WHERE id = $1"
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Email template not found".to_string()))?;
+    let item = sqlx::query_as::<_, EmailTemplate>("SELECT * FROM email_templates WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Email template not found".to_string()))?;
 
     Ok(Json(json!({"item": item})))
 }
@@ -148,10 +151,10 @@ pub async fn create(
     .bind(&body.template_type)
     .execute(&state.db).await?;
 
-    let item = sqlx::query_as::<_, EmailTemplate>(
-        "SELECT * FROM email_templates WHERE id = $1"
-    )
-    .bind(id).fetch_one(&state.db).await?;
+    let item = sqlx::query_as::<_, EmailTemplate>("SELECT * FROM email_templates WHERE id = $1")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
 
     Ok(Json(json!({"item": item})))
 }
@@ -175,7 +178,7 @@ pub async fn update(
             is_default = COALESCE($6, is_default),
             template_type = COALESCE($7, template_type),
             updated_at = NOW()
-           WHERE id = $8"#
+           WHERE id = $8"#,
     )
     .bind(&body.name)
     .bind(&body.subject)
@@ -185,12 +188,13 @@ pub async fn update(
     .bind(body.is_default)
     .bind(&body.template_type)
     .bind(id)
-    .execute(&state.db).await?;
+    .execute(&state.db)
+    .await?;
 
-    let item = sqlx::query_as::<_, EmailTemplate>(
-        "SELECT * FROM email_templates WHERE id = $1"
-    )
-    .bind(id).fetch_one(&state.db).await?;
+    let item = sqlx::query_as::<_, EmailTemplate>("SELECT * FROM email_templates WHERE id = $1")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
 
     Ok(Json(json!({"item": item})))
 }
@@ -204,7 +208,9 @@ pub async fn delete_template(
     require_admin(&claims)?;
 
     sqlx::query("DELETE FROM email_templates WHERE id = $1")
-        .bind(id).execute(&state.db).await?;
+        .bind(id)
+        .execute(&state.db)
+        .await?;
 
     Ok(Json(json!({"status": "deleted"})))
 }
@@ -236,7 +242,15 @@ pub fn router(state: AppState) -> Router<AppState> {
 
     Router::new()
         .route("/", routing::get(list).post(create))
-        .route("/:id", routing::get(get_handler).put(update).delete(delete_template))
+        .route(
+            "/:id",
+            routing::get(get_handler)
+                .put(update)
+                .delete(delete_template),
+        )
         .route("/merge-fields", routing::get(get_merge_fields_handler))
-        .layer(middleware::from_fn_with_state(state.clone(), crate::auth::middleware::auth_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::middleware::auth_middleware,
+        ))
 }

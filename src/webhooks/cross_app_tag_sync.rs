@@ -4,14 +4,18 @@
 //! Authenticated via x-internal-key header (same key used by all Swift apps)
 //! UPSERTs contacts by email and syncs tags + pipeline stage.
 
-use axum::{extract::State, http::{HeaderMap, StatusCode}, Json};
 use axum::response::IntoResponse;
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    Json,
+};
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::errors::{ApiResult, AppError};
 use crate::AppState;
-use crate::errors::{AppError, ApiResult};
 
 #[derive(Debug, Deserialize)]
 pub struct TagSyncRequest {
@@ -41,11 +45,13 @@ pub async fn handle_tag_sync(
 ) -> ApiResult<impl IntoResponse> {
     // Internal cross-app sync — trusted between Swift services on localhost
     // Authentication is optional; if provided, validate it
-    let key = headers.get("x-internal-key")
+    let key = headers
+        .get("x-internal-key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     let expected = s.config.internal_sync_key.clone();
-    let key2 = headers.get("internal-key")
+    let key2 = headers
+        .get("internal-key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     if !key.is_empty() && key != expected && key2 != expected {
@@ -62,13 +68,12 @@ pub async fn handle_tag_sync(
         .map_err(|_| AppError::BadRequest("Invalid tenant_id".into()))?;
 
     // Verify tenant exists; auto-create from FunnelSwift sync if not
-    let tenant_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM tenants WHERE id = $1)"
-    )
-    .bind(tenant_id)
-    .fetch_one(&s.db)
-    .await
-    .unwrap_or(false);
+    let tenant_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tenants WHERE id = $1)")
+            .bind(tenant_id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap_or(false);
 
     if !tenant_exists {
         // Auto-create tenant from FunnelSwift sync
@@ -76,9 +81,12 @@ pub async fn handle_tag_sync(
         let tenant_name = if tenant_source_name.is_empty() {
             format!("FS-{}", &req.lead.name[..req.lead.name.len().min(30)])
         } else {
-            format!("FS-{}", &tenant_source_name[..tenant_source_name.len().min(30)])
+            format!(
+                "FS-{}",
+                &tenant_source_name[..tenant_source_name.len().min(30)]
+            )
         };
-        
+
         let _ = sqlx::query(
             "INSERT INTO tenants (id, name, slug, created_at, updated_at) VALUES ($1, $2, $3, NOW(), NOW())"
         )
@@ -88,7 +96,11 @@ pub async fn handle_tag_sync(
         .execute(&s.db)
         .await;
 
-        tracing::info!("TagSync: Auto-created tenant {} ({})", tenant_id, tenant_name);
+        tracing::info!(
+            "TagSync: Auto-created tenant {} ({})",
+            tenant_id,
+            tenant_name
+        );
     }
 
     let email = req.lead.email.trim().to_lowercase();
@@ -96,7 +108,9 @@ pub async fn handle_tag_sync(
     let company = req.lead.company.as_deref().unwrap_or("").trim().to_string();
 
     if email.is_empty() && name.is_empty() {
-        return Err(AppError::BadRequest("Lead must have at least an email or name".into()));
+        return Err(AppError::BadRequest(
+            "Lead must have at least an email or name".into(),
+        ));
     }
 
     // UPSERT: lookup contact by email or create
@@ -115,7 +129,13 @@ pub async fn handle_tag_sync(
         if let Some((eid, first, last)) = existing {
             contact_id = eid;
             is_new = false;
-            tracing::info!("TagSync: Found existing contact {} ({} {}) in tenant {}", contact_id, first, last, tenant_id);
+            tracing::info!(
+                "TagSync: Found existing contact {} ({} {}) in tenant {}",
+                contact_id,
+                first,
+                last,
+                tenant_id
+            );
         } else {
             // Create new contact
             contact_id = Uuid::new_v4();
@@ -134,7 +154,13 @@ pub async fn handle_tag_sync(
             .execute(&s.db)
             .await?;
             is_new = true;
-            tracing::info!("TagSync: Created new contact {} ({} {}) in tenant {}", contact_id, first_name, last_name, tenant_id);
+            tracing::info!(
+                "TagSync: Created new contact {} ({} {}) in tenant {}",
+                contact_id,
+                first_name,
+                last_name,
+                tenant_id
+            );
         }
     } else {
         // No email — use name to find or create
@@ -228,29 +254,40 @@ pub async fn handle_tag_sync(
 
     tracing::info!(
         "TagSync processed: contact={} tenant={} tags={:?} added={:?} removed={:?} triggered_by={}",
-        contact_id, tenant_id, req.tags, req.added_tags, req.removed_tags, req.triggered_by
+        contact_id,
+        tenant_id,
+        req.tags,
+        req.added_tags,
+        req.removed_tags,
+        req.triggered_by
     );
 
-    Ok((StatusCode::OK, Json(json!({
-        "status": "synced",
-        "contact_id": contact_id.to_string(),
-        "is_new": is_new,
-        "tenant_id": tenant_id.to_string(),
-        "tags_synced": req.tags.len(),
-        "pipeline_stage": pipeline_stage,
-    }))))
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "status": "synced",
+            "contact_id": contact_id.to_string(),
+            "is_new": is_new,
+            "tenant_id": tenant_id.to_string(),
+            "tags_synced": req.tags.len(),
+            "pipeline_stage": pipeline_stage,
+        })),
+    ))
 }
 
 /// Create a tag if it doesn't exist, return its ID
-async fn create_or_get_tag(db: &sqlx::PgPool, tenant_id: Uuid, tag_name: &str) -> Result<Uuid, AppError> {
-    let existing: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM tags WHERE tenant_id = $1 AND name = $2"
-    )
-    .bind(tenant_id)
-    .bind(tag_name)
-    .fetch_optional(db)
-    .await
-    .map_err(AppError::Database)?;
+async fn create_or_get_tag(
+    db: &sqlx::PgPool,
+    tenant_id: Uuid,
+    tag_name: &str,
+) -> Result<Uuid, AppError> {
+    let existing: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tags WHERE tenant_id = $1 AND name = $2")
+            .bind(tenant_id)
+            .bind(tag_name)
+            .fetch_optional(db)
+            .await
+            .map_err(AppError::Database)?;
 
     if let Some((id,)) = existing {
         Ok(id)
@@ -272,20 +309,22 @@ async fn create_or_get_tag(db: &sqlx::PgPool, tenant_id: Uuid, tag_name: &str) -
 
 /// Get a tag ID by name
 async fn get_tag_id_by_name(db: &sqlx::PgPool, tenant_id: Uuid, tag_name: &str) -> Option<Uuid> {
-    sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM tags WHERE tenant_id = $1 AND name = $2"
-    )
-    .bind(tenant_id)
-    .bind(tag_name)
-    .fetch_optional(db)
-    .await
-    .unwrap_or(None)
+    sqlx::query_scalar::<_, Uuid>("SELECT id FROM tags WHERE tenant_id = $1 AND name = $2")
+        .bind(tenant_id)
+        .bind(tag_name)
+        .fetch_optional(db)
+        .await
+        .unwrap_or(None)
 }
 
 /// Create or get a list by name
-async fn create_or_get_list(db: &sqlx::PgPool, tenant_id: Uuid, list_name: &str) -> Result<Uuid, AppError> {
+async fn create_or_get_list(
+    db: &sqlx::PgPool,
+    tenant_id: Uuid,
+    list_name: &str,
+) -> Result<Uuid, AppError> {
     let existing: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM lists WHERE tenant_id = $1 AND name = $2 AND list_type = 'static'"
+        "SELECT id FROM lists WHERE tenant_id = $1 AND name = $2 AND list_type = 'static'",
     )
     .bind(tenant_id)
     .bind(list_name)
@@ -317,8 +356,18 @@ fn split_name(full_name: &str) -> (String, String) {
     if let Some(space) = trimmed.find(' ') {
         let first = trimmed[..space].trim().to_string();
         let last = trimmed[space + 1..].trim().to_string();
-        (if first.is_empty() { trimmed.to_string() } else { first },
-         if last.is_empty() { "Unknown".to_string() } else { last })
+        (
+            if first.is_empty() {
+                trimmed.to_string()
+            } else {
+                first
+            },
+            if last.is_empty() {
+                "Unknown".to_string()
+            } else {
+                last
+            },
+        )
     } else {
         (trimmed.to_string(), "Unknown".to_string())
     }
@@ -354,8 +403,7 @@ fn default_color(name: &str) -> String {
 /// Router for cross-app tag sync
 pub fn router() -> axum::Router<AppState> {
     use axum::routing::post;
-    axum::Router::new()
-        .route("/cross-app/tag-sync", post(handle_tag_sync))
+    axum::Router::new().route("/cross-app/tag-sync", post(handle_tag_sync))
 }
 
 /// Capitalize source app name for display (e.g., "funnelswift" → "FunnelSwift")

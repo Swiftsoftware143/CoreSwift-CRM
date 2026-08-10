@@ -32,8 +32,14 @@ pub async fn test(creds: &serde_json::Value) -> (bool, String) {
         Ok(resp) if resp.status().is_success() => {
             (true, "MissedCall Responder connection successful".into())
         }
-        Ok(resp) => (false, format!("MissedCall Responder returned status {}", resp.status())),
-        Err(e) => (false, format!("MissedCall Responder connection failed: {}", e)),
+        Ok(resp) => (
+            false,
+            format!("MissedCall Responder returned status {}", resp.status()),
+        ),
+        Err(e) => (
+            false,
+            format!("MissedCall Responder connection failed: {}", e),
+        ),
     }
 }
 
@@ -54,7 +60,9 @@ pub async fn push_entity(
                 .send()
                 .await
                 .map_err(|e| format!("MissedCall push failed: {}", e))?;
-            resp.json().await.map_err(|e| format!("MissedCall response: {}", e))
+            resp.json()
+                .await
+                .map_err(|e| format!("MissedCall response: {}", e))
         }
         "sms_reply" => {
             // Trigger an automated SMS reply through MissedCall Responder's engine
@@ -66,9 +74,14 @@ pub async fn push_entity(
                 .send()
                 .await
                 .map_err(|e| format!("MissedCall SMS trigger failed: {}", e))?;
-            resp.json().await.map_err(|e| format!("MissedCall response: {}", e))
+            resp.json()
+                .await
+                .map_err(|e| format!("MissedCall response: {}", e))
         }
-        _ => Err(format!("MissedCall Responder does not support entity type: {}", entity_type)),
+        _ => Err(format!(
+            "MissedCall Responder does not support entity type: {}",
+            entity_type
+        )),
     }
 }
 
@@ -82,7 +95,10 @@ pub async fn pull_entity(
     let query = if filters.is_empty() {
         String::new()
     } else {
-        let params: Vec<String> = filters.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+        let params: Vec<String> = filters
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect();
         format!("?{}", params.join("&"))
     };
 
@@ -95,9 +111,14 @@ pub async fn pull_entity(
                 .send()
                 .await
                 .map_err(|e| format!("MissedCall pull failed: {}", e))?;
-            resp.json().await.map_err(|e| format!("MissedCall response: {}", e))
+            resp.json()
+                .await
+                .map_err(|e| format!("MissedCall response: {}", e))
         }
-        _ => Err(format!("MissedCall Responder does not support pulling entity type: {}", entity_type)),
+        _ => Err(format!(
+            "MissedCall Responder does not support pulling entity type: {}",
+            entity_type
+        )),
     }
 }
 
@@ -123,7 +144,16 @@ pub fn get_meta() -> serde_json::Value {
 }
 
 fn extract_creds(creds: &serde_json::Value) -> Result<(String, String), String> {
-    let api_key = creds.get("api_key").and_then(|v| v.as_str()).ok_or("MissedCall Responder API key missing")?.to_string();
-    let base_url = creds.get("base_url").and_then(|v| v.as_str()).ok_or("MissedCall Responder base URL missing")?.trim_end_matches('/').to_string();
+    let api_key = creds
+        .get("api_key")
+        .and_then(|v| v.as_str())
+        .ok_or("MissedCall Responder API key missing")?
+        .to_string();
+    let base_url = creds
+        .get("base_url")
+        .and_then(|v| v.as_str())
+        .ok_or("MissedCall Responder base URL missing")?
+        .trim_end_matches('/')
+        .to_string();
     Ok((api_key, base_url))
 }

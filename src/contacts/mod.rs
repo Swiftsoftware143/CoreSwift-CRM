@@ -2,12 +2,12 @@
 //!
 //! Full CRUD with tenant-scoped queries, search, and pagination.
 
-pub mod models;
 pub mod handlers;
 pub mod internal_handler;
+pub mod models;
 
-use axum::{Router, middleware};
 use crate::AppState;
+use axum::{middleware, Router};
 
 /// Build the contacts router with auth middleware.
 pub fn router(state: AppState) -> Router<AppState> {
@@ -18,5 +18,8 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/:id", axum::routing::get(handlers::get))
         .route("/:id", axum::routing::patch(handlers::update))
         .route("/:id", axum::routing::delete(handlers::delete))
-        .layer(middleware::from_fn_with_state(state.clone(), crate::auth::middleware::auth_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::middleware::auth_middleware,
+        ))
 }

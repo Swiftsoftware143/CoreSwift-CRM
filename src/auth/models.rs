@@ -137,12 +137,15 @@ pub struct Account {
 /// Create invite request.
 #[derive(Debug, Deserialize)]
 pub struct CreateInviteRequest {
-    pub role: String,  // "admin" | "member"
+    pub role: String, // "admin" | "member"
 }
 
 /// Helper to extract claims from an Authorization header in a handler
 /// that doesn't use the extension extractor (e.g. /me, /logout).
-pub fn extract_claims_from_request(request: &axum::extract::Request, secret: &str) -> Result<Claims, crate::errors::AppError> {
+pub fn extract_claims_from_request(
+    request: &axum::extract::Request,
+    secret: &str,
+) -> Result<Claims, crate::errors::AppError> {
     let auth_header = request
         .headers()
         .get("Authorization")

@@ -1,29 +1,36 @@
 //! Native App Connectors — API handlers
 
-use axum::{extract::{State, Path, Json, Extension}, http::StatusCode, response::IntoResponse};
-use serde_json::json;
-use uuid::Uuid;
-use sqlx::Row;
-use crate::AppState;
-use crate::errors::{AppError, ApiResult};
-use crate::auth::Claims;
-use super::models::*;
 use super::connectors;
+use super::models::*;
+use crate::auth::Claims;
+use crate::errors::{ApiResult, AppError};
+use crate::AppState;
+use axum::{
+    extract::{Extension, Json, Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+};
+use serde_json::json;
+use sqlx::Row;
+use uuid::Uuid;
 
 // ── List all available apps (visible to all authenticated users) ──
 
 pub async fn list_available_apps() -> ApiResult<impl IntoResponse> {
-    let apps: Vec<serde_json::Value> = connectors::NATIVE_APPS.iter().map(|a| {
-        json!({
-            "slug": a.slug,
-            "name": a.name,
-            "description": a.description,
-            "auth_type": a.auth_type,
-            "auth_fields": a.auth_fields,
-            "access_level": a.access_level,
-            "meta": connectors::get_app_meta(a.slug),
+    let apps: Vec<serde_json::Value> = connectors::NATIVE_APPS
+        .iter()
+        .map(|a| {
+            json!({
+                "slug": a.slug,
+                "name": a.name,
+                "description": a.description,
+                "auth_type": a.auth_type,
+                "auth_fields": a.auth_fields,
+                "access_level": a.access_level,
+                "meta": connectors::get_app_meta(a.slug),
+            })
         })
-    }).collect();
+        .collect();
     Ok(Json(json!({"apps": apps})))
 }
 
@@ -39,7 +46,9 @@ pub async fn connect_app(
     let is_admin = c.role == "account_owner" || c.role == "admin";
 
     // Look up the app definition
-    let app = connectors::NATIVE_APPS.iter().find(|a| a.slug == app_slug)
+    let app = connectors::NATIVE_APPS
+        .iter()
+        .find(|a| a.slug == app_slug)
         .ok_or_else(|| AppError::NotFound(format!("App '{}' not found", app_slug)))?;
 
     // Check access level
@@ -51,20 +60,24 @@ pub async fn connect_app(
     for field in app.auth_fields {
         let value = r.credentials.get(*field).and_then(|v| v.as_str());
         match value {
-            Some(v) if !v.is_empty() => {},
+            Some(v) if !v.is_empty() => {}
             _ => return Err(AppError::Validation(format!("{} is required", field))),
         }
     }
 
     // Test the connection
-    let (test_ok, test_msg, _latency) = connectors::test_connection(&app_slug, &r.credentials).await;
+    let (test_ok, test_msg, _latency) =
+        connectors::test_connection(&app_slug, &r.credentials).await;
     if !test_ok {
-        return Err(AppError::Validation(format!("Connection test failed: {}", test_msg)));
+        return Err(AppError::Validation(format!(
+            "Connection test failed: {}",
+            test_msg
+        )));
     }
 
     // Upsert the connection
     let existing = sqlx::query_scalar::<_, i32>(
-        "SELECT COUNT(*) FROM app_connections WHERE tenant_id = $1 AND app_slug = $2"
+        "SELECT COUNT(*) FROM app_connections WHERE tenant_id = $1 AND app_slug = $2",
     )
     .bind(account_id)
     .bind(&app_slug)
@@ -123,10 +136,15 @@ pub async fn disconnect_app(
         .await?;
 
     if r.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("No connection found for '{}'", app_slug)));
+        return Err(AppError::NotFound(format!(
+            "No connection found for '{}'",
+            app_slug
+        )));
     }
 
-    Ok(Json(json!({"message": format!("{} disconnected", app_slug)})))
+    Ok(Json(
+        json!({"message": format!("{} disconnected", app_slug)}),
+    ))
 }
 
 // ── Get connection status for an app ──
@@ -150,26 +168,22 @@ pub async fn app_status(
     .await?;
 
     match conn {
-        Some((status, test_ok, error, last_test, credentials, config)) => {
-            Ok(Json(json!({
-                "app_slug": app_slug,
-                "connected": true,
-                "status": status,
-                "last_test_ok": test_ok,
-                "last_test_at": last_test,
-                "error_message": error,
-                "config": config,
-                "credentials_provided": !credentials.as_object().map(|o| o.is_empty()).unwrap_or(true),
-                "meta": app_meta,
-            })))
-        }
-        None => {
-            Ok(Json(json!({
-                "app_slug": app_slug,
-                "connected": false,
-                "meta": app_meta,
-            })))
-        }
+        Some((status, test_ok, error, last_test, credentials, config)) => Ok(Json(json!({
+            "app_slug": app_slug,
+            "connected": true,
+            "status": status,
+            "last_test_ok": test_ok,
+            "last_test_at": last_test,
+            "error_message": error,
+            "config": config,
+            "credentials_provided": !credentials.as_object().map(|o| o.is_empty()).unwrap_or(true),
+            "meta": app_meta,
+        }))),
+        None => Ok(Json(json!({
+            "app_slug": app_slug,
+            "connected": false,
+            "meta": app_meta,
+        }))),
     }
 }
 
@@ -183,7 +197,9 @@ pub async fn test_connection(
 ) -> ApiResult<impl IntoResponse> {
     let _is_admin = c.role == "account_owner" || c.role == "admin";
 
-    let app = connectors::NATIVE_APPS.iter().find(|a| a.slug == app_slug)
+    let app = connectors::NATIVE_APPS
+        .iter()
+        .find(|a| a.slug == app_slug)
         .ok_or_else(|| AppError::NotFound(format!("App '{}' not found", app_slug)))?;
 
     let (ok, msg, latency) = connectors::test_connection(&app_slug, &r.credentials).await;
@@ -341,20 +357,23 @@ pub async fn sync_history(
     .fetch_all(&s.db)
     .await?;
 
-    let logs: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "id": r.get::<Uuid, _>("id"),
-            "app_slug": r.get::<String, _>("app_slug"),
-            "direction": r.get::<String, _>("direction"),
-            "entity_type": r.get::<String, _>("entity_type"),
-            "records_processed": r.get::<i32, _>("records_processed"),
-            "records_succeeded": r.get::<i32, _>("records_succeeded"),
-            "records_failed": r.get::<i32, _>("records_failed"),
-            "status": r.get::<String, _>("status"),
-            "started_at": r.get::<chrono::DateTime<chrono::Utc>, _>("started_at"),
-            "completed_at": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at"),
+    let logs: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<Uuid, _>("id"),
+                "app_slug": r.get::<String, _>("app_slug"),
+                "direction": r.get::<String, _>("direction"),
+                "entity_type": r.get::<String, _>("entity_type"),
+                "records_processed": r.get::<i32, _>("records_processed"),
+                "records_succeeded": r.get::<i32, _>("records_succeeded"),
+                "records_failed": r.get::<i32, _>("records_failed"),
+                "status": r.get::<String, _>("status"),
+                "started_at": r.get::<chrono::DateTime<chrono::Utc>, _>("started_at"),
+                "completed_at": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at"),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({"sync_history": logs})))
 }
@@ -370,12 +389,11 @@ pub async fn get_admin_config(
         return Err(AppError::Forbidden);
     }
 
-    let config: Option<serde_json::Value> = sqlx::query_scalar(
-        "SELECT config FROM app_admin_configs WHERE app_slug = $1"
-    )
-    .bind(&app_slug)
-    .fetch_optional(&s.db)
-    .await?;
+    let config: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT config FROM app_admin_configs WHERE app_slug = $1")
+            .bind(&app_slug)
+            .fetch_optional(&s.db)
+            .await?;
 
     Ok(Json(json!({
         "app_slug": app_slug,
@@ -402,7 +420,9 @@ pub async fn update_admin_config(
     .execute(&s.db)
     .await?;
 
-    Ok(Json(json!({"message": "Config updated", "app_slug": app_slug})))
+    Ok(Json(
+        json!({"message": "Config updated", "app_slug": app_slug}),
+    ))
 }
 
 pub async fn list_admin_configs(
@@ -413,19 +433,21 @@ pub async fn list_admin_configs(
         return Err(AppError::Forbidden);
     }
 
-    let rows = sqlx::query(
-        "SELECT app_slug, config, updated_at FROM app_admin_configs ORDER BY app_slug"
-    )
-    .fetch_all(&s.db)
-    .await?;
+    let rows =
+        sqlx::query("SELECT app_slug, config, updated_at FROM app_admin_configs ORDER BY app_slug")
+            .fetch_all(&s.db)
+            .await?;
 
-    let configs: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "app_slug": r.get::<String, _>("app_slug"),
-            "config": r.get::<serde_json::Value, _>("config"),
-            "updated_at": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+    let configs: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "app_slug": r.get::<String, _>("app_slug"),
+                "config": r.get::<serde_json::Value, _>("config"),
+                "updated_at": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({"admin_configs": configs})))
 }
@@ -440,12 +462,26 @@ pub async fn create_ada_campaign_trigger(
     let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     if r.name.is_empty() || r.ada_campaign_id.is_empty() {
-        return Err(AppError::Validation("Name and ada_campaign_id are required".into()));
+        return Err(AppError::Validation(
+            "Name and ada_campaign_id are required".into(),
+        ));
     }
 
-    let valid_triggers = ["user_created", "contact_created", "account_activated", "scan_complete", "referral_confirmed", "commission_earned", "payout_processed", "affiliate_activated"];
+    let valid_triggers = [
+        "user_created",
+        "contact_created",
+        "account_activated",
+        "scan_complete",
+        "referral_confirmed",
+        "commission_earned",
+        "payout_processed",
+        "affiliate_activated",
+    ];
     if !valid_triggers.contains(&r.trigger_on.as_str()) {
-        return Err(AppError::Validation(format!("Invalid trigger. Must be one of: {:?}", valid_triggers)));
+        return Err(AppError::Validation(format!(
+            "Invalid trigger. Must be one of: {:?}",
+            valid_triggers
+        )));
     }
 
     let row = sqlx::query(
@@ -484,25 +520,28 @@ pub async fn list_ada_campaign_triggers(
     let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let rows = sqlx::query(
-        "SELECT * FROM ada_campaign_triggers WHERE tenant_id = $1 ORDER BY created_at DESC"
+        "SELECT * FROM ada_campaign_triggers WHERE tenant_id = $1 ORDER BY created_at DESC",
     )
     .bind(account_id)
     .fetch_all(&s.db)
     .await?;
 
-    let triggers: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "id": r.get::<Uuid, _>("id"),
-            "tenant_id": r.get::<Uuid, _>("tenant_id"),
-            "name": r.get::<String, _>("name"),
-            "trigger_on": r.get::<String, _>("trigger_on"),
-            "ada_campaign_id": r.get::<String, _>("ada_campaign_id"),
-            "schedule_delay_minutes": r.get::<i32, _>("schedule_delay_minutes"),
-            "active": r.get::<bool, _>("active"),
-            "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
-            "updated_at": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+    let triggers: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<Uuid, _>("id"),
+                "tenant_id": r.get::<Uuid, _>("tenant_id"),
+                "name": r.get::<String, _>("name"),
+                "trigger_on": r.get::<String, _>("trigger_on"),
+                "ada_campaign_id": r.get::<String, _>("ada_campaign_id"),
+                "schedule_delay_minutes": r.get::<i32, _>("schedule_delay_minutes"),
+                "active": r.get::<bool, _>("active"),
+                "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                "updated_at": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({"triggers": triggers})))
 }

@@ -1,8 +1,8 @@
 //! Checklist engine — triggers checklists on events and creates progress rows.
 
+use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
-use serde_json::json;
 
 /// Start a checklist for a given entity.
 /// Called when trigger event fires (e.g., contact.created, payment.received)
@@ -24,10 +24,15 @@ pub async fn trigger_checklist(
     for (template_id, _stage_count, _days) in templates {
         let instance = sqlx::query_as::<_, (Uuid,)>(
             r#"INSERT INTO checklist_instances (id, tenant_id, template_id, entity_type, entity_id)
-               VALUES ($1, $2, $3, $4, $5) RETURNING id"#
+               VALUES ($1, $2, $3, $4, $5) RETURNING id"#,
         )
-        .bind(Uuid::new_v4()).bind(tenant_id).bind(template_id).bind(entity_type).bind(entity_id)
-        .fetch_optional(db).await;
+        .bind(Uuid::new_v4())
+        .bind(tenant_id)
+        .bind(template_id)
+        .bind(entity_type)
+        .bind(entity_id)
+        .fetch_optional(db)
+        .await;
 
         if let Ok(Some((inst_id,))) = instance {
             // Create progress rows for each stage
@@ -39,10 +44,13 @@ pub async fn trigger_checklist(
                 for (order, title, msg_template, delay) in &stages {
                     let _ = sqlx::query(
                         r#"INSERT INTO checklist_progress (id, instance_id, stage_order)
-                           VALUES ($1, $2, $3)"#
+                           VALUES ($1, $2, $3)"#,
                     )
-                    .bind(Uuid::new_v4()).bind(inst_id).bind(order)
-                    .execute(db).await;
+                    .bind(Uuid::new_v4())
+                    .bind(inst_id)
+                    .bind(order)
+                    .execute(db)
+                    .await;
 
                     // Schedule delayed action for this stage
                     let _ = sqlx::query(

@@ -14,33 +14,75 @@
 //! now trigger an Ada campaign for welcome emails + scan reports on
 //! new client/account creation.
 
-pub mod models;
-pub mod handlers;
 pub mod connectors;
+pub mod handlers;
+pub mod models;
 
-use axum::{Router, middleware};
 use crate::AppState;
+use axum::{middleware, Router};
 
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
         // Admin manages available apps (FunnelSwift, AdaSwift, etc.)
         .route("/apps", axum::routing::get(handlers::list_available_apps))
         // Admin + Tenant: connect/disconnect their app instances
-        .route("/apps/:app_slug/connect", axum::routing::post(handlers::connect_app))
-        .route("/apps/:app_slug/disconnect", axum::routing::post(handlers::disconnect_app))
-        .route("/apps/:app_slug/status", axum::routing::get(handlers::app_status))
-        .route("/apps/:app_slug/test", axum::routing::post(handlers::test_connection))
+        .route(
+            "/apps/:app_slug/connect",
+            axum::routing::post(handlers::connect_app),
+        )
+        .route(
+            "/apps/:app_slug/disconnect",
+            axum::routing::post(handlers::disconnect_app),
+        )
+        .route(
+            "/apps/:app_slug/status",
+            axum::routing::get(handlers::app_status),
+        )
+        .route(
+            "/apps/:app_slug/test",
+            axum::routing::post(handlers::test_connection),
+        )
         // Admin + Tenant: sync operations
-        .route("/apps/:app_slug/sync/pull", axum::routing::post(handlers::pull_from_app))
-        .route("/apps/:app_slug/sync/push", axum::routing::post(handlers::push_to_app))
-        .route("/apps/:app_slug/sync/history", axum::routing::get(handlers::sync_history))
+        .route(
+            "/apps/:app_slug/sync/pull",
+            axum::routing::post(handlers::pull_from_app),
+        )
+        .route(
+            "/apps/:app_slug/sync/push",
+            axum::routing::post(handlers::push_to_app),
+        )
+        .route(
+            "/apps/:app_slug/sync/history",
+            axum::routing::get(handlers::sync_history),
+        )
         // Admin only: global app config (e.g. AdaSwift base URL)
-        .route("/apps/admin/:app_slug", axum::routing::get(handlers::get_admin_config))
-        .route("/apps/admin/:app_slug", axum::routing::patch(handlers::update_admin_config))
-        .route("/apps/admin/configs", axum::routing::get(handlers::list_admin_configs))
+        .route(
+            "/apps/admin/:app_slug",
+            axum::routing::get(handlers::get_admin_config),
+        )
+        .route(
+            "/apps/admin/:app_slug",
+            axum::routing::patch(handlers::update_admin_config),
+        )
+        .route(
+            "/apps/admin/configs",
+            axum::routing::get(handlers::list_admin_configs),
+        )
         // Map a CRM Swift automation rule to trigger an Ada campaign
-        .route("/apps/ada-campaigns", axum::routing::post(handlers::create_ada_campaign_trigger))
-        .route("/apps/ada-campaigns", axum::routing::get(handlers::list_ada_campaign_triggers))
-        .route("/apps/ada-campaigns/:id", axum::routing::delete(handlers::delete_ada_campaign_trigger))
-        .layer(middleware::from_fn_with_state(state.clone(), crate::auth::middleware::auth_middleware))
+        .route(
+            "/apps/ada-campaigns",
+            axum::routing::post(handlers::create_ada_campaign_trigger),
+        )
+        .route(
+            "/apps/ada-campaigns",
+            axum::routing::get(handlers::list_ada_campaign_triggers),
+        )
+        .route(
+            "/apps/ada-campaigns/:id",
+            axum::routing::delete(handlers::delete_ada_campaign_trigger),
+        )
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::middleware::auth_middleware,
+        ))
 }

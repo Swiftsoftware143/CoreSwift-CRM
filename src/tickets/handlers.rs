@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, Query, State, Extension},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -9,9 +9,9 @@ use serde_json::json;
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::AppState;
 use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
+use crate::AppState;
 
 use super::models::*;
 
@@ -63,17 +63,16 @@ pub async fn get_ticket(
     Path(ticket_id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    let ticket = sqlx::query_as::<_, Ticket>(
-        "SELECT * FROM tickets WHERE id = $1 AND tenant_id = $2"
-    )
-    .bind(ticket_id)
-    .bind(tid)
-    .fetch_optional(&s.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Ticket not found".into()))?;
+    let ticket =
+        sqlx::query_as::<_, Ticket>("SELECT * FROM tickets WHERE id = $1 AND tenant_id = $2")
+            .bind(ticket_id)
+            .bind(tid)
+            .fetch_optional(&s.db)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Ticket not found".into()))?;
 
     let messages = sqlx::query_as::<_, TicketMessage>(
-        "SELECT * FROM ticket_messages WHERE ticket_id = $1 ORDER BY created_at ASC"
+        "SELECT * FROM ticket_messages WHERE ticket_id = $1 ORDER BY created_at ASC",
     )
     .bind(ticket_id)
     .fetch_all(&s.db)
@@ -121,14 +120,13 @@ pub async fn update_ticket(
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let ticket = sqlx::query_as::<_, Ticket>(
-        "SELECT * FROM tickets WHERE id = $1 AND tenant_id = $2"
-    )
-    .bind(ticket_id)
-    .bind(tid)
-    .fetch_optional(&s.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Ticket not found".into()))?;
+    let ticket =
+        sqlx::query_as::<_, Ticket>("SELECT * FROM tickets WHERE id = $1 AND tenant_id = $2")
+            .bind(ticket_id)
+            .bind(tid)
+            .fetch_optional(&s.db)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Ticket not found".into()))?;
 
     let new_subject = body.subject.unwrap_or(ticket.subject);
     let new_description = body.description.unwrap_or(ticket.description);
@@ -141,7 +139,7 @@ pub async fn update_ticket(
            SET subject = $1, description = $2, status = $3, priority = $4,
                assigned_to = $5, updated_at = NOW()
            WHERE id = $6 AND tenant_id = $7
-           RETURNING *"#
+           RETURNING *"#,
     )
     .bind(&new_subject)
     .bind(&new_description)
@@ -188,7 +186,7 @@ pub async fn add_message(
 
     // Verify ticket belongs to tenant
     let exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM tickets WHERE id = $1 AND tenant_id = $2)"
+        "SELECT EXISTS(SELECT 1 FROM tickets WHERE id = $1 AND tenant_id = $2)",
     )
     .bind(ticket_id)
     .bind(tid)
@@ -202,7 +200,7 @@ pub async fn add_message(
     let sender = body.sender_type.unwrap_or_else(|| "agent".to_string());
     let msg = sqlx::query_as::<_, TicketMessage>(
         r#"INSERT INTO ticket_messages (ticket_id, sender_type, message)
-           VALUES ($1, $2, $3) RETURNING *"#
+           VALUES ($1, $2, $3) RETURNING *"#,
     )
     .bind(ticket_id)
     .bind(&sender)
@@ -229,21 +227,40 @@ pub async fn ticket_stats(
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     #[derive(FromRow, Serialize)]
-    struct StatRow { status: String, count: Option<i64> }
+    struct StatRow {
+        status: String,
+        count: Option<i64>,
+    }
 
     let rows = sqlx::query_as::<_, StatRow>(
         r#"SELECT status, COUNT(*) as count
-           FROM tickets WHERE tenant_id = $1 GROUP BY status"#
+           FROM tickets WHERE tenant_id = $1 GROUP BY status"#,
     )
     .bind(tid)
     .fetch_all(&s.db)
     .await?;
 
     let total = rows.iter().fold(0i64, |acc, r| acc + r.count.unwrap_or(0));
-    let open = rows.iter().find(|r| r.status == "open").and_then(|r| r.count).unwrap_or(0);
-    let in_progress = rows.iter().find(|r| r.status == "in_progress").and_then(|r| r.count).unwrap_or(0);
-    let resolved = rows.iter().find(|r| r.status == "resolved").and_then(|r| r.count).unwrap_or(0);
-    let closed = rows.iter().find(|r| r.status == "closed").and_then(|r| r.count).unwrap_or(0);
+    let open = rows
+        .iter()
+        .find(|r| r.status == "open")
+        .and_then(|r| r.count)
+        .unwrap_or(0);
+    let in_progress = rows
+        .iter()
+        .find(|r| r.status == "in_progress")
+        .and_then(|r| r.count)
+        .unwrap_or(0);
+    let resolved = rows
+        .iter()
+        .find(|r| r.status == "resolved")
+        .and_then(|r| r.count)
+        .unwrap_or(0);
+    let closed = rows
+        .iter()
+        .find(|r| r.status == "closed")
+        .and_then(|r| r.count)
+        .unwrap_or(0);
 
     Ok(Json(json!({
         "total": total,
@@ -282,7 +299,6 @@ pub async fn public_contact_form(
     Ok((StatusCode::CREATED, Json(json!(ticket))))
 }
 
-
 // ── Public: Tenant-scoped ticket submit (no auth) ─────────────────────
 
 /// POST /s/:tid/ticket — embedded form submission
@@ -309,7 +325,10 @@ pub async fn public_submit_ticket(
     .fetch_one(&s.db)
     .await?;
 
-    Ok((StatusCode::CREATED, Json(json!({"status": "received", "ticket_id": ticket.id}))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({"status": "received", "ticket_id": ticket.id})),
+    ))
 }
 
 // ── Public: Embed script (no auth) ────────────────────────────────────

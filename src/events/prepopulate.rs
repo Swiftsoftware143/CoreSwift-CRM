@@ -4,9 +4,9 @@
 //! sources (Google Places, Facebook, etc.) to pre-fill their listing.
 //! Currently a stub with the structure for future integrations.
 
+use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
-use serde_json::json;
 
 /// Attempt to pre-populate directory listing data from public sources.
 /// When a business signs up, this scrapes public info to fill their listing.
@@ -37,10 +37,14 @@ pub async fn prepopulate_listing(
     let _ = sqlx::query(
         r#"INSERT INTO prepopulated_data (id, tenant_id, entity_type, data, preview_link)
            VALUES ($1, $2, 'directory_listing', $3, $4)
-           ON CONFLICT (id) DO UPDATE SET data = $3, preview_link = $4, updated_at = NOW()"#
+           ON CONFLICT (id) DO UPDATE SET data = $3, preview_link = $4, updated_at = NOW()"#,
     )
-    .bind(data_id).bind(tenant_id).bind(&data).bind(&preview_link)
-    .execute(db).await;
+    .bind(data_id)
+    .bind(tenant_id)
+    .bind(&data)
+    .bind(&preview_link)
+    .execute(db)
+    .await;
 
     data_id
 }

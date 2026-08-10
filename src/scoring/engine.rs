@@ -1,14 +1,19 @@
+use super::models::{score_category, Score, ScoreRule, ScoringThreshold, ScoringWebhook};
 use sqlx::PgPool;
 use std::collections::HashMap;
 use std::time::Duration;
 use uuid::Uuid;
-use super::models::{Score, ScoreRule, ScoringThreshold, ScoringWebhook, score_category};
 
 /// Calculate score for a contact based on an event type.
 /// Applies all matching active rules and records history.
-pub async fn calculate_score(db: &PgPool, tenant_id: Uuid, contact_id: Uuid, event_type: &str) -> Result<Score, crate::errors::AppError> {
+pub async fn calculate_score(
+    db: &PgPool,
+    tenant_id: Uuid,
+    contact_id: Uuid,
+    event_type: &str,
+) -> Result<Score, crate::errors::AppError> {
     let rules = sqlx::query_as::<_, ScoreRule>(
-        "SELECT * FROM score_rules WHERE tenant_id=$1 AND event_type=$2 AND is_active=true"
+        "SELECT * FROM score_rules WHERE tenant_id=$1 AND event_type=$2 AND is_active=true",
     )
     .bind(tenant_id)
     .bind(event_type)
@@ -16,7 +21,7 @@ pub async fn calculate_score(db: &PgPool, tenant_id: Uuid, contact_id: Uuid, eve
     .await?;
 
     let mut score = sqlx::query_as::<_, Score>(
-        "SELECT * FROM contact_scores WHERE tenant_id=$1 AND contact_id=$2"
+        "SELECT * FROM contact_scores WHERE tenant_id=$1 AND contact_id=$2",
     )
     .bind(tenant_id)
     .bind(contact_id)
@@ -42,7 +47,11 @@ pub async fn calculate_score(db: &PgPool, tenant_id: Uuid, contact_id: Uuid, eve
     let mut total_points = 0i32;
 
     for rule in &rules {
-        let pts = if rule.direction == "subtract" { -rule.points } else { rule.points };
+        let pts = if rule.direction == "subtract" {
+            -rule.points
+        } else {
+            rule.points
+        };
         total_points += pts;
         let previous = (current_score + total_points - pts).max(0);
         let new_score_val = (current_score + total_points).max(0);
@@ -65,7 +74,9 @@ pub async fn calculate_score(db: &PgPool, tenant_id: Uuid, contact_id: Uuid, eve
 
     let final_score = (current_score + total_points).max(0);
     let category = score_category(final_score);
-    let old_cat = score.map(|s| s.category).unwrap_or_else(|| "interested".to_string());
+    let old_cat = score
+        .map(|s| s.category)
+        .unwrap_or_else(|| "interested".to_string());
 
     let updated = sqlx::query_as::<_, Score>(
         "UPDATE contact_scores SET total_score=$1, category=$2, last_event_type=$3, last_event_at=NOW(), updated_at=NOW() WHERE id=$4 RETURNING *"
@@ -78,7 +89,14 @@ pub async fn calculate_score(db: &PgPool, tenant_id: Uuid, contact_id: Uuid, eve
     .await?;
 
     if old_cat != category {
-        crate::automation::engine::fire_score_trigger(db, tenant_id, contact_id, final_score, category).await;
+        crate::automation::engine::fire_score_trigger(
+            db,
+            tenant_id,
+            contact_id,
+            final_score,
+            category,
+        )
+        .await;
         let _ = apply_thresholds(db, tenant_id, contact_id, final_score, category).await;
         let _ = fire_scoring_webhooks(db, tenant_id, contact_id, final_score, category).await;
     }
@@ -97,7 +115,7 @@ pub async fn apply_thresholds(
     let thresholds = sqlx::query_as::<_, ScoringThreshold>(
         "SELECT * FROM scoring_thresholds
          WHERE tenant_id = $1 AND is_active = true
-         AND min_score <= $2 AND (max_score IS NULL OR max_score >= $2)"
+         AND min_score <= $2 AND (max_score IS NULL OR max_score >= $2)",
     )
     .bind(tenant_id)
     .bind(total_score)
@@ -130,7 +148,7 @@ pub async fn apply_thresholds(
             "assign_tag" => {
                 if let Some(tag_name) = t.action_config.get("tag_name").and_then(|v| v.as_str()) {
                     if let Ok(Some((tag_id,))) = sqlx::query_as::<_, (Uuid,)>(
-                        "SELECT id FROM tags WHERE tenant_id = $1 AND name = $2 LIMIT 1"
+                        "SELECT id FROM tags WHERE tenant_id = $1 AND name = $2 LIMIT 1",
                     )
                     .bind(tenant_id)
                     .bind(tag_name)
@@ -167,7 +185,7 @@ pub async fn fire_scoring_webhooks(
     let webhooks = match sqlx::query_as::<_, ScoringWebhook>(
         "SELECT * FROM scoring_webhooks
          WHERE tenant_id = $1 AND is_active = true
-         AND min_score <= $2 AND (max_score IS NULL OR max_score >= $2)"
+         AND min_score <= $2 AND (max_score IS NULL OR max_score >= $2)",
     )
     .bind(tenant_id)
     .bind(total_score)
@@ -230,7 +248,7 @@ pub async fn fire_scoring_webhooks(
             }
             _ => {
                 let _ = sqlx::query(
-                    "UPDATE scoring_webhooks SET failure_count = failure_count + 1 WHERE id = $1"
+                    "UPDATE scoring_webhooks SET failure_count = failure_count + 1 WHERE id = $1",
                 )
                 .bind(wh.id)
                 .execute(db)
@@ -240,7 +258,11 @@ pub async fn fire_scoring_webhooks(
     }
 }
 
-pub async fn ensure_score_record(db: &PgPool, tenant_id: Uuid, contact_id: Uuid) -> Result<Score, crate::errors::AppError> {
+pub async fn ensure_score_record(
+    db: &PgPool,
+    tenant_id: Uuid,
+    contact_id: Uuid,
+) -> Result<Score, crate::errors::AppError> {
     Ok(match sqlx::query_as::<_, Score>("SELECT * FROM contact_scores WHERE tenant_id=$1 AND contact_id=$2")
         .bind(tenant_id)
         .bind(contact_id)

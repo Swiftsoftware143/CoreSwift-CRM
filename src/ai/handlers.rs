@@ -1,18 +1,36 @@
-use axum::{extract::{State, Json, Extension}, response::IntoResponse};
+use crate::ai::engine;
+use crate::ai::models::*;
+use crate::auth::models::Claims;
+use crate::errors::{ApiResult, AppError};
+use crate::AppState;
+use axum::{
+    extract::{Extension, Json, State},
+    response::IntoResponse,
+};
 use serde_json::json;
 use uuid::Uuid;
-use crate::AppState;
-use crate::errors::{AppError, ApiResult};
-use crate::auth::models::Claims;
-use crate::ai::models::*;
-use crate::ai::engine;
 
 /// POST /api/ai/prioritize — Score and rank all contacts by priority
-pub async fn prioritize(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<PrioritizeRequest>) -> ApiResult<impl IntoResponse> {
+pub async fn prioritize(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(r): Json<PrioritizeRequest>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Pull contacts joined with health scores, last activity, and risk level
-    let contacts = sqlx::query_as::<_, (Uuid, String, String, i32, Option<i32>, Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
+    let contacts = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            String,
+            i32,
+            Option<i32>,
+            Option<String>,
+            Option<chrono::DateTime<chrono::Utc>>,
+        ),
+    >(
         r#"SELECT c.id, c.name, c.email,
                   COALESCE(cs.total_score, 0) as score,
                   ah.score as health_score,
@@ -23,32 +41,48 @@ pub async fn prioritize(State(s): State<AppState>, Extension(c): Extension<Claim
            LEFT JOIN account_health ah ON ah.entity_id = c.id AND ah.entity_type = 'contact'
            WHERE c.tenant_id = $1
            ORDER BY ah.score ASC NULLS LAST, cs.total_score DESC NULLS LAST
-           LIMIT $2"#
-    ).bind(tid).bind(r.limit.unwrap_or(50)).fetch_all(&s.db).await?;
+           LIMIT $2"#,
+    )
+    .bind(tid)
+    .bind(r.limit.unwrap_or(50))
+    .fetch_all(&s.db)
+    .await?;
 
-    let mut prioritized: Vec<serde_json::Value> = contacts.into_iter().map(|(id, name, email, score, health, risk, last)| {
-        let health_score = health.unwrap_or(100);
-        let days_inactive = last.map(|t| (chrono::Utc::now() - t).num_days() as i32).unwrap_or(0);
-        let risk_level = risk.unwrap_or_else(|| "healthy".to_string());
-        let priority = (score as f64 * 0.4) + ((100 - health_score) as f64 * 0.3) + (days_inactive as f64 * 0.2);
+    let mut prioritized: Vec<serde_json::Value> = contacts
+        .into_iter()
+        .map(|(id, name, email, score, health, risk, last)| {
+            let health_score = health.unwrap_or(100);
+            let days_inactive = last
+                .map(|t| (chrono::Utc::now() - t).num_days() as i32)
+                .unwrap_or(0);
+            let risk_level = risk.unwrap_or_else(|| "healthy".to_string());
+            let priority = (score as f64 * 0.4)
+                + ((100 - health_score) as f64 * 0.3)
+                + (days_inactive as f64 * 0.2);
 
-        let action = if risk_level == "critical" { "human_callback" }
-                     else if risk_level == "at_risk" { "re_engage_email" }
-                     else if days_inactive > 0 { "checklist_stage" }
-                     else { "monitor" };
+            let action = if risk_level == "critical" {
+                "human_callback"
+            } else if risk_level == "at_risk" {
+                "re_engage_email"
+            } else if days_inactive > 0 {
+                "checklist_stage"
+            } else {
+                "monitor"
+            };
 
-        json!({
-            "contact_id": id,
-            "name": name,
-            "email": email,
-            "score": score,
-            "health_score": health_score,
-            "risk_level": risk_level,
-            "days_inactive": days_inactive,
-            "priority_score": (priority * 100.0).round() / 100.0,
-            "recommended_action": action,
+            json!({
+                "contact_id": id,
+                "name": name,
+                "email": email,
+                "score": score,
+                "health_score": health_score,
+                "risk_level": risk_level,
+                "days_inactive": days_inactive,
+                "priority_score": (priority * 100.0).round() / 100.0,
+                "recommended_action": action,
+            })
         })
-    }).collect();
+        .collect();
 
     // Sort by priority descending
     prioritized.sort_by(|a, b| {
@@ -57,23 +91,39 @@ pub async fn prioritize(State(s): State<AppState>, Extension(c): Extension<Claim
         pb.partial_cmp(&pa).unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    Ok(Json(json!({"prioritized": prioritized, "count": prioritized.len()})))
+    Ok(Json(
+        json!({"prioritized": prioritized, "count": prioritized.len()}),
+    ))
 }
 
 /// POST /api/ai/predict — Predict win probability for a specific contact
-pub async fn predict(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<PredictRequest>) -> ApiResult<impl IntoResponse> {
+pub async fn predict(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(r): Json<PredictRequest>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Gather signals
     let positive = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT COUNT(*) FROM events WHERE tenant_id = $1 AND entity_id = $2
-         AND event_type IN ('login', 'feature_used', 'email.opened', 'email.clicked', 'api_call')"
-    ).bind(tid).bind(r.contact_id).fetch_one(&s.db).await?.unwrap_or(0);
+         AND event_type IN ('login', 'feature_used', 'email.opened', 'email.clicked', 'api_call')",
+    )
+    .bind(tid)
+    .bind(r.contact_id)
+    .fetch_one(&s.db)
+    .await?
+    .unwrap_or(0);
 
     let negative = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT COUNT(*) FROM events WHERE tenant_id = $1 AND entity_id = $2
-         AND event_type IN ('failed_action', 'complaint', 'unsubscribe', 'days_inactive')"
-    ).bind(tid).bind(r.contact_id).fetch_one(&s.db).await?.unwrap_or(0);
+         AND event_type IN ('failed_action', 'complaint', 'unsubscribe', 'days_inactive')",
+    )
+    .bind(tid)
+    .bind(r.contact_id)
+    .fetch_one(&s.db)
+    .await?
+    .unwrap_or(0);
 
     let health = sqlx::query_as::<_, (Option<i32>, Option<String>)>(
         "SELECT score, risk_level FROM account_health WHERE tenant_id = $1 AND entity_type = 'contact' AND entity_id = $2"
@@ -82,12 +132,19 @@ pub async fn predict(State(s): State<AppState>, Extension(c): Extension<Claims>,
     let (score, risk) = health.unwrap_or((Some(50), Some("unknown".to_string())));
 
     // Simple weighted prediction
-    let win_prob = ((positive as f64 * 0.15) + (score.unwrap_or(50) as f64 * 0.01) - (negative as f64 * 0.1)).clamp(0.0, 1.0);
+    let win_prob = ((positive as f64 * 0.15) + (score.unwrap_or(50) as f64 * 0.01)
+        - (negative as f64 * 0.1))
+        .clamp(0.0, 1.0);
 
-    let rec = if risk.as_deref() == Some("critical") { "escalate" }
-              else if win_prob < 0.3 { "nurture" }
-              else if win_prob < 0.7 { "discount" }
-              else { "paused" };
+    let rec = if risk.as_deref() == Some("critical") {
+        "escalate"
+    } else if win_prob < 0.3 {
+        "nurture"
+    } else if win_prob < 0.7 {
+        "discount"
+    } else {
+        "paused"
+    };
 
     Ok(Json(json!({
         "contact_id": r.contact_id,
@@ -98,21 +155,33 @@ pub async fn predict(State(s): State<AppState>, Extension(c): Extension<Claims>,
 }
 
 /// POST /api/ai/recommend — Get segmentation and campaign recommendations
-pub async fn recommend(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<CampaignRequest>) -> ApiResult<impl IntoResponse> {
+pub async fn recommend(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(r): Json<CampaignRequest>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let rec = engine::recommend_campaign(&s.db, tid, &r.campaign_goal).await;
     Ok(Json(json!(rec)))
 }
 
 /// POST /api/ai/campaign — Legacy alias for recommend
-pub async fn campaign(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<CampaignRequest>) -> ApiResult<impl IntoResponse> {
+pub async fn campaign(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(r): Json<CampaignRequest>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let rec = engine::recommend_campaign(&s.db, tid, &r.campaign_goal).await;
     Ok(Json(json!(rec)))
 }
 
 /// POST /api/ai/message — AI-compose a follow-up message for a specific context
-pub async fn compose_message(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<ComposeMessageRequest>) -> ApiResult<impl IntoResponse> {
+pub async fn compose_message(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(r): Json<ComposeMessageRequest>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Get contact info for personalization
@@ -130,8 +199,12 @@ pub async fn compose_message(State(s): State<AppState>, Extension(c): Extension<
     // Try AI-powered composition via DeepSeek (with OpenAI/Anthropic fallback)
     let mut api_keys = std::collections::HashMap::new();
     if let Ok(Some(keys)) = sqlx::query_scalar::<_, Option<serde_json::Value>>(
-        "SELECT settings->'ai'->'providers' FROM tenants WHERE id = $1"
-    ).bind(tid).fetch_one(&s.db).await {
+        "SELECT settings->'ai'->'providers' FROM tenants WHERE id = $1",
+    )
+    .bind(tid)
+    .fetch_one(&s.db)
+    .await
+    {
         if let Some(obj) = keys.as_object() {
             for (k, v) in obj {
                 if let Some(val) = v.as_str() {
@@ -145,13 +218,19 @@ pub async fn compose_message(State(s): State<AppState>, Extension(c): Extension<
         crate::ai::router::ai_compose_follow_up(
             &api_keys,
             &name,
-            &name,  // business_name same as contact name for now
+            &name, // business_name same as contact name for now
             &r.context,
             (assessment.churn_probability * 100.0) as i32,
             assessment.signals_count,
-        ).await
+        )
+        .await
     } else {
-        compose_body(&r.context, &name, &r.tone.unwrap_or_else(|| "friendly".to_string()), &assessment)
+        compose_body(
+            &r.context,
+            &name,
+            &r.tone.unwrap_or_else(|| "friendly".to_string()),
+            &assessment,
+        )
     };
 
     let subject = compose_subject(&r.context, &name, &assessment);
@@ -161,14 +240,17 @@ pub async fn compose_message(State(s): State<AppState>, Extension(c): Extension<
     // Save the composed message as a template
     let _ = sqlx::query(
         r#"INSERT INTO message_templates (id, tenant_id, name, channel, subject, body, variables)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)"#
+           VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
     )
-    .bind(msg_id).bind(tid)
+    .bind(msg_id)
+    .bind(tid)
     .bind(format!("ai_composed_{}_{}", r.context, r.contact_id))
     .bind(&r.channel)
-    .bind(&subject).bind(&body)
+    .bind(&subject)
+    .bind(&body)
     .bind(json!({"ai_generated": true, "context": &r.context, "template": template_slug}))
-    .execute(&s.db).await;
+    .execute(&s.db)
+    .await;
 
     Ok(Json(json!({
         "subject": subject,
@@ -180,21 +262,33 @@ pub async fn compose_message(State(s): State<AppState>, Extension(c): Extension<
 }
 
 /// POST /api/ai/channel — AI-suggest the best channel for follow-up
-pub async fn suggest_channel(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<ChannelRequest>) -> ApiResult<impl IntoResponse> {
+pub async fn suggest_channel(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(r): Json<ChannelRequest>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let suggestion = engine::suggest_channel(&s.db, tid, r.contact_id, &r.context).await;
     Ok(Json(json!(suggestion)))
 }
 
 /// POST /api/ai/timing — AI-suggest optimal send time
-pub async fn suggest_timing(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<TimingRequest>) -> ApiResult<impl IntoResponse> {
+pub async fn suggest_timing(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(r): Json<TimingRequest>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let suggestion = engine::suggest_timing(&s.db, tid, r.contact_id).await;
     Ok(Json(json!(suggestion)))
 }
 
 /// POST /api/ai/risk — Assess churn risk for a single contact
-pub async fn assess_churn_risk(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<ChurnRequest>) -> ApiResult<impl IntoResponse> {
+pub async fn assess_churn_risk(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(r): Json<ChurnRequest>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let assessment = engine::assess_churn_risk(&s.db, tid, r.contact_id).await;
     Ok(Json(json!(assessment)))
@@ -239,7 +333,9 @@ fn compose_body(context: &str, name: &str, tone: &str, assessment: &ChurnAssessm
 fn compose_subject(context: &str, name: &str, assessment: &ChurnAssessment) -> String {
     match context {
         "abandoned_signup" => format!("{name}, finish setting up your profile"),
-        "inactive_trial" if assessment.churn_probability >= 0.5 => format!("{name}, your trial needs attention"),
+        "inactive_trial" if assessment.churn_probability >= 0.5 => {
+            format!("{name}, your trial needs attention")
+        }
         "inactive_trial" => format!("{name}, want a hand getting started?"),
         "checklist_stage_2" => "Next step: Add your business hours".to_string(),
         "checklist_stage_3" => "Final step: Add your keywords".to_string(),

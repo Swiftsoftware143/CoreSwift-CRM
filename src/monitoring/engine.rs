@@ -3,10 +3,10 @@
 //! Scores entities on a 0–100 scale based on signals.
 //! Triggers interventions when thresholds are crossed.
 
+use chrono::Utc;
+use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
-use serde_json::json;
-use chrono::Utc;
 
 /// Record a health signal and recalculate risk level.
 /// Called automatically by the event bus on login, feature_used, days_inactive, etc.
@@ -42,10 +42,15 @@ pub async fn record_signal(
         _ => score,
     };
 
-    let risk = if new_score >= 80 { "healthy" }
-              else if new_score >= 40 { "at_risk" }
-              else if new_score > 0 { "critical" }
-              else { "churned" };
+    let risk = if new_score >= 80 {
+        "healthy"
+    } else if new_score >= 40 {
+        "at_risk"
+    } else if new_score > 0 {
+        "critical"
+    } else {
+        "churned"
+    };
 
     let is_activity = signal == "login" || signal == "feature_used" || signal == "api_call";
 
@@ -56,12 +61,18 @@ pub async fn record_signal(
             last_active_at = CASE WHEN $3 THEN NOW() ELSE last_active_at END,
             signals = COALESCE(signals, '[]'::jsonb) || $4::jsonb,
             updated_at = NOW()
-           WHERE tenant_id = $5 AND entity_type = $6 AND entity_id = $7"#
+           WHERE tenant_id = $5 AND entity_type = $6 AND entity_id = $7"#,
     )
-    .bind(new_score).bind(risk).bind(is_activity)
+    .bind(new_score)
+    .bind(risk)
+    .bind(is_activity)
     .bind(json!([{"signal": signal, "value": value, "ts": Utc::now().to_rfc3339()}]))
-    .bind(tenant_id).bind(entity_type).bind(entity_id)
-    .execute(db).await.ok();
+    .bind(tenant_id)
+    .bind(entity_type)
+    .bind(entity_id)
+    .execute(db)
+    .await
+    .ok();
 
     // Check if intervention needed
     if risk == "critical" || risk == "at_risk" {
@@ -70,7 +81,13 @@ pub async fn record_signal(
 }
 
 /// Check thresholds and trigger interventions for at-risk accounts.
-async fn check_interventions(db: &PgPool, tenant_id: Uuid, entity_type: &str, entity_id: Uuid, risk_level: &str) {
+async fn check_interventions(
+    db: &PgPool,
+    tenant_id: Uuid,
+    entity_type: &str,
+    entity_id: Uuid,
+    risk_level: &str,
+) {
     let thresholds = sqlx::query_as::<_, (String, serde_json::Value)>(
         "SELECT intervention_action, intervention_config FROM health_thresholds WHERE tenant_id = $1 AND entity_type = $2 AND risk_level = $3 AND is_active = true LIMIT 1"
     ).bind(tenant_id).bind(entity_type).bind(risk_level).fetch_optional(db).await;

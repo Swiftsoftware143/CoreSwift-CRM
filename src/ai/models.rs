@@ -21,7 +21,7 @@ pub struct PrioritizedContact {
     pub risk_level: String,
     pub last_activity: Option<String>,
     pub days_inactive: i32,
-    pub priority_score: f64,    // composite: (score * 0.4) + (100-health) * 0.3 + days_inactive * 0.2 + engagement * 0.1
+    pub priority_score: f64, // composite: (score * 0.4) + (100-health) * 0.3 + days_inactive * 0.2 + engagement * 0.1
     pub recommended_action: String, // "re-engage_email", "checklist_stage", "human_callback", "downgrade"
 }
 
@@ -38,7 +38,7 @@ pub struct WinPrediction {
     pub business_name: String,
     pub win_probability: f64,
     pub expected_value: f64,
-    pub key_signals: Vec<String>,    // positive signals: "email.opened", "feature_used", "login"
+    pub key_signals: Vec<String>, // positive signals: "email.opened", "feature_used", "login"
     pub warning_signals: Vec<String>, // negative: "days_inactive", "support_ticket", "failed_action"
     pub recommendation: String,
 }
@@ -49,8 +49,8 @@ pub struct WinPrediction {
 pub struct ComposeMessageRequest {
     pub tenant_id: Uuid,
     pub contact_id: Uuid,
-    pub context: String,  // "abandoned_signup", "inactive_trial", "checklist_stage_2", "churn_risk", "renewal"
-    pub channel: String,  // "email" or "sms"
+    pub context: String, // "abandoned_signup", "inactive_trial", "checklist_stage_2", "churn_risk", "renewal"
+    pub channel: String, // "email" or "sms"
     pub tone: Option<String>, // "professional", "friendly", "urgent"
 }
 

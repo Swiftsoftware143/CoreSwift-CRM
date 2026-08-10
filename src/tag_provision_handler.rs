@@ -4,14 +4,14 @@
 //! POST /api/v1/internal/tag-provision
 //! Protected by X-Internal-Key header matching INTERNAL_SYNC_KEY env var.
 
-use axum::{extract::State, http::HeaderMap, Json};
 use axum::response::IntoResponse;
+use axum::{extract::State, http::HeaderMap, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::errors::{ApiResult, AppError};
 use crate::AppState;
-use crate::errors::{AppError, ApiResult};
 
 /// Payload received from FunnelSwift tag webhook
 #[derive(Debug, Deserialize)]
@@ -57,20 +57,55 @@ pub async fn handle_tag_provision(
     if key != expected {
         tracing::warn!(
             "tag_provision: invalid internal key (got {}, expected {})",
-            key, expected
+            key,
+            expected
         );
         return Err(AppError::Unauthorized);
     }
 
-    let email = req.contact.email.as_deref().unwrap_or("").trim().to_lowercase();
-    let first_name = req.contact.first_name.as_deref().unwrap_or("").trim().to_string();
-    let last_name = req.contact.last_name.as_deref().unwrap_or("").trim().to_string();
-    let company_name = req.contact.company.as_deref().unwrap_or("").trim().to_string();
-    let phone = req.contact.phone.as_deref().unwrap_or("").trim().to_string();
+    let email = req
+        .contact
+        .email
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+    let first_name = req
+        .contact
+        .first_name
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let last_name = req
+        .contact
+        .last_name
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let company_name = req
+        .contact
+        .company
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let phone = req
+        .contact
+        .phone
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
 
     tracing::info!(
         "tag_provision: received for tag={} email={} first={} last={} company={}",
-        req.tag.name, email, first_name, last_name, company_name
+        req.tag.name,
+        email,
+        first_name,
+        last_name,
+        company_name
     );
 
     // 2. If no email, use a placeholder from the tag + timestamp
@@ -85,7 +120,7 @@ pub async fn handle_tag_provision(
         r#"SELECT c.id, c.tenant_id
            FROM contacts c
            WHERE LOWER(c.email) = $1 AND c.is_active = true
-           LIMIT 1"#
+           LIMIT 1"#,
     )
     .bind(&lookup_email)
     .fetch_optional(&s.db)
@@ -94,13 +129,17 @@ pub async fn handle_tag_provision(
     if let Some((contact_id, tenant_id)) = existing_contact {
         tracing::info!(
             "tag_provision: contact already exists id={} tenant_id={}",
-            contact_id, tenant_id
+            contact_id,
+            tenant_id
         );
-        return Ok((axum::http::StatusCode::OK, Json(json!({
-            "status": "already_exists",
-            "contact_id": contact_id.to_string(),
-            "tenant_id": tenant_id.to_string(),
-        }))));
+        return Ok((
+            axum::http::StatusCode::OK,
+            Json(json!({
+                "status": "already_exists",
+                "contact_id": contact_id.to_string(),
+                "tenant_id": tenant_id.to_string(),
+            })),
+        ));
     }
 
     // 4. Create a new tenant for this provisioned contact
@@ -110,13 +149,16 @@ pub async fn handle_tag_provision(
     } else if !first_name.is_empty() {
         format!("FS-{}", &first_name[..first_name.len().min(60)])
     } else {
-        format!("FS-Provisioned-{}", &lookup_email[..lookup_email.len().min(40)])
+        format!(
+            "FS-Provisioned-{}",
+            &lookup_email[..lookup_email.len().min(40)]
+        )
     };
 
     let _ = sqlx::query(
         r#"INSERT INTO tenants (id, name, slug, created_at, updated_at)
            VALUES ($1, $2, $3, NOW(), NOW())
-           ON CONFLICT (id) DO NOTHING"#
+           ON CONFLICT (id) DO NOTHING"#,
     )
     .bind(tenant_id)
     .bind(&tenant_name)
@@ -124,7 +166,11 @@ pub async fn handle_tag_provision(
     .execute(&s.db)
     .await;
 
-    tracing::info!("tag_provision: created tenant {} ({})", tenant_id, tenant_name);
+    tracing::info!(
+        "tag_provision: created tenant {} ({})",
+        tenant_id,
+        tenant_name
+    );
 
     // 5. Create the contact record
     let contact_id = Uuid::new_v4();
@@ -146,7 +192,10 @@ pub async fn handle_tag_provision(
 
     tracing::info!(
         "tag_provision: created contact {} ({} {}) in tenant {}",
-        contact_id, first_name, last_name, tenant_id
+        contact_id,
+        first_name,
+        last_name,
+        tenant_id
     );
 
     // 6. Assign a "Free" tag to the contact
@@ -154,7 +203,7 @@ pub async fn handle_tag_provision(
     let _ = sqlx::query(
         r#"INSERT INTO tag_assignments (id, tag_id, entity_type, entity_id, tenant_id)
            VALUES ($1, $2, 'contact', $3, $4)
-           ON CONFLICT (tag_id, entity_type, entity_id, tenant_id) DO NOTHING"#
+           ON CONFLICT (tag_id, entity_type, entity_id, tenant_id) DO NOTHING"#,
     )
     .bind(Uuid::new_v4())
     .bind(free_tag_id)
@@ -169,7 +218,7 @@ pub async fn handle_tag_provision(
     let _ = sqlx::query(
         r#"INSERT INTO list_members (id, list_id, contact_id, tenant_id)
            VALUES ($1, $2, $3, $4)
-           ON CONFLICT (list_id, contact_id) DO NOTHING"#
+           ON CONFLICT (list_id, contact_id) DO NOTHING"#,
     )
     .bind(Uuid::new_v4())
     .bind(list_id)
@@ -178,23 +227,50 @@ pub async fn handle_tag_provision(
     .execute(&s.db)
     .await;
 
-    Ok((axum::http::StatusCode::CREATED, Json(json!({
-        "status": "provisioned",
-        "contact_id": contact_id.to_string(),
-        "tenant_id": tenant_id.to_string(),
-        "tag_assigned": "Free",
-    }))))
+    // 8. Send welcome email for newly provisioned contacts
+    {
+        let db = s.db.clone();
+        let tid = tenant_id;
+        let email = lookup_email.clone();
+        let full_name = format!("{} {}", first_name, last_name).trim().to_string();
+        tokio::spawn(async move {
+            let vars = serde_json::json!({
+                "name": full_name,
+                "email": email,
+                "app_url": "https://app.coreswiftcrm.com",
+                "account_name": "CoreSwift CRM"
+            });
+            if let Err(e) =
+                crate::email::send_template_email(&db, tid, &email, "welcome", &vars).await
+            {
+                tracing::warn!("Failed to send CoreSwift welcome email to {}: {}", email, e);
+            }
+        });
+    }
+
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(json!({
+            "status": "provisioned",
+            "contact_id": contact_id.to_string(),
+            "tenant_id": tenant_id.to_string(),
+            "tag_assigned": "Free",
+        })),
+    ))
 }
 
 /// Create a tag if it doesn't exist, return its ID
-async fn create_or_get_tag(db: &sqlx::PgPool, tenant_id: Uuid, tag_name: &str) -> Result<Uuid, AppError> {
-    let existing: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM tags WHERE tenant_id = $1 AND name = $2"
-    )
-    .bind(tenant_id)
-    .bind(tag_name)
-    .fetch_optional(db)
-    .await?;
+async fn create_or_get_tag(
+    db: &sqlx::PgPool,
+    tenant_id: Uuid,
+    tag_name: &str,
+) -> Result<Uuid, AppError> {
+    let existing: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM tags WHERE tenant_id = $1 AND name = $2")
+            .bind(tenant_id)
+            .bind(tag_name)
+            .fetch_optional(db)
+            .await?;
 
     if let Some((id,)) = existing {
         Ok(id)
@@ -214,9 +290,13 @@ async fn create_or_get_tag(db: &sqlx::PgPool, tenant_id: Uuid, tag_name: &str) -
 }
 
 /// Create or get a list by name
-async fn create_or_get_list(db: &sqlx::PgPool, tenant_id: Uuid, list_name: &str) -> Result<Uuid, AppError> {
+async fn create_or_get_list(
+    db: &sqlx::PgPool,
+    tenant_id: Uuid,
+    list_name: &str,
+) -> Result<Uuid, AppError> {
     let existing: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM lists WHERE tenant_id = $1 AND name = $2 AND list_type = 'static'"
+        "SELECT id FROM lists WHERE tenant_id = $1 AND name = $2 AND list_type = 'static'",
     )
     .bind(tenant_id)
     .bind(list_name)

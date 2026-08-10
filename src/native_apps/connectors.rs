@@ -6,11 +6,11 @@
 use std::collections::HashMap;
 
 pub mod adaswift;
-pub mod funnelswift;
 pub mod cheatlayer;
-pub mod workflowswift;
+pub mod funnelswift;
 pub mod missedcall_responder;
 pub mod multi_directory;
+pub mod workflowswift;
 
 /// Registered connector metadata
 pub struct AppConnector {
@@ -19,7 +19,7 @@ pub struct AppConnector {
     pub description: &'static str,
     pub auth_type: &'static str,
     pub auth_fields: &'static [&'static str],
-    pub access_level: &'static str,  // "admin" | "admin_tenant"
+    pub access_level: &'static str, // "admin" | "admin_tenant"
 }
 
 /// All known native apps
@@ -108,7 +108,9 @@ pub async fn push_data(
         "cheatlayer" => cheatlayer::push_entity(credentials, entity_type, data).await,
         "funnelswift" => funnelswift::push_entity(credentials, entity_type, data).await,
         "workflowswift" => workflowswift::push_entity(credentials, entity_type, data).await,
-        "missedcall-responder" => missedcall_responder::push_entity(credentials, entity_type, data).await,
+        "missedcall-responder" => {
+            missedcall_responder::push_entity(credentials, entity_type, data).await
+        }
         "multi-directory" => multi_directory::push_entity(credentials, entity_type, data).await,
         _ => Err(format!("Unknown app: {}", slug)),
     }
@@ -126,7 +128,9 @@ pub async fn pull_data(
         "cheatlayer" => cheatlayer::pull_entity(credentials, entity_type, filters).await,
         "funnelswift" => funnelswift::pull_entity(credentials, entity_type, filters).await,
         "workflowswift" => workflowswift::pull_entity(credentials, entity_type, filters).await,
-        "missedcall-responder" => missedcall_responder::pull_entity(credentials, entity_type, filters).await,
+        "missedcall-responder" => {
+            missedcall_responder::pull_entity(credentials, entity_type, filters).await
+        }
         "multi-directory" => multi_directory::pull_entity(credentials, entity_type, filters).await,
         _ => Err(format!("Unknown app: {}", slug)),
     }
@@ -134,7 +138,6 @@ pub async fn pull_data(
 
 /// Get app metadata (labels, available entities, etc.)
 pub fn get_app_meta(slug: &str) -> Option<serde_json::Value> {
-    
     match slug {
         "adaswift" => Some(adaswift::get_meta()),
         "cheatlayer" => Some(cheatlayer::get_meta()),

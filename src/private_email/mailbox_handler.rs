@@ -1,4 +1,7 @@
-use axum::{extract::{Path, State}, Extension, Json};
+use axum::{
+    extract::{Path, State},
+    Extension, Json,
+};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -15,8 +18,7 @@ pub async fn provision_mailbox(
     Extension(claims): Extension<Claims>,
     Json(req): Json<ProvisionMailboxRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     feature_gate::check_mailbox_limit(&state.db, account_id).await?;
 
@@ -60,11 +62,13 @@ pub async fn provision_mailbox(
         };
 
         // Create the mailbox via Mailgun API
-        let mg_id = create_mailgun_mailbox(base_url, &api_key, &domain.domain, &req.local_part).await
+        let mg_id = create_mailgun_mailbox(base_url, &api_key, &domain.domain, &req.local_part)
+            .await
             .map_err(AppError::Internal)?;
 
         // Create route for inbound forwarding
-        let _route_id = create_mailgun_route(base_url, &api_key, &domain.domain).await
+        let _route_id = create_mailgun_route(base_url, &api_key, &domain.domain)
+            .await
             .map_err(AppError::Internal)?;
 
         Some(mg_id)
@@ -96,8 +100,7 @@ pub async fn list_mailboxes(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let boxes = sqlx::query_as::<_, PrivateEmailBox>(
         "SELECT * FROM private_email_boxes WHERE tenant_id = $1 ORDER BY created_at DESC",
@@ -115,8 +118,7 @@ pub async fn delete_mailbox(
     Extension(claims): Extension<Claims>,
     Path(box_id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let mailbox = sqlx::query_as::<_, PrivateEmailBox>(
         "SELECT * FROM private_email_boxes WHERE id = $1 AND tenant_id = $2",
@@ -138,7 +140,9 @@ pub async fn delete_mailbox(
     .await
     .map_err(AppError::Database)?;
 
-    Ok(Json(json!({"deleted": true, "email": mailbox.email_address})))
+    Ok(Json(
+        json!({"deleted": true, "email": mailbox.email_address}),
+    ))
 }
 
 pub async fn update_mailbox(
@@ -147,8 +151,7 @@ pub async fn update_mailbox(
     Path(box_id): Path<Uuid>,
     Json(req): Json<UpdateMailboxRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let row = sqlx::query_as::<_, PrivateEmailBox>(
         r#"

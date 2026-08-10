@@ -12,13 +12,13 @@
 //! The AI reads from account_health signals, event_logs, checklist_progress,
 //! and contact scoring to make these decisions at runtime.
 
-pub mod handlers;
-pub mod router;
-pub mod models;
 pub mod engine;
+pub mod handlers;
+pub mod models;
+pub mod router;
 
-use axum::{Router, middleware};
 use crate::AppState;
+use axum::{middleware, Router};
 
 /// Build the AI router with auth middleware.
 pub fn router(state: AppState) -> Router<AppState> {
@@ -31,5 +31,8 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/channel", axum::routing::post(handlers::suggest_channel))
         .route("/timing", axum::routing::post(handlers::suggest_timing))
         .route("/risk", axum::routing::post(handlers::assess_churn_risk))
-        .layer(middleware::from_fn_with_state(state.clone(), crate::auth::middleware::auth_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::middleware::auth_middleware,
+        ))
 }

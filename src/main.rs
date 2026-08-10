@@ -5,73 +5,70 @@
 //! The server provides a fully-featured CRM with contacts, pipelines,
 //! lead scoring, automation, and integration capabilities.
 
-mod config;
-mod db;
-mod errors;
-mod features;
-pub mod auth;
 pub mod account;
+pub mod admin_actions;
+pub mod affiliates;
+pub mod ai;
+pub mod analytics;
+pub mod audit;
+pub mod auth;
+pub mod automation;
+pub mod billing;
+pub mod bookings;
+pub mod campaigns;
+pub mod checklists;
+pub mod communications;
+pub mod companies;
+mod config;
 pub mod contacts;
 pub mod contacts_internal;
-pub mod tenants_internal;
-pub mod companies;
-pub mod pipelines;
-pub mod tags;
-pub mod scoring;
+pub mod dashboard;
+mod db;
+pub mod email;
+pub mod email_templates;
+mod errors;
+pub mod events;
+mod features;
+pub mod google_calendar;
+pub mod inbound;
+pub mod industries;
+pub mod integrations;
 pub mod lists;
 pub mod lists_internal;
-pub mod automation;
-pub mod integrations;
-pub mod analytics;
-pub mod ai;
-pub mod billing;
-pub mod affiliates;
-pub mod audit;
-pub mod events;
-pub mod communications;
-pub mod checklists;
-pub mod monitoring;
-pub mod notifications;
-pub mod native_apps;
-pub mod admin_actions;
-pub mod campaigns;
-pub mod industries;
 pub mod messages;
+pub mod monitoring;
+pub mod native_apps;
+pub mod notifications;
+pub mod pipelines;
 pub mod plans;
+pub mod portfolio;
+pub mod private_email;
 pub mod provider_keys;
 pub mod rate_limiter;
-pub mod webhook;
-pub mod dashboard;
-pub mod portfolio;
-pub mod bookings;
-pub mod tickets;
-pub mod inbound;
-pub mod telnyx;
-pub mod webhooks;
 pub mod round_robin;
-pub mod google_calendar;
-pub mod tracked_links;
-pub mod email_templates;
-pub mod email;
-pub mod worker;
+pub mod scoring;
 pub mod tag_provision_handler;
-pub mod private_email;
+pub mod tags;
+pub mod telnyx;
+pub mod tenants_internal;
+pub mod tickets;
+pub mod tracked_links;
+pub mod webhook;
+pub mod webhooks;
+pub mod worker;
 
 use axum::{
+    http::{HeaderValue, StatusCode},
+    response::IntoResponse,
     routing::get,
     Router,
-    response::IntoResponse,
-    http::{StatusCode, HeaderValue},
 };
+use std::time::Duration;
 use tokio::signal;
 use tower_http::{
-    cors::CorsLayer,
-    trace::TraceLayer,
-    compression::CompressionLayer,
-    services::ServeDir,
+    compression::CompressionLayer, cors::CorsLayer, services::ServeDir, trace::TraceLayer,
 };
 use tracing_subscriber::EnvFilter;
-use std::time::Duration;
 
 /// Application state shared across all handlers
 #[derive(Clone)]
@@ -94,7 +91,8 @@ async fn main() -> anyhow::Result<()> {
     // Initialize jsonwebtoken crypto provider (required by jsonwebtoken v10)
     jsonwebtoken::crypto::CryptoProvider::install_default(
         &jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER,
-    ).ok();
+    )
+    .ok();
 
     // Initialize tracing with structured logging
     tracing_subscriber::fmt()
@@ -111,13 +109,11 @@ async fn main() -> anyhow::Result<()> {
         &config.database_url,
         config.db_min_connections,
         config.db_max_connections,
-    ).await?;
+    )
+    .await?;
 
     // Run database migrations (skip if already applied)
-    match sqlx::migrate!("./migrations")
-        .run(&db)
-        .await
-    {
+    match sqlx::migrate!("./migrations").run(&db).await {
         Ok(_) => tracing::info!("Database migrations completed successfully"),
         Err(e) => tracing::warn!("Migration skipped (tables may already exist): {}", e),
     }
@@ -150,9 +146,15 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/contacts", contacts::router(state.clone()))
         .nest("/api/internal/contacts", contacts_internal::router())
         // FunnelSwift tag provision webhook — auto-provision free-tier contacts
-        .route("/api/v1/internal/tag-provision", axum::routing::post(tag_provision_handler::handle_tag_provision))
+        .route(
+            "/api/v1/internal/tag-provision",
+            axum::routing::post(tag_provision_handler::handle_tag_provision),
+        )
         // Unified Inbox — messages webhook from MD/IS (no auth, fire-and-forget)
-        .route("/api/messages/webhook", axum::routing::post(messages::handlers::webhook_receive))
+        .route(
+            "/api/messages/webhook",
+            axum::routing::post(messages::handlers::webhook_receive),
+        )
         .nest("/api/companies", companies::router(state.clone()))
         .nest("/api/pipelines", pipelines::router(state.clone()))
         .nest("/api/tags", tags::router(state.clone()))
@@ -205,29 +207,53 @@ async fn main() -> anyhow::Result<()> {
         // Cross-app webhooks — receive tag sync events from satellite apps
         .nest("/api/v1/webhooks", webhooks::cross_app_tag_sync::router())
         // Google Calendar sync — OAuth2, push/pull events
-        .nest("/api/google-calendar", google_calendar::router(state.clone()))
+        .nest(
+            "/api/google-calendar",
+            google_calendar::router(state.clone()),
+        )
         // Automation rules (tag triggers, webhooks, etc)
         .nest("/api/automation", automation::router(state.clone()))
         // Tracked links
         .nest("/api/tracked-links", tracked_links::router(state.clone()))
         // Email Templates CRUD (admin only)
-        .nest("/api/email-templates", email_templates::router(state.clone()))
+        .nest(
+            "/api/email-templates",
+            email_templates::router(state.clone()),
+        )
         // Private email boxes (Mailgun integration, plan-gated)
         .nest("/api/tickets", tickets::router(state.clone()))
         .nest("/api/private-email", private_email::router(state.clone()))
         // Public redirect for tracked links (no auth)
         .nest("/track", tracked_links::public_router())
         // Mailgun inbound webhook (no auth — called by Mailgun)
-        .route("/api/v1/webhooks/mailgun/inbound", axum::routing::post(private_email::webhook_handler::inbound_webhook))
+        .route(
+            "/api/v1/webhooks/mailgun/inbound",
+            axum::routing::post(private_email::webhook_handler::inbound_webhook),
+        )
         // Stripe/PayPal webhooks (no auth)
-        .route("/api/billing/webhooks/stripe", axum::routing::post(billing::handlers::stripe_webhook))
-        .route("/api/billing/webhooks/paypal", axum::routing::post(billing::handlers::paypal_webhook))
+        .route(
+            "/api/billing/webhooks/stripe",
+            axum::routing::post(billing::handlers::stripe_webhook),
+        )
+        .route(
+            "/api/billing/webhooks/paypal",
+            axum::routing::post(billing::handlers::paypal_webhook),
+        )
         // Public booking endpoints (no auth)
         .nest("/api/public/bookings", bookings::public_router())
         // Tickets public endpoints (root level)
-        .route("/s/:tenant_id/ticket", axum::routing::post(tickets::handlers::public_submit_ticket))
-        .route("/s/:tenant_id/widget.js", axum::routing::get(tickets::handlers::support_embed_script))
-        .route("/api/public/contact", axum::routing::post(tickets::handlers::public_contact_form))
+        .route(
+            "/s/:tenant_id/ticket",
+            axum::routing::post(tickets::handlers::public_submit_ticket),
+        )
+        .route(
+            "/s/:tenant_id/widget.js",
+            axum::routing::get(tickets::handlers::support_embed_script),
+        )
+        .route(
+            "/api/public/contact",
+            axum::routing::post(tickets::handlers::public_contact_form),
+        )
         // Layer stack (inner to outer = last to first in call order)
         .layer(CompressionLayer::new())
         .layer(axum::middleware::from_fn(security_headers_middleware))
@@ -259,11 +285,14 @@ async fn main() -> anyhow::Result<()> {
 
 /// Health check endpoint — returns 200 when the service is running
 async fn health_check() -> impl IntoResponse {
-    (StatusCode::OK, axum::Json(serde_json::json!({
-        "status": "ok",
-        "service": "crm-swift",
-        "version": env!("CARGO_PKG_VERSION")
-    })))
+    (
+        StatusCode::OK,
+        axum::Json(serde_json::json!({
+            "status": "ok",
+            "service": "crm-swift",
+            "version": env!("CARGO_PKG_VERSION")
+        })),
+    )
 }
 
 /// Readiness check endpoint — verifies database connectivity
@@ -278,20 +307,29 @@ async fn ready_check(
 
     use redis::AsyncCommands;
     let mut redis_conn = state.redis.clone();
-    let redis_ok: bool = redis_conn.set::<&str, &str, String>("healthcheck", "ok").await.is_ok();
+    let redis_ok: bool = redis_conn
+        .set::<&str, &str, String>("healthcheck", "ok")
+        .await
+        .is_ok();
 
     if db_ok && redis_ok {
-        (StatusCode::OK, axum::Json(serde_json::json!({
-            "status": "ready",
-            "database": "connected",
-            "redis": "connected",
-        })))
+        (
+            StatusCode::OK,
+            axum::Json(serde_json::json!({
+                "status": "ready",
+                "database": "connected",
+                "redis": "connected",
+            })),
+        )
     } else {
-        (StatusCode::SERVICE_UNAVAILABLE, axum::Json(serde_json::json!({
-            "status": "not_ready",
-            "database": db_ok,
-            "redis": redis_ok,
-        })))
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(serde_json::json!({
+                "status": "not_ready",
+                "database": db_ok,
+                "redis": redis_ok,
+            })),
+        )
     }
 }
 
@@ -329,10 +367,9 @@ async fn security_headers_middleware(
         "X-Content-Type-Options",
         HeaderValue::from_static("nosniff"),
     );
-    response.headers_mut().insert(
-        "X-Frame-Options",
-        HeaderValue::from_static("DENY"),
-    );
+    response
+        .headers_mut()
+        .insert("X-Frame-Options", HeaderValue::from_static("DENY"));
     response.headers_mut().insert(
         "X-XSS-Protection",
         HeaderValue::from_static("1; mode=block"),

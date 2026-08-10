@@ -1,33 +1,60 @@
-use axum::{extract::State, http::HeaderMap, Json};
 use axum::response::IntoResponse;
+use axum::{extract::State, http::HeaderMap, Json};
 use uuid::Uuid;
 
-use crate::AppState;
 use crate::errors::{ApiResult, AppError};
+use crate::AppState;
 
 pub async fn internal_create(
     State(s): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let key = headers.get("x-internal-key").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let key = headers
+        .get("x-internal-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     let expected = s.config.internal_sync_key.clone();
     if key != expected {
         return Err(AppError::Unauthorized);
     }
 
-    let tenant_id = req.get("tenant_id")
+    let tenant_id = req
+        .get("tenant_id")
         .and_then(|v| v.as_str())
         .and_then(|s| Uuid::parse_str(s).ok())
         .ok_or_else(|| AppError::BadRequest("tenant_id required".into()))?;
 
-    let first_name = req.get("first_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let last_name = req.get("last_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let email = req.get("email").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let phone = req.get("phone").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let company_id = req.get("company_id").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok());
-    let notes = req.get("notes").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let title = req.get("title").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let first_name = req
+        .get("first_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let last_name = req
+        .get("last_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let email = req
+        .get("email")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let phone = req
+        .get("phone")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let company_id = req
+        .get("company_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok());
+    let notes = req
+        .get("notes")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let title = req
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     if first_name.is_empty() {
         return Err(AppError::BadRequest("first_name is required".into()));
@@ -49,12 +76,13 @@ pub async fn internal_create(
     .execute(&s.db)
     .await?;
 
-    Ok(Json(serde_json::json!({"id": id.to_string(), "first_name": first_name, "last_name": last_name})))
+    Ok(Json(
+        serde_json::json!({"id": id.to_string(), "first_name": first_name, "last_name": last_name}),
+    ))
 }
 
 /// Router for internal contact endpoints (no auth middleware)
 pub fn router() -> axum::Router<AppState> {
     use axum::routing::post;
-    axum::Router::new()
-        .route("/", post(internal_create))
+    axum::Router::new().route("/", post(internal_create))
 }

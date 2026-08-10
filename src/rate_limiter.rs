@@ -14,12 +14,11 @@ use axum::{
     Json,
 };
 use governor::{
-    clock::DefaultClock,
-    state::keyed::DefaultKeyedStateStore,
-    Quota, RateLimiter as GovernorRateLimiter,
+    clock::DefaultClock, state::keyed::DefaultKeyedStateStore, Quota,
+    RateLimiter as GovernorRateLimiter,
 };
-use serde_json::json;
 use nonzero_ext::nonzero;
+use serde_json::json;
 use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -34,17 +33,18 @@ pub enum RateLimitKind {
 /// Combined rate limiter state
 #[derive(Clone)]
 pub struct RateLimiterState {
-    pub auth_limiter: Arc<GovernorRateLimiter<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock>>,
+    pub auth_limiter:
+        Arc<GovernorRateLimiter<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock>>,
     pub api_limiter: Arc<GovernorRateLimiter<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock>>,
 }
 
 impl RateLimiterState {
     /// Create rate limiter instances from configuration
     pub fn from_config(config: &crate::config::AppConfig) -> Self {
-        let auth_burst = NonZeroU32::new(config.auth_rate_limit_per_minute)
-            .unwrap_or(nonzero!(5u32));
-        let api_burst = NonZeroU32::new(config.api_rate_limit_per_minute)
-            .unwrap_or(nonzero!(20u32));
+        let auth_burst =
+            NonZeroU32::new(config.auth_rate_limit_per_minute).unwrap_or(nonzero!(5u32));
+        let api_burst =
+            NonZeroU32::new(config.api_rate_limit_per_minute).unwrap_or(nonzero!(20u32));
 
         let auth_quota = Quota::per_minute(auth_burst);
         let api_quota = Quota::per_minute(api_burst);

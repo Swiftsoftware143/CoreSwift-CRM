@@ -1,7 +1,7 @@
 //! Plans CRUD handlers — all require `agency_admin` role.
 
 use axum::{
-    extract::{State, Path, Json, Extension},
+    extract::{Extension, Json, Path, State},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -9,10 +9,10 @@ use rust_decimal::Decimal;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::AppState;
-use crate::errors::{AppError, ApiResult};
-use crate::auth::models::Claims;
 use super::models::*;
+use crate::auth::models::Claims;
+use crate::errors::{ApiResult, AppError};
+use crate::AppState;
 
 /// Helper to enforce agency_admin role.
 fn require_admin(claims: &Claims) -> Result<(), AppError> {
@@ -30,7 +30,10 @@ async fn sync_plan_to_affiliate(
     plan_price: f64,
     is_active: bool,
 ) {
-    let url = format!("{}/api/v1/internal/sync-affiliate-plan", config.funnelswift_url.trim_end_matches('/'));
+    let url = format!(
+        "{}/api/v1/internal/sync-affiliate-plan",
+        config.funnelswift_url.trim_end_matches('/')
+    );
     let api_key = config.internal_sync_key.clone();
 
     let action_owned = action.to_string();
@@ -57,13 +60,29 @@ async fn sync_plan_to_affiliate(
             Ok(resp) => {
                 let status = resp.status();
                 if status.is_success() {
-                    tracing::info!("sync-affiliate-plan {} {}: {}", action_owned, plan_name_owned, status);
+                    tracing::info!(
+                        "sync-affiliate-plan {} {}: {}",
+                        action_owned,
+                        plan_name_owned,
+                        status
+                    );
                 } else {
                     let body = resp.text().await.unwrap_or_default();
-                    tracing::warn!("sync-affiliate-plan {} {} failed: {} - {}", action_owned, plan_name_owned, status, body);
+                    tracing::warn!(
+                        "sync-affiliate-plan {} {} failed: {} - {}",
+                        action_owned,
+                        plan_name_owned,
+                        status,
+                        body
+                    );
                 }
             }
-            Err(e) => tracing::warn!("sync-affiliate-plan {} {} error: {}", action_owned, plan_name_owned, e),
+            Err(e) => tracing::warn!(
+                "sync-affiliate-plan {} {} error: {}",
+                action_owned,
+                plan_name_owned,
+                e
+            ),
         }
     });
 }
@@ -75,11 +94,9 @@ pub async fn list(
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&c)?;
 
-    let plans = sqlx::query_as::<_, Plan>(
-        "SELECT * FROM plans ORDER BY sort_order ASC, name ASC",
-    )
-    .fetch_all(&s.db)
-    .await?;
+    let plans = sqlx::query_as::<_, Plan>("SELECT * FROM plans ORDER BY sort_order ASC, name ASC")
+        .fetch_all(&s.db)
+        .await?;
 
     Ok(Json(json!({"plans": plans})))
 }
@@ -127,7 +144,14 @@ pub async fn create(
     let plan_price_f64 = r.price_monthly.unwrap_or(0.0);
     let config_clone = s.config.clone();
     tokio::spawn(async move {
-        sync_plan_to_affiliate(&config_clone, "create", &plan_name_str, plan_price_f64, true).await;
+        sync_plan_to_affiliate(
+            &config_clone,
+            "create",
+            &plan_name_str,
+            plan_price_f64,
+            true,
+        )
+        .await;
     });
 
     Ok((StatusCode::CREATED, Json(json!(plan))))
@@ -180,8 +204,14 @@ pub async fn update(
     )
     .bind(&r.name)
     .bind(&r.description)
-    .bind(r.price_monthly.map(|v| Decimal::from_f64_retain(v).unwrap_or(Decimal::ZERO)))
-    .bind(r.price_yearly.map(|v| Decimal::from_f64_retain(v).unwrap_or(Decimal::ZERO)))
+    .bind(
+        r.price_monthly
+            .map(|v| Decimal::from_f64_retain(v).unwrap_or(Decimal::ZERO)),
+    )
+    .bind(
+        r.price_yearly
+            .map(|v| Decimal::from_f64_retain(v).unwrap_or(Decimal::ZERO)),
+    )
     .bind(r.max_contacts)
     .bind(r.max_deals)
     .bind(r.max_users)
@@ -203,7 +233,14 @@ pub async fn update(
     let is_active_val = r.is_active.unwrap_or(true);
     let config_clone = s.config.clone();
     tokio::spawn(async move {
-        sync_plan_to_affiliate(&config_clone, "update", &plan_name_str, plan_price_f64, is_active_val).await;
+        sync_plan_to_affiliate(
+            &config_clone,
+            "update",
+            &plan_name_str,
+            plan_price_f64,
+            is_active_val,
+        )
+        .await;
     });
 
     Ok(Json(json!(plan)))

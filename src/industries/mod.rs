@@ -11,24 +11,26 @@
 //! DELETE /api/industries/:slug    — deactivate an industry dashboard
 //! GET    /api/industries/limit    — get plan industry limit & usage
 
-pub mod models;
 pub mod handlers;
+pub mod models;
 
-use axum::{Router, middleware};
 use crate::AppState;
+use axum::{middleware, Router};
 
 /// Build the industries router with auth middleware where needed.
 pub fn router(state: AppState) -> Router<AppState> {
     // Public route — no auth needed for available list
-    let public = Router::new()
-        .route("/available", axum::routing::get(handlers::list_available));
+    let public = Router::new().route("/available", axum::routing::get(handlers::list_available));
 
     // Protected routes — require auth
     let protected = Router::new()
         .route("/", axum::routing::get(handlers::list_user_industries))
         .route("/", axum::routing::post(handlers::set_user_industry))
         .route("/limit", axum::routing::get(handlers::get_industry_limit))
-        .route("/:slug", axum::routing::delete(handlers::remove_user_industry))
+        .route(
+            "/:slug",
+            axum::routing::delete(handlers::remove_user_industry),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,

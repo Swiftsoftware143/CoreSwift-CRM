@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, Query, State, Extension},
+    extract::{Extension, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
@@ -8,10 +8,10 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::AppState;
 use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
 use crate::scoring::engine;
+use crate::AppState;
 
 use super::models::*;
 
@@ -23,7 +23,7 @@ pub async fn list_calendars(
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let calendars = sqlx::query_as::<_, BookingCalendar>(
-        "SELECT * FROM booking_calendars WHERE tenant_id = $1 ORDER BY name"
+        "SELECT * FROM booking_calendars WHERE tenant_id = $1 ORDER BY name",
     )
     .bind(tid)
     .fetch_all(&s.db)
@@ -60,17 +60,25 @@ pub async fn internal_create_calendar(
     Json(body): Json<CreateCalendarRequest>,
 ) -> ApiResult<impl IntoResponse> {
     // Validate internal key
-    let key = headers.get("x-internal-key").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let key = headers
+        .get("x-internal-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     if key != s.config.internal_sync_key {
         return Err(AppError::Unauthorized);
     }
 
     // tenant_id is extracted from the request body for internal endpoints
-    let _tenant_id = Uuid::parse_str(body.metadata.as_ref()
-        .and_then(|m| m.get("tenant_id"))
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::BadRequest("metadata.tenant_id required for internal creation".into()))?)
-        .map_err(|_| AppError::BadRequest("Invalid tenant_id in metadata".into()))?;
+    let _tenant_id = Uuid::parse_str(
+        body.metadata
+            .as_ref()
+            .and_then(|m| m.get("tenant_id"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                AppError::BadRequest("metadata.tenant_id required for internal creation".into())
+            })?,
+    )
+    .map_err(|_| AppError::BadRequest("Invalid tenant_id in metadata".into()))?;
 
     let insert_result = sqlx::query_as::<_, BookingCalendar>(
         r#"INSERT INTO booking_calendars (tenant_id, name, slug, description, calendar_type, metadata)
@@ -88,17 +96,19 @@ pub async fn internal_create_calendar(
 
     match insert_result {
         Ok(cal) => Ok((StatusCode::CREATED, Json(json!(cal)))),
-        Err(sqlx::Error::Database(ref db_err)) if db_err.constraint() == Some("booking_calendars_tenant_id_slug_key") => {
+        Err(sqlx::Error::Database(ref db_err))
+            if db_err.constraint() == Some("booking_calendars_tenant_id_slug_key") =>
+        {
             // Calendar already exists — return success with existing calendar
             let existing = sqlx::query_as::<_, BookingCalendar>(
-                "SELECT * FROM booking_calendars WHERE tenant_id = $1 AND slug = $2"
+                "SELECT * FROM booking_calendars WHERE tenant_id = $1 AND slug = $2",
             )
             .bind(_tenant_id)
             .bind(&body.slug)
             .fetch_one(&s.db)
             .await?;
             Ok((StatusCode::OK, Json(json!(existing))))
-        },
+        }
         Err(e) => Err(e.into()),
     }
 }
@@ -112,35 +122,43 @@ pub async fn internal_create_default_slot(
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     // Validate internal key
-    let key = headers.get("x-internal-key").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let key = headers
+        .get("x-internal-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     if key != s.config.internal_sync_key {
         return Err(AppError::Unauthorized);
     }
 
-    let tenant_id = body.get("tenant_id")
+    let tenant_id = body
+        .get("tenant_id")
         .and_then(|v| v.as_str())
         .and_then(|s| Uuid::parse_str(s).ok())
         .ok_or_else(|| AppError::BadRequest("tenant_id required as UUID string".into()))?;
 
-    let calendar_slug = body.get("calendar_slug")
+    let calendar_slug = body
+        .get("calendar_slug")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("calendar_slug required".into()))?;
 
-    let slot_name = body.get("slot_name")
+    let slot_name = body
+        .get("slot_name")
         .and_then(|v| v.as_str())
         .unwrap_or("Appointment Booking");
 
-    let total_slots = body.get("total_slots")
+    let total_slots = body
+        .get("total_slots")
         .and_then(|v| v.as_i64())
         .unwrap_or(-1) as i32;
 
-    let default_duration_days = body.get("default_duration_days")
+    let default_duration_days = body
+        .get("default_duration_days")
         .and_then(|v| v.as_i64())
         .unwrap_or(1) as i32;
 
     // Find calendar by slug and tenant_id
     let cal = sqlx::query_as::<_, BookingCalendar>(
-        "SELECT * FROM booking_calendars WHERE tenant_id = $1 AND slug = $2"
+        "SELECT * FROM booking_calendars WHERE tenant_id = $1 AND slug = $2",
     )
     .bind(tenant_id)
     .bind(calendar_slug)
@@ -150,7 +168,7 @@ pub async fn internal_create_default_slot(
 
     // Check if slot already exists with this name for this calendar
     let existing = sqlx::query_scalar::<_, i32>(
-        "SELECT COUNT(*) FROM calendar_slots WHERE calendar_id = $1 AND slot_name = $2"
+        "SELECT COUNT(*) FROM calendar_slots WHERE calendar_id = $1 AND slot_name = $2",
     )
     .bind(cal.id)
     .bind(slot_name)
@@ -159,19 +177,21 @@ pub async fn internal_create_default_slot(
     .unwrap_or(0);
 
     if existing > 0 {
-        return Ok((StatusCode::CONFLICT, Json(json!({
-            "message": "Slot already exists",
-            "slot_name": slot_name,
-        }))));
+        return Ok((
+            StatusCode::CONFLICT,
+            Json(json!({
+                "message": "Slot already exists",
+                "slot_name": slot_name,
+            })),
+        ));
     }
 
     // Get max sort_order
-    let max_order: (Option<i32>,) = sqlx::query_as(
-        "SELECT MAX(sort_order) FROM calendar_slots WHERE calendar_id = $1"
-    )
-    .bind(cal.id)
-    .fetch_one(&s.db)
-    .await?;
+    let max_order: (Option<i32>,) =
+        sqlx::query_as("SELECT MAX(sort_order) FROM calendar_slots WHERE calendar_id = $1")
+            .bind(cal.id)
+            .fetch_one(&s.db)
+            .await?;
 
     let slot = sqlx::query_as::<_, CalendarSlot>(
         r#"INSERT INTO calendar_slots (calendar_id, slot_name, total_slots, filled_slots, default_duration_days, sort_order)
@@ -196,7 +216,7 @@ pub async fn get_calendar(
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let cal = sqlx::query_as::<_, BookingCalendar>(
-        "SELECT * FROM booking_calendars WHERE tenant_id = $1 AND slug = $2"
+        "SELECT * FROM booking_calendars WHERE tenant_id = $1 AND slug = $2",
     )
     .bind(tid)
     .bind(&slug)
@@ -214,7 +234,7 @@ pub async fn update_calendar(
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let existing = sqlx::query_as::<_, BookingCalendar>(
-        "SELECT * FROM booking_calendars WHERE tenant_id = $1 AND slug = $2"
+        "SELECT * FROM booking_calendars WHERE tenant_id = $1 AND slug = $2",
     )
     .bind(tid)
     .bind(&slug)
@@ -222,8 +242,14 @@ pub async fn update_calendar(
     .await?
     .ok_or_else(|| AppError::NotFound("Calendar not found".into()))?;
 
-    let name = body.get("name").and_then(|v| v.as_str()).unwrap_or(&existing.name);
-    let desc = body.get("description").and_then(|v| v.as_str()).or(existing.description.as_deref());
+    let name = body
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&existing.name);
+    let desc = body
+        .get("description")
+        .and_then(|v| v.as_str())
+        .or(existing.description.as_deref());
     let meta = body.get("metadata").cloned().or(existing.metadata);
 
     let cal = sqlx::query_as::<_, BookingCalendar>(
@@ -251,7 +277,7 @@ pub async fn list_slots(
         r#"SELECT cs.* FROM calendar_slots cs
            JOIN booking_calendars bc ON cs.calendar_id = bc.id
            WHERE bc.tenant_id = $1 AND bc.slug = $2
-           ORDER BY cs.sort_order"#
+           ORDER BY cs.sort_order"#,
     )
     .bind(tid)
     .bind(&slug)
@@ -268,7 +294,7 @@ pub async fn create_slot(
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let cal = sqlx::query_as::<_, BookingCalendar>(
-        "SELECT * FROM booking_calendars WHERE tenant_id = $1 AND slug = $2"
+        "SELECT * FROM booking_calendars WHERE tenant_id = $1 AND slug = $2",
     )
     .bind(tid)
     .bind(&slug)
@@ -276,12 +302,11 @@ pub async fn create_slot(
     .await?
     .ok_or_else(|| AppError::NotFound("Calendar not found".into()))?;
 
-    let max_order: (Option<i32>,) = sqlx::query_as(
-        "SELECT MAX(sort_order) FROM calendar_slots WHERE calendar_id = $1"
-    )
-    .bind(cal.id)
-    .fetch_one(&s.db)
-    .await?;
+    let max_order: (Option<i32>,) =
+        sqlx::query_as("SELECT MAX(sort_order) FROM calendar_slots WHERE calendar_id = $1")
+            .bind(cal.id)
+            .fetch_one(&s.db)
+            .await?;
 
     let slot = sqlx::query_as::<_, CalendarSlot>(
         r#"INSERT INTO calendar_slots (calendar_id, slot_name, total_slots, filled_slots, default_duration_days, price_override, coreswift_tag_template, coreswift_list_id, sort_order)
@@ -312,7 +337,7 @@ pub async fn update_slot(
     let _existing = sqlx::query_as::<_, CalendarSlot>(
         r#"SELECT cs.* FROM calendar_slots cs
            JOIN booking_calendars bc ON cs.calendar_id = bc.id
-           WHERE bc.tenant_id = $1 AND bc.slug = $2 AND cs.id = $3"#
+           WHERE bc.tenant_id = $1 AND bc.slug = $2 AND cs.id = $3"#,
     )
     .bind(tid)
     .bind(&slug)
@@ -329,12 +354,24 @@ pub async fn update_slot(
             price_override = COALESCE($4, price_override),
             coreswift_tag_template = COALESCE($5, coreswift_tag_template),
             updated_at = NOW()
-           WHERE id = $6 RETURNING *"#
+           WHERE id = $6 RETURNING *"#,
     )
     .bind(body.get("slot_name").and_then(|v| v.as_str()))
-    .bind(body.get("total_slots").and_then(|v| v.as_i64()).map(|v| v as i32))
-    .bind(body.get("default_duration_days").and_then(|v| v.as_i64()).map(|v| v as i32))
-    .bind(body.get("price_override").and_then(|v| v.as_f64()).map(|v| rust_decimal::Decimal::try_from(v).unwrap_or_default()))
+    .bind(
+        body.get("total_slots")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32),
+    )
+    .bind(
+        body.get("default_duration_days")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32),
+    )
+    .bind(
+        body.get("price_override")
+            .and_then(|v| v.as_f64())
+            .map(|v| rust_decimal::Decimal::try_from(v).unwrap_or_default()),
+    )
     .bind(body.get("coreswift_tag_template").and_then(|v| v.as_str()))
     .bind(slot_id)
     .fetch_one(&s.db)
@@ -351,7 +388,7 @@ pub async fn delete_slot(
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let result = sqlx::query(
         r#"DELETE FROM calendar_slots cs USING booking_calendars bc
-           WHERE cs.calendar_id = bc.id AND bc.tenant_id = $1 AND bc.slug = $2 AND cs.id = $3"#
+           WHERE cs.calendar_id = bc.id AND bc.tenant_id = $1 AND bc.slug = $2 AND cs.id = $3"#,
     )
     .bind(tid)
     .bind(&slug)
@@ -374,14 +411,66 @@ pub async fn get_questions(
 ) -> ApiResult<impl IntoResponse> {
     let questions = BookingQuestionsResponse {
         questions: vec![
-            BookingQuestion { key: "business_name".into(), label: "Business Name".into(), r#type: "text".into(), required: true, options: None },
-            BookingQuestion { key: "contact_name".into(), label: "Your Name".into(), r#type: "text".into(), required: true, options: None },
-            BookingQuestion { key: "contact_email".into(), label: "Email Address".into(), r#type: "email".into(), required: true, options: None },
-            BookingQuestion { key: "contact_phone".into(), label: "Phone Number".into(), r#type: "tel".into(), required: false, options: None },
-            BookingQuestion { key: "website".into(), label: "Business Website".into(), r#type: "url".into(), required: false, options: None },
-            BookingQuestion { key: "description".into(), label: "Tell us about your business / ad copy".into(), r#type: "textarea".into(), required: true, options: None },
-            BookingQuestion { key: "target_audience".into(), label: "Target Audience".into(), r#type: "text".into(), required: false, options: None },
-            BookingQuestion { key: "call_booking".into(), label: "Would you like a sales call to discuss details?".into(), r#type: "select".into(), required: false, options: Some(vec!["No, proceed with booking".into(), "Yes, call me back".into(), "Email me instead".into()]) },
+            BookingQuestion {
+                key: "business_name".into(),
+                label: "Business Name".into(),
+                r#type: "text".into(),
+                required: true,
+                options: None,
+            },
+            BookingQuestion {
+                key: "contact_name".into(),
+                label: "Your Name".into(),
+                r#type: "text".into(),
+                required: true,
+                options: None,
+            },
+            BookingQuestion {
+                key: "contact_email".into(),
+                label: "Email Address".into(),
+                r#type: "email".into(),
+                required: true,
+                options: None,
+            },
+            BookingQuestion {
+                key: "contact_phone".into(),
+                label: "Phone Number".into(),
+                r#type: "tel".into(),
+                required: false,
+                options: None,
+            },
+            BookingQuestion {
+                key: "website".into(),
+                label: "Business Website".into(),
+                r#type: "url".into(),
+                required: false,
+                options: None,
+            },
+            BookingQuestion {
+                key: "description".into(),
+                label: "Tell us about your business / ad copy".into(),
+                r#type: "textarea".into(),
+                required: true,
+                options: None,
+            },
+            BookingQuestion {
+                key: "target_audience".into(),
+                label: "Target Audience".into(),
+                r#type: "text".into(),
+                required: false,
+                options: None,
+            },
+            BookingQuestion {
+                key: "call_booking".into(),
+                label: "Would you like a sales call to discuss details?".into(),
+                r#type: "select".into(),
+                required: false,
+                options: Some(vec![
+                    "No, proceed with booking".into(),
+                    "Yes, call me back".into(),
+                    "Email me instead".into(),
+                ]),
+            },
         ],
     };
     Ok(Json(json!(questions)))
@@ -404,7 +493,7 @@ pub async fn get_available(
         r#"SELECT cs.* FROM calendar_slots cs
            JOIN booking_calendars bc ON cs.calendar_id = bc.id
            WHERE bc.tenant_id = $1 AND bc.slug = $2 AND cs.is_active = true
-           ORDER BY cs.sort_order"#
+           ORDER BY cs.sort_order"#,
     )
     .bind(tid)
     .bind(&slug)
@@ -421,19 +510,69 @@ pub struct PublicTenantQuery {
     pub tenant: Option<String>,
 }
 
-pub async fn public_questions(
-    Query(_q): Query<PublicTenantQuery>,
-) -> ApiResult<impl IntoResponse> {
+pub async fn public_questions(Query(_q): Query<PublicTenantQuery>) -> ApiResult<impl IntoResponse> {
     let questions = BookingQuestionsResponse {
         questions: vec![
-            BookingQuestion { key: "business_name".into(), label: "Business Name".into(), r#type: "text".into(), required: true, options: None },
-            BookingQuestion { key: "contact_name".into(), label: "Your Name".into(), r#type: "text".into(), required: true, options: None },
-            BookingQuestion { key: "contact_email".into(), label: "Email Address".into(), r#type: "email".into(), required: true, options: None },
-            BookingQuestion { key: "contact_phone".into(), label: "Phone Number".into(), r#type: "tel".into(), required: false, options: None },
-            BookingQuestion { key: "website".into(), label: "Business Website".into(), r#type: "url".into(), required: false, options: None },
-            BookingQuestion { key: "description".into(), label: "Tell us about your business / ad copy".into(), r#type: "textarea".into(), required: true, options: None },
-            BookingQuestion { key: "target_audience".into(), label: "Target Audience".into(), r#type: "text".into(), required: false, options: None },
-            BookingQuestion { key: "call_booking".into(), label: "Would you like a sales call to discuss details?".into(), r#type: "select".into(), required: false, options: Some(vec!["No, proceed with booking".into(), "Yes, call me back".into(), "Email me instead".into()]) },
+            BookingQuestion {
+                key: "business_name".into(),
+                label: "Business Name".into(),
+                r#type: "text".into(),
+                required: true,
+                options: None,
+            },
+            BookingQuestion {
+                key: "contact_name".into(),
+                label: "Your Name".into(),
+                r#type: "text".into(),
+                required: true,
+                options: None,
+            },
+            BookingQuestion {
+                key: "contact_email".into(),
+                label: "Email Address".into(),
+                r#type: "email".into(),
+                required: true,
+                options: None,
+            },
+            BookingQuestion {
+                key: "contact_phone".into(),
+                label: "Phone Number".into(),
+                r#type: "tel".into(),
+                required: false,
+                options: None,
+            },
+            BookingQuestion {
+                key: "website".into(),
+                label: "Business Website".into(),
+                r#type: "url".into(),
+                required: false,
+                options: None,
+            },
+            BookingQuestion {
+                key: "description".into(),
+                label: "Tell us about your business / ad copy".into(),
+                r#type: "textarea".into(),
+                required: true,
+                options: None,
+            },
+            BookingQuestion {
+                key: "target_audience".into(),
+                label: "Target Audience".into(),
+                r#type: "text".into(),
+                required: false,
+                options: None,
+            },
+            BookingQuestion {
+                key: "call_booking".into(),
+                label: "Would you like a sales call to discuss details?".into(),
+                r#type: "select".into(),
+                required: false,
+                options: Some(vec![
+                    "No, proceed with booking".into(),
+                    "Yes, call me back".into(),
+                    "Email me instead".into(),
+                ]),
+            },
         ],
     };
     Ok(Json(json!(questions)))
@@ -447,7 +586,7 @@ pub async fn public_available(
         r#"SELECT cs.* FROM calendar_slots cs
            JOIN booking_calendars bc ON cs.calendar_id = bc.id
            WHERE bc.tenant_id = $1 AND bc.is_active = true AND cs.is_active = true
-           ORDER BY bc.name, cs.sort_order"#
+           ORDER BY bc.name, cs.sort_order"#,
     )
     .bind(tenant_id)
     .fetch_all(&s.db)
@@ -461,7 +600,7 @@ pub async fn public_create_booking(
     Json(body): Json<CreateBookingRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let cal = sqlx::query_as::<_, BookingCalendar>(
-        "SELECT * FROM booking_calendars WHERE slug = $1 AND is_active = true"
+        "SELECT * FROM booking_calendars WHERE slug = $1 AND is_active = true",
     )
     .bind(&body.calendar_slug)
     .fetch_optional(&s.db)
@@ -471,7 +610,7 @@ pub async fn public_create_booking(
     // Look up slot — by ID if provided, otherwise use slot_name or default to listed
     let slot = if let Some(slot_id) = body.slot_id {
         sqlx::query_as::<_, CalendarSlot>(
-            "SELECT * FROM calendar_slots WHERE id = $1 AND calendar_id = $2 AND is_active = true"
+            "SELECT * FROM calendar_slots WHERE id = $1 AND calendar_id = $2 AND is_active = true",
         )
         .bind(slot_id)
         .bind(cal.id)
@@ -553,10 +692,19 @@ pub async fn public_create_booking(
     }
 
     // Round-robin assignment: fire-and-forget so booking response is not delayed
-    if let Some(team_id) = crate::round_robin::engine::find_team_for_calendar(&s.db, booking.calendar_id).await {
+    if let Some(team_id) =
+        crate::round_robin::engine::find_team_for_calendar(&s.db, booking.calendar_id).await
+    {
         let db = s.db.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::round_robin::engine::assign_lead(&db, team_id, Some(booking.id), booking.contact_id).await {
+            if let Err(e) = crate::round_robin::engine::assign_lead(
+                &db,
+                team_id,
+                Some(booking.id),
+                booking.contact_id,
+            )
+            .await
+            {
                 tracing::error!("round-robin assignment failed: {}", e);
             }
         });
@@ -581,12 +729,14 @@ pub async fn create_checkout(
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    let booking_id = body.get("booking_id").and_then(|v| v.as_str())
+    let booking_id = body
+        .get("booking_id")
+        .and_then(|v| v.as_str())
         .and_then(|v| Uuid::parse_str(v).ok())
         .ok_or_else(|| AppError::Validation("booking_id required".into()))?;
 
     let booking = sqlx::query_as::<_, SlotBooking>(
-        "UPDATE slot_bookings SET status = 'active' WHERE id = $1 AND tenant_id = $2 RETURNING *"
+        "UPDATE slot_bookings SET status = 'active' WHERE id = $1 AND tenant_id = $2 RETURNING *",
     )
     .bind(booking_id)
     .bind(tid)
@@ -605,10 +755,19 @@ pub async fn create_checkout(
     }
 
     // Round-robin assignment: fire-and-forget so booking response is not delayed
-    if let Some(team_id) = crate::round_robin::engine::find_team_for_calendar(&s.db, booking.calendar_id).await {
+    if let Some(team_id) =
+        crate::round_robin::engine::find_team_for_calendar(&s.db, booking.calendar_id).await
+    {
         let db = s.db.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::round_robin::engine::assign_lead(&db, team_id, Some(booking.id), booking.contact_id).await {
+            if let Err(e) = crate::round_robin::engine::assign_lead(
+                &db,
+                team_id,
+                Some(booking.id),
+                booking.contact_id,
+            )
+            .await
+            {
                 tracing::error!("round-robin assignment failed: {}", e);
             }
         });
@@ -625,7 +784,7 @@ pub async fn list_bookings(
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let bookings = sqlx::query_as::<_, SlotBooking>(
-        "SELECT * FROM slot_bookings WHERE tenant_id = $1 ORDER BY created_at DESC"
+        "SELECT * FROM slot_bookings WHERE tenant_id = $1 ORDER BY created_at DESC",
     )
     .bind(tid)
     .fetch_all(&s.db)
@@ -641,7 +800,7 @@ pub async fn get_booking(
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let booking = sqlx::query_as::<_, SlotBooking>(
-        "SELECT * FROM slot_bookings WHERE id = $1 AND tenant_id = $2"
+        "SELECT * FROM slot_bookings WHERE id = $1 AND tenant_id = $2",
     )
     .bind(id)
     .bind(tid)
@@ -667,10 +826,12 @@ pub async fn cancel_booking(
     .await?
     .ok_or_else(|| AppError::NotFound("Booking not found".into()))?;
 
-    sqlx::query("UPDATE calendar_slots SET filled_slots = GREATEST(filled_slots - 1, 0) WHERE id = $1")
-        .bind(booking.slot_id)
-        .execute(&s.db)
-        .await?;
+    sqlx::query(
+        "UPDATE calendar_slots SET filled_slots = GREATEST(filled_slots - 1, 0) WHERE id = $1",
+    )
+    .bind(booking.slot_id)
+    .execute(&s.db)
+    .await?;
 
     Ok(Json(json!({"success": true, "status": "cancelled"})))
 }
@@ -688,9 +849,13 @@ pub async fn adjust_slot_config(
             updated_at = NOW()
            FROM booking_calendars bc
            WHERE cs.calendar_id = bc.id AND bc.tenant_id = $2 AND cs.id = $3
-           RETURNING cs.*"#
+           RETURNING cs.*"#,
     )
-    .bind(body.get("total_slots").and_then(|v| v.as_i64()).map(|v| v as i32))
+    .bind(
+        body.get("total_slots")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32),
+    )
     .bind(tid)
     .bind(id)
     .fetch_optional(&s.db)

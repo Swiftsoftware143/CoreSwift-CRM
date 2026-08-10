@@ -4,10 +4,10 @@
 //! This is the glue that lets OpenClaw, n8n, and CheatLayer call any
 //! endpoint through a single webhook.
 
+use rand::Rng;
+use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
-use serde_json::json;
-use rand::Rng;
 
 /// Route a webhook action to the correct handler.
 /// Returns (status_code, response_body_json).
@@ -23,8 +23,12 @@ pub async fn route_action(
     let result = match action {
         // ── Contacts ──
         "contacts.list" => {
-            let limit = params.and_then(|p| p.get("limit").and_then(|v| v.as_i64())).unwrap_or(50);
-            let offset = params.and_then(|p| p.get("offset").and_then(|v| v.as_i64())).unwrap_or(0);
+            let limit = params
+                .and_then(|p| p.get("limit").and_then(|v| v.as_i64()))
+                .unwrap_or(50);
+            let offset = params
+                .and_then(|p| p.get("offset").and_then(|v| v.as_i64()))
+                .unwrap_or(0);
             let contacts = sqlx::query_as::<_, (serde_json::Value,)>(
                 "SELECT id, first_name, last_name, email, phone, company_id, score, created_at FROM contacts WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
             )
@@ -36,7 +40,10 @@ pub async fn route_action(
         "contacts.create" => {
             let body = data.ok_or("data required")?;
             let id = Uuid::new_v4();
-            let first = body.get("first_name").and_then(|v| v.as_str()).unwrap_or("");
+            let first = body
+                .get("first_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let last = body.get("last_name").and_then(|v| v.as_str()).unwrap_or("");
             let email = body.get("email").and_then(|v| v.as_str()).unwrap_or("");
             let phone = body.get("phone").and_then(|v| v.as_str());
@@ -49,14 +56,17 @@ pub async fn route_action(
             Ok((201, json!({"id": id, "created": true})))
         }
         "contacts.get" => {
-            let id = params.and_then(|p| p.get("id").and_then(|v| v.as_str()))
+            let id = params
+                .and_then(|p| p.get("id").and_then(|v| v.as_str()))
                 .ok_or("contact id required")?;
             let uid = Uuid::parse_str(id).map_err(|_| "invalid uuid".to_string())?;
             let contact = sqlx::query_as::<_, (serde_json::Value,)>(
-                "SELECT * FROM contacts WHERE id = $1 AND tenant_id = $2"
+                "SELECT * FROM contacts WHERE id = $1 AND tenant_id = $2",
             )
-            .bind(uid).bind(tenant_id)
-            .fetch_optional(db).await
+            .bind(uid)
+            .bind(tenant_id)
+            .fetch_optional(db)
+            .await
             .map_err(|e| format!("DB error: {}", e))?
             .ok_or("contact not found".to_string())?;
             Ok((200, contact.0))
@@ -65,18 +75,23 @@ pub async fn route_action(
         // ── Tags ──
         "tags.list" => {
             let tags = sqlx::query_as::<_, (serde_json::Value,)>(
-                "SELECT id, name, color, category_id FROM tags WHERE tenant_id = $1 ORDER BY name"
+                "SELECT id, name, color, category_id FROM tags WHERE tenant_id = $1 ORDER BY name",
             )
             .bind(tenant_id)
-            .fetch_all(db).await
+            .fetch_all(db)
+            .await
             .map_err(|e| format!("DB error: {}", e))?;
             Ok((200, json!({"tags": tags})))
         }
         "tags.assign" => {
             let body = data.ok_or("data required")?;
-            let contact_id = body.get("contact_id").and_then(|v| v.as_str())
+            let contact_id = body
+                .get("contact_id")
+                .and_then(|v| v.as_str())
                 .ok_or("contact_id required")?;
-            let tag_id = body.get("tag_id").and_then(|v| v.as_str())
+            let tag_id = body
+                .get("tag_id")
+                .and_then(|v| v.as_str())
                 .ok_or("tag_id required")?;
             let cid = Uuid::parse_str(contact_id).map_err(|_| "invalid contact_id".to_string())?;
             let tid = Uuid::parse_str(tag_id).map_err(|_| "invalid tag_id".to_string())?;
@@ -100,7 +115,8 @@ pub async fn route_action(
             Ok((200, json!({"lists": lists})))
         }
         "lists.members" => {
-            let list_id = params.and_then(|p| p.get("id").and_then(|v| v.as_str()))
+            let list_id = params
+                .and_then(|p| p.get("id").and_then(|v| v.as_str()))
                 .ok_or("list id required")?;
             let lid = Uuid::parse_str(list_id).map_err(|_| "invalid uuid".to_string())?;
             let members = sqlx::query_as::<_, (serde_json::Value,)>(
@@ -123,7 +139,8 @@ pub async fn route_action(
             Ok((200, json!({"pipelines": pipelines})))
         }
         "pipelines.opportunities" => {
-            let pipeline_id = params.and_then(|p| p.get("pipeline_id").and_then(|v| v.as_str()))
+            let pipeline_id = params
+                .and_then(|p| p.get("pipeline_id").and_then(|v| v.as_str()))
                 .ok_or("pipeline_id required")?;
             let pid = Uuid::parse_str(pipeline_id).map_err(|_| "invalid uuid".to_string())?;
             let opportunities = sqlx::query_as::<_, (serde_json::Value,)>(
@@ -175,26 +192,34 @@ pub async fn route_action(
             Ok((200, json!({"products": products})))
         }
         "affiliate_products.my" => {
-            let affiliate_id = params.and_then(|p| p.get("affiliate_id").and_then(|v| v.as_str()))
+            let affiliate_id = params
+                .and_then(|p| p.get("affiliate_id").and_then(|v| v.as_str()))
                 .and_then(|s| Uuid::parse_str(s).ok())
                 .ok_or("affiliate_id required")?;
             let products = sqlx::query_as::<_, (serde_json::Value,)>(
                 "SELECT ap.*, aps.is_active as promoting, aps.promo_link
                  FROM affiliate_product_selections aps
                  JOIN affiliate_products ap ON ap.id = aps.product_id
-                 WHERE aps.affiliate_id = $1 AND ap.is_active = true"
+                 WHERE aps.affiliate_id = $1 AND ap.is_active = true",
             )
             .bind(affiliate_id)
-            .fetch_all(db).await
+            .fetch_all(db)
+            .await
             .map_err(|e| format!("DB error: {}", e))?;
             Ok((200, json!({"products": products})))
         }
         "affiliate_products.select" => {
             let body = data.ok_or("data required")?;
-            let aff_id = body.get("affiliate_id").and_then(|v| v.as_str())
-                .and_then(|s| Uuid::parse_str(s).ok()).ok_or("affiliate_id required")?;
-            let prod_id = body.get("product_id").and_then(|v| v.as_str())
-                .and_then(|s| Uuid::parse_str(s).ok()).ok_or("product_id required")?;
+            let aff_id = body
+                .get("affiliate_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .ok_or("affiliate_id required")?;
+            let prod_id = body
+                .get("product_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .ok_or("product_id required")?;
             sqlx::query(
                 "INSERT INTO affiliate_product_selections (id, affiliate_id, product_id, is_active) VALUES ($1, $2, $3, true) ON CONFLICT (affiliate_id, product_id) DO UPDATE SET is_active = true, updated_at = NOW()"
             )
@@ -205,10 +230,16 @@ pub async fn route_action(
         }
         "affiliate_products.unselect" => {
             let body = data.ok_or("data required")?;
-            let aff_id = body.get("affiliate_id").and_then(|v| v.as_str())
-                .and_then(|s| Uuid::parse_str(s).ok()).ok_or("affiliate_id required")?;
-            let prod_id = body.get("product_id").and_then(|v| v.as_str())
-                .and_then(|s| Uuid::parse_str(s).ok()).ok_or("product_id required")?;
+            let aff_id = body
+                .get("affiliate_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .ok_or("affiliate_id required")?;
+            let prod_id = body
+                .get("product_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .ok_or("product_id required")?;
             sqlx::query(
                 "UPDATE affiliate_product_selections SET is_active = false WHERE affiliate_id = $1 AND product_id = $2"
             )
@@ -221,10 +252,19 @@ pub async fn route_action(
         // ── Communications ──
         "comms.send" => {
             let body = data.ok_or("data required")?;
-            let channel = body.get("channel").and_then(|v| v.as_str()).unwrap_or("email");
-            let to = body.get("to").and_then(|v| v.as_str()).ok_or("to required")?;
+            let channel = body
+                .get("channel")
+                .and_then(|v| v.as_str())
+                .unwrap_or("email");
+            let to = body
+                .get("to")
+                .and_then(|v| v.as_str())
+                .ok_or("to required")?;
             let subject = body.get("subject").and_then(|v| v.as_str());
-            let body_text = body.get("body").and_then(|v| v.as_str()).ok_or("body required")?;
+            let body_text = body
+                .get("body")
+                .and_then(|v| v.as_str())
+                .ok_or("body required")?;
             let msg_id = Uuid::new_v4();
             sqlx::query(
                 "INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body) VALUES ($1, $2, $3, $4, $5, $6)"
@@ -238,8 +278,14 @@ pub async fn route_action(
         // ── Events ──
         "events.ingest" => {
             let body = data.ok_or("data required")?;
-            let source = body.get("source").and_then(|v| v.as_str()).unwrap_or("webhook");
-            let event_type = body.get("event_type").and_then(|v| v.as_str()).ok_or("event_type required")?;
+            let source = body
+                .get("source")
+                .and_then(|v| v.as_str())
+                .unwrap_or("webhook");
+            let event_type = body
+                .get("event_type")
+                .and_then(|v| v.as_str())
+                .ok_or("event_type required")?;
             let payload = body.get("payload").cloned().unwrap_or(json!({}));
             sqlx::query(
                 "INSERT INTO events (id, tenant_id, source, event_type, payload) VALUES ($1, $2, $3, $4, $5)"
@@ -252,15 +298,18 @@ pub async fn route_action(
 
         // ── AI ──
         "ai.assess" => {
-            let contact_id = params.and_then(|p| p.get("contact_id").and_then(|v| v.as_str()))
+            let contact_id = params
+                .and_then(|p| p.get("contact_id").and_then(|v| v.as_str()))
                 .ok_or("contact_id required")?;
             let cid = Uuid::parse_str(contact_id).map_err(|_| "invalid uuid".to_string())?;
             // Return basic score info from DB (full AI assessment requires LLM call)
             let score = sqlx::query_as::<_, (serde_json::Value,)>(
-                "SELECT * FROM scores WHERE contact_id = $1 AND tenant_id = $2"
+                "SELECT * FROM scores WHERE contact_id = $1 AND tenant_id = $2",
             )
-            .bind(cid).bind(tenant_id)
-            .fetch_optional(db).await
+            .bind(cid)
+            .bind(tenant_id)
+            .fetch_optional(db)
+            .await
             .map_err(|e| format!("DB error: {}", e))?;
             Ok((200, json!({"churn_assessment": score})))
         }
@@ -268,7 +317,10 @@ pub async fn route_action(
         // ── Native Apps ──
         "native.connect" => {
             let body = data.ok_or("data required")?;
-            let app_slug = body.get("app_slug").and_then(|v| v.as_str()).ok_or("app_slug required")?;
+            let app_slug = body
+                .get("app_slug")
+                .and_then(|v| v.as_str())
+                .ok_or("app_slug required")?;
             let credentials = body.get("credentials").ok_or("credentials required")?;
             // Just store the connection intent; actual test happens in the connector
             sqlx::query(
@@ -281,8 +333,14 @@ pub async fn route_action(
         }
         "native.sync.push" => {
             let body = data.ok_or("data required")?;
-            let app_slug = body.get("app_slug").and_then(|v| v.as_str()).ok_or("app_slug required")?;
-            let entity_type = body.get("entity_type").and_then(|v| v.as_str()).ok_or("entity_type required")?;
+            let app_slug = body
+                .get("app_slug")
+                .and_then(|v| v.as_str())
+                .ok_or("app_slug required")?;
+            let entity_type = body
+                .get("entity_type")
+                .and_then(|v| v.as_str())
+                .ok_or("entity_type required")?;
             let payload = body.get("payload").ok_or("payload required")?;
             let log_id = Uuid::new_v4();
             sqlx::query(
@@ -291,12 +349,21 @@ pub async fn route_action(
             .bind(log_id).bind(tenant_id).bind(app_slug).bind(entity_type)
             .execute(db).await
             .map_err(|e| format!("DB error: {}", e))?;
-            Ok((200, json!({"sync_id": log_id, "pushed": true, "data": payload})))
+            Ok((
+                200,
+                json!({"sync_id": log_id, "pushed": true, "data": payload}),
+            ))
         }
         "native.sync.pull" => {
             let body = data.ok_or("data required")?;
-            let app_slug = body.get("app_slug").and_then(|v| v.as_str()).ok_or("app_slug required")?;
-            let entity_type = body.get("entity_type").and_then(|v| v.as_str()).ok_or("entity_type required")?;
+            let app_slug = body
+                .get("app_slug")
+                .and_then(|v| v.as_str())
+                .ok_or("app_slug required")?;
+            let entity_type = body
+                .get("entity_type")
+                .and_then(|v| v.as_str())
+                .ok_or("entity_type required")?;
             let log_id = Uuid::new_v4();
             sqlx::query(
                 "INSERT INTO app_sync_logs (id, tenant_id, app_slug, direction, entity_type, status, records_processed, completed_at) VALUES ($1, $2, $3, 'pull', $4, 'completed', 0, NOW())"
@@ -343,8 +410,12 @@ pub async fn route_action(
 
         // directory.listings — List business listings with filters
         "directory.listings" => {
-            let limit = params.and_then(|p| p.get("limit").and_then(|v| v.as_i64())).unwrap_or(50);
-            let offset = params.and_then(|p| p.get("offset").and_then(|v| v.as_i64())).unwrap_or(0);
+            let limit = params
+                .and_then(|p| p.get("limit").and_then(|v| v.as_i64()))
+                .unwrap_or(50);
+            let offset = params
+                .and_then(|p| p.get("offset").and_then(|v| v.as_i64()))
+                .unwrap_or(0);
             let unit = params.and_then(|p| p.get("unit").and_then(|v| v.as_str()));
             let state_filter = params.and_then(|p| p.get("state").and_then(|v| v.as_str()));
 
@@ -365,18 +436,23 @@ pub async fn route_action(
                 binds.push(s.to_string());
                 param_idx += 1;
             }
-            sql.push_str(&format!(" ORDER BY bp.last_activity_at DESC NULLS LAST LIMIT ${} OFFSET ${}", param_idx, param_idx + 1));
+            sql.push_str(&format!(
+                " ORDER BY bp.last_activity_at DESC NULLS LAST LIMIT ${} OFFSET ${}",
+                param_idx,
+                param_idx + 1
+            ));
 
             // We need a dynamic query builder — use sqlx::query_as with the raw SQL and bind each param
             // For simplicity with variable bind counts, we fetch raw rows
-            let mut query = sqlx::query_as::<_, (serde_json::Value,)>(&sql)
-                .bind(tenant_id);
+            let mut query = sqlx::query_as::<_, (serde_json::Value,)>(&sql).bind(tenant_id);
             for b in &binds {
                 query = query.bind(b);
             }
             query = query.bind(limit as i32).bind(offset as i32);
 
-            let listings = query.fetch_all(db).await
+            let listings = query
+                .fetch_all(db)
+                .await
                 .map_err(|e| format!("DB error: {}", e))?;
 
             // Also return total count
@@ -391,30 +467,44 @@ pub async fn route_action(
             }
             let total: (i64,) = sqlx::query_as(&count_sql)
                 .bind(tenant_id)
-                .fetch_one(db).await
+                .fetch_one(db)
+                .await
                 .map_err(|e| format!("DB error: {}", e))?;
 
-            Ok((200, json!({
-                "listings": listings,
-                "total": total.0,
-                "limit": limit,
-                "offset": offset
-            })))
+            Ok((
+                200,
+                json!({
+                    "listings": listings,
+                    "total": total.0,
+                    "limit": limit,
+                    "offset": offset
+                }),
+            ))
         }
 
         // directory.listings.create — Create a new business listing
         "directory.listings.create" => {
             let body = data.ok_or("data required")?;
-            let business_name = body.get("business_name").and_then(|v| v.as_str())
+            let business_name = body
+                .get("business_name")
+                .and_then(|v| v.as_str())
                 .ok_or("business_name required")?;
-            let unit = body.get("unit").and_then(|v| v.as_str())
+            let unit = body
+                .get("unit")
+                .and_then(|v| v.as_str())
                 .unwrap_or("directory");
-            let user_id_str = body.get("user_id").and_then(|v| v.as_str())
+            let user_id_str = body
+                .get("user_id")
+                .and_then(|v| v.as_str())
                 .ok_or("user_id required")?;
 
-            let user_id = Uuid::parse_str(user_id_str).map_err(|_| "invalid user_id".to_string())?;
+            let user_id =
+                Uuid::parse_str(user_id_str).map_err(|_| "invalid user_id".to_string())?;
             let profile_id = Uuid::new_v4();
-            let state = body.get("current_state").and_then(|v| v.as_str()).unwrap_or("lead_captured");
+            let state = body
+                .get("current_state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("lead_captured");
 
             sqlx::query(
                 "INSERT INTO business_profiles (id, user_id, business_name, unit, current_state) VALUES ($1, $2, $3, $4, $5)"
@@ -433,12 +523,16 @@ pub async fn route_action(
             .bind(json!({"business_name": business_name, "unit": unit}))
             .execute(db).await;
 
-            Ok((201, json!({"id": profile_id, "business_name": business_name, "created": true})))
+            Ok((
+                201,
+                json!({"id": profile_id, "business_name": business_name, "created": true}),
+            ))
         }
 
         // directory.listings.get — Get listing details
         "directory.listings.get" => {
-            let id = params.and_then(|p| p.get("id").and_then(|v| v.as_str()))
+            let id = params
+                .and_then(|p| p.get("id").and_then(|v| v.as_str()))
                 .ok_or("listing id (business_profile_id) required")?;
             let profile_id = Uuid::parse_str(id).map_err(|_| "invalid uuid".to_string())?;
 
@@ -458,16 +552,20 @@ pub async fn route_action(
             .fetch_all(db).await
             .map_err(|e| format!("DB error: {}", e))?;
 
-            Ok((200, json!({
-                "listing": listing,
-                "recent_events": events
-            })))
+            Ok((
+                200,
+                json!({
+                    "listing": listing,
+                    "recent_events": events
+                }),
+            ))
         }
 
         // directory.listings.update — Update a listing
         "directory.listings.update" => {
             let body = data.ok_or("data required")?;
-            let id = params.and_then(|p| p.get("id").and_then(|v| v.as_str()))
+            let id = params
+                .and_then(|p| p.get("id").and_then(|v| v.as_str()))
                 .or_else(|| body.get("id").and_then(|v| v.as_str()))
                 .ok_or("listing id required")?;
             let profile_id = Uuid::parse_str(id).map_err(|_| "invalid uuid".to_string())?;
@@ -520,7 +618,9 @@ pub async fn route_action(
             }
             query = query.bind(profile_id);
 
-            query.execute(db).await
+            query
+                .execute(db)
+                .await
                 .map_err(|e| format!("DB error: {}", e))?;
 
             // Log the update event
@@ -538,7 +638,8 @@ pub async fn route_action(
 
         // directory.reviews — Pull reviews for a listing
         "directory.reviews" => {
-            let id = params.and_then(|p| p.get("id").and_then(|v| v.as_str()))
+            let id = params
+                .and_then(|p| p.get("id").and_then(|v| v.as_str()))
                 .ok_or("listing id (business_profile_id) required")?;
             let profile_id = Uuid::parse_str(id).map_err(|_| "invalid uuid".to_string())?;
 
@@ -558,16 +659,20 @@ pub async fn route_action(
             .fetch_all(db).await
             .map_err(|e| format!("DB error: {}", e))?;
 
-            Ok((200, json!({
-                "reviews": reviews,
-                "external_reviews": prepopulated,
-                "total_reviews": reviews.len()
-            })))
+            Ok((
+                200,
+                json!({
+                    "reviews": reviews,
+                    "external_reviews": prepopulated,
+                    "total_reviews": reviews.len()
+                }),
+            ))
         }
 
         // directory.followups — Check followup status for a listing
         "directory.followups" => {
-            let id = params.and_then(|p| p.get("id").and_then(|v| v.as_str()))
+            let id = params
+                .and_then(|p| p.get("id").and_then(|v| v.as_str()))
                 .ok_or("listing id (business_profile_id) required")?;
             let profile_id = Uuid::parse_str(id).map_err(|_| "invalid uuid".to_string())?;
 
@@ -593,11 +698,14 @@ pub async fn route_action(
             .fetch_all(db).await
             .map_err(|e| format!("DB error: {}", e))?;
 
-            Ok((200, json!({
-                "pending_followups": pending,
-                "executed_followups": executed,
-                "checklist_instances": checklist
-            })))
+            Ok((
+                200,
+                json!({
+                    "pending_followups": pending,
+                    "executed_followups": executed,
+                    "checklist_instances": checklist
+                }),
+            ))
         }
 
         // directory.analytics — Get directory analytics
@@ -651,13 +759,16 @@ pub async fn route_action(
             .fetch_all(db).await
             .map_err(|e| format!("DB error: {}", e))?;
 
-            Ok((200, json!({
-                "state_breakdown": state_breakdown,
-                "unit_breakdown": unit_breakdown,
-                "event_volume_30d": event_volume,
-                "followup_stats": followup_stats,
-                "subscription_stats": subscription_stats
-            })))
+            Ok((
+                200,
+                json!({
+                    "state_breakdown": state_breakdown,
+                    "unit_breakdown": unit_breakdown,
+                    "event_volume_30d": event_volume,
+                    "followup_stats": followup_stats,
+                    "subscription_stats": subscription_stats
+                }),
+            ))
         }
 
         // directory.health — Check directory system health
@@ -702,34 +813,50 @@ pub async fn route_action(
             .fetch_all(db).await
             .map_err(|e| format!("DB error: {}", e))?;
 
-            Ok((200, json!({
-                "status": "ok",
-                "total_profiles": total_profiles.0,
-                "events_24h": events_24h.0,
-                "stale_followups": stale_followups.0,
-                "stuck_leads_7d": stuck_leads.0,
-                "recent_errors": recent_errors,
-                "tables": ["business_profiles", "event_logs", "followup_queue"]
-            })))
+            Ok((
+                200,
+                json!({
+                    "status": "ok",
+                    "total_profiles": total_profiles.0,
+                    "events_24h": events_24h.0,
+                    "stale_followups": stale_followups.0,
+                    "stuck_leads_7d": stuck_leads.0,
+                    "recent_errors": recent_errors,
+                    "tables": ["business_profiles", "event_logs", "followup_queue"]
+                }),
+            ))
         }
 
         // ── Tenant Management (for FunnelSwift auto-provisioning) ──
         "tenants.create" => {
             let body = data.ok_or("data required: name, email")?;
-            let name = body.get("name").and_then(|v| v.as_str()).ok_or("name required")?;
-            let email = body.get("email").and_then(|v| v.as_str()).ok_or("email required")?;
+            let name = body
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or("name required")?;
+            let email = body
+                .get("email")
+                .and_then(|v| v.as_str())
+                .ok_or("email required")?;
 
             // Create tenant
-            let slug = format!("{}-{}", name.to_lowercase().replace(' ', "-"), &Uuid::new_v4().to_string()[..8]);
+            let slug = format!(
+                "{}-{}",
+                name.to_lowercase().replace(' ', "-"),
+                &Uuid::new_v4().to_string()[..8]
+            );
             let new_tid = Uuid::new_v4();
             sqlx::query("INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)")
-                .bind(new_tid).bind(name).bind(&slug)
-                .execute(db).await
+                .bind(new_tid)
+                .bind(name)
+                .bind(&slug)
+                .execute(db)
+                .await
                 .map_err(|e| format!("Failed to create tenant: {}", e))?;
 
             // Create owner user with temp password
             let uid = Uuid::new_v4();
-            use argon2::password_hash::{SaltString, PasswordHasher};
+            use argon2::password_hash::{PasswordHasher, SaltString};
             let salt = SaltString::generate(&mut rand::thread_rng());
             let temp_pass = format!("temp-{}", &Uuid::new_v4().to_string()[..8]);
             let pw_hash = argon2::Argon2::default()
@@ -745,11 +872,11 @@ pub async fn route_action(
             .map_err(|e| format!("Failed to create user: {}", e))?;
 
             // Assign free plan
-            let plan = sqlx::query_scalar::<_, Uuid>(
-                "SELECT id FROM plans WHERE slug = 'free' LIMIT 1"
-            )
-            .fetch_optional(db).await
-            .map_err(|e| format!("DB error: {}", e))?;
+            let plan =
+                sqlx::query_scalar::<_, Uuid>("SELECT id FROM plans WHERE slug = 'free' LIMIT 1")
+                    .fetch_optional(db)
+                    .await
+                    .map_err(|e| format!("DB error: {}", e))?;
 
             if let Some(plan_id) = plan {
                 let _ = sqlx::query(
@@ -760,8 +887,15 @@ pub async fn route_action(
             }
 
             // Create affiliate profile
-            let code = format!("{}{}", name.to_lowercase().chars().filter(|c| c.is_alphanumeric()).take(6).collect::<String>(),
-                rand::thread_rng().gen_range(100..999));
+            let code = format!(
+                "{}{}",
+                name.to_lowercase()
+                    .chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .take(6)
+                    .collect::<String>(),
+                rand::thread_rng().gen_range(100..999)
+            );
             sqlx::query(
                 "INSERT INTO affiliates (id, tenant_id, user_id, code, commission_rate, commission_type) VALUES ($1, $2, $3, $4, '10', 'percentage') ON CONFLICT (tenant_id, user_id) DO NOTHING"
             )
@@ -769,16 +903,19 @@ pub async fn route_action(
             .execute(db).await
             .map_err(|e| format!("Failed to create affiliate: {}", e))?;
 
-            Ok((201, json!({
-                "tenant_id": new_tid,
-                "user_id": uid,
-                "slug": slug,
-                "email": email,
-                "user_created": true,
-                "affiliate_code": code,
-                "plan": "free",
-                "auto_webhook_token": true
-            })))
+            Ok((
+                201,
+                json!({
+                    "tenant_id": new_tid,
+                    "user_id": uid,
+                    "slug": slug,
+                    "email": email,
+                    "user_created": true,
+                    "affiliate_code": code,
+                    "plan": "free",
+                    "auto_webhook_token": true
+                }),
+            ))
         }
 
         // ── Webhook Token Management ──
@@ -792,7 +929,10 @@ pub async fn route_action(
             .bind(wh_id).bind(tenant_id).bind("Webhook token").bind(&token).bind(&action_list)
             .execute(db).await
             .map_err(|e| format!("DB error: {}", e))?;
-            Ok((201, json!({"id": wh_id, "webhook_token": token, "allowed_actions": action_list, "created": true})))
+            Ok((
+                201,
+                json!({"id": wh_id, "webhook_token": token, "allowed_actions": action_list, "created": true}),
+            ))
         }
         "webhooks.revoke" => {
             let body = data.ok_or("data required")?;
@@ -828,7 +968,8 @@ pub async fn route_action(
 
         // ── Pipeline Stages ──
         "pipelines.stages" => {
-            let pipeline_id = params.and_then(|p| p.get("pipeline_id").and_then(|v| v.as_str()))
+            let pipeline_id = params
+                .and_then(|p| p.get("pipeline_id").and_then(|v| v.as_str()))
                 .ok_or("pipeline_id required")?;
             let pid = Uuid::parse_str(pipeline_id).map_err(|_| "invalid uuid".to_string())?;
             let stages = sqlx::query_as::<_, (serde_json::Value,)>(
@@ -841,13 +982,21 @@ pub async fn route_action(
         }
         "pipelines.create_stage" => {
             let body = data.ok_or("data required")?;
-            let pipeline_id = body.get("pipeline_id").and_then(|v| v.as_str())
+            let pipeline_id = body
+                .get("pipeline_id")
+                .and_then(|v| v.as_str())
                 .ok_or("pipeline_id required")?;
-            let name = body.get("name").and_then(|v| v.as_str())
+            let name = body
+                .get("name")
+                .and_then(|v| v.as_str())
                 .ok_or("name required")?;
             let sort_order = body.get("sort_order").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-            let color = body.get("color").and_then(|v| v.as_str()).unwrap_or("#CCCCCC");
-            let pid = Uuid::parse_str(pipeline_id).map_err(|_| "invalid pipeline_id".to_string())?;
+            let color = body
+                .get("color")
+                .and_then(|v| v.as_str())
+                .unwrap_or("#CCCCCC");
+            let pid =
+                Uuid::parse_str(pipeline_id).map_err(|_| "invalid pipeline_id".to_string())?;
             let stage_id = Uuid::new_v4();
             sqlx::query(
                 "INSERT INTO pipeline_stages (id, pipeline_id, name, sort_order, color) VALUES ($1, $2, $3, $4, $5)"
@@ -861,11 +1010,18 @@ pub async fn route_action(
         // ── Users ──
         "users.invite" => {
             let body = data.ok_or("data required")?;
-            let email = body.get("email").and_then(|v| v.as_str())
+            let email = body
+                .get("email")
+                .and_then(|v| v.as_str())
                 .ok_or("email required")?;
-            let name = body.get("name").and_then(|v| v.as_str())
+            let name = body
+                .get("name")
+                .and_then(|v| v.as_str())
                 .ok_or("name required")?;
-            let role = body.get("role").and_then(|v| v.as_str()).unwrap_or("member");
+            let role = body
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or("member");
             if role != "member" && role != "admin" {
                 return Err("role must be 'member' or 'admin'".to_string());
             }
@@ -878,7 +1034,10 @@ pub async fn route_action(
             .bind(uid).bind(tenant_id).bind(email).bind("PLACEHOLDER_HASH").bind(name).bind(role)
             .execute(db).await
             .map_err(|e| format!("DB error: {}", e))?;
-            Ok((201, json!({"id": uid, "email": email, "name": name, "role": role, "user_created": true, "invited": true})))
+            Ok((
+                201,
+                json!({"id": uid, "email": email, "name": name, "role": role, "user_created": true, "invited": true}),
+            ))
         }
         "users.list" => {
             let users = sqlx::query_as::<_, (serde_json::Value,)>(
@@ -899,29 +1058,34 @@ pub async fn route_action(
             .fetch_optional(db).await
             .map_err(|e| format!("DB error: {}", e))?
             .ok_or("tenant not found".to_string())?;
-            let webhook_count: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM automation_webhooks WHERE tenant_id = $1"
-            )
-            .bind(tenant_id)
-            .fetch_one(db).await
-            .map_err(|e| format!("DB error: {}", e))?;
+            let webhook_count: (i64,) =
+                sqlx::query_as("SELECT COUNT(*) FROM automation_webhooks WHERE tenant_id = $1")
+                    .bind(tenant_id)
+                    .fetch_one(db)
+                    .await
+                    .map_err(|e| format!("DB error: {}", e))?;
             let plan_info = sqlx::query_as::<_, (serde_json::Value,)>(
                 "SELECT p.id as plan_id, p.name, p.slug, p.price_monthly, p.price_yearly, tp.status, tp.billing_cycle\n FROM tenant_plans tp JOIN plans p ON p.id = tp.plan_id WHERE tp.tenant_id = $1"
             )
             .bind(tenant_id)
             .fetch_optional(db).await
             .map_err(|e| format!("DB error: {}", e))?;
-            Ok((200, json!({
-                "account": tenant,
-                "webhook_token_count": webhook_count.0,
-                "plan": plan_info
-            })))
+            Ok((
+                200,
+                json!({
+                    "account": tenant,
+                    "webhook_token_count": webhook_count.0,
+                    "plan": plan_info
+                }),
+            ))
         }
 
         // ── Scoring ──
         "scoring.calculate" => {
             let body = data.ok_or("data required")?;
-            let contact_id = body.get("contact_id").and_then(|v| v.as_str())
+            let contact_id = body
+                .get("contact_id")
+                .and_then(|v| v.as_str())
                 .ok_or("contact_id required")?;
             let cid = Uuid::parse_str(contact_id).map_err(|_| "invalid contact_id".to_string())?;
             // Read contact fields for scoring
@@ -933,32 +1097,62 @@ pub async fn route_action(
             .map_err(|e| format!("DB error: {}", e))?
             .ok_or("contact not found".to_string())?;
             // Simple scoring: base 50 + 10 if has email + 10 if has phone + 10 if has company_id + 20 if existing score > 0
-            let has_email = contact.0.get("email").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
-            let has_phone = contact.0.get("phone").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
-            let has_company = contact.0.get("company_id").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
-            let existing_score = contact.0.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let has_email = contact
+                .0
+                .get("email")
+                .and_then(|v| v.as_str())
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
+            let has_phone = contact
+                .0
+                .get("phone")
+                .and_then(|v| v.as_str())
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
+            let has_company = contact
+                .0
+                .get("company_id")
+                .and_then(|v| v.as_str())
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
+            let existing_score = contact
+                .0
+                .get("score")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
             let mut score: i32 = 50;
-            if has_email { score += 10; }
-            if has_phone { score += 10; }
-            if has_company { score += 10; }
-            if existing_score > 0.0 { score += 20; }
+            if has_email {
+                score += 10;
+            }
+            if has_phone {
+                score += 10;
+            }
+            if has_company {
+                score += 10;
+            }
+            if existing_score > 0.0 {
+                score += 20;
+            }
             sqlx::query(
                 "UPDATE contacts SET score = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3"
             )
             .bind(score).bind(cid).bind(tenant_id)
             .execute(db).await
             .map_err(|e| format!("DB error: {}", e))?;
-            Ok((200, json!({"contact_id": cid, "score": score, "calculated": true})))
+            Ok((
+                200,
+                json!({"contact_id": cid, "score": score, "calculated": true}),
+            ))
         }
 
         // ── Analytics ──
         "analytics.contacts" => {
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM contacts WHERE tenant_id = $1"
-            )
-            .bind(tenant_id)
-            .fetch_one(db).await
-            .map_err(|e| format!("DB error: {}", e))?;
+            let total: (i64,) =
+                sqlx::query_as("SELECT COUNT(*) FROM contacts WHERE tenant_id = $1")
+                    .bind(tenant_id)
+                    .fetch_one(db)
+                    .await
+                    .map_err(|e| format!("DB error: {}", e))?;
             // Contacts by tag
             let by_tag = sqlx::query_as::<_, (serde_json::Value,)>(
                 "SELECT t.id, t.name, COUNT(ta.entity_id) as count\n FROM tags t\n LEFT JOIN tag_assignments ta ON ta.tag_id = t.id AND ta.entity_type = 'contact'\n WHERE t.tenant_id = $1\n GROUP BY t.id, t.name ORDER BY count DESC"
@@ -973,16 +1167,21 @@ pub async fn route_action(
             .bind(tenant_id)
             .fetch_all(db).await
             .map_err(|e| format!("DB error: {}", e))?;
-            Ok((200, json!({
-                "total_contacts": total.0,
-                "by_tag": by_tag,
-                "created_over_time_30d": by_day
-            })))
+            Ok((
+                200,
+                json!({
+                    "total_contacts": total.0,
+                    "by_tag": by_tag,
+                    "created_over_time_30d": by_day
+                }),
+            ))
         }
 
         // ── Audit ──
         "audit.log" => {
-            let limit = params.and_then(|p| p.get("limit").and_then(|v| v.as_i64())).unwrap_or(50);
+            let limit = params
+                .and_then(|p| p.get("limit").and_then(|v| v.as_i64()))
+                .unwrap_or(50);
             let entity_filter = params.and_then(|p| p.get("entity_type").and_then(|v| v.as_str()));
             let entries = if let Some(entity_type) = entity_filter {
                 sqlx::query_as::<_, (serde_json::Value,)>(
@@ -1002,12 +1201,16 @@ pub async fn route_action(
 
         // ── Search ──
         "search.query" => {
-            let q = params.and_then(|p| p.get("q").and_then(|v| v.as_str()))
+            let q = params
+                .and_then(|p| p.get("q").and_then(|v| v.as_str()))
                 .ok_or("search term 'q' required")?;
             let allowed = ["contacts", "tags", "lists"];
             let entities_param = params.and_then(|p| p.get("entities").and_then(|v| v.as_array()));
             let entities: Vec<&str> = if let Some(arr) = entities_param {
-                arr.iter().filter_map(|v| v.as_str()).filter(|e| allowed.contains(e)).collect()
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .filter(|e| allowed.contains(e))
+                    .collect()
             } else {
                 allowed.to_vec()
             };

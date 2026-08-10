@@ -6,13 +6,13 @@
 //!   - The "If-Not-Then" delay engine
 //!   - External webhook endpoints
 
-pub mod handlers;
 pub mod dispatcher;
+pub mod handlers;
 pub mod models;
 pub mod prepopulate;
 
-use axum::{Router, middleware};
 use crate::AppState;
+use axum::{middleware, Router};
 
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
@@ -25,6 +25,12 @@ pub fn router(state: AppState) -> Router<AppState> {
         // Delayed action management (If-Not-Then)
         .route("/delayed", axum::routing::get(handlers::list_delayed))
         .route("/delayed", axum::routing::post(handlers::schedule_delayed))
-        .route("/delayed/:id", axum::routing::delete(handlers::cancel_delayed))
-        .layer(middleware::from_fn_with_state(state.clone(), crate::auth::middleware::auth_middleware))
+        .route(
+            "/delayed/:id",
+            axum::routing::delete(handlers::cancel_delayed),
+        )
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::middleware::auth_middleware,
+        ))
 }

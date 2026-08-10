@@ -1,13 +1,21 @@
+use super::models::AutomationRule;
+use crate::errors::AppError;
 use sqlx::PgPool;
 use uuid::Uuid;
-use crate::errors::AppError;
-use super::models::AutomationRule;
 
-pub async fn execute_action(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, entity_type: &str, entity_id: Uuid) -> Result<(), AppError> {
+pub async fn execute_action(
+    db: &PgPool,
+    rule: &AutomationRule,
+    tenant_id: Uuid,
+    entity_type: &str,
+    entity_id: Uuid,
+) -> Result<(), AppError> {
     match rule.action_type.as_str() {
         "AddTag" => exec_add_tag(db, rule, tenant_id, entity_type, entity_id).await,
         "RemoveTag" => exec_remove_tag(db, rule, entity_type, entity_id).await,
-        "MovePipeline" | "pipeline.move" => exec_move_pipeline(db, rule, tenant_id, entity_id).await,
+        "MovePipeline" | "pipeline.move" => {
+            exec_move_pipeline(db, rule, tenant_id, entity_id).await
+        }
         "AddToList" => exec_add_to_list(db, rule, tenant_id, entity_id).await,
         "RemoveFromList" => exec_remove_from_list(db, rule, entity_id).await,
         "Webhook" => exec_webhook(db, rule, tenant_id, entity_type, entity_id).await,
@@ -19,46 +27,126 @@ pub async fn execute_action(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid,
     }
 }
 
-async fn exec_add_tag(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, entity_type: &str, entity_id: Uuid) -> Result<(), AppError> {
-    let tid_str = rule.action_config.get("tag_id").and_then(|v| v.as_str()).ok_or(AppError::Validation("Missing tag_id".into()))?;
-    let tag_id = Uuid::parse_str(tid_str).map_err(|_| AppError::Validation("Invalid tag_id".into()))?;
+async fn exec_add_tag(
+    db: &PgPool,
+    rule: &AutomationRule,
+    tenant_id: Uuid,
+    entity_type: &str,
+    entity_id: Uuid,
+) -> Result<(), AppError> {
+    let tid_str = rule
+        .action_config
+        .get("tag_id")
+        .and_then(|v| v.as_str())
+        .ok_or(AppError::Validation("Missing tag_id".into()))?;
+    let tag_id =
+        Uuid::parse_str(tid_str).map_err(|_| AppError::Validation("Invalid tag_id".into()))?;
     let exists: bool = sqlx::query_scalar("SELECT COUNT(*) FROM tag_assignments WHERE tag_id=$1 AND entity_type=$2::entity_type AND entity_id=$3 AND tenant_id=$4").bind(tag_id).bind(entity_type).bind(entity_id).bind(tenant_id).fetch_one(db).await.unwrap_or(0) > 0;
-    if !exists { sqlx::query("INSERT INTO tag_assignments(id,tag_id,entity_type,entity_id,tenant_id) VALUES($1,$2,$3,$4,$5)").bind(Uuid::new_v4()).bind(tag_id).bind(entity_type).bind(entity_id).bind(tenant_id).execute(db).await?; }
+    if !exists {
+        sqlx::query("INSERT INTO tag_assignments(id,tag_id,entity_type,entity_id,tenant_id) VALUES($1,$2,$3,$4,$5)").bind(Uuid::new_v4()).bind(tag_id).bind(entity_type).bind(entity_id).bind(tenant_id).execute(db).await?;
+    }
     Ok(())
 }
 
-async fn exec_remove_tag(db: &PgPool, rule: &AutomationRule, entity_type: &str, entity_id: Uuid) -> Result<(), AppError> {
-    let tid_str = rule.action_config.get("tag_id").and_then(|v| v.as_str()).ok_or(AppError::Validation("Missing tag_id".into()))?;
-    let tag_id = Uuid::parse_str(tid_str).map_err(|_| AppError::Validation("Invalid tag_id".into()))?;
+async fn exec_remove_tag(
+    db: &PgPool,
+    rule: &AutomationRule,
+    entity_type: &str,
+    entity_id: Uuid,
+) -> Result<(), AppError> {
+    let tid_str = rule
+        .action_config
+        .get("tag_id")
+        .and_then(|v| v.as_str())
+        .ok_or(AppError::Validation("Missing tag_id".into()))?;
+    let tag_id =
+        Uuid::parse_str(tid_str).map_err(|_| AppError::Validation("Invalid tag_id".into()))?;
     sqlx::query("DELETE FROM tag_assignments WHERE tag_id=$1 AND entity_type=$2::entity_type AND entity_id=$3").bind(tag_id).bind(entity_type).bind(entity_id).execute(db).await?;
     Ok(())
 }
 
-async fn exec_move_pipeline(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, entity_id: Uuid) -> Result<(), AppError> {
-    let sid_str = rule.action_config.get("stage_id").and_then(|v| v.as_str()).ok_or(AppError::Validation("Missing stage_id".into()))?;
-    let stage_id = Uuid::parse_str(sid_str).map_err(|_| AppError::Validation("Invalid stage_id".into()))?;
-    let r = sqlx::query("UPDATE opportunities SET stage_id=$1, updated_at=NOW() WHERE id=$2 AND tenant_id=$3").bind(stage_id).bind(entity_id).bind(tenant_id).execute(db).await?;
-    if r.rows_affected() > 0 { sqlx::query("INSERT INTO stage_history(id,opportunity_id,to_stage_id) VALUES($1,$2,$3)").bind(Uuid::new_v4()).bind(entity_id).bind(stage_id).execute(db).await?; }
+async fn exec_move_pipeline(
+    db: &PgPool,
+    rule: &AutomationRule,
+    tenant_id: Uuid,
+    entity_id: Uuid,
+) -> Result<(), AppError> {
+    let sid_str = rule
+        .action_config
+        .get("stage_id")
+        .and_then(|v| v.as_str())
+        .ok_or(AppError::Validation("Missing stage_id".into()))?;
+    let stage_id =
+        Uuid::parse_str(sid_str).map_err(|_| AppError::Validation("Invalid stage_id".into()))?;
+    let r = sqlx::query(
+        "UPDATE opportunities SET stage_id=$1, updated_at=NOW() WHERE id=$2 AND tenant_id=$3",
+    )
+    .bind(stage_id)
+    .bind(entity_id)
+    .bind(tenant_id)
+    .execute(db)
+    .await?;
+    if r.rows_affected() > 0 {
+        sqlx::query("INSERT INTO stage_history(id,opportunity_id,to_stage_id) VALUES($1,$2,$3)")
+            .bind(Uuid::new_v4())
+            .bind(entity_id)
+            .bind(stage_id)
+            .execute(db)
+            .await?;
+    }
     Ok(())
 }
 
-async fn exec_add_to_list(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, entity_id: Uuid) -> Result<(), AppError> {
-    let lid_str = rule.action_config.get("list_id").and_then(|v| v.as_str()).ok_or(AppError::Validation("Missing list_id".into()))?;
-    let list_id = Uuid::parse_str(lid_str).map_err(|_| AppError::Validation("Invalid list_id".into()))?;
+async fn exec_add_to_list(
+    db: &PgPool,
+    rule: &AutomationRule,
+    tenant_id: Uuid,
+    entity_id: Uuid,
+) -> Result<(), AppError> {
+    let lid_str = rule
+        .action_config
+        .get("list_id")
+        .and_then(|v| v.as_str())
+        .ok_or(AppError::Validation("Missing list_id".into()))?;
+    let list_id =
+        Uuid::parse_str(lid_str).map_err(|_| AppError::Validation("Invalid list_id".into()))?;
     sqlx::query("INSERT INTO list_members(id,list_id,contact_id,tenant_id,added_manually) VALUES($1,$2,$3,$4,false) ON CONFLICT DO NOTHING")
         .bind(Uuid::new_v4()).bind(list_id).bind(entity_id).bind(tenant_id).execute(db).await?;
     Ok(())
 }
 
-async fn exec_remove_from_list(db: &PgPool, rule: &AutomationRule, entity_id: Uuid) -> Result<(), AppError> {
-    let lid_str = rule.action_config.get("list_id").and_then(|v| v.as_str()).ok_or(AppError::Validation("Missing list_id".into()))?;
-    let list_id = Uuid::parse_str(lid_str).map_err(|_| AppError::Validation("Invalid list_id".into()))?;
-    sqlx::query("DELETE FROM list_members WHERE list_id=$1 AND contact_id=$2").bind(list_id).bind(entity_id).execute(db).await?;
+async fn exec_remove_from_list(
+    db: &PgPool,
+    rule: &AutomationRule,
+    entity_id: Uuid,
+) -> Result<(), AppError> {
+    let lid_str = rule
+        .action_config
+        .get("list_id")
+        .and_then(|v| v.as_str())
+        .ok_or(AppError::Validation("Missing list_id".into()))?;
+    let list_id =
+        Uuid::parse_str(lid_str).map_err(|_| AppError::Validation("Invalid list_id".into()))?;
+    sqlx::query("DELETE FROM list_members WHERE list_id=$1 AND contact_id=$2")
+        .bind(list_id)
+        .bind(entity_id)
+        .execute(db)
+        .await?;
     Ok(())
 }
 
-async fn exec_webhook(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, entity_type: &str, entity_id: Uuid) -> Result<(), AppError> {
-    let url = rule.action_config.get("url").and_then(|v| v.as_str()).ok_or(AppError::Validation("Missing webhook url".into()))?;
+async fn exec_webhook(
+    db: &PgPool,
+    rule: &AutomationRule,
+    tenant_id: Uuid,
+    entity_type: &str,
+    entity_id: Uuid,
+) -> Result<(), AppError> {
+    let url = rule
+        .action_config
+        .get("url")
+        .and_then(|v| v.as_str())
+        .ok_or(AppError::Validation("Missing webhook url".into()))?;
 
     // Look up contact info for the payload
     let contact_info: Option<(String, Option<String>, Option<String>)> = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
@@ -70,7 +158,8 @@ async fn exec_webhook(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, entit
     .await
     .unwrap_or(None);
 
-    let (contact_name, contact_email, contact_phone) = contact_info.unwrap_or_else(|| ("Unknown".into(), None, None));
+    let (contact_name, contact_email, contact_phone) =
+        contact_info.unwrap_or_else(|| ("Unknown".into(), None, None));
 
     let payload = serde_json::json!({
         "event": rule.trigger_type,
@@ -90,10 +179,11 @@ async fn exec_webhook(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, entit
         .build()
         .unwrap_or_default();
 
-    let headers: std::collections::HashMap<String, String> =
-        rule.action_config.get("headers")
-            .and_then(|h| serde_json::from_value(h.clone()).ok())
-            .unwrap_or_default();
+    let headers: std::collections::HashMap<String, String> = rule
+        .action_config
+        .get("headers")
+        .and_then(|h| serde_json::from_value(h.clone()).ok())
+        .unwrap_or_default();
 
     let mut req = client.post(url).json(&payload);
     for (k, v) in &headers {
@@ -119,12 +209,16 @@ async fn exec_webhook(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, entit
 
 async fn exec_notify(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid) -> Result<(), AppError> {
     let user_id_str = rule.action_config.get("user_id").and_then(|v| v.as_str());
-    let message = rule.action_config.get("message").and_then(|v| v.as_str()).unwrap_or("Automation triggered");
+    let message = rule
+        .action_config
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Automation triggered");
 
     if let Some(uid_str) = user_id_str {
         if let Ok(user_id) = Uuid::parse_str(uid_str) {
             let _ = sqlx::query(
-                "INSERT INTO notifications(id, tenant_id, user_id, message) VALUES($1, $2, $3, $4)"
+                "INSERT INTO notifications(id, tenant_id, user_id, message) VALUES($1, $2, $3, $4)",
             )
             .bind(Uuid::new_v4())
             .bind(tenant_id)
@@ -139,8 +233,17 @@ async fn exec_notify(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid) -> Res
 }
 
 /// Execute send_email action — sends an email via the comms provider
-async fn exec_send_email(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, entity_type: &str, entity_id: Uuid) -> Result<(), AppError> {
-    let template_id = rule.action_config.get("template_id").and_then(|v| v.as_str());
+async fn exec_send_email(
+    db: &PgPool,
+    rule: &AutomationRule,
+    tenant_id: Uuid,
+    entity_type: &str,
+    entity_id: Uuid,
+) -> Result<(), AppError> {
+    let template_id = rule
+        .action_config
+        .get("template_id")
+        .and_then(|v| v.as_str());
 
     // Get contact email
     let contact_email: Option<String> = if entity_type == "contact" {
@@ -153,19 +256,31 @@ async fn exec_send_email(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, en
         None
     };
 
-    let to = rule.action_config.get("to").and_then(|v| v.as_str()).map(|s| s.to_string())
+    let to = rule
+        .action_config
+        .get("to")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
         .or(contact_email)
         .ok_or_else(|| AppError::Validation("No recipient email available".into()))?;
 
-    let subject = rule.action_config.get("subject").and_then(|v| v.as_str()).unwrap_or("Automated Message");
-    let body = rule.action_config.get("body").and_then(|v| v.as_str()).unwrap_or("");
+    let subject = rule
+        .action_config
+        .get("subject")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Automated Message");
+    let body = rule
+        .action_config
+        .get("body")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     let body_text = if !body.is_empty() {
         body.to_string()
     } else if let Some(tid) = template_id {
         // Load template body
         sqlx::query_scalar::<_, String>(
-            "SELECT body FROM message_templates WHERE id=$1 AND tenant_id=$2"
+            "SELECT body FROM message_templates WHERE id=$1 AND tenant_id=$2",
         )
         .bind(Uuid::parse_str(tid).unwrap_or(Uuid::nil()))
         .bind(tenant_id)
@@ -180,7 +295,7 @@ async fn exec_send_email(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, en
     let msg_id = Uuid::new_v4();
     let _ = sqlx::query(
         "INSERT INTO outbound_messages(id, tenant_id, channel, to_address, subject, body, status)
-         VALUES($1, $2, 'email', $3, $4, $5, 'queued')"
+         VALUES($1, $2, 'email', $3, $4, $5, 'queued')",
     )
     .bind(msg_id)
     .bind(tenant_id)
@@ -199,7 +314,8 @@ async fn exec_send_email(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, en
         &to,
         Some(subject.to_string()),
         &body_text,
-    ).await;
+    )
+    .await;
     let _ = crate::communications::providers::deliver(&cfg).await;
 
     let _ = sqlx::query(
@@ -210,8 +326,17 @@ async fn exec_send_email(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, en
 }
 
 /// Execute send_sms action
-async fn exec_send_sms(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, entity_type: &str, entity_id: Uuid) -> Result<(), AppError> {
-    let template_id = rule.action_config.get("template_id").and_then(|v| v.as_str());
+async fn exec_send_sms(
+    db: &PgPool,
+    rule: &AutomationRule,
+    tenant_id: Uuid,
+    entity_type: &str,
+    entity_id: Uuid,
+) -> Result<(), AppError> {
+    let template_id = rule
+        .action_config
+        .get("template_id")
+        .and_then(|v| v.as_str());
 
     // Get contact phone
     let contact_phone: Option<String> = if entity_type == "contact" {
@@ -224,17 +349,25 @@ async fn exec_send_sms(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, enti
         None
     };
 
-    let to = rule.action_config.get("to").and_then(|v| v.as_str()).map(|s| s.to_string())
+    let to = rule
+        .action_config
+        .get("to")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
         .or(contact_phone)
         .ok_or_else(|| AppError::Validation("No recipient phone available".into()))?;
 
-    let body = rule.action_config.get("body").and_then(|v| v.as_str()).unwrap_or("");
+    let body = rule
+        .action_config
+        .get("body")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     let body_text = if !body.is_empty() {
         body.to_string()
     } else if let Some(tid) = template_id {
         sqlx::query_scalar::<_, String>(
-            "SELECT body FROM message_templates WHERE id=$1 AND tenant_id=$2"
+            "SELECT body FROM message_templates WHERE id=$1 AND tenant_id=$2",
         )
         .bind(Uuid::parse_str(tid).unwrap_or(Uuid::nil()))
         .bind(tenant_id)
@@ -248,7 +381,7 @@ async fn exec_send_sms(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, enti
     let msg_id = Uuid::new_v4();
     let _ = sqlx::query(
         "INSERT INTO outbound_messages(id, tenant_id, channel, to_address, body, status)
-         VALUES($1, $2, 'sms', $3, $4, 'queued')"
+         VALUES($1, $2, 'sms', $3, $4, 'queued')",
     )
     .bind(msg_id)
     .bind(tenant_id)
@@ -258,14 +391,9 @@ async fn exec_send_sms(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, enti
     .await;
 
     let cfg = crate::communications::providers::load_delivery_config(
-        db,
-        msg_id,
-        tenant_id,
-        "sms",
-        &to,
-        None,
-        &body_text,
-    ).await;
+        db, msg_id, tenant_id, "sms", &to, None, &body_text,
+    )
+    .await;
     let _ = crate::communications::providers::deliver(&cfg).await;
 
     let _ = sqlx::query(
@@ -276,12 +404,21 @@ async fn exec_send_sms(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, enti
 }
 
 /// Execute scoring.update action — adjust contact score
-async fn exec_scoring_update(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid, entity_id: Uuid) -> Result<(), AppError> {
-    let points = rule.action_config.get("points").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+async fn exec_scoring_update(
+    db: &PgPool,
+    rule: &AutomationRule,
+    tenant_id: Uuid,
+    entity_id: Uuid,
+) -> Result<(), AppError> {
+    let points = rule
+        .action_config
+        .get("points")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as i32;
 
     if points != 0 {
         let score_id = match sqlx::query_as::<_, (Uuid,)>(
-            "SELECT id FROM contact_scores WHERE tenant_id=$1 AND contact_id=$2"
+            "SELECT id FROM contact_scores WHERE tenant_id=$1 AND contact_id=$2",
         )
         .bind(tenant_id)
         .bind(entity_id)
