@@ -1,12 +1,15 @@
-use axum::{extract::{Path, State}, Extension, Json};
+use axum::{
+    extract::{Path, State},
+    Extension, Json,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+use super::encryption;
 use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
-use super::encryption;
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct ApiKeyRow {
@@ -25,7 +28,9 @@ pub struct AddApiKeyRequest {
     pub provider: String,
 }
 
-fn default_provider() -> String { "mailgun".into() }
+fn default_provider() -> String {
+    "mailgun".into()
+}
 
 pub async fn list_api_keys(
     State(state): State<AppState>,
@@ -41,11 +46,16 @@ pub async fn list_api_keys(
     .map_err(AppError::Database)?;
 
     // Return without the encrypted key — just metadata
-    let safe: Vec<serde_json::Value> = rows.iter().map(|r| serde_json::json!({
-        "id": r.id,
-        "label": r.label,
-        "provider": r.provider,
-    })).collect();
+    let safe: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.id,
+                "label": r.label,
+                "provider": r.provider,
+            })
+        })
+        .collect();
 
     Ok(Json(serde_json::json!(safe)))
 }
@@ -57,8 +67,8 @@ pub async fn add_api_key(
 ) -> ApiResult<Json<serde_json::Value>> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let encrypted = encryption::encrypt_api_key(account_id, &req.api_key)
-        .map_err(AppError::Internal)?;
+    let encrypted =
+        encryption::encrypt_api_key(account_id, &req.api_key).map_err(AppError::Internal)?;
 
     let row = sqlx::query_as::<_, ApiKeyRow>(
         r#"
@@ -90,14 +100,12 @@ pub async fn delete_api_key(
 ) -> ApiResult<Json<serde_json::Value>> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let result = sqlx::query(
-        "DELETE FROM private_email_api_keys WHERE id = $1 AND tenant_id = $2"
-    )
-    .bind(key_id)
-    .bind(account_id)
-    .execute(&state.db)
-    .await
-    .map_err(AppError::Database)?;
+    let result = sqlx::query("DELETE FROM private_email_api_keys WHERE id = $1 AND tenant_id = $2")
+        .bind(key_id)
+        .bind(account_id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::Database)?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("API key not found".into()));

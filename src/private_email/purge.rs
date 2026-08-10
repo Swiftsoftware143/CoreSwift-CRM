@@ -25,7 +25,9 @@ pub async fn purge_expired_emails(
             t
         }
         Err(e) => {
-            summary.errors.push(format!("Failed to list tenants: {}", e));
+            summary
+                .errors
+                .push(format!("Failed to list tenants: {}", e));
             return summary;
         }
     };
@@ -86,21 +88,16 @@ async fn get_purge_targets(
     }
 
     // All tenants that have outbound_messages
-    let rows: Vec<(Uuid,)> = sqlx::query_as(
-        "SELECT DISTINCT tenant_id FROM outbound_messages",
-    )
-    .fetch_all(pool)
-    .await?;
+    let rows: Vec<(Uuid,)> = sqlx::query_as("SELECT DISTINCT tenant_id FROM outbound_messages")
+        .fetch_all(pool)
+        .await?;
 
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
 /// Purge expired email records for a single tenant.
 /// Returns (messages_deleted, events_deleted).
-async fn purge_single_tenant(
-    pool: &PgPool,
-    tenant_id: Uuid,
-) -> Result<(i64, i64), sqlx::Error> {
+async fn purge_single_tenant(pool: &PgPool, tenant_id: Uuid) -> Result<(i64, i64), sqlx::Error> {
     // Determine retention window for this tenant
     let retention_days = get_retention_days(pool, tenant_id).await;
 
@@ -139,14 +136,13 @@ async fn purge_single_tenant(
 /// Look up the retention window for a tenant.
 /// Falls back to 365 days when no override is set.
 async fn get_retention_days(pool: &PgPool, tenant_id: Uuid) -> i32 {
-    let row: Option<(Option<i32>,)> = sqlx::query_as(
-        "SELECT retention_days FROM tenant_email_limits WHERE tenant_id = $1",
-    )
-    .bind(tenant_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+    let row: Option<(Option<i32>,)> =
+        sqlx::query_as("SELECT retention_days FROM tenant_email_limits WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
 
     row.and_then(|(days,)| days).unwrap_or(365)
 }

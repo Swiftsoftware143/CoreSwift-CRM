@@ -7,8 +7,8 @@ use uuid::Uuid;
 pub struct Event {
     pub id: Uuid,
     pub tenant_id: Uuid,
-    pub source: String,          // "landing_page", "directory", "saas", "api"
-    pub event_type: String,      // "form.submitted", "trial.started", "listing.viewed", "payment.received"
+    pub source: String,              // "landing_page", "directory", "saas", "api"
+    pub event_type: String, // "form.submitted", "trial.started", "listing.viewed", "payment.received"
     pub entity_type: Option<String>, // "contact", "company", "opportunity"
     pub entity_id: Option<Uuid>,
     pub payload: serde_json::Value,
@@ -24,9 +24,9 @@ pub struct DelayedAction {
     pub id: Uuid,
     pub tenant_id: Uuid,
     pub trigger_event_id: Uuid,
-    pub condition_type: String,  // "timeout", "no_event", "no_action"
+    pub condition_type: String, // "timeout", "no_event", "no_action"
     pub condition_config: serde_json::Value, // {"wait_hours": 2, "expected_event": "form.completed"}
-    pub action_type: String,     // "send_email", "send_sms", "webhook", "tag_contact"
+    pub action_type: String,                 // "send_email", "send_sms", "webhook", "tag_contact"
     pub action_config: serde_json::Value,
     pub execute_at: DateTime<Utc>,
     pub executed: bool,

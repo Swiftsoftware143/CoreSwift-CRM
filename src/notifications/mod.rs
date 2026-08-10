@@ -1,7 +1,7 @@
 pub mod handlers;
 
-use axum::{Router, middleware};
 use crate::AppState;
+use axum::{middleware, Router};
 
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
@@ -17,6 +17,12 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/rules/:id", axum::routing::delete(handlers::delete_rule))
         // Notification Queue
         .route("/queue", axum::routing::get(handlers::list_queue))
-        .route("/queue", axum::routing::post(handlers::enqueue_notification))
-        .layer(middleware::from_fn_with_state(state.clone(), crate::auth::middleware::auth_middleware))
+        .route(
+            "/queue",
+            axum::routing::post(handlers::enqueue_notification),
+        )
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::middleware::auth_middleware,
+        ))
 }

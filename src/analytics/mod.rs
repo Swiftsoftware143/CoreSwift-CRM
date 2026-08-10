@@ -4,8 +4,8 @@
 
 pub mod handlers;
 
-use axum::{Router, middleware};
 use crate::AppState;
+use axum::{middleware, Router};
 
 /// Build the analytics router with auth middleware.
 pub fn router(state: AppState) -> Router<AppState> {
@@ -14,5 +14,8 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/scores", axum::routing::get(handlers::score_distribution))
         .route("/tags", axum::routing::get(handlers::tag_usage))
         .route("/contacts", axum::routing::get(handlers::contact_stats))
-        .layer(middleware::from_fn_with_state(state.clone(), crate::auth::middleware::auth_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::middleware::auth_middleware,
+        ))
 }

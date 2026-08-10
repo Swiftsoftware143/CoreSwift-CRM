@@ -1,7 +1,7 @@
 //! Contact handlers: CRUD + search with tenant isolation.
 
 use axum::{
-    extract::{State, Path, Query, Json},
+    extract::{Json, Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Extension,
@@ -10,11 +10,11 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::AppState;
-use crate::errors::{AppError, ApiResult, validate_pagination};
-use crate::auth::models::Claims;
-use crate::audit;
 use super::models::*;
+use crate::audit;
+use crate::auth::models::Claims;
+use crate::errors::{validate_pagination, ApiResult, AppError};
+use crate::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct ContactListParams {
@@ -35,8 +35,7 @@ pub async fn list(
     Extension(claims): Extension<Claims>,
     Query(params): Query<ContactListParams>,
 ) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let (page, per_page) = validate_pagination(params.page, params.per_page);
     let offset = (page - 1) * per_page;
@@ -53,7 +52,9 @@ pub async fn list(
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(json!({ "contacts": contacts, "page": page, "per_page": per_page })))
+    Ok(Json(
+        json!({ "contacts": contacts, "page": page, "per_page": per_page }),
+    ))
 }
 
 /// GET /api/contacts/search?q=... — Full-text search on contacts.
@@ -62,11 +63,12 @@ pub async fn search(
     Extension(claims): Extension<Claims>,
     Query(params): Query<ContactSearchParams>,
 ) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     if params.q.is_empty() {
-        return Err(AppError::Validation("Search query 'q' is required".to_string()));
+        return Err(AppError::Validation(
+            "Search query 'q' is required".to_string(),
+        ));
     }
 
     let (page, per_page) = validate_pagination(params.page, params.per_page);
@@ -87,7 +89,9 @@ pub async fn search(
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(json!({ "contacts": contacts, "query": params.q, "page": page, "per_page": per_page })))
+    Ok(Json(
+        json!({ "contacts": contacts, "query": params.q, "page": page, "per_page": per_page }),
+    ))
 }
 
 /// POST /api/contacts — Create a new contact (dedup by email).
@@ -96,11 +100,12 @@ pub async fn create(
     Extension(claims): Extension<Claims>,
     Json(req): Json<CreateContactRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     if req.first_name.is_empty() || req.last_name.is_empty() {
-        return Err(AppError::Validation("First name and last name are required".to_string()));
+        return Err(AppError::Validation(
+            "First name and last name are required".to_string(),
+        ));
     }
 
     // If email is provided, check for existing contact with same email for this tenant
@@ -197,17 +202,15 @@ pub async fn get(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let contact = sqlx::query_as::<_, Contact>(
-        "SELECT * FROM contacts WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(id)
-    .bind(account_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound(format!("Contact {} not found", id)))?;
+    let contact =
+        sqlx::query_as::<_, Contact>("SELECT * FROM contacts WHERE id = $1 AND tenant_id = $2")
+            .bind(id)
+            .bind(account_id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(AppError::NotFound(format!("Contact {} not found", id)))?;
 
     Ok(Json(json!(contact)))
 }
@@ -219,8 +222,7 @@ pub async fn update(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateContactRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // If email is being changed, check that no OTHER contact already has that email for this tenant
     if let Some(ref email) = req.email {
@@ -236,7 +238,7 @@ pub async fn update(
 
             if existing.is_some() {
                 return Err(AppError::Duplicate(
-                    "Another contact with this email already exists".to_string()
+                    "Another contact with this email already exists".to_string(),
                 ));
             }
         }
@@ -297,7 +299,8 @@ pub async fn update(
         Some(existing_id),
         Some(json!({"updated": true})),
         None,
-    ).await;
+    )
+    .await;
 
     Ok(Json(json!(contact)))
 }
@@ -308,8 +311,7 @@ pub async fn delete(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&claims.aid)
-        .map_err(|_| AppError::Unauthorized)?;
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let result = sqlx::query("DELETE FROM contacts WHERE id = $1 AND tenant_id = $2")
         .bind(id)

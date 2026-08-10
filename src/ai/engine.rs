@@ -4,9 +4,9 @@
 //! intelligent decisions about follow-ups. They analyze live database state
 //! and produce adaptive recommendations.
 
+use crate::ai::models::*;
 use sqlx::PgPool;
 use uuid::Uuid;
-use crate::ai::models::*;
 
 /// Assess churn risk for a single entity by analyzing health signals, activity, and plan status.
 /// Called by the worker every 5 minutes for inactive trials.
@@ -17,17 +17,27 @@ pub async fn assess_churn_risk(db: &PgPool, tenant_id: Uuid, contact_id: Uuid) -
          FROM account_health WHERE tenant_id = $1 AND entity_type = 'contact' AND entity_id = $2"
     ).bind(tenant_id).bind(contact_id).fetch_optional(db).await.unwrap_or(None);
 
-    let (score, risk_level, last_active_at, signals_len): (Option<i32>, Option<String>, Option<chrono::DateTime<chrono::Utc>>, Option<i32>) = health_row.unwrap_or_default();
+    let (score, risk_level, last_active_at, signals_len): (
+        Option<i32>,
+        Option<String>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<i32>,
+    ) = health_row.unwrap_or_default();
 
     let plan_row = sqlx::query_as::<_, (Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
         "SELECT tp.status, tp.trial_ends_at
          FROM tenant_plans tp
          JOIN contacts c ON c.tenant_id = tp.tenant_id
          WHERE c.id = $1 AND tp.status IN ('active', 'trialing')
-         LIMIT 1"
-    ).bind(contact_id).fetch_optional(db).await.unwrap_or(None);
+         LIMIT 1",
+    )
+    .bind(contact_id)
+    .fetch_optional(db)
+    .await
+    .unwrap_or(None);
 
-    let (plan_status, _trial_ends): (Option<String>, Option<chrono::DateTime<chrono::Utc>>) = plan_row.unwrap_or_default();
+    let (plan_status, _trial_ends): (Option<String>, Option<chrono::DateTime<chrono::Utc>>) =
+        plan_row.unwrap_or_default();
 
     let score = score.unwrap_or(100);
     let _risk = risk_level.unwrap_or_else(|| "healthy".to_string());
@@ -36,18 +46,26 @@ pub async fn assess_churn_risk(db: &PgPool, tenant_id: Uuid, contact_id: Uuid) -
     let is_trialing = plan_status.as_deref() == Some("trialing");
 
     // Days since last activity
-    let inactivity_days = last_at.map(|t| {
-        let diff = chrono::Utc::now() - t;
-        diff.num_days()
-    }).unwrap_or(0);
+    let inactivity_days = last_at
+        .map(|t| {
+            let diff = chrono::Utc::now() - t;
+            diff.num_days()
+        })
+        .unwrap_or(0);
 
     // Age of account in days
     let age_days = sqlx::query_scalar::<_, Option<i64>>(
-        "SELECT EXTRACT(DAY FROM (NOW() - created_at))::bigint FROM contacts WHERE id = $1"
-    ).bind(contact_id).fetch_one(db).await.unwrap_or(None).unwrap_or(0);
+        "SELECT EXTRACT(DAY FROM (NOW() - created_at))::bigint FROM contacts WHERE id = $1",
+    )
+    .bind(contact_id)
+    .fetch_one(db)
+    .await
+    .unwrap_or(None)
+    .unwrap_or(0);
 
     // Weighted churn model: score contribution + inactivity + plan status + signal velocity
-    let churn_prob = calculate_churn_probability(score, inactivity_days, is_trialing, signals_count);
+    let churn_prob =
+        calculate_churn_probability(score, inactivity_days, is_trialing, signals_count);
 
     let (risk_tier, intervention, priority) = classify_churn(churn_prob, score, inactivity_days);
 
@@ -63,7 +81,12 @@ pub async fn assess_churn_risk(db: &PgPool, tenant_id: Uuid, contact_id: Uuid) -
     }
 }
 
-fn calculate_churn_probability(score: i32, inactivity_days: i64, is_trialing: bool, _signals: i32) -> f64 {
+fn calculate_churn_probability(
+    score: i32,
+    inactivity_days: i64,
+    is_trialing: bool,
+    _signals: i32,
+) -> f64 {
     let mut prob: f64 = 1.0 - (score as f64 / 100.0);
     prob += (inactivity_days as f64 * 0.02).min(0.4);
     if is_trialing {
@@ -75,34 +98,63 @@ fn calculate_churn_probability(score: i32, inactivity_days: i64, is_trialing: bo
 
 fn classify_churn(prob: f64, score: i32, days: i64) -> (String, String, String) {
     if prob >= 0.75 || score <= 10 || days >= 30 {
-        ("critical".to_string(), "immediate_human_callback + urgency_email".to_string(), "immediate".to_string())
+        (
+            "critical".to_string(),
+            "immediate_human_callback + urgency_email".to_string(),
+            "immediate".to_string(),
+        )
     } else if prob >= 0.50 || score <= 40 || days >= 14 {
-        ("high".to_string(), "personalized_re_engagement + discount_offer".to_string(), "within_24h".to_string())
+        (
+            "high".to_string(),
+            "personalized_re_engagement + discount_offer".to_string(),
+            "within_24h".to_string(),
+        )
     } else if prob >= 0.25 || score <= 70 || days >= 7 {
-        ("medium".to_string(), "checklist_automation + reminder_email".to_string(), "within_week".to_string())
+        (
+            "medium".to_string(),
+            "checklist_automation + reminder_email".to_string(),
+            "within_week".to_string(),
+        )
     } else {
-        ("low".to_string(), "monitor — no action needed".to_string(), "monitor".to_string())
+        (
+            "low".to_string(),
+            "monitor — no action needed".to_string(),
+            "monitor".to_string(),
+        )
     }
 }
 
 /// Determine the best channel for a follow-up based on historical engagement.
 /// Reads from event_logs to see which channels the contact has responded to.
-pub async fn suggest_channel(db: &PgPool, tenant_id: Uuid, contact_id: Uuid, _context: &str) -> ChannelSuggestion {
+pub async fn suggest_channel(
+    db: &PgPool,
+    tenant_id: Uuid,
+    contact_id: Uuid,
+    _context: &str,
+) -> ChannelSuggestion {
     // Count email opens vs SMS interactions
     let email_engagement = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT COUNT(*) FROM event_logs el
          JOIN business_profiles bp ON bp.id = el.business_profile_id
          JOIN users u ON u.id = bp.user_id
          WHERE u.tenant_id = $1 AND u.id = $2
-         AND el.event_name IN ('email.opened', 'email.clicked', 'email.replied')"
-    ).bind(tenant_id).bind(contact_id).fetch_optional(db).await;
+         AND el.event_name IN ('email.opened', 'email.clicked', 'email.replied')",
+    )
+    .bind(tenant_id)
+    .bind(contact_id)
+    .fetch_optional(db)
+    .await;
 
     let sms_engagement = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT COUNT(*) FROM outbound_messages WHERE tenant_id = $1 AND channel = 'sms'
          AND status = 'sent' AND to_address IN (
              SELECT email FROM contacts WHERE id = $2
-         )"
-    ).bind(tenant_id).bind(contact_id).fetch_optional(db).await;
+         )",
+    )
+    .bind(tenant_id)
+    .bind(contact_id)
+    .fetch_optional(db)
+    .await;
 
     let email_count = email_engagement.unwrap_or(None).flatten().unwrap_or(0);
     let sms_count = sms_engagement.unwrap_or(None).flatten().unwrap_or(0);
@@ -111,7 +163,10 @@ pub async fn suggest_channel(db: &PgPool, tenant_id: Uuid, contact_id: Uuid, _co
         ChannelSuggestion {
             recommended_channel: "email".to_string(),
             confidence: 0.8,
-            reason: format!("Contact has engaged with {} emails vs {} SMS messages", email_count, sms_count),
+            reason: format!(
+                "Contact has engaged with {} emails vs {} SMS messages",
+                email_count, sms_count
+            ),
         }
     } else if sms_count > 0 && email_count == 0 {
         ChannelSuggestion {
@@ -133,7 +188,7 @@ pub async fn suggest_timing(_db: &PgPool, _tenant_id: Uuid, _contact_id: Uuid) -
     // In production: analyze event_logs for time-of-day patterns per contact.
     // For now: sensible defaults based on B2B behavior patterns.
     TimingSuggestion {
-        recommended_hour: 10,  // 10 AM — peak B2B email open rates
+        recommended_hour: 10, // 10 AM — peak B2B email open rates
         recommended_day: "weekday".to_string(),
         best_window: "morning".to_string(),
         confidence: 0.65,
@@ -142,10 +197,18 @@ pub async fn suggest_timing(_db: &PgPool, _tenant_id: Uuid, _contact_id: Uuid) -
 }
 
 /// Suggest a segmentation and campaign strategy for the given goal.
-pub async fn recommend_campaign(db: &PgPool, tenant_id: Uuid, goal: &str) -> CampaignRecommendation {
-    let target_count = sqlx::query_scalar::<_, Option<i64>>(
-        "SELECT COUNT(*) FROM contacts WHERE tenant_id = $1"
-    ).bind(tenant_id).fetch_one(db).await.unwrap_or(None).unwrap_or(0);
+pub async fn recommend_campaign(
+    db: &PgPool,
+    tenant_id: Uuid,
+    goal: &str,
+) -> CampaignRecommendation {
+    let target_count =
+        sqlx::query_scalar::<_, Option<i64>>("SELECT COUNT(*) FROM contacts WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(db)
+            .await
+            .unwrap_or(None)
+            .unwrap_or(0);
 
     let segments = vec![
         CampaignSegment {

@@ -5,11 +5,11 @@
 //!
 //! Access: Tenant-scoped (all authenticated users)
 
-pub mod models;
 pub mod handlers;
+pub mod models;
 
-use axum::{Router, middleware};
 use crate::AppState;
+use axum::{middleware, Router};
 
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
@@ -22,19 +22,40 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/:id/pause", axum::routing::post(handlers::pause))
         // Steps
         .route("/steps", axum::routing::post(handlers::add_step))
-        .route("/steps/:step_id", axum::routing::patch(handlers::update_step))
-        .route("/steps/:step_id", axum::routing::delete(handlers::delete_step))
+        .route(
+            "/steps/:step_id",
+            axum::routing::patch(handlers::update_step),
+        )
+        .route(
+            "/steps/:step_id",
+            axum::routing::delete(handlers::delete_step),
+        )
         // Triggers (tag -> campaign)
         .route("/:id/triggers", axum::routing::get(handlers::list_triggers))
         .route("/:id/triggers", axum::routing::post(handlers::add_trigger))
-        .route("/triggers/:trigger_id", axum::routing::delete(handlers::remove_trigger))
+        .route(
+            "/triggers/:trigger_id",
+            axum::routing::delete(handlers::remove_trigger),
+        )
         // Enrollments
-        .route("/:id/enrollments", axum::routing::get(handlers::list_enrollments))
+        .route(
+            "/:id/enrollments",
+            axum::routing::get(handlers::list_enrollments),
+        )
         .route("/:id/enroll", axum::routing::post(handlers::enroll_contact))
-        .route("/enrollments/:enrollment_id", axum::routing::patch(handlers::update_enrollment))
+        .route(
+            "/enrollments/:enrollment_id",
+            axum::routing::patch(handlers::update_enrollment),
+        )
         // Action: build full campaign from template names
         .route("/build", axum::routing::post(handlers::build_campaign))
         // Sync a tag from FunnelSwift to CRM Swift
-        .route("/sync-tag", axum::routing::post(handlers::sync_funnelswift_tag))
-        .layer(middleware::from_fn_with_state(state.clone(), crate::auth::middleware::auth_middleware))
+        .route(
+            "/sync-tag",
+            axum::routing::post(handlers::sync_funnelswift_tag),
+        )
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::middleware::auth_middleware,
+        ))
 }

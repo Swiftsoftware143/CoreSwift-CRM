@@ -52,7 +52,9 @@ pub async fn inbound_webhook(
     let (sender_email, recipient_email, mailgun_payload) = try_parse_inbound(&body);
 
     if sender_email.is_empty() || recipient_email.is_empty() {
-        return Ok(Json(json!({"received": false, "error": "could not determine sender or recipient"})));
+        return Ok(Json(
+            json!({"received": false, "error": "could not determine sender or recipient"}),
+        ));
     }
 
     // Find which mailbox this is for (by recipient email)
@@ -95,26 +97,28 @@ pub async fn inbound_webhook(
                     })));
                 }
                 None => {
-                    return Ok(Json(json!({"received": false, "error": "no matching mailbox"})));
+                    return Ok(Json(
+                        json!({"received": false, "error": "no matching mailbox"}),
+                    ));
                 }
             }
         }
     };
 
     // Get domain_id for the mailbox to validate webhook signature
-    let domain_row = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT domain_id FROM private_email_boxes WHERE id = $1",
-    )
-    .bind(mailbox_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(AppError::Database)?
-    .ok_or_else(|| AppError::NotFound("Mailbox domain not found".into()))?;
+    let domain_row =
+        sqlx::query_as::<_, (Uuid,)>("SELECT domain_id FROM private_email_boxes WHERE id = $1")
+            .bind(mailbox_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(AppError::Database)?
+            .ok_or_else(|| AppError::NotFound("Mailbox domain not found".into()))?;
 
     let domain_id = domain_row.0;
 
     // Load provider config to validate webhook signature
-    let provider_config = load_provider_config(&state.db, domain_id, tenant_id).await
+    let provider_config = load_provider_config(&state.db, domain_id, tenant_id)
+        .await
         .map_err(|e| AppError::Internal(format!("Failed to load provider config: {}", e)))?;
 
     // Validate webhook — pass raw body to provider for signature check
@@ -124,7 +128,7 @@ pub async fn inbound_webhook(
     let inbound = match inbound {
         Some(i) => i,
         None => {
-                // Signature validation failed — try reconstructing from raw parse
+            // Signature validation failed — try reconstructing from raw parse
             // (not all senders configure webhook verification)
             let (body_text, subject, body_html, msg_id, in_reply_to) =
                 if let Some(ref p) = mailgun_payload {
@@ -135,9 +139,27 @@ pub async fn inbound_webhook(
                     } else {
                         &p.body_html
                     };
-                    let mid = if p.message_id.is_empty() { None } else { Some(p.message_id.clone()) };
-                    let irt = if p.in_reply_to.is_empty() { None } else { Some(p.in_reply_to.clone()) };
-                    (text.to_string(), p.subject.clone(), if p.body_html.is_empty() { None } else { Some(p.body_html.clone()) }, mid.clone(), irt)
+                    let mid = if p.message_id.is_empty() {
+                        None
+                    } else {
+                        Some(p.message_id.clone())
+                    };
+                    let irt = if p.in_reply_to.is_empty() {
+                        None
+                    } else {
+                        Some(p.in_reply_to.clone())
+                    };
+                    (
+                        text.to_string(),
+                        p.subject.clone(),
+                        if p.body_html.is_empty() {
+                            None
+                        } else {
+                            Some(p.body_html.clone())
+                        },
+                        mid.clone(),
+                        irt,
+                    )
                 } else {
                     ("".to_string(), "".to_string(), None, None, None)
                 };
@@ -191,7 +213,7 @@ pub async fn inbound_webhook(
     // If the receiving mailbox is the tenant's designated support box,
     // auto-create a ticket from this email.
     let support_box_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT (settings->>'support_email_box_id')::uuid FROM tenants WHERE id = $1"
+        "SELECT (settings->>'support_email_box_id')::uuid FROM tenants WHERE id = $1",
     )
     .bind(tenant_id)
     .fetch_optional(&state.db)
@@ -243,8 +265,13 @@ pub async fn inbound_webhook(
 
     // Fire auto-reply rules
     super::auto_reply_handler::maybe_fire_auto_reply(
-        &state.db, tenant_id, "always", "", &inbound.from,
-    ).await;
+        &state.db,
+        tenant_id,
+        "always",
+        "",
+        &inbound.from,
+    )
+    .await;
 
     Ok(Json(json!({
         "received": true,
@@ -277,13 +304,15 @@ fn try_parse_inbound(body: &str) -> (String, String, Option<MailgunInbound>) {
     }
     // Attempt 2: JSON body (SES SNS, Postmark, custom providers)
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
-        let recipient = json.get("recipient")
+        let recipient = json
+            .get("recipient")
             .or_else(|| json.get("to"))
             .or_else(|| json.get("mail").and_then(|m| m.get("recipient")))
             .and_then(|v| v.as_str())
             .map(extract_email)
             .unwrap_or_default();
-        let sender = json.get("sender")
+        let sender = json
+            .get("sender")
             .or_else(|| json.get("from"))
             .or_else(|| json.get("mail").and_then(|m| m.get("sender")))
             .and_then(|v| v.as_str())

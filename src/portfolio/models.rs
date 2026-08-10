@@ -36,6 +36,8 @@ pub struct IntegrationTarget {
 pub struct CreatePortfolioRequest {
     pub name: String,
     pub slug: Option<String>,
+    pub email: Option<String>,
+    pub description: Option<String>,
     pub settings: Option<serde_json::Value>,
 }
 

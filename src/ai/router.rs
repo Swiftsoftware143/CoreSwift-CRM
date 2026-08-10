@@ -10,7 +10,12 @@ use serde_json::json;
 
 /// Route a prompt to the configured LLM provider with fallback chain.
 /// Tries primary first, then falls through to next providers on failure.
-pub async fn route_to_llm(_primary: &str, api_keys: &std::collections::HashMap<String, String>, system_prompt: &str, user_prompt: &str) -> Result<String, String> {
+pub async fn route_to_llm(
+    _primary: &str,
+    api_keys: &std::collections::HashMap<String, String>,
+    system_prompt: &str,
+    user_prompt: &str,
+) -> Result<String, String> {
     // Define fallback chain: primary -> openai -> anthropic
     let providers = ["deepseek", "openai", "anthropic"];
 
@@ -73,7 +78,9 @@ async fn call_deepseek(api_key: &str, system: &str, user: &str) -> Result<String
         return Err(format!("DeepSeek returned {}", status));
     }
 
-    let body: serde_json::Value = resp.json().await
+    let body: serde_json::Value = resp
+        .json()
+        .await
         .map_err(|e| format!("DeepSeek response parse failed: {}", e))?;
 
     body["choices"][0]["message"]["content"]
@@ -104,7 +111,9 @@ async fn call_openai(api_key: &str, system: &str, user: &str) -> Result<String, 
         .await
         .map_err(|e| format!("OpenAI request failed: {}", e))?;
 
-    let body: serde_json::Value = resp.json().await
+    let body: serde_json::Value = resp
+        .json()
+        .await
         .map_err(|e| format!("OpenAI response parse failed: {}", e))?;
 
     body["choices"][0]["message"]["content"]
@@ -135,7 +144,9 @@ async fn call_anthropic(api_key: &str, system: &str, user: &str) -> Result<Strin
         .await
         .map_err(|e| format!("Anthropic request failed: {}", e))?;
 
-    let body: serde_json::Value = resp.json().await
+    let body: serde_json::Value = resp
+        .json()
+        .await
         .map_err(|e| format!("Anthropic response parse failed: {}", e))?;
 
     body["content"][0]["text"]

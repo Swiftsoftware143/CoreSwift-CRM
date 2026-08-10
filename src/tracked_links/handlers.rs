@@ -1,16 +1,16 @@
 use axum::{
-    extract::{State, Path, Json, Extension, Query},
+    extract::{Extension, Json, Path, Query, State},
     http::{StatusCode, Uri},
     response::{IntoResponse, Redirect},
 };
+use rand::Rng;
 use serde_json::json;
 use uuid::Uuid;
-use rand::Rng;
 
-use crate::AppState;
-use crate::errors::{AppError, ApiResult};
-use crate::auth::models::Claims;
 use super::models::*;
+use crate::auth::models::Claims;
+use crate::errors::{ApiResult, AppError};
+use crate::AppState;
 
 /// POST /api/tracked-links — create a tracked link
 pub async fn create_tracked_link(
@@ -22,7 +22,7 @@ pub async fn create_tracked_link(
 
     // Validate tag exists in this tenant
     let tag_exists: bool = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM tags WHERE id=$1 AND tenant_id=$2 AND is_active=true"
+        "SELECT COUNT(*) FROM tags WHERE id=$1 AND tenant_id=$2 AND is_active=true",
     )
     .bind(r.tag_id)
     .bind(tenant_id)
@@ -32,7 +32,10 @@ pub async fn create_tracked_link(
         > 0;
 
     if !tag_exists {
-        return Err(AppError::NotFound(format!("Tag {} not found or inactive", r.tag_id)));
+        return Err(AppError::NotFound(format!(
+            "Tag {} not found or inactive",
+            r.tag_id
+        )));
     }
 
     // Generate unique slug
@@ -40,7 +43,7 @@ pub async fn create_tracked_link(
 
     let id = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO tracked_links(id, tenant_id, tag_id, slug, target_url) VALUES($1,$2,$3,$4,$5)"
+        "INSERT INTO tracked_links(id, tenant_id, tag_id, slug, target_url) VALUES($1,$2,$3,$4,$5)",
     )
     .bind(id)
     .bind(tenant_id)
@@ -72,7 +75,7 @@ pub async fn list_tracked_links(
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let links = sqlx::query_as::<_, TrackedLink>(
-        "SELECT * FROM tracked_links WHERE tenant_id=$1 ORDER BY created_at DESC"
+        "SELECT * FROM tracked_links WHERE tenant_id=$1 ORDER BY created_at DESC",
     )
     .bind(tenant_id)
     .fetch_all(&s.db)
@@ -81,22 +84,20 @@ pub async fn list_tracked_links(
     // Build results with click counts and tag info
     let mut results: Vec<TrackedLinkWithClicks> = Vec::new();
     for link in &links {
-        let click_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM link_clicks WHERE tracked_link_id=$1"
-        )
-        .bind(link.id)
-        .fetch_one(&s.db)
-        .await
-        .unwrap_or(0);
+        let click_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM link_clicks WHERE tracked_link_id=$1")
+                .bind(link.id)
+                .fetch_one(&s.db)
+                .await
+                .unwrap_or(0);
 
-        let tag_info: Option<(String, Option<String>)> = sqlx::query_as(
-            "SELECT name, color FROM tags WHERE id=$1"
-        )
-        .bind(link.tag_id)
-        .fetch_optional(&s.db)
-        .await
-        .ok()
-        .flatten();
+        let tag_info: Option<(String, Option<String>)> =
+            sqlx::query_as("SELECT name, color FROM tags WHERE id=$1")
+                .bind(link.tag_id)
+                .fetch_optional(&s.db)
+                .await
+                .ok()
+                .flatten();
 
         let (tag_name, tag_color) = tag_info.unwrap_or_else(|| ("Unknown".to_string(), None));
 
@@ -144,20 +145,18 @@ pub async fn redirect_tracked_link(
     Path(slug): Path<String>,
     Query(params): Query<serde_json::Value>,
 ) -> Result<impl IntoResponse, AppError> {
-    let link = sqlx::query_as::<_, TrackedLink>(
-        "SELECT * FROM tracked_links WHERE slug=$1"
-    )
-    .bind(&slug)
-    .fetch_optional(&s.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound(format!("Tracked link not found: {}", slug)))?;
+    let link = sqlx::query_as::<_, TrackedLink>("SELECT * FROM tracked_links WHERE slug=$1")
+        .bind(&slug)
+        .fetch_optional(&s.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("Tracked link not found: {}", slug)))?;
 
     // Record the click if contact_id is provided
     if let Some(contact_id_str) = params.get("contact_id").and_then(|v| v.as_str()) {
         if let Ok(contact_id) = Uuid::parse_str(contact_id_str) {
             let _ = sqlx::query(
                 "INSERT INTO link_clicks(id, tracked_link_id, contact_id, tenant_id)
-                 VALUES($1, $2, $3, $4)"
+                 VALUES($1, $2, $3, $4)",
             )
             .bind(Uuid::new_v4())
             .bind(link.id)
@@ -169,7 +168,10 @@ pub async fn redirect_tracked_link(
     }
 
     // Redirect to target URL
-    let uri: Uri = link.target_url.parse().map_err(|_| AppError::BadRequest("Invalid target URL".into()))?;
+    let uri: Uri = link
+        .target_url
+        .parse()
+        .map_err(|_| AppError::BadRequest("Invalid target URL".into()))?;
     Ok(Redirect::to(uri.to_string().as_str()))
 }
 

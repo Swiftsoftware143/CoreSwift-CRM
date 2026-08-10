@@ -1,63 +1,101 @@
-use axum::{extract::{State, Path, Json, Extension, Query}, http::StatusCode, response::IntoResponse};
+use super::models::*;
+use crate::auth::models::Claims;
+use crate::errors::{validate_pagination, ApiResult, AppError};
+use crate::AppState;
+use axum::{
+    extract::{Extension, Json, Path, Query, State},
+    http::StatusCode,
+    response::IntoResponse,
+};
 use rust_decimal::Decimal;
 use serde_json::json;
 use uuid::Uuid;
-use crate::AppState;
-use crate::errors::{AppError, ApiResult, validate_pagination};
-use crate::auth::models::Claims;
-use super::models::*;
 
-fn count_or_zero(v: Option<i64>) -> i64 { v.unwrap_or(0) }
+fn count_or_zero(v: Option<i64>) -> i64 {
+    v.unwrap_or(0)
+}
 
 /// POST /api/affiliates/profile — Create affiliate profile
-pub async fn create_profile(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<CreateAffiliateRequest>) -> ApiResult<impl IntoResponse> {
+pub async fn create_profile(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(r): Json<CreateAffiliateRequest>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
     // Check if already exists
-    let existing = sqlx::query_scalar::<_, Option<i64>>("SELECT COUNT(*) FROM affiliates WHERE tenant_id = $1 AND user_id = $2")
-        .bind(tid).bind(uid)
-        .fetch_one(&s.db).await?;
+    let existing = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT COUNT(*) FROM affiliates WHERE tenant_id = $1 AND user_id = $2",
+    )
+    .bind(tid)
+    .bind(uid)
+    .fetch_one(&s.db)
+    .await?;
     let existing = count_or_zero(existing);
 
     if existing > 0 {
-        return Err(AppError::Duplicate("Affiliate profile already exists".to_string()));
+        return Err(AppError::Duplicate(
+            "Affiliate profile already exists".to_string(),
+        ));
     }
 
     // Get user name for code generation
-    let user_name: Option<String> = sqlx::query_scalar::<_, Option<String>>("SELECT name FROM users WHERE id = $1")
-        .bind(uid).fetch_optional(&s.db).await?.ok_or(AppError::Unauthorized)?;
+    let user_name: Option<String> =
+        sqlx::query_scalar::<_, Option<String>>("SELECT name FROM users WHERE id = $1")
+            .bind(uid)
+            .fetch_optional(&s.db)
+            .await?
+            .ok_or(AppError::Unauthorized)?;
 
     let code = generate_code(&user_name.unwrap_or_else(|| "affiliate".to_string()));
     let rate = r.commission_rate.unwrap_or(10.0);
-    let ctype = r.commission_type.unwrap_or_else(|| "percentage".to_string());
+    let ctype = r
+        .commission_type
+        .unwrap_or_else(|| "percentage".to_string());
 
     let aff = sqlx::query_as::<_, Affiliate>(
         r#"INSERT INTO affiliates (id, tenant_id, user_id, code, commission_rate, commission_type)
-           VALUES ($1, $2, $3, $4, $5, $6) RETURNING *"#
+           VALUES ($1, $2, $3, $4, $5, $6) RETURNING *"#,
     )
-    .bind(Uuid::new_v4()).bind(tid).bind(uid).bind(&code)
-    .bind(Decimal::try_from(rate).unwrap_or(Decimal::new(10, 1))).bind(&ctype)
-    .fetch_one(&s.db).await?;
+    .bind(Uuid::new_v4())
+    .bind(tid)
+    .bind(uid)
+    .bind(&code)
+    .bind(Decimal::try_from(rate).unwrap_or(Decimal::new(10, 1)))
+    .bind(&ctype)
+    .fetch_one(&s.db)
+    .await?;
 
     Ok((StatusCode::CREATED, Json(json!(aff))))
 }
 
 /// GET /api/affiliates/profile — Get affiliate profile
-pub async fn get_profile(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
+pub async fn get_profile(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
-    let aff = sqlx::query_as::<_, Affiliate>("SELECT * FROM affiliates WHERE tenant_id = $1 AND user_id = $2")
-        .bind(tid).bind(uid)
-        .fetch_optional(&s.db).await?
-        .ok_or(AppError::NotFound("No affiliate profile".to_string()))?;
+    let aff = sqlx::query_as::<_, Affiliate>(
+        "SELECT * FROM affiliates WHERE tenant_id = $1 AND user_id = $2",
+    )
+    .bind(tid)
+    .bind(uid)
+    .fetch_optional(&s.db)
+    .await?
+    .ok_or(AppError::NotFound("No affiliate profile".to_string()))?;
 
     Ok(Json(json!(aff)))
 }
 
 /// PATCH /api/affiliates/profile — Update affiliate profile
-pub async fn update_profile(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<UpdateAffiliateRequest>) -> ApiResult<impl IntoResponse> {
+pub async fn update_profile(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(r): Json<UpdateAffiliateRequest>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
@@ -67,29 +105,45 @@ pub async fn update_profile(State(s): State<AppState>, Extension(c): Extension<C
             commission_type = COALESCE($2, commission_type),
             is_active = COALESCE($3, is_active),
             updated_at = NOW()
-           WHERE tenant_id = $4 AND user_id = $5 RETURNING *"#
+           WHERE tenant_id = $4 AND user_id = $5 RETURNING *"#,
     )
-    .bind(r.commission_rate.map(|v| Decimal::try_from(v).unwrap_or(Decimal::new(10, 1))))
+    .bind(
+        r.commission_rate
+            .map(|v| Decimal::try_from(v).unwrap_or(Decimal::new(10, 1))),
+    )
     .bind(r.commission_type)
     .bind(r.is_active)
-    .bind(tid).bind(uid)
-    .fetch_one(&s.db).await?;
+    .bind(tid)
+    .bind(uid)
+    .fetch_one(&s.db)
+    .await?;
 
     Ok(Json(json!(aff)))
 }
 
 /// GET /api/affiliates/referrals — List referrals for this affiliate
-pub async fn list_referrals(State(s): State<AppState>, Extension(c): Extension<Claims>, Query(p): Query<serde_json::Value>) -> ApiResult<impl IntoResponse> {
+pub async fn list_referrals(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Query(p): Query<serde_json::Value>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
-    let (page, per_page) = validate_pagination(p.get("page").and_then(|v| v.as_i64()), p.get("per_page").and_then(|v| v.as_i64()));
+    let (page, per_page) = validate_pagination(
+        p.get("page").and_then(|v| v.as_i64()),
+        p.get("per_page").and_then(|v| v.as_i64()),
+    );
     let offset = (page - 1) * per_page;
 
     // Get affiliate id
-    let aff_id: Uuid = sqlx::query_scalar::<_, Uuid>("SELECT id FROM affiliates WHERE tenant_id = $1 AND user_id = $2")
-        .bind(tid).bind(uid)
-        .fetch_optional(&s.db).await?
-        .ok_or(AppError::NotFound("No affiliate profile".to_string()))?;
+    let aff_id: Uuid = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM affiliates WHERE tenant_id = $1 AND user_id = $2",
+    )
+    .bind(tid)
+    .bind(uid)
+    .fetch_optional(&s.db)
+    .await?
+    .ok_or(AppError::NotFound("No affiliate profile".to_string()))?;
 
     let referrals = sqlx::query_as::<_, Referral>(
         "SELECT * FROM referrals WHERE affiliate_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
@@ -97,25 +151,41 @@ pub async fn list_referrals(State(s): State<AppState>, Extension(c): Extension<C
     .bind(aff_id).bind(per_page).bind(offset)
     .fetch_all(&s.db).await?;
 
-    let total = sqlx::query_scalar::<_, Option<i64>>("SELECT COUNT(*) FROM referrals WHERE affiliate_id = $1")
-        .bind(aff_id)
-        .fetch_one(&s.db).await?;
+    let total = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT COUNT(*) FROM referrals WHERE affiliate_id = $1",
+    )
+    .bind(aff_id)
+    .fetch_one(&s.db)
+    .await?;
     let total = count_or_zero(total);
 
-    Ok(Json(json!({"referrals": referrals, "total": total, "page": page, "per_page": per_page})))
+    Ok(Json(
+        json!({"referrals": referrals, "total": total, "page": page, "per_page": per_page}),
+    ))
 }
 
 /// GET /api/affiliates/payouts — List commission payouts
-pub async fn list_payouts(State(s): State<AppState>, Extension(c): Extension<Claims>, Query(p): Query<serde_json::Value>) -> ApiResult<impl IntoResponse> {
+pub async fn list_payouts(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Query(p): Query<serde_json::Value>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
-    let (page, per_page) = validate_pagination(p.get("page").and_then(|v| v.as_i64()), p.get("per_page").and_then(|v| v.as_i64()));
+    let (page, per_page) = validate_pagination(
+        p.get("page").and_then(|v| v.as_i64()),
+        p.get("per_page").and_then(|v| v.as_i64()),
+    );
     let offset = (page - 1) * per_page;
 
-    let aff_id: Uuid = sqlx::query_scalar::<_, Uuid>("SELECT id FROM affiliates WHERE tenant_id = $1 AND user_id = $2")
-        .bind(tid).bind(uid)
-        .fetch_optional(&s.db).await?
-        .ok_or(AppError::NotFound("No affiliate profile".to_string()))?;
+    let aff_id: Uuid = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM affiliates WHERE tenant_id = $1 AND user_id = $2",
+    )
+    .bind(tid)
+    .bind(uid)
+    .fetch_optional(&s.db)
+    .await?
+    .ok_or(AppError::NotFound("No affiliate profile".to_string()))?;
 
     let payouts = sqlx::query_as::<_, CommissionPayout>(
         "SELECT * FROM commission_payouts WHERE affiliate_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
@@ -123,30 +193,50 @@ pub async fn list_payouts(State(s): State<AppState>, Extension(c): Extension<Cla
     .bind(aff_id).bind(per_page).bind(offset)
     .fetch_all(&s.db).await?;
 
-    let total = sqlx::query_scalar::<_, Option<i64>>("SELECT COUNT(*) FROM commission_payouts WHERE affiliate_id = $1")
-        .bind(aff_id)
-        .fetch_one(&s.db).await?;
+    let total = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT COUNT(*) FROM commission_payouts WHERE affiliate_id = $1",
+    )
+    .bind(aff_id)
+    .fetch_one(&s.db)
+    .await?;
     let total = count_or_zero(total);
 
-    Ok(Json(json!({"payouts": payouts, "total": total, "page": page, "per_page": per_page})))
+    Ok(Json(
+        json!({"payouts": payouts, "total": total, "page": page, "per_page": per_page}),
+    ))
 }
 
 /// GET /api/affiliates/stats — Aggregated affiliate stats
-pub async fn get_stats(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
+pub async fn get_stats(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
-    let aff = sqlx::query_as::<_, Affiliate>("SELECT * FROM affiliates WHERE tenant_id = $1 AND user_id = $2")
-        .bind(tid).bind(uid)
-        .fetch_optional(&s.db).await?
-        .ok_or(AppError::NotFound("No affiliate profile".to_string()))?;
+    let aff = sqlx::query_as::<_, Affiliate>(
+        "SELECT * FROM affiliates WHERE tenant_id = $1 AND user_id = $2",
+    )
+    .bind(tid)
+    .bind(uid)
+    .fetch_optional(&s.db)
+    .await?
+    .ok_or(AppError::NotFound("No affiliate profile".to_string()))?;
 
-    let total_refs = sqlx::query_scalar::<_, Option<i64>>("SELECT COUNT(*) FROM referrals WHERE affiliate_id = $1")
-        .bind(aff.id).fetch_one(&s.db).await?;
+    let total_refs = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT COUNT(*) FROM referrals WHERE affiliate_id = $1",
+    )
+    .bind(aff.id)
+    .fetch_one(&s.db)
+    .await?;
     let total_refs = count_or_zero(total_refs);
 
-    let pending_refs = sqlx::query_scalar::<_, Option<i64>>("SELECT COUNT(*) FROM referrals WHERE affiliate_id = $1 AND status = 'pending'")
-        .bind(aff.id).fetch_one(&s.db).await?;
+    let pending_refs = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT COUNT(*) FROM referrals WHERE affiliate_id = $1 AND status = 'pending'",
+    )
+    .bind(aff.id)
+    .fetch_one(&s.db)
+    .await?;
     let pending_refs = count_or_zero(pending_refs);
 
     let converted_refs = sqlx::query_scalar::<_, Option<i64>>("SELECT COUNT(*) FROM referrals WHERE affiliate_id = $1 AND status IN ('converted', 'commissioned', 'paid')")
@@ -171,39 +261,61 @@ pub async fn get_stats(State(s): State<AppState>, Extension(c): Extension<Claims
 }
 
 /// POST /api/affiliates/redeem/{code} — Apply an affiliate code to current tenant
-pub async fn redeem_code(State(s): State<AppState>, Extension(c): Extension<Claims>, Path(code): Path<String>) -> ApiResult<impl IntoResponse> {
+pub async fn redeem_code(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path(code): Path<String>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let aff = sqlx::query_as::<_, Affiliate>("SELECT * FROM affiliates WHERE code = $1 AND is_active = true")
-        .bind(&code)
-        .fetch_optional(&s.db).await?
-        .ok_or(AppError::NotFound("Invalid or inactive affiliate code".to_string()))?;
+    let aff = sqlx::query_as::<_, Affiliate>(
+        "SELECT * FROM affiliates WHERE code = $1 AND is_active = true",
+    )
+    .bind(&code)
+    .fetch_optional(&s.db)
+    .await?
+    .ok_or(AppError::NotFound(
+        "Invalid or inactive affiliate code".to_string(),
+    ))?;
 
     // Can't refer yourself
     if aff.tenant_id == tid {
-        return Err(AppError::Validation("Cannot redeem your own affiliate code".to_string()));
+        return Err(AppError::Validation(
+            "Cannot redeem your own affiliate code".to_string(),
+        ));
     }
 
     // Check if already referred
-    let existing = sqlx::query_scalar::<_, Option<i64>>("SELECT COUNT(*) FROM referrals WHERE affiliate_id = $1 AND referred_tenant_id = $2")
-        .bind(aff.id).bind(tid)
-        .fetch_one(&s.db).await?;
+    let existing = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT COUNT(*) FROM referrals WHERE affiliate_id = $1 AND referred_tenant_id = $2",
+    )
+    .bind(aff.id)
+    .bind(tid)
+    .fetch_one(&s.db)
+    .await?;
     let existing = count_or_zero(existing);
 
     if existing > 0 {
-        return Err(AppError::Duplicate("Account already referred by this affiliate".to_string()));
+        return Err(AppError::Duplicate(
+            "Account already referred by this affiliate".to_string(),
+        ));
     }
 
     let referral = sqlx::query_as::<_, Referral>(
         r#"INSERT INTO referrals (id, affiliate_id, referred_tenant_id, status)
-           VALUES ($1, $2, $3, 'pending') RETURNING *"#
+           VALUES ($1, $2, $3, 'pending') RETURNING *"#,
     )
-    .bind(Uuid::new_v4()).bind(aff.id).bind(tid)
-    .fetch_one(&s.db).await?;
+    .bind(Uuid::new_v4())
+    .bind(aff.id)
+    .bind(tid)
+    .fetch_one(&s.db)
+    .await?;
 
     // Update affiliate referral count
     let _ = sqlx::query("UPDATE affiliates SET referral_count = referral_count + 1 WHERE id = $1")
-        .bind(aff.id).execute(&s.db).await;
+        .bind(aff.id)
+        .execute(&s.db)
+        .await;
 
     Ok((StatusCode::CREATED, Json(json!(referral))))
 }
@@ -211,11 +323,14 @@ pub async fn redeem_code(State(s): State<AppState>, Extension(c): Extension<Clai
 // ── Affiliate Product Board ──
 
 /// GET /api/affiliates/products — List affiliate products (public for FunnelSwift)
-pub async fn list_products(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
+pub async fn list_products(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let products = sqlx::query_as::<_, AffiliateProduct>(
-        "SELECT * FROM affiliate_products WHERE tenant_id = $1 ORDER BY sort_order ASC, name ASC"
+        "SELECT * FROM affiliate_products WHERE tenant_id = $1 ORDER BY sort_order ASC, name ASC",
     )
     .bind(tid)
     .fetch_all(&s.db)
@@ -225,7 +340,11 @@ pub async fn list_products(State(s): State<AppState>, Extension(c): Extension<Cl
 }
 
 /// POST /api/affiliates/products — Create a product
-pub async fn create_product(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<CreateProductRequest>) -> ApiResult<impl IntoResponse> {
+pub async fn create_product(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(r): Json<CreateProductRequest>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     if r.name.is_empty() {
@@ -255,7 +374,12 @@ pub async fn create_product(State(s): State<AppState>, Extension(c): Extension<C
 }
 
 /// PATCH /api/affiliates/products/{id} — Update a product
-pub async fn update_product(State(s): State<AppState>, Extension(c): Extension<Claims>, Path(id): Path<Uuid>, Json(r): Json<UpdateProductRequest>) -> ApiResult<impl IntoResponse> {
+pub async fn update_product(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path(id): Path<Uuid>,
+    Json(r): Json<UpdateProductRequest>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let product = sqlx::query_as::<_, AffiliateProduct>(
@@ -272,14 +396,23 @@ pub async fn update_product(State(s): State<AppState>, Extension(c): Extension<C
             is_active = COALESCE($10, is_active),
             sort_order = COALESCE($11, sort_order),
             updated_at = NOW()
-           WHERE id = $12 AND tenant_id = $13 RETURNING *"#
+           WHERE id = $12 AND tenant_id = $13 RETURNING *"#,
     )
     .bind(&r.name)
     .bind(&r.description)
-    .bind(r.price.map(|v| Decimal::try_from(v).unwrap_or(Decimal::ZERO)))
-    .bind(r.commission_rate.map(|v| Decimal::try_from(v).unwrap_or(Decimal::new(10, 1))))
+    .bind(
+        r.price
+            .map(|v| Decimal::try_from(v).unwrap_or(Decimal::ZERO)),
+    )
+    .bind(
+        r.commission_rate
+            .map(|v| Decimal::try_from(v).unwrap_or(Decimal::new(10, 1))),
+    )
     .bind(r.commission_type.as_deref())
-    .bind(r.commission_amount.map(|v| Decimal::try_from(v).unwrap_or(Decimal::ZERO)))
+    .bind(
+        r.commission_amount
+            .map(|v| Decimal::try_from(v).unwrap_or(Decimal::ZERO)),
+    )
     .bind(r.tag_id)
     .bind(&r.image_url)
     .bind(&r.checkout_url)
@@ -295,19 +428,28 @@ pub async fn update_product(State(s): State<AppState>, Extension(c): Extension<C
 }
 
 /// DELETE /api/affiliates/products/{id} — Delete a product
-pub async fn delete_product(State(s): State<AppState>, Extension(c): Extension<Claims>, Path(id): Path<Uuid>) -> ApiResult<impl IntoResponse> {
+pub async fn delete_product(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let r = sqlx::query("DELETE FROM affiliate_products WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tid)
         .execute(&s.db)
         .await?;
-    if r.rows_affected() == 0 { return Err(AppError::NotFound("Product not found".into())); }
+    if r.rows_affected() == 0 {
+        return Err(AppError::NotFound("Product not found".into()));
+    }
     Ok(Json(json!({"message": "Product deleted"})))
 }
 
 /// GET /api/affiliates/products/tags — Get products grouped by tag (for FunnelSwift display)
-pub async fn products_by_tag(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
+pub async fn products_by_tag(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     let products = sqlx::query_as::<_, (serde_json::Value,)>(
@@ -315,7 +457,7 @@ pub async fn products_by_tag(State(s): State<AppState>, Extension(c): Extension<
            FROM affiliate_products ap
            LEFT JOIN tags t ON t.id = ap.tag_id
            WHERE ap.tenant_id = $1 AND ap.is_active = true
-           ORDER BY ap.sort_order ASC, ap.name ASC"#
+           ORDER BY ap.sort_order ASC, ap.name ASC"#,
     )
     .bind(tid)
     .fetch_all(&s.db)
@@ -328,16 +470,23 @@ pub async fn products_by_tag(State(s): State<AppState>, Extension(c): Extension<
 // Affiliates log into FunnelSwift back-end and pick which products to promote
 
 /// GET /api/affiliates/my-products — Get products I'm promoting + products available
-pub async fn list_my_products(State(s): State<AppState>, Extension(c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
+pub async fn list_my_products(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
     let aff_id: Uuid = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM affiliates WHERE tenant_id = $1 AND user_id = $2"
+        "SELECT id FROM affiliates WHERE tenant_id = $1 AND user_id = $2",
     )
-    .bind(tid).bind(uid)
-    .fetch_optional(&s.db).await?
-    .ok_or(AppError::NotFound("Affiliate profile not found. Create one first.".into()))?;
+    .bind(tid)
+    .bind(uid)
+    .fetch_optional(&s.db)
+    .await?
+    .ok_or(AppError::NotFound(
+        "Affiliate profile not found. Create one first.".into(),
+    ))?;
 
     // Products I'm currently promoting
     let my_products = sqlx::query_as::<_, (serde_json::Value,)>(
@@ -374,15 +523,21 @@ pub async fn list_my_products(State(s): State<AppState>, Extension(c): Extension
 }
 
 /// POST /api/affiliates/my-products/select — Start promoting a product
-pub async fn select_product(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<SelectProductRequest>) -> ApiResult<impl IntoResponse> {
+pub async fn select_product(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(r): Json<SelectProductRequest>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
     let aff_id: Uuid = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM affiliates WHERE tenant_id = $1 AND user_id = $2"
+        "SELECT id FROM affiliates WHERE tenant_id = $1 AND user_id = $2",
     )
-    .bind(tid).bind(uid)
-    .fetch_optional(&s.db).await?
+    .bind(tid)
+    .bind(uid)
+    .fetch_optional(&s.db)
+    .await?
     .ok_or(AppError::NotFound("Affiliate profile not found".into()))?;
 
     // Check product exists and belongs to this tenant
@@ -411,19 +566,27 @@ pub async fn select_product(State(s): State<AppState>, Extension(c): Extension<C
     .fetch_one(&s.db)
     .await?;
 
-    Ok(Json(json!({"message": "Product selected for promotion", "selection": selection.0})))
+    Ok(Json(
+        json!({"message": "Product selected for promotion", "selection": selection.0}),
+    ))
 }
 
 /// POST /api/affiliates/my-products/unselect — Stop promoting a product
-pub async fn unselect_product(State(s): State<AppState>, Extension(c): Extension<Claims>, Json(r): Json<SelectProductRequest>) -> ApiResult<impl IntoResponse> {
+pub async fn unselect_product(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(r): Json<SelectProductRequest>,
+) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
     let aff_id: Uuid = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM affiliates WHERE tenant_id = $1 AND user_id = $2"
+        "SELECT id FROM affiliates WHERE tenant_id = $1 AND user_id = $2",
     )
-    .bind(tid).bind(uid)
-    .fetch_optional(&s.db).await?
+    .bind(tid)
+    .bind(uid)
+    .fetch_optional(&s.db)
+    .await?
     .ok_or(AppError::NotFound("Affiliate profile not found".into()))?;
 
     sqlx::query(

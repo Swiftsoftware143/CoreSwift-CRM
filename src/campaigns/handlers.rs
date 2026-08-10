@@ -1,18 +1,18 @@
 use axum::{
-    extract::{State, Path, Json, Extension, Query},
+    extract::{Extension, Json, Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
-use chrono::{Utc, TimeDelta};
+use chrono::{TimeDelta, Utc};
 use serde_json::json;
-use uuid::Uuid;
-use std::str::FromStr;
 use sqlx::PgPool;
+use std::str::FromStr;
+use uuid::Uuid;
 
-use crate::AppState;
-use crate::errors::{AppError, ApiResult};
-use crate::auth::models::Claims;
 use super::models::*;
+use crate::auth::models::Claims;
+use crate::errors::{ApiResult, AppError};
+use crate::AppState;
 
 // ──┬─────────────────────────────────────────────
 //   │ CRUD: Campaigns
@@ -34,15 +34,26 @@ pub async fn list(
         let list = sqlx::query_as::<_, EmailCampaign>(
             "SELECT * FROM email_campaigns WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
         ).bind(tid).bind(per_page).bind(offset).fetch_all(&s.db).await?;
-        let t: i64 = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM email_campaigns WHERE tenant_id = $1")
-            .bind(tid).fetch_one(&s.db).await.unwrap_or(0);
+        let t: i64 = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM email_campaigns WHERE tenant_id = $1",
+        )
+        .bind(tid)
+        .fetch_one(&s.db)
+        .await
+        .unwrap_or(0);
         (list, t)
     } else {
         let list = sqlx::query_as::<_, EmailCampaign>(
             "SELECT * FROM email_campaigns WHERE tenant_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4"
         ).bind(tid).bind(status_filter).bind(per_page).bind(offset).fetch_all(&s.db).await?;
-        let t: i64 = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM email_campaigns WHERE tenant_id = $1 AND status = $2")
-            .bind(tid).bind(status_filter).fetch_one(&s.db).await.unwrap_or(0);
+        let t: i64 = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM email_campaigns WHERE tenant_id = $1 AND status = $2",
+        )
+        .bind(tid)
+        .bind(status_filter)
+        .fetch_one(&s.db)
+        .await
+        .unwrap_or(0);
         (list, t)
     };
 
@@ -69,10 +80,15 @@ pub async fn create(
 
     let campaign = sqlx::query_as::<_, EmailCampaign>(
         r#"INSERT INTO email_campaigns (id, tenant_id, name, description, status, created_by)
-           VALUES ($1, $2, $3, $4, 'draft', $5) RETURNING *"#
+           VALUES ($1, $2, $3, $4, 'draft', $5) RETURNING *"#,
     )
-    .bind(Uuid::new_v4()).bind(tid).bind(&r.name).bind(&r.description).bind(uid)
-    .fetch_one(&s.db).await?;
+    .bind(Uuid::new_v4())
+    .bind(tid)
+    .bind(&r.name)
+    .bind(&r.description)
+    .bind(uid)
+    .fetch_one(&s.db)
+    .await?;
 
     // If steps provided, create them
     let mut created_steps = Vec::new();
@@ -99,35 +115,50 @@ pub async fn create(
             r#"INSERT INTO tags (id, tenant_id, name, color, is_active)
                VALUES ($1, $2, $3, '#3B82F6', true)
                ON CONFLICT (tenant_id, name) DO UPDATE SET is_active = true
-               RETURNING id"#
+               RETURNING id"#,
         )
-        .bind(Uuid::new_v4()).bind(tid).bind(tag_name)
-        .fetch_one(&s.db).await?;
-        tag_id = tag.0.get("id").and_then(|v| v.as_str()).and_then(|s| Uuid::from_str(s).ok());
+        .bind(Uuid::new_v4())
+        .bind(tid)
+        .bind(tag_name)
+        .fetch_one(&s.db)
+        .await?;
+        tag_id = tag
+            .0
+            .get("id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::from_str(s).ok());
 
         // Create campaign trigger for this tag
         if let Some(tid_val) = tag_id {
             let _ = sqlx::query(
                 r#"INSERT INTO email_campaign_triggers (id, campaign_id, tag_id, trigger_type)
                    VALUES ($1, $2, $3, 'tag_assigned')
-                   ON CONFLICT (campaign_id, tag_id) DO NOTHING"#
+                   ON CONFLICT (campaign_id, tag_id) DO NOTHING"#,
             )
-            .bind(Uuid::new_v4()).bind(campaign.id).bind(tid_val)
-            .execute(&s.db).await;
+            .bind(Uuid::new_v4())
+            .bind(campaign.id)
+            .bind(tid_val)
+            .execute(&s.db)
+            .await;
         }
 
         // Sync to FunnelSwift if enabled
         if r.funnelswift_sync.unwrap_or(false) {
-            funnelswift_synced = sync_tag_to_funnelswift(&s.db, tid, tag_name, "create").await.is_ok();
+            funnelswift_synced = sync_tag_to_funnelswift(&s.db, tid, tag_name, "create")
+                .await
+                .is_ok();
         }
     }
 
-    Ok((StatusCode::CREATED, Json(json!({
-        "campaign": campaign,
-        "steps": created_steps,
-        "tag_id": tag_id,
-        "funnelswift_synced": funnelswift_synced,
-    }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "campaign": campaign,
+            "steps": created_steps,
+            "tag_id": tag_id,
+            "funnelswift_synced": funnelswift_synced,
+        })),
+    ))
 }
 
 /// GET /api/campaigns/{id} — Get campaign with steps and triggers
@@ -139,17 +170,27 @@ pub async fn get(
     let tid = parse_tenant(&c)?;
 
     let campaign = sqlx::query_as::<_, EmailCampaign>(
-        "SELECT * FROM email_campaigns WHERE id = $1 AND tenant_id = $2"
-    ).bind(id).bind(tid).fetch_optional(&s.db).await?
-        .ok_or(AppError::NotFound("Campaign not found".into()))?;
+        "SELECT * FROM email_campaigns WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(id)
+    .bind(tid)
+    .fetch_optional(&s.db)
+    .await?
+    .ok_or(AppError::NotFound("Campaign not found".into()))?;
 
     let steps = sqlx::query_as::<_, CampaignStep>(
-        "SELECT * FROM email_campaign_steps WHERE campaign_id = $1 ORDER BY step_order"
-    ).bind(id).fetch_all(&s.db).await?;
+        "SELECT * FROM email_campaign_steps WHERE campaign_id = $1 ORDER BY step_order",
+    )
+    .bind(id)
+    .fetch_all(&s.db)
+    .await?;
 
     let triggers = sqlx::query_as::<_, CampaignTrigger>(
-        "SELECT ect.* FROM email_campaign_triggers ect WHERE campaign_id = $1"
-    ).bind(id).fetch_all(&s.db).await?;
+        "SELECT ect.* FROM email_campaign_triggers ect WHERE campaign_id = $1",
+    )
+    .bind(id)
+    .fetch_all(&s.db)
+    .await?;
 
     Ok(Json(json!({
         "campaign": campaign,
@@ -173,10 +214,15 @@ pub async fn update(
             description = COALESCE($2, description),
             status = COALESCE($3, status),
             updated_at = NOW()
-           WHERE id = $4 AND tenant_id = $5 RETURNING *"#
+           WHERE id = $4 AND tenant_id = $5 RETURNING *"#,
     )
-    .bind(&r.name).bind(&r.description).bind(&r.status).bind(id).bind(tid)
-    .fetch_optional(&s.db).await?
+    .bind(&r.name)
+    .bind(&r.description)
+    .bind(&r.status)
+    .bind(id)
+    .bind(tid)
+    .fetch_optional(&s.db)
+    .await?
     .ok_or(AppError::NotFound("Campaign not found".into()))?;
 
     Ok(Json(json!(campaign)))
@@ -190,7 +236,10 @@ pub async fn delete(
 ) -> ApiResult<impl IntoResponse> {
     let tid = parse_tenant(&c)?;
     sqlx::query("DELETE FROM email_campaigns WHERE id = $1 AND tenant_id = $2")
-        .bind(id).bind(tid).execute(&s.db).await?;
+        .bind(id)
+        .bind(tid)
+        .execute(&s.db)
+        .await?;
     Ok(Json(json!({"message": "Campaign deleted"})))
 }
 
@@ -204,17 +253,27 @@ pub async fn activate(
 
     // Verify campaign has steps
     let step_count: i64 = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM email_campaign_steps WHERE campaign_id = $1"
-    ).bind(id).fetch_one(&s.db).await.unwrap_or(0);
+        "SELECT COUNT(*) FROM email_campaign_steps WHERE campaign_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&s.db)
+    .await
+    .unwrap_or(0);
 
     if step_count == 0 {
-        return Err(AppError::Validation("Campaign must have at least one step before activating".into()));
+        return Err(AppError::Validation(
+            "Campaign must have at least one step before activating".into(),
+        ));
     }
 
     let campaign = sqlx::query_as::<_, EmailCampaign>(
         r#"UPDATE email_campaigns SET status = 'active', updated_at = NOW()
-           WHERE id = $1 AND tenant_id = $2 RETURNING *"#
-    ).bind(id).bind(tid).fetch_optional(&s.db).await?
+           WHERE id = $1 AND tenant_id = $2 RETURNING *"#,
+    )
+    .bind(id)
+    .bind(tid)
+    .fetch_optional(&s.db)
+    .await?
     .ok_or(AppError::NotFound("Campaign not found".into()))?;
 
     Ok(Json(json!(campaign)))
@@ -230,8 +289,12 @@ pub async fn pause(
 
     let campaign = sqlx::query_as::<_, EmailCampaign>(
         r#"UPDATE email_campaigns SET status = 'paused', updated_at = NOW()
-           WHERE id = $1 AND tenant_id = $2 RETURNING *"#
-    ).bind(id).bind(tid).fetch_optional(&s.db).await?
+           WHERE id = $1 AND tenant_id = $2 RETURNING *"#,
+    )
+    .bind(id)
+    .bind(tid)
+    .fetch_optional(&s.db)
+    .await?
     .ok_or(AppError::NotFound("Campaign not found".into()))?;
 
     Ok(Json(json!(campaign)))
@@ -252,8 +315,12 @@ pub async fn add_step(
     // Get the max step_order for this campaign
     let max_order: i32 = sqlx::query_scalar::<_, i32>(
         "SELECT COALESCE(MAX(step_order), 0) FROM email_campaign_steps esc
-         JOIN email_campaigns ec ON ec.id = esc.campaign_id WHERE ec.tenant_id = $1"
-    ).bind(tid).fetch_one(&s.db).await.unwrap_or(0);
+         JOIN email_campaigns ec ON ec.id = esc.campaign_id WHERE ec.tenant_id = $1",
+    )
+    .bind(tid)
+    .fetch_one(&s.db)
+    .await
+    .unwrap_or(0);
 
     let order = r.step_order.unwrap_or(max_order + 1);
 
@@ -288,11 +355,17 @@ pub async fn update_step(
            WHERE email_campaign_steps.id = $6
              AND email_campaigns.id = email_campaign_steps.campaign_id
              AND email_campaigns.tenant_id = $7
-           RETURNING email_campaign_steps.*"#
+           RETURNING email_campaign_steps.*"#,
     )
-    .bind(&r.template_name).bind(&r.subject).bind(&r.body)
-    .bind(r.delay_days).bind(r.step_order).bind(step_id).bind(tid)
-    .fetch_optional(&s.db).await?
+    .bind(&r.template_name)
+    .bind(&r.subject)
+    .bind(&r.body)
+    .bind(r.delay_days)
+    .bind(r.step_order)
+    .bind(step_id)
+    .bind(tid)
+    .fetch_optional(&s.db)
+    .await?
     .ok_or(AppError::NotFound("Step not found".into()))?;
 
     Ok(Json(json!(step)))
@@ -310,9 +383,12 @@ pub async fn delete_step(
         "DELETE FROM email_campaign_steps USING email_campaigns
          WHERE email_campaign_steps.id = $1
            AND email_campaigns.id = email_campaign_steps.campaign_id
-           AND email_campaigns.tenant_id = $2"
+           AND email_campaigns.tenant_id = $2",
     )
-    .bind(step_id).bind(tid).execute(&s.db).await?;
+    .bind(step_id)
+    .bind(tid)
+    .execute(&s.db)
+    .await?;
 
     Ok(Json(json!({"message": "Step deleted"})))
 }
@@ -331,8 +407,12 @@ pub async fn list_triggers(
     let triggers = sqlx::query_as::<_, CampaignTrigger>(
         "SELECT ect.* FROM email_campaign_triggers ect
          JOIN email_campaigns ec ON ec.id = ect.campaign_id
-         WHERE ect.campaign_id = $1 AND ec.tenant_id = $2"
-    ).bind(id).bind(tid).fetch_all(&s.db).await?;
+         WHERE ect.campaign_id = $1 AND ec.tenant_id = $2",
+    )
+    .bind(id)
+    .bind(tid)
+    .fetch_all(&s.db)
+    .await?;
     Ok(Json(json!({"triggers": triggers})))
 }
 
@@ -348,10 +428,14 @@ pub async fn add_trigger(
         r#"INSERT INTO email_campaign_triggers (id, campaign_id, tag_id, trigger_type)
            VALUES ($1, $2, $3, $4)
            ON CONFLICT (campaign_id, tag_id) DO NOTHING
-           RETURNING *"#
+           RETURNING *"#,
     )
-    .bind(Uuid::new_v4()).bind(id).bind(r.tag_id).bind(r.trigger_type.unwrap_or("tag_assigned".into()))
-    .fetch_optional(&s.db).await?;
+    .bind(Uuid::new_v4())
+    .bind(id)
+    .bind(r.tag_id)
+    .bind(r.trigger_type.unwrap_or("tag_assigned".into()))
+    .fetch_optional(&s.db)
+    .await?;
 
     Ok((StatusCode::CREATED, Json(json!(trigger))))
 }
@@ -367,8 +451,12 @@ pub async fn remove_trigger(
         "DELETE FROM email_campaign_triggers USING email_campaigns
          WHERE email_campaign_triggers.id = $1
            AND email_campaigns.id = email_campaign_triggers.campaign_id
-           AND email_campaigns.tenant_id = $2"
-    ).bind(trigger_id).bind(tid).execute(&s.db).await?;
+           AND email_campaigns.tenant_id = $2",
+    )
+    .bind(trigger_id)
+    .bind(tid)
+    .execute(&s.db)
+    .await?;
     Ok(Json(json!({"message": "Trigger removed"})))
 }
 
@@ -387,8 +475,12 @@ pub async fn list_enrollments(
         "SELECT ece.* FROM email_campaign_enrollments ece
          JOIN email_campaigns ec ON ec.id = ece.campaign_id
          WHERE ece.campaign_id = $1 AND ec.tenant_id = $2
-         ORDER BY ece.created_at DESC"
-    ).bind(id).bind(tid).fetch_all(&s.db).await?;
+         ORDER BY ece.created_at DESC",
+    )
+    .bind(id)
+    .bind(tid)
+    .fetch_all(&s.db)
+    .await?;
     Ok(Json(json!({"enrollments": enrollments})))
 }
 
@@ -403,8 +495,12 @@ pub async fn enroll_contact(
 
     // Get total steps
     let total_steps: i32 = sqlx::query_scalar::<_, i32>(
-        "SELECT COUNT(*) FROM email_campaign_steps WHERE campaign_id = $1"
-    ).bind(id).fetch_one(&s.db).await.unwrap_or(0) as i32;
+        "SELECT COUNT(*) FROM email_campaign_steps WHERE campaign_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&s.db)
+    .await
+    .unwrap_or(0) as i32;
 
     if total_steps == 0 {
         return Err(AppError::Validation("Campaign has no steps".into()));
@@ -412,8 +508,11 @@ pub async fn enroll_contact(
 
     // Get first step's delay to calculate next_send_at
     let first_step = sqlx::query_as::<_, CampaignStep>(
-        "SELECT * FROM email_campaign_steps WHERE campaign_id = $1 ORDER BY step_order LIMIT 1"
-    ).bind(id).fetch_optional(&s.db).await?;
+        "SELECT * FROM email_campaign_steps WHERE campaign_id = $1 ORDER BY step_order LIMIT 1",
+    )
+    .bind(id)
+    .fetch_optional(&s.db)
+    .await?;
 
     let next_send = first_step.map(|step| {
         Utc::now() + TimeDelta::try_days(step.delay_days as i64).unwrap_or(TimeDelta::zero())
@@ -453,9 +552,13 @@ pub async fn update_enrollment(
                WHERE email_campaign_enrollments.id = $2
                  AND email_campaigns.id = email_campaign_enrollments.campaign_id
                  AND email_campaigns.tenant_id = $3
-               RETURNING email_campaign_enrollments.*"#
-        ).bind("completed").bind(enrollment_id).bind(tid)
-        .fetch_optional(&s.db).await?
+               RETURNING email_campaign_enrollments.*"#,
+        )
+        .bind("completed")
+        .bind(enrollment_id)
+        .bind(tid)
+        .fetch_optional(&s.db)
+        .await?
     } else {
         sqlx::query_as::<_, CampaignEnrollment>(
             r#"UPDATE email_campaign_enrollments SET status = $1
@@ -463,9 +566,13 @@ pub async fn update_enrollment(
                WHERE email_campaign_enrollments.id = $2
                  AND email_campaigns.id = email_campaign_enrollments.campaign_id
                  AND email_campaigns.tenant_id = $3
-               RETURNING email_campaign_enrollments.*"#
-        ).bind(&r.status).bind(enrollment_id).bind(tid)
-        .fetch_optional(&s.db).await?
+               RETURNING email_campaign_enrollments.*"#,
+        )
+        .bind(&r.status)
+        .bind(enrollment_id)
+        .bind(tid)
+        .fetch_optional(&s.db)
+        .await?
     }
     .ok_or(AppError::NotFound("Enrollment not found".into()))?;
 
@@ -489,16 +596,23 @@ pub async fn build_campaign(
         return Err(AppError::Validation("Campaign name is required".into()));
     }
     if r.steps.is_empty() {
-        return Err(AppError::Validation("At least one email step is required".into()));
+        return Err(AppError::Validation(
+            "At least one email step is required".into(),
+        ));
     }
 
     // 1. Create the campaign
     let campaign = sqlx::query_as::<_, EmailCampaign>(
         r#"INSERT INTO email_campaigns (id, tenant_id, name, description, status, created_by)
-           VALUES ($1, $2, $3, $4, 'draft', $5) RETURNING *"#
+           VALUES ($1, $2, $3, $4, 'draft', $5) RETURNING *"#,
     )
-    .bind(Uuid::new_v4()).bind(tid).bind(&r.name).bind(&r.description).bind(uid)
-    .fetch_one(&s.db).await?;
+    .bind(Uuid::new_v4())
+    .bind(tid)
+    .bind(&r.name)
+    .bind(&r.description)
+    .bind(uid)
+    .fetch_one(&s.db)
+    .await?;
 
     // 2. Create all steps
     let mut created_steps = Vec::new();
@@ -523,21 +637,31 @@ pub async fn build_campaign(
             r#"INSERT INTO tags (id, tenant_id, name, color, is_active)
                VALUES ($1, $2, $3, '#3B82F6', true)
                ON CONFLICT (tenant_id, name) DO UPDATE SET is_active = true
-               RETURNING id, name"#
+               RETURNING id, name"#,
         )
-        .bind(Uuid::new_v4()).bind(tid).bind(tag_name)
-        .fetch_one(&s.db).await?;
-        tag_id = tag.0.get("id").and_then(|v| v.as_str()).and_then(|s| Uuid::from_str(s).ok());
+        .bind(Uuid::new_v4())
+        .bind(tid)
+        .bind(tag_name)
+        .fetch_one(&s.db)
+        .await?;
+        tag_id = tag
+            .0
+            .get("id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::from_str(s).ok());
 
         // Link tag to campaign as trigger
         if let Some(tid_val) = tag_id {
             let _ = sqlx::query(
                 r#"INSERT INTO email_campaign_triggers (id, campaign_id, tag_id, trigger_type)
                    VALUES ($1, $2, $3, 'tag_assigned')
-                   ON CONFLICT (campaign_id, tag_id) DO NOTHING"#
+                   ON CONFLICT (campaign_id, tag_id) DO NOTHING"#,
             )
-            .bind(Uuid::new_v4()).bind(campaign.id).bind(tid_val)
-            .execute(&s.db).await;
+            .bind(Uuid::new_v4())
+            .bind(campaign.id)
+            .bind(tid_val)
+            .execute(&s.db)
+            .await;
         }
 
         // Sync to FunnelSwift if enabled
@@ -552,27 +676,36 @@ pub async fn build_campaign(
     // 4. Auto-activate if steps are present and tag is set
     let _ = sqlx::query(
         r#"UPDATE email_campaigns SET status = 'active', updated_at = NOW()
-           WHERE id = $1 AND status = 'draft'"#
-    ).bind(campaign.id).execute(&s.db).await;
+           WHERE id = $1 AND status = 'draft'"#,
+    )
+    .bind(campaign.id)
+    .execute(&s.db)
+    .await;
 
-    Ok((StatusCode::CREATED, Json(json!(BuildResult {
-        campaign,
-        steps: created_steps,
-        tag_id,
-        funnelswift_synced,
-        message: format!(
-            "Campaign '{}' created with {} email steps{}",
-            r.name,
-            r.steps.len(),
-            if funnelswift_synced {
-                format!(" and synced tag '{}' to FunnelSwift", r.funnelswift_tag.as_deref().unwrap_or(""))
-            } else if r.funnelswift_tag.is_some() {
-                " (tag created locally, FunnelSwift sync pending)".into()
-            } else {
-                String::new()
-            }
-        ),
-    }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!(BuildResult {
+            campaign,
+            steps: created_steps,
+            tag_id,
+            funnelswift_synced,
+            message: format!(
+                "Campaign '{}' created with {} email steps{}",
+                r.name,
+                r.steps.len(),
+                if funnelswift_synced {
+                    format!(
+                        " and synced tag '{}' to FunnelSwift",
+                        r.funnelswift_tag.as_deref().unwrap_or("")
+                    )
+                } else if r.funnelswift_tag.is_some() {
+                    " (tag created locally, FunnelSwift sync pending)".into()
+                } else {
+                    String::new()
+                }
+            ),
+        })),
+    ))
 }
 
 // ──┬─────────────────────────────────────────────
@@ -610,10 +743,12 @@ async fn sync_tag_to_funnelswift(
     use crate::native_apps::connectors::funnelswift;
 
     // Get tenant's FunnelSwift integration config
-    let creds: Option<serde_json::Value> = sqlx::query_scalar(
-        "SELECT integration_config->'funnelswift' FROM tenants WHERE id = $1"
-    ).bind(tenant_id).fetch_optional(db).await?
-        .flatten();
+    let creds: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT integration_config->'funnelswift' FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .fetch_optional(db)
+            .await?
+            .flatten();
 
     let credentials = match creds {
         Some(c) if c.is_object() && !c.as_object().map(|o| o.is_empty()).unwrap_or(true) => c,
@@ -639,7 +774,10 @@ async fn sync_tag_to_funnelswift(
                 }
                 Err(e) => {
                     log_sync(db, tenant_id, tag_name, action, "failed", Some(&e)).await;
-                    Err(AppError::Internal(format!("FunnelSwift sync failed: {}", e)))
+                    Err(AppError::Internal(format!(
+                        "FunnelSwift sync failed: {}",
+                        e
+                    )))
                 }
             }
         }
@@ -654,11 +792,17 @@ async fn sync_tag_to_funnelswift(
                 }
                 Err(e) => {
                     log_sync(db, tenant_id, tag_name, action, "failed", Some(&e)).await;
-                    Err(AppError::Internal(format!("FunnelSwift sync failed: {}", e)))
+                    Err(AppError::Internal(format!(
+                        "FunnelSwift sync failed: {}",
+                        e
+                    )))
                 }
             }
         }
-        _ => Err(AppError::Validation(format!("Unknown sync action: {}", action))),
+        _ => Err(AppError::Validation(format!(
+            "Unknown sync action: {}",
+            action
+        ))),
     }
 }
 

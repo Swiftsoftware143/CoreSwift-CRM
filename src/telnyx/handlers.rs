@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::auth::models::Claims;
-use crate::errors::{AppError, ApiResult};
+use crate::errors::{ApiResult, AppError};
 use crate::AppState;
 
 // ---------------------------------------------------------------------------
@@ -128,7 +128,7 @@ pub struct TelnyxWebhookEventPayload {
     #[serde(default)]
     pub digits: Option<String>,
     #[serde(default)]
-    pub text: Option<String>,            // SMS body
+    pub text: Option<String>, // SMS body
     #[serde(default)]
     pub messaging_profile_id: Option<String>,
     #[serde(default)]
@@ -147,14 +147,14 @@ fn mask_key(key: &str) -> String {
         return format!("{}...", &key[..3.min(key.len())]);
     }
     let prefix = &key[..3];
-    let suffix = &key[key.len()-3..];
+    let suffix = &key[key.len() - 3..];
     format!("{}...{}", prefix, suffix)
 }
 
 /// Fetch the global Telnyx config row.
 async fn get_global_config(db: &sqlx::PgPool) -> Result<Option<TelnyxConfig>, AppError> {
     let config = sqlx::query_as::<_, TelnyxConfig>(
-        "SELECT * FROM telnyx_config WHERE is_active = true LIMIT 1"
+        "SELECT * FROM telnyx_config WHERE is_active = true LIMIT 1",
     )
     .fetch_optional(db)
     .await?;
@@ -189,11 +189,14 @@ async fn resolve_telnyx_api_key(db: &sqlx::PgPool, tenant_id: Uuid) -> Result<St
     }
 
     // Fall back to global config
-    let global = get_global_config(db).await?
+    let global = get_global_config(db)
+        .await?
         .ok_or_else(|| AppError::Internal("Telnyx not configured".into()))?;
 
     if global.api_key.is_empty() {
-        return Err(AppError::Internal("Telnyx API key is empty in global config".into()));
+        return Err(AppError::Internal(
+            "Telnyx API key is empty in global config".into(),
+        ));
     }
 
     Ok(global.api_key)
@@ -220,11 +223,15 @@ async fn telnyx_api_request(
         req = req.json(&b);
     }
 
-    let resp = req.send().await
+    let resp = req
+        .send()
+        .await
         .map_err(|e| AppError::Internal(format!("Telnyx API error: {}", e)))?;
 
     let status = resp.status();
-    let resp_body: Value = resp.json().await
+    let resp_body: Value = resp
+        .json()
+        .await
         .map_err(|e| AppError::Internal(format!("Failed to parse Telnyx response: {}", e)))?;
 
     Ok((status, resp_body))
@@ -238,7 +245,7 @@ async fn deduct_credit(db: &sqlx::PgPool, tenant_id: Uuid) -> Result<bool, AppEr
              lifetime_credits = COALESCE(lifetime_credits, 0) + 1,
              updated_at = NOW()
          WHERE tenant_id = $1
-         RETURNING credit_balance"
+         RETURNING credit_balance",
     )
     .bind(tenant_id)
     .fetch_optional(db)
@@ -259,14 +266,15 @@ async fn tenant_id_for_number(db: &sqlx::PgPool, called_number: &str) -> Result<
     };
 
     let tenant_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT tenant_id FROM telnyx_numbers WHERE phone_number = $1 AND is_active = true LIMIT 1"
+        "SELECT tenant_id FROM telnyx_numbers WHERE phone_number = $1 AND is_active = true LIMIT 1",
     )
     .bind(&normalized)
     .fetch_optional(db)
     .await?
     .flatten();
 
-    tenant_id.ok_or_else(|| AppError::NotFound(format!("No tenant found for number: {}", normalized)))
+    tenant_id
+        .ok_or_else(|| AppError::NotFound(format!("No tenant found for number: {}", normalized)))
 }
 
 // ---------------------------------------------------------------------------
@@ -302,7 +310,8 @@ pub async fn send_sms(
 
     if owns_number.is_none() {
         return Err(AppError::Validation(format!(
-            "Number {} is not assigned to your account", from
+            "Number {} is not assigned to your account",
+            from
         )));
     }
 
@@ -312,7 +321,8 @@ pub async fn send_sms(
         None // BYOK — Telnyx manages via API key
     } else {
         // Use global config's messaging profile
-        get_global_config(&state.db).await?
+        get_global_config(&state.db)
+            .await?
             .and_then(|c| c.messaging_profile_id)
     };
 
@@ -337,7 +347,9 @@ pub async fn send_sms(
         .map_err(|e| AppError::Internal(format!("Telnyx send error: {}", e)))?;
 
     let status = resp.status();
-    let resp_body: Value = resp.json().await
+    let resp_body: Value = resp
+        .json()
+        .await
         .map_err(|e| AppError::Internal(format!("Failed to parse Telnyx response: {}", e)))?;
 
     if !status.is_success() && status != 202 {
@@ -345,7 +357,10 @@ pub async fn send_sms(
             .pointer("/errors/0/detail")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown Telnyx error");
-        return Err(AppError::Internal(format!("Telnyx SMS failed: {}", err_msg)));
+        return Err(AppError::Internal(format!(
+            "Telnyx SMS failed: {}",
+            err_msg
+        )));
     }
 
     // Extract message ID from Telnyx response
@@ -383,13 +398,16 @@ pub async fn send_sms(
     .execute(&state.db)
     .await?;
 
-    Ok((StatusCode::OK, Json(json!({
-        "message_id": sms_id,
-        "telnyx_message_id": telnyx_msg_id,
-        "status": "sent",
-        "from": from,
-        "to": req.to,
-    }))))
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "message_id": sms_id,
+            "telnyx_message_id": telnyx_msg_id,
+            "status": "sent",
+            "from": from,
+            "to": req.to,
+        })),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -422,7 +440,10 @@ pub async fn webhook(
 
     tracing::info!(
         "Telnyx voice webhook: event={}, from={:?}, to={:?}, call_ctrl={:?}",
-        event_type, from_number, to_number, call_control_id
+        event_type,
+        from_number,
+        to_number,
+        call_control_id
     );
 
     // Only process inbound calls
@@ -491,7 +512,11 @@ pub async fn webhook(
     .execute(&state.db)
     .await?;
 
-    tracing::info!("Processed Telnyx inbound call for tenant {}: call_id={}", tenant_id, call_id);
+    tracing::info!(
+        "Processed Telnyx inbound call for tenant {}: call_id={}",
+        tenant_id,
+        call_id
+    );
 
     // Return answer + gather commands (same as MissedCall Respondr)
     Ok(Json(json!({
@@ -557,7 +582,9 @@ pub async fn sms_webhook(
 
     tracing::info!(
         "Inbound SMS: from={:?}, to={:?}, body={}",
-        from_number, to_number, text
+        from_number,
+        to_number,
+        text
     );
 
     let called = to_number.clone().unwrap_or_default();
@@ -570,14 +597,21 @@ pub async fn sms_webhook(
     // Resolve tenant from the "to" number (the number the SMS was sent to)
     match tenant_id_for_number(&state.db, &normalized_called).await {
         Ok(tenant_id) => {
-            let normalized_from = from_number.as_ref().map(|s| {
-                if s.starts_with('+') { s.clone() } else { format!("+{}", s) }
-            }).unwrap_or_else(|| "unknown".to_string());
+            let normalized_from = from_number
+                .as_ref()
+                .map(|s| {
+                    if s.starts_with('+') {
+                        s.clone()
+                    } else {
+                        format!("+{}", s)
+                    }
+                })
+                .unwrap_or_else(|| "unknown".to_string());
 
             // Record inbound SMS as an event
             sqlx::query(
                 "INSERT INTO events (id, tenant_id, source, event_type, entity_type, payload)
-                 VALUES ($1, $2, 'telnyx', 'sms.received', 'message', $3)"
+                 VALUES ($1, $2, 'telnyx', 'sms.received', 'message', $3)",
             )
             .bind(Uuid::new_v4())
             .bind(tenant_id)
@@ -591,10 +625,18 @@ pub async fn sms_webhook(
             .execute(&state.db)
             .await?;
 
-            tracing::info!("Inbound SMS recorded for tenant {}: from={}", tenant_id, normalized_from);
+            tracing::info!(
+                "Inbound SMS recorded for tenant {}: from={}",
+                tenant_id,
+                normalized_from
+            );
         }
         Err(e) => {
-            tracing::warn!("No tenant found for SMS destination {}: {}", normalized_called, e);
+            tracing::warn!(
+                "No tenant found for SMS destination {}: {}",
+                normalized_called,
+                e
+            );
         }
     }
 
@@ -641,7 +683,7 @@ pub async fn purchase_number(
 
     // Check if already assigned and active
     let existing_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM telnyx_numbers WHERE phone_number = $1 AND is_active = true"
+        "SELECT id FROM telnyx_numbers WHERE phone_number = $1 AND is_active = true",
     )
     .bind(&number)
     .fetch_optional(&state.db)
@@ -649,38 +691,41 @@ pub async fn purchase_number(
     .flatten();
 
     if let Some(existing_id) = existing_id {
-        let current_tenant: Option<Uuid> = sqlx::query_scalar(
-            "SELECT tenant_id FROM telnyx_numbers WHERE id = $1"
-        )
-        .bind(existing_id)
-        .fetch_one(&state.db)
-        .await?;
+        let current_tenant: Option<Uuid> =
+            sqlx::query_scalar("SELECT tenant_id FROM telnyx_numbers WHERE id = $1")
+                .bind(existing_id)
+                .fetch_one(&state.db)
+                .await?;
 
         if current_tenant == Some(tenant_id) {
-            return Err(AppError::Duplicate("Number already assigned to your account".into()));
+            return Err(AppError::Duplicate(
+                "Number already assigned to your account".into(),
+            ));
         }
 
         // Reassign
-        sqlx::query(
-            "UPDATE telnyx_numbers SET tenant_id = $1, updated_at = NOW() WHERE id = $2"
-        )
-        .bind(tenant_id)
-        .bind(existing_id)
-        .execute(&state.db)
-        .await?;
+        sqlx::query("UPDATE telnyx_numbers SET tenant_id = $1, updated_at = NOW() WHERE id = $2")
+            .bind(tenant_id)
+            .bind(existing_id)
+            .execute(&state.db)
+            .await?;
 
-        return Ok((StatusCode::OK, Json(json!({
-            "id": existing_id,
-            "number": number,
-            "assigned": true,
-            "reassigned": true
-        }))));
+        return Ok((
+            StatusCode::OK,
+            Json(json!({
+                "id": existing_id,
+                "number": number,
+                "assigned": true,
+                "reassigned": true
+            })),
+        ));
     }
 
     // If not BYOK, purchase via Telnyx API
     let byok = tenant_has_own_telnyx(&state.db, tenant_id).await?;
     if !byok {
-        let global = get_global_config(&state.db).await?
+        let global = get_global_config(&state.db)
+            .await?
             .ok_or_else(|| AppError::Internal("Telnyx not configured by admin".into()))?;
 
         let client = reqwest::Client::new();
@@ -700,14 +745,14 @@ pub async fn purchase_number(
             .map_err(|e| AppError::Internal(format!("Telnyx purchase error: {}", e)))?;
 
         let resp_status = resp.status();
-        let resp_body: Value = resp.json().await
-            .map_err(|e| AppError::Internal(format!("Failed to parse Telnyx purchase response: {}", e)))?;
+        let resp_body: Value = resp.json().await.map_err(|e| {
+            AppError::Internal(format!("Failed to parse Telnyx purchase response: {}", e))
+        })?;
 
         if !resp_status.is_success() {
             return Err(AppError::Internal(format!(
                 "Telnyx purchase failed ({}): {}",
-                resp_status,
-                resp_body
+                resp_status, resp_body
             )));
         }
     }
@@ -725,12 +770,15 @@ pub async fn purchase_number(
     .execute(&state.db)
     .await?;
 
-    Ok((StatusCode::CREATED, Json(json!({
-        "id": id,
-        "number": number,
-        "assigned": true,
-        "reassigned": false
-    }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": id,
+            "number": number,
+            "assigned": true,
+            "reassigned": false
+        })),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -744,7 +792,7 @@ pub async fn delete_number(
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let number = sqlx::query_as::<_, TelnyxNumber>(
-        "SELECT * FROM telnyx_numbers WHERE id = $1 AND tenant_id = $2"
+        "SELECT * FROM telnyx_numbers WHERE id = $1 AND tenant_id = $2",
     )
     .bind(id)
     .bind(tenant_id)
@@ -757,18 +805,25 @@ pub async fn delete_number(
     if !byok {
         if let Ok(Some(_)) = get_global_config(&state.db).await {
             // Don't block on Telnyx release failure — soft-delete locally regardless
-            let _ = telnyx_api_request(&state.db, tenant_id, reqwest::Method::DELETE,
-                &format!("/phone_numbers/{}", number.phone_number.trim_start_matches('+')), None).await;
+            let _ = telnyx_api_request(
+                &state.db,
+                tenant_id,
+                reqwest::Method::DELETE,
+                &format!(
+                    "/phone_numbers/{}",
+                    number.phone_number.trim_start_matches('+')
+                ),
+                None,
+            )
+            .await;
         }
     }
 
     // Soft-delete
-    sqlx::query(
-        "UPDATE telnyx_numbers SET is_active = false, updated_at = NOW() WHERE id = $1"
-    )
-    .bind(id)
-    .execute(&state.db)
-    .await?;
+    sqlx::query("UPDATE telnyx_numbers SET is_active = false, updated_at = NOW() WHERE id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await?;
 
     Ok(Json(json!({
         "deleted": true,
@@ -794,12 +849,20 @@ pub async fn search_available_numbers(
         &state.db,
         tenant_id,
         reqwest::Method::GET,
-        &format!("/available_phone_numbers?filter[number][starts_with]={}&page[size]={}", filter, limit),
+        &format!(
+            "/available_phone_numbers?filter[number][starts_with]={}&page[size]={}",
+            filter, limit
+        ),
         None,
-    ).await?;
+    )
+    .await?;
 
     if !status.is_success() {
-        tracing::warn!("Telnyx available numbers search failed: {} {:?}", status, body);
+        tracing::warn!(
+            "Telnyx available numbers search failed: {} {:?}",
+            status,
+            body
+        );
     }
 
     let numbers = body

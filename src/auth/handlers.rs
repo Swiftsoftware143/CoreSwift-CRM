@@ -4,22 +4,22 @@
 //! or an existing tenant slug can be specified.
 
 use axum::{
-    Json,
-    extract::{State, Request, Extension},
+    extract::{Extension, Request, State},
     http::StatusCode,
     response::IntoResponse,
+    Json,
 };
+use chrono::Utc;
 use serde_json::{json, Value};
 use uuid::Uuid;
-use chrono::Utc;
 
 use argon2::{Argon2, PasswordHasher};
 use password_hash::SaltString;
 
-use crate::AppState;
-use crate::errors::{AppError, ApiResult};
-use super::models::*;
 use super::middleware;
+use super::models::*;
+use crate::errors::{ApiResult, AppError};
+use crate::AppState;
 
 /// POST /api/auth/register — Create a new account.
 /// Every signup creates their own isolated tenant (account).
@@ -68,13 +68,12 @@ pub async fn register(
     let password_hash = hash_password(&req.password)?;
 
     // Create user as admin (first user in tenant gets owner role)
-    let is_first_user = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM users WHERE tenant_id = $1",
-    )
-    .bind(tenant_id)
-    .fetch_one(&state.db)
-    .await?
-        == 0;
+    let is_first_user =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&state.db)
+            .await?
+            == 0;
 
     let role = if is_first_user { "owner" } else { "member" };
 
@@ -103,7 +102,6 @@ pub async fn register(
     // Generate tokens
     let (access_token, refresh_token, expires_in) = generate_tokens(&user, &state)?;
 
-
     // Send welcome email via template system
     let vars = json!({
         "name": &req.name,
@@ -112,25 +110,26 @@ pub async fn register(
         "account_name": &tenant.name,
         "app_url": "https://app.coreswiftcrm.com",
     });
-    let _ = crate::email::send_template_email(
-        &state.db,
-        tenant_id,
-        &req.email,
-        "welcome",
-        &vars,
-    )
-    .await
-    .map_err(|e| { tracing::warn!(error = %e, "Welcome email via template failed"); e })
-    .ok();
+    let _ = crate::email::send_template_email(&state.db, tenant_id, &req.email, "welcome", &vars)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "Welcome email via template failed");
+            e
+        })
+        .ok();
     let mut next_steps = vec![
         "Connect your apps — POST /api/native/apps/{slug}/connect".to_string(),
         "Create contacts — POST /api/contacts".to_string(),
         "Set up pipelines — POST /api/pipelines".to_string(),
     ];
     if is_first_user {
-        next_steps.insert(0, format!(
-            "Invite team members — use your tenant slug: '{}'", tenant.slug
-        ));
+        next_steps.insert(
+            0,
+            format!(
+                "Invite team members — use your tenant slug: '{}'",
+                tenant.slug
+            ),
+        );
     }
 
     Ok((
@@ -193,16 +192,14 @@ pub async fn refresh(
 ) -> ApiResult<impl IntoResponse> {
     let claims = middleware::verify_token(&req.refresh_token, &state.config.jwt_secret)?;
 
-    let user_id = Uuid::parse_str(&claims.sub)
-        .map_err(|_| AppError::Unauthorized)?;
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
 
-    let user = sqlx::query_as::<_, TeamMember>(
-        "SELECT * FROM users WHERE id = $1 AND is_active = true",
-    )
-    .bind(user_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::Unauthorized)?;
+    let user =
+        sqlx::query_as::<_, TeamMember>("SELECT * FROM users WHERE id = $1 AND is_active = true")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(AppError::Unauthorized)?;
 
     let (access_token, _, expires_in) = generate_tokens(&user, &state)?;
 
@@ -214,10 +211,7 @@ pub async fn refresh(
 }
 
 /// GET /api/auth/me — Get current user profile.
-pub async fn me(
-    State(state): State<AppState>,
-    request: Request,
-) -> ApiResult<impl IntoResponse> {
+pub async fn me(State(state): State<AppState>, request: Request) -> ApiResult<impl IntoResponse> {
     let auth_header = request
         .headers()
         .get("Authorization")
@@ -230,16 +224,14 @@ pub async fn me(
 
     let claims = middleware::verify_token(token, &state.config.jwt_secret)?;
 
-    let user_id = Uuid::parse_str(&claims.sub)
-        .map_err(|_| AppError::Unauthorized)?;
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
 
-    let user = sqlx::query_as::<_, TeamMember>(
-        "SELECT * FROM users WHERE id = $1 AND is_active = true",
-    )
-    .bind(user_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::Unauthorized)?;
+    let user =
+        sqlx::query_as::<_, TeamMember>("SELECT * FROM users WHERE id = $1 AND is_active = true")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(AppError::Unauthorized)?;
 
     Ok(Json(json!({
         "team_member": TeamMemberResponse::from(user),
@@ -338,10 +330,7 @@ pub async fn logout(
 /// Resolve the tenant for registration — create new account or join via invite.
 /// Every person gets their own isolated tenant (account).
 /// If no account_name/slug provided, auto-generates one from email.
-async fn resolve_account(
-    state: &AppState,
-    req: &RegisterRequest,
-) -> Result<Uuid, AppError> {
+async fn resolve_account(state: &AppState, req: &RegisterRequest) -> Result<Uuid, AppError> {
     // If invite token provided, look up the invite and join that tenant
     if let Some(token) = &req.invite_token {
         let invite = sqlx::query_as::<_, (Uuid,)>(
@@ -353,10 +342,12 @@ async fn resolve_account(
         .ok_or_else(|| AppError::NotFound("Invalid or expired invite token".into()))?;
 
         // Mark invite as accepted
-        sqlx::query("UPDATE tenant_invites SET accepted = true, accepted_at = NOW() WHERE token = $1")
-            .bind(token)
-            .execute(&state.db)
-            .await?;
+        sqlx::query(
+            "UPDATE tenant_invites SET accepted = true, accepted_at = NOW() WHERE token = $1",
+        )
+        .bind(token)
+        .execute(&state.db)
+        .await?;
 
         return Ok(invite.0);
     }
@@ -381,7 +372,7 @@ async fn resolve_account(
         // Auto-assign Free Plan to new tenant
         {
             let free_plan_id: uuid::Uuid = sqlx::query_scalar(
-                "SELECT id FROM plans WHERE slug = 'free' AND is_active = true LIMIT 1"
+                "SELECT id FROM plans WHERE slug = 'free' AND is_active = true LIMIT 1",
             )
             .fetch_optional(&state.db)
             .await
@@ -391,7 +382,7 @@ async fn resolve_account(
             let _ = sqlx::query(
                 r#"INSERT INTO tenant_plans (tenant_id, plan_id, status, billing_cycle)
                    VALUES ($1, $2, 'active', 'monthly')
-                   ON CONFLICT (tenant_id) DO NOTHING"#
+                   ON CONFLICT (tenant_id) DO NOTHING"#,
             )
             .bind(tenant.id)
             .bind(free_plan_id)
@@ -413,13 +404,11 @@ async fn resolve_account(
         .bind(&slug)
         .fetch_one(&state.db)
         .await
-        .map_err(|e| {
-            AppError::Database(e)
-        })?;
+        .map_err(|e| AppError::Database(e))?;
         // Auto-assign Free Plan to new tenant
         {
             let free_plan_id: uuid::Uuid = sqlx::query_scalar(
-                "SELECT id FROM plans WHERE slug = 'free' AND is_active = true LIMIT 1"
+                "SELECT id FROM plans WHERE slug = 'free' AND is_active = true LIMIT 1",
             )
             .fetch_optional(&state.db)
             .await
@@ -429,7 +418,7 @@ async fn resolve_account(
             let _ = sqlx::query(
                 r#"INSERT INTO tenant_plans (tenant_id, plan_id, status, billing_cycle)
                    VALUES ($1, $2, 'active', 'monthly')
-                   ON CONFLICT (tenant_id) DO NOTHING"#
+                   ON CONFLICT (tenant_id) DO NOTHING"#,
             )
             .bind(tenant.id)
             .bind(free_plan_id)
@@ -458,7 +447,7 @@ fn extract_claims(request: &Request, state: &AppState) -> Result<Claims, AppErro
 /// Hash a password using argon2.
 fn hash_password(password: &str) -> Result<String, AppError> {
     use argon2::{
-        password_hash::{SaltString, PasswordHasher},
+        password_hash::{PasswordHasher, SaltString},
         Argon2,
     };
 
@@ -532,18 +521,18 @@ pub async fn forgot_password(
     }
 
     // Look up user
-    let user = sqlx::query_as::<_, UserRow>(
-        "SELECT id, name FROM users WHERE email = $1"
-    )
-    .bind(&req.email)
-    .fetch_optional(&state.db)
-    .await?;
+    let user = sqlx::query_as::<_, UserRow>("SELECT id, name FROM users WHERE email = $1")
+        .bind(&req.email)
+        .fetch_optional(&state.db)
+        .await?;
 
     let user = match user {
         Some(u) => u,
         None => {
             // Don't reveal whether email exists — return success either way
-            return Ok(Json(json!({"message": "If that email is registered, a reset link has been sent."})));
+            return Ok(Json(
+                json!({"message": "If that email is registered, a reset link has been sent."}),
+            ));
         }
     };
 
@@ -552,7 +541,7 @@ pub async fn forgot_password(
     let expires_at = Utc::now() + chrono::Duration::hours(1);
 
     sqlx::query(
-        "INSERT INTO password_resets (id, user_id, token, expires_at) VALUES ($1, $2, $3, $4)"
+        "INSERT INTO password_resets (id, user_id, token, expires_at) VALUES ($1, $2, $3, $4)",
     )
     .bind(Uuid::new_v4())
     .bind(user.id)
@@ -576,10 +565,15 @@ pub async fn forgot_password(
         &vars,
     )
     .await
-    .map_err(|e| { tracing::warn!(error = %e, "Failed to send password reset email via template"); e })
+    .map_err(|e| {
+        tracing::warn!(error = %e, "Failed to send password reset email via template");
+        e
+    })
     .ok();
 
-    Ok(Json(json!({"message": "If that email is registered, a reset link has been sent."})))
+    Ok(Json(
+        json!({"message": "If that email is registered, a reset link has been sent."}),
+    ))
 }
 
 /// POST /api/auth/reset-password — Reset password using token
@@ -594,12 +588,14 @@ pub async fn reset_password(
     Json(req): Json<ResetPasswordRequest>,
 ) -> ApiResult<impl IntoResponse> {
     if req.password.len() < 8 {
-        return Err(AppError::Validation("Password must be at least 8 characters".to_string()));
+        return Err(AppError::Validation(
+            "Password must be at least 8 characters".to_string(),
+        ));
     }
 
     // Find valid reset token
     let reset = sqlx::query_as::<_, PasswordResetRow>(
-        "SELECT id, user_id, expires_at, used FROM password_resets WHERE token = $1"
+        "SELECT id, user_id, expires_at, used FROM password_resets WHERE token = $1",
     )
     .bind(&req.token)
     .fetch_optional(&state.db)
@@ -607,7 +603,9 @@ pub async fn reset_password(
     .ok_or_else(|| AppError::Validation("Invalid or expired reset token".to_string()))?;
 
     if reset.used {
-        return Err(AppError::Validation("Token has already been used".to_string()));
+        return Err(AppError::Validation(
+            "Token has already been used".to_string(),
+        ));
     }
 
     if Utc::now() > reset.expires_at {
@@ -634,7 +632,9 @@ pub async fn reset_password(
         .execute(&state.db)
         .await?;
 
-    Ok(Json(json!({"message": "Password has been reset successfully."})))
+    Ok(Json(
+        json!({"message": "Password has been reset successfully."}),
+    ))
 }
 
 // ── Internal row types ──
@@ -653,13 +653,12 @@ struct PasswordResetRow {
     used: bool,
 }
 
-
 pub async fn get_usage(
     State(state): State<AppState>,
     Extension(claims): Extension<crate::auth::models::Claims>,
 ) -> Result<Json<Value>, AppError> {
-    let tid = uuid::Uuid::parse_str(&claims.aid).map_err(|_| AppError::BadRequest("Invalid account".into()))?;
+    let tid = uuid::Uuid::parse_str(&claims.aid)
+        .map_err(|_| AppError::BadRequest("Invalid account".into()))?;
     let usage = crate::features::get_usage_json(&state.db, tid).await;
     Ok(Json(usage))
 }
-

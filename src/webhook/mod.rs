@@ -10,14 +10,16 @@
 //! This is the universal entry point so OpenClaw, n8n, and CheatLayer
 //! only need to know one URL + one token to access the entire CRM Swift API.
 
+pub mod actions;
 pub mod handlers;
 pub mod models;
-pub mod actions;
 
-use axum::Router;
 use crate::AppState;
+use axum::Router;
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/:token/:action", axum::routing::post(handlers::handle_webhook))
+    Router::new().route(
+        "/:token/:action",
+        axum::routing::post(handlers::handle_webhook),
+    )
 }

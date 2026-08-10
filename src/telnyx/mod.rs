@@ -8,8 +8,8 @@
 
 pub mod handlers;
 
-use axum::{Router, middleware};
 use crate::AppState;
+use axum::{middleware, Router};
 
 /// Build the Telnyx route tree.
 /// Public routes (no auth):
@@ -34,13 +34,20 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/send-sms", axum::routing::post(handlers::send_sms))
         .route("/numbers", axum::routing::get(handlers::list_numbers))
         .route("/numbers", axum::routing::post(handlers::purchase_number))
-        .route("/numbers/:id", axum::routing::delete(handlers::delete_number))
-        .route("/available", axum::routing::get(handlers::search_available_numbers))
+        .route(
+            "/numbers/:id",
+            axum::routing::delete(handlers::delete_number),
+        )
+        .route(
+            "/available",
+            axum::routing::get(handlers::search_available_numbers),
+        )
         .route("/config", axum::routing::get(handlers::get_config))
         .route("/config", axum::routing::put(handlers::update_config))
-        .layer(middleware::from_fn_with_state(state.clone(), crate::auth::middleware::auth_middleware));
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::middleware::auth_middleware,
+        ));
 
-    Router::new()
-        .merge(public)
-        .merge(protected)
+    Router::new().merge(public).merge(protected)
 }

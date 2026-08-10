@@ -21,7 +21,9 @@ pub struct SetRetentionRequest {
     pub retention_days: i32,
 }
 
-fn default_retention() -> i32 { 365 }
+fn default_retention() -> i32 {
+    365
+}
 
 /// Request body for triggering a manual purge.
 #[derive(Debug, Deserialize)]
@@ -122,9 +124,15 @@ pub struct AddDomainRequest {
     pub smtp_tls: bool,
 }
 
-fn default_region() -> String { "us".into() }
-fn default_provider_type() -> String { "mailgun".into() }
-fn default_true() -> bool { true }
+fn default_region() -> String {
+    "us".into()
+}
+fn default_provider_type() -> String {
+    "mailgun".into()
+}
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Deserialize)]
 pub struct ProvisionMailboxRequest {
@@ -188,8 +196,7 @@ pub struct TenantEmailLimitsResponse {
 
 // Plan feature limits
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PrivateEmailPlanFeatures {
     #[serde(default)]
     pub private_email: bool,

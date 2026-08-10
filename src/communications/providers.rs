@@ -3,9 +3,9 @@
 //! Each provider implements a `deliver` function called by the dispatcher.
 //! Configured per-tenant via `tenants.settings->'communications'`.
 
+use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
-use serde_json::{json, Value};
 
 /// Configuration loaded from tenant settings for a single delivery attempt.
 #[derive(Debug, Clone)]
@@ -145,14 +145,22 @@ async fn deliver_via_smtp(cfg: &DeliveryConfig) -> (bool, Option<String>) {
 async fn deliver_whatsapp(cfg: &DeliveryConfig) -> (bool, Option<String>) {
     let phone_number_id = match &cfg.whatsapp_phone_number_id {
         Some(id) => id,
-        None => return (false, Some("WhatsApp phone number ID not configured".to_string())),
+        None => {
+            return (
+                false,
+                Some("WhatsApp phone number ID not configured".to_string()),
+            )
+        }
     };
     let api_token = match &cfg.whatsapp_api_token {
         Some(t) => t,
         None => return (false, Some("WhatsApp API token not configured".to_string())),
     };
 
-    let url = format!("https://graph.facebook.com/v21.0/{}/messages", phone_number_id);
+    let url = format!(
+        "https://graph.facebook.com/v21.0/{}/messages",
+        phone_number_id
+    );
     let payload = serde_json::json!({
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
@@ -245,9 +253,13 @@ pub async fn load_delivery_config(
     subject: Option<String>,
     body: &str,
 ) -> DeliveryConfig {
-    let settings: Option<Value> = sqlx::query_scalar(
-        "SELECT settings->'communications' FROM tenants WHERE id = $1"
-    ).bind(tenant_id).fetch_optional(db).await.unwrap_or(None).flatten();
+    let settings: Option<Value> =
+        sqlx::query_scalar("SELECT settings->'communications' FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .fetch_optional(db)
+            .await
+            .unwrap_or(None)
+            .flatten();
 
     let comms = settings.unwrap_or(json!({}));
 
@@ -258,18 +270,59 @@ pub async fn load_delivery_config(
         to: to.to_string(),
         subject,
         body: body.to_string(),
-        email_provider: comms.get("email_provider").and_then(|v| v.as_str()).unwrap_or("mailgun").to_string(),
-        sms_provider: comms.get("sms_provider").and_then(|v| v.as_str()).unwrap_or("telnyx").to_string(),
-        mailgun_domain: comms.get("mailgun_domain").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        mailgun_api_key: comms.get("mailgun_api_key").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        telnyx_api_key: comms.get("telnyx_api_key").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        whatsapp_phone_number_id: comms.get("whatsapp_phone_number_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        whatsapp_api_token: comms.get("whatsapp_api_token").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        smtp_host: comms.get("smtp_host").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        smtp_port: comms.get("smtp_port").and_then(|v| v.as_u64()).map(|p| p as u16),
-        smtp_username: comms.get("smtp_username").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        smtp_password: comms.get("smtp_password").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        from_email: comms.get("from_email").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        from_name: comms.get("from_name").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        email_provider: comms
+            .get("email_provider")
+            .and_then(|v| v.as_str())
+            .unwrap_or("mailgun")
+            .to_string(),
+        sms_provider: comms
+            .get("sms_provider")
+            .and_then(|v| v.as_str())
+            .unwrap_or("telnyx")
+            .to_string(),
+        mailgun_domain: comms
+            .get("mailgun_domain")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        mailgun_api_key: comms
+            .get("mailgun_api_key")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        telnyx_api_key: comms
+            .get("telnyx_api_key")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        whatsapp_phone_number_id: comms
+            .get("whatsapp_phone_number_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        whatsapp_api_token: comms
+            .get("whatsapp_api_token")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        smtp_host: comms
+            .get("smtp_host")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        smtp_port: comms
+            .get("smtp_port")
+            .and_then(|v| v.as_u64())
+            .map(|p| p as u16),
+        smtp_username: comms
+            .get("smtp_username")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        smtp_password: comms
+            .get("smtp_password")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        from_email: comms
+            .get("from_email")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        from_name: comms
+            .get("from_name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
     }
 }

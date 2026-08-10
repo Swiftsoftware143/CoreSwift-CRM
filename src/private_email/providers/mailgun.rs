@@ -1,10 +1,10 @@
 //! Mailgun email provider — send via REST API, receive via webhook.
 
-use async_trait::async_trait;
-use crate::private_email::providers::{EmailProvider, InboundEmail, ProviderConfig, SendResult};
 use crate::private_email::encryption;
-use sha2::Sha256;
+use crate::private_email::providers::{EmailProvider, InboundEmail, ProviderConfig, SendResult};
+use async_trait::async_trait;
 use hmac::{Hmac, Mac};
+use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -28,17 +28,21 @@ impl EmailProvider for MailgunProvider {
         let api_key = match &config.encrypted_api_key {
             Some(k) => match encryption::decrypt_api_key(config.tenant_id, k) {
                 Ok(key) => key,
-                Err(e) => return SendResult {
+                Err(e) => {
+                    return SendResult {
+                        success: false,
+                        provider_message_id: None,
+                        error: Some(format!("Failed to decrypt API key: {}", e)),
+                    }
+                }
+            },
+            None => {
+                return SendResult {
                     success: false,
                     provider_message_id: None,
-                    error: Some(format!("Failed to decrypt API key: {}", e)),
-                },
-            },
-            None => return SendResult {
-                success: false,
-                provider_message_id: None,
-                error: Some("Mailgun API key not configured".into()),
-            },
+                    error: Some("Mailgun API key not configured".into()),
+                }
+            }
         };
 
         let base_url = if config.region.as_deref() == Some("eu") {
@@ -73,7 +77,11 @@ impl EmailProvider for MailgunProvider {
                     let body = resp.text().await.unwrap_or_default();
                     let msg_id = serde_json::from_str::<serde_json::Value>(&body)
                         .ok()
-                        .and_then(|v| v.get("id").and_then(|id| id.as_str()).map(|s| s.to_string()));
+                        .and_then(|v| {
+                            v.get("id")
+                                .and_then(|id| id.as_str())
+                                .map(|s| s.to_string())
+                        });
                     SendResult {
                         success: true,
                         provider_message_id: msg_id,
@@ -104,7 +112,10 @@ impl EmailProvider for MailgunProvider {
             .collect();
 
         let get = |key: &str| -> Option<String> {
-            params.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+            params
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
         };
 
         // Validate Mailgun signature if webhook key is configured

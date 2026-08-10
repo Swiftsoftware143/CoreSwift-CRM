@@ -1,4 +1,7 @@
-use axum::{extract::{Path, State}, Extension, Json};
+use axum::{
+    extract::{Path, State},
+    Extension, Json,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -51,7 +54,7 @@ pub async fn list_auto_replies(
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let rows = sqlx::query_as::<_, AutoReplyRow>(
-        "SELECT * FROM private_email_auto_replies WHERE tenant_id = $1 ORDER BY created_at DESC"
+        "SELECT * FROM private_email_auto_replies WHERE tenant_id = $1 ORDER BY created_at DESC",
     )
     .bind(account_id)
     .fetch_all(&state.db)
@@ -134,14 +137,13 @@ pub async fn delete_auto_reply(
 ) -> ApiResult<Json<serde_json::Value>> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let result = sqlx::query(
-        "DELETE FROM private_email_auto_replies WHERE id = $1 AND tenant_id = $2"
-    )
-    .bind(reply_id)
-    .bind(account_id)
-    .execute(&state.db)
-    .await
-    .map_err(AppError::Database)?;
+    let result =
+        sqlx::query("DELETE FROM private_email_auto_replies WHERE id = $1 AND tenant_id = $2")
+            .bind(reply_id)
+            .bind(account_id)
+            .execute(&state.db)
+            .await
+            .map_err(AppError::Database)?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Auto-reply rule not found".into()));
@@ -159,7 +161,7 @@ pub async fn maybe_fire_auto_reply(
     pool: &sqlx::PgPool,
     tenant_id: Uuid,
     trigger_type: &str,
-    trigger_value: &str,  // tag name, list name, stage name, or ""
+    trigger_value: &str, // tag name, list name, stage name, or ""
     recipient_email: &str,
 ) {
     // Find matching active rules
@@ -232,11 +234,7 @@ pub async fn maybe_fire_auto_reply(
     }
 }
 
-async fn fire_single_rule(
-    pool: &sqlx::PgPool,
-    rule: &AutoReplyRow,
-    recipient: &str,
-) {
+async fn fire_single_rule(pool: &sqlx::PgPool, rule: &AutoReplyRow, recipient: &str) {
     let subject = rule.subject.clone().unwrap_or_else(|| " ".into());
 
     let mailbox = if let Some(mb_id) = rule.mailbox_id {
@@ -261,6 +259,13 @@ async fn fire_single_rule(
 
     // Use provider-agnostic send
     let _ = super::send_handler::send_via_provider(
-        pool, domain_id, rule.tenant_id, &from_address, recipient, &subject, &rule.body_html,
-    ).await;
+        pool,
+        domain_id,
+        rule.tenant_id,
+        &from_address,
+        recipient,
+        &subject,
+        &rule.body_html,
+    )
+    .await;
 }

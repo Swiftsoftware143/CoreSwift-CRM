@@ -5,7 +5,7 @@
 //! Plan limits are enforced via `plans.max_industries`.
 
 use axum::{
-    extract::{State, Extension, Path},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -13,29 +13,119 @@ use axum::{
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::AppState;
-use crate::errors::{AppError, ApiResult};
-use crate::auth::models::Claims;
 use super::models::*;
+use crate::auth::models::Claims;
+use crate::errors::{ApiResult, AppError};
+use crate::AppState;
 
 // ── Canonical industry list ──
 // Mirrors template_categories from the workflowswift database.
 const CANONICAL_INDUSTRIES: &[(&str, &str, &str, &str, i32)] = &[
-    ("site-flipping", "Site Flipping", "Website flipping, marketplace listings, TinyBrander funnel", "🔄", 0),
-    ("sales-lead-gen", "Sales & Lead Generation", "Lead capture, nurturing, and sales pipeline automation", "💼", 1),
-    ("service-businesses", "Service Businesses", "Estimate, schedule, invoice workflows", "🔧", 2),
-    ("recruitment-staffing", "Recruitment & Staffing", "Resume screening, interview coordination, placements", "👥", 3),
-    ("marketing-agencies", "Marketing Agencies", "Content calendars, ad campaigns, reporting", "📣", 4),
-    ("professional-services", "Professional Services", "Tax, legal, consulting workflows", "⚖️", 5),
-    ("ecommerce-retail", "Ecommerce & Retail", "Order fulfillment, inventory, dropshipping", "🛒", 6),
-    ("healthcare-wellness", "Healthcare & Wellness", "Patient intake, appointments, treatment planning", "🏥", 7),
-    ("construction-development", "Construction & Development", "Permit management, subcontractor bidding, development", "🏗️", 8),
-    ("grant-funding", "Grant & Funding", "Grant writing, research, submission tracking", "💰", 9),
-    ("education-training", "Education & Training", "Course creation, enrollment, certificates", "📚", 10),
-    ("publishing-media", "Publishing & Media", "Content approval, newsletters, editorial calendars", "📰", 11),
-    ("government-contracting", "Government Contracting", "Opportunity discovery, bidding, contract management", "🏛️", 12),
-    ("content-creation", "Content Creation", "AI video, images, voiceover workflows", "🎬", 13),
-    ("newsletter", "Newsletter", "Email newsletter creation and management", "📧", 14),
+    (
+        "site-flipping",
+        "Site Flipping",
+        "Website flipping, marketplace listings, TinyBrander funnel",
+        "🔄",
+        0,
+    ),
+    (
+        "sales-lead-gen",
+        "Sales & Lead Generation",
+        "Lead capture, nurturing, and sales pipeline automation",
+        "💼",
+        1,
+    ),
+    (
+        "service-businesses",
+        "Service Businesses",
+        "Estimate, schedule, invoice workflows",
+        "🔧",
+        2,
+    ),
+    (
+        "recruitment-staffing",
+        "Recruitment & Staffing",
+        "Resume screening, interview coordination, placements",
+        "👥",
+        3,
+    ),
+    (
+        "marketing-agencies",
+        "Marketing Agencies",
+        "Content calendars, ad campaigns, reporting",
+        "📣",
+        4,
+    ),
+    (
+        "professional-services",
+        "Professional Services",
+        "Tax, legal, consulting workflows",
+        "⚖️",
+        5,
+    ),
+    (
+        "ecommerce-retail",
+        "Ecommerce & Retail",
+        "Order fulfillment, inventory, dropshipping",
+        "🛒",
+        6,
+    ),
+    (
+        "healthcare-wellness",
+        "Healthcare & Wellness",
+        "Patient intake, appointments, treatment planning",
+        "🏥",
+        7,
+    ),
+    (
+        "construction-development",
+        "Construction & Development",
+        "Permit management, subcontractor bidding, development",
+        "🏗️",
+        8,
+    ),
+    (
+        "grant-funding",
+        "Grant & Funding",
+        "Grant writing, research, submission tracking",
+        "💰",
+        9,
+    ),
+    (
+        "education-training",
+        "Education & Training",
+        "Course creation, enrollment, certificates",
+        "📚",
+        10,
+    ),
+    (
+        "publishing-media",
+        "Publishing & Media",
+        "Content approval, newsletters, editorial calendars",
+        "📰",
+        11,
+    ),
+    (
+        "government-contracting",
+        "Government Contracting",
+        "Opportunity discovery, bidding, contract management",
+        "🏛️",
+        12,
+    ),
+    (
+        "content-creation",
+        "Content Creation",
+        "AI video, images, voiceover workflows",
+        "🎬",
+        13,
+    ),
+    (
+        "newsletter",
+        "Newsletter",
+        "Email newsletter creation and management",
+        "📧",
+        14,
+    ),
 ];
 
 fn fallback_industries() -> Vec<IndustryOption> {
@@ -89,12 +179,14 @@ pub async fn set_user_industry(
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     if req.industry_slug.is_empty() {
-        return Err(AppError::Validation("industry_slug is required".to_string()));
+        return Err(AppError::Validation(
+            "industry_slug is required".to_string(),
+        ));
     }
 
     // Count current active industries for this user
     let current_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM user_industry_dashboards WHERE user_id = $1 AND is_active = true"
+        "SELECT COUNT(*) FROM user_industry_dashboards WHERE user_id = $1 AND is_active = true",
     )
     .bind(user_id)
     .fetch_one(&s.db)
@@ -105,7 +197,7 @@ pub async fn set_user_industry(
         r#"SELECT COALESCE(p.max_industries, 1)
            FROM tenants t
            LEFT JOIN plans p ON p.id = t.plan_id
-           WHERE t.id = $1"#
+           WHERE t.id = $1"#,
     )
     .bind(tenant_id)
     .fetch_optional(&s.db)
@@ -114,7 +206,7 @@ pub async fn set_user_industry(
 
     // Check if we're adding a new one
     let existing = sqlx::query_as::<_, UserIndustryDashboard>(
-        "SELECT * FROM user_industry_dashboards WHERE user_id = $1 AND industry_slug = $2"
+        "SELECT * FROM user_industry_dashboards WHERE user_id = $1 AND industry_slug = $2",
     )
     .bind(user_id)
     .bind(&req.industry_slug)
@@ -128,7 +220,8 @@ pub async fn set_user_industry(
         )));
     }
 
-    let dashboard_name = req.dashboard_name
+    let dashboard_name = req
+        .dashboard_name
         .unwrap_or_else(|| format!("{} Dashboard", req.industry_slug.replace('-', " ")));
 
     // Upsert: insert or reactivate
@@ -180,7 +273,9 @@ pub async fn remove_user_industry(
     .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound("Industry dashboard not found".to_string()));
+        return Err(AppError::NotFound(
+            "Industry dashboard not found".to_string(),
+        ));
     }
 
     Ok(Json(json!({"message": "Industry dashboard deactivated"})))
@@ -196,7 +291,7 @@ pub async fn get_industry_limit(
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let current_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM user_industry_dashboards WHERE user_id = $1 AND is_active = true"
+        "SELECT COUNT(*) FROM user_industry_dashboards WHERE user_id = $1 AND is_active = true",
     )
     .bind(user_id)
     .fetch_one(&s.db)
@@ -206,7 +301,7 @@ pub async fn get_industry_limit(
         r#"SELECT COALESCE(p.max_industries, 1)
            FROM tenants t
            LEFT JOIN plans p ON p.id = t.plan_id
-           WHERE t.id = $1"#
+           WHERE t.id = $1"#,
     )
     .bind(tenant_id)
     .fetch_optional(&s.db)

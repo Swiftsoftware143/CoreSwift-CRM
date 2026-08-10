@@ -11,19 +11,19 @@
 //! - POST /api/google-calendar/webhook       — Google Calendar push notification
 
 use axum::{
-    extract::{Path, Query, State, Extension},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use uuid::Uuid;
 use std::collections::HashMap;
+use uuid::Uuid;
 
-use crate::AppState;
 use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
+use crate::AppState;
 
 // ── Google OAuth2 configuration ──────────────────────────────────────────
 
@@ -33,10 +33,8 @@ const GOOGLE_CALENDAR_API: &str = "https://www.googleapis.com/calendar/v3";
 
 /// Get OAuth2 client configuration from AppConfig or environment
 fn google_oauth_config() -> (String, String, String) {
-    let client_id = std::env::var("GOOGLE_CLIENT_ID")
-        .unwrap_or_else(|_| String::new());
-    let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
-        .unwrap_or_else(|_| String::new());
+    let client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_else(|_| String::new());
+    let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_else(|_| String::new());
     let redirect_uri = std::env::var("GOOGLE_REDIRECT_URI")
         .unwrap_or_else(|_| "http://localhost:8080/api/google-calendar/oauth-callback".to_string());
     (client_id, client_secret, redirect_uri)
@@ -51,7 +49,10 @@ pub fn router(state: AppState) -> axum::Router<AppState> {
         .route("/oauth-callback", get(oauth_callback))
         .route("/sync/:calendar_id", post(sync_calendar))
         .route("/webhook", post(webhook_handler))
-        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::auth::middleware::auth_middleware))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::middleware::auth_middleware,
+        ))
 }
 
 // ── Request/Response types ───────────────────────────────────────────────
@@ -137,13 +138,15 @@ pub async fn get_connect_url(
 
     // Verify the calendar exists and belongs to this tenant
     if !calendar_id.is_empty() {
-        let cal: Option<(Uuid,)> = sqlx::query_scalar(
-            "SELECT id FROM booking_calendars WHERE id = $1 AND tenant_id = $2"
-        )
-        .bind(Uuid::parse_str(&calendar_id).map_err(|_| AppError::Validation("Invalid calendar_id".to_string()))?)
-        .bind(tid)
-        .fetch_optional(&s.db)
-        .await?;
+        let cal: Option<(Uuid,)> =
+            sqlx::query_scalar("SELECT id FROM booking_calendars WHERE id = $1 AND tenant_id = $2")
+                .bind(
+                    Uuid::parse_str(&calendar_id)
+                        .map_err(|_| AppError::Validation("Invalid calendar_id".to_string()))?,
+                )
+                .bind(tid)
+                .fetch_optional(&s.db)
+                .await?;
         if cal.is_none() {
             return Err(AppError::NotFound("Calendar not found".to_string()));
         }
@@ -174,7 +177,9 @@ pub async fn oauth_callback(
         return Err(AppError::BadRequest(format!("Google OAuth error: {}", err)));
     }
 
-    let code = params.code.ok_or_else(|| AppError::Validation("Authorization code missing".to_string()))?;
+    let code = params
+        .code
+        .ok_or_else(|| AppError::Validation("Authorization code missing".to_string()))?;
     let (client_id, client_secret, redirect_uri) = google_oauth_config();
 
     // Exchange auth code for tokens
@@ -199,8 +204,11 @@ pub async fn oauth_callback(
         .await
         .map_err(|e| AppError::BadRequest(format!("Failed to parse token response: {}", e)))?;
 
-    let refresh_token = token_data.refresh_token
-        .ok_or_else(|| AppError::BadRequest("No refresh_token received (Google requires prompt=consent)".to_string()))?;
+    let refresh_token = token_data.refresh_token.ok_or_else(|| {
+        AppError::BadRequest(
+            "No refresh_token received (Google requires prompt=consent)".to_string(),
+        )
+    })?;
 
     // Optionally get a default calendar ID for this user
     let calendar_id = params.state.as_deref().unwrap_or("");
@@ -226,9 +234,12 @@ pub async fn oauth_callback(
 
     // If the calendar doesn't have a google_calendar_id yet, fetch/create one
     let existing_cal_id: Option<String> = sqlx::query_scalar(
-        "SELECT google_calendar_id FROM booking_calendars WHERE id = $1 AND tenant_id = $2"
+        "SELECT google_calendar_id FROM booking_calendars WHERE id = $1 AND tenant_id = $2",
     )
-    .bind(Uuid::parse_str(calendar_id).map_err(|_| AppError::Validation("Invalid calendar_id".to_string()))?)
+    .bind(
+        Uuid::parse_str(calendar_id)
+            .map_err(|_| AppError::Validation("Invalid calendar_id".to_string()))?,
+    )
     .bind(tid)
     .fetch_optional(&s.db)
     .await?
@@ -237,9 +248,12 @@ pub async fn oauth_callback(
     if existing_cal_id.is_none() {
         // Create a new Google Calendar for this booking calendar
         let calendar_name: String = sqlx::query_scalar(
-            "SELECT name FROM booking_calendars WHERE id = $1 AND tenant_id = $2"
+            "SELECT name FROM booking_calendars WHERE id = $1 AND tenant_id = $2",
         )
-        .bind(Uuid::parse_str(calendar_id).map_err(|_| AppError::Validation("Invalid calendar_id".to_string()))?)
+        .bind(
+            Uuid::parse_str(calendar_id)
+                .map_err(|_| AppError::Validation("Invalid calendar_id".to_string()))?,
+        )
         .bind(tid)
         .fetch_optional(&s.db)
         .await?
@@ -252,15 +266,21 @@ pub async fn oauth_callback(
 
         let create_resp = client
             .post(format!("{}/calendars", GOOGLE_CALENDAR_API))
-            .header("Authorization", format!("Bearer {}", token_data.access_token))
+            .header(
+                "Authorization",
+                format!("Bearer {}", token_data.access_token),
+            )
             .json(&create_payload)
             .send()
             .await
-            .map_err(|e| AppError::BadRequest(format!("Failed to create Google Calendar: {}", e)))?;
+            .map_err(|e| {
+                AppError::BadRequest(format!("Failed to create Google Calendar: {}", e))
+            })?;
 
         if create_resp.status().is_success() {
-            let created: CalendarItem = create_resp.json().await
-                .map_err(|e| AppError::BadRequest(format!("Failed to parse calendar create response: {}", e)))?;
+            let created: CalendarItem = create_resp.json().await.map_err(|e| {
+                AppError::BadRequest(format!("Failed to parse calendar create response: {}", e))
+            })?;
 
             sqlx::query(
                 "UPDATE booking_calendars SET google_calendar_id = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3"
@@ -295,7 +315,7 @@ pub async fn sync_calendar(
     // Get calendar with refresh token
     let cal = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
         r#"SELECT name, google_refresh_token, google_calendar_id
-           FROM booking_calendars WHERE id = $1 AND tenant_id = $2"#
+           FROM booking_calendars WHERE id = $1 AND tenant_id = $2"#,
     )
     .bind(calendar_id)
     .bind(tid)
@@ -334,7 +354,18 @@ pub async fn sync_calendar(
 
     let client = reqwest::Client::new();
 
-    for (booking_id, business_name, contact_name, contact_email, description, start_date, _slot_pos, _status, end_date) in &bookings {
+    for (
+        booking_id,
+        business_name,
+        contact_name,
+        contact_email,
+        description,
+        start_date,
+        _slot_pos,
+        _status,
+        end_date,
+    ) in &bookings
+    {
         let event_title = format!("{} - {}", calendar_name, business_name);
         let event_desc = format!(
             "Booking from CoreSwift\nBusiness: {}\nContact: {}\nEmail: {}\n\n{}",
@@ -358,7 +389,10 @@ pub async fn sync_calendar(
         });
 
         match client
-            .post(format!("{}/calendars/{}/events", GOOGLE_CALENDAR_API, google_cal_id))
+            .post(format!(
+                "{}/calendars/{}/events",
+                GOOGLE_CALENDAR_API, google_cal_id
+            ))
             .header("Authorization", format!("Bearer {}", access_token))
             .json(&event_payload)
             .send()
@@ -390,7 +424,8 @@ pub async fn sync_calendar(
     loop {
         let mut url = format!(
             "{}/calendars/{}/events?timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime",
-            GOOGLE_CALENDAR_API, google_cal_id,
+            GOOGLE_CALENDAR_API,
+            google_cal_id,
             time_min.format("%Y-%m-%dT%H:%M:%SZ"),
             time_max.format("%Y-%m-%dT%H:%M:%SZ"),
         );
@@ -412,12 +447,18 @@ pub async fn sync_calendar(
                                 if item.status.as_deref() == Some("cancelled") {
                                     continue;
                                 }
-                                let event_start = item.start.as_ref()
+                                let event_start = item
+                                    .start
+                                    .as_ref()
                                     .and_then(|s| s.date_time.as_ref().or(s.date.as_ref()))
-                                    .cloned().unwrap_or_default();
-                                let event_end = item.end.as_ref()
+                                    .cloned()
+                                    .unwrap_or_default();
+                                let event_end = item
+                                    .end
+                                    .as_ref()
                                     .and_then(|e| e.date_time.as_ref().or(e.date.as_ref()))
-                                    .cloned().unwrap_or_default();
+                                    .cloned()
+                                    .unwrap_or_default();
                                 pulled.push(json!({
                                     "google_event_id": item.id,
                                     "summary": item.summary,
@@ -497,7 +538,10 @@ async fn get_access_token(refresh_token: &str) -> Result<String, AppError> {
 
     if !resp.status().is_success() {
         let err_text = resp.text().await.unwrap_or_default();
-        return Err(AppError::BadRequest(format!("Token refresh error: {}", err_text)));
+        return Err(AppError::BadRequest(format!(
+            "Token refresh error: {}",
+            err_text
+        )));
     }
 
     let token_data: GoogleTokenResponse = resp

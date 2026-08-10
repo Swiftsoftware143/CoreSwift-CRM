@@ -30,9 +30,7 @@ pub async fn test(creds: &serde_json::Value) -> (bool, String) {
         .send()
         .await
     {
-        Ok(resp) if resp.status().is_success() => {
-            (true, "AdaSwift connection successful".into())
-        }
+        Ok(resp) if resp.status().is_success() => (true, "AdaSwift connection successful".into()),
         Ok(resp) => (false, format!("AdaSwift returned status {}", resp.status())),
         Err(e) => (false, format!("AdaSwift connection failed: {}", e)),
     }
@@ -56,7 +54,9 @@ pub async fn push_entity(
                 .send()
                 .await
                 .map_err(|e| format!("AdaSwift push failed: {}", e))?;
-            resp.json().await.map_err(|e| format!("AdaSwift response parse failed: {}", e))
+            resp.json()
+                .await
+                .map_err(|e| format!("AdaSwift response parse failed: {}", e))
         }
         "trigger_campaign" => {
             // Create a new client in AdaSwift AND trigger the welcome campaign
@@ -68,9 +68,14 @@ pub async fn push_entity(
                 .send()
                 .await
                 .map_err(|e| format!("AdaSwift campaign trigger failed: {}", e))?;
-            resp.json().await.map_err(|e| format!("AdaSwift response parse failed: {}", e))
+            resp.json()
+                .await
+                .map_err(|e| format!("AdaSwift response parse failed: {}", e))
         }
-        _ => Err(format!("AdaSwift does not support entity type: {}", entity_type)),
+        _ => Err(format!(
+            "AdaSwift does not support entity type: {}",
+            entity_type
+        )),
     }
 }
 
@@ -94,10 +99,14 @@ pub async fn pull_entity(
                 .send()
                 .await
                 .map_err(|e| format!("AdaSwift pull failed: {}", e))?;
-            resp.json().await.map_err(|e| format!("AdaSwift response parse failed: {}", e))
+            resp.json()
+                .await
+                .map_err(|e| format!("AdaSwift response parse failed: {}", e))
         }
         "reports" => {
-            let client_id = filters.get("client_id").ok_or("client_id filter required for reports")?;
+            let client_id = filters
+                .get("client_id")
+                .ok_or("client_id filter required for reports")?;
             let url = format!("{}/api/clients/{}/reports", base_url, client_id);
             let resp = reqwest::Client::new()
                 .get(&url)
@@ -105,9 +114,14 @@ pub async fn pull_entity(
                 .send()
                 .await
                 .map_err(|e| format!("AdaSwift pull failed: {}", e))?;
-            resp.json().await.map_err(|e| format!("AdaSwift response parse failed: {}", e))
+            resp.json()
+                .await
+                .map_err(|e| format!("AdaSwift response parse failed: {}", e))
         }
-        _ => Err(format!("AdaSwift does not support pulling entity type: {}", entity_type)),
+        _ => Err(format!(
+            "AdaSwift does not support pulling entity type: {}",
+            entity_type
+        )),
     }
 }
 
@@ -134,11 +148,13 @@ pub fn get_meta() -> serde_json::Value {
 }
 
 fn extract_creds(creds: &serde_json::Value) -> Result<(String, String), String> {
-    let api_key = creds.get("api_key")
+    let api_key = creds
+        .get("api_key")
         .and_then(|v| v.as_str())
         .ok_or("AdaSwift API key missing")?
         .to_string();
-    let base_url = creds.get("base_url")
+    let base_url = creds
+        .get("base_url")
         .and_then(|v| v.as_str())
         .ok_or("AdaSwift base URL missing")?
         .trim_end_matches('/')

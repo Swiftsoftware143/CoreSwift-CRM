@@ -1,16 +1,19 @@
 //! Chat action handlers — single endpoint to orchestrate multi-app flows
 
-use axum::{extract::{State, Json, Extension}, response::IntoResponse};
-use serde_json::json;
+use axum::{
+    extract::{Extension, Json, State},
+    response::IntoResponse,
+};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use uuid::Uuid;
 
-use rust_decimal::Decimal;
-use crate::AppState;
-use crate::errors::{AppError, ApiResult};
-use crate::auth::Claims;
 use crate::affiliates::models::*;
 use crate::auth::models::TeamMember;
+use crate::auth::Claims;
+use crate::errors::{ApiResult, AppError};
+use crate::AppState;
+use rust_decimal::Decimal;
 
 #[derive(Debug, Deserialize)]
 pub struct ChatActionRequest {
@@ -38,9 +41,9 @@ pub struct StepPrompt {
 pub struct FieldRequest {
     pub field: String,
     pub label: String,
-    pub field_type: String,  // "text" | "email" | "number" | "select"
+    pub field_type: String, // "text" | "email" | "number" | "select"
     pub required: bool,
-    pub options: Option<Vec<String>>,  // for select fields
+    pub options: Option<Vec<String>>, // for select fields
 }
 
 /// POST /api/admin/chat-action — Execute a business action from chat
@@ -53,11 +56,23 @@ pub async fn execute_chat_action(
     let _is_admin = c.role == "owner" || c.role == "admin";
 
     let result: Result<axum::response::Response, AppError> = match r.intent.as_str() {
-        "create_affiliate" => handle_create_affiliate(&s, tenant_id, r.params).await.map(IntoResponse::into_response),
-        "create_affiliate_in_funnelswift" => handle_create_affiliate_funnelswift(&s, tenant_id, r.params).await.map(IntoResponse::into_response),
-        "create_tenant_account" => handle_create_tenant_account(&s, r.params).await.map(IntoResponse::into_response),
-        "build_campaign" => handle_build_campaign(&s, tenant_id, r.params).await.map(IntoResponse::into_response),
-        "sync_funnelswift_tag" => handle_sync_funnelswift_tag(&s, tenant_id, r.params).await.map(IntoResponse::into_response),
+        "create_affiliate" => handle_create_affiliate(&s, tenant_id, r.params)
+            .await
+            .map(IntoResponse::into_response),
+        "create_affiliate_in_funnelswift" => {
+            handle_create_affiliate_funnelswift(&s, tenant_id, r.params)
+                .await
+                .map(IntoResponse::into_response)
+        }
+        "create_tenant_account" => handle_create_tenant_account(&s, r.params)
+            .await
+            .map(IntoResponse::into_response),
+        "build_campaign" => handle_build_campaign(&s, tenant_id, r.params)
+            .await
+            .map(IntoResponse::into_response),
+        "sync_funnelswift_tag" => handle_sync_funnelswift_tag(&s, tenant_id, r.params)
+            .await
+            .map(IntoResponse::into_response),
         _ => Err(AppError::NotFound(format!("Unknown intent: {}", r.intent))),
     };
     result
@@ -166,18 +181,33 @@ async fn handle_create_affiliate(
 
     // Check what's missing
     let mut missing = Vec::new();
-    if name.is_none() { missing.push(FieldRequest {
-        field: "name".into(), label: "Affiliate full name".into(),
-        field_type: "text".into(), required: true, options: None,
-    }); }
-    if email.is_none() { missing.push(FieldRequest {
-        field: "email".into(), label: "Affiliate email address".into(),
-        field_type: "email".into(), required: true, options: None,
-    }); }
-    if commission_rate.is_none() { missing.push(FieldRequest {
-        field: "commission_rate".into(), label: "Commission rate (%)".into(),
-        field_type: "number".into(), required: true, options: None,
-    }); }
+    if name.is_none() {
+        missing.push(FieldRequest {
+            field: "name".into(),
+            label: "Affiliate full name".into(),
+            field_type: "text".into(),
+            required: true,
+            options: None,
+        });
+    }
+    if email.is_none() {
+        missing.push(FieldRequest {
+            field: "email".into(),
+            label: "Affiliate email address".into(),
+            field_type: "email".into(),
+            required: true,
+            options: None,
+        });
+    }
+    if commission_rate.is_none() {
+        missing.push(FieldRequest {
+            field: "commission_rate".into(),
+            label: "Commission rate (%)".into(),
+            field_type: "number".into(),
+            required: true,
+            options: None,
+        });
+    }
 
     if !missing.is_empty() {
         return Ok(Json(json!(ChatActionResult {
@@ -195,25 +225,28 @@ async fn handle_create_affiliate(
 
     let name = name.ok_or_else(|| AppError::BadRequest("missing field: name".into()))?;
     let email = email.ok_or_else(|| AppError::BadRequest("missing field: email".into()))?;
-    let rate = commission_rate.ok_or_else(|| AppError::BadRequest("missing field: commission_rate".into()))?;
+    let rate = commission_rate
+        .ok_or_else(|| AppError::BadRequest("missing field: commission_rate".into()))?;
 
     // Check if user already exists
-    let existing_user = sqlx::query_as::<_, TeamMember>(
-        "SELECT * FROM users WHERE email = $1"
-    )
-    .bind(email)
-    .fetch_optional(&s.db)
-    .await?;
+    let existing_user = sqlx::query_as::<_, TeamMember>("SELECT * FROM users WHERE email = $1")
+        .bind(email)
+        .fetch_optional(&s.db)
+        .await?;
 
     let (user_id, user_tenant_id) = if let Some(user) = existing_user {
         // TeamMember exists — use their tenant
         (user.id, user.tenant_id)
     } else {
         // Create a new tenant and user for the affiliate
-        let slug = format!("{}-{}", name.to_lowercase().replace(' ', "-"), &Uuid::new_v4().to_string()[..8]);
+        let slug = format!(
+            "{}-{}",
+            name.to_lowercase().replace(' ', "-"),
+            &Uuid::new_v4().to_string()[..8]
+        );
 
         // Create tenant first via the auth flow
-        
+
         // We'll create tenant + user directly
         let new_tenant_id = Uuid::new_v4();
         sqlx::query("INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)")
@@ -226,7 +259,7 @@ async fn handle_create_affiliate(
         // Auto-gen webhook token happens via trigger in migration 027
 
         let new_user_id = Uuid::new_v4();
-        use argon2::password_hash::{SaltString, PasswordHasher};
+        use argon2::password_hash::{PasswordHasher, SaltString};
         let salt = SaltString::generate(&mut rand::thread_rng());
         let password_hash = argon2::Argon2::default()
             .hash_password(name.as_bytes(), &salt)
@@ -253,7 +286,7 @@ async fn handle_create_affiliate(
         r#"INSERT INTO affiliates (id, tenant_id, user_id, code, commission_rate, commission_type)
            VALUES ($1, $2, $3, $4, $5, 'percentage') ON CONFLICT (tenant_id, user_id) DO UPDATE SET
            commission_rate = EXCLUDED.commission_rate, updated_at = NOW()
-           RETURNING *"#
+           RETURNING *"#,
     )
     .bind(Uuid::new_v4())
     .bind(user_tenant_id)
@@ -297,22 +330,42 @@ async fn handle_create_affiliate_funnelswift(
     let price = params.get("price").and_then(|v| v.as_f64());
 
     let mut missing = Vec::new();
-    if name.is_none() { missing.push(FieldRequest {
-        field: "name".into(), label: "Affiliate name".into(),
-        field_type: "text".into(), required: true, options: None,
-    }); }
-    if email.is_none() { missing.push(FieldRequest {
-        field: "email".into(), label: "Affiliate email".into(),
-        field_type: "email".into(), required: true, options: None,
-    }); }
-    if product_name.is_none() { missing.push(FieldRequest {
-        field: "product_name".into(), label: "Product name for affiliate board".into(),
-        field_type: "text".into(), required: true, options: None,
-    }); }
-    if commission_rate.is_none() { missing.push(FieldRequest {
-        field: "commission_rate".into(), label: "Commission rate (%)".into(),
-        field_type: "number".into(), required: true, options: None,
-    }); }
+    if name.is_none() {
+        missing.push(FieldRequest {
+            field: "name".into(),
+            label: "Affiliate name".into(),
+            field_type: "text".into(),
+            required: true,
+            options: None,
+        });
+    }
+    if email.is_none() {
+        missing.push(FieldRequest {
+            field: "email".into(),
+            label: "Affiliate email".into(),
+            field_type: "email".into(),
+            required: true,
+            options: None,
+        });
+    }
+    if product_name.is_none() {
+        missing.push(FieldRequest {
+            field: "product_name".into(),
+            label: "Product name for affiliate board".into(),
+            field_type: "text".into(),
+            required: true,
+            options: None,
+        });
+    }
+    if commission_rate.is_none() {
+        missing.push(FieldRequest {
+            field: "commission_rate".into(),
+            label: "Commission rate (%)".into(),
+            field_type: "number".into(),
+            required: true,
+            options: None,
+        });
+    }
 
     if !missing.is_empty() {
         return Ok(Json(json!(ChatActionResult {
@@ -327,8 +380,10 @@ async fn handle_create_affiliate_funnelswift(
 
     let name = name.ok_or_else(|| AppError::BadRequest("missing field: name".into()))?;
     let email = email.ok_or_else(|| AppError::BadRequest("missing field: email".into()))?;
-    let prod_name = product_name.ok_or_else(|| AppError::BadRequest("missing field: product_name".into()))?;
-    let rate = commission_rate.ok_or_else(|| AppError::BadRequest("missing field: commission_rate".into()))?;
+    let prod_name =
+        product_name.ok_or_else(|| AppError::BadRequest("missing field: product_name".into()))?;
+    let rate = commission_rate
+        .ok_or_else(|| AppError::BadRequest("missing field: commission_rate".into()))?;
     let product_price = price.unwrap_or(79.0);
 
     // Step 1: Create CRM Swift account
@@ -343,7 +398,7 @@ async fn handle_create_affiliate_funnelswift(
         .await?;
 
     let new_user_id = Uuid::new_v4();
-    use argon2::password_hash::{SaltString, PasswordHasher};
+    use argon2::password_hash::{PasswordHasher, SaltString};
     let salt = SaltString::generate(&mut rand::thread_rng());
     let password_hash = argon2::Argon2::default()
         .hash_password(name.as_bytes(), &salt)
@@ -365,7 +420,7 @@ async fn handle_create_affiliate_funnelswift(
     let code = generate_code(name);
     let aff = sqlx::query_as::<_, Affiliate>(
         r#"INSERT INTO affiliates (id, tenant_id, user_id, code, commission_rate, commission_type)
-           VALUES ($1, $2, $3, $4, $5, 'percentage') RETURNING *"#
+           VALUES ($1, $2, $3, $4, $5, 'percentage') RETURNING *"#,
     )
     .bind(Uuid::new_v4())
     .bind(new_tenant_id)
@@ -390,7 +445,7 @@ async fn handle_create_affiliate_funnelswift(
 
     // Step 4: Try to create or get a tag for FunnelSwift
     let tag = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT * FROM tags WHERE tenant_id = $1 AND name = $2"
+        "SELECT * FROM tags WHERE tenant_id = $1 AND name = $2",
     )
     .bind(new_tenant_id)
     .bind(format!("Affiliate: {}", name))
@@ -401,7 +456,7 @@ async fn handle_create_affiliate_funnelswift(
         t.0.get("id").cloned()
     } else {
         let new_tag = sqlx::query_as::<_, (serde_json::Value,)>(
-            "INSERT INTO tags (id, tenant_id, name, color) VALUES ($1, $2, $3, $4) RETURNING id"
+            "INSERT INTO tags (id, tenant_id, name, color) VALUES ($1, $2, $3, $4) RETURNING id",
         )
         .bind(Uuid::new_v4())
         .bind(new_tenant_id)
@@ -416,8 +471,15 @@ async fn handle_create_affiliate_funnelswift(
     if let Some(tid) = tag_id {
         let _ = sqlx::query("UPDATE affiliate_products SET tag_id = $1 WHERE id = $2")
             .bind(tid.as_str().and_then(|s| Uuid::parse_str(s).ok()))
-            .bind(product.0.get("id").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok()))
-            .execute(&s.db).await;
+            .bind(
+                product
+                    .0
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| Uuid::parse_str(s).ok()),
+            )
+            .execute(&s.db)
+            .await;
     }
 
     // Step 5: Trigger Ada campaign trigger for welcome
@@ -463,14 +525,24 @@ async fn handle_create_tenant_account(
     let email = params.get("email").and_then(|v| v.as_str());
 
     let mut missing = Vec::new();
-    if name.is_none() { missing.push(FieldRequest {
-        field: "name".into(), label: "Account/agency name".into(),
-        field_type: "text".into(), required: true, options: None,
-    }); }
-    if email.is_none() { missing.push(FieldRequest {
-        field: "email".into(), label: "Admin email address".into(),
-        field_type: "email".into(), required: true, options: None,
-    }); }
+    if name.is_none() {
+        missing.push(FieldRequest {
+            field: "name".into(),
+            label: "Account/agency name".into(),
+            field_type: "text".into(),
+            required: true,
+            options: None,
+        });
+    }
+    if email.is_none() {
+        missing.push(FieldRequest {
+            field: "email".into(),
+            label: "Admin email address".into(),
+            field_type: "email".into(),
+            required: true,
+            options: None,
+        });
+    }
 
     if !missing.is_empty() {
         return Ok(Json(json!(ChatActionResult {
@@ -487,7 +559,11 @@ async fn handle_create_tenant_account(
     let email = email.ok_or_else(|| AppError::BadRequest("missing field: email".into()))?;
 
     // Create tenant
-    let slug = format!("{}-{}", name.to_lowercase().replace(' ', "-"), &Uuid::new_v4().to_string()[..8]);
+    let slug = format!(
+        "{}-{}",
+        name.to_lowercase().replace(' ', "-"),
+        &Uuid::new_v4().to_string()[..8]
+    );
     let tenant_id = Uuid::new_v4();
 
     sqlx::query("INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)")
@@ -499,7 +575,7 @@ async fn handle_create_tenant_account(
 
     // Create admin user
     let user_id = Uuid::new_v4();
-    use argon2::password_hash::{SaltString, PasswordHasher};
+    use argon2::password_hash::{PasswordHasher, SaltString};
     let salt = SaltString::generate(&mut rand::thread_rng());
     let temp_password = format!("temp-{}", &Uuid::new_v4().to_string()[..8]);
     let password_hash = argon2::Argon2::default()
@@ -519,11 +595,10 @@ async fn handle_create_tenant_account(
     .await?;
 
     // Subscribe to free plan
-    let free_plan = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM plans WHERE slug = 'free' LIMIT 1"
-    )
-    .fetch_optional(&s.db)
-    .await?;
+    let free_plan =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM plans WHERE slug = 'free' LIMIT 1")
+            .fetch_optional(&s.db)
+            .await?;
 
     if let Some((plan_id,)) = free_plan {
         let _ = sqlx::query(
@@ -540,7 +615,10 @@ async fn handle_create_tenant_account(
     Ok(Json(json!(ChatActionResult {
         intent: "create_tenant_account".into(),
         success: true,
-        message: format!("Account '{}' created. Login: {}. A password reset link has been sent.", name, email),
+        message: format!(
+            "Account '{}' created. Login: {}. A password reset link has been sent.",
+            name, email
+        ),
         results: json!({
             "tenant_id": tenant_id,
             "user_id": user_id,
@@ -550,9 +628,19 @@ async fn handle_create_tenant_account(
             "slug": slug,
         }),
         next_steps: vec![
-            StepPrompt { step: "Login".into(), description: "Admin logs in with provided credentials".into() },
-            StepPrompt { step: "Connect apps".into(), description: "Admin connects FunnelSwift, WorkflowSwift, MissedCall Responder".into() },
-            StepPrompt { step: "Set up".into(), description: "Create pipelines, invite team, configure automations".into() },
+            StepPrompt {
+                step: "Login".into(),
+                description: "Admin logs in with provided credentials".into()
+            },
+            StepPrompt {
+                step: "Connect apps".into(),
+                description: "Admin connects FunnelSwift, WorkflowSwift, MissedCall Responder"
+                    .into()
+            },
+            StepPrompt {
+                step: "Set up".into(),
+                description: "Create pipelines, invite team, configure automations".into()
+            },
         ],
         missing_fields: vec![],
     })))
@@ -568,20 +656,32 @@ async fn handle_build_campaign(
     let name = params.get("name").and_then(|v| v.as_str());
     let description = params.get("description").and_then(|v| v.as_str());
     let funnelswift_tag = params.get("funnelswift_tag").and_then(|v| v.as_str());
-    let funnelswift_sync = params.get("funnelswift_sync").and_then(|v| v.as_bool()).unwrap_or(true);
+    let funnelswift_sync = params
+        .get("funnelswift_sync")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     let steps_val = params.get("steps");
 
     let mut missing = Vec::new();
     if name.is_none() {
         missing.push(FieldRequest {
-            field: "name".into(), label: "Campaign name".into(),
-            field_type: "text".into(), required: true, options: None,
+            field: "name".into(),
+            label: "Campaign name".into(),
+            field_type: "text".into(),
+            required: true,
+            options: None,
         });
     }
-    if steps_val.as_ref().is_none_or(|v| !v.is_array() || v.as_array().is_none_or(|a| a.is_empty())) {
+    if steps_val
+        .as_ref()
+        .is_none_or(|v| !v.is_array() || v.as_array().is_none_or(|a| a.is_empty()))
+    {
         missing.push(FieldRequest {
-            field: "steps".into(), label: "Email steps (array of {template_name, subject, body, delay_days})".into(),
-            field_type: "text".into(), required: true, options: None,
+            field: "steps".into(),
+            label: "Email steps (array of {template_name, subject, body, delay_days})".into(),
+            field_type: "text".into(),
+            required: true,
+            options: None,
         });
     }
 
@@ -598,7 +698,9 @@ async fn handle_build_campaign(
 
     let campaign_name = name.ok_or_else(|| AppError::BadRequest("missing field: name".into()))?;
     let steps_val = steps_val.ok_or_else(|| AppError::BadRequest("missing field: steps".into()))?;
-    let steps_arr = steps_val.as_array().ok_or_else(|| AppError::BadRequest("steps must be an array".into()))?;
+    let steps_arr = steps_val
+        .as_array()
+        .ok_or_else(|| AppError::BadRequest("steps must be an array".into()))?;
 
     for (i, step) in steps_arr.iter().enumerate() {
         let tn = step.get("template_name").and_then(|v| v.as_str());
@@ -628,19 +730,31 @@ async fn handle_build_campaign(
     // 1. Create campaign
     let campaign = sqlx::query_as::<_, (serde_json::Value,)>(
         r#"INSERT INTO email_campaigns (id, tenant_id, name, description, status, created_by)
-           VALUES ($1, $2, $3, $4, 'draft', NULL) RETURNING *"#
+           VALUES ($1, $2, $3, $4, 'draft', NULL) RETURNING *"#,
     )
-    .bind(Uuid::new_v4()).bind(tenant_id).bind(campaign_name).bind(description)
-    .fetch_one(&s.db).await?;
+    .bind(Uuid::new_v4())
+    .bind(tenant_id)
+    .bind(campaign_name)
+    .bind(description)
+    .fetch_one(&s.db)
+    .await?;
 
-    let campaign_id_str = campaign.0.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let campaign_id_str = campaign
+        .0
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let campaign_id = Uuid::parse_str(&campaign_id_str)
         .map_err(|_| AppError::BadRequest("invalid campaign id".into()))?;
 
     // 2. Create steps
     let mut created_steps = Vec::new();
     for (i, step) in steps_arr.iter().enumerate() {
-        let tn = step.get("template_name").and_then(|v| v.as_str()).unwrap_or("");
+        let tn = step
+            .get("template_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let subj = step.get("subject").and_then(|v| v.as_str());
         let body = step.get("body").and_then(|v| v.as_str()).unwrap_or("");
         let delay = step.get("delay_days").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
@@ -664,20 +778,31 @@ async fn handle_build_campaign(
             r#"INSERT INTO tags (id, tenant_id, name, color, is_active)
                VALUES ($1, $2, $3, '#3B82F6', true)
                ON CONFLICT (tenant_id, name) DO UPDATE SET is_active = true
-               RETURNING id, name"#
+               RETURNING id, name"#,
         )
-        .bind(Uuid::new_v4()).bind(tenant_id).bind(tag_name)
-        .fetch_one(&s.db).await?;
+        .bind(Uuid::new_v4())
+        .bind(tenant_id)
+        .bind(tag_name)
+        .fetch_one(&s.db)
+        .await?;
         tag_result = Some(tag);
 
-        if let Some(tid_val) = tag_result.as_ref().and_then(|t| t.0.get("id")).and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok()) {
+        if let Some(tid_val) = tag_result
+            .as_ref()
+            .and_then(|t| t.0.get("id"))
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok())
+        {
             let _ = sqlx::query(
                 r#"INSERT INTO email_campaign_triggers (id, campaign_id, tag_id, trigger_type)
                    VALUES ($1, $2, $3, 'tag_assigned')
-                   ON CONFLICT (campaign_id, tag_id) DO NOTHING"#
+                   ON CONFLICT (campaign_id, tag_id) DO NOTHING"#,
             )
-            .bind(Uuid::new_v4()).bind(campaign_id).bind(tid_val)
-            .execute(&s.db).await;
+            .bind(Uuid::new_v4())
+            .bind(campaign_id)
+            .bind(tid_val)
+            .execute(&s.db)
+            .await;
         }
 
         if funnelswift_sync {
@@ -691,19 +816,35 @@ async fn handle_build_campaign(
     // 4. Auto-activate
     let _ = sqlx::query(
         r#"UPDATE email_campaigns SET status = 'active', updated_at = NOW()
-           WHERE id = $1 AND status = 'draft'"#
-    ).bind(campaign_id).execute(&s.db).await;
+           WHERE id = $1 AND status = 'draft'"#,
+    )
+    .bind(campaign_id)
+    .execute(&s.db)
+    .await;
 
-    let step_summary: Vec<String> = created_steps.iter().enumerate().map(|(i, s)| {
-        let tn = s.0.get("template_name").and_then(|v| v.as_str()).unwrap_or("");
-        let subj = s.0.get("subject").and_then(|v| v.as_str()).unwrap_or("(no subject)");
-        let delay = s.0.get("delay_days").and_then(|v| v.as_i64()).unwrap_or(0);
-        format!("  {}. {} — '{}' — {} day(s) delay", i + 1, tn, subj, delay)
-    }).collect();
+    let step_summary: Vec<String> = created_steps
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let tn =
+                s.0.get("template_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+            let subj =
+                s.0.get("subject")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("(no subject)");
+            let delay = s.0.get("delay_days").and_then(|v| v.as_i64()).unwrap_or(0);
+            format!("  {}. {} — '{}' — {} day(s) delay", i + 1, tn, subj, delay)
+        })
+        .collect();
 
     let tag_msg = match (funnelswift_tag, &funnelswift_result) {
         (Some(tn), Some(res)) => format!("\n\nTag '{}': {}", tn, res),
-        (Some(tn), None) => format!("\n\nTag '{}': created locally (FunnelSwift sync not configured)", tn),
+        (Some(tn), None) => format!(
+            "\n\nTag '{}': created locally (FunnelSwift sync not configured)",
+            tn
+        ),
         (None, _) => String::new(),
     };
 
@@ -723,8 +864,17 @@ async fn handle_build_campaign(
             "funnelswift_sync": funnelswift_result,
         }),
         next_steps: vec![
-            StepPrompt { step: "Add contacts".into(), description: format!("Campaign auto-starts when contacts get tag '{}'", funnelswift_tag.unwrap_or("the linked tag")) },
-            StepPrompt { step: "FunnelSwift captures".into(), description: "Leads captured in FunnelSwift with matching tag auto-enroll".into() },
+            StepPrompt {
+                step: "Add contacts".into(),
+                description: format!(
+                    "Campaign auto-starts when contacts get tag '{}'",
+                    funnelswift_tag.unwrap_or("the linked tag")
+                )
+            },
+            StepPrompt {
+                step: "FunnelSwift captures".into(),
+                description: "Leads captured in FunnelSwift with matching tag auto-enroll".into()
+            },
         ],
         missing_fields: vec![],
     })))
@@ -743,14 +893,19 @@ async fn handle_sync_funnelswift_tag(
     let mut missing = Vec::new();
     if tag_name.is_none() {
         missing.push(FieldRequest {
-            field: "tag_name".into(), label: "Tag name to sync".into(),
-            field_type: "text".into(), required: true, options: None,
+            field: "tag_name".into(),
+            label: "Tag name to sync".into(),
+            field_type: "text".into(),
+            required: true,
+            options: None,
         });
     }
     if action.is_none() || !["create", "delete"].contains(&action.unwrap_or("")) {
         missing.push(FieldRequest {
-            field: "action".into(), label: "Sync action (create/delete)".into(),
-            field_type: "select".into(), required: true,
+            field: "action".into(),
+            label: "Sync action (create/delete)".into(),
+            field_type: "select".into(),
+            required: true,
             options: Some(vec!["create".into(), "delete".into()]),
         });
     }
@@ -785,7 +940,8 @@ async fn handle_sync_funnelswift_tag(
             results: json!({"tag_name": tag, "action": act, "status": "failed"}),
             next_steps: vec![StepPrompt {
                 step: "Connect FunnelSwift".into(),
-                description: "Go to Settings > Integrations > FunnelSwift to add your API key and URL".into(),
+                description:
+                    "Go to Settings > Integrations > FunnelSwift to add your API key and URL".into(),
             }],
             missing_fields: vec![],
         }))),
@@ -802,11 +958,13 @@ async fn sync_tag_to_funnelswift_internal(
 ) -> Result<String, String> {
     use crate::native_apps::connectors::funnelswift;
 
-    let creds: Option<serde_json::Value> = sqlx::query_scalar(
-        "SELECT integration_config->'funnelswift' FROM tenants WHERE id = $1"
-    ).bind(tenant_id).fetch_optional(db).await
-        .map_err(|e| format!("DB error: {}", e))?
-        .flatten();
+    let creds: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT integration_config->'funnelswift' FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .fetch_optional(db)
+            .await
+            .map_err(|e| format!("DB error: {}", e))?
+            .flatten();
 
     let credentials = match creds {
         Some(c) if c.is_object() && !c.as_object().map(|o| o.is_empty()).unwrap_or(true) => c,
@@ -863,9 +1021,7 @@ async fn sync_tag_to_funnelswift_internal(
 // ═══════════════════════════════════════════════════════════════════
 
 /// GET /api/admin/health — simple health check (no auth)
-pub async fn health_check(
-    State(s): State<AppState>,
-) -> ApiResult<impl IntoResponse> {
+pub async fn health_check(State(s): State<AppState>) -> ApiResult<impl IntoResponse> {
     let db_ok = sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(&s.db)
         .await
@@ -888,7 +1044,8 @@ pub async fn impersonate(
         return Err(AppError::Forbidden);
     }
 
-    let target_tenant_id = req.get("tenant_id")
+    let target_tenant_id = req
+        .get("tenant_id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("tenant_id is required".into()))?;
 
@@ -915,9 +1072,7 @@ pub async fn impersonate(
 }
 
 /// POST /api/admin/stop-impersonation — instruction to restore admin token
-pub async fn stop_impersonation(
-    Extension(_c): Extension<Claims>,
-) -> ApiResult<impl IntoResponse> {
+pub async fn stop_impersonation(Extension(_c): Extension<Claims>) -> ApiResult<impl IntoResponse> {
     Ok(Json(json!({
         "status": "impersonation_stopped",
         "note": "Drop impersonation token and restore original admin token"
@@ -971,16 +1126,19 @@ pub async fn list_all_tenants(
     .fetch_all(&s.db)
     .await?;
 
-    let tenants: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "id": r.try_get::<&str,_>("id").unwrap_or(""),
-            "name": r.try_get::<Option<String>,_>("name").ok().flatten(),
-            "slug": r.try_get::<Option<String>,_>("slug").ok().flatten(),
-            "email": r.try_get::<Option<String>,_>("email").ok().flatten(),
-            "is_active": r.try_get::<bool,_>("is_active").unwrap_or(true),
-            "created_at": r.try_get::<&str,_>("created_at").unwrap_or(""),
+    let tenants: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.try_get::<&str,_>("id").unwrap_or(""),
+                "name": r.try_get::<Option<String>,_>("name").ok().flatten(),
+                "slug": r.try_get::<Option<String>,_>("slug").ok().flatten(),
+                "email": r.try_get::<Option<String>,_>("email").ok().flatten(),
+                "is_active": r.try_get::<bool,_>("is_active").unwrap_or(true),
+                "created_at": r.try_get::<&str,_>("created_at").unwrap_or(""),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({ "tenants": tenants })))
 }
@@ -990,9 +1148,21 @@ pub async fn cross_app_sync(
     State(s): State<AppState>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("Company").to_string();
-    let email = req.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let description = req.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let name = req
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Company")
+        .to_string();
+    let email = req
+        .get("email")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let description = req
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     if email.is_empty() {
         return Err(AppError::BadRequest("email is required".into()));
@@ -1005,7 +1175,10 @@ pub async fn cross_app_sync(
         .unwrap_or(0);
 
     if existing > 0 {
-        return Err(AppError::Duplicate(format!("A user with email {} already exists", email)));
+        return Err(AppError::Duplicate(format!(
+            "A user with email {} already exists",
+            email
+        )));
     }
 
     let tenant_id = Uuid::new_v4();
@@ -1019,10 +1192,15 @@ pub async fn cross_app_sync(
         .await?;
 
     let user_id = Uuid::new_v4();
-    let generated_password = Uuid::new_v4().to_string().replace("-", "").chars().take(12).collect::<String>();
-    use argon2::{Argon2, PasswordHasher};
-    use argon2::password_hash::SaltString;
+    let generated_password = Uuid::new_v4()
+        .to_string()
+        .replace("-", "")
+        .chars()
+        .take(12)
+        .collect::<String>();
     use argon2::password_hash::rand_core::OsRng;
+    use argon2::password_hash::SaltString;
+    use argon2::{Argon2, PasswordHasher};
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();
     let password_hash = argon2

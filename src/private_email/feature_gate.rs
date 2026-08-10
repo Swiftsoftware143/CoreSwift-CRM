@@ -10,13 +10,11 @@ pub async fn get_tenant_limits(
     pool: &PgPool,
     tenant_id: Uuid,
 ) -> Result<Option<TenantEmailLimits>, AppError> {
-    sqlx::query_as::<_, TenantEmailLimits>(
-        "SELECT * FROM tenant_email_limits WHERE tenant_id = $1",
-    )
-    .bind(tenant_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(AppError::Database)
+    sqlx::query_as::<_, TenantEmailLimits>("SELECT * FROM tenant_email_limits WHERE tenant_id = $1")
+        .bind(tenant_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(AppError::Database)
 }
 
 /// Check if private email is enabled for a tenant's plan,
@@ -67,16 +65,17 @@ pub async fn check_domain_limit(pool: &PgPool, tenant_id: Uuid) -> Result<(), Ap
     };
 
     if max_domains == 0 {
-        return Err(AppError::BadRequest("Domain provisioning not available on your plan".into()));
+        return Err(AppError::BadRequest(
+            "Domain provisioning not available on your plan".into(),
+        ));
     }
 
-    let count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM private_email_domains WHERE tenant_id = $1",
-    )
-    .bind(tenant_id)
-    .fetch_one(pool)
-    .await
-    .map_err(AppError::Database)?;
+    let count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM private_email_domains WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(pool)
+            .await
+            .map_err(AppError::Database)?;
 
     if max_domains > 0 && count.0 >= max_domains as i64 {
         return Err(AppError::BadRequest(format!(
@@ -102,7 +101,9 @@ pub async fn check_mailbox_limit(pool: &PgPool, tenant_id: Uuid) -> Result<(), A
     };
 
     if max_mailboxes == 0 {
-        return Err(AppError::BadRequest("Mailbox provisioning not available on your plan".into()));
+        return Err(AppError::BadRequest(
+            "Mailbox provisioning not available on your plan".into(),
+        ));
     }
 
     let count: (i64,) = sqlx::query_as(

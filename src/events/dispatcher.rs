@@ -6,9 +6,9 @@
 //! 3. If a delay is required, delayed_actions table tracks it
 //! 4. After timeout, evaluate_delayed_action checks condition and fires
 
+use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
-use serde_json::json;
 
 /// Dispatch an event to all matching automation rules for a tenant.
 /// Fire-and-forget — logs failures but never blocks.
@@ -22,11 +22,14 @@ pub async fn dispatch_automation(
     payload: &serde_json::Value,
 ) {
     // Find active automation rules matching this trigger
-    let rules = match sqlx::query_as::<_, (Uuid, String, serde_json::Value, String, serde_json::Value)>(
+    let rules = match sqlx::query_as::<
+        _,
+        (Uuid, String, serde_json::Value, String, serde_json::Value),
+    >(
         r#"SELECT id, trigger_type, trigger_config, action_type, action_config
            FROM automation_rules
            WHERE tenant_id = $1 AND is_active = true AND trigger_type = $2
-           ORDER BY execution_count ASC"#
+           ORDER BY execution_count ASC"#,
     )
     .bind(tenant_id)
     .bind(event_type)
@@ -53,7 +56,16 @@ pub async fn dispatch_automation(
         }
 
         // Execute the action
-        execute_action(db, tenant_id, rule_id, &action_type, &action_config, entity_id, payload).await;
+        execute_action(
+            db,
+            tenant_id,
+            rule_id,
+            &action_type,
+            &action_config,
+            entity_id,
+            payload,
+        )
+        .await;
 
         // Increment execution count
         let _ = sqlx::query("UPDATE automation_rules SET execution_count = execution_count + 1, last_executed_at = NOW() WHERE id = $1")
@@ -66,7 +78,8 @@ pub async fn dispatch_automation(
     match event_type {
         "contact.created" | "signup" | "trial.started" | "payment.received" => {
             if let (Some(et), Some(eid)) = (entity_type, entity_id) {
-                crate::checklists::engine::trigger_checklist(db, tenant_id, event_type, et, eid).await;
+                crate::checklists::engine::trigger_checklist(db, tenant_id, event_type, et, eid)
+                    .await;
             }
         }
         _ => {}
@@ -76,7 +89,15 @@ pub async fn dispatch_automation(
     match event_type {
         "login" | "feature_used" | "api_call" => {
             if let Some(eid) = entity_id {
-                crate::monitoring::engine::record_signal(db, tenant_id, entity_type.unwrap_or("contact"), eid, event_type, 1).await;
+                crate::monitoring::engine::record_signal(
+                    db,
+                    tenant_id,
+                    entity_type.unwrap_or("contact"),
+                    eid,
+                    event_type,
+                    1,
+                )
+                .await;
             }
         }
         _ => {}
@@ -97,15 +118,21 @@ async fn execute_action(
 
     match action_type {
         "tag_contact" | "add_tag" => {
-            if let (Some(eid), Some(tag_name)) = (entity_id, action_config.get("tag_name").and_then(|v| v.as_str())) {
+            if let (Some(eid), Some(tag_name)) = (
+                entity_id,
+                action_config.get("tag_name").and_then(|v| v.as_str()),
+            ) {
                 let _ = sqlx::query(
                     r#"INSERT INTO tag_assignments (id, tag_id, entity_type, entity_id, tenant_id)
                        SELECT uuid_generate_v4(), t.id, 'contact', $1
                        FROM tags t WHERE t.tenant_id = $2 AND t.name = $3
-                       ON CONFLICT (tag_id, entity_type, entity_id, tenant_id) DO NOTHING"#
+                       ON CONFLICT (tag_id, entity_type, entity_id, tenant_id) DO NOTHING"#,
                 )
-                .bind(eid).bind(tenant_id).bind(tag_name)
-                .execute(db).await;
+                .bind(eid)
+                .bind(tenant_id)
+                .bind(tag_name)
+                .execute(db)
+                .await;
             }
         }
         "send_email" => {
@@ -149,7 +176,8 @@ async fn execute_action(
                 let url_owned = url.to_string();
                 tokio::spawn(async move {
                     let client = reqwest::Client::new();
-                    let _ = client.post(&url_owned)
+                    let _ = client
+                        .post(&url_owned)
                         .json(&payload)
                         .timeout(std::time::Duration::from_secs(10))
                         .send()
@@ -159,15 +187,22 @@ async fn execute_action(
         }
         "notify_user" => {
             if let (Some(user_id), Some(message)) = (
-                action_config.get("user_id").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok()),
+                action_config
+                    .get("user_id")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| Uuid::parse_str(s).ok()),
                 action_config.get("message").and_then(|v| v.as_str()),
             ) {
                 let _ = sqlx::query(
                     r#"INSERT INTO notifications (id, tenant_id, user_id, message)
-                       VALUES ($1, $2, $3, $4)"#
+                       VALUES ($1, $2, $3, $4)"#,
                 )
-                .bind(Uuid::new_v4()).bind(tenant_id).bind(user_id).bind(message)
-                .execute(db).await;
+                .bind(Uuid::new_v4())
+                .bind(tenant_id)
+                .bind(user_id)
+                .bind(message)
+                .execute(db)
+                .await;
             }
         }
         _ => {
@@ -180,7 +215,7 @@ async fn execute_action(
 /// Checks if the expected event occurred. If not, fires the action.
 pub async fn evaluate_delayed_action(db: &PgPool, action_id: Uuid) {
     let action = match sqlx::query_as::<_, crate::events::models::DelayedAction>(
-        "SELECT * FROM delayed_actions WHERE id = $1 AND executed = false AND cancelled = false"
+        "SELECT * FROM delayed_actions WHERE id = $1 AND executed = false AND cancelled = false",
     )
     .bind(action_id)
     .fetch_optional(db)
@@ -202,7 +237,11 @@ pub async fn evaluate_delayed_action(db: &PgPool, action_id: Uuid) {
         }
         "no_event" => {
             // Check if the expected event occurred between trigger and now
-            if let Some(expected_event) = action.condition_config.get("expected_event").and_then(|v| v.as_str()) {
+            if let Some(expected_event) = action
+                .condition_config
+                .get("expected_event")
+                .and_then(|v| v.as_str())
+            {
                 let count: i64 = sqlx::query_scalar::<_, Option<i64>>(
                     "SELECT COUNT(*) FROM events WHERE tenant_id = $1 AND event_type = $2 AND created_at > $3"
                 )
@@ -240,11 +279,14 @@ pub async fn evaluate_delayed_action(db: &PgPool, action_id: Uuid) {
             &action.action_config,
             None,
             &serde_json::Value::Null,
-        ).await;
+        )
+        .await;
     }
 
     // Mark as executed regardless — condition already evaluated
-    let _ = sqlx::query("UPDATE delayed_actions SET executed = true, updated_at = NOW() WHERE id = $1")
-        .bind(action_id)
-        .execute(db).await;
+    let _ =
+        sqlx::query("UPDATE delayed_actions SET executed = true, updated_at = NOW() WHERE id = $1")
+            .bind(action_id)
+            .execute(db)
+            .await;
 }

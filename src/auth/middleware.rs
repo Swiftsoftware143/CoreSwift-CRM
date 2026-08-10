@@ -9,9 +9,9 @@ use axum::{
     response::Response,
 };
 
-use crate::AppState;
-use crate::errors::AppError;
 use super::models::Claims;
+use crate::errors::AppError;
+use crate::AppState;
 
 /// Auth middleware that extracts team member context from JWT bearer token.
 /// For routes that require authentication, attach via
@@ -47,7 +47,7 @@ pub async fn auth_middleware(
 
 /// Verify a JWT token and return the claims.
 pub fn verify_token(token: &str, secret: &str) -> Result<Claims, AppError> {
-    use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
+    use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 
     let decoding_key = DecodingKey::from_secret(secret.as_bytes());
     let mut validation = Validation::new(Algorithm::HS256);
@@ -56,25 +56,23 @@ pub fn verify_token(token: &str, secret: &str) -> Result<Claims, AppError> {
     validation.set_issuer(&["coreswift"]);
     validation.set_audience(&["coreswift-api"]);
 
-    let token_data = decode::<Claims>(token, &decoding_key, &validation)
-        .map_err(|e| {
-            tracing::warn!(error = %e, "JWT verification failed");
-            AppError::Unauthorized
-        })?;
+    let token_data = decode::<Claims>(token, &decoding_key, &validation).map_err(|e| {
+        tracing::warn!(error = %e, "JWT verification failed");
+        AppError::Unauthorized
+    })?;
 
     Ok(token_data.claims)
 }
 
 /// Create a JWT access token.
 pub fn create_access_token(claims: &Claims, secret: &str) -> Result<String, AppError> {
-    use jsonwebtoken::{encode, Header, EncodingKey};
+    use jsonwebtoken::{encode, EncodingKey, Header};
 
     let encoding_key = EncodingKey::from_secret(secret.as_bytes());
-    encode(&Header::default(), claims, &encoding_key)
-        .map_err(|e| {
-            tracing::error!(error = %e, "Failed to create JWT");
-            AppError::Internal("Failed to create token".to_string())
-        })
+    encode(&Header::default(), claims, &encoding_key).map_err(|e| {
+        tracing::error!(error = %e, "Failed to create JWT");
+        AppError::Internal("Failed to create token".to_string())
+    })
 }
 
 /// Check if user has sufficient role level.

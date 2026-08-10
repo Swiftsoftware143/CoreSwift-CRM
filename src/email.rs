@@ -8,7 +8,6 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-
 /// Get available merge fields for a given template type.
 /// Returns a list of field names that can be used in templates.
 pub fn get_merge_fields(template_type: &str) -> Vec<&'static str> {
@@ -16,7 +15,15 @@ pub fn get_merge_fields(template_type: &str) -> Vec<&'static str> {
         "welcome" => vec!["name", "email", "password", "app_url"],
         "purchase_confirmed" => vec!["name", "plan_name", "app_url"],
         "password_reset" => vec!["name", "token", "app_url"],
-        _ => vec!["name", "email", "password", "app_url", "plan_name", "token", "account_name"],
+        _ => vec![
+            "name",
+            "email",
+            "password",
+            "app_url",
+            "plan_name",
+            "token",
+            "account_name",
+        ],
     }
 }
 
@@ -56,7 +63,7 @@ pub async fn send_template_email(
            FROM email_templates
            WHERE template_type = $1 AND (aid = $2 OR is_default = true)
            ORDER BY is_default ASC, created_at DESC
-           LIMIT 1"#
+           LIMIT 1"#,
     )
     .bind(template_type)
     .bind(tenant_id)
@@ -69,23 +76,20 @@ pub async fn send_template_email(
         Some(t) => {
             // Use DB template
             let subject = render_template(
-                &t.subject.unwrap_or_else(|| get_default_subject(template_type, app_name)),
+                &t.subject
+                    .unwrap_or_else(|| get_default_subject(template_type, app_name)),
                 vars,
             );
-            let html_body = t.html_body.as_ref()
+            let html_body = t
+                .html_body
+                .as_ref()
                 .map(|h| render_template(h, vars))
                 .unwrap_or_default();
             let text_body = render_template(&t.body.unwrap_or_default(), vars);
             let use_html = t.is_html.unwrap_or(true);
 
             queue_outbound_message(
-                db,
-                tenant_id,
-                to,
-                &subject,
-                &text_body,
-                &html_body,
-                use_html,
+                db, tenant_id, to, &subject, &text_body, &html_body, use_html,
             )
             .await
         }
@@ -115,7 +119,7 @@ async fn queue_outbound_message(
 
     sqlx::query(
         r#"INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status)
-           VALUES ($1, $2, 'email', $3, $4, $5, 'queued')"#
+           VALUES ($1, $2, 'email', $3, $4, $5, 'queued')"#,
     )
     .bind(Uuid::new_v4())
     .bind(tenant_id)
@@ -153,7 +157,10 @@ async fn send_inline(
     let email = vars.get("email").and_then(|v| v.as_str()).unwrap_or("");
     let password = vars.get("password").and_then(|v| v.as_str()).unwrap_or("");
     let token = vars.get("token").and_then(|v| v.as_str()).unwrap_or("");
-    let plan_name_val = vars.get("plan_name").and_then(|v| v.as_str()).unwrap_or("a plan");
+    let plan_name_val = vars
+        .get("plan_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("a plan");
 
     match template_type {
         "welcome" => {

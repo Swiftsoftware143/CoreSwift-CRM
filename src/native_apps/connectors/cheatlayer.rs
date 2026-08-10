@@ -26,10 +26,11 @@ pub async fn test(creds: &serde_json::Value) -> (bool, String) {
         .send()
         .await
     {
-        Ok(resp) if resp.status().is_success() => {
-            (true, "CheatLayer connection successful".into())
-        }
-        Ok(resp) => (false, format!("CheatLayer returned status {}", resp.status())),
+        Ok(resp) if resp.status().is_success() => (true, "CheatLayer connection successful".into()),
+        Ok(resp) => (
+            false,
+            format!("CheatLayer returned status {}", resp.status()),
+        ),
         Err(e) => (false, format!("CheatLayer connection failed: {}", e)),
     }
 }
@@ -51,9 +52,14 @@ pub async fn push_entity(
                 .send()
                 .await
                 .map_err(|e| format!("CheatLayer push failed: {}", e))?;
-            resp.json().await.map_err(|e| format!("CheatLayer response: {}", e))
+            resp.json()
+                .await
+                .map_err(|e| format!("CheatLayer response: {}", e))
         }
-        _ => Err(format!("CheatLayer does not support entity type: {}", entity_type)),
+        _ => Err(format!(
+            "CheatLayer does not support entity type: {}",
+            entity_type
+        )),
     }
 }
 
@@ -67,7 +73,10 @@ pub async fn pull_entity(
     let query = if filters.is_empty() {
         String::new()
     } else {
-        let params: Vec<String> = filters.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+        let params: Vec<String> = filters
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect();
         format!("?{}", params.join("&"))
     };
 
@@ -80,9 +89,14 @@ pub async fn pull_entity(
                 .send()
                 .await
                 .map_err(|e| format!("CheatLayer pull failed: {}", e))?;
-            resp.json().await.map_err(|e| format!("CheatLayer response: {}", e))
+            resp.json()
+                .await
+                .map_err(|e| format!("CheatLayer response: {}", e))
         }
-        _ => Err(format!("CheatLayer does not support pulling entity type: {}", entity_type)),
+        _ => Err(format!(
+            "CheatLayer does not support pulling entity type: {}",
+            entity_type
+        )),
     }
 }
 
@@ -103,7 +117,16 @@ pub fn get_meta() -> serde_json::Value {
 }
 
 fn extract_creds(creds: &serde_json::Value) -> Result<(String, String), String> {
-    let api_key = creds.get("api_key").and_then(|v| v.as_str()).ok_or("CheatLayer API key missing")?.to_string();
-    let base_url = creds.get("base_url").and_then(|v| v.as_str()).ok_or("CheatLayer base URL missing")?.trim_end_matches('/').to_string();
+    let api_key = creds
+        .get("api_key")
+        .and_then(|v| v.as_str())
+        .ok_or("CheatLayer API key missing")?
+        .to_string();
+    let base_url = creds
+        .get("base_url")
+        .and_then(|v| v.as_str())
+        .ok_or("CheatLayer base URL missing")?
+        .trim_end_matches('/')
+        .to_string();
     Ok((api_key, base_url))
 }
