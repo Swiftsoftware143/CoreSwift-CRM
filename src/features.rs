@@ -3,6 +3,7 @@ use crate::errors::AppError;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+#[allow(dead_code)]
 pub async fn enforce_feature_limit(
     db: &PgPool,
     tenant_id: Uuid,
@@ -125,6 +126,7 @@ pub async fn get_usage_json(db: &PgPool, tenant_id: Uuid) -> serde_json::Value {
     })
 }
 
+#[allow(dead_code)]
 async fn count_usage(db: &PgPool, tenant_id: Uuid, feature_key: &str) -> Result<i64, AppError> {
     match feature_key {
         "max_contacts" | "contacts" | "leads" => Ok(sqlx::query_scalar(
