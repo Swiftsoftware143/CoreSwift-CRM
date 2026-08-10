@@ -19,6 +19,7 @@ pub fn router() -> Router<crate::AppState> {
         .route("/login", axum::routing::post(handlers::login))
         .route("/refresh", axum::routing::post(handlers::refresh))
         .route("/me", axum::routing::get(handlers::me))
+        .route("/me/usage", axum::routing::get(handlers::get_usage))
         .route("/logout", axum::routing::post(handlers::logout))
         .route("/invite", axum::routing::post(handlers::create_invite))
         .route("/invites", axum::routing::get(handlers::list_invites))

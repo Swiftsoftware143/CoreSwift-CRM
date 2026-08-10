@@ -8,6 +8,7 @@
 mod config;
 mod db;
 mod errors;
+mod features;
 pub mod auth;
 pub mod account;
 pub mod contacts;
