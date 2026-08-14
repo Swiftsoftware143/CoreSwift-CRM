@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS ticket_messages (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_tickets_tenant_id ON tickets(tenant_id);
-CREATE INDEX idx_tickets_contact_id ON tickets(contact_id);
-CREATE INDEX idx_tickets_status ON tickets(status);
-CREATE INDEX idx_ticket_messages_ticket_id ON ticket_messages(ticket_id);
+CREATE INDEX IF NOT EXISTS idx_tickets_tenant_id ON tickets(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_tickets_contact_id ON tickets(contact_id);
+CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
+CREATE INDEX IF NOT EXISTS idx_ticket_messages_ticket_id ON ticket_messages(ticket_id);
