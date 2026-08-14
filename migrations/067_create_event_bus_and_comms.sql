@@ -85,4 +85,32 @@ CREATE TABLE IF NOT EXISTS notifications (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(tenant_id, user_id, read);
+-- notifications table in live DB has 'is_read'; code expects 'read'.
+-- Reconcile: add 'read' column if missing, backfill from is_read, then index it.
+-- Reconcile notifications table to the code-expected schema:
+-- code struct wants (id, tenant_id, user_id, message, read, created_at);
+-- live table has (title, body, notification_type, is_read, metadata,...).
+-- Additive only — safe on empty table.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='message') THEN
+        ALTER TABLE notifications ADD COLUMN message TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='read') THEN
+        ALTER TABLE notifications ADD COLUMN read BOOLEAN DEFAULT false;
+    END IF;
+END $$;
+
+UPDATE notifications SET message = COALESCE(body, title) WHERE message IS NULL AND (body IS NOT NULL OR title IS NOT NULL);
+UPDATE notifications SET read = is_read WHERE read IS NULL AND is_read IS NOT NULL;
+
+UPDATE notifications SET read = is_read WHERE read IS NULL AND is_read IS NOT NULL;
+
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='read') THEN
+        IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE tablename='notifications' AND indexname='idx_notifications_user_read') THEN
+            CREATE INDEX idx_notifications_user_read ON notifications(tenant_id, user_id, read);
+        END IF;
+    END IF;
+END $$;
