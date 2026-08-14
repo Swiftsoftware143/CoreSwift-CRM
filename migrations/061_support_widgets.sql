@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS ticket_inboxes (
     email_fwd   TEXT, -- forward new tickets to this email
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX idx_ticket_inboxes_tenant ON ticket_inboxes(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_ticket_inboxes_tenant ON ticket_inboxes(tenant_id);
 
 -- Support widget: an embeddable support form tied to an inbox.
 CREATE TABLE IF NOT EXISTS support_widgets (
@@ -27,9 +27,9 @@ CREATE TABLE IF NOT EXISTS support_widgets (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(tenant_id, slug)
 );
-CREATE INDEX idx_support_widgets_tenant ON support_widgets(tenant_id);
-CREATE INDEX idx_support_widgets_inbox ON support_widgets(inbox_id);
+CREATE INDEX IF NOT EXISTS idx_support_widgets_tenant ON support_widgets(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_support_widgets_inbox ON support_widgets(inbox_id);
 
 -- Add widget_id to tickets so we know which widget generated the ticket
 ALTER TABLE tickets ADD COLUMN IF NOT EXISTS widget_id UUID REFERENCES support_widgets(id) ON DELETE SET NULL;
-CREATE INDEX idx_tickets_widget_id ON tickets(widget_id);
+CREATE INDEX IF NOT EXISTS idx_tickets_widget_id ON tickets(widget_id);
