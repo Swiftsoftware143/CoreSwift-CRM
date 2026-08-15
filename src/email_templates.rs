@@ -63,7 +63,7 @@ fn require_admin(claims: &Claims) -> Result<(), AppError> {
     if claims.role != "admin"
         && claims.role != "owner"
         && claims.role != "superadmin"
-        && claims.role != "account_owner"
+        && claims.role != "account_owner" && claims.role != "agency_admin"
     {
         return Err(AppError::Forbidden);
     }

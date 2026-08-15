@@ -53,6 +53,7 @@ pub mod tags;
 pub mod telnyx;
 pub mod tenants_internal;
 pub mod tickets;
+pub mod support_widgets;
 pub mod tracked_links;
 pub mod webhook;
 pub mod webhooks;
@@ -166,6 +167,8 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/messages", messages::router(state.clone()))
         .nest("/api/internal/tenants", tenants_internal::router())
         .nest("/api/internal/tags", tags::internal_handler::router())
+        .nest("/api/integrations", integrations::router(state.clone()))
+        .nest("/api", provider_keys::router(state.clone()))
         .nest("/api/analytics", analytics::router(state.clone()))
         .nest("/api/ai", ai::router(state.clone()))
         // Billing (plan tiers, feature toggles)
@@ -222,7 +225,8 @@ async fn main() -> anyhow::Result<()> {
             email_templates::router(state.clone()),
         )
         // Private email boxes (Mailgun integration, plan-gated)
-        .nest("/api/tickets", tickets::router(state.clone()))
+        .nest("/api", tickets::router(state.clone()))
+        .nest("/api/widgets", support_widgets::router(state.clone()))
         .nest("/api/private-email", private_email::router(state.clone()))
         // Public redirect for tracked links (no auth)
         .nest("/track", tracked_links::public_router())
