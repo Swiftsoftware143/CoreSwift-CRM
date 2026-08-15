@@ -25,3 +25,5 @@ Thumbs.db
 *.log
 *.bak
 *.bak-*
+crm-swift
+/target/
