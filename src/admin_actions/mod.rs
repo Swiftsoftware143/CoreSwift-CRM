@@ -1,3 +1,4 @@
+
 //! Admin module — chat actions + legacy admin API routes
 //!
 //! POST /api/admin/chat-action — run business actions from chat
@@ -8,6 +9,7 @@
 //! POST /api/admin/portfolio-sync — cross-app sync
 
 pub mod handlers;
+pub mod site_handler;
 
 use crate::AppState;
 use axum::{middleware, Router};
@@ -40,6 +42,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route(
             "/portfolio-sync",
             axum::routing::post(handlers::cross_app_sync),
+        )
+        .route(
+            "/site",
+            axum::routing::get(site_handler::get_site).put(site_handler::update_site),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),
