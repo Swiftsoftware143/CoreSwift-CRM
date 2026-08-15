@@ -1,85 +1,25 @@
-version: "3.3"
-
-x-common-vars: &common-vars
-  APP_HOST: 0.0.0.0
-  APP_PORT: 8080
-  DATABASE_URL: postgres://${POSTGRES_USER:-crm_swift}:${POSTGRES_PASSWORD:-crm_swift_pass}@postgres:5432/${POSTGRES_DB:-crm_swift}
-  REDIS_URL: redis://redis:6379
-  JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
-  JWT_ACCESS_TOKEN_EXPIRY: ${JWT_ACCESS_TOKEN_EXPIRY:-3600}
-  JWT_REFRESH_TOKEN_EXPIRY: ${JWT_REFRESH_TOKEN_EXPIRY:-2592000}
-  AUTH_RATE_LIMIT_PER_MINUTE: ${AUTH_RATE_LIMIT_PER_MINUTE:-5}
-  API_RATE_LIMIT_PER_MINUTE: ${API_RATE_LIMIT_PER_MINUTE:-20}
-  SCORE_CACHE_TTL: ${SCORE_CACHE_TTL:-300}
-  LIST_CACHE_TTL: ${LIST_CACHE_TTL:-120}
-  SESSION_CACHE_TTL: ${SESSION_CACHE_TTL:-3600}
-  DB_MIN_CONNECTIONS: ${DB_MIN_CONNECTIONS:-5}
-  DB_MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-20}
-  RUST_LOG: ${RUST_LOG:-crm_swift=debug,info}
-
+# ============================================================
+# CoreSwift CRM — PRODUCTION docker-compose (canonical)
+# ============================================================
+# NOTE: the authoritative compose lives at /opt/swift/docker/crm-swift/docker-compose.yml
+# on the VPS. It runs the crm-swift image built from the HOST-BUILT binary
+# (see Dockerfile above). This repo copy is the source of truth for that file.
+# ============================================================
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: crm-swift-postgres
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-crm_swift}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crm_swift_pass}
-      POSTGRES_DB: ${POSTGRES_DB:-crm_swift}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-crm_swift}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    container_name: crm-swift-redis
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  # Local email catcher — captures all Mailgun/SMTP.com emails in dev
-  mailpit:
-    image: axllent/mailpit:latest
-    container_name: crm-swift-mailpit
-    ports:
-      - "1025:1025"   # SMTP port
-      - "8025:8025"   # Web UI
-    restart: unless-stopped
-
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: crm-swift-app
-    ports:
-      - "${APP_PORT:-8080}:8080"
-    environment:
-      <<: *common-vars
+  crm-swift:
+    image: crm-swift:latest
+    container_name: crm-swift
+    restart: always
+    network_mode: host
     env_file:
-      - path: ./.env
-        required: false
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-
-
-
-volumes:
-  postgres_data:
-  redis_data:
+      - /etc/swift/env/coreswift.env
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -sf -o /dev/null 'http://127.0.0.1:8084/api/health' || curl -sk -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8084/api/health' | grep -qE '^(200|401|403|404|405)'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
