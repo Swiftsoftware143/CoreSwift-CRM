@@ -136,12 +136,11 @@ pub async fn create_widget(
     .flatten();
 
     if let Some(limit) = plan_limit {
-        let current: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM support_widgets WHERE tenant_id = $1",
-        )
-        .bind(tid)
-        .fetch_one(&s.db)
-        .await?;
+        let current: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM support_widgets WHERE tenant_id = $1")
+                .bind(tid)
+                .fetch_one(&s.db)
+                .await?;
         if current >= limit {
             return Err(AppError::BadRequest(format!(
                 "Widget limit reached ({}). Upgrade your plan for more widgets.",
@@ -156,14 +155,12 @@ pub async fn create_widget(
     } else {
         let iid = Uuid::new_v4();
         // Create a default inbox named after the widget
-        sqlx::query(
-            "INSERT INTO ticket_inboxes (id, tenant_id, name) VALUES ($1, $2, $3)",
-        )
-        .bind(iid)
-        .bind(tid)
-        .bind(format!("{} Inbox", &req.name))
-        .execute(&s.db)
-        .await?;
+        sqlx::query("INSERT INTO ticket_inboxes (id, tenant_id, name) VALUES ($1, $2, $3)")
+            .bind(iid)
+            .bind(tid)
+            .bind(format!("{} Inbox", &req.name))
+            .execute(&s.db)
+            .await?;
         iid
     };
 
@@ -410,9 +407,17 @@ pub async fn widget_embed_js(
     }};
 }})();"#,
         widget.slug,
-        if widget.position == "bottom-left" { "left" } else { "right" },
+        if widget.position == "bottom-left" {
+            "left"
+        } else {
+            "right"
+        },
         widget.theme_color,
-        if widget.position == "bottom-left" { "left" } else { "right" },
+        if widget.position == "bottom-left" {
+            "left"
+        } else {
+            "right"
+        },
         widget.theme_color,
         widget.theme_color,
         widget.theme_color,
@@ -489,8 +494,8 @@ pub async fn widget_submit(
 // ── Router ──────────────────────────────────────────────
 
 pub fn router(state: AppState) -> axum::Router<AppState> {
-    use axum::routing::{get, patch, post};
     use axum::middleware;
+    use axum::routing::{get, patch, post};
 
     // Public routes — no auth
     let public = axum::Router::new()
@@ -506,15 +511,9 @@ pub fn router(state: AppState) -> axum::Router<AppState> {
     // Protected routes
     let protected = axum::Router::new()
         .route("/", get(list_widgets).post(create_widget))
-        .route(
-            "/:id",
-            patch(update_widget).delete(delete_widget),
-        )
+        .route("/:id", patch(update_widget).delete(delete_widget))
         .route("/inboxes", get(list_inboxes).post(create_inbox))
-        .route(
-            "/inboxes/:id",
-            patch(update_inbox).delete(delete_inbox),
-        )
+        .route("/inboxes/:id", patch(update_inbox).delete(delete_inbox))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,

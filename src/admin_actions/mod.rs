@@ -1,4 +1,3 @@
-
 //! Admin module — chat actions + legacy admin API routes
 //!
 //! POST /api/admin/chat-action — run business actions from chat
