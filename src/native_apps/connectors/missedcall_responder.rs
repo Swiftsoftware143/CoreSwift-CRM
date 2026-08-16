@@ -1,6 +1,6 @@
 //! MissedCall Responder Connector
 //!
-//! Callback Pro SaaS — React + TypeScript + Supabase app for handling missed calls.
+//! Callback Pro SaaS — React + TypeScript app for handling missed calls.
 //! Features: SMS auto-reply with hybrid LLM suite, lead kanban board, tenant management,
 //! BYOK (bring your own key) for SMS provider, event bus.
 //!

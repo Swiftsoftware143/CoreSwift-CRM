@@ -1,6 +1,6 @@
 //! WorkflowSwift Automation Connector
 //!
-//! WorkflowSwift is the n8n-based workflow automation engine with a Supabase backend.
+//! WorkflowSwift is the n8n-based workflow automation engine (Postgres backend).
 //! It runs scheduled workflows with credit tracking, custom workflow builder,
 //! and portfolio management.
 //!
@@ -108,7 +108,7 @@ pub fn get_meta() -> serde_json::Value {
     serde_json::json!({
         "name": "WorkflowSwift Automation",
         "slug": "workflowswift",
-        "description": "n8n-based workflow automation engine with Supabase backend",
+        "description": "n8n-based workflow automation engine (Postgres backend)",
         "auth_type": "api_key",
         "auth_fields": ["api_key", "base_url"],
         "access_level": "admin_account",
