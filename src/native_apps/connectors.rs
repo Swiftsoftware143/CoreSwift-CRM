@@ -51,7 +51,7 @@ pub static NATIVE_APPS: &[AppConnector] = &[
     AppConnector {
         slug: "workflowswift",
         name: "WorkflowSwift Automation",
-        description: "n8n-based workflow automation engine with Supabase backend. Tenants connect their workflow instance.",
+        description: "n8n-based workflow automation engine (Postgres backend). Tenants connect their workflow instance.",
         auth_type: "api_key",
         auth_fields: &["api_key", "base_url"],
         access_level: "admin_tenant",
