@@ -29,6 +29,7 @@ pub mod email;
 pub mod email_templates;
 mod errors;
 pub mod events;
+pub mod external_api;
 mod features;
 pub mod google_calendar;
 pub mod inbound;
@@ -40,6 +41,7 @@ pub mod messages;
 pub mod monitoring;
 pub mod native_apps;
 pub mod notifications;
+pub mod personal_api_keys;
 pub mod pipelines;
 pub mod plans;
 pub mod portfolio;
@@ -169,6 +171,11 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/internal/tags", tags::internal_handler::router())
         .nest("/api/integrations", integrations::router(state.clone()))
         .nest("/api", provider_keys::router(state.clone()))
+        .nest("/api/external", external_api::router())
+        .nest(
+            "/api/personal-api-keys",
+            personal_api_keys::router(state.clone()),
+        )
         .nest("/api/analytics", analytics::router(state.clone()))
         .nest("/api/ai", ai::router(state.clone()))
         // Billing (plan tiers, feature toggles)
