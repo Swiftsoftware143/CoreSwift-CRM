@@ -9,6 +9,7 @@ pub struct List {
     pub name: String,
     pub description: Option<String>,
     pub list_type: String,
+    #[sqlx(rename = "dynamic_rules")]
     pub rules: Option<serde_json::Value>,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
