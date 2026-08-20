@@ -31,6 +31,17 @@ fn key_hash(key: &str) -> String {
     h.update(key.as_bytes());
     hex::encode(h.finalize())
 }
+/// Coerce any JSON scalar (string/number/bool) to its string form.
+/// Returns None for null/object/array (nothing to store as a text field value).
+fn value_to_string(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
 
 /// Resolve a personal API key -> (tenant_id). Returns Unauthorized on failure.
 async fn resolve_key(s: &AppState, headers: &HeaderMap) -> Result<(Uuid, Uuid), AppError> {
@@ -432,11 +443,11 @@ pub async fn external_push_contact(
         }
         let norm = k.to_lowercase();
         if is_builtin(&norm) {
-            if let Some(s) = v.as_str() {
-                builtin.insert(norm.clone(), s.to_string());
+            if let Some(s) = value_to_string(v) {
+                builtin.insert(norm.clone(), s);
             }
-        } else if let Some(s) = v.as_str() {
-            custom.insert(norm.clone(), s.to_string());
+        } else if let Some(s) = value_to_string(v) {
+            custom.insert(norm.clone(), s);
         }
     }
 
@@ -445,11 +456,11 @@ pub async fn external_push_contact(
         for (k, v) in fields.iter() {
             let norm = k.to_lowercase();
             if is_builtin(&norm) {
-                if let Some(s) = v.as_str() {
-                    builtin.insert(norm.clone(), s.to_string());
+                if let Some(s) = value_to_string(v) {
+                    builtin.insert(norm.clone(), s);
                 }
-            } else if let Some(s) = v.as_str() {
-                custom.insert(norm.clone(), s.to_string());
+            } else if let Some(s) = value_to_string(v) {
+                custom.insert(norm.clone(), s);
             }
         }
     }
