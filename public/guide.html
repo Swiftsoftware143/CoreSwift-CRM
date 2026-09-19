@@ -204,7 +204,7 @@
     <p>Navigate to:</p>
     <pre>https://coreswiftcrm.com</pre>
     <p>Enter your email and password.</p>
-    <div class="callout info"><strong>Demo Account</strong>  <code>swiftsoftware143@yahoo.com</code> / <code>(rotated-2026-09-16)</code></div>
+    <div class="callout info"><strong>Demo Account</strong>  <code>swiftsoftware143@yahoo.com</code> / <code>(rotated - see admin guide)</code></div>
     <p>On success, you receive a JWT access token and refresh token. The app stores these for all API calls. You'll be redirected to the Dashboard.</p>
   </div>
   <div class="card">
@@ -1055,7 +1055,7 @@ Authorization: Bearer &lt;token&gt;</pre>
     <pre>PUT /api/auth/password
 Authorization: Bearer &lt;token&gt;
 
-{ "current_password": "(rotated-2026-09-16)", "new_password": "NewSecurePass123!" }</pre>
+{ "current_password": "&lt;your-current-password&gt;", "new_password": "NewSecurePass123!" }</pre>
     <div class="callout warn"><strong>Forgot your password?</strong> Use the forgot-password flow on the login screen: <code>POST /api/auth/forgot-password</code> with your email. Check your inbox for a reset link.</div>
   </div>
 
