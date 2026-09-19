@@ -42,7 +42,6 @@ fn value_to_string(v: &Value) -> Option<String> {
     }
 }
 
-
 /// Resolve a personal API key -> (tenant_id). Returns Unauthorized on failure.
 async fn resolve_key(s: &AppState, headers: &HeaderMap) -> Result<(Uuid, Uuid), AppError> {
     let key = headers
