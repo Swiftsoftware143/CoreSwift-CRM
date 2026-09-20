@@ -500,7 +500,13 @@ async function doLogin() {
     }
     const data = await res.json();
     STATE.token = data.access_token || data.token;
-    STATE.user = data.user || { email, name: email.split('@')[0], role: 'agency_admin' };
+    // The API returns `team_member` and NEVER `user`, so `data.user || {...role:'agency_admin'}`
+    // always fell through and stamped EVERY login as a platform admin — which silently
+    // defeated the role-filtered nav (every tenant rendered the platform menu).
+    // Read the real role; a missing role must never default to a platform one.
+    const acct = data.team_member || data.user || {};
+    STATE.user = Object.assign({ email: email, name: email.split('@')[0] }, acct);
+    if (!STATE.user.role) STATE.user.role = 'member';
     localStorage.setItem('crm_token', STATE.token);
     localStorage.setItem('crm_user', JSON.stringify(STATE.user));
     showApp();
