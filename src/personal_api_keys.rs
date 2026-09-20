@@ -121,11 +121,75 @@ pub async fn revoke_key(
     Ok(Json(json!({ "revoked": true })))
 }
 
+/// POST /api/personal-api-keys/:id/rotate — replace a key with a fresh secret.
+///
+/// The full key is only ever shown once, so without this the only way to "rotate" was
+/// revoke-then-create, which silently breaks whatever capture app was already using the
+/// key (it keeps POSTing against a dead key and the leads stop). Rotate keeps the name
+/// and swaps the secret in one step: the new key is returned once, the old row is
+/// removed, so the previous secret stops working immediately.
+pub async fn rotate_key(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    let user_id = Uuid::parse_str(&c.sub).ok();
+
+    let name = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM personal_api_keys WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(id)
+    .bind(tenant_id)
+    .fetch_optional(&s.db)
+    .await
+    .map_err(AppError::Database)?
+    .ok_or_else(|| AppError::NotFound("API key not found".into()))?;
+
+    let full_key = generate_key();
+    let hash = key_hash(&full_key);
+    let prefix = full_key.get(0..12).unwrap_or("csk_").to_string();
+    let new_id = Uuid::new_v4();
+
+    let mut tx = s.db.begin().await.map_err(AppError::Database)?;
+    sqlx::query(
+        "INSERT INTO personal_api_keys (id, tenant_id, user_id, name, key_hash, key_prefix)
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(new_id)
+    .bind(tenant_id)
+    .bind(user_id)
+    .bind(&name)
+    .bind(&hash)
+    .bind(&prefix)
+    .execute(&mut *tx)
+    .await
+    .map_err(AppError::Database)?;
+
+    sqlx::query("DELETE FROM personal_api_keys WHERE id = $1 AND tenant_id = $2")
+        .bind(id)
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(AppError::Database)?;
+    tx.commit().await.map_err(AppError::Database)?;
+
+    Ok(Json(json!({
+        "id": new_id.to_string(),
+        "rotated_from": id.to_string(),
+        "name": name,
+        "key": full_key,
+        "prefix": prefix,
+        "note": "Store this key now — it is shown only once. The previous key no longer works."
+    })))
+}
+
 pub fn router(state: AppState) -> axum::Router<AppState> {
-    use axum::routing::{delete, get};
+    use axum::routing::{delete, get, post};
     axum::Router::new()
         .route("/", get(list_keys).post(create_key))
         .route("/:id", delete(revoke_key))
+        .route("/:id/rotate", post(rotate_key))
         // Plan gating — the admin controls this module per plan
         // (features::FEATURE_REGISTRY is the source of truth for the admin UI).
         .layer(middleware::from_fn_with_state(

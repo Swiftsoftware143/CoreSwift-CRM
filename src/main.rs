@@ -34,6 +34,7 @@ mod features;
 pub mod google_calendar;
 pub mod inbound;
 pub mod industries;
+pub mod integration_center;
 pub mod integrations;
 pub mod lists;
 pub mod lists_internal;
@@ -170,6 +171,11 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/internal/tenants", tenants_internal::router())
         .nest("/api/internal/tags", tags::internal_handler::router())
         .nest("/api/integrations", integrations::router(state.clone()))
+        // Hub Integration Center — what feeds this CRM (lead sources) + what it feeds
+        .nest(
+            "/api/integration-center",
+            integration_center::router(state.clone()),
+        )
         .nest("/api", provider_keys::router(state.clone()))
         .nest("/api/external", external_api::router())
         .nest(

@@ -1016,6 +1016,10 @@ const TAB_RENDERERS = {
       '<p style="color:var(--text-secondary);margin:0">CoreSwift is the hub: the capture apps on this page <strong>push their leads INTO this account</strong> ' +
       '(capture app &rarr; CoreSwift), and CoreSwift is the single home for them. Connecting an app stores the key that lets that app deliver here. ' +
       'Provider keys below are the BYOK keys your own features call (email, SMS, LLM).</p>') +
+    '<div id="icLeadSourcesWrap" data-ops="ic-lead-sources"><div class="loading-wrap"><div class="spinner"></div> Loading lead sources...</div></div>' +
+    '<br>' +
+    '<div id="icKeysWrap" data-ops="ic-personal-keys"><div class="loading-wrap"><div class="spinner"></div> Loading API keys...</div></div>' +
+    '<br>' +
     '<div id="icNativeWrap" data-ops="ic-native"><div class="loading-wrap"><div class="spinner"></div> Loading native connectors...</div></div>' +
     '<br>' +
     '<div id="icProviderWrap" data-ops="ic-providers"><div class="loading-wrap"><div class="spinner"></div> Loading provider keys...</div></div>' +
@@ -1892,7 +1896,7 @@ async function runPurge() {
 // though the API returns {count, items} — which is why every provider read
 // "Not connected" no matter what the account had stored.
 
-const IC = { apps: [], status: {}, providers: [], keys: {}, isAdmin: false, loaded: false };
+const IC = { apps: [], status: {}, providers: [], keys: {}, overview: null, isAdmin: false, loaded: false };
 
 const IC_ADMIN_ROLES = ['owner', 'account_owner', 'admin', 'agency_admin'];
 
@@ -1959,7 +1963,7 @@ function icBind(el) {
 
 async function loadIntegrationCenter() {
   IC.isAdmin = icIsAdmin();
-  await Promise.all([icLoadApps(), icLoadProviders()]);
+  await Promise.all([icLoadApps(), icLoadProviders(), icLoadOverview()]);
   icRenderUpgradePaths();
   IC.loaded = true;
 }
@@ -2252,7 +2256,142 @@ async function icDeleteProvider(pkey) {
   }
 }
 
+// ── Lead sources + lead-delivery keys (live from /api/integration-center/overview) ──
+// Lead-source status is computed from the contacts table, not from "is the app
+// connected": an app that has never delivered a lead reads as "never received" and an
+// unrecognized source_app shows up as its own row instead of being silently dropped.
+const IC_SISTER_SLUG = {
+  funnelswift: 'funnelswift',
+  incentiveswift: null,
+  adaswift: 'adaswift',
+  workflowswift: 'workflowswift',
+  missedcallrespondr: 'missedcall-responder',
+  multidirectory: 'multi-directory',
+  'funnel-swift-mobile': null
+};
+
+async function icLoadOverview() {
+  try {
+    IC.overview = await API.get('/integration-center/overview');
+  } catch (e) {
+    IC.overview = { error: e.message };
+  }
+  icRenderLeadSources();
+  icRenderKeys();
+}
+
+function icFmtDate(v) { return v ? new Date(v).toLocaleString() : '—'; }
+
+function icRenderLeadSources() {
+  const el = document.getElementById('icLeadSourcesWrap');
+  if (!el) return;
+  const o = IC.overview || {};
+  if (o.error) { el.innerHTML = icErr('Could not load lead sources', o.error); return; }
+  const sec = o.lead_sources || {};
+  const items = sec.items || [];
+  const feeding = items.filter(i => i.status === 'feeding').length;
+  const rows = items.map(i => [
+    '<strong>' + escapeHtml(i.name || i.key) + '</strong><div style="font-size:.72rem;color:var(--text-muted)">' + escapeHtml(i.key) +
+      (i.unrecognized ? ' <span class="badge badge-muted">unrecognized</span>' : '') + '</div>',
+    i.status === 'feeding' ? '<span class="badge badge-success">feeding</span>'
+      : (i.status === 'idle' ? '<span class="badge badge-muted">idle</span>' : '<span class="badge badge-muted">never received</span>'),
+    String(i.leads_30d || 0),
+    String(i.leads_total || 0),
+    escapeHtml(icFmtDate(i.last_lead_at))
+  ]);
+  let html = card('📥 Lead sources — what is feeding this CRM',
+    '<p style="color:var(--text-secondary);margin:0 0 10px">Capture apps deliver their leads here with a <code>csk_…</code> key: ' +
+    '<code>POST ' + escapeHtml(sec.push_endpoint || '/api/external/contacts') + '</code>, header <code>' +
+    escapeHtml(sec.auth || 'Authorization: Bearer csk_…') + '</code>. Status is live from the contacts table — <strong>' +
+    feeding + '</strong> of ' + items.length + ' capture apps delivered in the last 30 days.</p>');
+  html += dataTable(['Capture app', 'Status', 'Leads 30d', 'Leads total', 'Last lead'], rows,
+    'No capture app has delivered a lead yet — create a key below and paste it into the app.');
+  el.innerHTML = html;
+}
+
+function icRenderKeys() {
+  const el = document.getElementById('icKeysWrap');
+  if (!el) return;
+  const o = IC.overview || {};
+  if (o.error) { el.innerHTML = icErr('Could not load lead-delivery keys', o.error); return; }
+  const items = (o.personal_keys && o.personal_keys.items) || [];
+  const active = items.filter(k => k.is_active).length;
+  const rows = items.map(k => [
+    '<strong>' + escapeHtml(k.name || 'default') + '</strong>',
+    '<code>' + escapeHtml(k.prefix || '') + '…</code>',
+    k.is_active ? '<span class="badge badge-success">active</span>' : '<span class="badge badge-muted">revoked</span>',
+    escapeHtml(icFmtDate(k.last_used_at)),
+    escapeHtml(icFmtDate(k.created_at)),
+    '<button class="btn btn-ghost btn-xs" onclick="icRotateKey(\'' + escapeHtmlAttr(k.id) + '\')">Rotate</button> ' +
+    '<button class="btn btn-ghost btn-xs" onclick="icRevokeKey(\'' + escapeHtmlAttr(k.id) + '\')">Revoke</button>'
+  ]);
+  const body = '<p style="color:var(--text-secondary);margin:0 0 10px">Each key lets a capture app deliver leads into <strong>this account</strong>. ' +
+    'Only the prefix is ever displayed — the full key is shown once, at creation. <strong>' + active + '</strong> active of ' + items.length + ' total.</p>' +
+    dataTable(['Name', 'Prefix', 'Status', 'Last used', 'Created', ''], rows,
+      'No keys yet — create one and paste it into a capture app\'s CoreSwift integration.');
+  const footer = '<button class="btn btn-primary btn-sm" onclick="icCreateKey()">+ Create lead-delivery key</button>';
+  el.innerHTML = card('🔑 Lead-delivery keys (csk_…)', body, footer);
+}
+
+async function icCreateKey() {
+  try {
+    const d = await API.post('/personal-api-keys', { name: 'lead-capture' });
+    await icShowKeyOnce(d, 'Key created');
+  } catch (e) {
+    toast('Could not create key: ' + e.message, 'error');
+  }
+}
+
+async function icRotateKey(id) {
+  if (!confirm('Rotate this key? The current secret stops working immediately.')) return;
+  try {
+    const d = await API.post('/personal-api-keys/' + encodeURIComponent(id) + '/rotate', {});
+    await icShowKeyOnce(d, 'Key rotated');
+  } catch (e) {
+    toast('Could not rotate: ' + e.message, 'error');
+  }
+}
+
+async function icRevokeKey(id) {
+  if (!confirm('Revoke this key? Any app still using it stops delivering leads.')) return;
+  try {
+    await API.del('/personal-api-keys/' + encodeURIComponent(id));
+    toast('Key revoked', 'success');
+    await icLoadOverview();
+  } catch (e) {
+    toast('Could not revoke: ' + e.message, 'error');
+  }
+}
+
+async function icShowKeyOnce(d, title) {
+  showModal(escapeHtml(title),
+    '<p style="margin:0 0 8px">Paste this into the capture app now — it is shown <strong>once</strong> and can never be retrieved again.</p>' +
+    '<div class="form-group"><label>Key</label><input id="icNewKey" readonly value="' + escapeHtmlAttr(d && d.key || '') + '"></div>' +
+    '<div style="font-size:.75rem;color:var(--text-muted)">Prefix ' + escapeHtml(d && d.prefix || '') + '</div>',
+    '<button class="btn btn-secondary" onclick="closeModal()">Done</button>');
+  const inp = document.getElementById('icNewKey');
+  if (inp) { inp.focus(); inp.select(); }
+  await icLoadOverview();
+}
+
 // ── Sister products as upgrade paths ──
+// Prefer the hub's own list (GET /integration-center/overview → cross_sell: one entry +
+// CTA per capture app, including IncentiveSwift and FunnelSwift Mobile which the static
+// fallback never knew about). IC_SISTERS stays only as the offline fallback.
+function icUpgradePaths() {
+  const cs = IC.overview && IC.overview.cross_sell;
+  if (Array.isArray(cs) && cs.length) {
+    return cs.map(s => ({
+      slug: IC_SISTER_SLUG[s.key] || s.key,
+      key: s.key,
+      name: s.name,
+      url: s.url,
+      pitch: s.cta || s.description
+    }));
+  }
+  return IC_SISTERS.map(s => ({ slug: s.slug, key: s.slug, name: s.name, url: s.url, pitch: s.pitch }));
+}
+
 function icRenderUpgradePaths() {
   const el = document.getElementById('icUpgradeWrap');
   if (!el) return;
@@ -2260,7 +2399,7 @@ function icRenderUpgradePaths() {
     '<p style="color:var(--text-secondary);margin:0">These products feed CoreSwift. A customer who already runs one of them is the natural ' +
     'cross-sell — connect the app above and its captured leads land here as contacts.</p>');
   html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px">';
-  IC_SISTERS.forEach(s => {
+  icUpgradePaths().forEach(s => {
     const st = IC.status[s.slug];
     const isConnected = !!(st && st.connected);
     html += '<div class="card"><div class="card-body">' +
