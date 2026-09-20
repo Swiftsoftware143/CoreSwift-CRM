@@ -564,7 +564,9 @@ function renderSidebar() {
   MENU.forEach(it => item(it, false));
   h += '<div class="nav-divider">── SETTINGS ──</div>';
   SETTINGS_MENU.forEach(it => item(it, false));
-  if (STATE.user && STATE.user.role === 'agency_admin') {
+  // Admin menu is for platform operators — the DB uses three admin vocabularies
+  // ('agency_admin' for the platform admin, 'owner'/'admin' for tenant owners).
+  if (STATE.user && ['agency_admin','owner','admin'].indexOf(STATE.user.role) >= 0) {
     h += '<div class="nav-divider">── ADMIN ──</div>';
     ADMIN_MENU.forEach(it => item(it, false));
   }
@@ -780,7 +782,7 @@ const TAB_RENDERERS = {
       '<div class="stat-card"><div class="stat-icon">💰</div><div class="stat-value">--</div><div class="stat-label">Conversion Rate</div></div>' +
     '</div>' +
     card('Campaign Performance', '<p style="color:var(--text-secondary)">Connect your email provider in the Integration Center to populate analytics data.</p>',
-      '<button class="btn btn-secondary btn-sm" onclick="switchTab('integrations')">🔌 Open Integration Center</button>');
+    '<button class="btn btn-secondary btn-sm" onclick="switchTab(&#39;integrations&#39;)">🔌 Open Integration Center</button>');
   },
 
   'rules': () => {
@@ -834,7 +836,7 @@ const TAB_RENDERERS = {
       '<button class="btn btn-primary btn-sm" onclick="showComposeModal()">✏️ Compose</button>') +
     '<div id="messagesContent">' +
       card('Recent Messages', '<div class="empty-state"><div class="empty-icon">💬</div><h3>No messages yet</h3><p>Connect a messaging provider in the Integration Center.</p></div>',
-        '<button class="btn btn-secondary btn-sm" onclick="switchTab('integrations')">🔌 Integration Center</button>') +
+        '<button class="btn btn-secondary btn-sm" onclick="switchTab(&#39;integrations&#39;)">🔌 Integration Center</button>') +
     '</div>';
   },
 
@@ -878,14 +880,14 @@ const TAB_RENDERERS = {
       '<div class="chat-messages" id="chatMessages">' +
         '<div class="chat-msg assistant">' +
           '<div class="msg-role">AI Assistant</div>' +
-          'Connect an LLM provider (OpenAI, DeepSeek, Anthropic) in the <a href="#" onclick="switchTab('integrations')">Integration Center</a> to get started.' +
+          'Connect an LLM provider (OpenAI, DeepSeek, Anthropic) in the <a href="#" onclick="switchTab(&#39;integrations&#39;)">Integration Center</a> to get started.' +
         '</div>' +
       '</div>' +
       '<div class="chat-input-area">' +
         '<select id="chatModel" style="padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-size:.85rem">' +
           '<option value="">Select model...</option>' +
         '</select>' +
-        '<input type="text" id="chatInput" placeholder="Ask me anything about your CRM..." onkeydown="if(event.key==='Enter')sendChat()">' +
+        '<input type="text" id="chatInput" placeholder="Ask me anything about your CRM..." onkeydown="if(event.key===&#39;Enter&#39;)sendChat()">' +
         '<button class="btn btn-primary" onclick="sendChat()">Send</button>' +
       '</div>' +
     '</div>';
@@ -937,7 +939,12 @@ const TAB_RENDERERS = {
   },
 
   // === ADMIN ===
-  'portfolio': () => placeholderPanel('Portfolio Companies', 'Manage companies and their subscriptions across the platform.', '🏢'),
+  'portfolio': () => {
+    return pageHeader('Portfolio Companies', 'Every portfolio company on the platform, with cross-app sync',
+      '<button class="btn btn-secondary btn-sm" data-ops="portfolio-sync-open" onclick="showPortfolioSyncModal()">🔄 Sync New Company</button>' +
+      '<button class="btn btn-primary btn-sm" data-ops="portfolio-company-add" onclick="showAddPortfolioModal()">+ Add Company</button>') +
+    '<div id="portfolioTable" data-ops="portfolio-companies"><div class="loading-wrap"><div class="spinner"></div> Loading portfolio companies...</div></div>';
+  },
   'users': () => {
     return pageHeader('Users', 'Manage platform users and permissions',
       '<button class="btn btn-primary btn-sm" onclick="showAddUserModal()">+ Add User</button>') +
@@ -950,7 +957,11 @@ const TAB_RENDERERS = {
   'affiliates': () => placeholderPanel('Affiliates', 'Manage your affiliate program — track referrals, commissions, and payouts.', '🤝'),
   'widgets': () => placeholderPanel('Widgets', 'Embeddable CRM widgets for your website — contact forms, chat, booking.', '🧩'),
   'webhooks': () => placeholderPanel('Webhooks', 'Configure outgoing webhooks for real-time event notifications.', '🔗'),
-  'native-apps': () => placeholderPanel('Native Apps', 'iOS and Android app configuration and deployment.', '📱'),
+  'native-apps': () => {
+    return pageHeader('Native App Connectors', 'Global config for the native connector layer (AdaSwift, FunnelSwift, ZaarHub, WorkflowSwift)',
+      '<button class="btn btn-primary btn-sm" data-ops="native-app-config-set" onclick="showNativeConfigModal()">+ Set App Config</button>') +
+    '<div id="nativeConfigsTable" data-ops="native-app-configs"><div class="loading-wrap"><div class="spinner"></div> Loading app configs...</div></div>';
+  },
   'audit-log': () => {
     return pageHeader('Audit Log', 'Track all platform activity',
       '<button class="btn btn-secondary btn-sm">Export CSV</button>') +
@@ -974,7 +985,20 @@ const TAB_RENDERERS = {
       '</div>', '<button class="btn btn-secondary btn-sm">Refresh</button>');
   },
   'telnyx-admin': () => placeholderPanel('Telnyx Admin', 'Configure Telnyx provider settings for all tenants.', '☎️'),
-  'email-admin': () => placeholderPanel('Private Email Admin', 'Manage email provider configurations across all tenants.', '📧'),
+  'email-admin': () => {
+    return pageHeader('Private Email Admin', 'Per-tenant email limits, data retention and purge controls',
+      '<button class="btn btn-danger btn-sm" data-ops="pe-purge" onclick="showPurgeModal()">🧨 Run Purge</button>') +
+    '<div id="peLimitsTable" data-ops="pe-limits"><div class="loading-wrap"><div class="spinner"></div> Loading tenant overrides...</div></div>' +
+    '<br>' +
+    card('Tenant Retention', '<div class="form-group"><label>Tenant</label><select id="peRetTenant" data-ops="pe-retention"></select></div>' +
+      '<div class="form-group"><label>Retention (days, 30–3650)</label><input type="number" id="peRetDays" min="30" max="3650" value="365"></div>' +
+      '<p class="form-hint" id="peRetStatus">Pick a tenant, press “Load Current”, then save. Saving creates the override row if the tenant has none.</p>',
+      '<button class="btn btn-secondary" data-ops="pe-retention-load" onclick="loadRetentionForTenant()">Load Current</button>' +
+      '<button class="btn btn-primary" data-ops="pe-retention-save" onclick="saveRetentionForTenant()">Save Retention</button>') +
+    '<br>' +
+    card('🧨 Purge Expired Email Data', '<p style="color:var(--text-secondary)">Deletes private-email data older than each tenant’s retention window. Destructive and irreversible — the purge control always requires an explicit typed confirmation.</p>',
+      '<button class="btn btn-danger" data-ops="pe-purge-open" onclick="showPurgeModal()">Open Purge Control</button>');
+  },
   'provider-keys': () => placeholderPanel('Provider Keys Admin', 'Global API key management for all providers.', '🔑'),
   'configuration': () => {
     let html = pageHeader('Site Configuration', 'SEO, analytics, legal pages, and homepage settings') +
@@ -1034,8 +1058,8 @@ function renderSiteConfigForm() {
   html += '<div class="card" style="margin-bottom:20px"><div class="card-header">📊 Analytics &amp; Tracking</div><div class="card-body"><div class="config-list">';
   html += input('ga_id', 'Google Analytics ID', 'e.g. G-XXXXXXXXXX or UA-XXXXX-X', 'text', 'G-XXXXXXXXXX');
   html += input('gtm_id', 'Google Tag Manager ID', 'e.g. GTM-XXXXXXX', 'text', 'GTM-XXXXXXX');
-  html += input('head_scripts', 'Head Scripts', 'Custom scripts in <head> (one per line)', 'textarea', '<script>...</script>');
-  html += input('body_scripts', 'Body Scripts', 'Custom scripts before </body>', 'textarea', '<script>...</script>');
+  html += input('head_scripts', 'Head Scripts', 'Custom scripts in <head> (one per line)', 'textarea', '<scr' + 'ipt>...</scr' + 'ipt>');
+  html += input('body_scripts', 'Body Scripts', 'Custom scripts before </body>', 'textarea', '<scr' + 'ipt>...</scr' + 'ipt>');
   html += '</div></div></div>';
 
   // Homepage
@@ -1456,8 +1480,342 @@ const TAB_LOADERS = {
     } catch(e) {
       document.getElementById('usersTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Users endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
+  },
+
+  // === ROUND 7 ADMIN OPS LOADERS ===
+
+  'portfolio': async () => {
+    const el = document.getElementById('portfolioTable');
+    if (!el) return;
+    try {
+      const data = await API.get('/admin/portfolio-companies');
+      const companies = (data && data.portfolio_companies) || [];
+      const rows = companies.map(c => [
+        escapeHtml(c.name || '—'),
+        escapeHtml(c.slug || '—'),
+        escapeHtml(c.email || '—'),
+        c.is_active ? '<span class="badge badge-success">active</span>' : '<span class="badge badge-muted">inactive</span>',
+        escapeHtml(c.created_at ? new Date(c.created_at).toLocaleDateString() : '—'),
+        `<button class="btn btn-ghost btn-xs" data-ops="portfolio-targets-open" onclick="showTargetsModal('${c.id}','${escapeHtmlAttr(c.name || '')}')">Targets</button>`
+      ]);
+      el.innerHTML = dataTable(['Company','Slug','Email','Status','Created',''], rows,
+        'No portfolio companies yet — add one, or run a cross-app sync.');
+    } catch(e) {
+      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Portfolio endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'native-apps': async () => {
+    const el = document.getElementById('nativeConfigsTable');
+    if (!el) return;
+    try {
+      const data = await API.get('/native/apps/admin/configs');
+      const configs = (data && data.admin_configs) || [];
+      const rows = configs.map(c => {
+        const cfg = JSON.stringify(c.config || {});
+        const short = cfg.length > 90 ? cfg.slice(0, 90) + '…' : cfg;
+        return [
+          `<span class="badge badge-primary">${escapeHtml(c.app_slug || '—')}</span>`,
+          `<code style="font-size:.75rem">${escapeHtml(short)}</code>`,
+          escapeHtml(c.updated_at ? new Date(c.updated_at).toLocaleString() : '—'),
+          `<button class="btn btn-ghost btn-xs" data-ops="native-app-config-edit" onclick='showNativeConfigModal(${JSON.stringify(c.app_slug || '')}, ${JSON.stringify(c.config || {})})'>Edit</button>`
+        ];
+      });
+      el.innerHTML = dataTable(['App','Config','Updated',''], rows,
+        'No native app configs stored yet — use “+ Set App Config” to add one (e.g. adaswift base URL).');
+    } catch(e) {
+      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Native app configs endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'email-admin': async () => {
+    const el = document.getElementById('peLimitsTable');
+    const sel = document.getElementById('peRetTenant');
+    if (!el) return;
+    try {
+      if (!PE_TENANTS.length) {
+        try {
+          const td = await API.get('/admin/tenants');
+          PE_TENANTS = (td && td.tenants) || [];
+        } catch(_) { PE_TENANTS = []; }
+      }
+      if (sel) sel.innerHTML = peTenantOptions('');
+      const data = await API.get('/private-email/admin/limits');
+      const list = Array.isArray(data) ? data : ((data && data.limits) || []);
+      const nameOf = id => {
+        const t = PE_TENANTS.filter(x => x.id === id)[0];
+        return t ? (t.name || t.slug || id) : id;
+      };
+      const nz = v => (v === null || v === undefined) ? '—' : v;
+      const rows = list.map(r => [
+        escapeHtml(nameOf(r.tenant_id)),
+        nz(r.retention_days) + ' days',
+        escapeHtml(r.last_purged_at ? new Date(r.last_purged_at).toLocaleString() : 'never'),
+        'domains ' + nz(r.max_domains) + ' · boxes ' + nz(r.max_mailboxes) + ' · aliases ' + nz(r.max_aliases_per_mailbox),
+        `<button class="btn btn-ghost btn-xs" data-ops="pe-retention-row" onclick="useTenantRetention('${r.tenant_id}')">Retention</button>` +
+        `<button class="btn btn-ghost btn-xs" onclick="showPurgeModal('${r.tenant_id}')">Purge</button>`
+      ]);
+      el.innerHTML = dataTable(['Tenant','Retention','Last purge','Limit overrides',''], rows,
+        'No per-tenant email limit overrides yet — set retention below to create one.');
+    } catch(e) {
+      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Private-email admin endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
   }
 };
+
+// ========== ROUND 7 — ADMIN OPS CONTROLS ==========
+// Portfolio companies + cross-app sync + integration targets · native app configs ·
+// private-email limits, retention and purge. Every control calls an EXISTING route:
+//   GET    /api/admin/portfolio-companies           POST /api/portfolio
+//   POST   /api/admin/portfolio-sync                GET|POST /api/portfolio/:id/targets
+//   GET    /api/native/apps/admin/configs           PATCH    /api/native/apps/admin/:app_slug
+//   GET    /api/private-email/admin/limits          GET|PATCH /api/private-email/admin/limits/:tenant_id/retention
+//   POST   /api/private-email/admin/purge/run
+let PE_TENANTS = [];
+
+function peTenantOptions(selected) {
+  if (!PE_TENANTS.length) return '<option value="">(no tenants returned)</option>';
+  return '<option value="">— select tenant —</option>' + PE_TENANTS.map(t =>
+    '<option value="' + escapeHtmlAttr(t.id) + '"' + (t.id === selected ? ' selected' : '') + '>' +
+    escapeHtml(t.name || t.slug || t.id) + '</option>').join('');
+}
+
+function showTargetsModal(companyId, companyName) {
+  showModal('Integration Targets — ' + companyName,
+    '<div id="targetsBody" data-ops="portfolio-targets"><div style="text-align:center;padding:20px;color:var(--text-muted)">Loading targets...</div></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Close</button>', true);
+  loadTargets(companyId);
+}
+
+async function loadTargets(companyId) {
+  const el = document.getElementById('targetsBody');
+  if (!el) return;
+  try {
+    const data = await API.get('/portfolio/' + companyId + '/targets');
+    const targets = (data && data.integration_targets) || [];
+    let html = '';
+    if (targets.length) {
+      html += '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Provider</th><th>Webhook URL</th><th>Key</th><th>Events</th><th></th></tr></thead><tbody>';
+      targets.forEach(t => {
+        html += '<tr>' +
+          '<td>' + escapeHtml(t.name || '—') + '</td>' +
+          '<td><span class="badge badge-muted">' + escapeHtml(t.provider || '—') + '</span></td>' +
+          '<td style="word-break:break-all">' + escapeHtml(t.webhook_url || '—') + '</td>' +
+          '<td>' + (t.has_api_key ? escapeHtml(t.api_key_masked || 'set') : '—') + '</td>' +
+          '<td>' + escapeHtml((t.events || []).join(', ') || '—') + '</td>' +
+          '<td>' + (t.is_active ? '✅' : '⛔') + '</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table></div>';
+    } else {
+      html += '<p style="color:var(--text-secondary);margin-bottom:12px">No integration targets for this portfolio company yet.</p>';
+    }
+    html += '<div class="card" style="margin-top:16px"><div class="card-header">Add Target</div><div class="card-body">' +
+      '<div class="form-group"><label>Name *</label><input type="text" id="tgName" placeholder="e.g. Slack alerts"></div>' +
+      '<div class="form-group"><label>Provider</label><select id="tgProvider"><option value="webhook">webhook</option><option value="n8n">n8n</option><option value="zapier">zapier</option><option value="slack">slack</option><option value="generic">generic</option></select></div>' +
+      '<div class="form-group"><label>Webhook URL *</label><input type="url" id="tgUrl" placeholder="https://..."></div>' +
+      '<div class="form-group"><label>API Key (optional)</label><input type="password" id="tgKey"></div>' +
+      '<div class="form-group"><label>Events (comma separated)</label><input type="text" id="tgEvents" placeholder="contact.created, deal.won"></div>' +
+      '<p class="form-hint">Targets receive portfolio sync events for this company only.</p>' +
+      '</div><div class="card-footer"><button class="btn btn-primary btn-sm" data-ops="portfolio-target-add" onclick="addIntegrationTarget(\'' + companyId + '\')">+ Add Target</button></div></div>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<p style="color:var(--error)">Failed to load targets: ' + escapeHtml(e.message) + '</p>';
+  }
+}
+
+async function addIntegrationTarget(companyId) {
+  const g = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+  const name = g('tgName').trim();
+  const provider = g('tgProvider') || 'webhook';
+  const webhook_url = g('tgUrl').trim();
+  const api_key = g('tgKey').trim();
+  const events = g('tgEvents').split(',').map(s => s.trim()).filter(Boolean);
+  if (!name || !webhook_url) { toast('Name and webhook URL are required', 'error'); return; }
+  const body = { name: name, provider: provider, webhook_url: webhook_url, events: events };
+  if (api_key) body.api_key = api_key;
+  try {
+    await API.post('/portfolio/' + companyId + '/targets', body);
+    toast('Integration target added', 'success');
+    loadTargets(companyId);
+  } catch(e) {
+    toast('Add failed: ' + e.message, 'error');
+  }
+}
+
+function showAddPortfolioModal() {
+  showModal('Add Portfolio Company',
+    '<div class="form-group"><label>Name *</label><input type="text" id="pcName"></div>' +
+    '<div class="form-group"><label>Slug (optional)</label><input type="text" id="pcSlug" placeholder="auto-generated from name"></div>' +
+    '<div class="form-group"><label>Email</label><input type="email" id="pcEmail"></div>' +
+    '<div class="form-group"><label>Description</label><textarea id="pcDesc" rows="3"></textarea></div>' +
+    '<p class="form-hint">Creates the company in your account and broadcasts a create event to every sister app.</p>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" data-ops="portfolio-company-create" onclick="createPortfolioCompany()">Create</button>');
+}
+
+async function createPortfolioCompany() {
+  const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const name = g('pcName');
+  if (!name) { toast('Name is required', 'error'); return; }
+  const body = { name: name };
+  const slug = g('pcSlug'); const email = g('pcEmail'); const desc = g('pcDesc');
+  if (slug) body.slug = slug;
+  if (email) body.email = email;
+  if (desc) body.description = desc;
+  try {
+    await API.post('/portfolio', body);
+    closeModal();
+    toast('Portfolio company created', 'success');
+    if (TAB_LOADERS['portfolio']) TAB_LOADERS['portfolio']();
+  } catch(e) {
+    toast('Create failed: ' + e.message, 'error');
+  }
+}
+
+function showPortfolioSyncModal() {
+  showModal('Cross-App Portfolio Sync',
+    '<p style="color:var(--text-secondary);margin-bottom:12px">Creates a tenant + owner user + portfolio entry and broadcasts to every sister app (FunnelSwift, IncentiveSwift, WorkflowSwift, ADASwift, MissedCall). Use for a brand-new client company; the owner email must not already exist.</p>' +
+    '<div class="form-group"><label>Company Name *</label><input type="text" id="psName"></div>' +
+    '<div class="form-group"><label>Owner Email *</label><input type="email" id="psEmail"></div>' +
+    '<div class="form-group"><label>Description</label><textarea id="psDesc" rows="3"></textarea></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" data-ops="portfolio-sync" onclick="runPortfolioSync()">Run Sync</button>');
+}
+
+async function runPortfolioSync() {
+  const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const name = g('psName'); const email = g('psEmail'); const desc = g('psDesc');
+  if (!email) { toast('Owner email is required', 'error'); return; }
+  try {
+    const res = await API.post('/admin/portfolio-sync', { name: name || 'Company', email: email, description: desc });
+    closeModal();
+    toast('Cross-app sync complete', 'success');
+    showModal('Sync Result', '<pre style="white-space:pre-wrap;font-size:.8rem">' + escapeHtml(JSON.stringify(res, null, 2)) + '</pre>',
+      '<button class="btn btn-primary" onclick="closeModal()">Close</button>');
+    if (TAB_LOADERS['portfolio']) TAB_LOADERS['portfolio']();
+  } catch(e) {
+    toast('Sync failed: ' + e.message, 'error');
+  }
+}
+
+function showNativeConfigModal(appSlug, cfg) {
+  const val = cfg ? JSON.stringify(cfg, null, 2) : '{\n  "base_url": "http://127.0.0.1:8080"\n}';
+  showModal('Native App Config — ' + (appSlug || 'new app'),
+    '<div class="form-group"><label>App Slug *</label><input type="text" id="naSlug" value="' + escapeHtmlAttr(appSlug || '') + '"' + (appSlug ? ' readonly' : '') + ' placeholder="adaswift"></div>' +
+    '<div class="form-group"><label>Config (JSON)</label><textarea id="naConfig" rows="10" spellcheck="false" style="font-family:monospace">' + escapeHtml(val) + '</textarea></div>' +
+    '<p class="form-hint">Stored in app_admin_configs; the native connector layer reads it at call time (base URL, tokens, feature flags).</p>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" data-ops="native-app-config-save" onclick="saveNativeConfig()">Save Config</button>', true);
+}
+
+async function saveNativeConfig() {
+  const slugEl = document.getElementById('naSlug');
+  const cfgEl = document.getElementById('naConfig');
+  const slug = slugEl ? slugEl.value.trim() : '';
+  const raw = cfgEl ? cfgEl.value.trim() : '';
+  if (!slug) { toast('App slug is required', 'error'); return; }
+  let cfg;
+  try { cfg = raw ? JSON.parse(raw) : {}; }
+  catch(e) { toast('Config is not valid JSON', 'error'); return; }
+  try {
+    await API.call('PATCH', '/native/apps/admin/' + encodeURIComponent(slug), cfg);
+    closeModal();
+    toast('Config saved for ' + slug, 'success');
+    if (TAB_LOADERS['native-apps']) TAB_LOADERS['native-apps']();
+  } catch(e) {
+    toast('Save failed: ' + e.message, 'error');
+  }
+}
+
+function useTenantRetention(tenantId) {
+  const sel = document.getElementById('peRetTenant');
+  if (sel) sel.value = tenantId;
+  loadRetentionForTenant();
+}
+
+async function loadRetentionForTenant() {
+  const sel = document.getElementById('peRetTenant');
+  const st = document.getElementById('peRetStatus');
+  const daysEl = document.getElementById('peRetDays');
+  if (!sel || !sel.value) { toast('Select a tenant first', 'warning'); return; }
+  try {
+    const r = await API.get('/private-email/admin/limits/' + encodeURIComponent(sel.value) + '/retention');
+    if (daysEl && r && r.retention_days) daysEl.value = r.retention_days;
+    if (st) st.textContent = 'Current retention: ' + ((r && r.retention_days) || '—') + ' days · last purge: ' + ((r && r.last_purged_at) || 'never');
+  } catch(e) {
+    if (st) st.textContent = 'Failed to load retention: ' + e.message;
+  }
+}
+
+async function saveRetentionForTenant() {
+  const sel = document.getElementById('peRetTenant');
+  const daysEl = document.getElementById('peRetDays');
+  const st = document.getElementById('peRetStatus');
+  if (!sel || !sel.value) { toast('Select a tenant first', 'warning'); return; }
+  const days = parseInt(daysEl ? daysEl.value : '0', 10);
+  if (!days || days < 30 || days > 3650) { toast('Retention must be between 30 and 3650 days', 'error'); return; }
+  try {
+    await API.call('PATCH', '/private-email/admin/limits/' + encodeURIComponent(sel.value) + '/retention', { retention_days: days });
+    toast('Retention saved (' + days + ' days)', 'success');
+    if (st) st.textContent = 'Saved — retention is now ' + days + ' days.';
+    if (TAB_LOADERS['email-admin']) TAB_LOADERS['email-admin']();
+  } catch(e) {
+    toast('Save failed: ' + e.message, 'error');
+  }
+}
+
+function purgeConfirmWord() {
+  const sel = document.getElementById('purgeScope');
+  return (sel && sel.value) ? 'PURGE' : 'PURGE ALL';
+}
+
+function purgeConfirmCheck() {
+  const word = purgeConfirmWord();
+  const label = document.getElementById('purgeWord');
+  if (label) label.textContent = word;
+  const input = document.getElementById('purgeConfirm');
+  if (input) input.placeholder = word;
+  const typed = input ? input.value : '';
+  const btn = document.getElementById('purgeRunBtn');
+  if (btn) btn.disabled = typed.trim().toUpperCase() !== word;
+}
+
+function showPurgeModal(preselectTenantId) {
+  showModal('🧨 Purge Expired Email Data',
+    '<p style="color:var(--error);font-weight:600">Destructive and irreversible — email older than the retention window is deleted permanently.</p>' +
+    '<div class="form-group"><label>Scope</label><select id="purgeScope" data-ops="pe-purge-scope" onchange="purgeConfirmCheck()">' +
+      '<option value="">— all tenants (global purge) —</option>' + peTenantOptions(preselectTenantId) + '</select></div>' +
+    '<p class="form-hint">Leave the scope empty to purge every tenant on the platform; pick one tenant to limit the run.</p>' +
+    '<div class="form-group"><label>Type <code id="purgeWord">PURGE ALL</code> to unlock the button</label>' +
+      '<input type="text" id="purgeConfirm" data-ops="pe-purge-confirm" oninput="purgeConfirmCheck()" placeholder="PURGE ALL"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-danger" id="purgeRunBtn" data-ops="pe-purge-run" disabled onclick="runPurge()">Run Purge</button>', true);
+  purgeConfirmCheck();
+}
+
+async function runPurge() {
+  const sel = document.getElementById('purgeScope');
+  const input = document.getElementById('purgeConfirm');
+  const tenantId = sel ? sel.value : '';
+  if (((input ? input.value : '') || '').trim().toUpperCase() !== purgeConfirmWord()) {
+    toast('Confirmation text does not match', 'error');
+    return;
+  }
+  const btn = document.getElementById('purgeRunBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Purging...'; }
+  try {
+    const res = await API.post('/private-email/admin/purge/run', tenantId ? { tenant_id: tenantId } : {});
+    closeModal();
+    toast('Purge complete', 'success');
+    showModal('Purge Result', '<pre style="white-space:pre-wrap;font-size:.8rem">' + escapeHtml(JSON.stringify(res, null, 2)) + '</pre>',
+      '<button class="btn btn-primary" onclick="closeModal()">Close</button>');
+    if (TAB_LOADERS['email-admin']) TAB_LOADERS['email-admin']();
+  } catch(e) {
+    toast('Purge failed: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Run Purge'; }
+  }
+}
 
 // ========== MODAL GENERATORS ==========
 function configureProvider(id, name, desc) {
@@ -1536,23 +1894,23 @@ async function changePassword() {
 }
 
 // Placeholder modal stubs
-function showAddContactModal() { showModal('Add Contact', '<div class="form-group"><label>Name</label><input type="text"></div><div class="form-group"><label>Email</label><input type="email"></div><div class="form-group"><label>Phone</label><input type="text"></div><div class="form-group"><label>Company</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Contact added','success')">Save</button>'); }
+function showAddContactModal() { showModal('Add Contact', '<div class="form-group"><label>Name</label><input type="text"></div><div class="form-group"><label>Email</label><input type="email"></div><div class="form-group"><label>Phone</label><input type="text"></div><div class="form-group"><label>Company</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Contact added&#39;,&#39;success&#39;)">Save</button>'); }
 function editContact(id) { toast('Editing contact: ' + id, 'info'); }
-function showAddCompanyModal(){ showModal('Add Company', '<div class="form-group"><label>Company Name</label><input type="text"></div><div class="form-group"><label>Industry</label><input type="text"></div><div class="form-group"><label>Website</label><input type="url"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Company added','success')">Save</button>'); }
+function showAddCompanyModal(){ showModal('Add Company', '<div class="form-group"><label>Company Name</label><input type="text"></div><div class="form-group"><label>Industry</label><input type="text"></div><div class="form-group"><label>Website</label><input type="url"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Company added&#39;,&#39;success&#39;)">Save</button>'); }
 function editCompany(id){ toast('Editing company: ' + id, 'info'); }
-function showAddDealModal(){ showModal('Add Deal', '<div class="form-group"><label>Deal Name</label><input type="text"></div><div class="form-group"><label>Value</label><input type="number"></div><div class="form-group"><label>Pipeline</label><select><option>Select...</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Deal added','success')">Save</button>'); }
-function showAddCampaignModal(){ showModal('New Campaign', '<div class="form-group"><label>Campaign Name</label><input type="text"></div><div class="form-group"><label>Type</label><select><option>Email</option><option>SMS</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Campaign created','success')">Create</button>'); }
-function showAddListModal(){ showModal('New List', '<div class="form-group"><label>List Name</label><input type="text"></div><div class="form-group"><label>Description</label><textarea></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('List created','success')">Create</button>'); }
-function showAddTagModal(){ showModal('New Tag', '<div class="form-group"><label>Tag Name</label><input type="text"></div><div class="form-group"><label>Color</label><input type="color" value="#6366f1"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Tag created','success')">Create</button>'); }
-function showAddRuleModal(){ showModal('New Rule', '<div class="form-group"><label>Rule Name</label><input type="text"></div><div class="form-group"><label>Trigger</label><select><option>Contact created</option><option>Deal stage changed</option><option>Form submitted</option><option>Tag added</option></select></div><div class="form-group"><label>Action</label><select><option>Send email</option><option>Add to list</option><option>Update deal</option><option>Create task</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Rule created','success')">Create Rule</button>'); }
-function showAddScoreRuleModal(){ showModal('Add Scoring Criterion', '<div class="form-group"><label>Criterion Name</label><input type="text"></div><div class="form-group"><label>Points</label><input type="number" value="5"></div><div class="form-group"><label>Trigger</label><select><option>Email opened</option><option>Link clicked</option><option>Form submitted</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Criterion added','success')">Add</button>'); }
-function showAddTemplateModal(){ showModal('New Template', '<div class="form-group"><label>Template Name</label><input type="text"></div><div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Body</label><textarea rows="6"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Template saved','success')">Save</button>'); }
-function showComposeModal(){ showModal('Compose Message', '<div class="form-group"><label>To</label><input type="text"></div><div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Message</label><textarea rows="5"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Message sent','success')">Send</button>'); }
-function showAddTicketModal(){ showModal('New Ticket', '<div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Description</label><textarea rows="4"></textarea></div><div class="form-group"><label>Priority</label><select><option>Normal</option><option>High</option><option>Urgent</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Ticket created','success')">Create</button>'); }
-function showAddEventModal(){ showModal('New Event', '<div class="form-group"><label>Title</label><input type="text"></div><div class="form-group"><label>Date</label><input type="date"></div><div class="form-group"><label>Time</label><input type="time"></div><div class="form-group"><label>Location</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Event created','success')">Save</button>'); }
-function showAddLinkModal(){ showModal('Generate Tracked Link', '<div class="form-group"><label>Destination URL</label><input type="url"></div><div class="form-group"><label>Campaign</label><select><option>None</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Link generated','success')">Generate</button>'); }
+function showAddDealModal(){ showModal('Add Deal', '<div class="form-group"><label>Deal Name</label><input type="text"></div><div class="form-group"><label>Value</label><input type="number"></div><div class="form-group"><label>Pipeline</label><select><option>Select...</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Deal added&#39;,&#39;success&#39;)">Save</button>'); }
+function showAddCampaignModal(){ showModal('New Campaign', '<div class="form-group"><label>Campaign Name</label><input type="text"></div><div class="form-group"><label>Type</label><select><option>Email</option><option>SMS</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Campaign created&#39;,&#39;success&#39;)">Create</button>'); }
+function showAddListModal(){ showModal('New List', '<div class="form-group"><label>List Name</label><input type="text"></div><div class="form-group"><label>Description</label><textarea></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;List created&#39;,&#39;success&#39;)">Create</button>'); }
+function showAddTagModal(){ showModal('New Tag', '<div class="form-group"><label>Tag Name</label><input type="text"></div><div class="form-group"><label>Color</label><input type="color" value="#6366f1"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Tag created&#39;,&#39;success&#39;)">Create</button>'); }
+function showAddRuleModal(){ showModal('New Rule', '<div class="form-group"><label>Rule Name</label><input type="text"></div><div class="form-group"><label>Trigger</label><select><option>Contact created</option><option>Deal stage changed</option><option>Form submitted</option><option>Tag added</option></select></div><div class="form-group"><label>Action</label><select><option>Send email</option><option>Add to list</option><option>Update deal</option><option>Create task</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Rule created&#39;,&#39;success&#39;)">Create Rule</button>'); }
+function showAddScoreRuleModal(){ showModal('Add Scoring Criterion', '<div class="form-group"><label>Criterion Name</label><input type="text"></div><div class="form-group"><label>Points</label><input type="number" value="5"></div><div class="form-group"><label>Trigger</label><select><option>Email opened</option><option>Link clicked</option><option>Form submitted</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Criterion added&#39;,&#39;success&#39;)">Add</button>'); }
+function showAddTemplateModal(){ showModal('New Template', '<div class="form-group"><label>Template Name</label><input type="text"></div><div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Body</label><textarea rows="6"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Template saved&#39;,&#39;success&#39;)">Save</button>'); }
+function showComposeModal(){ showModal('Compose Message', '<div class="form-group"><label>To</label><input type="text"></div><div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Message</label><textarea rows="5"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Message sent&#39;,&#39;success&#39;)">Send</button>'); }
+function showAddTicketModal(){ showModal('New Ticket', '<div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Description</label><textarea rows="4"></textarea></div><div class="form-group"><label>Priority</label><select><option>Normal</option><option>High</option><option>Urgent</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Ticket created&#39;,&#39;success&#39;)">Create</button>'); }
+function showAddEventModal(){ showModal('New Event', '<div class="form-group"><label>Title</label><input type="text"></div><div class="form-group"><label>Date</label><input type="date"></div><div class="form-group"><label>Time</label><input type="time"></div><div class="form-group"><label>Location</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Event created&#39;,&#39;success&#39;)">Save</button>'); }
+function showAddLinkModal(){ showModal('Generate Tracked Link', '<div class="form-group"><label>Destination URL</label><input type="url"></div><div class="form-group"><label>Campaign</label><select><option>None</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Link generated&#39;,&#39;success&#39;)">Generate</button>'); }
 function showAddMemberModal(){ toast('Add team member form coming soon', 'info'); }
-function showAddUserModal(){ showModal('Add User', '<div class="form-group"><label>Name</label><input type="text"></div><div class="form-group"><label>Email</label><input type="email"></div><div class="form-group"><label>Role</label><select><option>user</option><option>agency_admin</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('User added','success')">Create</button>'); }
+function showAddUserModal(){ showModal('Add User', '<div class="form-group"><label>Name</label><input type="text"></div><div class="form-group"><label>Email</label><input type="email"></div><div class="form-group"><label>Role</label><select><option>user</option><option>agency_admin</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;User added&#39;,&#39;success&#39;)">Create</button>'); }
 
 // Chat
 function sendChat() {

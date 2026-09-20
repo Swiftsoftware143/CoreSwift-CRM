@@ -380,12 +380,19 @@ pub async fn sync_history(
 
 // ── Admin-only: get global app config ──
 
+/// Global (platform-level) app configuration may be managed by the platform admin
+/// (`agency_admin`) as well as tenant-level `owner`/`admin` — the fleet's role
+/// vocabulary uses all three and the admin SPA gates on `agency_admin`.
+fn is_platform_admin(role: &str) -> bool {
+    matches!(role, "owner" | "admin" | "agency_admin")
+}
+
 pub async fn get_admin_config(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
     Path(app_slug): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
-    if c.role != "owner" && c.role != "admin" {
+    if !is_platform_admin(&c.role) {
         return Err(AppError::Forbidden);
     }
 
@@ -407,7 +414,7 @@ pub async fn update_admin_config(
     Path(app_slug): Path<String>,
     Json(config): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    if c.role != "owner" && c.role != "admin" {
+    if !is_platform_admin(&c.role) {
         return Err(AppError::Forbidden);
     }
 
@@ -429,7 +436,7 @@ pub async fn list_admin_configs(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    if c.role != "owner" && c.role != "admin" {
+    if !is_platform_admin(&c.role) {
         return Err(AppError::Forbidden);
     }
 
