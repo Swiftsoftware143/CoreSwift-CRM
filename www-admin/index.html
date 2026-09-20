@@ -643,7 +643,14 @@ function renderSidebar() {
   SETTINGS_MENU.forEach(it => item(it, false));
   // Admin menu is for platform operators — the DB uses three admin vocabularies
   // ('agency_admin' for the platform admin, 'owner'/'admin' for tenant owners).
-  if (STATE.user && ['agency_admin','owner','admin'].indexOf(STATE.user.role) >= 0) {
+  // Platform operators ONLY. 'owner'/'admin' are TENANT-owner vocabularies above — every
+  // real tenant user is 'owner', so including them exposed the whole platform menu
+  // (Features & Plans, Site Configuration, Telnyx/Email admin, Billing, Users) to customers.
+  // The server rejects them anyway (tenant -> 403 on the plan registry), so this was a UI
+  // leak that dead-ends on an error, not an escalation. Keep tenant-visible items in MENU
+  // or SETTINGS_MENU instead.
+  const PLATFORM_ROLES = ['agency_admin', 'platform_admin', 'superadmin'];
+  if (STATE.user && PLATFORM_ROLES.indexOf(STATE.user.role) >= 0) {
     h += '<div class="nav-divider">── ADMIN ──</div>';
     ADMIN_MENU.forEach(it => item(it, false));
   }
