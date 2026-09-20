@@ -166,15 +166,18 @@ pub async fn internal_create_default_slot(
     .await?
     .ok_or_else(|| AppError::NotFound("Calendar not found".into()))?;
 
-    // Check if slot already exists with this name for this calendar
-    let existing = sqlx::query_scalar::<_, i32>(
+    // Check if slot already exists with this name for this calendar.
+    // COUNT(*) is bigint: decoding it into i32 fails at runtime ("mismatched
+    // types") with no compile error, and the old `.unwrap_or(0)` swallowed that
+    // failure into "no duplicate exists", so this guard never fired and every
+    // call created another slot. i64 + `?` so a real DB error surfaces.
+    let existing = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM calendar_slots WHERE calendar_id = $1 AND slot_name = $2",
     )
     .bind(cal.id)
     .bind(slot_name)
     .fetch_one(&s.db)
-    .await
-    .unwrap_or(0);
+    .await?;
 
     if existing > 0 {
         return Ok((
