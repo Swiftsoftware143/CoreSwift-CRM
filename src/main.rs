@@ -145,8 +145,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ready", get(ready_check))
         // Serve SPA at root
         .nest_service("/", ServeDir::new("public"))
-        // Auth routes (no auth required)
-        .nest("/api/auth", auth::router())
+        // Auth routes (public group + auth-middleware-guarded /invite & /me/usage)
+        .nest("/api/auth", auth::router(state.clone()))
         // Protected routes
         .nest("/api/account", account::router(state.clone()))
         .nest("/api/contacts", contacts::router(state.clone()))
