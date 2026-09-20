@@ -54,6 +54,12 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/sync-tag",
             axum::routing::post(handlers::sync_funnelswift_tag),
         )
+        // Plan gating — the admin controls this module per plan
+        // (features::FEATURE_REGISTRY is the source of truth for the admin UI).
+        .layer(middleware::from_fn_with_state(
+            crate::features::FeatureGate::new(state.db.clone(), "campaigns", "Campaigns"),
+            crate::features::gate_mw,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,

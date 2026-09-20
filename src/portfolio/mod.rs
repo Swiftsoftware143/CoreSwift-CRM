@@ -17,6 +17,12 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/:id", axum::routing::delete(handlers::delete))
         .route("/:id/targets", axum::routing::get(handlers::list_targets))
         .route("/:id/targets", axum::routing::post(handlers::create_target))
+        // Plan gating — the admin controls this module per plan
+        // (features::FEATURE_REGISTRY is the source of truth for the admin UI).
+        .layer(middleware::from_fn_with_state(
+            crate::features::FeatureGate::new(state.db.clone(), "portfolio", "Portfolio sync"),
+            crate::features::gate_mw,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,

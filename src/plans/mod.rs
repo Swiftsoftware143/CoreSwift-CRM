@@ -14,6 +14,8 @@ use axum::{middleware, Router};
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/", axum::routing::get(handlers::list))
+        // Feature toggles the admin can set per plan (drives the admin UI).
+        .route("/registry", axum::routing::get(handlers::feature_registry))
         .route("/", axum::routing::post(handlers::create))
         .route("/:id", axum::routing::get(handlers::get))
         .route("/:id", axum::routing::patch(handlers::update))

@@ -41,6 +41,12 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/my-products/unselect",
             axum::routing::post(handlers::unselect_product),
         )
+        // Plan gating — the admin controls this module per plan
+        // (features::FEATURE_REGISTRY is the source of truth for the admin UI).
+        .layer(middleware::from_fn_with_state(
+            crate::features::FeatureGate::new(state.db.clone(), "affiliates", "Affiliate system"),
+            crate::features::gate_mw,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,

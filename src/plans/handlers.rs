@@ -101,6 +101,25 @@ pub async fn list(
     Ok(Json(json!({"plans": plans})))
 }
 
+/// The feature keys the admin can toggle per plan, plus every plan's current values.
+/// The admin UI renders its switches from this — `features::FEATURE_REGISTRY` is the
+/// single source of truth, so a newly-gated module appears here automatically.
+pub async fn feature_registry(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
+    require_admin(&c)?;
+
+    let plans = sqlx::query_as::<_, Plan>("SELECT * FROM plans ORDER BY sort_order ASC, name ASC")
+        .fetch_all(&s.db)
+        .await?;
+
+    Ok(Json(json!({
+        "features": crate::features::feature_registry_json(),
+        "plans": plans,
+    })))
+}
+
 /// POST /api/plans — Create a new plan (agency_admin only)
 pub async fn create(
     State(s): State<AppState>,

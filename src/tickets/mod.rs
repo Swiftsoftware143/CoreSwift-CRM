@@ -48,6 +48,12 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/tickets/:id/messages",
             axum::routing::post(handlers::add_message),
         )
+        // Plan gating — the admin controls this module per plan
+        // (features::FEATURE_REGISTRY is the source of truth for the admin UI).
+        .layer(middleware::from_fn_with_state(
+            crate::features::FeatureGate::new(state.db.clone(), "tickets", "Support tickets"),
+            crate::features::gate_mw,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,

@@ -19,6 +19,12 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/provider-keys/:provider",
             axum::routing::get(handlers::get_provider_key).delete(handlers::delete_provider_key),
         )
+        // Plan gating — the admin controls this module per plan
+        // (features::FEATURE_REGISTRY is the source of truth for the admin UI).
+        .layer(middleware::from_fn_with_state(
+            crate::features::FeatureGate::new(state.db.clone(), "provider_keys", "Provider keys"),
+            crate::features::gate_mw,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,

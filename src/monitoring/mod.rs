@@ -39,6 +39,16 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/account-health/status/:profile_id",
             axum::routing::get(account_health_handler::profile_health_status),
         )
+        // Plan gating — the admin controls this module per plan
+        // (features::FEATURE_REGISTRY is the source of truth for the admin UI).
+        .layer(middleware::from_fn_with_state(
+            crate::features::FeatureGate::new(
+                state.db.clone(),
+                "monitoring",
+                "Monitoring & health",
+            ),
+            crate::features::gate_mw,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,

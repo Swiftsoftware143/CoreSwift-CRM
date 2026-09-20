@@ -30,6 +30,16 @@ pub fn router(state: AppState) -> Router<AppState> {
             axum::routing::get(handlers::list_assignments),
         )
         .route("/assign", axum::routing::post(handlers::trigger_assignment))
+        // Plan gating — the admin controls this module per plan
+        // (features::FEATURE_REGISTRY is the source of truth for the admin UI).
+        .layer(middleware::from_fn_with_state(
+            crate::features::FeatureGate::new(
+                state.db.clone(),
+                "round_robin",
+                "Round-robin routing",
+            ),
+            crate::features::gate_mw,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,

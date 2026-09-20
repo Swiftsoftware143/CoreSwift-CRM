@@ -514,6 +514,16 @@ pub fn router(state: AppState) -> axum::Router<AppState> {
         .route("/:id", patch(update_widget).delete(delete_widget))
         .route("/inboxes", get(list_inboxes).post(create_inbox))
         .route("/inboxes/:id", patch(update_inbox).delete(delete_inbox))
+        // Plan gating — the admin controls this module per plan
+        // (features::FEATURE_REGISTRY is the source of truth for the admin UI).
+        .layer(middleware::from_fn_with_state(
+            crate::features::FeatureGate::new(
+                state.db.clone(),
+                "support_widgets",
+                "Support widgets",
+            ),
+            crate::features::gate_mw,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,

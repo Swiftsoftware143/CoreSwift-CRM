@@ -1325,6 +1325,90 @@ Authorization: Bearer &lt;token&gt;</pre>
       </ul>
       <p>To access, log in to FunnelSwift and navigate to <strong>Super Admin → Affiliate Admin</strong>.</p>
 
+<section id="plans-features">
+  <h2 class="sec-title"><span class="sec-num">21</span> Plans &amp; Feature Access</h2>
+  <div class="card">
+    <h3>Your admin decides what each plan includes</h3>
+    <p>Features are not hard-coded. Each plan carries a set of feature flags, and every flag can be
+       switched on or off per plan by an admin — so a Free tier can be a genuinely stripped-down
+       CRM while Enterprise unlocks everything. A single tenant can also be given a per-tenant
+       override without changing the plan itself.</p>
+    <p>When a feature is switched off for your plan, its API returns <strong>402 Payment Required</strong>
+       with a message naming the feature, and the corresponding area of the app is unavailable
+       until the plan is upgraded. Features you do have are untouched.</p>
+    <h3>Flags an admin controls</h3>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Flag</th><th>Feature</th><th>Module</th><th>Notes</th></tr></thead>
+        <tbody>
+      <tr><td><code>campaigns</code></td><td>Campaigns</td><td>campaigns</td><td>Sequenced email campaigns</td></tr>
+      <tr><td><code>automation</code></td><td>Automations</td><td>automation</td><td>Trigger/action engine</td></tr>
+      <tr><td><code>checklists</code></td><td>Checklists</td><td>checklists</td><td>Onboarding/process checklists</td></tr>
+      <tr><td><code>ai_enabled</code></td><td>AI scoring</td><td>ai, scoring</td><td>Lead scoring and AI helpers</td></tr>
+      <tr><td><code>tickets</code></td><td>Support tickets</td><td>tickets</td><td>In-house ticketing + email-to-ticket</td></tr>
+      <tr><td><code>affiliates</code></td><td>Affiliate system</td><td>affiliates</td><td>Referral tracking and payouts</td></tr>
+      <tr><td><code>native_apps</code></td><td>Native app connectors</td><td>native_apps</td><td>FunnelSwift, ADASwift, MissedCall, WorkflowSwift, CheatLayer, Multi-Directory</td></tr>
+      <tr><td><code>telnyx</code></td><td>SMS &amp; voice (Telnyx)</td><td>telnyx, comms</td><td>SMS, number management, call tracking</td></tr>
+      <tr><td><code>round_robin</code></td><td>Round-robin routing</td><td>round_robin</td><td>Fair lead distribution across a team</td></tr>
+      <tr><td><code>events</code></td><td>Event system</td><td>events</td><td>Internal event bus</td></tr>
+      <tr><td><code>monitoring</code></td><td>Monitoring &amp; health</td><td>monitoring</td><td>Account health scoring and thresholds</td></tr>
+      <tr><td><code>bookings</code></td><td>Bookings &amp; scheduling</td><td>bookings</td><td>Calendar booking pages</td></tr>
+      <tr><td><code>google_calendar</code></td><td>Google Calendar sync</td><td>google_calendar</td><td>Two-way calendar sync</td></tr>
+      <tr><td><code>api_access</code></td><td>API access</td><td>personal_api_keys</td><td>Per-tenant API keys</td></tr>
+      <tr><td><code>webhooks</code></td><td>Webhooks</td><td>webhook</td><td>Outbound webhook delivery</td></tr>
+      <tr><td><code>integrations</code></td><td>Integrations</td><td>integrations</td><td>n8n and third-party integrations</td></tr>
+      <tr><td><code>provider_keys</code></td><td>Provider keys</td><td>provider_keys</td><td>Bring-your-own provider credentials</td></tr>
+      <tr><td><code>support_widgets</code></td><td>Support widgets</td><td>support_widgets</td><td>Embeddable support surfaces</td></tr>
+      <tr><td><code>tracked_links</code></td><td>Tracked links</td><td>tracked_links</td><td>Click tracking links</td></tr>
+      <tr><td><code>private_email</code></td><td>Private email</td><td>private_email</td><td>Own domain + mailboxes (also has its own limits)</td></tr>
+      <tr><td><code>portfolio</code></td><td>Portfolio sync</td><td>portfolio</td><td>Cross-tenant portfolio management</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">Source of truth: <code>features::FEATURE_REGISTRY</code> in the API, which is also what
+       the admin panel renders its switches from. If a module is added there it appears here and in the
+       admin automatically.</p>
+  </div>
+</section>
+
+<section id="modules-connectors">
+  <h2 class="sec-title"><span class="sec-num">22</span> Modules &amp; Connectors</h2>
+  <div class="card">
+    <h3>Connections to your other apps</h3>
+    <p>CoreSwift is the CRM hub for the rest of the ecosystem. Each connector is a native integration —
+       no third-party middleware:</p>
+    <ul>
+      <li><strong>FunnelSwift</strong> — leads captured on funnels and cards land in CoreSwift</li>
+      <li><strong>ADAswift</strong> — accessibility scan reports tied to the client record</li>
+      <li><strong>MissedCall Responder</strong> — missed-call leads and call events</li>
+      <li><strong>WorkflowSwift</strong> — automation hand-offs and status callbacks</li>
+      <li><strong>CheatLayer</strong> — automation-suite connection</li>
+      <li><strong>Multi-Directory / ZaarHub</strong> — directory listings and city campaigns</li>
+    </ul>
+    <p>Each connector can be connected/disconnected and synced per tenant, and is gated by the
+       <code>native_apps</code> flag above.</p>
+    <h3>Private Email</h3>
+    <p>Bring your own domain (Mailgun, SMTP, SES or Postmark), provision mailboxes such as
+       <code>info@yourcompany.com</code>, send with DKIM/SPF signing, and have inbound replies create
+       contact activity on the CRM timeline. Domain and mailbox counts are plan limits; provider
+       credentials are encrypted at rest.</p>
+    <h3>Also included</h3>
+    <ul>
+      <li><strong>Bookings &amp; scheduling</strong> — public booking pages with calendar sync</li>
+      <li><strong>Google Calendar</strong> — two-way sync of bookings and events</li>
+      <li><strong>Support tickets</strong> — in-house help desk; inbound email to a support mailbox
+          opens a ticket, with a customer portal view</li>
+      <li><strong>Monitoring &amp; compliance</strong> — account health scoring, configurable alert
+          thresholds, full audit log</li>
+      <li><strong>Portfolio</strong> — cross-tenant management for groups of companies</li>
+      <li><strong>Analytics, tags, lists, tracked links, provider keys, rate limiting</strong></li>
+    </ul>
+    <p class="muted">Not in this app: spreadsheet import/export is <strong>CSV only</strong> (XLS/XLSX are
+       not supported), and there is no newsletter/mailing-list sender — campaigns and private email cover
+       outbound email.</p>
+  </div>
+</section>
+
 </body>
 </html>
 

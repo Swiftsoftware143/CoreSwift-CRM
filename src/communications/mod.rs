@@ -29,6 +29,12 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/providers",
             axum::routing::patch(handlers::update_providers),
         )
+        // Plan gating — the admin controls this module per plan
+        // (features::FEATURE_REGISTRY is the source of truth for the admin UI).
+        .layer(middleware::from_fn_with_state(
+            crate::features::FeatureGate::new(state.db.clone(), "telnyx", "SMS & voice (Telnyx)"),
+            crate::features::gate_mw,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,

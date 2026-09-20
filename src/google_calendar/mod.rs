@@ -49,6 +49,16 @@ pub fn router(state: AppState) -> axum::Router<AppState> {
         .route("/oauth-callback", get(oauth_callback))
         .route("/sync/:calendar_id", post(sync_calendar))
         .route("/webhook", post(webhook_handler))
+        // Plan gating — the admin controls this module per plan
+        // (features::FEATURE_REGISTRY is the source of truth for the admin UI).
+        .layer(axum::middleware::from_fn_with_state(
+            crate::features::FeatureGate::new(
+                state.db.clone(),
+                "google_calendar",
+                "Google Calendar sync",
+            ),
+            crate::features::gate_mw,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,
