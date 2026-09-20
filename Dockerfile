@@ -13,6 +13,12 @@
 #
 # Authoritative deploy context: /opt/swift/docker/crm-swift/
 # (host-built binary + migrations are staged there, NOT in git).
+#
+# RESTART IS NOT A DEPLOY: crm-swift has NO bind mounts, so `docker restart
+# crm-swift` re-runs the image-baked OLD binary. Use:
+#     /opt/swift/bin/deploy-coreswift.sh        # this app's staged-context deploy
+#     /opt/swift/bin/deploy-app.sh crm-swift    # the shared engine (same thing)
+# both rebuild the image, force-recreate, prove sha256 parity and hit /api/health.
 # ============================================================
 FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 curl && rm -rf /var/lib/apt/lists/*
