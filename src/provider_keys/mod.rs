@@ -17,7 +17,9 @@ pub fn router(state: AppState) -> Router<AppState> {
         )
         .route(
             "/provider-keys/:provider",
-            axum::routing::get(handlers::get_provider_key).delete(handlers::delete_provider_key),
+            axum::routing::get(handlers::get_provider_key)
+                .patch(handlers::update_provider_key)
+                .delete(handlers::delete_provider_key),
         )
         // Plan gating — the admin controls this module per plan
         // (features::FEATURE_REGISTRY is the source of truth for the admin UI).

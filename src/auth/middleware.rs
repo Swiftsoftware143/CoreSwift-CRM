@@ -85,3 +85,17 @@ pub fn require_role(actual: &str, minimum: &str) -> bool {
 
     actual_idx >= min_idx
 }
+
+/// Is this role an account administrator?
+///
+/// The platform carries three role vocabularies: signup writes `owner` (all 15
+/// owner rows in the DB), older claims/membership code used `account_owner` and
+/// `admin`, and the platform-operations role is `agency_admin`. Handler code that
+/// means "this tenant's owner, or a platform operator" must accept ALL of them.
+/// Comparing against a single pair is not a style choice — it silently 403s every
+/// real account owner, which is what `native_apps::connect_app` was doing (its
+/// admin-only connectors were unreachable for owners AND for the platform admin,
+/// whose role is `agency_admin`).
+pub fn is_account_admin(role: &str) -> bool {
+    matches!(role, "owner" | "account_owner" | "admin" | "agency_admin")
+}

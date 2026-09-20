@@ -45,7 +45,12 @@ pub static NATIVE_APPS: &[AppConnector] = &[
         name: "FunnelSwift",
         description: "Sales funnel builder — mobile (Expo) app for building and managing sales funnels. Tenants connect their own FunnelSwift account.",
         auth_type: "api_key",
-        auth_fields: &["api_key", "webhook_secret"],
+        // FunnelSwift's connector takes the tenant's API key plus the API base the
+        // tenant's instance answers on (same shape as every other connector). It used
+        // to advertise `webhook_secret`, which the connector never read — so the
+        // Integration Center collected a field nothing consumed and the connection
+        // test hit a hardcoded URL no deployment answers.
+        auth_fields: &["api_key", "base_url"],
         access_level: "admin_tenant",
     },
     AppConnector {

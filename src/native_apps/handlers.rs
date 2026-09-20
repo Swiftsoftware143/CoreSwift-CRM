@@ -43,7 +43,9 @@ pub async fn connect_app(
     Json(r): Json<ConnectAppRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    let is_admin = c.role == "account_owner" || c.role == "admin";
+    // Three role vocabularies exist ('owner' is what signup writes, 'agency_admin'
+    // is the platform operator) — see auth::middleware::is_account_admin.
+    let is_admin = crate::auth::middleware::is_account_admin(&c.role);
 
     // Look up the app definition
     let app = connectors::NATIVE_APPS
@@ -195,7 +197,7 @@ pub async fn test_connection(
     Path(app_slug): Path<String>,
     Json(r): Json<ConnectAppRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let _is_admin = c.role == "account_owner" || c.role == "admin";
+    let _is_admin = crate::auth::middleware::is_account_admin(&c.role);
 
     let app = connectors::NATIVE_APPS
         .iter()

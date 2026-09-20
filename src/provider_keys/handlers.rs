@@ -150,6 +150,53 @@ pub async fn upsert_provider_key(
     ))
 }
 
+#[derive(serde::Deserialize, Debug)]
+pub struct UpdateProviderKeyRequest {
+    pub is_active: Option<bool>,
+    pub base_url: Option<String>,
+    pub metadata: Option<Value>,
+}
+
+/// PATCH /provider-keys/:provider — enable/disable (or re-point) a stored key WITHOUT
+/// resending the secret.
+///
+/// GET only ever returns `api_key_masked`, so a UI toggle has no way to round-trip the
+/// real secret, and the only other write path is the upsert — which rejects an empty
+/// `api_key` by design. That left "toggle this connection" impossible to implement
+/// from any client, so the Integration Center could show a key but never switch it off.
+pub async fn update_provider_key(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path(provider): Path<String>,
+    Json(req): Json<UpdateProviderKeyRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    let row = sqlx::query(
+        "UPDATE provider_keys SET is_active = COALESCE($1, is_active), base_url = COALESCE($2, base_url), metadata = COALESCE($3, metadata), updated_at = NOW() WHERE tenant_id = $4 AND provider = $5 RETURNING id, tenant_id, provider, api_key, base_url, metadata, is_active, scope, created_at, updated_at"
+    )
+    .bind(req.is_active)
+    .bind(req.base_url.as_deref())
+    .bind(req.metadata.as_ref())
+    .bind(tenant_id)
+    .bind(&provider)
+    .fetch_optional(&s.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("Provider key '{}' not found", provider)))?;
+
+    Ok(Json(json!({
+        "id": row.get::<Uuid,_>("id"),
+        "tenant_id": row.get::<Uuid,_>("tenant_id"),
+        "provider": row.get::<String,_>("provider"),
+        "api_key_masked": mask_key(&row.get::<String,_>("api_key")),
+        "base_url": row.get::<Option<String>,_>("base_url"),
+        "metadata": row.get::<Value,_>("metadata"),
+        "is_active": row.get::<bool,_>("is_active"),
+        "scope": row.get::<String,_>("scope"),
+        "created_at": row.get::<chrono::DateTime<chrono::Utc>,_>("created_at"),
+        "updated_at": row.get::<chrono::DateTime<chrono::Utc>,_>("updated_at"),
+    })))
+}
+
 pub async fn delete_provider_key(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,

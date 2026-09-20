@@ -608,8 +608,7 @@ const ADMIN_MENU = [
   ]},
   { type:'group', icon:'📡', label:'Communication Admin', children:[
     { id:'telnyx-admin', icon:'☎️', label:'Telnyx Admin' },
-    { id:'email-admin', icon:'📧', label:'Private Email Admin' },
-    { id:'provider-keys', icon:'🔑', label:'Provider Keys Admin' }
+    { id:'email-admin', icon:'📧', label:'Private Email Admin' }
   ]},
   { id:'features-plans', icon:'🧩', label:'Features & Plans' },
   { type:'group', icon:'⚙️', label:'Admin Settings', children:[
@@ -1012,8 +1011,16 @@ const TAB_RENDERERS = {
   },
 
   'integrations': () => {
-    return pageHeader('Integration Center', 'Manage all your third-party API keys and integrations') +
-    '<div id="providerCards"><div class="loading-wrap"><div class="spinner"></div> Loading providers...</div></div>';
+    return pageHeader('Integration Center', 'Your lead-capture apps and provider keys — every credential here is stored against THIS account (BYOK), never as a platform-wide default') +
+    card('🧭 How data flows',
+      '<p style="color:var(--text-secondary);margin:0">CoreSwift is the hub: the capture apps on this page <strong>push their leads INTO this account</strong> ' +
+      '(capture app &rarr; CoreSwift), and CoreSwift is the single home for them. Connecting an app stores the key that lets that app deliver here. ' +
+      'Provider keys below are the BYOK keys your own features call (email, SMS, LLM).</p>') +
+    '<div id="icNativeWrap" data-ops="ic-native"><div class="loading-wrap"><div class="spinner"></div> Loading native connectors...</div></div>' +
+    '<br>' +
+    '<div id="icProviderWrap" data-ops="ic-providers"><div class="loading-wrap"><div class="spinner"></div> Loading provider keys...</div></div>' +
+    '<br>' +
+    '<div id="icUpgradeWrap" data-ops="ic-upgrades"></div>';
   },
 
   // === ADMIN ===
@@ -1077,7 +1084,10 @@ const TAB_RENDERERS = {
     card('🧨 Purge Expired Email Data', '<p style="color:var(--text-secondary)">Deletes private-email data older than each tenant’s retention window. Destructive and irreversible — the purge control always requires an explicit typed confirmation.</p>',
       '<button class="btn btn-danger" data-ops="pe-purge-open" onclick="showPurgeModal()">Open Purge Control</button>');
   },
-  'provider-keys': () => placeholderPanel('Provider Keys Admin', 'Global API key management for all providers.', '🔑'),
+  // The old 'provider-keys' admin panel (a stub whose copy read "Global API key management
+  // for all providers") is retired: it contradicted the BYOK rule — keys are per-tenant,
+  // entered in the Integration Center, and there is no global paste. Its nav entry is gone
+  // too, so there is exactly one place to manage credentials.
   'features-plans': () => {
     let html = pageHeader('Features & Plans', 'Turn modules on or off per plan — enforced on every request') +
       '<div id="fpWrap"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading feature registry...</div></div>';
@@ -1473,47 +1483,7 @@ const TAB_LOADERS = {
   },
 
   'integrations': async () => {
-    const providers = [
-      { id:'mailgun', name:'Mailgun', desc:'Transactional email delivery', icon:'✉️' },
-      { id:'twilio', name:'Twilio', desc:'SMS and voice communications', icon:'💬' },
-      { id:'sendgrid', name:'SendGrid', desc:'Email API service', icon:'📧' },
-      { id:'openai', name:'OpenAI', desc:'GPT-4, embeddings, and more', icon:'🧠' },
-      { id:'deepseek', name:'DeepSeek', desc:'Cost-effective LLM provider', icon:'🤖' },
-      { id:'anthropic', name:'Anthropic', desc:'Claude models', icon:'✨' },
-      { id:'moonshot', name:'Moonshot', desc:'Backup LLM provider', icon:'🌙' },
-      { id:'custom_llm', name:'Custom LLM', desc:'Bring your own LLM endpoint', icon:'🔧' },
-      { id:'telnyx', name:'Telnyx', desc:'SMS, voice, and number provisioning', icon:'📱' },
-      { id:'google', name:'Google', desc:'Calendar, Drive, and more', icon:'🔵' }
-    ];
-
-    // Try to fetch existing provider keys
-    let providerData = {};
-    try {
-      const keys = await API.get('/provider-keys');
-      if (Array.isArray(keys)) {
-        keys.forEach(k => { providerData[k.provider || k.name] = k; });
-      }
-    } catch(e) {}
-
-    let html = '<div class="provider-grid">';
-    providers.forEach(p => {
-      const connected = !!providerData[p.id] || !!providerData[p.name];
-      html += `<div class="provider-card${connected?' connected':''}">
-        <div class="provider-header">
-          <span class="provider-name">${p.icon} ${p.name}</span>
-          <span class="provider-status">
-            <span class="status-dot ${connected?'connected':'disconnected'}"></span>
-            ${connected ? 'Connected' : 'Not connected'}
-          </span>
-        </div>
-        <div class="provider-desc">${p.desc}</div>
-        <button class="btn ${connected?'btn-secondary':'btn-primary'} btn-sm btn-block" onclick="configureProvider('${p.id}','${p.name}','${p.desc}')">
-          ${connected ? 'Reconfigure' : 'Connect'}
-        </button>
-      </div>`;
-    });
-    html += '</div>';
-    document.getElementById('providerCards').innerHTML = html;
+    await loadIntegrationCenter();
   },
 
   'billing': async () => {
@@ -1902,50 +1872,414 @@ async function runPurge() {
 }
 
 // ========== MODAL GENERATORS ==========
-function configureProvider(id, name, desc) {
-  const fields = {
-    openai: [{name:'api_key',label:'API Key',type:'password'},{name:'model',label:'Default Model',type:'text',default:'gpt-4o'}],
-    deepseek: [{name:'api_key',label:'API Key',type:'password'},{name:'model',label:'Default Model',type:'text',default:'deepseek-chat'}],
-    anthropic: [{name:'api_key',label:'API Key',type:'password'},{name:'model',label:'Default Model',type:'text',default:'claude-sonnet-4-6'}],
-    mailgun: [{name:'api_key',label:'API Key',type:'password'},{name:'domain',label:'Domain',type:'text'}],
-    sendgrid: [{name:'api_key',label:'API Key',type:'password'}],
-    twilio: [{name:'account_sid',label:'Account SID',type:'text'},{name:'auth_token',label:'Auth Token',type:'password'},{name:'phone',label:'From Number',type:'text'}],
-    telnyx: [{name:'api_key',label:'API Key',type:'password'},{name:'phone',label:'Phone Number',type:'text'}],
-    google: [{name:'client_id',label:'Client ID',type:'text'},{name:'client_secret',label:'Client Secret',type:'password'}],
-    moonshot: [{name:'api_key',label:'API Key',type:'password'}],
-    custom_llm: [{name:'api_key',label:'API Key',type:'password'},{name:'endpoint',label:'Endpoint URL',type:'text'},{name:'model',label:'Model Name',type:'text'}]
-  };
+// ── INTEGRATION CENTER ───────────────────────────────────────────────────────
+// One surface for every credential this account owns (BYOK), sourced from the API —
+// never from a hardcoded list:
+//   GET    /native/apps                    -> the first-party capture connectors
+//   GET    /native/apps/:slug/status       -> THIS account's connection state
+//   POST   /native/apps/:slug/test         -> live test, stores nothing
+//   POST   /native/apps/:slug/connect      -> test, then store the credentials
+//   POST   /native/apps/:slug/disconnect   -> forget the credentials
+//   GET    /available-providers            -> the provider catalogue (DB-backed)
+//   GET    /provider-keys                  -> stored keys, returns {count, items}
+//   POST   /provider-keys                  -> upsert a key
+//   PATCH  /provider-keys/:provider        -> toggle is_active without resending the secret
+//   DELETE /provider-keys/:provider        -> remove
+//
+// What this replaced, so nobody reintroduces it: the old view hardcoded ten providers
+// (five of which do not exist in available_providers, so saving them always 422'd),
+// named none of the six native connectors, and read the key list as a bare array even
+// though the API returns {count, items} — which is why every provider read
+// "Not connected" no matter what the account had stored.
 
-  const providerFields = fields[id] || [{name:'api_key',label:'API Key',type:'password'}];
+const IC = { apps: [], status: {}, providers: [], keys: {}, isAdmin: false, loaded: false };
 
-  let formHtml = `<p style="color:var(--text-secondary);margin-bottom:16px">${desc}</p>`;
-  providerFields.forEach(f => {
-    formHtml += `<div class="form-group">
-      <label>${f.label}</label>
-      <input type="${f.type}" id="cfg_${f.name}" value="${escapeHtml(f.default||'')}" placeholder="Enter ${f.label.toLowerCase()}">
-    </div>`;
-  });
+const IC_ADMIN_ROLES = ['owner', 'account_owner', 'admin', 'agency_admin'];
 
-  showModal(`Configure ${name}`, formHtml,
-    `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="saveProvider('${id}')">Connect</button>`);
+// The sister products, as cross-sell/upgrade paths. A tenant who already runs one of
+// these and not CoreSwift is exactly who the upsell targets.
+const IC_SISTERS = [
+  { slug:'funnelswift',          name:'FunnelSwift',          url:'https://app.funnelswift.net',         pitch:'Sales funnels and landing pages. Funnel opt-ins land in CoreSwift as contacts.' },
+  { slug:'workflowswift',        name:'WorkflowSwift',        url:'https://app.workflowswift.com',       pitch:'Workflow automation on n8n — enrich and route leads before they reach the CRM.' },
+  { slug:'missedcall-responder', name:'MissedCall Responder', url:'https://app.missedcallrespondr.com',   pitch:'Missed-call text-back. Every recovered caller becomes a lead in CoreSwift.' },
+  { slug:'adaswift',             name:'AdaSwift',             url:'https://app.adaswift.com',            pitch:'Accessibility scanning and client reporting for agencies.' },
+  { slug:'multi-directory',      name:'Multi-Directory',      url:'https://directory.swiftsoftware.net', pitch:'Publish and follow up across business directories.' },
+  { slug:'cheatlayer',           name:'CheatLayer',           url:'https://cheatlayer.com',              pitch:'Browser automation and scraping — scrape-to-lead.' }
+];
+
+// Pre-filled API base per connector. The connector health-checks <base>/api/health
+// (WorkflowSwift: <base>/health, FunnelSwift: <base>/v1/health), so a wrong value is
+// caught by the test before anything is stored.
+const IC_BASE_DEFAULT = {
+  'adaswift': 'https://app.adaswift.com',
+  'cheatlayer': 'https://cheatlayer.com',
+  'funnelswift': 'https://app.funnelswift.net',
+  'workflowswift': 'https://app.workflowswift.com',
+  'missedcall-responder': 'https://app.missedcallrespondr.com',
+  'multi-directory': 'https://directory.swiftsoftware.net'
+};
+
+const IC_FIELD_LABEL = { api_key: 'API Key', base_url: 'API Base URL', webhook_secret: 'Webhook Secret' };
+
+const IC_FIELD_HINT = {
+  base_url: 'The address this app answers on, e.g. https://app.funnelswift.net — the connection test calls it directly.',
+  webhook_secret: 'The signing secret this app sends with its webhook payloads.'
+};
+
+const IC_PROVIDER_ICON = { brain:'🤖', mail:'✉️', newspaper:'📰', database:'🗄️', key:'🔑', phone:'📱', message:'💬', chart:'📈', search:'🔎', globe:'🌐' };
+
+function icIsAdmin() {
+  return !!(STATE.user && IC_ADMIN_ROLES.indexOf(STATE.user.role) >= 0);
 }
 
-async function saveProvider(providerId) {
-  const data = { provider: providerId };
-  const inputs = document.querySelectorAll('#modalContainer input');
-  inputs.forEach(inp => {
-    if (inp.id.startsWith('cfg_')) {
-      data[inp.id.replace('cfg_','')] = inp.value;
-    }
+function icErr(title, msg) {
+  const upgrade = /payment required|forbidden|not entitled/i.test(msg || '')
+    ? ' This module may be switched off on your plan — check <strong>Features &amp; Plans</strong>.'
+    : '';
+  return '<div class="card"><div class="card-body"><p style="color:var(--error);margin:0">' +
+    escapeHtml(title) + ': ' + escapeHtml(msg || 'request failed') + upgrade + '</p></div></div>';
+}
+
+function icBind(el) {
+  el.querySelectorAll('[data-ic]').forEach(b => {
+    b.addEventListener('click', () => {
+      const act = b.getAttribute('data-ic');
+      const slug = b.getAttribute('data-slug');
+      const provider = b.getAttribute('data-provider');
+      if (act === 'connect') icOpenConnect(slug);
+      else if (act === 'disconnect') icDisconnectApp(slug);
+      else if (act === 'provider') icOpenProvider(provider);
+      else if (act === 'provider-del') icDeleteProvider(provider);
+    });
   });
+  el.querySelectorAll('[data-ic-toggle]').forEach(c => {
+    c.addEventListener('change', () => icToggleProvider(c.getAttribute('data-ic-toggle'), c.checked));
+  });
+}
+
+async function loadIntegrationCenter() {
+  IC.isAdmin = icIsAdmin();
+  await Promise.all([icLoadApps(), icLoadProviders()]);
+  icRenderUpgradePaths();
+  IC.loaded = true;
+}
+
+// ── Native connectors: the capture apps that push leads INTO CoreSwift ──
+async function icLoadApps() {
+  const wrap = document.getElementById('icNativeWrap');
+  if (!wrap) return;
+  let apps = [];
   try {
-    await API.post('/provider-keys', data);
-    closeModal();
-    toast(`Provider connected successfully`, 'success');
-  } catch(e) {
-    toast('Failed to save: ' + e.message, 'error');
+    const d = await API.get('/native/apps');
+    apps = (d && d.apps) || [];
+  } catch (e) {
+    wrap.innerHTML = icErr('Could not load native connectors', e.message);
+    return;
   }
+  IC.apps = apps;
+
+  // Connection state is per-connector (and per-account) — one call each, in parallel.
+  const status = {};
+  await Promise.all(apps.map(async a => {
+    try { status[a.slug] = await API.get('/native/apps/' + encodeURIComponent(a.slug) + '/status'); }
+    catch (e) { status[a.slug] = { connected: false, status_error: e.message }; }
+  }));
+  IC.status = status;
+  icRenderApps();
+}
+
+function icRenderApps() {
+  const el = document.getElementById('icNativeWrap');
+  if (!el) return;
+  const rows = IC.apps.map(a => {
+    const st = IC.status[a.slug] || {};
+    const connected = !!st.connected;
+    const access = a.access_level === 'admin_tenant' ? 'This account' : 'Platform admin';
+
+    let statusCell;
+    if (connected) {
+      statusCell = '<span class="status-dot connected"></span> ' +
+        (st.last_test_ok === false
+          ? '<span class="badge badge-warning">connected, last test failed</span>'
+          : '<span class="badge badge-success">connected</span>');
+      if (st.last_test_at) {
+        statusCell += '<div style="font-size:.72rem;color:var(--text-muted)">tested ' +
+          escapeHtml(new Date(st.last_test_at).toLocaleString()) + '</div>';
+      }
+      if (st.error_message) {
+        statusCell += '<div style="font-size:.72rem;color:var(--warning,#f0ad4e)">' + escapeHtml(st.error_message) + '</div>';
+      }
+    } else {
+      statusCell = '<span class="status-dot disconnected"></span> <span class="badge badge-muted">not connected</span>';
+      if (st.status_error) {
+        statusCell += '<div style="font-size:.72rem;color:var(--text-muted)">' + escapeHtml(st.status_error) + '</div>';
+      }
+    }
+
+    // Platform-level connectors need an admin; tenant-level ones any account owner.
+    const canManage = a.access_level === 'admin_tenant' || IC.isAdmin;
+    let actions = '';
+    if (canManage) {
+      actions += '<button class="btn ' + (connected ? 'btn-secondary' : 'btn-primary') + ' btn-xs" data-ic="connect" data-slug="' +
+        escapeHtmlAttr(a.slug) + '">' + (connected ? 'Reconfigure' : 'Connect') + '</button>';
+      if (connected) {
+        actions += ' <button class="btn btn-ghost btn-xs" data-ic="disconnect" data-slug="' +
+          escapeHtmlAttr(a.slug) + '">Disconnect</button>';
+      }
+    } else {
+      actions += '<span style="font-size:.72rem;color:var(--text-muted)">platform-admin connection</span>';
+    }
+
+    return [
+      '<strong>' + escapeHtml(a.name) + '</strong>' +
+        '<div style="font-size:.74rem;color:var(--text-muted);max-width:360px">' + escapeHtml(a.description || '') + '</div>',
+      escapeHtml(access),
+      statusCell,
+      actions
+    ];
+  });
+
+  el.innerHTML = card('📥 Lead capture apps &rarr; CoreSwift',
+    '<p style="color:var(--text-secondary);margin:0">Each of these apps captures leads. Connect it and its captured leads flow <strong>into this account</strong> — ' +
+    'CoreSwift is the single home for them, so you work every lead here instead of in six places. ' +
+    'Credentials are stored per account (never as a platform-wide default) and the connection is only saved after a live test passes.</p>') +
+    dataTable(['App', 'Credentials', 'Status', ''], rows,
+      IC.apps.length ? 'No connectors registered.' : 'No native connectors are registered on this platform yet.');
+
+  icBind(el);
+}
+
+function icOpenConnect(slug) {
+  const a = IC.apps.find(x => x.slug === slug);
+  if (!a) return;
+  const fields = (a.auth_fields && a.auth_fields.length) ? a.auth_fields : ['api_key'];
+  const st = IC.status[slug] || {};
+  const sister = IC_SISTERS.find(s => s.slug === slug);
+
+  let body = '<p style="color:var(--text-secondary);margin-bottom:14px">' + escapeHtml(a.description || '') + '</p>';
+  if (sister) {
+    body += '<p style="color:var(--text-secondary);margin-bottom:14px">Direction in CoreSwift is <strong>inbound</strong>: once live, ' +
+      escapeHtml(sister.name) + ' pushes its captured leads into this account.</p>';
+  }
+  fields.forEach(f => {
+    const secret = /key|secret|token|password/i.test(f);
+    const def = f === 'base_url' ? ((st.config && st.config.base_url) || IC_BASE_DEFAULT[slug] || '') : '';
+    body += '<div class="form-group"><label>' + escapeHtml(IC_FIELD_LABEL[f] || f) + '</label>' +
+      '<input type="' + (secret ? 'password' : 'text') + '" id="icF_' + escapeHtmlAttr(f) + '" value="' + escapeHtmlAttr(def) + '" autocomplete="off">' +
+      (IC_FIELD_HINT[f] ? '<span class="form-hint">' + escapeHtml(IC_FIELD_HINT[f]) + '</span>' : '') +
+      '</div>';
+  });
+  body += '<p class="form-hint">Connecting runs a live test first — a bad key or URL is reported here and nothing is stored.</p>';
+
+  showModal('Connect ' + escapeHtml(a.name), body,
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-secondary" id="icTestBtn">Test only</button>' +
+    '<button class="btn btn-primary" id="icConnectBtn">Test &amp; connect</button>');
+
+  const readCreds = () => {
+    const c = {};
+    fields.forEach(f => {
+      const el = document.getElementById('icF_' + f);
+      c[f] = el ? el.value.trim() : '';
+    });
+    return c;
+  };
+  const tb = document.getElementById('icTestBtn');
+  if (tb) tb.addEventListener('click', () => icTestCreds(slug, readCreds(), tb));
+  const cb = document.getElementById('icConnectBtn');
+  if (cb) cb.addEventListener('click', () => icConnect(slug, readCreds(), cb));
+}
+
+async function icTestCreds(slug, credentials, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await API.post('/native/apps/' + encodeURIComponent(slug) + '/test', { credentials: credentials });
+    if (r && r.success) toast((r.app_name || slug) + ': ' + r.message, 'success');
+    else toast('Test failed: ' + ((r && r.message) || 'no response'), 'error');
+  } catch (e) {
+    toast('Test failed: ' + e.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function icConnect(slug, credentials, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await API.post('/native/apps/' + encodeURIComponent(slug) + '/connect', { credentials: credentials });
+    closeModal();
+    toast((r && r.message) || (slug + ' connected'), 'success');
+    await icLoadApps();
+  } catch (e) {
+    toast('Could not connect: ' + e.message, 'error');
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function icDisconnectApp(slug) {
+  if (!confirm('Disconnect ' + slug + '? Its stored credentials are deleted and its leads stop flowing in.')) return;
+  try {
+    await API.post('/native/apps/' + encodeURIComponent(slug) + '/disconnect', {});
+    toast(slug + ' disconnected', 'success');
+    await icLoadApps();
+  } catch (e) {
+    toast('Could not disconnect: ' + e.message, 'error');
+  }
+}
+
+// ── Provider keys: BYOK, per account ──
+async function icLoadProviders() {
+  const wrap = document.getElementById('icProviderWrap');
+  if (!wrap) return;
+  let providers = [], keys = {};
+  try {
+    const res = await Promise.all([API.get('/available-providers'), API.get('/provider-keys')]);
+    providers = (res[0] && res[0].items) || [];
+    ((res[1] && res[1].items) || []).forEach(k => { keys[k.provider] = k; });
+  } catch (e) {
+    wrap.innerHTML = icErr('Could not load provider keys', e.message);
+    return;
+  }
+  IC.providers = providers;
+  IC.keys = keys;
+  icRenderProviders();
+}
+
+function icRenderProviders() {
+  const el = document.getElementById('icProviderWrap');
+  if (!el) return;
+  let html = card('🔑 Provider keys (BYOK — stored on this account only)',
+    '<p style="color:var(--text-secondary);margin:0">Keys your own features call. Stored per account; nothing here is a platform-wide default ' +
+    'and a saved key is never shown back in full.</p>');
+
+  if (!IC.providers.length) {
+    el.innerHTML = html + '<div class="card"><div class="card-body"><div class="empty-state"><h3>No providers registered</h3>' +
+      '<p>The provider catalogue is empty.</p></div></div></div>';
+    return;
+  }
+
+  html += '<div class="provider-grid">';
+  IC.providers.forEach(p => {
+    const k = IC.keys[p.key];
+    const on = !!(k && k.is_active);
+    const icon = IC_PROVIDER_ICON[p.icon] || '🔑';
+    html += '<div class="provider-card' + (on ? ' connected' : '') + '">' +
+      '<div class="provider-header">' +
+        '<span class="provider-name">' + icon + ' ' + escapeHtml(p.name) + '</span>' +
+        '<span class="provider-status"><span class="status-dot ' + (on ? 'connected' : 'disconnected') + '"></span> ' +
+          (k ? (on ? 'Active' : 'Disabled') : 'Not set') + '</span>' +
+      '</div>' +
+      '<div class="provider-desc">' + escapeHtml(p.description || '') + '</div>' +
+      (k ? '<div style="font-size:.74rem;color:var(--text-muted);margin-bottom:8px"><code>' +
+            escapeHtml(k.api_key_masked || '') + '</code>' + (k.base_url ? '<br>' + escapeHtml(k.base_url) : '') + '</div>' : '') +
+      (k ? '<label style="display:flex;align-items:center;gap:8px;font-size:.78rem;margin-bottom:8px;cursor:pointer">' +
+            '<input type="checkbox" style="width:16px;height:16px;cursor:pointer" data-ic-toggle="' + escapeHtmlAttr(p.key) + '"' +
+            (on ? ' checked' : '') + '> Enabled for this account</label>' : '') +
+      '<button class="btn ' + (k ? 'btn-secondary' : 'btn-primary') + ' btn-sm btn-block" data-ic="provider" data-provider="' +
+        escapeHtmlAttr(p.key) + '">' + (k ? 'Replace key' : 'Add key') + '</button>' +
+      (k ? '<button class="btn btn-ghost btn-xs btn-block" style="margin-top:6px" data-ic="provider-del" data-provider="' +
+            escapeHtmlAttr(p.key) + '">Remove</button>' : '') +
+      '</div>';
+  });
+  html += '</div>';
+
+  el.innerHTML = html;
+  icBind(el);
+}
+
+function icOpenProvider(pkey) {
+  const p = IC.providers.find(x => x.key === pkey);
+  if (!p) return;
+  const existing = IC.keys[pkey];
+  let body = '<p style="color:var(--text-secondary);margin-bottom:14px">' + escapeHtml(p.description || '') + '</p>' +
+    '<div class="form-group"><label>API Key</label>' +
+    '<input type="password" id="icPk_api_key" placeholder="paste your ' + escapeHtmlAttr(p.name) + ' key" autocomplete="off"></div>';
+  if (p.requires_base_url) {
+    body += '<div class="form-group"><label>Base URL</label>' +
+      '<input type="text" id="icPk_base_url" value="' + escapeHtmlAttr((existing && existing.base_url) || '') + '" autocomplete="off">' +
+      '<span class="form-hint">' + escapeHtml(IC_FIELD_HINT.base_url) + '</span></div>';
+  }
+  body += '<p class="form-hint">Stored on this account only. ' +
+    (existing ? 'Saving replaces the current key immediately. ' : '') +
+    'The full key is never shown again after saving.</p>';
+
+  showModal((existing ? 'Replace ' : 'Add ') + escapeHtml(p.name) + ' key', body,
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="icPkSave">Save key</button>');
+
+  const btn = document.getElementById('icPkSave');
+  if (btn) btn.addEventListener('click', () => icSaveProvider(pkey));
+}
+
+async function icSaveProvider(pkey) {
+  const keyEl = document.getElementById('icPk_api_key');
+  const baseEl = document.getElementById('icPk_base_url');
+  const apiKey = keyEl ? keyEl.value.trim() : '';
+  if (!apiKey) { toast('Enter the API key', 'error'); return; }
+  const btn = document.getElementById('icPkSave');
+  if (btn) btn.disabled = true;
+  const payload = { provider: pkey, api_key: apiKey, is_active: true };
+  if (baseEl && baseEl.value.trim()) payload.base_url = baseEl.value.trim();
+  try {
+    await API.post('/provider-keys', payload);
+    closeModal();
+    toast('Key saved for this account', 'success');
+    await icLoadProviders();
+  } catch (e) {
+    toast('Save failed: ' + e.message, 'error');
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function icToggleProvider(pkey, on) {
+  try {
+    await API.patch('/provider-keys/' + encodeURIComponent(pkey), { is_active: !!on });
+    toast(pkey + (on ? ' enabled' : ' disabled') + ' for this account', 'success');
+  } catch (e) {
+    toast('Could not save: ' + e.message, 'error');
+  }
+  await icLoadProviders();
+}
+
+async function icDeleteProvider(pkey) {
+  if (!confirm('Remove the ' + pkey + ' key from this account?')) return;
+  try {
+    await API.del('/provider-keys/' + encodeURIComponent(pkey));
+    toast(pkey + ' key removed', 'success');
+    await icLoadProviders();
+  } catch (e) {
+    toast('Could not remove: ' + e.message, 'error');
+  }
+}
+
+// ── Sister products as upgrade paths ──
+function icRenderUpgradePaths() {
+  const el = document.getElementById('icUpgradeWrap');
+  if (!el) return;
+  let html = card('🚀 Sister products (upgrade paths)',
+    '<p style="color:var(--text-secondary);margin:0">These products feed CoreSwift. A customer who already runs one of them is the natural ' +
+    'cross-sell — connect the app above and its captured leads land here as contacts.</p>');
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px">';
+  IC_SISTERS.forEach(s => {
+    const st = IC.status[s.slug];
+    const isConnected = !!(st && st.connected);
+    html += '<div class="card"><div class="card-body">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
+        '<strong>' + escapeHtml(s.name) + '</strong>' +
+        (isConnected ? '<span class="badge badge-success">connected</span>' : '<span class="badge badge-muted">not connected</span>') +
+      '</div>' +
+      '<p style="color:var(--text-secondary);font-size:.82rem;margin:8px 0 12px">' + escapeHtml(s.pitch) + '</p>' +
+      '<a class="btn btn-secondary btn-sm btn-block" href="' + escapeHtmlAttr(s.url) + '" target="_blank" rel="noopener">Open ' +
+        escapeHtml(s.name) + ' ↗</a>' +
+      (isConnected ? '' : '<div style="font-size:.72rem;color:var(--text-muted);margin-top:8px">Connect it above to pull its leads into CoreSwift.</div>') +
+      '</div></div>';
+  });
+  html += '</div>';
+  if (IC.isAdmin) {
+    html += '<p style="color:var(--text-secondary);margin-top:14px">Need more integrations than this plan allows? ' +
+      '<a href="#" onclick="switchTab(\'features-plans\');return false">Open Features &amp; Plans</a> to see what this account is entitled to.</p>';
+  }
+  el.innerHTML = html;
 }
 
 async function saveProfile() {
