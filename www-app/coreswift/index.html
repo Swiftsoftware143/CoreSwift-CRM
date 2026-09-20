@@ -529,7 +529,13 @@ function logout(silent) {
 
 function showApp() {
   document.getElementById('loginScreen').style.display = 'none';
-  document.getElementById('appWrap').style.display = '';
+  // NOTE: #appWrap ships with class="hidden" and the stylesheet has
+  // `.hidden{display:none!important}` — that !important beats any inline style, so clearing
+  // the inline display alone left the whole workspace invisible (a blank dark page after every
+  // login). Drop the class as well as the inline style.
+  var appWrap = document.getElementById('appWrap');
+  appWrap.classList.remove('hidden');
+  appWrap.style.display = '';
   document.getElementById('userEmail').textContent = STATE.user.email;
   document.getElementById('userAvatar').textContent = (STATE.user.name || STATE.user.email)[0].toUpperCase();
   renderSidebar();
