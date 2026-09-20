@@ -29,13 +29,16 @@ pub async fn route_action(
             let offset = params
                 .and_then(|p| p.get("offset").and_then(|v| v.as_i64()))
                 .unwrap_or(0);
-            let contacts = sqlx::query_as::<_, (serde_json::Value,)>(
-                "SELECT id, first_name, last_name, email, phone, company_id, score, created_at FROM contacts WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
+            // Aggregate to ONE json column. Selecting 8 columns into a 1-tuple cannot
+            // decode ("mismatched types") — this endpoint returned 400 for every tenant.
+            let row = sqlx::query_as::<_, (serde_json::Value,)>(
+                "SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT id, first_name, last_name, email, phone, company_id, score, created_at FROM contacts WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3) t"
             )
             .bind(tenant_id).bind(limit as i32).bind(offset as i32)
-            .fetch_all(db).await
+            .fetch_one(db).await
             .map_err(|e| format!("DB error: {}", e))?;
-            Ok((200, json!({"contacts": contacts, "total": contacts.len()})))
+            let total = row.0.as_array().map(|a| a.len()).unwrap_or(0);
+            Ok((200, json!({"contacts": row.0, "total": total})))
         }
         "contacts.create" => {
             let body = data.ok_or("data required")?;
