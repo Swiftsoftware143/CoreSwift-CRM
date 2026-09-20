@@ -177,8 +177,38 @@ async fn count_usage(db: &PgPool, tenant_id: Uuid, feature_key: &str) -> Result<
 // moment this shipped. An explicit `false` is what turns a feature off, which is
 // what the admin UI writes. Seed the plans with explicit flags for real tiers.
 //
+// WATCH OUT — the plans were authored BEFORE this registry and spell some keys
+// differently (`automation_enabled`, `support_tickets`, `onboarding_checklists`,
+// `account_health_monitoring`). Looking up the registry spelling against those
+// plans finds nothing, yields `None`, and therefore ALLOWS — a gate that looks
+// wired but never fires. PLAN_KEY_ALIASES below bridges the two vocabularies.
+// Verified against live data: without the aliases only 2 of 21 keys can deny.
+//
 // No active plan -> allowed, matching `enforce_feature_limit`'s behaviour.
 // ─────────────────────────────────────────────────────────────────────────────
+/// Registry key -> the spelling the live `plans.features` JSONB actually uses.
+///
+/// The plans predate the registry, so four features exist in the DB under a
+/// different name. Reading the registry spelling alone returns `None` for those,
+/// which this function treats as "allowed" — so the gate silently stops
+/// enforcing. Verified live: `plans.free.features.support_tickets` is `false`,
+/// but gating on `tickets` never saw it. Keep this table in step with the DB.
+pub const PLAN_KEY_ALIASES: &[(&str, &str)] = &[
+    ("automation", "automation_enabled"),
+    ("checklists", "onboarding_checklists"),
+    ("tickets", "support_tickets"),
+    ("monitoring", "account_health_monitoring"),
+];
+
+/// The key to read out of `plans.features` for a given registry key.
+pub fn plan_key_for(registry_key: &str) -> &str {
+    PLAN_KEY_ALIASES
+        .iter()
+        .find(|(k, _)| *k == registry_key)
+        .map(|(_, v)| *v)
+        .unwrap_or(registry_key)
+}
+
 pub async fn enforce_feature_flag(
     db: &PgPool,
     tenant_id: Uuid,
@@ -200,11 +230,14 @@ pub async fn enforce_feature_flag(
         return Ok(()); // no active plan — do not lock the tenant out
     };
 
+    // Overrides are keyed by the registry name (that is what the admin UI
+    // writes); the plan itself is read under its own historical spelling.
+    let plan_key = plan_key_for(feature_key);
     let enabled = overrides
         .as_ref()
         .and_then(|o| o.get(feature_key))
         .and_then(|v| v.as_bool())
-        .or_else(|| features.get(feature_key).and_then(|v| v.as_bool()));
+        .or_else(|| features.get(plan_key).and_then(|v| v.as_bool()));
 
     match enabled {
         Some(false) => Err(AppError::UpgradeRequired(format!(
