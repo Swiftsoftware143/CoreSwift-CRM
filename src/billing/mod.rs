@@ -15,6 +15,14 @@ pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/plans", axum::routing::get(handlers::list_plans))
         .route("/plans", axum::routing::post(handlers::create_plan))
+        // Feature toggles the admin can set per plan — the admin UI reads its switches
+        // from here. NOTE: the `plans` module (src/plans/) defines its own router with
+        // this route, but that router is NOT nested in main.rs, so the module is dead
+        // code; this mounted path is the live one.
+        .route(
+            "/plans/registry",
+            axum::routing::get(crate::plans::handlers::feature_registry),
+        )
         .route("/plans/:id", axum::routing::get(handlers::get_plan))
         .route("/plans/:id", axum::routing::patch(handlers::update_plan))
         .route("/plans/:id", axum::routing::delete(handlers::delete_plan))

@@ -110,13 +110,23 @@ pub async fn feature_registry(
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&c)?;
 
-    let plans = sqlx::query_as::<_, Plan>("SELECT * FROM plans ORDER BY sort_order ASC, name ASC")
-        .fetch_all(&s.db)
-        .await?;
+    // Read explicit columns rather than `SELECT *` into the `Plan` model: that model still
+    // declares columns this table does not have (max_deals, max_users, max_storage_mb,
+    // payment_link), so a star-select fails to map and the endpoint 500s.
+    let rows: Vec<(String, String, serde_json::Value)> = sqlx::query_as(
+        "SELECT slug, name, COALESCE(features, '{}'::jsonb) AS features
+           FROM plans
+          ORDER BY sort_order ASC NULLS LAST, name ASC",
+    )
+    .fetch_all(&s.db)
+    .await?;
 
     Ok(Json(json!({
         "features": crate::features::feature_registry_json(),
-        "plans": plans,
+        "plans": rows
+            .into_iter()
+            .map(|(slug, name, features)| json!({ "slug": slug, "name": name, "features": features }))
+            .collect::<Vec<_>>(),
     })))
 }
 
