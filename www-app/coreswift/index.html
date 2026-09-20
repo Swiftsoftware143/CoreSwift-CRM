@@ -595,7 +595,10 @@ const MENU = [
 
 const SETTINGS_MENU = [
   { id:'profile', icon:'👤', label:'Profile' },
-  { id:'integrations', icon:'🔌', label:'Integration Center' }
+  { id:'integrations', icon:'🔌', label:'Integration Center' },
+  // Tenant-side team management. roles[] hides the nav entry from a 'member': the API
+  // answers 403 for any non-owner/admin token, so offering it would only dead-end.
+  { id:'team', icon:'👥', label:'Team & Invites', roles:['owner','admin'] }
 ];
 
 const ADMIN_MENU = [
@@ -626,6 +629,7 @@ function renderSidebar() {
   const nav = document.getElementById('sidebarNav');
   let h = '';
   function item(it, indent) {
+    if (it.roles && (!STATE.user || it.roles.indexOf(STATE.user.role) < 0)) return;
     const isGroup = it.type === 'group';
     if (isGroup) {
       const gid = 'group-'+it.label.toLowerCase().replace(/[^a-z]/g,'');
@@ -1116,6 +1120,35 @@ const TAB_RENDERERS = {
     '<div id="siteConfigForm" style="max-width:900px"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading site settings...</div></div>';
     loadSiteConfig();
     return html;
+  },
+  // Team & Invites — POST /api/auth/invite + GET /api/auth/invites (owner/admin only).
+  'team': () => {
+    if (!canManageTeam()) {
+      return pageHeader('Team & Invites', 'Bring your teammates into this workspace') +
+        card('Owner or admin required',
+          '<p style="color:var(--text-secondary);margin:0">You are signed in as <strong>' +
+          escapeHtml((STATE.user && STATE.user.role) || 'member') +
+          '</strong>. Invite links and the invite list belong to the workspace owner or an admin. ' +
+          'The API enforces the same rule, so there is nothing to manage here.</p>');
+    }
+    return pageHeader('Team & Invites', 'Bring your teammates into this workspace') +
+      card('Invite a teammate',
+        '<div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">' +
+          '<div style="flex:0 0 250px"><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Role for the new teammate</label>' +
+            '<select id="inviteRole" style="width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary)">' +
+              '<option value="member">Member — day-to-day CRM access</option>' +
+              '<option value="admin">Admin — full workspace access</option>' +
+            '</select></div>' +
+          '<button class="btn btn-primary" id="inviteBtn" onclick="createInvite()">➕ Create invite link</button>' +
+        '</div>' +
+        '<div id="inviteResult" style="display:none;margin-top:16px">' +
+          '<label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Invite link &mdash; send this to your teammate</label>' +
+          '<div style="display:flex;gap:8px"><input id="inviteUrl" readonly style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:.85rem">' +
+          '<button class="btn btn-secondary" id="inviteCopyBtn" onclick="copyInviteUrl()">📋 Copy</button></div>' +
+          '<p style="color:var(--text-secondary);font-size:.82rem;margin:8px 0 0">Single use, expires 7 days after creation. Opening it lets them create an account that joins this workspace.</p>' +
+        '</div>',
+        'Only the owner or an admin of this workspace can create invites.') +
+      '<div id="invitesWrap"><div class="loading-wrap"><div class="spinner"></div> Loading invites...</div></div>';
   }
 };
 
@@ -1256,6 +1289,7 @@ function escapeHtmlAttr(str) {
 
 // ========== ASYNC TAB LOADERS (fetch real data) ==========
 const TAB_LOADERS = {
+  'team': async () => { await loadInvites(); },
   'dashboard': async () => {
     try {
       const stats = await API.get('/dashboard/stats');
@@ -2515,8 +2549,97 @@ function filterCompanies(query) {
   });
 }
 
+// ========== TEAM & INVITES (POST /api/auth/invite, GET /api/auth/invites) ==========
+// The API is the real gate: create_invite/list_invites answer 403 for any role other than
+// owner/admin. canManageTeam() only decides whether the controls are rendered at all, so a
+// member never sees a button that would dead-end on an error.
+function canManageTeam() {
+  return !!(STATE.user && (STATE.user.role === 'owner' || STATE.user.role === 'admin'));
+}
+
+async function createInvite() {
+  if (!canManageTeam()) { toast('Only the owner or an admin can invite teammates', 'error'); return; }
+  const sel = document.getElementById('inviteRole');
+  const role = sel ? sel.value : 'member';
+  const btn = document.getElementById('inviteBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+  try {
+    const d = await API.post('/auth/invite', { role: role });
+    const full = window.location.origin + (d.invite_url || ('/auth/register?invite_token=' + d.invite_token));
+    const inp = document.getElementById('inviteUrl');
+    if (inp) inp.value = full;
+    const box = document.getElementById('inviteResult');
+    if (box) box.style.display = 'block';
+    toast('Invite link created — ' + (d.role || role) + ', expires in ' + (d.expires_in_days || 7) + ' days', 'success');
+    loadInvites();
+  } catch (e) {
+    toast('Could not create the invite: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '➕ Create invite link'; }
+  }
+}
+
+function copyInviteUrl() {
+  const inp = document.getElementById('inviteUrl');
+  if (!inp || !inp.value) return;
+  inp.focus();
+  inp.select();
+  const done = () => toast('Invite link copied — send it to your teammate', 'success');
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(inp.value).then(done, () => { document.execCommand('copy'); done(); });
+    } else if (document.execCommand('copy')) { done(); }
+  } catch (e) { /* the selection is left in place as the manual fallback */ }
+}
+
+async function loadInvites() {
+  const wrap = document.getElementById('invitesWrap');
+  if (!wrap) return;
+  if (!canManageTeam()) { wrap.innerHTML = ''; return; }
+  try {
+    const d = await API.get('/auth/invites');
+    wrap.innerHTML = invitesTable((d && d.invites) || []);
+  } catch (e) {
+    wrap.innerHTML = card('Invites', '<p style="color:var(--danger,#f66);margin:0">Could not load invites: ' + escapeHtml(e.message) + '</p>');
+  }
+}
+
+function invitesTable(rows) {
+  if (!rows.length) {
+    return card('Invites', '<div class="empty-state"><div class="empty-icon">📨</div><h3>No invites yet</h3>' +
+      '<p>Create one above — the link is what lets a teammate join this workspace.</p></div>');
+  }
+  const now = Date.now();
+  const body = rows.map(r => {
+    const exp = r.expires_at ? new Date(r.expires_at).getTime() : 0;
+    const state = r.accepted ? '<span style="color:var(--success,#34d399)">Accepted</span>'
+      : (exp && exp < now ? '<span style="color:var(--text-muted)">Expired</span>'
+                          : '<span style="color:var(--accent,#38bdf8)">Pending</span>');
+    return '<tr>' +
+      '<td>' + escapeHtml(r.role || 'member') + '</td>' +
+      '<td>' + state + '</td>' +
+      '<td>' + escapeHtml(fmtTeamDate(r.expires_at)) + '</td>' +
+      '<td>' + escapeHtml(fmtTeamDate(r.created_at)) + '</td>' +
+      '<td><code style="font-size:.72rem">' + escapeHtml(String(r.token || '').slice(0, 8)) + '…</code></td>' +
+    '</tr>';
+  }).join('');
+  return card('Invites',
+    '<div class="table-wrap"><table><thead><tr><th>Role</th><th>Status</th><th>Expires</th><th>Created</th><th>Token</th></tr></thead>' +
+    '<tbody>' + body + '</tbody></table></div>');
+}
+
+function fmtTeamDate(v) { return v ? new Date(v).toLocaleString() : '—'; }
+
 // ========== INIT ==========
 window.addEventListener('DOMContentLoaded', () => {
+  // Invite landing: POST /api/auth/invite returns /auth/register?invite_token=<uuid>, but
+  // nginx try_files sends that path to THIS shell (there is no /auth/register file) — the
+  // token used to be dropped on the floor. Hand it to the sign-in page, which can consume it.
+  const landingInvite = new URLSearchParams(window.location.search).get('invite_token');
+  if (landingInvite && !localStorage.getItem('crm_token')) {
+    window.location.replace('/login?invite_token=' + encodeURIComponent(landingInvite));
+    return;
+  }
   const token = localStorage.getItem('crm_token');
   const userStr = localStorage.getItem('crm_user');
   if (token && userStr) {

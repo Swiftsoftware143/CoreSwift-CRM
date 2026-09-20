@@ -46,8 +46,8 @@ pub async fn register(
         return Err(AppError::Validation("Invalid email format".to_string()));
     }
 
-    // Determine tenant
-    let tenant_id = resolve_account(&state, &req).await?;
+    // Determine tenant — and, when the signup came through an invite, the role it grants.
+    let (tenant_id, invite_role) = resolve_account(&state, &req).await?;
 
     // Check for duplicate user
     let existing = sqlx::query_scalar::<_, i64>(
@@ -76,7 +76,13 @@ pub async fn register(
             .await?
             == 0;
 
-    let role = if is_first_user { "owner" } else { "member" };
+    // A first user owns the tenant. Everyone else gets the role the inviter chose: the invite
+    // role used to be stored and then ignored, so an 'admin' invite silently produced a member.
+    let role = if is_first_user {
+        "owner"
+    } else {
+        invite_role.as_deref().unwrap_or("member")
+    };
 
     let user = sqlx::query_as::<_, TeamMember>(
         r#"INSERT INTO users (id, tenant_id, email, password_hash, name, role)
@@ -250,6 +256,18 @@ pub async fn create_invite(
         return Err(AppError::Forbidden);
     }
 
+    // tenant_invites.role has a CHECK for admin/member only; validate here so a bad role is a
+    // clean 422 instead of a constraint violation surfacing as a 500.
+    let role = match req.role.trim() {
+        "admin" => "admin",
+        "member" => "member",
+        _ => {
+            return Err(AppError::Validation(
+                "role must be 'admin' or 'member'".to_string(),
+            ))
+        }
+    };
+
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let token = uuid::Uuid::new_v4().to_string();
 
@@ -259,7 +277,7 @@ pub async fn create_invite(
     .bind(Uuid::new_v4())
     .bind(tenant_id)
     .bind(&token)
-    .bind(&req.role)
+    .bind(role)
     .execute(&state.db)
     .await?;
 
@@ -267,7 +285,7 @@ pub async fn create_invite(
         "invite_token": token,
         "invite_url": format!("/auth/register?invite_token={}", token),
         "expires_in_days": 7,
-        "role": req.role,
+        "role": role,
     })))
 }
 
@@ -331,11 +349,15 @@ pub async fn logout(
 /// Resolve the tenant for registration — create new account or join via invite.
 /// Every person gets their own isolated tenant (account).
 /// If no account_name/slug provided, auto-generates one from email.
-async fn resolve_account(state: &AppState, req: &RegisterRequest) -> Result<Uuid, AppError> {
-    // If invite token provided, look up the invite and join that tenant
+async fn resolve_account(
+    state: &AppState,
+    req: &RegisterRequest,
+) -> Result<(Uuid, Option<String>), AppError> {
+    // If invite token provided, look up the invite, join that tenant, and carry the role the
+    // inviter picked (the CHECK on tenant_invites allows only 'admin' and 'member').
     if let Some(token) = &req.invite_token {
-        let invite = sqlx::query_as::<_, (Uuid,)>(
-            "SELECT tenant_id FROM tenant_invites WHERE token = $1 AND accepted = false AND expires_at > NOW()"
+        let invite = sqlx::query_as::<_, (Uuid, String)>(
+            "SELECT tenant_id, role FROM tenant_invites WHERE token = $1 AND accepted = false AND expires_at > NOW()"
         )
         .bind(token)
         .fetch_optional(&state.db)
@@ -350,7 +372,7 @@ async fn resolve_account(state: &AppState, req: &RegisterRequest) -> Result<Uuid
         .execute(&state.db)
         .await?;
 
-        return Ok(invite.0);
+        return Ok((invite.0, Some(invite.1)));
     }
 
     if let (Some(name), Some(slug)) = (&req.account_name, &req.account_slug) {
@@ -390,7 +412,7 @@ async fn resolve_account(state: &AppState, req: &RegisterRequest) -> Result<Uuid
             .execute(&state.db)
             .await;
         }
-        Ok(tenant.id)
+        Ok((tenant.id, None))
     } else {
         // Auto-generate tenant from email — each admin gets their own tenant
         let local_part = req.email.split('@').next().unwrap_or("user");
@@ -426,7 +448,7 @@ async fn resolve_account(state: &AppState, req: &RegisterRequest) -> Result<Uuid
             .execute(&state.db)
             .await;
         }
-        Ok(tenant.id)
+        Ok((tenant.id, None))
     }
 }
 
