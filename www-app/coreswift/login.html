@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in — CoreSwift CRM</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f1117;color:#e1e4ed;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.card{background:#1a1d27;border:1px solid #2d3248;border-radius:12px;padding:28px;width:100%;max-width:400px;box-shadow:0 12px 40px rgba(0,0,0,.4)}
+h1{font-size:22px;font-weight:700;text-align:center}
+.sub{color:#8b8fa3;font-size:13px;text-align:center;margin:6px 0 20px}
+.tabs{display:flex;margin-bottom:20px;border-bottom:1px solid #2d3248}
+.tab{flex:1;text-align:center;padding:10px;cursor:pointer;font-size:14px;font-weight:600;color:#8b8fa3;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab.on{color:#38bdf8;border-bottom-color:#38bdf8}
+.pane{display:none}.pane.on{display:block}
+label{display:block;font-size:12px;color:#8b8fa3;margin:12px 0 5px}
+input{background:#232736;border:1px solid #2d3248;color:#e1e4ed;padding:11px 13px;border-radius:8px;font-size:14px;width:100%}
+input:focus{outline:none;border-color:#38bdf8}
+button{width:100%;margin-top:18px;background:#38bdf8;color:#0b1220;border:none;border-radius:8px;padding:12px;font-size:15px;font-weight:700;cursor:pointer}
+button:disabled{opacity:.6;cursor:not-allowed}
+.msg{display:none;margin-top:14px;padding:10px 12px;border-radius:8px;font-size:13px;line-height:1.5}
+.msg.err{display:block;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.4);color:#fca5a5}
+.msg.ok{display:block;background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.4);color:#6ee7b7}
+.foot{text-align:center;font-size:12px;color:#8b8fa3;margin-top:18px}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid #0b1220;border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>CoreSwift CRM</h1>
+  <p class="sub">Sign in to your workspace</p>
+  <div class="tabs">
+    <div class="tab on" id="tabLogin">Sign in</div>
+    <div class="tab" id="tabRegister">Create account</div>
+  </div>
+
+  <form class="pane on" id="paneLogin">
+    <label>Email</label><input id="liEmail" type="email" autocomplete="email" required>
+    <label>Password</label><input id="liPass" type="password" autocomplete="current-password" required>
+    <button type="submit" id="liBtn">Sign in</button>
+  </form>
+
+  <form class="pane" id="paneRegister">
+    <label>Full name</label><input id="rgName" autocomplete="name" required>
+    <label>Work email</label><input id="rgEmail" type="email" autocomplete="email" required>
+    <label>Password <span style="color:#8b8fa3">(min 8 characters)</span></label><input id="rgPass" type="password" minlength="8" autocomplete="new-password" required>
+    <label>Workspace name</label><input id="rgAccount" placeholder="e.g. Acme Roofing" required>
+    <button type="submit" id="rgBtn">Create free account</button>
+    <p class="foot" style="margin-top:12px">Starts on the Free plan — no credit card required.</p>
+  </form>
+
+  <div class="msg" id="msg"></div>
+  <div class="foot">CoreSwift CRM &copy; 2026</div>
+</div>
+<script>
+(function () {
+  'use strict';
+  var TOKEN_KEY = 'cs_token', USER_KEY = 'cs_user', ACCOUNT_KEY = 'cs_account';
+  var msg = document.getElementById('msg');
+
+  function show(text, ok) {
+    msg.className = 'msg ' + (ok ? 'ok' : 'err');
+    msg.textContent = text;
+  }
+  function hide() { msg.className = 'msg'; msg.textContent = ''; }
+
+  // Already signed in? Go straight to the app.
+  if (sessionStorage.getItem(TOKEN_KEY) && sessionStorage.getItem(USER_KEY)) {
+    window.location.replace('/');
+    return;
+  }
+
+  document.getElementById('tabLogin').addEventListener('click', function () { swap(true); });
+  document.getElementById('tabRegister').addEventListener('click', function () { swap(false); });
+  function swap(isLogin) {
+    hide();
+    document.getElementById('tabLogin').classList.toggle('on', isLogin);
+    document.getElementById('tabRegister').classList.toggle('on', !isLogin);
+    document.getElementById('paneLogin').classList.toggle('on', isLogin);
+    document.getElementById('paneRegister').classList.toggle('on', !isLogin);
+  }
+
+  function slugify(v) {
+    return String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  }
+
+  function submit(url, body, btn, label, okText) {
+    hide();
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin"></span>' + label;
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      return res.text().then(function (text) {
+        var data = null;
+        try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+        if (!res.ok) {
+          throw new Error((data && (data.message || data.error)) || ('Request failed (HTTP ' + res.status + ')'));
+        }
+        if (!data || !data.access_token) { throw new Error('Login succeeded but no access token was returned.'); }
+        sessionStorage.setItem(TOKEN_KEY, data.access_token);
+        sessionStorage.setItem(USER_KEY, JSON.stringify(data.team_member || {}));
+        sessionStorage.setItem(ACCOUNT_KEY, JSON.stringify(data.account || {}));
+        // The SPA at '/' reads localStorage 'crm_token'/'crm_user'. Mirror the session into
+        // those keys or signing in here bounces to '/' and the SPA shows the login form again.
+        localStorage.setItem('crm_token', data.access_token);
+        localStorage.setItem('crm_user', JSON.stringify(data.team_member || {}));
+        show(okText, true);
+        window.location.replace('/');
+      });
+    }).catch(function (e) {
+      btn.disabled = false;
+      btn.textContent = label;
+      show(e.message, false);
+    });
+  }
+
+  document.getElementById('paneLogin').addEventListener('submit', function (e) {
+    e.preventDefault();
+    submit('/api/auth/login', {
+      email: document.getElementById('liEmail').value.trim(),
+      password: document.getElementById('liPass').value
+    }, document.getElementById('liBtn'), 'Sign in', 'Welcome back — opening your workspace…');
+  });
+
+  document.getElementById('paneRegister').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var name = document.getElementById('rgName').value.trim();
+    var acct = document.getElementById('rgAccount').value.trim();
+    var slug = slugify(acct) || slugify(name) || 'workspace';
+    if (slug.length < 3) { show('Workspace name must be at least 3 characters.', false); return; }
+    submit('/api/auth/register', {
+      name: name,
+      email: document.getElementById('rgEmail').value.trim(),
+      password: document.getElementById('rgPass').value,
+      account_name: acct,
+      account_slug: slug
+    }, document.getElementById('rgBtn'), 'Create free account', 'Account created — opening your workspace…');
+  });
+})();
+</script>
+</body>
+</html>
