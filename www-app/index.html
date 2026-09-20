@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CoreSwift CRM</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0f1117;--surface:#1a1d27;--surface2:#232736;--border:#2d3248;--text:#e1e4ed;--text2:#8b8fa3;
+--accent:#38bdf8;--accent2:#7dd3fc;--green:#34d399;--red:#ef4444;--yellow:#fbbf24;--radius:8px}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+a{color:var(--accent)}
+.layout{display:flex;min-height:100vh}
+.side{width:210px;background:var(--surface);border-right:1px solid var(--border);padding:18px 0;flex-shrink:0}
+.brand{padding:0 18px 16px;border-bottom:1px solid var(--border);margin-bottom:12px}
+.brand h1{font-size:16px;font-weight:700}
+.brand span{font-size:11px;color:var(--text2);display:block;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav a{display:block;padding:10px 18px;color:var(--text2);text-decoration:none;font-size:14px;border-left:3px solid transparent}
+.nav a:hover{background:var(--surface2);color:var(--text)}
+.nav a.on{color:var(--accent);border-left-color:var(--accent);background:var(--surface2)}
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.top{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 22px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+.top .who{font-size:13px;color:var(--text2)}
+.view{padding:22px;flex:1}
+button{cursor:pointer;font-size:13px;border:none;border-radius:var(--radius);padding:8px 14px;transition:opacity .2s}
+button:disabled{opacity:.5;cursor:not-allowed}
+.btn-primary{background:var(--accent);color:#0b1220;font-weight:600}
+.btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+.btn-danger{background:var(--red);color:#fff}
+.btn-sm{padding:5px 10px;font-size:12px}
+input,select,textarea{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:9px 12px;border-radius:var(--radius);font-size:14px;width:100%;font-family:inherit}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+h2{font-size:17px;font-weight:600;margin-bottom:4px}
+h3{font-size:14px;font-weight:600;margin-bottom:10px;color:var(--text)}
+.page-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:18px}
+.sub{color:var(--text2);font-size:13px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:18px}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px}
+.kpi .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text2);font-weight:600}
+.kpi .val{font-size:24px;font-weight:700;margin-top:6px}
+table{width:100%;border-collapse:collapse}
+th,td{padding:9px 10px;text-align:left;border-bottom:1px solid var(--border);font-size:13px;vertical-align:top}
+th{color:var(--text2);font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:.5px}
+tbody tr:hover{background:var(--surface2)}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;border:1px solid transparent}
+.b-green{background:rgba(52,211,153,.14);color:var(--green);border-color:rgba(52,211,153,.35)}
+.b-grey{background:var(--surface2);color:var(--text2);border-color:var(--border)}
+.b-yellow{background:rgba(251,191,36,.14);color:var(--yellow);border-color:rgba(251,191,36,.35)}
+.b-blue{background:rgba(56,189,248,.14);color:var(--accent);border-color:rgba(56,189,248,.35)}
+.b-red{background:rgba(239,68,68,.14);color:var(--red);border-color:rgba(239,68,68,.35)}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+.src{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:13px}
+.src h4{font-size:14px;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.src p{font-size:12px;color:var(--text2);margin:6px 0;line-height:1.5}
+.src .meta{font-size:11px;color:var(--text2);display:flex;gap:12px;flex-wrap:wrap;margin-top:8px}
+.empty{text-align:center;padding:34px 16px;color:var(--text2)}
+.empty .big{font-size:30px;display:block;margin-bottom:8px}
+.banner{border-radius:var(--radius);padding:12px 14px;font-size:13px;margin-bottom:14px;line-height:1.5}
+.b-err{background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.4);color:#fca5a5}
+.b-warn{background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.4);color:#fde68a}
+.b-up{background:linear-gradient(135deg,rgba(56,189,248,.12),rgba(125,211,252,.06));border:1px solid rgba(56,189,248,.4)}
+.b-up h3{color:var(--accent);margin-bottom:6px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.overlay{position:fixed;inset:0;background:rgba(3,6,12,.72);display:flex;align-items:center;justify-content:center;padding:18px;z-index:50}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;width:100%;max-width:440px;max-height:88vh;overflow:auto}
+.modal h3{font-size:16px;margin-bottom:14px}
+.modal label{display:block;font-size:12px;color:var(--text2);margin:10px 0 4px}
+.modal .row{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--text2);border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:middle}
+@keyframes sp{to{transform:rotate(360deg)}}
+#toast{position:fixed;bottom:20px;right:20px;z-index:80;display:flex;flex-direction:column;gap:8px}
+.toast{background:var(--surface2);border:1px solid var(--border);border-left:3px solid var(--green);padding:10px 14px;border-radius:var(--radius);font-size:13px;max-width:340px}
+.toast.bad{border-left-color:var(--red)}
+@media(max-width:760px){.layout{flex-direction:column}.side{width:100%;display:flex;overflow-x:auto;padding:8px}.brand{display:none}.nav{display:flex}.nav a{border-left:none;border-bottom:3px solid transparent;white-space:nowrap}.nav a.on{border-left:none;border-bottom-color:var(--accent)}}
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="side">
+    <div class="brand">
+      <h1>CoreSwift CRM</h1>
+      <span id="acctName">—</span>
+    </div>
+    <nav class="nav" id="nav">
+      <a href="#/overview" data-k="overview">Overview</a>
+      <a href="#/contacts" data-k="contacts">Contacts</a>
+      <a href="#/pipelines" data-k="pipelines">Pipelines</a>
+      <a href="#/tickets" data-k="tickets">Support tickets</a>
+      <a href="#/integrations" data-k="integrations">Integrations</a>
+      <a href="#/plan" data-k="plan">Plan &amp; usage</a>
+    </nav>
+  </aside>
+  <div class="main">
+    <header class="top">
+      <div class="who" id="who">—</div>
+      <div><button class="btn-secondary btn-sm" id="signOut">Sign out</button></div>
+    </header>
+    <section class="view" id="view"></section>
+  </div>
+</div>
+<div id="modal-root"></div>
+<div id="toast"></div>
+<script>
+(function () {
+  'use strict';
+  var TOKEN_KEY = 'cs_token', USER_KEY = 'cs_user', ACCOUNT_KEY = 'cs_account';
+  var token = sessionStorage.getItem(TOKEN_KEY);
+  var user = null;
+  try { user = JSON.parse(sessionStorage.getItem(USER_KEY) || 'null'); } catch (e) { user = null; }
+  var account = null;
+  try { account = JSON.parse(sessionStorage.getItem(ACCOUNT_KEY) || 'null'); } catch (e) { account = null; }
+
+  // Auth guard — one contract, one login page.
+  if (!token || !user) { window.location.replace('/login'); return; }
+
+  var view = document.getElementById('view');
+  var modalRoot = document.getElementById('modal-root');
+
+  document.getElementById('who').textContent = (user.name || user.email || 'user') + (user.role ? ' · ' + user.role : '');
+  document.getElementById('acctName').textContent = (account && account.name) || user.email || '';
+  document.getElementById('signOut').addEventListener('click', function () { signOut(); });
+
+  function ApiError(message, status) { this.name = 'ApiError'; this.message = message; this.status = status; }
+  ApiError.prototype = Object.create(Error.prototype);
+
+  function signOut(silent) {
+    sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(USER_KEY);
+    sessionStorage.removeItem(ACCOUNT_KEY);
+    if (!silent) { toast('Signed out'); }
+    window.location.replace('/login');
+  }
+
+  function api(path, opts) {
+    opts = opts || {};
+    var headers = { 'Accept': 'application/json' };
+    if (opts.body !== undefined) { headers['Content-Type'] = 'application/json'; }
+    if (token) { headers['Authorization'] = 'Bearer ' + token; }
+    return fetch('/api' + path, {
+      method: opts.method || 'GET',
+      headers: headers,
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined
+    }).then(function (res) {
+      return res.text().then(function (text) {
+        var data = null;
+        try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+        if (res.status === 401) { signOut(true); throw new ApiError('Your session expired — please sign in again.', 401); }
+        if (res.status === 402) { throw new ApiError((data && data.message) || 'This feature is not available on your current plan.', 402); }
+        if (!res.ok) { throw new ApiError((data && (data.message || data.error)) || ('Request failed (HTTP ' + res.status + ')'), res.status); }
+        return data;
+      });
+    });
+  }
+
+  function esc(v) {
+    if (v === null || v === undefined) { return ''; }
+    return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function num(v) { var n = Number(v || 0); return n.toLocaleString(); }
+  function usd(v) { return '$' + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  function when(v) {
+    if (!v) { return '—'; }
+    var d = new Date(v);
+    if (isNaN(d.getTime())) { return '—'; }
+    return d.toLocaleString();
+  }
+  function toast(msg, bad) {
+    var t = document.createElement('div');
+    t.className = 'toast' + (bad ? ' bad' : '');
+    t.textContent = msg;
+    document.getElementById('toast').appendChild(t);
+    setTimeout(function () { t.remove(); }, 4200);
+  }
+  function spinner(label) {
+    return '<div class="empty"><span class="spin"></span> ' + esc(label || 'Loading…') + '</div>';
+  }
+  function errBlock(e) {
+    if (e && e.status === 402) {
+      return '<div class="banner b-up"><h3>Upgrade required</h3><div>' + esc(e.message) +
+        '</div><p class="sub" style="margin-top:8px">Your plan controls which modules are available. ' +
+        'Ask your account owner to upgrade, or contact support.</p></div>';
+    }
+    return '<div class="banner b-err"><b>Could not load this view.</b><div style="margin-top:4px">' +
+      esc(e && e.message ? e.message : 'Unknown error') + '</div></div>';
+  }
+  function empty(icon, title, sub) {
+    return '<div class="empty"><span class="big">' + icon + '</span><div><b>' + esc(title) + '</b></div>' +
+      (sub ? '<div class="sub" style="margin-top:6px">' + esc(sub) + '</div>' : '') + '</div>';
+  }
+  function closeModal() { modalRoot.innerHTML = ''; }
+  function openModal(html, onReady) {
+    modalRoot.innerHTML = '<div class="overlay"><div class="modal">' + html + '</div></div>';
+    var ov = modalRoot.querySelector('.overlay');
+    ov.addEventListener('click', function (ev) { if (ev.target === ov) { closeModal(); } });
+    if (onReady) { onReady(modalRoot.querySelector('.modal')); }
+  }
+
+  /* ---------------------------------------------------------------- overview */
+  function loadOverview() {
+    view.innerHTML = spinner('Loading overview…');
+    return Promise.all([
+      api('/dashboard/stats'),
+      api('/contacts?per_page=5'),
+      api('/integration-center/overview').catch(function (e) { return { __err: e }; })
+    ]).then(function (r) {
+      var s = r[0] || {}, c = r[1] || {}, ic = r[2] || {};
+      var contacts = c.contacts || [];
+      var icLine = '';
+      if (!ic.__err) {
+        var ls = (ic.lead_sources && ic.lead_sources.items) || [];
+        var feeding = ls.filter(function (i) { return i.status === 'feeding'; });
+        icLine = '<div class="card"><h3>Lead capture</h3>' +
+          '<div class="sub">' + num(ic.totals && ic.totals.contacts) + ' contacts total · ' +
+          num(ic.totals && ic.totals.contacts_30d) + ' in the last 30 days</div>' +
+          '<div style="margin-top:10px">' + (feeding.length
+            ? feeding.map(function (i) { return '<span class="badge b-green" style="margin-right:6px">' + esc(i.name) + ' ' + num(i.leads_30d) + '</span>'; }).join('')
+            : '<span class="badge b-grey">no capture app has delivered leads yet</span>') + '</div>' +
+          '<div style="margin-top:12px"><a href="#/integrations">Open Integration Center →</a></div></div>';
+      }
+      view.innerHTML =
+        '<div class="page-head"><div><h2>Overview</h2><div class="sub">Your CRM workspace at a glance</div></div></div>' +
+        '<div class="kpis">' +
+        kpi('Contacts', num(s.total_contacts)) +
+        kpi('Companies', num(s.total_companies)) +
+        kpi('Open opportunities', num(s.total_opportunities)) +
+        kpi('Pipeline value', usd(s.total_revenue)) +
+        '</div>' +
+        '<div class="card"><h3>Recent contacts</h3>' +
+        (contacts.length ? contactsTable(contacts) : empty('👤', 'No contacts yet', 'Leads pushed from a capture app land here automatically.')) +
+        '</div>' + icLine;
+    }).catch(function (e) { view.innerHTML = errBlock(e); });
+  }
+  function kpi(label, val) {
+    return '<div class="kpi"><div class="lbl">' + esc(label) + '</div><div class="val">' + esc(val) + '</div></div>';
+  }
+  function contactName(c) {
+    var n = [c.first_name, c.last_name].filter(Boolean).join(' ');
+    return n || c.email || '(no name)';
+  }
+  function contactsTable(list) {
+    return '<table><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Source</th><th>Created</th></tr></thead><tbody>' +
+      list.map(function (c) {
+        var src = (c.metadata && c.metadata.source_app) || '';
+        return '<tr><td>' + esc(contactName(c)) + '</td><td>' + esc(c.email || '—') + '</td><td>' + esc(c.phone || '—') +
+          '</td><td>' + (src ? '<span class="badge b-blue">' + esc(src) + '</span>' : '<span class="badge b-grey">manual</span>') +
+          '</td><td class="sub">' + esc(when(c.created_at)) + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+
+  /* ---------------------------------------------------------------- contacts */
+  function loadContacts() {
+    view.innerHTML = spinner('Loading contacts…');
+    return api('/contacts?per_page=100').then(function (d) {
+      var list = (d && d.contacts) || [];
+      view.innerHTML =
+        '<div class="page-head"><div><h2>Contacts</h2><div class="sub">' + num(list.length) + ' in this workspace</div></div>' +
+        '<div><button class="btn-primary" id="newContact">+ New contact</button></div></div>' +
+        '<div class="card" style="display:flex;gap:8px;align-items:center">' +
+        '<input id="q" placeholder="Search name, email or phone" style="max-width:380px">' +
+        '<button class="btn-secondary" id="doSearch">Search</button></div>' +
+        '<div class="card" id="cList">' + (list.length ? contactsTable(list) : empty('👤', 'No contacts yet', 'Add one, or let a capture app push leads in.')) + '</div>';
+      document.getElementById('newContact').addEventListener('click', newContactModal);
+      document.getElementById('doSearch').addEventListener('click', doSearch);
+      document.getElementById('q').addEventListener('keydown', function (e) { if (e.key === 'Enter') { doSearch(); } });
+      function doSearch() {
+        var q = document.getElementById('q').value.trim();
+        var target = document.getElementById('cList');
+        if (!q) { target.innerHTML = list.length ? contactsTable(list) : empty('👤', 'No contacts yet'); return; }
+        target.innerHTML = spinner('Searching…');
+        api('/contacts/search?q=' + encodeURIComponent(q)).then(function (r) {
+          var hits = (r && r.contacts) || [];
+          target.innerHTML = hits.length ? contactsTable(hits) : empty('🔍', 'No match for “' + q + '”');
+        }).catch(function (e) { target.innerHTML = errBlock(e); });
+      }
+    }).catch(function (e) { view.innerHTML = errBlock(e); });
+  }
+  function newContactModal() {
+    openModal(
+      '<h3>New contact</h3>' +
+      '<label>First name</label><input id="ncFirst">' +
+      '<label>Last name</label><input id="ncLast">' +
+      '<label>Email</label><input id="ncEmail" type="email">' +
+      '<label>Phone</label><input id="ncPhone">' +
+      '<div class="row"><button class="btn-secondary" id="ncCancel">Cancel</button>' +
+      '<button class="btn-primary" id="ncSave">Create contact</button></div>',
+      function () {
+        document.getElementById('ncCancel').addEventListener('click', closeModal);
+        document.getElementById('ncSave').addEventListener('click', function () {
+          var first = document.getElementById('ncFirst').value.trim();
+          var last = document.getElementById('ncLast').value.trim();
+          if (!first && !last) { toast('First or last name is required', true); return; }
+          var btn = this; btn.disabled = true; btn.textContent = 'Creating…';
+          api('/contacts', {
+            method: 'POST',
+            body: {
+              first_name: first, last_name: last,
+              email: document.getElementById('ncEmail').value.trim() || null,
+              phone: document.getElementById('ncPhone').value.trim() || null
+            }
+          }).then(function () {
+            closeModal(); toast('Contact created'); loadContacts();
+          }).catch(function (e) {
+            btn.disabled = false; btn.textContent = 'Create contact';
+            toast(e.message, true);
+          });
+        });
+      });
+  }
+
+  /* --------------------------------------------------------------- pipelines */
+  function loadPipelines() {
+    view.innerHTML = spinner('Loading pipelines…');
+    return api('/pipelines').then(function (d) {
+      var pls = (d && d.pipelines) || [];
+      var head = '<div class="page-head"><div><h2>Pipelines</h2><div class="sub">' +
+        (pls.length ? num(pls.length) + ' pipeline(s)' : 'No pipelines in this workspace') + '</div></div></div>';
+      if (!pls.length) {
+        view.innerHTML = head +
+          '<div class="card">' + empty('🔄', 'No pipelines yet',
+            'Pipelines and their stages are read from GET /api/pipelines.') +
+          '<div class="banner b-warn" style="margin-top:14px"><b>Deferred:</b> creating pipelines and stages is not exposed here yet — ' +
+          'the pipelines write path returns HTTP 500 because the pipelines/opportunities Rust domain is written against a different schema ' +
+          'than the live tables (<span class="mono">account_id</span> vs <span class="mono">tenant_id</span>, ' +
+          '<span class="mono">description</span>/<span class="mono">is_won_stage</span> columns that do not exist). ' +
+          'That defect is tracked separately so this surface never ships a dead button.</div></div>';
+        return;
+      }
+      return Promise.all(pls.map(function (p) {
+        var pipe = p.pipeline || p;
+        return api('/pipelines/' + pipe.id + '/opportunities?per_page=100')
+          .then(function (o) { return { pipe: pipe, stages: p.stages || [], opps: (o && o.opportunities) || [] }; })
+          .catch(function (e) { return { pipe: pipe, stages: p.stages || [], opps: [], err: e }; });
+      })).then(function (rows) {
+        view.innerHTML = head + rows.map(function (r) {
+          var byStage = {};
+          r.opps.forEach(function (o) { (byStage[o.stage_id] = byStage[o.stage_id] || []).push(o); });
+          return '<div class="card"><h3>' + esc(r.pipe.name) + (r.pipe.is_default ? ' <span class="badge b-blue">default</span>' : '') + '</h3>' +
+            (r.err ? errBlock(r.err) : '') +
+            (r.stages.length ? '<div class="grid2">' + r.stages.map(function (s) {
+              var items = byStage[s.id] || [];
+              return '<div class="src"><h4>' + esc(s.name) + '<span class="badge b-grey">' + num(items.length) + '</span></h4>' +
+                (items.length ? items.map(function (o) {
+                  return '<div style="font-size:12px;margin-top:6px">' + esc(o.name) +
+                    '<div class="sub">' + usd(o.value) + ' · ' + num(o.probability) + '%</div></div>';
+                }).join('') : '<p>No opportunities in this stage.</p>') + '</div>';
+            }).join('') + '</div>' : '<div class="sub">No stages defined for this pipeline.</div>') +
+            '</div>';
+        }).join('');
+      });
+    }).catch(function (e) { view.innerHTML = errBlock(e); });
+  }
+
+  /* ----------------------------------------------------------------- tickets */
+  function loadTickets() {
+    view.innerHTML = spinner('Loading support tickets…');
+    return api('/tickets?per_page=50').then(function (d) {
+      var list = (d && (d.tickets || d.items)) || [];
+      view.innerHTML =
+        '<div class="page-head"><div><h2>Support tickets</h2><div class="sub">Customer support inbox</div></div></div>' +
+        '<div class="card">' + (list.length ? '<table><thead><tr><th>Subject</th><th>Status</th><th>Priority</th><th>Created</th></tr></thead><tbody>' +
+          list.map(function (t) {
+            return '<tr><td>' + esc(t.subject || t.title || '—') + '</td><td><span class="badge b-grey">' + esc(t.status || '—') +
+              '</span></td><td>' + esc(t.priority || '—') + '</td><td class="sub">' + esc(when(t.created_at)) + '</td></tr>';
+          }).join('') + '</tbody></table>' : empty('🎫', 'No tickets', 'Tickets raised through the support widget appear here.')) + '</div>';
+    }).catch(function (e) { view.innerHTML = errBlock(e); });
+  }
+
+  /* ------------------------------------------------------------ integrations */
+  function loadIntegrations() {
+    view.innerHTML = spinner('Loading Integration Center…');
+    return api('/integration-center/overview').then(function (d) {
+      var totals = d.totals || {};
+      var sources = (d.lead_sources && d.lead_sources.items) || [];
+      var native = (d.native_integrations && d.native_integrations.items) || [];
+      var keys = (d.personal_keys && d.personal_keys.items) || [];
+      var cross = d.cross_sell || [];
+      var feeding = (d.lead_sources && d.lead_sources.feeding) || 0;
+
+      var html =
+        '<div class="page-head"><div><h2>Integration Center</h2>' +
+        '<div class="sub">What feeds this CRM and what it can push to</div></div>' +
+        '<div><button class="btn-primary" id="newKey">+ New lead-delivery key</button></div></div>' +
+        '<div class="kpis">' + kpi('Contacts', num(totals.contacts)) + kpi('Last 30 days', num(totals.contacts_30d)) +
+        kpi('Capture apps feeding', num(feeding)) + kpi('Active keys', num(d.personal_keys && d.personal_keys.active)) + '</div>';
+
+      html += '<div class="card"><h3>Lead sources — what feeds this CRM</h3>' +
+        '<div class="sub" style="margin-bottom:12px">Every capture app pushes to <span class="mono">POST /api/external/contacts</span> with a ' +
+        '<span class="mono">csk_</span> key; contacts are tagged with the source app automatically.</div>' +
+        '<div class="grid2">' + sources.map(function (s) {
+          var badge = s.status === 'feeding' ? '<span class="badge b-green">feeding</span>'
+            : (s.status === 'idle' ? '<span class="badge b-yellow">idle</span>' : '<span class="badge b-grey">never</span>');
+          return '<div class="src"><h4>' + esc(s.name) + badge + '</h4><p>' + esc(s.description || '') + '</p>' +
+            '<div class="meta"><span><b>' + num(s.leads_total) + '</b> leads</span><span><b>' + num(s.leads_30d) + '</b> in 30d</span>' +
+            '<span>last: ' + esc(when(s.last_lead_at)) + '</span></div>' +
+            (s.url ? '<div style="margin-top:10px"><a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.cta || 'Open') + ' →</a></div>' : '') +
+            '</div>';
+        }).join('') + '</div></div>';
+
+      html += '<div class="card"><h3>Native connectors</h3>' +
+        (native.length ? '<div class="grid2">' + native.map(function (n) {
+          return '<div class="src"><h4>' + esc(n.name) +
+            (n.connected ? '<span class="badge b-green">connected</span>' : '<span class="badge b-grey">not connected</span>') + '</h4>' +
+            '<p>' + esc(n.description || '') + '</p><div class="meta"><span>auth: ' + esc(n.auth_type || 'api_key') + '</span>' +
+            (n.requires_base_url ? '<span>needs base URL</span>' : '') +
+            (n.last_test_ok === true ? '<span class="badge b-green">last test ok</span>' : (n.last_test_ok === false ? '<span class="badge b-red">last test failed</span>' : '')) +
+            '</div></div>';
+        }).join('') + '</div>' : empty('🔌', 'No connectors configured', 'Native connectors come from the provider catalogue.')) + '</div>';
+
+      html += '<div class="card"><h3>Lead-delivery keys</h3>' +
+        '<div class="sub" style="margin-bottom:10px">Paste a key into a capture app. Keys are shown once — only the prefix is stored for display.</div>' +
+        (keys.length ? '<table><thead><tr><th>Name</th><th>Prefix</th><th>Status</th><th>Last used</th><th></th></tr></thead><tbody>' +
+          keys.map(function (k) {
+            return '<tr><td>' + esc(k.name) + '</td><td class="mono">' + esc(k.prefix) + '…</td>' +
+              '<td>' + (k.is_active ? '<span class="badge b-green">active</span>' : '<span class="badge b-grey">revoked</span>') + '</td>' +
+              '<td class="sub">' + esc(when(k.last_used_at)) + '</td>' +
+              '<td style="text-align:right"><button class="btn-secondary btn-sm" data-rot="' + esc(k.id) + '">Rotate</button> ' +
+              '<button class="btn-danger btn-sm" data-rev="' + esc(k.id) + '">Revoke</button></td></tr>';
+          }).join('') + '</tbody></table>' : empty('🔑', 'No keys yet', 'Create one, then paste it into the capture app.'));
+      html += '</div>';
+
+      html += '<div class="card"><h3>Grow your lead capture</h3><div class="sub" style="margin-bottom:10px">One path per sister app — every one of them can push leads into this CRM.</div>' +
+        '<div class="grid2">' + cross.map(function (c) {
+          return '<div class="src"><h4>' + esc(c.name) + '</h4><p>' + esc(c.description || '') + '</p>' +
+            (c.url ? '<div style="margin-top:8px"><a href="' + esc(c.url) + '" target="_blank" rel="noopener">' + esc(c.cta || 'Open') + ' →</a></div>' : '') +
+            '</div>';
+        }).join('') + '</div></div>';
+
+      view.innerHTML = html;
+      document.getElementById('newKey').addEventListener('click', newKeyModal);
+      view.querySelectorAll('[data-rev]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var id = this.getAttribute('data-rev');
+          this.disabled = true;
+          api('/personal-api-keys/' + id, { method: 'DELETE' }).then(function () {
+            toast('Key revoked'); loadIntegrations();
+          }).catch(function (e) { toast(e.message, true); this.disabled = false; });
+        });
+      });
+      view.querySelectorAll('[data-rot]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var id = this.getAttribute('data-rot');
+          this.disabled = true;
+          api('/personal-api-keys/' + id + '/rotate', { method: 'POST' }).then(function (r) {
+            showKeyOnce(r); loadIntegrations();
+          }).catch(function (e) { toast(e.message, true); this.disabled = false; });
+        });
+      });
+    }).catch(function (e) { view.innerHTML = errBlock(e); });
+  }
+  function showKeyOnce(r) {
+    var key = (r && r.key) || '';
+    openModal('<h3>Your new key</h3><div class="banner b-warn">Copy it now — it is shown only once.</div>' +
+      '<div class="mono" style="word-break:break-all;background:var(--surface2);padding:12px;border-radius:6px;border:1px solid var(--border)">' + esc(key) + '</div>' +
+      '<div class="sub" style="margin-top:10px">Send leads to <span class="mono">POST /api/external/contacts</span> with header <span class="mono">Authorization: Bearer &lt;key&gt;</span>.</div>' +
+      '<div class="row"><button class="btn-primary" id="kc">Done</button></div>',
+      function () {
+        document.getElementById('kc').addEventListener('click', closeModal);
+        if (navigator.clipboard && key) { navigator.clipboard.writeText(key).then(function () { toast('Key copied to clipboard'); }, function () { }); }
+      });
+  }
+  function newKeyModal() {
+    openModal('<h3>New lead-delivery key</h3><label>Label</label>' +
+      '<input id="nkName" placeholder="e.g. FunnelSwift prod">' +
+      '<div class="row"><button class="btn-secondary" id="nkCancel">Cancel</button>' +
+      '<button class="btn-primary" id="nkSave">Create key</button></div>',
+      function () {
+        document.getElementById('nkCancel').addEventListener('click', closeModal);
+        document.getElementById('nkSave').addEventListener('click', function () {
+          var name = document.getElementById('nkName').value.trim() || 'default';
+          var btn = this; btn.disabled = true; btn.textContent = 'Creating…';
+          api('/personal-api-keys', { method: 'POST', body: { name: name } }).then(function (r) {
+            closeModal(); showKeyOnce(r); loadIntegrations();
+          }).catch(function (e) { btn.disabled = false; btn.textContent = 'Create key'; toast(e.message, true); });
+        });
+      });
+  }
+
+  /* -------------------------------------------------------------------- plan */
+  function loadPlan() {
+    view.innerHTML = spinner('Loading plan…');
+    return api('/billing/subscription').then(function (d) {
+      d = d || {};
+      view.innerHTML =
+        '<div class="page-head"><div><h2>Plan &amp; usage</h2><div class="sub">What this workspace is entitled to</div></div></div>' +
+        '<div class="card"><div class="kpis">' +
+        kpi('Plan', d.plan_name || d.plan || '—') +
+        kpi('Status', d.status || '—') +
+        kpi('Billing cycle', d.billing_cycle || '—') +
+        kpi('Renews / ends', when(d.current_period_ends_at)) +
+        '</div>' +
+        '<div class="sub">Plan limits and per-module feature access are controlled by the platform admin.</div></div>' +
+        '<div class="card"><h3>Module access</h3><div id="mods">' + spinner('Checking modules…') + '</div></div>';
+      var mods = [['Support tickets', '/tickets/stats'], ['Contacts', '/contacts?per_page=1'], ['Integration Center', '/integration-center/lead-sources']];
+      Promise.all(mods.map(function (m) {
+        return api(m[1]).then(function () { return { name: m[0], ok: true }; })
+          .catch(function (e) { return { name: m[0], ok: false, msg: e.message, status: e.status }; });
+      })).then(function (rows) {
+        document.getElementById('mods').innerHTML = '<table><tbody>' + rows.map(function (r) {
+          return '<tr><td>' + esc(r.name) + '</td><td>' + (r.ok ? '<span class="badge b-green">available</span>'
+            : (r.status === 402 ? '<span class="badge b-yellow">needs upgrade</span>' : '<span class="badge b-red">error</span>')) +
+            '</td><td class="sub">' + esc(r.ok ? '' : r.msg) + '</td></tr>';
+        }).join('') + '</tbody></table>';
+      });
+    }).catch(function (e) { view.innerHTML = errBlock(e); });
+  }
+
+  /* ------------------------------------------------------------------ router */
+  var routes = {
+    overview: loadOverview, contacts: loadContacts, pipelines: loadPipelines,
+    tickets: loadTickets, integrations: loadIntegrations, plan: loadPlan
+  };
+  function currentKey() {
+    var k = (window.location.hash || '').replace(/^#\/?/, '');
+    return routes[k] ? k : 'overview';
+  }
+  function navigate() {
+    var key = currentKey();
+    Array.prototype.forEach.call(document.querySelectorAll('#nav a'), function (a) {
+      if (a.getAttribute('data-k') === key) { a.classList.add('on'); } else { a.classList.remove('on'); }
+    });
+    routes[key]();
+  }
+  window.addEventListener('hashchange', navigate);
+  navigate();
+})();
+</script>
+</body>
+</html>
