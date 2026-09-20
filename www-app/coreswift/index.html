@@ -1,0 +1,2688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CoreSwift CRM Admin</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg-primary:#0f1117;--bg-secondary:#1a1d27;--bg-card:#222532;
+  --bg-hover:#2a2d3a;--bg-active:#2d3152;
+  --text-primary:#e8eaed;--text-secondary:#9aa0a6;--text-muted:#6b7280;
+  --accent:#6366f1;--accent-hover:#818cf8;--accent-subtle:rgba(99,102,241,.12);
+  --success:#22c55e;--warning:#f59e0b;--error:#ef4444;
+  --border:#2d3148;--border-light:#383c52;
+  --radius-sm:4px;--radius:8px;--radius-lg:12px;
+  --sidebar-w:260px;--sidebar-collapsed:60px;--header-h:56px;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.3);--shadow:0 4px 12px rgba(0,0,0,.4);
+  --shadow-lg:0 8px 32px rgba(0,0,0,.5);
+}
+body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg-primary);color:var(--text-primary);display:flex;min-height:100vh;overflow:hidden;line-height:1.5}
+a{color:var(--accent);text-decoration:none}
+a:hover{color:var(--accent-hover)}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--text-muted)}
+
+/* ===== LOGIN ===== */
+.login-wrap{display:flex;align-items:center;justify-content:center;width:100vw;height:100vh;background:var(--bg-primary)}
+.login-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:40px;width:420px;max-width:90vw;box-shadow:var(--shadow-lg)}
+.login-card .logo{font-size:2rem;margin-bottom:8px;text-align:center}
+.login-card h1{font-size:1.4rem;margin-bottom:4px;text-align:center}
+.login-card .sub{color:var(--text-secondary);margin-bottom:28px;text-align:center;font-size:.9rem}
+.login-error{background:rgba(239,68,68,.12);color:var(--error);padding:10px 14px;border-radius:var(--radius-sm);margin-bottom:16px;font-size:.85rem;display:none}
+
+/* ===== FORMS ===== */
+.form-group{margin-bottom:16px}
+.form-group label{display:block;margin-bottom:6px;font-size:.82rem;color:var(--text-secondary);font-weight:500}
+.form-group input,.form-group select,.form-group textarea{width:100%;padding:10px 12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-size:.88rem;outline:none;transition:border-color .2s;font-family:inherit}
+.form-group input:focus,.form-group select:focus,.form-group textarea:focus{border-color:var(--accent)}
+.form-group textarea{resize:vertical;min-height:80px}
+.form-hint{font-size:.78rem;color:var(--text-muted);margin-top:4px}
+
+/* ===== BUTTONS ===== */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:10px 20px;border:none;border-radius:var(--radius-sm);font-size:.88rem;font-weight:500;cursor:pointer;transition:all .2s;font-family:inherit;white-space:nowrap}
+.btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:var(--accent-hover);transform:translateY(-1px)}
+.btn-secondary{background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border)}.btn-secondary:hover{background:var(--bg-hover)}
+.btn-danger{background:var(--error);color:#fff}.btn-danger:hover{opacity:.9}
+.btn-ghost{background:transparent;color:var(--text-secondary);border:1px solid transparent}.btn-ghost:hover{color:var(--text-primary);background:var(--bg-hover)}
+.btn-sm{padding:6px 12px;font-size:.8rem}
+.btn-xs{padding:3px 8px;font-size:.75rem;border-radius:3px}
+.btn-block{width:100%;justify-content:center}
+.btn-icon{background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:1.1rem;padding:4px 8px;border-radius:var(--radius-sm);display:inline-flex;align-items:center;justify-content:center}.btn-icon:hover{color:var(--text-primary);background:var(--bg-hover)}
+
+/* ===== LAYOUT ===== */
+.sidebar{width:var(--sidebar-w);background:var(--bg-secondary);border-right:1px solid var(--border);display:flex;flex-direction:column;height:100vh;position:fixed;left:0;top:0;z-index:100;transition:width .2s ease;overflow:hidden;flex-shrink:0}
+.sidebar.collapsed{width:var(--sidebar-collapsed)}
+.sidebar.collapsed .nav-text,.sidebar.collapsed .nav-arrow,.sidebar.collapsed .sidebar-brand-text,.sidebar.collapsed .nav-group-label{opacity:0;pointer-events:none;transition:opacity .1s}
+.sidebar.collapsed .nav-item{padding:10px 0;justify-content:center}
+.sidebar.collapsed .nav-icon{margin-right:0;font-size:1.2rem}
+.main-wrap{margin-left:var(--sidebar-w);flex:1;display:flex;flex-direction:column;height:100vh;overflow:hidden;transition:margin-left .2s ease}
+.main-wrap.expanded{margin-left:var(--sidebar-collapsed)}
+
+/* ===== HEADER ===== */
+.header{height:var(--header-h);background:var(--bg-secondary);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 24px;flex-shrink:0}
+.header-left{display:flex;align-items:center;gap:12px}
+.header-title{font-size:1.1rem;font-weight:600}
+.header-right{display:flex;align-items:center;gap:12px}
+.user-btn{display:flex;align-items:center;gap:8px;padding:6px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);cursor:pointer;font-size:.85rem;transition:all .2s}
+.user-btn:hover{background:var(--bg-hover)}
+.avatar{width:28px;height:28px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:.75rem;color:#fff;flex-shrink:0}
+.dropdown{position:relative}
+.dropdown-menu{position:absolute;top:100%;right:0;margin-top:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);min-width:200px;box-shadow:var(--shadow-lg);z-index:200;display:none;overflow:hidden}
+.dropdown-menu.show{display:block}
+.dropdown-item{padding:10px 16px;display:flex;align-items:center;gap:8px;cursor:pointer;font-size:.85rem;color:var(--text-primary);transition:background .15s;border:none;background:none;width:100%;text-align:left;font-family:inherit}
+.dropdown-item:hover{background:var(--bg-hover)}
+.dropdown-divider{height:1px;background:var(--border);margin:4px 0}
+
+/* ===== SIDEBAR NAV ===== */
+.sidebar-header{padding:16px 20px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);flex-shrink:0;height:var(--header-h)}
+.sidebar-brand{font-size:1rem;font-weight:700;white-space:nowrap}
+.sidebar-logo{font-size:1.4rem}
+.sidebar-nav{flex:1;overflow-y:auto;padding:8px 0}
+.nav-section{padding:4px 0}
+.nav-divider{padding:8px 20px;font-size:.7rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 20px;cursor:pointer;color:var(--text-secondary);font-size:.88rem;transition:all .15s;border-left:3px solid transparent;white-space:nowrap}
+.nav-item:hover{color:var(--text-primary);background:var(--bg-hover)}
+.nav-item.active{color:#fff;background:var(--accent-subtle);border-left-color:var(--accent)}
+.nav-item .nav-icon{width:20px;text-align:center;flex-shrink:0;font-size:1rem}
+.nav-item .nav-text{flex:1}
+.nav-item .nav-arrow{font-size:.7rem;transition:transform .2s;color:var(--text-muted)}
+.nav-item.group-expanded .nav-arrow{transform:rotate(90deg)}
+.nav-group-items{overflow:hidden;max-height:0;transition:max-height .3s ease}
+.nav-group-items.expanded{max-height:600px}
+.nav-group-items .nav-item{padding-left:44px;font-size:.84rem}
+.sidebar-footer{padding:12px 20px;border-top:1px solid var(--border);flex-shrink:0}
+.collapse-btn{display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--text-muted);font-size:.82rem;background:none;border:none;width:100%;padding:6px 0;font-family:inherit}
+.collapse-btn:hover{color:var(--text-primary)}
+.admin-section{display:none}
+.admin-section.visible{display:block}
+
+/* ===== MAIN CONTENT ===== */
+.content{flex:1;overflow-y:auto;padding:0}
+.content-inner{padding:24px;max-width:1400px}
+.page-header{margin-bottom:24px}
+.page-header h2{font-size:1.5rem;font-weight:600;margin-bottom:4px}
+.page-header p{color:var(--text-secondary);font-size:.9rem}
+.page-actions{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+
+/* ===== BANNER ===== */
+.upgrade-banner{background:linear-gradient(135deg,rgba(99,102,241,.15),rgba(139,92,246,.1));border:1px solid var(--accent);border-radius:var(--radius);padding:14px 20px;display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;gap:12px;flex-wrap:wrap}
+.upgrade-banner p{font-size:.9rem;color:var(--text-primary);margin:0}
+.upgrade-banner .plan-name{color:var(--accent-hover);font-weight:600}
+.upgrade-banner .banner-actions{display:flex;gap:8px;flex-shrink:0}
+.upgrade-banner.dismissed{display:none}
+
+/* ===== CARDS ===== */
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.card-header{padding:14px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;font-weight:600;font-size:.9rem}
+.card-body{padding:20px}
+.card-footer{padding:12px 20px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:flex-end;gap:8px}
+
+/* ===== STATS GRID ===== */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;margin-bottom:24px}
+.stat-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;transition:all .2s;cursor:default}
+.stat-card:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:var(--shadow)}
+.stat-card .stat-icon{font-size:1.5rem;margin-bottom:8px}
+.stat-card .stat-value{font-size:1.8rem;font-weight:700;margin-bottom:2px}
+.stat-card .stat-label{font-size:.82rem;color:var(--text-secondary)}
+.stat-card.accent{border-left:3px solid var(--accent)}
+
+/* ===== TABLE ===== */
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:10px 14px;font-size:.8rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid var(--border);white-space:nowrap}
+td{padding:10px 14px;font-size:.88rem;border-bottom:1px solid var(--border);color:var(--text-primary)}
+tr:hover td{background:var(--bg-hover)}
+.empty-state{text-align:center;padding:60px 20px;color:var(--text-muted)}
+.empty-state .empty-icon{font-size:3rem;margin-bottom:12px}
+.empty-state h3{font-size:1.1rem;margin-bottom:6px;color:var(--text-secondary)}
+.empty-state p{font-size:.88rem;max-width:400px;margin:0 auto 16px}
+
+/* ===== BADGES ===== */
+.badge{display:inline-flex;padding:3px 10px;border-radius:20px;font-size:.75rem;font-weight:500}
+.badge-primary{background:var(--accent-subtle);color:var(--accent-hover)}
+.badge-success{background:rgba(34,197,94,.12);color:var(--success)}
+.badge-warning{background:rgba(245,158,11,.12);color:var(--warning)}
+.badge-error{background:rgba(239,68,68,.12);color:var(--error)}
+.badge-muted{background:var(--bg-secondary);color:var(--text-muted)}
+
+/* ===== TOASTS ===== */
+.toast-container{position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px}
+.toast{padding:12px 18px;border-radius:var(--radius);font-size:.88rem;box-shadow:var(--shadow-lg);animation:slideIn .3s ease;display:flex;align-items:center;gap:10px;min-width:300px;max-width:450px}
+.toast-success{background:#065f46;color:#d1fae5;border:1px solid #059669}
+.toast-error{background:#7f1d1d;color:#fecaca;border:1px solid #dc2626}
+.toast-info{background:#1e3a5f;color:#dbeafe;border:1px solid #3b82f6}
+.toast-warning{background:#78350f;color:#fef3c7;border:1px solid #f59e0b}
+.toast-close{margin-left:auto;cursor:pointer;opacity:.7;background:none;border:none;color:inherit;font-size:1rem}
+.toast-close:hover{opacity:1}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+
+/* ===== MODAL ===== */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:500;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.modal{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);width:520px;max-width:90vw;max-height:85vh;overflow-y:auto;animation:modalIn .2s ease}
+.modal-lg{width:700px}
+.modal-header{padding:18px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:var(--bg-card);z-index:1}
+.modal-header h3{font-size:1.1rem;font-weight:600}
+.modal-body{padding:24px}
+.modal-footer{padding:14px 24px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;position:sticky;bottom:0;background:var(--bg-card)}
+@keyframes modalIn{from{transform:scale(.95) translateY(10px);opacity:0}to{transform:scale(1) translateY(0);opacity:1}}
+
+/* ===== GRID ===== */
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+@media(max-width:768px){.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}}
+
+/* ===== PROVIDER CARDS ===== */
+.provider-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.provider-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;transition:all .2s}
+.provider-card:hover{border-color:var(--accent)}
+.provider-card.connected{border-color:var(--success)}
+.provider-card .provider-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.provider-card .provider-name{font-weight:600;font-size:.95rem}
+.provider-card .provider-status{font-size:.78rem}
+.provider-card .provider-desc{font-size:.82rem;color:var(--text-secondary);margin-bottom:14px}
+.status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
+.status-dot.connected{background:var(--success)}
+.status-dot.disconnected{background:var(--text-muted)}
+
+/* ===== CHAT ===== */
+.chat-container{display:flex;flex-direction:column;height:calc(100vh - 180px);background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.chat-messages{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:12px}
+.chat-msg{padding:10px 14px;border-radius:var(--radius);max-width:80%;font-size:.88rem;line-height:1.5}
+.chat-msg.user{align-self:flex-end;background:var(--accent);color:#fff}
+.chat-msg.assistant{align-self:flex-start;background:var(--bg-secondary);border:1px solid var(--border)}
+.chat-input-area{display:flex;gap:8px;padding:14px;border-top:1px solid var(--border)}
+.chat-input-area input{flex:1;padding:10px 14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-size:.88rem;outline:none}
+.chat-input-area input:focus{border-color:var(--accent)}
+.chat-msg .msg-role{font-size:.72rem;color:var(--text-muted);margin-bottom:4px}
+
+/* ===== SEARCH BAR ===== */
+.search-bar{display:flex;gap:8px;margin-bottom:16px}
+.search-bar input{flex:1;padding:10px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-size:.88rem;outline:none}
+.search-bar input:focus{border-color:var(--accent)}
+
+/* ===== TOGGLE ===== */
+.toggle{position:relative;display:inline-block;width:44px;height:24px}
+.toggle input{opacity:0;width:0;height:0}
+.toggle-slider{position:absolute;cursor:pointer;inset:0;background:var(--border);border-radius:24px;transition:.2s}
+.toggle-slider:before{position:absolute;content:'';height:18px;width:18px;left:3px;bottom:3px;background:var(--text-primary);border-radius:50%;transition:.2s}
+.toggle input:checked+.toggle-slider{background:var(--accent)}
+.toggle input:checked+.toggle-slider:before{transform:translateX(20px)}
+
+/* ===== CONFIG LIST ===== */
+.config-list{display:flex;flex-direction:column;gap:1px;background:var(--border);border-radius:var(--radius);overflow:hidden}
+.config-item{background:var(--bg-card);padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+.config-item .config-info{flex:1}
+.config-item .config-label{font-weight:500;font-size:.9rem}
+.config-item .config-desc{font-size:.8rem;color:var(--text-secondary);margin-top:2px}
+
+/* ===== PLANS ===== */
+.plans-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}
+.plan-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;text-align:center;transition:all .2s;position:relative}
+.plan-card:hover{border-color:var(--accent)}
+.plan-card.current{border-color:var(--accent);background:var(--accent-subtle)}
+.plan-card .plan-badge{position:absolute;top:12px;right:12px}
+.plan-card .plan-name{font-size:1.1rem;font-weight:600;margin-bottom:4px}
+.plan-card .plan-price{font-size:2rem;font-weight:700;margin:12px 0}
+.plan-card .plan-price span{font-size:.9rem;color:var(--text-secondary);font-weight:400}
+.plan-card .plan-features{list-style:none;padding:0;margin:16px 0;text-align:left}
+.plan-card .plan-features li{padding:6px 0;font-size:.85rem;color:var(--text-secondary);display:flex;align-items:center;gap:8px}
+.plan-card .plan-features li.check{color:var(--text-primary)}
+
+/* ===== PLACEHOLDER ===== */
+.placeholder-panel{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;text-align:center}
+.placeholder-panel .placeholder-icon{font-size:3.5rem;margin-bottom:16px}
+.placeholder-panel h3{font-size:1.2rem;margin-bottom:8px}
+.placeholder-panel p{color:var(--text-secondary);font-size:.9rem;max-width:450px;margin:0 auto 20px}
+
+/* ===== LOADING ===== */
+.spinner{display:inline-block;width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-wrap{display:flex;align-items:center;justify-content:center;padding:40px;gap:12px;color:var(--text-secondary)}
+
+.hidden{display:none!important}
+</style>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/favicon.svg"></head>
+<body>
+
+
+<div id="loginScreen" class="login-wrap">
+  <div class="login-card">
+    <div class="logo">🏢</div>
+    <h1>CoreSwift CRM</h1>
+    <p class="sub">Admin Dashboard</p>
+    <div id="loginError" class="login-error"></div>
+    <div class="form-group">
+      <label>Email</label>
+      <input type="email" id="loginEmail" placeholder="admin@example.com" value="">
+    </div>
+    <div class="form-group">
+      <label>Password</label>
+      <input type="password" id="loginPassword" placeholder="Enter password">
+    </div>
+    <button class="btn btn-primary btn-block" onclick="doLogin()">Sign In</button>
+  </div>
+</div>
+
+
+<div id="appWrap" class="hidden" style="display:none">
+  <!-- SIDEBAR -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <span class="sidebar-logo">🏢</span>
+      <span class="sidebar-brand sidebar-brand-text">CoreSwift CRM</span>
+    </div>
+    <nav class="sidebar-nav" id="sidebarNav">
+    </nav>
+    <div class="sidebar-footer">
+      <button class="collapse-btn" onclick="toggleSidebar()">
+        <span id="collapseIcon">◀</span>
+        <span class="nav-text">Collapse</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div class="main-wrap" id="mainWrap">
+    <header class="header">
+      <div class="header-left">
+        <span class="header-title" id="pageTitle">Dashboard</span>
+      </div>
+      <div class="header-right">
+        <div class="dropdown">
+          <button class="user-btn" onclick="toggleUserMenu()">
+            <div class="avatar" id="userAvatar">S</div>
+            <span id="userEmail">admin</span>
+            <span style="font-size:.7rem">▾</span>
+          </button>
+          <div class="dropdown-menu" id="userMenu">
+            <button class="dropdown-item" onclick="switchTab('profile')">👤 Profile</button>
+            <button class="dropdown-item" onclick="switchTab('billing')">💳 Plans &amp; Billing</button>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-item" onclick="logout()" style="color:var(--error)">🚪 Sign Out</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div class="content" id="mainContent">
+      <div class="content-inner">
+        <div id="upgradeBanner" class="upgrade-banner dismissed">
+          <p>You're on the <span class="plan-name" id="currentPlanName">Free</span> plan. <span>Upgrade for more features.</span></p>
+          <div class="banner-actions">
+            <button class="btn btn-primary btn-sm" onclick="openUpgradeModal()">Upgrade Now</button>
+            <button class="btn btn-ghost btn-sm" onclick="dismissBanner()">Dismiss</button>
+          </div>
+        </div>
+        <div id="tabPanels"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST CONTAINER -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- MODAL CONTAINER -->
+<div id="modalContainer"></div>
+
+<script>
+
+
+
+const STATE = {
+  token: null,
+  user: null,
+  activeTab: 'dashboard',
+  sidebarCollapsed: false,
+  planName: 'Free',
+  providers: {},
+  integrations: {}
+};
+
+const API = {
+  async call(method, path, body) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (STATE.token) headers['Authorization'] = `Bearer ${STATE.token}`;
+    const opts = { method, headers };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch('/api' + path, opts);
+    if (res.status === 401) { logout(true); throw new Error('Session expired'); }
+    if (res.status === 402) { showUpgradeBanner(); throw new Error('Payment required'); }
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { const e = await res.json(); msg = e.error || e.message || msg; } catch(_){}
+      throw new Error(msg);
+    }
+    return res.status === 204 ? null : res.json();
+  },
+  get(path) { return this.call('GET', path); },
+  post(path, body) { return this.call('POST', path, body); },
+  put(path, body) { return this.call('PUT', path, body); },
+  patch(path, body) { return this.call('PATCH', path, body); },
+  del(path) { return this.call('DELETE', path); }
+};
+
+// ── Features & Plans: per-plan feature toggles ───────────────────────────────
+// Source of truth is GET /api/billing/plans/registry (the same 21-key registry the
+// server enforces). The server denies with 402 when a plan's flag is explicitly false;
+// an ABSENT key means allowed.
+let FP_DATA = null;
+
+async function loadFeatureMatrix() {
+  const wrap = document.getElementById('fpWrap');
+  if (!wrap) return;
+  try {
+    const d = await API.get('/billing/plans/registry');
+    FP_DATA = d;
+    const plans = d.plans || [], feats = d.features || [];
+    if (!plans.length || !feats.length) {
+      wrap.innerHTML = '<div style="padding:20px;color:var(--text-muted)">Registry returned no plans or no features.</div>';
+      return;
+    }
+    let h = '<div style="overflow:auto"><table style="width:100%;border-collapse:collapse;min-width:820px">' +
+      '<thead><tr><th style="text-align:left;padding:10px;border-bottom:2px solid var(--border,#333)">Feature</th>';
+    plans.forEach(p => {
+      h += '<th style="text-align:center;padding:10px;border-bottom:2px solid var(--border,#333)">' +
+           escapeHtml(p.name || p.slug) + '</th>';
+    });
+    h += '</tr></thead><tbody>';
+    feats.forEach(f => {
+      h += '<tr><td style="padding:10px;border-bottom:1px solid var(--border,#2a2a2a)">' +
+        '<strong>' + escapeHtml(f.label) + '</strong><br>' +
+        '<span style="color:var(--text-muted);font-size:12px">' + escapeHtml(f.key) +
+        ' &middot; ' + escapeHtml(f.module) + '</span></td>';
+      plans.forEach(p => {
+        const v = (p.features || {})[f.key];
+        const on = v === true;
+        h += '<td style="text-align:center;padding:10px;border-bottom:1px solid var(--border,#2a2a2a)">' +
+          '<input type="checkbox" style="width:18px;height:18px;cursor:pointer"' +
+          ' data-plan="' + escapeHtml(p.id) + '" data-slug="' + escapeHtml(p.slug) + '"' +
+          ' data-key="' + escapeHtml(f.key) + '"' + (on ? ' checked' : '') +
+          ' onchange="toggleFeature(this)" title="' +
+          (v === undefined ? 'not set on this plan (allowed)' : (on ? 'enabled' : 'disabled')) + '">' +
+          (v === undefined ? '<div style="font-size:11px;color:var(--text-muted)">unset</div>' : '') +
+          '</td>';
+      });
+      h += '</tr>';
+    });
+    h += '</tbody></table></div>' +
+      '<p style="color:var(--text-secondary);margin-top:14px;max-width:820px">' +
+      'An <strong>unset</strong> box means the plan does not mention that feature, which the server treats as ' +
+      '<em>allowed</em> (so existing tenants are never silently stripped). Unticking writes an explicit ' +
+      '<code>false</code> and is what actually denies the request with HTTP 402. Changes save immediately.</p>';
+    wrap.innerHTML = h;
+  } catch (e) {
+    wrap.innerHTML = '<div style="padding:20px;color:var(--danger,#f66)">Could not load the registry: ' +
+      escapeHtml(e.message) + '</div>';
+  }
+}
+
+async function toggleFeature(el) {
+  const planId = el.dataset.plan, slug = el.dataset.slug, key = el.dataset.key;
+  const on = el.checked;
+  el.disabled = true;
+  try {
+    // features is replaced whole (COALESCE), never merged — so merge client-side or the
+    // plan loses its numeric limits.
+    const plan = ((FP_DATA && FP_DATA.plans) || []).find(p => p.id === planId);
+    const merged = Object.assign({}, (plan && plan.features) || {});
+    merged[key] = on;
+    await API.patch('/billing/plans/' + planId, { features: merged });
+    if (plan) plan.features = merged;
+    toast(key + ' turned ' + (on ? 'ON' : 'OFF') + ' for ' + slug, 'success');
+  } catch (e) {
+    el.checked = !on;
+    toast('Save failed: ' + e.message, 'error');
+  } finally {
+    el.disabled = false;
+  }
+}
+
+// Toast
+function toast(msg, type='info') {
+  const c = document.getElementById('toastContainer');
+  const icons = { success:'✓', error:'✕', info:'ℹ', warning:'⚠' };
+  const t = document.createElement('div');
+  t.className = 'toast toast-'+type;
+  t.innerHTML = `<span>${icons[type]||''}</span><span>${escapeHtml(msg)}</span><button class="toast-close" onclick="this.parentElement.remove()">✕</button>`;
+  c.appendChild(t);
+  setTimeout(() => { if(t.parentElement) t.remove(); }, 5000);
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// Modal
+function showModal(title, bodyHtml, footerHtml, large) {
+  const c = document.getElementById('modalContainer');
+  c.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+      <div class="modal${large?' modal-lg':''}">
+        <div class="modal-header">
+          <h3>${title}</h3>
+          <button class="btn-icon" onclick="closeModal()">✕</button>
+        </div>
+        <div class="modal-body">${bodyHtml}</div>
+        ${footerHtml ? `<div class="modal-footer">${footerHtml}</div>` : ''}
+      </div>
+    </div>`;
+}
+function closeModal() { document.getElementById('modalContainer').innerHTML = ''; }
+
+// Auth
+async function doLogin() {
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  const errEl = document.getElementById('loginError');
+  if (!email || !password) { errEl.textContent = 'Please enter email and password.'; errEl.style.display='block'; return; }
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({email, password})
+    });
+    if (!res.ok) {
+      let msg = 'Invalid credentials';
+      try { const e = await res.json(); msg = e.error || e.message || msg; } catch(_){}
+      throw new Error(msg);
+    }
+    const data = await res.json();
+    STATE.token = data.access_token || data.token;
+    // The API returns `team_member` and NEVER `user`, so `data.user || {...role:'agency_admin'}`
+    // always fell through and stamped EVERY login as a platform admin — which silently
+    // defeated the role-filtered nav (every tenant rendered the platform menu).
+    // Read the real role; a missing role must never default to a platform one.
+    const acct = data.team_member || data.user || {};
+    STATE.user = Object.assign({ email: email, name: email.split('@')[0] }, acct);
+    if (!STATE.user.role) STATE.user.role = 'member';
+    localStorage.setItem('crm_token', STATE.token);
+    localStorage.setItem('crm_user', JSON.stringify(STATE.user));
+    showApp();
+    toast('Welcome back, ' + (STATE.user.name || STATE.user.email), 'success');
+  } catch(e) {
+    errEl.textContent = e.message;
+    errEl.style.display = 'block';
+  }
+}
+
+function logout(silent) {
+  STATE.token = null;
+  STATE.user = null;
+  localStorage.removeItem('crm_token');
+  localStorage.removeItem('crm_user');
+  document.getElementById('appWrap').style.display = 'none';
+  document.getElementById('loginScreen').style.display = 'flex';
+  if (!silent) toast('Signed out', 'info');
+}
+
+function showApp() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('appWrap').style.display = '';
+  document.getElementById('userEmail').textContent = STATE.user.email;
+  document.getElementById('userAvatar').textContent = (STATE.user.name || STATE.user.email)[0].toUpperCase();
+  renderSidebar();
+  switchTab('dashboard');
+  checkPlan();
+}
+
+// Sidebar
+function toggleSidebar() {
+  STATE.sidebarCollapsed = !STATE.sidebarCollapsed;
+  document.getElementById('sidebar').classList.toggle('collapsed', STATE.sidebarCollapsed);
+  document.getElementById('mainWrap').classList.toggle('expanded', STATE.sidebarCollapsed);
+  document.getElementById('collapseIcon').textContent = STATE.sidebarCollapsed ? '▶' : '◀';
+}
+
+function toggleUserMenu() {
+  document.getElementById('userMenu').classList.toggle('show');
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('.dropdown')) {
+    document.getElementById('userMenu').classList.remove('show');
+  }
+});
+
+// ===== SIDEBAR MENU DEFINITION =====
+const MENU = [
+  { id:'dashboard', icon:'📊', label:'Dashboard' },
+  { id:'contacts', icon:'👥', label:'Contacts' },
+  { id:'companies', icon:'🏢', label:'Companies' },
+  { type:'group', icon:'💰', label:'Sales', children:[
+    { id:'pipelines', icon:'📈', label:'Pipelines & Deals' }
+  ]},
+  { type:'group', icon:'📣', label:'Marketing', children:[
+    { id:'campaigns', icon:'📢', label:'Campaigns' },
+    { id:'lists', icon:'📋', label:'Lists' },
+    { id:'analytics', icon:'📊', label:'Analytics' }
+  ]},
+  { type:'group', icon:'⚡', label:'Automation', children:[
+    { id:'rules', icon:'⚙️', label:'Rules' },
+    { id:'tags', icon:'🏷️', label:'Tags' },
+    { id:'lead-scoring', icon:'🎯', label:'Lead Scoring' }
+  ]},
+  { type:'group', icon:'💬', label:'Communication', children:[
+    { id:'email-templates', icon:'✉️', label:'Email Templates' },
+    { id:'messages', icon:'💬', label:'Messages' },
+    { id:'notifications', icon:'🔔', label:'Notifications' },
+    { id:'telnyx', icon:'📱', label:'Telnyx SMS/Voice' },
+    { id:'comm-log', icon:'📜', label:'Communications Log' }
+  ]},
+  { id:'tickets', icon:'🎫', label:'Support Tickets' },
+  { type:'group', icon:'📬', label:'Inbox', children:[
+    { id:'inbox', icon:'📬', label:'Private Email' }
+  ]},
+  { id:'calendar', icon:'📅', label:'Calendar' },
+  { id:'bookings', icon:'📆', label:'Bookings' },
+  { id:'ai-assistant', icon:'🤖', label:'AI Assistant' },
+  { id:'tracked-links', icon:'🔗', label:'Tracked Links' },
+  { type:'group', icon:'🔄', label:'Workflow', children:[
+    { id:'checklists', icon:'✅', label:'Checklists' },
+    { id:'round-robin', icon:'🔄', label:'Round Robin' }
+  ]}
+];
+
+const SETTINGS_MENU = [
+  { id:'profile', icon:'👤', label:'Profile' },
+  { id:'integrations', icon:'🔌', label:'Integration Center' }
+];
+
+const ADMIN_MENU = [
+  { id:'portfolio', icon:'🏢', label:'Portfolio Companies' },
+  { id:'users', icon:'👥', label:'Users' },
+  { type:'group', icon:'💰', label:'Revenue', children:[
+    { id:'billing', icon:'💳', label:'Billing & Plans' },
+    { id:'affiliates', icon:'🤝', label:'Affiliates' }
+  ]},
+  { type:'group', icon:'🔧', label:'Platform', children:[
+    { id:'widgets', icon:'🧩', label:'Widgets' },
+    { id:'webhooks', icon:'🔗', label:'Webhooks' },
+    { id:'native-apps', icon:'📱', label:'Native Apps' },
+    { id:'audit-log', icon:'📝', label:'Audit Log' },
+    { id:'monitoring', icon:'📡', label:'Monitoring' }
+  ]},
+  { type:'group', icon:'📡', label:'Communication Admin', children:[
+    { id:'telnyx-admin', icon:'☎️', label:'Telnyx Admin' },
+    { id:'email-admin', icon:'📧', label:'Private Email Admin' }
+  ]},
+  { id:'features-plans', icon:'🧩', label:'Features & Plans' },
+  { type:'group', icon:'⚙️', label:'Admin Settings', children:[
+    { id:'configuration', icon:'⚙️', label:'Configuration' }
+  ]}
+];
+
+function renderSidebar() {
+  const nav = document.getElementById('sidebarNav');
+  let h = '';
+  function item(it, indent) {
+    const isGroup = it.type === 'group';
+    if (isGroup) {
+      const gid = 'group-'+it.label.toLowerCase().replace(/[^a-z]/g,'');
+      h += `<div class="nav-item" onclick="toggleGroup('${gid}')" data-group="${gid}">
+        <span class="nav-icon">${it.icon}</span>
+        <span class="nav-text">${it.label}</span>
+        <span class="nav-arrow">▶</span>
+      </div>`;
+      h += `<div class="nav-group-items" id="${gid}">`;
+      it.children.forEach(c => item(c, true));
+      h += '</div>';
+    } else {
+      h += `<div class="nav-item${STATE.activeTab===it.id?' active':''}" onclick="switchTab('${it.id}')" data-tab="${it.id}">
+        <span class="nav-icon">${it.icon}</span>
+        <span class="nav-text">${it.label}</span>
+      </div>`;
+    }
+  }
+  MENU.forEach(it => item(it, false));
+  h += '<div class="nav-divider">── SETTINGS ──</div>';
+  SETTINGS_MENU.forEach(it => item(it, false));
+  // Admin menu is for platform operators — the DB uses three admin vocabularies
+  // ('agency_admin' for the platform admin, 'owner'/'admin' for tenant owners).
+  // Platform operators ONLY. 'owner'/'admin' are TENANT-owner vocabularies above — every
+  // real tenant user is 'owner', so including them exposed the whole platform menu
+  // (Features & Plans, Site Configuration, Telnyx/Email admin, Billing, Users) to customers.
+  // The server rejects them anyway (tenant -> 403 on the plan registry), so this was a UI
+  // leak that dead-ends on an error, not an escalation. Keep tenant-visible items in MENU
+  // or SETTINGS_MENU instead.
+  const PLATFORM_ROLES = ['agency_admin', 'platform_admin', 'superadmin'];
+  if (STATE.user && PLATFORM_ROLES.indexOf(STATE.user.role) >= 0) {
+    h += '<div class="nav-divider">── ADMIN ──</div>';
+    ADMIN_MENU.forEach(it => item(it, false));
+  }
+  nav.innerHTML = h;
+
+  // Restore expanded groups
+  document.querySelectorAll('.nav-group-items').forEach(g => {
+    if (STATE.expandedGroups && STATE.expandedGroups[g.id]) {
+      g.classList.add('expanded');
+      const btn = g.previousElementSibling;
+      if (btn) btn.classList.add('group-expanded');
+    }
+  });
+}
+
+function toggleGroup(gid) {
+  const items = document.getElementById(gid);
+  const btn = document.querySelector(`[data-group="${gid}"]`);
+  if (!items) return;
+  const isExpanded = items.classList.toggle('expanded');
+  if (btn) btn.classList.toggle('group-expanded', isExpanded);
+  if (!STATE.expandedGroups) STATE.expandedGroups = {};
+  STATE.expandedGroups[gid] = isExpanded;
+}
+
+function switchTab(tabId) {
+  STATE.activeTab = tabId;
+  document.getElementById('pageTitle').textContent = getTabLabel(tabId);
+  // Update sidebar active
+  document.querySelectorAll('.nav-item[data-tab]').forEach(el => {
+    el.classList.toggle('active', el.dataset.tab === tabId);
+  });
+  renderTab(tabId);
+  // Close user menu
+  document.getElementById('userMenu').classList.remove('show');
+}
+
+function getTabLabel(id) {
+  const all = [...MENU, ...SETTINGS_MENU, ...ADMIN_MENU];
+  for (const it of all) {
+    if (it.id === id) return it.label;
+    if (it.type === 'group' && it.children) {
+      for (const c of it.children) if (c.id === id) return c.label;
+    }
+  }
+  return id.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+}
+
+
+
+// ===== UPGRADE BANNER =====
+async function checkPlan() {
+  try {
+    const plans = await API.get('/billing/plans');
+    if (plans && plans.length > 0) {
+      // Find user's current plan or default to first
+      const current = plans.find(p => p.is_current || p.is_default) || plans[0];
+      STATE.planName = current.name || 'Free';
+      document.getElementById('currentPlanName').textContent = STATE.planName;
+      if (STATE.planName.toLowerCase() === 'free' || STATE.planName.toLowerCase() === 'starter') {
+        if (!localStorage.getItem('crm_banner_dismissed')) {
+          showUpgradeBanner();
+        }
+      }
+    }
+  } catch(e) {
+    // Plan endpoint might not exist — that's fine
+  }
+}
+
+function showUpgradeBanner() {
+  document.getElementById('upgradeBanner').classList.remove('dismissed');
+}
+
+function dismissBanner() {
+  document.getElementById('upgradeBanner').classList.add('dismissed');
+  localStorage.setItem('crm_banner_dismissed', '1');
+}
+
+async function openUpgradeModal() {
+  let plansHtml = '<div class="loading-wrap"><div class="spinner"></div> Loading plans...</div>';
+  showModal('Upgrade Your Plan', plansHtml, '', true);
+  try {
+    const plans = await API.get('/billing/plans');
+    if (!plans || plans.length === 0) {
+      document.querySelector('#modalContainer .modal-body').innerHTML = '<p class="empty-state">No plans available</p>';
+      return;
+    }
+    plansHtml = '<div class="plans-grid">';
+    plans.forEach(p => {
+      const isCurrent = p.name === STATE.planName;
+      const price = p.price_monthly || p.price || 0;
+      const features = (p.features || []).slice(0, 6);
+      plansHtml += `<div class="plan-card${isCurrent?' current':''}">
+        ${isCurrent ? '<span class="badge badge-primary plan-badge">Current</span>' : ''}
+        <div class="plan-name">${escapeHtml(p.name)}</div>
+        <div class="plan-price">$${price}<span>/mo</span></div>
+        <ul class="plan-features">
+          ${features.map(f => `<li class="check">✓ ${escapeHtml(typeof f==='string'?f:f.name||f)}</li>`).join('')}
+        </ul>
+        <button class="btn ${isCurrent ? 'btn-secondary' : 'btn-primary'} btn-block" ${isCurrent?'disabled':''}>
+          ${isCurrent ? 'Current Plan' : 'Upgrade'}
+        </button>
+      </div>`;
+    });
+    plansHtml += '</div>';
+    document.querySelector('#modalContainer .modal-body').innerHTML = plansHtml;
+  } catch(e) {
+    document.querySelector('#modalContainer .modal-body').innerHTML = `<p style="color:var(--error)">Failed to load plans: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+// ===== TAB RENDERING =====
+function renderTab(tabId) {
+  const container = document.getElementById('tabPanels');
+  const fn = TAB_RENDERERS[tabId];
+  if (fn) {
+    container.innerHTML = fn();
+    // If there's an async loader, call it
+    if (TAB_LOADERS[tabId]) {
+      TAB_LOADERS[tabId]();
+    }
+  } else {
+    container.innerHTML = placeholderPanel(getTabLabel(tabId), 'This feature is under development.', '🚧');
+  }
+}
+
+function placeholderPanel(title, desc, icon) {
+  return `<div class="placeholder-panel">
+    <div class="placeholder-icon">${icon||'🚧'}</div>
+    <h3>${title}</h3>
+    <p>${desc||'Configure this feature to get started.'}</p>
+    <button class="btn btn-secondary" onclick="switchTab('integrations')">🔌 Open Integration Center</button>
+  </div>`;
+}
+
+function pageHeader(title, desc, actions) {
+  return `<div class="page-header">
+    <h2>${title}</h2>
+    ${desc ? `<p>${desc}</p>` : ''}
+    ${actions ? `<div class="page-actions">${actions}</div>` : ''}
+  </div>`;
+}
+
+function card(header, body, footer) {
+  return `<div class="card">
+    ${header ? `<div class="card-header">${header}</div>` : ''}
+    ${body ? `<div class="card-body">${body}</div>` : ''}
+    ${footer ? `<div class="card-footer">${footer}</div>` : ''}
+  </div>`;
+}
+
+function dataTable(headers, rows, emptyMsg) {
+  if (!rows || rows.length === 0) {
+    return `<div class="card"><div class="card-body"><div class="empty-state">
+      <div class="empty-icon">📭</div>
+      <h3>No data yet</h3>
+      <p>${emptyMsg || 'Nothing to display right now.'}</p>
+    </div></div></div>`;
+  }
+  return `<div class="card"><div class="table-wrap"><table>
+    <thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody>
+  </table></div></div>`;
+}
+
+// ========== SYNC TAB RENDERERS (no API calls needed) ==========
+const TAB_RENDERERS = {
+  'dashboard': () => {
+    return pageHeader('Dashboard', 'Overview of your CRM performance') +
+    '<div class="stats-grid" id="statsGrid"><div class="loading-wrap"><div class="spinner"></div> Loading stats...</div></div>' +
+    '<div id="dashboardExtra"></div>';
+  },
+
+  'contacts': () => {
+    return pageHeader('Contacts', 'Manage your contacts and leads',
+      '<button class="btn btn-primary btn-sm" onclick="showAddContactModal()">+ Add Contact</button>') +
+    '<div class="search-bar"><input type="text" placeholder="Search contacts..." oninput="filterContacts(this.value)"></div>' +
+    '<div id="contactsTable"><div class="loading-wrap"><div class="spinner"></div> Loading contacts...</div></div>';
+  },
+
+  'companies': () => {
+    return pageHeader('Companies', 'Organizations in your CRM',
+      '<button class="btn btn-primary btn-sm" onclick="showAddCompanyModal()">+ Add Company</button>') +
+    '<div class="search-bar"><input type="text" placeholder="Search companies..." oninput="filterCompanies(this.value)"></div>' +
+    '<div id="companiesTable"><div class="loading-wrap"><div class="spinner"></div> Loading companies...</div></div>';
+  },
+
+  'pipelines': () => {
+    return pageHeader('Pipelines & Deals', 'Track deals through your sales pipeline',
+      '<button class="btn btn-primary btn-sm" onclick="showAddDealModal()">+ Add Deal</button>') +
+    '<div id="pipelinesContent"><div class="loading-wrap"><div class="spinner"></div> Loading pipelines...</div></div>';
+  },
+
+  'campaigns': () => {
+    return pageHeader('Campaigns', 'Marketing campaigns and outreach',
+      '<button class="btn btn-primary btn-sm" onclick="showAddCampaignModal()">+ New Campaign</button>') +
+    '<div id="campaignsTable"><div class="loading-wrap"><div class="spinner"></div> Loading campaigns...</div></div>';
+  },
+
+  'lists': () => {
+    return pageHeader('Lists', 'Contact lists for segmentation',
+      '<button class="btn btn-primary btn-sm" onclick="showAddListModal()">+ New List</button>') +
+    '<div id="listsTable"><div class="loading-wrap"><div class="spinner"></div> Loading lists...</div></div>';
+  },
+
+  'analytics': () => {
+    return pageHeader('Analytics', 'Campaign and pipeline performance metrics') +
+    '<div class="stats-grid">' +
+      '<div class="stat-card"><div class="stat-icon">📧</div><div class="stat-value">--</div><div class="stat-label">Emails Sent</div></div>' +
+      '<div class="stat-card"><div class="stat-icon">👆</div><div class="stat-value">--</div><div class="stat-label">Open Rate</div></div>' +
+      '<div class="stat-card"><div class="stat-icon">🖱️</div><div class="stat-value">--</div><div class="stat-label">Click Rate</div></div>' +
+      '<div class="stat-card"><div class="stat-icon">💰</div><div class="stat-value">--</div><div class="stat-label">Conversion Rate</div></div>' +
+    '</div>' +
+    card('Campaign Performance', '<p style="color:var(--text-secondary)">Connect your email provider in the Integration Center to populate analytics data.</p>',
+    '<button class="btn btn-secondary btn-sm" onclick="switchTab(&#39;integrations&#39;)">🔌 Open Integration Center</button>');
+  },
+
+  'rules': () => {
+    return pageHeader('Automation Rules', 'IF-THIS-THEN-THAT automation engine',
+      '<button class="btn btn-primary btn-sm" onclick="showAddRuleModal()">+ New Rule</button>') +
+    '<div id="rulesContent">' +
+      card('How It Works', '<p style="color:var(--text-secondary);margin-bottom:12px">Create powerful automations with a simple trigger → action model.</p>' +
+        '<div class="grid-2" style="margin-top:12px">' +
+          '<div style="background:var(--bg-secondary);padding:14px;border-radius:var(--radius);border:1px solid var(--border)"><strong>📥 Triggers</strong><br><small style="color:var(--text-secondary)">Contact created, deal stage changed, form submitted, tag added, email opened, link clicked...</small></div>' +
+          '<div style="background:var(--bg-secondary);padding:14px;border-radius:var(--radius);border:1px solid var(--border)"><strong>📤 Actions</strong><br><small style="color:var(--text-secondary)">Send email, add to list, update deal, create task, notify, webhook...</small></div>' +
+        '</div>', '') +
+    '</div>';
+  },
+
+  'tags': () => {
+    return pageHeader('Tags', 'Organize contacts with tags',
+      '<button class="btn btn-primary btn-sm" onclick="showAddTagModal()">+ New Tag</button>') +
+    '<div id="tagsTable"><div class="loading-wrap"><div class="spinner"></div> Loading tags...</div></div>';
+  },
+
+  'lead-scoring': () => {
+    return pageHeader('Lead Scoring', 'Score leads based on behavior and attributes',
+      '<button class="btn btn-primary btn-sm" onclick="showAddScoreRuleModal()">+ Add Criterion</button>') +
+    '<p style="color:var(--text-secondary);margin-bottom:16px">Define scoring criteria. Leads accumulate points based on their actions and profile attributes.</p>' +
+    '<div id="scoringContent">' +
+      card('Score Criteria', '' +
+        '<div class="config-list">' +
+          '<div class="config-item"><div class="config-info"><div class="config-label">Email Opened</div><div class="config-desc">+5 points when a lead opens an email</div></div><span class="badge badge-primary">+5 pts</span></div>' +
+          '<div class="config-item"><div class="config-info"><div class="config-label">Link Clicked</div><div class="config-desc">+10 points when a lead clicks a tracked link</div></div><span class="badge badge-primary">+10 pts</span></div>' +
+          '<div class="config-item"><div class="config-info"><div class="config-label">Form Submitted</div><div class="config-desc">+20 points when a lead submits a form</div></div><span class="badge badge-primary">+20 pts</span></div>' +
+          '<div class="config-item"><div class="config-info"><div class="config-label">Deal Created</div><div class="config-desc">+30 points when a lead enters a pipeline</div></div><span class="badge badge-primary">+30 pts</span></div>' +
+        '</div>', '<button class="btn btn-primary btn-sm">Save Criteria</button>') +
+      '<br>' +
+      card('Score Thresholds', '' +
+        '<div class="config-list">' +
+          '<div class="config-item"><div class="config-info"><div class="config-label">🔴 Cold</div><div class="config-desc">0-20 points</div></div><span class="badge badge-muted">Cold</span></div>' +
+          '<div class="config-item"><div class="config-info"><div class="config-label">🟡 Warm</div><div class="config-desc">21-50 points</div></div><span class="badge badge-warning">Warm</span></div>' +
+          '<div class="config-item"><div class="config-info"><div class="config-label">🟢 Hot</div><div class="config-desc">51+ points</div></div><span class="badge badge-success">Hot</span></div>' +
+        '</div>', '') +
+    '</div>';
+  },
+
+  'email-templates': () => {
+    return pageHeader('Email Templates', 'Reusable email templates',
+      '<button class="btn btn-primary btn-sm" onclick="showAddTemplateModal()">+ New Template</button>') +
+    '<div id="templatesTable"><div class="loading-wrap"><div class="spinner"></div> Loading templates...</div></div>';
+  },
+
+  'messages': () => {
+    return pageHeader('Messages', 'Send and manage communications',
+      '<button class="btn btn-primary btn-sm" onclick="showComposeModal()">✏️ Compose</button>') +
+    '<div id="messagesContent">' +
+      card('Recent Messages', '<div class="empty-state"><div class="empty-icon">💬</div><h3>No messages yet</h3><p>Connect a messaging provider in the Integration Center.</p></div>',
+        '<button class="btn btn-secondary btn-sm" onclick="switchTab(&#39;integrations&#39;)">🔌 Integration Center</button>') +
+    '</div>';
+  },
+
+  'notifications': () => {
+    return pageHeader('Notifications', 'Platform notifications and alerts') +
+    card('Notification Settings', '' +
+      '<div class="config-list">' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">New Contact Added</div><div class="config-desc">Notify when a new contact is created</div></div><label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label></div>' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">Deal Stage Changed</div><div class="config-desc">Notify when a deal moves between stages</div></div><label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label></div>' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">Email Opened</div><div class="config-desc">Notify when a sent email is opened</div></div><label class="toggle"><input type="checkbox"><span class="toggle-slider"></span></label></div>' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">Task Due</div><div class="config-desc">Remind when tasks are approaching due date</div></div><label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label></div>' +
+      '</div>', '<button class="btn btn-primary btn-sm">Save Settings</button>');
+  },
+
+  'telnyx': () => placeholderPanel('Telnyx SMS/Voice', 'Connect your Telnyx account in the Integration Center to send SMS and make calls.', '📱'),
+
+  'comm-log': () => {
+    return pageHeader('Communications Log', 'History of all communications') +
+    card('Communication History', '<div class="empty-state"><div class="empty-icon">📜</div><h3>No communications yet</h3><p>Your communications log will appear here once you start sending messages.</p></div>');
+  },
+
+  'tickets': () => {
+    return pageHeader('Support Tickets', 'Manage customer support tickets',
+      '<button class="btn btn-primary btn-sm" onclick="showAddTicketModal()">+ New Ticket</button>') +
+    '<div id="ticketsTable"><div class="loading-wrap"><div class="spinner"></div> Loading tickets...</div></div>';
+  },
+
+  'inbox': () => placeholderPanel('Private Email', 'Connect a mail provider (Mailgun, SendGrid) in the Integration Center to enable private email inboxes.', '📬'),
+
+  'calendar': () => {
+    return pageHeader('Calendar', 'Schedule and manage events',
+      '<button class="btn btn-primary btn-sm" onclick="showAddEventModal()">+ New Event</button>') +
+    '<div id="calendarContent"><div class="loading-wrap"><div class="spinner"></div> Loading events...</div></div>';
+  },
+
+  'bookings': () => placeholderPanel('Bookings', 'Manage appointments and bookings. Share your booking link for self-scheduling.', '📆'),
+
+  'ai-assistant': () => {
+    return pageHeader('AI Assistant', 'Your AI-powered CRM assistant') +
+    '<div class="chat-container">' +
+      '<div class="chat-messages" id="chatMessages">' +
+        '<div class="chat-msg assistant">' +
+          '<div class="msg-role">AI Assistant</div>' +
+          'Connect an LLM provider (OpenAI, DeepSeek, Anthropic) in the <a href="#" onclick="switchTab(&#39;integrations&#39;)">Integration Center</a> to get started.' +
+        '</div>' +
+      '</div>' +
+      '<div class="chat-input-area">' +
+        '<select id="chatModel" style="padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-size:.85rem">' +
+          '<option value="">Select model...</option>' +
+        '</select>' +
+        '<input type="text" id="chatInput" placeholder="Ask me anything about your CRM..." onkeydown="if(event.key===&#39;Enter&#39;)sendChat()">' +
+        '<button class="btn btn-primary" onclick="sendChat()">Send</button>' +
+      '</div>' +
+    '</div>';
+  },
+
+  'tracked-links': () => {
+    return pageHeader('Tracked Links', 'Generate trackable URLs for campaigns',
+      '<button class="btn btn-primary btn-sm" onclick="showAddLinkModal()">+ Generate Link</button>') +
+    card('Tracked Links', '<div class="empty-state"><div class="empty-icon">🔗</div><h3>No tracked links yet</h3><p>Generate tracked URLs to monitor clicks and conversions.</p></div>');
+  },
+
+  'checklists': () => placeholderPanel('Checklists', 'Create and manage task checklists for deals, onboarding, and workflows.', '✅'),
+
+  'round-robin': () => {
+    return pageHeader('Round Robin', 'Distribute leads evenly across your team',
+      '<button class="btn btn-primary btn-sm" onclick="showAddMemberModal()">+ Add Member</button>') +
+    '<p style="color:var(--text-secondary);margin-bottom:16px">Configure round robin assignment rules to automatically distribute new contacts to team members.</p>' +
+    card('Team Members', '' +
+      '<div class="config-list" id="roundRobinMembers">' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">No team members added</div><div class="config-desc">Add team members to the rotation</div></div><span class="badge badge-muted">0 leads</span></div>' +
+      '</div>',
+      '<button class="btn btn-primary btn-sm">Start Rotation</button>') +
+    '<br>' +
+    card('Assignment Rules', '' +
+      '<div class="config-list">' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">Assignment Mode</div><div class="config-desc">How leads are distributed</div></div><select style="padding:6px 10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary)"><option>Round Robin (Sequential)</option><option>Weighted (by capacity)</option><option>Random</option></select></div>' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">Max Leads Per Member</div><div class="config-desc">Cap before skipping to next member</div></div><input type="number" value="10" style="width:80px;padding:6px 10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary)"></div>' +
+      '</div>', '<button class="btn btn-primary btn-sm">Save Rules</button>');
+  },
+
+  // === SETTINGS ===
+  'profile': () => {
+    return pageHeader('Profile Settings', 'Manage your account') +
+    card('Profile Information', '' +
+      '<div class="form-group"><label>Name</label><input type="text" id="profileName" value="' + (STATE.user ? escapeHtml(STATE.user.name || '') : '') + '"></div>' +
+      '<div class="form-group"><label>Email</label><input type="email" value="' + (STATE.user ? escapeHtml(STATE.user.email) : '') + '" disabled style="opacity:.6"> <span class="form-hint">Email cannot be changed</span></div>',
+      '<button class="btn btn-primary" onclick="saveProfile()">Save Changes</button>') +
+    '<br>' +
+    card('Change Password', '' +
+      '<div class="form-group"><label>Current Password</label><input type="password" id="currentPw"></div>' +
+      '<div class="form-group"><label>New Password</label><input type="password" id="newPw"></div>' +
+      '<div class="form-group"><label>Confirm New Password</label><input type="password" id="confirmPw"></div>',
+      '<button class="btn btn-primary" onclick="changePassword()">Update Password</button>');
+  },
+
+  'integrations': () => {
+    return pageHeader('Integration Center', 'Your lead-capture apps and provider keys — every credential here is stored against THIS account (BYOK), never as a platform-wide default') +
+    card('🧭 How data flows',
+      '<p style="color:var(--text-secondary);margin:0">CoreSwift is the hub: the capture apps on this page <strong>push their leads INTO this account</strong> ' +
+      '(capture app &rarr; CoreSwift), and CoreSwift is the single home for them. Connecting an app stores the key that lets that app deliver here. ' +
+      'Provider keys below are the BYOK keys your own features call (email, SMS, LLM).</p>') +
+    '<div id="icLeadSourcesWrap" data-ops="ic-lead-sources"><div class="loading-wrap"><div class="spinner"></div> Loading lead sources...</div></div>' +
+    '<br>' +
+    '<div id="icKeysWrap" data-ops="ic-personal-keys"><div class="loading-wrap"><div class="spinner"></div> Loading API keys...</div></div>' +
+    '<br>' +
+    '<div id="icNativeWrap" data-ops="ic-native"><div class="loading-wrap"><div class="spinner"></div> Loading native connectors...</div></div>' +
+    '<br>' +
+    '<div id="icProviderWrap" data-ops="ic-providers"><div class="loading-wrap"><div class="spinner"></div> Loading provider keys...</div></div>' +
+    '<br>' +
+    '<div id="icUpgradeWrap" data-ops="ic-upgrades"></div>';
+  },
+
+  // === ADMIN ===
+  'portfolio': () => {
+    return pageHeader('Portfolio Companies', 'Every portfolio company on the platform, with cross-app sync',
+      '<button class="btn btn-secondary btn-sm" data-ops="portfolio-sync-open" onclick="showPortfolioSyncModal()">🔄 Sync New Company</button>' +
+      '<button class="btn btn-primary btn-sm" data-ops="portfolio-company-add" onclick="showAddPortfolioModal()">+ Add Company</button>') +
+    '<div id="portfolioTable" data-ops="portfolio-companies"><div class="loading-wrap"><div class="spinner"></div> Loading portfolio companies...</div></div>';
+  },
+  'users': () => {
+    return pageHeader('Users', 'Manage platform users and permissions',
+      '<button class="btn btn-primary btn-sm" onclick="showAddUserModal()">+ Add User</button>') +
+    '<div id="usersTable"><div class="loading-wrap"><div class="spinner"></div> Loading users...</div></div>';
+  },
+  'billing': () => {
+    return pageHeader('Billing & Plans', 'Manage subscription plans and pricing') +
+    '<div id="plansContent"><div class="loading-wrap"><div class="spinner"></div> Loading plans...</div></div>';
+  },
+  'affiliates': () => placeholderPanel('Affiliates', 'Manage your affiliate program — track referrals, commissions, and payouts.', '🤝'),
+  'widgets': () => placeholderPanel('Widgets', 'Embeddable CRM widgets for your website — contact forms, chat, booking.', '🧩'),
+  'webhooks': () => placeholderPanel('Webhooks', 'Configure outgoing webhooks for real-time event notifications.', '🔗'),
+  'native-apps': () => {
+    return pageHeader('Native App Connectors', 'Global config for the native connector layer (AdaSwift, FunnelSwift, ZaarHub, WorkflowSwift)',
+      '<button class="btn btn-primary btn-sm" data-ops="native-app-config-set" onclick="showNativeConfigModal()">+ Set App Config</button>') +
+    '<div id="nativeConfigsTable" data-ops="native-app-configs"><div class="loading-wrap"><div class="spinner"></div> Loading app configs...</div></div>';
+  },
+  'audit-log': () => {
+    return pageHeader('Audit Log', 'Track all platform activity',
+      '<button class="btn btn-secondary btn-sm">Export CSV</button>') +
+    card('Activity Log', '<div class="empty-state"><div class="empty-icon">📝</div><h3>No audit entries</h3><p>Audit log entries will appear as users interact with the platform.</p></div>');
+  },
+  'monitoring': () => {
+    return pageHeader('Monitoring', 'Server and platform health') +
+    '<div class="stats-grid">' +
+      '<div class="stat-card accent"><div class="stat-icon">🟢</div><div class="stat-value">99.9%</div><div class="stat-label">Uptime</div></div>' +
+      '<div class="stat-card"><div class="stat-icon">⚡</div><div class="stat-value">45ms</div><div class="stat-label">Avg Response</div></div>' +
+      '<div class="stat-card"><div class="stat-icon">💾</div><div class="stat-value">34%</div><div class="stat-label">Disk Usage</div></div>' +
+      '<div class="stat-card"><div class="stat-icon">🧠</div><div class="stat-value">2.1GB</div><div class="stat-label">Memory Used</div></div>' +
+    '</div>' +
+    card('Service Status', '' +
+      '<div class="config-list">' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">API Server</div></div><span class="badge badge-success">● Online</span></div>' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">Database</div></div><span class="badge badge-success">● Online</span></div>' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">n8n</div></div><span class="badge badge-success">● Online</span></div>' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">Redis</div></div><span class="badge badge-success">● Online</span></div>' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">Email Service</div></div><span class="badge badge-warning">● Degraded</span></div>' +
+      '</div>', '<button class="btn btn-secondary btn-sm">Refresh</button>');
+  },
+  'telnyx-admin': () => placeholderPanel('Telnyx Admin', 'Configure Telnyx provider settings for all tenants.', '☎️'),
+  'email-admin': () => {
+    return pageHeader('Private Email Admin', 'Per-tenant email limits, data retention and purge controls',
+      '<button class="btn btn-danger btn-sm" data-ops="pe-purge" onclick="showPurgeModal()">🧨 Run Purge</button>') +
+    '<div id="peLimitsTable" data-ops="pe-limits"><div class="loading-wrap"><div class="spinner"></div> Loading tenant overrides...</div></div>' +
+    '<br>' +
+    card('Tenant Retention', '<div class="form-group"><label>Tenant</label><select id="peRetTenant" data-ops="pe-retention"></select></div>' +
+      '<div class="form-group"><label>Retention (days, 30–3650)</label><input type="number" id="peRetDays" min="30" max="3650" value="365"></div>' +
+      '<p class="form-hint" id="peRetStatus">Pick a tenant, press “Load Current”, then save. Saving creates the override row if the tenant has none.</p>',
+      '<button class="btn btn-secondary" data-ops="pe-retention-load" onclick="loadRetentionForTenant()">Load Current</button>' +
+      '<button class="btn btn-primary" data-ops="pe-retention-save" onclick="saveRetentionForTenant()">Save Retention</button>') +
+    '<br>' +
+    card('🧨 Purge Expired Email Data', '<p style="color:var(--text-secondary)">Deletes private-email data older than each tenant’s retention window. Destructive and irreversible — the purge control always requires an explicit typed confirmation.</p>',
+      '<button class="btn btn-danger" data-ops="pe-purge-open" onclick="showPurgeModal()">Open Purge Control</button>');
+  },
+  // The old 'provider-keys' admin panel (a stub whose copy read "Global API key management
+  // for all providers") is retired: it contradicted the BYOK rule — keys are per-tenant,
+  // entered in the Integration Center, and there is no global paste. Its nav entry is gone
+  // too, so there is exactly one place to manage credentials.
+  'features-plans': () => {
+    let html = pageHeader('Features & Plans', 'Turn modules on or off per plan — enforced on every request') +
+      '<div id="fpWrap"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading feature registry...</div></div>';
+    loadFeatureMatrix();
+    return html;
+  },
+  'configuration': () => {
+    let html = pageHeader('Site Configuration', 'SEO, analytics, legal pages, and homepage settings') +
+    '<div id="siteConfigForm" style="max-width:900px"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading site settings...</div></div>';
+    loadSiteConfig();
+    return html;
+  }
+};
+
+
+
+
+// ========== SITE CONFIG ==========
+let SITE_CONFIG = null;
+
+async function loadSiteConfig() {
+  try {
+    SITE_CONFIG = await API.get('/admin/site');
+    renderSiteConfigForm();
+  } catch(e) {
+    document.getElementById('siteConfigForm').innerHTML =
+      '<div class="card" style="text-align:center;padding:40px"><p style="color:var(--error)">Failed to load site config: '+escapeHtml(e.message)+'</p>'+
+      '<button class="btn btn-secondary btn-sm" onclick="loadSiteConfig()">Retry</button></div>';
+  }
+}
+
+function renderSiteConfigForm() {
+  const s = SITE_CONFIG || {};
+  const input = (key, label, desc, type, placeholder) => {
+    const val = s[key] || '';
+    return '<div class="config-item"><div class="config-info"><div class="config-label">'+label+'</div><div class="config-desc">'+desc+'</div></div>'+
+      (type==='textarea'
+        ? '<textarea id="cfg_'+key+'" style="width:400px;min-height:80px;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-family:inherit;resize:vertical" placeholder="'+escapeHtml(placeholder||'')+'">'+escapeHtml(val)+'</textarea>'
+        : '<input id="cfg_'+key+'" type="'+type+'" value="'+escapeHtmlAttr(val)+'" placeholder="'+escapeHtml(placeholder||'')+'" style="width:400px;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">')+
+      '</div>';
+  };
+  const toggle = (key, label, desc) =>
+    '<div class="config-item"><div class="config-info"><div class="config-label">'+label+'</div><div class="config-desc">'+desc+'</div></div><label class="toggle"><input id="cfg_'+key+'" type="checkbox"'+ (s[key] ? ' checked' : '') +'><span class="toggle-slider"></span></label></div>';
+
+  let html = '';
+
+  // SEO Section
+  html += '<div class="card" style="margin-bottom:20px"><div class="card-header">🌐 SEO &amp; Meta</div><div class="card-body"><div class="config-list">';
+  html += toggle('enable_signups', 'Enable Signups', 'Allow new users to register');
+  html += toggle('maintenance_mode', 'Maintenance Mode', 'Put the platform in maintenance mode');
+  html += input('title', 'Page Title', 'Browser tab title (50-60 chars)', 'text', 'CoreSwift CRM | Smart CRM');
+  html += input('description', 'Meta Description', 'Search snippet (150-160 chars)', 'text', 'All-in-one CRM platform...');
+  html += input('keywords', 'Meta Keywords', 'Comma-separated keywords', 'text', 'CRM, sales, pipeline...');
+  html += input('og_title', 'OG Title', 'Open Graph / social share title', 'text', 'CoreSwift CRM — All-in-One Platform');
+  html += input('og_description', 'OG Description', 'Open Graph / social share description', 'text', 'Automated follow-ups...');
+  html += input('og_image_url', 'OG Image URL', 'Full URL to social share image (1200x630px)', 'text', 'https://coreswiftcrm.com/og.png');
+  html += input('favicon_url', 'Favicon URL', 'Browser tab icon URL', 'text', 'https://coreswiftcrm.com/favicon.ico');
+  html += input('canonical_url', 'Canonical URL', 'Preferred URL for search engines', 'text', 'https://coreswiftcrm.com');
+  html += '</div></div></div>';
+
+  // Analytics
+  html += '<div class="card" style="margin-bottom:20px"><div class="card-header">📊 Analytics &amp; Tracking</div><div class="card-body"><div class="config-list">';
+  html += input('ga_id', 'Google Analytics ID', 'e.g. G-XXXXXXXXXX or UA-XXXXX-X', 'text', 'G-XXXXXXXXXX');
+  html += input('gtm_id', 'Google Tag Manager ID', 'e.g. GTM-XXXXXXX', 'text', 'GTM-XXXXXXX');
+  html += input('head_scripts', 'Head Scripts', 'Custom scripts in <head> (one per line)', 'textarea', '<scr' + 'ipt>...</scr' + 'ipt>');
+  html += input('body_scripts', 'Body Scripts', 'Custom scripts before </body>', 'textarea', '<scr' + 'ipt>...</scr' + 'ipt>');
+  html += '</div></div></div>';
+
+  // Homepage
+  html += '<div class="card" style="margin-bottom:20px"><div class="card-header">🏠 Homepage Content</div><div class="card-body"><div class="config-list">';
+  const hp = s.homepage || {};
+  html += '<div class="config-item"><div class="config-info"><div class="config-label">Headline</div><div class="config-desc">Main hero headline on the marketing page</div></div>'+
+    '<input id="cfg_homepage_headline" type="text" value="'+escapeHtmlAttr(hp.headline||'')+'" placeholder="The CRM That Works While You Sleep" style="width:400px;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"></div>';
+  html += '<div class="config-item"><div class="config-info"><div class="config-label">Sub-headline</div><div class="config-desc">Supporting text below the main headline</div></div>'+
+    '<input id="cfg_homepage_subheadline" type="text" value="'+escapeHtmlAttr(hp.subheadline||'')+'" placeholder="Automated follow-ups, smart pipelines..." style="width:400px;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"></div>';
+  html += '</div></div></div>';
+
+  // Legal Pages
+  html += '<div class="card" style="margin-bottom:20px"><div class="card-header">📜 Legal Pages</div><div class="card-body"><div class="config-list">';
+  html += input('legal_tos', 'Terms of Service', 'Full ToS content (HTML allowed)', 'textarea', '<h2>Terms of Service</h2>...');
+  html += input('legal_privacy', 'Privacy Policy', 'Full privacy policy content (HTML allowed)', 'textarea', '<h2>Privacy Policy</h2>...');
+  html += input('legal_refunds', 'Refund &amp; Cancellation Policy', 'Full refunds policy content (HTML allowed)', 'textarea', '<h2>Refund Policy</h2>...');
+  html += '</div></div></div>';
+
+  // Schema.org
+  html += '<div class="card" style="margin-bottom:20px"><div class="card-header">📋 Schema.org JSON-LD</div><div class="card-body"><div class="config-list">';
+  html += input('schema_json', 'JSON-LD Schema', 'Structured data for search engines (valid JSON)', 'textarea', '{"@context":"https://schema.org"...}');
+  html += '</div></div></div>';
+
+  // Rate Limiting + Session
+  html += '<div class="card" style="margin-bottom:20px"><div class="card-header">⚙️ Platform Settings</div><div class="card-body"><div class="config-list">';
+  html += input('rate_limit', 'Rate Limit', 'Requests per minute per user', 'number', '60');
+  html += input('session_timeout', 'Session Timeout (min)', 'Auto-logout after inactivity', 'number', '30');
+  html += '</div></div></div>';
+
+  html += '<br><button class="btn btn-primary" onclick="saveSiteConfig()">💾 Save Site Configuration</button> ';
+  html += '<button class="btn btn-secondary" onclick="loadSiteConfig()">🔄 Reload</button>';
+
+  document.getElementById('siteConfigForm').innerHTML = html;
+}
+
+async function saveSiteConfig() {
+  const getVal = (id) => {
+    const el = document.getElementById(id);
+    if (!el) return '';
+    if (el.type === 'checkbox') return el.checked;
+    return el.value;
+  };
+
+  const payload = {
+    title: getVal('cfg_title'),
+    description: getVal('cfg_description'),
+    keywords: getVal('cfg_keywords'),
+    og_title: getVal('cfg_og_title'),
+    og_description: getVal('cfg_og_description'),
+    og_image_url: getVal('cfg_og_image_url'),
+    favicon_url: getVal('cfg_favicon_url'),
+    canonical_url: getVal('cfg_canonical_url'),
+    ga_id: getVal('cfg_ga_id'),
+    gtm_id: getVal('cfg_gtm_id'),
+    head_scripts: getVal('cfg_head_scripts'),
+    body_scripts: getVal('cfg_body_scripts'),
+    homepage: {
+      headline: getVal('cfg_homepage_headline'),
+      subheadline: getVal('cfg_homepage_subheadline')
+    },
+    legal_tos: getVal('cfg_legal_tos'),
+    legal_privacy: getVal('cfg_legal_privacy'),
+    legal_refunds: getVal('cfg_legal_refunds'),
+    schema_json: getVal('cfg_schema_json'),
+    enable_signups: getVal('cfg_enable_signups'),
+    maintenance_mode: getVal('cfg_maintenance_mode'),
+    rate_limit: parseInt(getVal('cfg_rate_limit')) || 60,
+    session_timeout: parseInt(getVal('cfg_session_timeout')) || 30
+  };
+
+  try {
+    const res = await API.put('/admin/site', payload);
+    toast('Site configuration saved. Marketing HTML + legal pages regenerated.', 'success');
+    SITE_CONFIG = { ...SITE_CONFIG, ...payload };
+  } catch(e) {
+    toast('Save failed: ' + e.message, 'error');
+  }
+}
+
+function escapeHtmlAttr(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ========== ASYNC TAB LOADERS (fetch real data) ==========
+const TAB_LOADERS = {
+  'dashboard': async () => {
+    try {
+      const stats = await API.get('/dashboard/stats');
+      let html = '';
+      if (stats) {
+        const items = [
+          { icon:'👥', label:'Total Contacts', value: stats.total_contacts || stats.contacts || 0 },
+          { icon:'🏢', label:'Companies', value: stats.total_companies || stats.companies || 0 },
+          { icon:'💰', label:'Active Deals', value: stats.active_deals || stats.deals || 0 },
+          { icon:'📈', label:'Pipelines', value: stats.pipelines || stats.active_pipelines || 0 },
+          { icon:'🎫', label:'Open Tickets', value: stats.open_tickets || stats.tickets || 0 },
+          { icon:'📧', label:'Emails Sent', value: stats.emails_sent || 0 },
+          { icon:'📅', label:'Events This Week', value: stats.events_this_week || 0 },
+          { icon:'🔗', label:'Tracked Links', value: stats.tracked_links || 0 },
+        ];
+        items.forEach(it => {
+          html += `<div class="stat-card${it.icon==='👥'?' accent':''}">
+            <div class="stat-icon">${it.icon}</div>
+            <div class="stat-value">${it.value}</div>
+            <div class="stat-label">${it.label}</div>
+          </div>`;
+        });
+      }
+      document.getElementById('statsGrid').innerHTML = html || '<div class="empty-state"><p>No stats available</p></div>';
+    } catch(e) {
+      document.getElementById('statsGrid').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats endpoint unavailable — will populate once backend routes are active.</p></div></div>`;
+    }
+  },
+
+  'contacts': async () => {
+    try {
+      const contacts = await API.get('/contacts');
+      let rows = [];
+      if (Array.isArray(contacts)) {
+        rows = contacts.slice(0, 50).map(c => [
+          escapeHtml(c.name || c.full_name || '—'),
+          escapeHtml(c.email || '—'),
+          escapeHtml(c.phone || '—'),
+          escapeHtml(c.company || c.company_name || '—'),
+          `<span class="badge ${(c.status||'').toLowerCase()==='active'?'badge-success':'badge-muted'}">${escapeHtml(c.status || 'active')}</span>`,
+          `<button class="btn btn-ghost btn-xs" onclick="editContact('${c.id}')">Edit</button>`
+        ]);
+      }
+      document.getElementById('contactsTable').innerHTML = dataTable(
+        ['Name','Email','Phone','Company','Status',''], rows,
+        'No contacts yet. Add your first contact to get started.'
+      );
+    } catch(e) {
+      document.getElementById('contactsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Contacts endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'companies': async () => {
+    try {
+      const companies = await API.get('/companies');
+      let rows = [];
+      if (Array.isArray(companies)) {
+        rows = companies.slice(0, 50).map(c => [
+          escapeHtml(c.name || '—'),
+          escapeHtml(c.industry || '—'),
+          escapeHtml(c.website || '—'),
+          c.contact_count || c.contacts_count || '0',
+          `<span class="badge badge-muted">${escapeHtml(c.status || 'active')}</span>`,
+          `<button class="btn btn-ghost btn-xs" onclick="editCompany('${c.id}')">Edit</button>`
+        ]);
+      }
+      document.getElementById('companiesTable').innerHTML = dataTable(
+        ['Name','Industry','Website','Contacts','Status',''], rows,
+        'No companies yet. Add your first company.'
+      );
+    } catch(e) {
+      document.getElementById('companiesTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Companies endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'pipelines': async () => {
+    try {
+      const pipelines = await API.get('/pipelines');
+      let html = '';
+      if (Array.isArray(pipelines) && pipelines.length > 0) {
+        pipelines.forEach(p => {
+          html += `<div class="card" style="margin-bottom:16px">
+            <div class="card-header">📈 ${escapeHtml(p.name || 'Pipeline')} <span class="badge badge-primary">${p.deals_count || p.deal_count || 0} deals</span></div>
+            <div class="card-body">
+              <div class="table-wrap"><table>
+                <thead><tr><th>Deal</th><th>Contact</th><th>Value</th><th>Stage</th><th></th></tr></thead>
+                <tbody>`;
+          const deals = p.deals || [];
+          if (deals.length === 0) {
+            html += '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No deals in this pipeline</td></tr>';
+          } else {
+            deals.forEach(d => {
+              html += `<tr>
+                <td>${escapeHtml(d.name || d.title || 'Deal')}</td>
+                <td>${escapeHtml(d.contact_name || '—')}</td>
+                <td>${d.value ? '$'+d.value : '—'}</td>
+                <td><span class="badge badge-warning">${escapeHtml(d.stage || 'New')}</span></td>
+                <td><button class="btn btn-ghost btn-xs">View</button></td>
+              </tr>`;
+            });
+          }
+          html += '</tbody></table></div></div></div>';
+        });
+      } else {
+        html = '<div class="card"><div class="card-body"><div class="empty-state"><div class="empty-icon">📈</div><h3>No pipelines yet</h3><p>Create your first sales pipeline to start tracking deals.</p></div></div></div>';
+      }
+      document.getElementById('pipelinesContent').innerHTML = html;
+    } catch(e) {
+      document.getElementById('pipelinesContent').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Pipelines endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'campaigns': async () => {
+    try {
+      const campaigns = await API.get('/campaigns');
+      let rows = [];
+      if (Array.isArray(campaigns)) {
+        rows = campaigns.slice(0, 50).map(c => [
+          escapeHtml(c.name || '—'),
+          `<span class="badge badge-primary">${escapeHtml(c.type || 'email')}</span>`,
+          escapeHtml(c.status || 'draft'),
+          c.sent_count || c.sent || 0,
+          c.open_rate ? c.open_rate+'%' : '—',
+          `<button class="btn btn-ghost btn-xs">Edit</button>`
+        ]);
+      }
+      document.getElementById('campaignsTable').innerHTML = dataTable(
+        ['Name','Type','Status','Sent','Open Rate',''], rows,
+        'No campaigns yet. Launch your first marketing campaign.'
+      );
+    } catch(e) {
+      document.getElementById('campaignsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Campaigns endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'lists': async () => {
+    try {
+      const lists = await API.get('/lists');
+      let rows = [];
+      if (Array.isArray(lists)) {
+        rows = lists.slice(0, 50).map(l => [
+          escapeHtml(l.name || '—'),
+          l.contact_count || l.count || 0,
+          `<span class="badge badge-muted">${escapeHtml(l.type || 'static')}</span>`,
+          escapeHtml(l.created_at ? new Date(l.created_at).toLocaleDateString() : '—'),
+          `<button class="btn btn-ghost btn-xs">View</button>`
+        ]);
+      }
+      document.getElementById('listsTable').innerHTML = dataTable(
+        ['Name','Contacts','Type','Created',''], rows,
+        'No lists yet. Create a list to segment your contacts.'
+      );
+    } catch(e) {
+      document.getElementById('listsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Lists endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'tags': async () => {
+    try {
+      const tags = await API.get('/tags');
+      let html = '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+      if (Array.isArray(tags) && tags.length > 0) {
+        tags.forEach(t => {
+          html += `<span class="badge" style="background:${t.color||'var(--accent-subtle)'};color:${t.color?'#fff':'var(--accent-hover)'};padding:6px 14px;font-size:.85rem;cursor:pointer">${escapeHtml(t.name||t.label)}</span>`;
+        });
+      } else {
+        html = '<div class="card" style="width:100%"><div class="card-body"><div class="empty-state"><div class="empty-icon">🏷️</div><h3>No tags yet</h3><p>Create tags to organize your contacts.</p></div></div></div>';
+      }
+      html += '</div>';
+      document.getElementById('tagsTable').innerHTML = html;
+    } catch(e) {
+      document.getElementById('tagsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tags endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'email-templates': async () => {
+    try {
+      const templates = await API.get('/templates');
+      let rows = [];
+      if (Array.isArray(templates)) {
+        rows = templates.slice(0, 50).map(t => [
+          escapeHtml(t.name || '—'),
+          escapeHtml(t.subject || '—'),
+          `<span class="badge badge-muted">${escapeHtml(t.type || 'email')}</span>`,
+          escapeHtml(t.updated_at ? new Date(t.updated_at).toLocaleDateString() : '—'),
+          `<button class="btn btn-ghost btn-xs">Edit</button>`
+        ]);
+      }
+      document.getElementById('templatesTable').innerHTML = dataTable(
+        ['Name','Subject','Type','Updated',''], rows,
+        'No templates yet. Create reusable email templates.'
+      );
+    } catch(e) {
+      document.getElementById('templatesTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Templates endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'tickets': async () => {
+    try {
+      const tickets = await API.get('/tickets');
+      let rows = [];
+      if (Array.isArray(tickets)) {
+        rows = tickets.slice(0, 50).map(t => [
+          escapeHtml(t.subject || t.title || '—'),
+          `<span class="badge ${t.status==='open'?'badge-error':t.status==='in_progress'?'badge-warning':'badge-success'}">${escapeHtml(t.status||'open')}</span>`,
+          escapeHtml(t.priority || 'normal'),
+          escapeHtml(t.contact_name || t.requester || '—'),
+          escapeHtml(t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'),
+          `<button class="btn btn-ghost btn-xs">View</button>`
+        ]);
+      }
+      document.getElementById('ticketsTable').innerHTML = dataTable(
+        ['Subject','Status','Priority','Contact','Created',''], rows,
+        'No support tickets. Great job keeping customers happy!'
+      );
+    } catch(e) {
+      document.getElementById('ticketsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tickets endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'calendar': async () => {
+    try {
+      const events = await API.get('/calendar/events');
+      let rows = [];
+      if (Array.isArray(events)) {
+        rows = events.slice(0, 50).map(e => [
+          escapeHtml(e.title || e.name || '—'),
+          escapeHtml(e.date || e.start_date || '—'),
+          escapeHtml(e.time || e.start_time || '—'),
+          `<span class="badge badge-muted">${escapeHtml(e.type || 'meeting')}</span>`,
+          escapeHtml(e.location || '—'),
+          `<button class="btn btn-ghost btn-xs">Edit</button>`
+        ]);
+      }
+      document.getElementById('calendarContent').innerHTML = dataTable(
+        ['Event','Date','Time','Type','Location',''], rows,
+        'No events scheduled. Add your first calendar event.'
+      );
+    } catch(e) {
+      document.getElementById('calendarContent').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Calendar endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'integrations': async () => {
+    await loadIntegrationCenter();
+  },
+
+  'billing': async () => {
+    try {
+      const plans = await API.get('/billing/plans');
+      let html = '';
+      if (Array.isArray(plans) && plans.length > 0) {
+        html = '<div class="plans-grid">';
+        plans.forEach(p => {
+          const price = p.price_monthly || p.price || 0;
+          const features = (p.features || []).slice(0, 6);
+          html += `<div class="plan-card">
+            <div class="plan-name">${escapeHtml(p.name)}</div>
+            <div class="plan-price">$${price}<span>/mo</span></div>
+            <ul class="plan-features">
+              ${features.map(f => `<li class="check">✓ ${escapeHtml(typeof f==='string'?f:f.name||f)}</li>`).join('')}
+            </ul>
+            <button class="btn btn-secondary btn-sm btn-block">Edit Plan</button>
+          </div>`;
+        });
+        html += '</div>';
+      } else {
+        html = '<div class="card"><div class="card-body"><div class="empty-state"><div class="empty-icon">💳</div><h3>No plans defined</h3><p>Create subscription plans for your platform.</p></div></div></div>';
+      }
+      document.getElementById('plansContent').innerHTML = html;
+    } catch(e) {
+      document.getElementById('plansContent').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Plans endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'users': async () => {
+    try {
+      const users = await API.get('/users');
+      let rows = [];
+      if (Array.isArray(users)) {
+        rows = users.slice(0, 50).map(u => [
+          escapeHtml(u.name || '—'),
+          escapeHtml(u.email || '—'),
+          `<span class="badge ${u.role==='agency_admin'?'badge-primary':'badge-muted'}">${escapeHtml(u.role||'user')}</span>`,
+          escapeHtml(u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'),
+          `<button class="btn btn-ghost btn-xs">Edit</button>`
+        ]);
+      }
+      document.getElementById('usersTable').innerHTML = dataTable(
+        ['Name','Email','Role','Created',''], rows,
+        'No users yet.'
+      );
+    } catch(e) {
+      document.getElementById('usersTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Users endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  // === ROUND 7 ADMIN OPS LOADERS ===
+
+  'portfolio': async () => {
+    const el = document.getElementById('portfolioTable');
+    if (!el) return;
+    try {
+      const data = await API.get('/admin/portfolio-companies');
+      const companies = (data && data.portfolio_companies) || [];
+      const rows = companies.map(c => [
+        escapeHtml(c.name || '—'),
+        escapeHtml(c.slug || '—'),
+        escapeHtml(c.email || '—'),
+        c.is_active ? '<span class="badge badge-success">active</span>' : '<span class="badge badge-muted">inactive</span>',
+        escapeHtml(c.created_at ? new Date(c.created_at).toLocaleDateString() : '—'),
+        `<button class="btn btn-ghost btn-xs" data-ops="portfolio-targets-open" onclick="showTargetsModal('${c.id}','${escapeHtmlAttr(c.name || '')}')">Targets</button>`
+      ]);
+      el.innerHTML = dataTable(['Company','Slug','Email','Status','Created',''], rows,
+        'No portfolio companies yet — add one, or run a cross-app sync.');
+    } catch(e) {
+      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Portfolio endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'native-apps': async () => {
+    const el = document.getElementById('nativeConfigsTable');
+    if (!el) return;
+    try {
+      const data = await API.get('/native/apps/admin/configs');
+      const configs = (data && data.admin_configs) || [];
+      const rows = configs.map(c => {
+        const cfg = JSON.stringify(c.config || {});
+        const short = cfg.length > 90 ? cfg.slice(0, 90) + '…' : cfg;
+        return [
+          `<span class="badge badge-primary">${escapeHtml(c.app_slug || '—')}</span>`,
+          `<code style="font-size:.75rem">${escapeHtml(short)}</code>`,
+          escapeHtml(c.updated_at ? new Date(c.updated_at).toLocaleString() : '—'),
+          `<button class="btn btn-ghost btn-xs" data-ops="native-app-config-edit" onclick='showNativeConfigModal(${JSON.stringify(c.app_slug || '')}, ${JSON.stringify(c.config || {})})'>Edit</button>`
+        ];
+      });
+      el.innerHTML = dataTable(['App','Config','Updated',''], rows,
+        'No native app configs stored yet — use “+ Set App Config” to add one (e.g. adaswift base URL).');
+    } catch(e) {
+      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Native app configs endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'email-admin': async () => {
+    const el = document.getElementById('peLimitsTable');
+    const sel = document.getElementById('peRetTenant');
+    if (!el) return;
+    try {
+      if (!PE_TENANTS.length) {
+        try {
+          const td = await API.get('/admin/tenants');
+          PE_TENANTS = (td && td.tenants) || [];
+        } catch(_) { PE_TENANTS = []; }
+      }
+      if (sel) sel.innerHTML = peTenantOptions('');
+      const data = await API.get('/private-email/admin/limits');
+      const list = Array.isArray(data) ? data : ((data && data.limits) || []);
+      const nameOf = id => {
+        const t = PE_TENANTS.filter(x => x.id === id)[0];
+        return t ? (t.name || t.slug || id) : id;
+      };
+      const nz = v => (v === null || v === undefined) ? '—' : v;
+      const rows = list.map(r => [
+        escapeHtml(nameOf(r.tenant_id)),
+        nz(r.retention_days) + ' days',
+        escapeHtml(r.last_purged_at ? new Date(r.last_purged_at).toLocaleString() : 'never'),
+        'domains ' + nz(r.max_domains) + ' · boxes ' + nz(r.max_mailboxes) + ' · aliases ' + nz(r.max_aliases_per_mailbox),
+        `<button class="btn btn-ghost btn-xs" data-ops="pe-retention-row" onclick="useTenantRetention('${r.tenant_id}')">Retention</button>` +
+        `<button class="btn btn-ghost btn-xs" onclick="showPurgeModal('${r.tenant_id}')">Purge</button>`
+      ]);
+      el.innerHTML = dataTable(['Tenant','Retention','Last purge','Limit overrides',''], rows,
+        'No per-tenant email limit overrides yet — set retention below to create one.');
+    } catch(e) {
+      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Private-email admin endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  }
+};
+
+// ========== ROUND 7 — ADMIN OPS CONTROLS ==========
+// Portfolio companies + cross-app sync + integration targets · native app configs ·
+// private-email limits, retention and purge. Every control calls an EXISTING route:
+//   GET    /api/admin/portfolio-companies           POST /api/portfolio
+//   POST   /api/admin/portfolio-sync                GET|POST /api/portfolio/:id/targets
+//   GET    /api/native/apps/admin/configs           PATCH    /api/native/apps/admin/:app_slug
+//   GET    /api/private-email/admin/limits          GET|PATCH /api/private-email/admin/limits/:tenant_id/retention
+//   POST   /api/private-email/admin/purge/run
+let PE_TENANTS = [];
+
+function peTenantOptions(selected) {
+  if (!PE_TENANTS.length) return '<option value="">(no tenants returned)</option>';
+  return '<option value="">— select tenant —</option>' + PE_TENANTS.map(t =>
+    '<option value="' + escapeHtmlAttr(t.id) + '"' + (t.id === selected ? ' selected' : '') + '>' +
+    escapeHtml(t.name || t.slug || t.id) + '</option>').join('');
+}
+
+function showTargetsModal(companyId, companyName) {
+  showModal('Integration Targets — ' + companyName,
+    '<div id="targetsBody" data-ops="portfolio-targets"><div style="text-align:center;padding:20px;color:var(--text-muted)">Loading targets...</div></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Close</button>', true);
+  loadTargets(companyId);
+}
+
+async function loadTargets(companyId) {
+  const el = document.getElementById('targetsBody');
+  if (!el) return;
+  try {
+    const data = await API.get('/portfolio/' + companyId + '/targets');
+    const targets = (data && data.integration_targets) || [];
+    let html = '';
+    if (targets.length) {
+      html += '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Provider</th><th>Webhook URL</th><th>Key</th><th>Events</th><th></th></tr></thead><tbody>';
+      targets.forEach(t => {
+        html += '<tr>' +
+          '<td>' + escapeHtml(t.name || '—') + '</td>' +
+          '<td><span class="badge badge-muted">' + escapeHtml(t.provider || '—') + '</span></td>' +
+          '<td style="word-break:break-all">' + escapeHtml(t.webhook_url || '—') + '</td>' +
+          '<td>' + (t.has_api_key ? escapeHtml(t.api_key_masked || 'set') : '—') + '</td>' +
+          '<td>' + escapeHtml((t.events || []).join(', ') || '—') + '</td>' +
+          '<td>' + (t.is_active ? '✅' : '⛔') + '</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table></div>';
+    } else {
+      html += '<p style="color:var(--text-secondary);margin-bottom:12px">No integration targets for this portfolio company yet.</p>';
+    }
+    html += '<div class="card" style="margin-top:16px"><div class="card-header">Add Target</div><div class="card-body">' +
+      '<div class="form-group"><label>Name *</label><input type="text" id="tgName" placeholder="e.g. Slack alerts"></div>' +
+      '<div class="form-group"><label>Provider</label><select id="tgProvider"><option value="webhook">webhook</option><option value="n8n">n8n</option><option value="zapier">zapier</option><option value="slack">slack</option><option value="generic">generic</option></select></div>' +
+      '<div class="form-group"><label>Webhook URL *</label><input type="url" id="tgUrl" placeholder="https://..."></div>' +
+      '<div class="form-group"><label>API Key (optional)</label><input type="password" id="tgKey"></div>' +
+      '<div class="form-group"><label>Events (comma separated)</label><input type="text" id="tgEvents" placeholder="contact.created, deal.won"></div>' +
+      '<p class="form-hint">Targets receive portfolio sync events for this company only.</p>' +
+      '</div><div class="card-footer"><button class="btn btn-primary btn-sm" data-ops="portfolio-target-add" onclick="addIntegrationTarget(\'' + companyId + '\')">+ Add Target</button></div></div>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<p style="color:var(--error)">Failed to load targets: ' + escapeHtml(e.message) + '</p>';
+  }
+}
+
+async function addIntegrationTarget(companyId) {
+  const g = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+  const name = g('tgName').trim();
+  const provider = g('tgProvider') || 'webhook';
+  const webhook_url = g('tgUrl').trim();
+  const api_key = g('tgKey').trim();
+  const events = g('tgEvents').split(',').map(s => s.trim()).filter(Boolean);
+  if (!name || !webhook_url) { toast('Name and webhook URL are required', 'error'); return; }
+  const body = { name: name, provider: provider, webhook_url: webhook_url, events: events };
+  if (api_key) body.api_key = api_key;
+  try {
+    await API.post('/portfolio/' + companyId + '/targets', body);
+    toast('Integration target added', 'success');
+    loadTargets(companyId);
+  } catch(e) {
+    toast('Add failed: ' + e.message, 'error');
+  }
+}
+
+function showAddPortfolioModal() {
+  showModal('Add Portfolio Company',
+    '<div class="form-group"><label>Name *</label><input type="text" id="pcName"></div>' +
+    '<div class="form-group"><label>Slug (optional)</label><input type="text" id="pcSlug" placeholder="auto-generated from name"></div>' +
+    '<div class="form-group"><label>Email</label><input type="email" id="pcEmail"></div>' +
+    '<div class="form-group"><label>Description</label><textarea id="pcDesc" rows="3"></textarea></div>' +
+    '<p class="form-hint">Creates the company in your account and broadcasts a create event to every sister app.</p>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" data-ops="portfolio-company-create" onclick="createPortfolioCompany()">Create</button>');
+}
+
+async function createPortfolioCompany() {
+  const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const name = g('pcName');
+  if (!name) { toast('Name is required', 'error'); return; }
+  const body = { name: name };
+  const slug = g('pcSlug'); const email = g('pcEmail'); const desc = g('pcDesc');
+  if (slug) body.slug = slug;
+  if (email) body.email = email;
+  if (desc) body.description = desc;
+  try {
+    await API.post('/portfolio', body);
+    closeModal();
+    toast('Portfolio company created', 'success');
+    if (TAB_LOADERS['portfolio']) TAB_LOADERS['portfolio']();
+  } catch(e) {
+    toast('Create failed: ' + e.message, 'error');
+  }
+}
+
+function showPortfolioSyncModal() {
+  showModal('Cross-App Portfolio Sync',
+    '<p style="color:var(--text-secondary);margin-bottom:12px">Creates a tenant + owner user + portfolio entry and broadcasts to every sister app (FunnelSwift, IncentiveSwift, WorkflowSwift, ADASwift, MissedCall). Use for a brand-new client company; the owner email must not already exist.</p>' +
+    '<div class="form-group"><label>Company Name *</label><input type="text" id="psName"></div>' +
+    '<div class="form-group"><label>Owner Email *</label><input type="email" id="psEmail"></div>' +
+    '<div class="form-group"><label>Description</label><textarea id="psDesc" rows="3"></textarea></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" data-ops="portfolio-sync" onclick="runPortfolioSync()">Run Sync</button>');
+}
+
+async function runPortfolioSync() {
+  const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const name = g('psName'); const email = g('psEmail'); const desc = g('psDesc');
+  if (!email) { toast('Owner email is required', 'error'); return; }
+  try {
+    const res = await API.post('/admin/portfolio-sync', { name: name || 'Company', email: email, description: desc });
+    closeModal();
+    toast('Cross-app sync complete', 'success');
+    showModal('Sync Result', '<pre style="white-space:pre-wrap;font-size:.8rem">' + escapeHtml(JSON.stringify(res, null, 2)) + '</pre>',
+      '<button class="btn btn-primary" onclick="closeModal()">Close</button>');
+    if (TAB_LOADERS['portfolio']) TAB_LOADERS['portfolio']();
+  } catch(e) {
+    toast('Sync failed: ' + e.message, 'error');
+  }
+}
+
+function showNativeConfigModal(appSlug, cfg) {
+  const val = cfg ? JSON.stringify(cfg, null, 2) : '{\n  "base_url": "http://127.0.0.1:8080"\n}';
+  showModal('Native App Config — ' + (appSlug || 'new app'),
+    '<div class="form-group"><label>App Slug *</label><input type="text" id="naSlug" value="' + escapeHtmlAttr(appSlug || '') + '"' + (appSlug ? ' readonly' : '') + ' placeholder="adaswift"></div>' +
+    '<div class="form-group"><label>Config (JSON)</label><textarea id="naConfig" rows="10" spellcheck="false" style="font-family:monospace">' + escapeHtml(val) + '</textarea></div>' +
+    '<p class="form-hint">Stored in app_admin_configs; the native connector layer reads it at call time (base URL, tokens, feature flags).</p>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" data-ops="native-app-config-save" onclick="saveNativeConfig()">Save Config</button>', true);
+}
+
+async function saveNativeConfig() {
+  const slugEl = document.getElementById('naSlug');
+  const cfgEl = document.getElementById('naConfig');
+  const slug = slugEl ? slugEl.value.trim() : '';
+  const raw = cfgEl ? cfgEl.value.trim() : '';
+  if (!slug) { toast('App slug is required', 'error'); return; }
+  let cfg;
+  try { cfg = raw ? JSON.parse(raw) : {}; }
+  catch(e) { toast('Config is not valid JSON', 'error'); return; }
+  try {
+    await API.call('PATCH', '/native/apps/admin/' + encodeURIComponent(slug), cfg);
+    closeModal();
+    toast('Config saved for ' + slug, 'success');
+    if (TAB_LOADERS['native-apps']) TAB_LOADERS['native-apps']();
+  } catch(e) {
+    toast('Save failed: ' + e.message, 'error');
+  }
+}
+
+function useTenantRetention(tenantId) {
+  const sel = document.getElementById('peRetTenant');
+  if (sel) sel.value = tenantId;
+  loadRetentionForTenant();
+}
+
+async function loadRetentionForTenant() {
+  const sel = document.getElementById('peRetTenant');
+  const st = document.getElementById('peRetStatus');
+  const daysEl = document.getElementById('peRetDays');
+  if (!sel || !sel.value) { toast('Select a tenant first', 'warning'); return; }
+  try {
+    const r = await API.get('/private-email/admin/limits/' + encodeURIComponent(sel.value) + '/retention');
+    if (daysEl && r && r.retention_days) daysEl.value = r.retention_days;
+    if (st) st.textContent = 'Current retention: ' + ((r && r.retention_days) || '—') + ' days · last purge: ' + ((r && r.last_purged_at) || 'never');
+  } catch(e) {
+    if (st) st.textContent = 'Failed to load retention: ' + e.message;
+  }
+}
+
+async function saveRetentionForTenant() {
+  const sel = document.getElementById('peRetTenant');
+  const daysEl = document.getElementById('peRetDays');
+  const st = document.getElementById('peRetStatus');
+  if (!sel || !sel.value) { toast('Select a tenant first', 'warning'); return; }
+  const days = parseInt(daysEl ? daysEl.value : '0', 10);
+  if (!days || days < 30 || days > 3650) { toast('Retention must be between 30 and 3650 days', 'error'); return; }
+  try {
+    await API.call('PATCH', '/private-email/admin/limits/' + encodeURIComponent(sel.value) + '/retention', { retention_days: days });
+    toast('Retention saved (' + days + ' days)', 'success');
+    if (st) st.textContent = 'Saved — retention is now ' + days + ' days.';
+    if (TAB_LOADERS['email-admin']) TAB_LOADERS['email-admin']();
+  } catch(e) {
+    toast('Save failed: ' + e.message, 'error');
+  }
+}
+
+function purgeConfirmWord() {
+  const sel = document.getElementById('purgeScope');
+  return (sel && sel.value) ? 'PURGE' : 'PURGE ALL';
+}
+
+function purgeConfirmCheck() {
+  const word = purgeConfirmWord();
+  const label = document.getElementById('purgeWord');
+  if (label) label.textContent = word;
+  const input = document.getElementById('purgeConfirm');
+  if (input) input.placeholder = word;
+  const typed = input ? input.value : '';
+  const btn = document.getElementById('purgeRunBtn');
+  if (btn) btn.disabled = typed.trim().toUpperCase() !== word;
+}
+
+function showPurgeModal(preselectTenantId) {
+  showModal('🧨 Purge Expired Email Data',
+    '<p style="color:var(--error);font-weight:600">Destructive and irreversible — email older than the retention window is deleted permanently.</p>' +
+    '<div class="form-group"><label>Scope</label><select id="purgeScope" data-ops="pe-purge-scope" onchange="purgeConfirmCheck()">' +
+      '<option value="">— all tenants (global purge) —</option>' + peTenantOptions(preselectTenantId) + '</select></div>' +
+    '<p class="form-hint">Leave the scope empty to purge every tenant on the platform; pick one tenant to limit the run.</p>' +
+    '<div class="form-group"><label>Type <code id="purgeWord">PURGE ALL</code> to unlock the button</label>' +
+      '<input type="text" id="purgeConfirm" data-ops="pe-purge-confirm" oninput="purgeConfirmCheck()" placeholder="PURGE ALL"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-danger" id="purgeRunBtn" data-ops="pe-purge-run" disabled onclick="runPurge()">Run Purge</button>', true);
+  purgeConfirmCheck();
+}
+
+async function runPurge() {
+  const sel = document.getElementById('purgeScope');
+  const input = document.getElementById('purgeConfirm');
+  const tenantId = sel ? sel.value : '';
+  if (((input ? input.value : '') || '').trim().toUpperCase() !== purgeConfirmWord()) {
+    toast('Confirmation text does not match', 'error');
+    return;
+  }
+  const btn = document.getElementById('purgeRunBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Purging...'; }
+  try {
+    const res = await API.post('/private-email/admin/purge/run', tenantId ? { tenant_id: tenantId } : {});
+    closeModal();
+    toast('Purge complete', 'success');
+    showModal('Purge Result', '<pre style="white-space:pre-wrap;font-size:.8rem">' + escapeHtml(JSON.stringify(res, null, 2)) + '</pre>',
+      '<button class="btn btn-primary" onclick="closeModal()">Close</button>');
+    if (TAB_LOADERS['email-admin']) TAB_LOADERS['email-admin']();
+  } catch(e) {
+    toast('Purge failed: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Run Purge'; }
+  }
+}
+
+// ========== MODAL GENERATORS ==========
+// ── INTEGRATION CENTER ───────────────────────────────────────────────────────
+// One surface for every credential this account owns (BYOK), sourced from the API —
+// never from a hardcoded list:
+//   GET    /native/apps                    -> the first-party capture connectors
+//   GET    /native/apps/:slug/status       -> THIS account's connection state
+//   POST   /native/apps/:slug/test         -> live test, stores nothing
+//   POST   /native/apps/:slug/connect      -> test, then store the credentials
+//   POST   /native/apps/:slug/disconnect   -> forget the credentials
+//   GET    /available-providers            -> the provider catalogue (DB-backed)
+//   GET    /provider-keys                  -> stored keys, returns {count, items}
+//   POST   /provider-keys                  -> upsert a key
+//   PATCH  /provider-keys/:provider        -> toggle is_active without resending the secret
+//   DELETE /provider-keys/:provider        -> remove
+//
+// What this replaced, so nobody reintroduces it: the old view hardcoded ten providers
+// (five of which do not exist in available_providers, so saving them always 422'd),
+// named none of the six native connectors, and read the key list as a bare array even
+// though the API returns {count, items} — which is why every provider read
+// "Not connected" no matter what the account had stored.
+
+const IC = { apps: [], status: {}, providers: [], keys: {}, overview: null, isAdmin: false, loaded: false };
+
+const IC_ADMIN_ROLES = ['owner', 'account_owner', 'admin', 'agency_admin'];
+
+// The sister products, as cross-sell/upgrade paths. A tenant who already runs one of
+// these and not CoreSwift is exactly who the upsell targets.
+const IC_SISTERS = [
+  { slug:'funnelswift',          name:'FunnelSwift',          url:'https://app.funnelswift.net',         pitch:'Sales funnels and landing pages. Funnel opt-ins land in CoreSwift as contacts.' },
+  { slug:'workflowswift',        name:'WorkflowSwift',        url:'https://app.workflowswift.com',       pitch:'Workflow automation on n8n — enrich and route leads before they reach the CRM.' },
+  { slug:'missedcall-responder', name:'MissedCall Responder', url:'https://app.missedcallrespondr.com',   pitch:'Missed-call text-back. Every recovered caller becomes a lead in CoreSwift.' },
+  { slug:'adaswift',             name:'AdaSwift',             url:'https://app.adaswift.com',            pitch:'Accessibility scanning and client reporting for agencies.' },
+  { slug:'multi-directory',      name:'Multi-Directory',      url:'https://directory.swiftsoftware.net', pitch:'Publish and follow up across business directories.' },
+  { slug:'cheatlayer',           name:'CheatLayer',           url:'https://cheatlayer.com',              pitch:'Browser automation and scraping — scrape-to-lead.' }
+];
+
+// Pre-filled API base per connector. The connector health-checks <base>/api/health
+// (WorkflowSwift: <base>/health, FunnelSwift: <base>/v1/health), so a wrong value is
+// caught by the test before anything is stored.
+const IC_BASE_DEFAULT = {
+  'adaswift': 'https://app.adaswift.com',
+  'cheatlayer': 'https://cheatlayer.com',
+  'funnelswift': 'https://app.funnelswift.net',
+  'workflowswift': 'https://app.workflowswift.com',
+  'missedcall-responder': 'https://app.missedcallrespondr.com',
+  'multi-directory': 'https://directory.swiftsoftware.net'
+};
+
+const IC_FIELD_LABEL = { api_key: 'API Key', base_url: 'API Base URL', webhook_secret: 'Webhook Secret' };
+
+const IC_FIELD_HINT = {
+  base_url: 'The address this app answers on, e.g. https://app.funnelswift.net — the connection test calls it directly.',
+  webhook_secret: 'The signing secret this app sends with its webhook payloads.'
+};
+
+const IC_PROVIDER_ICON = { brain:'🤖', mail:'✉️', newspaper:'📰', database:'🗄️', key:'🔑', phone:'📱', message:'💬', chart:'📈', search:'🔎', globe:'🌐' };
+
+function icIsAdmin() {
+  return !!(STATE.user && IC_ADMIN_ROLES.indexOf(STATE.user.role) >= 0);
+}
+
+function icErr(title, msg) {
+  const upgrade = /payment required|forbidden|not entitled/i.test(msg || '')
+    ? ' This module may be switched off on your plan — check <strong>Features &amp; Plans</strong>.'
+    : '';
+  return '<div class="card"><div class="card-body"><p style="color:var(--error);margin:0">' +
+    escapeHtml(title) + ': ' + escapeHtml(msg || 'request failed') + upgrade + '</p></div></div>';
+}
+
+function icBind(el) {
+  el.querySelectorAll('[data-ic]').forEach(b => {
+    b.addEventListener('click', () => {
+      const act = b.getAttribute('data-ic');
+      const slug = b.getAttribute('data-slug');
+      const provider = b.getAttribute('data-provider');
+      if (act === 'connect') icOpenConnect(slug);
+      else if (act === 'disconnect') icDisconnectApp(slug);
+      else if (act === 'provider') icOpenProvider(provider);
+      else if (act === 'provider-del') icDeleteProvider(provider);
+    });
+  });
+  el.querySelectorAll('[data-ic-toggle]').forEach(c => {
+    c.addEventListener('change', () => icToggleProvider(c.getAttribute('data-ic-toggle'), c.checked));
+  });
+}
+
+async function loadIntegrationCenter() {
+  IC.isAdmin = icIsAdmin();
+  await Promise.all([icLoadApps(), icLoadProviders(), icLoadOverview()]);
+  icRenderUpgradePaths();
+  IC.loaded = true;
+}
+
+// ── Native connectors: the capture apps that push leads INTO CoreSwift ──
+async function icLoadApps() {
+  const wrap = document.getElementById('icNativeWrap');
+  if (!wrap) return;
+  let apps = [];
+  try {
+    const d = await API.get('/native/apps');
+    apps = (d && d.apps) || [];
+  } catch (e) {
+    wrap.innerHTML = icErr('Could not load native connectors', e.message);
+    return;
+  }
+  IC.apps = apps;
+
+  // Connection state is per-connector (and per-account) — one call each, in parallel.
+  const status = {};
+  await Promise.all(apps.map(async a => {
+    try { status[a.slug] = await API.get('/native/apps/' + encodeURIComponent(a.slug) + '/status'); }
+    catch (e) { status[a.slug] = { connected: false, status_error: e.message }; }
+  }));
+  IC.status = status;
+  icRenderApps();
+}
+
+function icRenderApps() {
+  const el = document.getElementById('icNativeWrap');
+  if (!el) return;
+  const rows = IC.apps.map(a => {
+    const st = IC.status[a.slug] || {};
+    const connected = !!st.connected;
+    const access = a.access_level === 'admin_tenant' ? 'This account' : 'Platform admin';
+
+    let statusCell;
+    if (connected) {
+      statusCell = '<span class="status-dot connected"></span> ' +
+        (st.last_test_ok === false
+          ? '<span class="badge badge-warning">connected, last test failed</span>'
+          : '<span class="badge badge-success">connected</span>');
+      if (st.last_test_at) {
+        statusCell += '<div style="font-size:.72rem;color:var(--text-muted)">tested ' +
+          escapeHtml(new Date(st.last_test_at).toLocaleString()) + '</div>';
+      }
+      if (st.error_message) {
+        statusCell += '<div style="font-size:.72rem;color:var(--warning,#f0ad4e)">' + escapeHtml(st.error_message) + '</div>';
+      }
+    } else {
+      statusCell = '<span class="status-dot disconnected"></span> <span class="badge badge-muted">not connected</span>';
+      if (st.status_error) {
+        statusCell += '<div style="font-size:.72rem;color:var(--text-muted)">' + escapeHtml(st.status_error) + '</div>';
+      }
+    }
+
+    // Platform-level connectors need an admin; tenant-level ones any account owner.
+    const canManage = a.access_level === 'admin_tenant' || IC.isAdmin;
+    let actions = '';
+    if (canManage) {
+      actions += '<button class="btn ' + (connected ? 'btn-secondary' : 'btn-primary') + ' btn-xs" data-ic="connect" data-slug="' +
+        escapeHtmlAttr(a.slug) + '">' + (connected ? 'Reconfigure' : 'Connect') + '</button>';
+      if (connected) {
+        actions += ' <button class="btn btn-ghost btn-xs" data-ic="disconnect" data-slug="' +
+          escapeHtmlAttr(a.slug) + '">Disconnect</button>';
+      }
+    } else {
+      actions += '<span style="font-size:.72rem;color:var(--text-muted)">platform-admin connection</span>';
+    }
+
+    return [
+      '<strong>' + escapeHtml(a.name) + '</strong>' +
+        '<div style="font-size:.74rem;color:var(--text-muted);max-width:360px">' + escapeHtml(a.description || '') + '</div>',
+      escapeHtml(access),
+      statusCell,
+      actions
+    ];
+  });
+
+  el.innerHTML = card('📥 Lead capture apps &rarr; CoreSwift',
+    '<p style="color:var(--text-secondary);margin:0">Each of these apps captures leads. Connect it and its captured leads flow <strong>into this account</strong> — ' +
+    'CoreSwift is the single home for them, so you work every lead here instead of in six places. ' +
+    'Credentials are stored per account (never as a platform-wide default) and the connection is only saved after a live test passes.</p>') +
+    dataTable(['App', 'Credentials', 'Status', ''], rows,
+      IC.apps.length ? 'No connectors registered.' : 'No native connectors are registered on this platform yet.');
+
+  icBind(el);
+}
+
+function icOpenConnect(slug) {
+  const a = IC.apps.find(x => x.slug === slug);
+  if (!a) return;
+  const fields = (a.auth_fields && a.auth_fields.length) ? a.auth_fields : ['api_key'];
+  const st = IC.status[slug] || {};
+  const sister = IC_SISTERS.find(s => s.slug === slug);
+
+  let body = '<p style="color:var(--text-secondary);margin-bottom:14px">' + escapeHtml(a.description || '') + '</p>';
+  if (sister) {
+    body += '<p style="color:var(--text-secondary);margin-bottom:14px">Direction in CoreSwift is <strong>inbound</strong>: once live, ' +
+      escapeHtml(sister.name) + ' pushes its captured leads into this account.</p>';
+  }
+  fields.forEach(f => {
+    const secret = /key|secret|token|password/i.test(f);
+    const def = f === 'base_url' ? ((st.config && st.config.base_url) || IC_BASE_DEFAULT[slug] || '') : '';
+    body += '<div class="form-group"><label>' + escapeHtml(IC_FIELD_LABEL[f] || f) + '</label>' +
+      '<input type="' + (secret ? 'password' : 'text') + '" id="icF_' + escapeHtmlAttr(f) + '" value="' + escapeHtmlAttr(def) + '" autocomplete="off">' +
+      (IC_FIELD_HINT[f] ? '<span class="form-hint">' + escapeHtml(IC_FIELD_HINT[f]) + '</span>' : '') +
+      '</div>';
+  });
+  body += '<p class="form-hint">Connecting runs a live test first — a bad key or URL is reported here and nothing is stored.</p>';
+
+  showModal('Connect ' + escapeHtml(a.name), body,
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-secondary" id="icTestBtn">Test only</button>' +
+    '<button class="btn btn-primary" id="icConnectBtn">Test &amp; connect</button>');
+
+  const readCreds = () => {
+    const c = {};
+    fields.forEach(f => {
+      const el = document.getElementById('icF_' + f);
+      c[f] = el ? el.value.trim() : '';
+    });
+    return c;
+  };
+  const tb = document.getElementById('icTestBtn');
+  if (tb) tb.addEventListener('click', () => icTestCreds(slug, readCreds(), tb));
+  const cb = document.getElementById('icConnectBtn');
+  if (cb) cb.addEventListener('click', () => icConnect(slug, readCreds(), cb));
+}
+
+async function icTestCreds(slug, credentials, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await API.post('/native/apps/' + encodeURIComponent(slug) + '/test', { credentials: credentials });
+    if (r && r.success) toast((r.app_name || slug) + ': ' + r.message, 'success');
+    else toast('Test failed: ' + ((r && r.message) || 'no response'), 'error');
+  } catch (e) {
+    toast('Test failed: ' + e.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function icConnect(slug, credentials, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await API.post('/native/apps/' + encodeURIComponent(slug) + '/connect', { credentials: credentials });
+    closeModal();
+    toast((r && r.message) || (slug + ' connected'), 'success');
+    await icLoadApps();
+  } catch (e) {
+    toast('Could not connect: ' + e.message, 'error');
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function icDisconnectApp(slug) {
+  if (!confirm('Disconnect ' + slug + '? Its stored credentials are deleted and its leads stop flowing in.')) return;
+  try {
+    await API.post('/native/apps/' + encodeURIComponent(slug) + '/disconnect', {});
+    toast(slug + ' disconnected', 'success');
+    await icLoadApps();
+  } catch (e) {
+    toast('Could not disconnect: ' + e.message, 'error');
+  }
+}
+
+// ── Provider keys: BYOK, per account ──
+async function icLoadProviders() {
+  const wrap = document.getElementById('icProviderWrap');
+  if (!wrap) return;
+  let providers = [], keys = {};
+  try {
+    const res = await Promise.all([API.get('/available-providers'), API.get('/provider-keys')]);
+    providers = (res[0] && res[0].items) || [];
+    ((res[1] && res[1].items) || []).forEach(k => { keys[k.provider] = k; });
+  } catch (e) {
+    wrap.innerHTML = icErr('Could not load provider keys', e.message);
+    return;
+  }
+  IC.providers = providers;
+  IC.keys = keys;
+  icRenderProviders();
+}
+
+function icRenderProviders() {
+  const el = document.getElementById('icProviderWrap');
+  if (!el) return;
+  let html = card('🔑 Provider keys (BYOK — stored on this account only)',
+    '<p style="color:var(--text-secondary);margin:0">Keys your own features call. Stored per account; nothing here is a platform-wide default ' +
+    'and a saved key is never shown back in full.</p>');
+
+  if (!IC.providers.length) {
+    el.innerHTML = html + '<div class="card"><div class="card-body"><div class="empty-state"><h3>No providers registered</h3>' +
+      '<p>The provider catalogue is empty.</p></div></div></div>';
+    return;
+  }
+
+  html += '<div class="provider-grid">';
+  IC.providers.forEach(p => {
+    const k = IC.keys[p.key];
+    const on = !!(k && k.is_active);
+    const icon = IC_PROVIDER_ICON[p.icon] || '🔑';
+    html += '<div class="provider-card' + (on ? ' connected' : '') + '">' +
+      '<div class="provider-header">' +
+        '<span class="provider-name">' + icon + ' ' + escapeHtml(p.name) + '</span>' +
+        '<span class="provider-status"><span class="status-dot ' + (on ? 'connected' : 'disconnected') + '"></span> ' +
+          (k ? (on ? 'Active' : 'Disabled') : 'Not set') + '</span>' +
+      '</div>' +
+      '<div class="provider-desc">' + escapeHtml(p.description || '') + '</div>' +
+      (k ? '<div style="font-size:.74rem;color:var(--text-muted);margin-bottom:8px"><code>' +
+            escapeHtml(k.api_key_masked || '') + '</code>' + (k.base_url ? '<br>' + escapeHtml(k.base_url) : '') + '</div>' : '') +
+      (k ? '<label style="display:flex;align-items:center;gap:8px;font-size:.78rem;margin-bottom:8px;cursor:pointer">' +
+            '<input type="checkbox" style="width:16px;height:16px;cursor:pointer" data-ic-toggle="' + escapeHtmlAttr(p.key) + '"' +
+            (on ? ' checked' : '') + '> Enabled for this account</label>' : '') +
+      '<button class="btn ' + (k ? 'btn-secondary' : 'btn-primary') + ' btn-sm btn-block" data-ic="provider" data-provider="' +
+        escapeHtmlAttr(p.key) + '">' + (k ? 'Replace key' : 'Add key') + '</button>' +
+      (k ? '<button class="btn btn-ghost btn-xs btn-block" style="margin-top:6px" data-ic="provider-del" data-provider="' +
+            escapeHtmlAttr(p.key) + '">Remove</button>' : '') +
+      '</div>';
+  });
+  html += '</div>';
+
+  el.innerHTML = html;
+  icBind(el);
+}
+
+function icOpenProvider(pkey) {
+  const p = IC.providers.find(x => x.key === pkey);
+  if (!p) return;
+  const existing = IC.keys[pkey];
+  let body = '<p style="color:var(--text-secondary);margin-bottom:14px">' + escapeHtml(p.description || '') + '</p>' +
+    '<div class="form-group"><label>API Key</label>' +
+    '<input type="password" id="icPk_api_key" placeholder="paste your ' + escapeHtmlAttr(p.name) + ' key" autocomplete="off"></div>';
+  if (p.requires_base_url) {
+    body += '<div class="form-group"><label>Base URL</label>' +
+      '<input type="text" id="icPk_base_url" value="' + escapeHtmlAttr((existing && existing.base_url) || '') + '" autocomplete="off">' +
+      '<span class="form-hint">' + escapeHtml(IC_FIELD_HINT.base_url) + '</span></div>';
+  }
+  body += '<p class="form-hint">Stored on this account only. ' +
+    (existing ? 'Saving replaces the current key immediately. ' : '') +
+    'The full key is never shown again after saving.</p>';
+
+  showModal((existing ? 'Replace ' : 'Add ') + escapeHtml(p.name) + ' key', body,
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="icPkSave">Save key</button>');
+
+  const btn = document.getElementById('icPkSave');
+  if (btn) btn.addEventListener('click', () => icSaveProvider(pkey));
+}
+
+async function icSaveProvider(pkey) {
+  const keyEl = document.getElementById('icPk_api_key');
+  const baseEl = document.getElementById('icPk_base_url');
+  const apiKey = keyEl ? keyEl.value.trim() : '';
+  if (!apiKey) { toast('Enter the API key', 'error'); return; }
+  const btn = document.getElementById('icPkSave');
+  if (btn) btn.disabled = true;
+  const payload = { provider: pkey, api_key: apiKey, is_active: true };
+  if (baseEl && baseEl.value.trim()) payload.base_url = baseEl.value.trim();
+  try {
+    await API.post('/provider-keys', payload);
+    closeModal();
+    toast('Key saved for this account', 'success');
+    await icLoadProviders();
+  } catch (e) {
+    toast('Save failed: ' + e.message, 'error');
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function icToggleProvider(pkey, on) {
+  try {
+    await API.patch('/provider-keys/' + encodeURIComponent(pkey), { is_active: !!on });
+    toast(pkey + (on ? ' enabled' : ' disabled') + ' for this account', 'success');
+  } catch (e) {
+    toast('Could not save: ' + e.message, 'error');
+  }
+  await icLoadProviders();
+}
+
+async function icDeleteProvider(pkey) {
+  if (!confirm('Remove the ' + pkey + ' key from this account?')) return;
+  try {
+    await API.del('/provider-keys/' + encodeURIComponent(pkey));
+    toast(pkey + ' key removed', 'success');
+    await icLoadProviders();
+  } catch (e) {
+    toast('Could not remove: ' + e.message, 'error');
+  }
+}
+
+// ── Lead sources + lead-delivery keys (live from /api/integration-center/overview) ──
+// Lead-source status is computed from the contacts table, not from "is the app
+// connected": an app that has never delivered a lead reads as "never received" and an
+// unrecognized source_app shows up as its own row instead of being silently dropped.
+const IC_SISTER_SLUG = {
+  funnelswift: 'funnelswift',
+  incentiveswift: null,
+  adaswift: 'adaswift',
+  workflowswift: 'workflowswift',
+  missedcallrespondr: 'missedcall-responder',
+  multidirectory: 'multi-directory',
+  'funnel-swift-mobile': null
+};
+
+async function icLoadOverview() {
+  try {
+    IC.overview = await API.get('/integration-center/overview');
+  } catch (e) {
+    IC.overview = { error: e.message };
+  }
+  icRenderLeadSources();
+  icRenderKeys();
+}
+
+function icFmtDate(v) { return v ? new Date(v).toLocaleString() : '—'; }
+
+function icRenderLeadSources() {
+  const el = document.getElementById('icLeadSourcesWrap');
+  if (!el) return;
+  const o = IC.overview || {};
+  if (o.error) { el.innerHTML = icErr('Could not load lead sources', o.error); return; }
+  const sec = o.lead_sources || {};
+  const items = sec.items || [];
+  const feeding = items.filter(i => i.status === 'feeding').length;
+  const rows = items.map(i => [
+    '<strong>' + escapeHtml(i.name || i.key) + '</strong><div style="font-size:.72rem;color:var(--text-muted)">' + escapeHtml(i.key) +
+      (i.unrecognized ? ' <span class="badge badge-muted">unrecognized</span>' : '') + '</div>',
+    i.status === 'feeding' ? '<span class="badge badge-success">feeding</span>'
+      : (i.status === 'idle' ? '<span class="badge badge-muted">idle</span>' : '<span class="badge badge-muted">never received</span>'),
+    String(i.leads_30d || 0),
+    String(i.leads_total || 0),
+    escapeHtml(icFmtDate(i.last_lead_at))
+  ]);
+  let html = card('📥 Lead sources — what is feeding this CRM',
+    '<p style="color:var(--text-secondary);margin:0 0 10px">Capture apps deliver their leads here with a <code>csk_…</code> key: ' +
+    '<code>POST ' + escapeHtml(sec.push_endpoint || '/api/external/contacts') + '</code>, header <code>' +
+    escapeHtml(sec.auth || 'Authorization: Bearer csk_…') + '</code>. Status is live from the contacts table — <strong>' +
+    feeding + '</strong> of ' + items.length + ' capture apps delivered in the last 30 days.</p>');
+  html += dataTable(['Capture app', 'Status', 'Leads 30d', 'Leads total', 'Last lead'], rows,
+    'No capture app has delivered a lead yet — create a key below and paste it into the app.');
+  el.innerHTML = html;
+}
+
+function icRenderKeys() {
+  const el = document.getElementById('icKeysWrap');
+  if (!el) return;
+  const o = IC.overview || {};
+  if (o.error) { el.innerHTML = icErr('Could not load lead-delivery keys', o.error); return; }
+  const items = (o.personal_keys && o.personal_keys.items) || [];
+  const active = items.filter(k => k.is_active).length;
+  const rows = items.map(k => [
+    '<strong>' + escapeHtml(k.name || 'default') + '</strong>',
+    '<code>' + escapeHtml(k.prefix || '') + '…</code>',
+    k.is_active ? '<span class="badge badge-success">active</span>' : '<span class="badge badge-muted">revoked</span>',
+    escapeHtml(icFmtDate(k.last_used_at)),
+    escapeHtml(icFmtDate(k.created_at)),
+    '<button class="btn btn-ghost btn-xs" onclick="icRotateKey(\'' + escapeHtmlAttr(k.id) + '\')">Rotate</button> ' +
+    '<button class="btn btn-ghost btn-xs" onclick="icRevokeKey(\'' + escapeHtmlAttr(k.id) + '\')">Revoke</button>'
+  ]);
+  const body = '<p style="color:var(--text-secondary);margin:0 0 10px">Each key lets a capture app deliver leads into <strong>this account</strong>. ' +
+    'Only the prefix is ever displayed — the full key is shown once, at creation. <strong>' + active + '</strong> active of ' + items.length + ' total.</p>' +
+    dataTable(['Name', 'Prefix', 'Status', 'Last used', 'Created', ''], rows,
+      'No keys yet — create one and paste it into a capture app\'s CoreSwift integration.');
+  const footer = '<button class="btn btn-primary btn-sm" onclick="icCreateKey()">+ Create lead-delivery key</button>';
+  el.innerHTML = card('🔑 Lead-delivery keys (csk_…)', body, footer);
+}
+
+async function icCreateKey() {
+  try {
+    const d = await API.post('/personal-api-keys', { name: 'lead-capture' });
+    await icShowKeyOnce(d, 'Key created');
+  } catch (e) {
+    toast('Could not create key: ' + e.message, 'error');
+  }
+}
+
+async function icRotateKey(id) {
+  if (!confirm('Rotate this key? The current secret stops working immediately.')) return;
+  try {
+    const d = await API.post('/personal-api-keys/' + encodeURIComponent(id) + '/rotate', {});
+    await icShowKeyOnce(d, 'Key rotated');
+  } catch (e) {
+    toast('Could not rotate: ' + e.message, 'error');
+  }
+}
+
+async function icRevokeKey(id) {
+  if (!confirm('Revoke this key? Any app still using it stops delivering leads.')) return;
+  try {
+    await API.del('/personal-api-keys/' + encodeURIComponent(id));
+    toast('Key revoked', 'success');
+    await icLoadOverview();
+  } catch (e) {
+    toast('Could not revoke: ' + e.message, 'error');
+  }
+}
+
+async function icShowKeyOnce(d, title) {
+  showModal(escapeHtml(title),
+    '<p style="margin:0 0 8px">Paste this into the capture app now — it is shown <strong>once</strong> and can never be retrieved again.</p>' +
+    '<div class="form-group"><label>Key</label><input id="icNewKey" readonly value="' + escapeHtmlAttr(d && d.key || '') + '"></div>' +
+    '<div style="font-size:.75rem;color:var(--text-muted)">Prefix ' + escapeHtml(d && d.prefix || '') + '</div>',
+    '<button class="btn btn-secondary" onclick="closeModal()">Done</button>');
+  const inp = document.getElementById('icNewKey');
+  if (inp) { inp.focus(); inp.select(); }
+  await icLoadOverview();
+}
+
+// ── Sister products as upgrade paths ──
+// Prefer the hub's own list (GET /integration-center/overview → cross_sell: one entry +
+// CTA per capture app, including IncentiveSwift and FunnelSwift Mobile which the static
+// fallback never knew about). IC_SISTERS stays only as the offline fallback.
+function icUpgradePaths() {
+  const cs = IC.overview && IC.overview.cross_sell;
+  if (Array.isArray(cs) && cs.length) {
+    return cs.map(s => ({
+      slug: IC_SISTER_SLUG[s.key] || s.key,
+      key: s.key,
+      name: s.name,
+      url: s.url,
+      pitch: s.cta || s.description
+    }));
+  }
+  return IC_SISTERS.map(s => ({ slug: s.slug, key: s.slug, name: s.name, url: s.url, pitch: s.pitch }));
+}
+
+function icRenderUpgradePaths() {
+  const el = document.getElementById('icUpgradeWrap');
+  if (!el) return;
+  let html = card('🚀 Sister products (upgrade paths)',
+    '<p style="color:var(--text-secondary);margin:0">These products feed CoreSwift. A customer who already runs one of them is the natural ' +
+    'cross-sell — connect the app above and its captured leads land here as contacts.</p>');
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px">';
+  icUpgradePaths().forEach(s => {
+    const st = IC.status[s.slug];
+    const isConnected = !!(st && st.connected);
+    html += '<div class="card"><div class="card-body">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
+        '<strong>' + escapeHtml(s.name) + '</strong>' +
+        (isConnected ? '<span class="badge badge-success">connected</span>' : '<span class="badge badge-muted">not connected</span>') +
+      '</div>' +
+      '<p style="color:var(--text-secondary);font-size:.82rem;margin:8px 0 12px">' + escapeHtml(s.pitch) + '</p>' +
+      '<a class="btn btn-secondary btn-sm btn-block" href="' + escapeHtmlAttr(s.url) + '" target="_blank" rel="noopener">Open ' +
+        escapeHtml(s.name) + ' ↗</a>' +
+      (isConnected ? '' : '<div style="font-size:.72rem;color:var(--text-muted);margin-top:8px">Connect it above to pull its leads into CoreSwift.</div>') +
+      '</div></div>';
+  });
+  html += '</div>';
+  if (IC.isAdmin) {
+    html += '<p style="color:var(--text-secondary);margin-top:14px">Need more integrations than this plan allows? ' +
+      '<a href="#" onclick="switchTab(\'features-plans\');return false">Open Features &amp; Plans</a> to see what this account is entitled to.</p>';
+  }
+  el.innerHTML = html;
+}
+
+async function saveProfile() {
+  const name = document.getElementById('profileName').value;
+  try {
+    await API.put('/profile', { name });
+    STATE.user.name = name;
+    document.getElementById('userAvatar').textContent = name[0].toUpperCase();
+    localStorage.setItem('crm_user', JSON.stringify(STATE.user));
+    toast('Profile updated', 'success');
+  } catch(e) {
+    toast('Failed to update profile: ' + e.message, 'error');
+  }
+}
+
+async function changePassword() {
+  const current = document.getElementById('currentPw').value;
+  const newPw = document.getElementById('newPw').value;
+  const confirm = document.getElementById('confirmPw').value;
+  if (newPw !== confirm) { toast('Passwords do not match', 'error'); return; }
+  try {
+    await API.put('/profile/password', { current_password: current, new_password: newPw });
+    toast('Password updated', 'success');
+    document.getElementById('currentPw').value = '';
+    document.getElementById('newPw').value = '';
+    document.getElementById('confirmPw').value = '';
+  } catch(e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+
+// Placeholder modal stubs
+function showAddContactModal() { showModal('Add Contact', '<div class="form-group"><label>Name</label><input type="text"></div><div class="form-group"><label>Email</label><input type="email"></div><div class="form-group"><label>Phone</label><input type="text"></div><div class="form-group"><label>Company</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Contact added&#39;,&#39;success&#39;)">Save</button>'); }
+function editContact(id) { toast('Editing contact: ' + id, 'info'); }
+function showAddCompanyModal(){ showModal('Add Company', '<div class="form-group"><label>Company Name</label><input type="text"></div><div class="form-group"><label>Industry</label><input type="text"></div><div class="form-group"><label>Website</label><input type="url"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Company added&#39;,&#39;success&#39;)">Save</button>'); }
+function editCompany(id){ toast('Editing company: ' + id, 'info'); }
+function showAddDealModal(){ showModal('Add Deal', '<div class="form-group"><label>Deal Name</label><input type="text"></div><div class="form-group"><label>Value</label><input type="number"></div><div class="form-group"><label>Pipeline</label><select><option>Select...</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Deal added&#39;,&#39;success&#39;)">Save</button>'); }
+function showAddCampaignModal(){ showModal('New Campaign', '<div class="form-group"><label>Campaign Name</label><input type="text"></div><div class="form-group"><label>Type</label><select><option>Email</option><option>SMS</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Campaign created&#39;,&#39;success&#39;)">Create</button>'); }
+function showAddListModal(){ showModal('New List', '<div class="form-group"><label>List Name</label><input type="text"></div><div class="form-group"><label>Description</label><textarea></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;List created&#39;,&#39;success&#39;)">Create</button>'); }
+function showAddTagModal(){ showModal('New Tag', '<div class="form-group"><label>Tag Name</label><input type="text"></div><div class="form-group"><label>Color</label><input type="color" value="#6366f1"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Tag created&#39;,&#39;success&#39;)">Create</button>'); }
+function showAddRuleModal(){ showModal('New Rule', '<div class="form-group"><label>Rule Name</label><input type="text"></div><div class="form-group"><label>Trigger</label><select><option>Contact created</option><option>Deal stage changed</option><option>Form submitted</option><option>Tag added</option></select></div><div class="form-group"><label>Action</label><select><option>Send email</option><option>Add to list</option><option>Update deal</option><option>Create task</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Rule created&#39;,&#39;success&#39;)">Create Rule</button>'); }
+function showAddScoreRuleModal(){ showModal('Add Scoring Criterion', '<div class="form-group"><label>Criterion Name</label><input type="text"></div><div class="form-group"><label>Points</label><input type="number" value="5"></div><div class="form-group"><label>Trigger</label><select><option>Email opened</option><option>Link clicked</option><option>Form submitted</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Criterion added&#39;,&#39;success&#39;)">Add</button>'); }
+function showAddTemplateModal(){ showModal('New Template', '<div class="form-group"><label>Template Name</label><input type="text"></div><div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Body</label><textarea rows="6"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Template saved&#39;,&#39;success&#39;)">Save</button>'); }
+function showComposeModal(){ showModal('Compose Message', '<div class="form-group"><label>To</label><input type="text"></div><div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Message</label><textarea rows="5"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Message sent&#39;,&#39;success&#39;)">Send</button>'); }
+function showAddTicketModal(){ showModal('New Ticket', '<div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Description</label><textarea rows="4"></textarea></div><div class="form-group"><label>Priority</label><select><option>Normal</option><option>High</option><option>Urgent</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Ticket created&#39;,&#39;success&#39;)">Create</button>'); }
+function showAddEventModal(){ showModal('New Event', '<div class="form-group"><label>Title</label><input type="text"></div><div class="form-group"><label>Date</label><input type="date"></div><div class="form-group"><label>Time</label><input type="time"></div><div class="form-group"><label>Location</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Event created&#39;,&#39;success&#39;)">Save</button>'); }
+function showAddLinkModal(){ showModal('Generate Tracked Link', '<div class="form-group"><label>Destination URL</label><input type="url"></div><div class="form-group"><label>Campaign</label><select><option>None</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Link generated&#39;,&#39;success&#39;)">Generate</button>'); }
+function showAddMemberModal(){ toast('Add team member form coming soon', 'info'); }
+function showAddUserModal(){ showModal('Add User', '<div class="form-group"><label>Name</label><input type="text"></div><div class="form-group"><label>Email</label><input type="email"></div><div class="form-group"><label>Role</label><select><option>user</option><option>agency_admin</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;User added&#39;,&#39;success&#39;)">Create</button>'); }
+
+// Chat
+function sendChat() {
+  const input = document.getElementById('chatInput');
+  const msg = input.value.trim();
+  if (!msg) return;
+  const container = document.getElementById('chatMessages');
+  container.innerHTML += `<div class="chat-msg user"><div class="msg-role">You</div>${escapeHtml(msg)}</div>`;
+  input.value = '';
+  container.innerHTML += `<div class="chat-msg assistant"><div class="msg-role">AI Assistant</div><em style="color:var(--text-muted)">Connect an LLM provider in the Integration Center to enable AI responses.</em></div>`;
+  container.scrollTop = container.scrollHeight;
+}
+
+// Contact/company filters
+function filterContacts(query) {
+  // Simple client-side filter on table text
+  const table = document.querySelector('#contactsTable table');
+  if (!table) return;
+  const rows = table.querySelectorAll('tbody tr');
+  const q = query.toLowerCase();
+  rows.forEach(row => {
+    row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+function filterCompanies(query) {
+  const table = document.querySelector('#companiesTable table');
+  if (!table) return;
+  const rows = table.querySelectorAll('tbody tr');
+  const q = query.toLowerCase();
+  rows.forEach(row => {
+    row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+
+// ========== INIT ==========
+window.addEventListener('DOMContentLoaded', () => {
+  const token = localStorage.getItem('crm_token');
+  const userStr = localStorage.getItem('crm_user');
+  if (token && userStr) {
+    try {
+      STATE.token = token;
+      STATE.user = JSON.parse(userStr);
+      showApp();
+    } catch(e) {
+      logout(true);
+    }
+  }
+  // Dismiss banner if it was dismissed
+  if (localStorage.getItem('crm_banner_dismissed')) {
+    document.getElementById('upgradeBanner').classList.add('dismissed');
+  }
+});
+
+// Close dropdown on outside click
+document.addEventListener('click', e => {
+  if (!e.target.closest('.dropdown')) {
+    document.getElementById('userMenu').classList.remove('show');
+  }
+});
+
+// ===== KEYBOARD SHORTCUTS (added 2026-08-21) =====
+// Gmail-style navigation. ? = help. g + key = go to tab. single keys = quick actions.
+(function () {
+  if (window.__crmShortcutsInstalled) return;
+  window.__crmShortcutsInstalled = true;
+
+  var pendingG = null; // 'g' two-key navigation buffer
+  var gTimer = null;
+
+  // key -> { desc, fn }
+  var NAV = {
+    d: { desc: 'g d  → Dashboard', tab: 'dashboard' },
+    c: { desc: 'g c  → Contacts', tab: 'contacts' },
+    o: { desc: 'g o  → Companies', tab: 'companies' },
+    p: { desc: 'g p  → Pipelines & Deals', tab: 'pipelines' },
+    m: { desc: 'g m  → Campaigns', tab: 'campaigns' },
+    l: { desc: 'g l  → Lists', tab: 'lists' },
+    a: { desc: 'g a  → Analytics', tab: 'analytics' },
+    r: { desc: 'g r  → Rules', tab: 'rules' },
+    t: { desc: 'g t  → Tags', tab: 'tags' },
+    s: { desc: 'g s  → Lead Scoring', tab: 'lead-scoring' },
+    e: { desc: 'g e  → Email Templates', tab: 'email-templates' },
+    i: { desc: 'g i  → Messages', tab: 'messages' },
+    n: { desc: 'g n  → Notifications', tab: 'notifications' },
+    x: { desc: 'g x  → Telnyx SMS/Voice', tab: 'telnyx' },
+    k: { desc: 'g k  → Support Tickets', tab: 'tickets' },
+    b: { desc: 'g b  → Private Email (Inbox)', tab: 'inbox' },
+    y: { desc: 'g y  → Calendar', tab: 'calendar' },
+    u: { desc: 'g u  → Bookings', tab: 'bookings' },
+    q: { desc: 'g q  → AI Assistant', tab: 'ai-assistant' },
+    g: { desc: 'g g  → Tracked Links', tab: 'tracked-links' },
+    h: { desc: 'g h  → Checklists', tab: 'checklists' },
+    w: { desc: 'g w  → Round Robin', tab: 'round-robin' },
+    f: { desc: 'g f  → Profile', tab: 'profile' },
+    z: { desc: 'g z  → Integration Center', tab: 'integrations' }
+  };
+
+  // single-key quick actions
+  var ACTIONS = {
+    c: { desc: 'c  → New Contact', fn: function () { showAddContactModal(); } },
+    o: { desc: 'o  → New Company', fn: function () { showAddCompanyModal(); } },
+    d: { desc: 'd  → New Deal', fn: function () { showAddDealModal(); } },
+    l: { desc: 'l  → New List', fn: function () { showAddListModal(); } },
+    t: { desc: 't  → New Tag', fn: function () { showAddTagModal(); } },
+    k: { desc: 'k  → New Ticket', fn: function () { showAddTicketModal(); } },
+    m: { desc: 'm  → Compose Message', fn: function () { showComposeModal(); } },
+    p: { desc: 'p  → New Campaign', fn: function () { showAddCampaignModal(); } },
+    e: { desc: 'e  → New Email Template', fn: function () { showAddTemplateModal(); } }
+  };
+
+  function isTyping(el) {
+    if (!el) return false;
+    var tag = (el.tagName || '').toLowerCase();
+    var editable = el.isContentEditable || el.getAttribute && el.getAttribute('contenteditable') === 'true';
+    return tag === 'input' || tag === 'textarea' || tag === 'select' || editable;
+  }
+
+  function modalOpen() {
+    var el = document.getElementById('modalContainer');
+    return !!(el && el.innerHTML && el.innerHTML.trim() !== '');
+  }
+
+  function clearG() { pendingG = null; if (gTimer) { clearTimeout(gTimer); gTimer = null; } }
+
+  function toastShortcuts(list) {
+    var rows = list.map(function (it) {
+      var k = it.desc.split('→')[0].trim();
+      var label = it.desc.indexOf('→') > -1 ? it.desc.split('→')[1].trim() : it.desc;
+      return '<div class="shortcut-row" style="display:flex;justify-content:space-between;gap:20px;padding:6px 0;border-bottom:1px solid var(--border,#eee)">' +
+        '<span style="color:var(--muted,#666)">' + escapeHtml(label) + '</span>' +
+        '<code style="background:var(--bg,#f3f4f6);padding:2px 8px;border-radius:4px;font-weight:600;white-space:nowrap">' + escapeHtml(k) + '</code></div>';
+    }).join('');
+    showModal('⌨️ Keyboard Shortcuts',
+      '<div style="font-size:13px;max-height:60vh;overflow:auto">' + rows +
+      '<div class="shortcut-row" style="padding:6px 0;border-bottom:1px solid var(--border,#eee)"><span style="color:var(--muted,#666)">Help — all shortcuts</span><code style="background:var(--bg,#f3f4f6);padding:2px 8px;border-radius:4px;font-weight:600;white-space:nowrap">?</code></div>' +
+      '<div class="shortcut-row" style="padding:6px 0"><span style="color:var(--muted,#666)">Close / cancel</span><code style="background:var(--bg,#f3f4f6);padding:2px 8px;border-radius:4px;font-weight:600;white-space:nowrap">Esc</code></div>' +
+      '</div>',
+      '<button class="btn btn-ghost" onclick="closeModal()">Close</button>');
+  }
+
+  function focusSearch() {
+    var first = document.querySelector('#tabPanels input[type="search"], #tabPanels input[placeholder*="earch"], #tabPanels input[placeholder*="Search"]');
+    if (first) { first.focus(); return true; }
+    return false;
+  }
+
+  document.addEventListener('keydown', function (e) {
+    // Always allow Escape to close modal / clear g-buffer
+    if (e.key === 'Escape') { clearG(); closeModal(); return; }
+
+    if (isTyping(e.target)) return; // never hijack while typing
+
+    // handle 'g' prefix
+    if (pendingG) {
+      var k2 = (e.key || '').toLowerCase();
+      if (e.key === 'Escape' || e.key === '?' || e.key === 'g') { clearG(); }
+      else if (NAV[k2]) {
+        e.preventDefault(); e.stopPropagation();
+        clearG();
+        if (STATE && STATE.user) { switchTab(NAV[k2].tab); }
+      } else { clearG(); return; }
+      return;
+    }
+
+    var key = (e.key || '').toLowerCase();
+    var ctrl = e.ctrlKey || e.metaKey;
+
+    // '?' help
+    if (e.key === '?' || (e.shiftKey && key === '/')) {
+      e.preventDefault();
+      toastShortcuts(Object.keys(NAV).map(function (k) { return NAV[k]; }).concat(
+        Object.keys(ACTIONS).map(function (k) { return ACTIONS[k]; })));
+      return;
+    }
+
+    // '/' global search (non-shift)
+    if (key === '/' && !e.shiftKey && !ctrl) {
+      e.preventDefault();
+      if (!focusSearch()) toastShortcuts([{ desc: 'No search box on this tab' }]);
+      return;
+    }
+
+    // step through modal actions
+    if (modalOpen()) return;
+
+    if (key === 'g') {
+      e.preventDefault(); pendingG = 'g';
+      if (gTimer) clearTimeout(gTimer);
+      gTimer = setTimeout(clearG, 1200);
+      return;
+    }
+
+    if (!ctrl && ACTIONS[key]) {
+      e.preventDefault();
+      ACTIONS[key].fn();
+    }
+  });
+})();
+// ===== END KEYBOARD SHORTCUTS =====
+
+</script>
+</body>
+</html>
+
+
