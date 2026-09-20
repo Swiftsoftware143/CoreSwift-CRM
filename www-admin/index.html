@@ -367,8 +367,85 @@ const API = {
   get(path) { return this.call('GET', path); },
   post(path, body) { return this.call('POST', path, body); },
   put(path, body) { return this.call('PUT', path, body); },
+  patch(path, body) { return this.call('PATCH', path, body); },
   del(path) { return this.call('DELETE', path); }
 };
+
+// ── Features & Plans: per-plan feature toggles ───────────────────────────────
+// Source of truth is GET /api/billing/plans/registry (the same 21-key registry the
+// server enforces). The server denies with 402 when a plan's flag is explicitly false;
+// an ABSENT key means allowed.
+let FP_DATA = null;
+
+async function loadFeatureMatrix() {
+  const wrap = document.getElementById('fpWrap');
+  if (!wrap) return;
+  try {
+    const d = await API.get('/billing/plans/registry');
+    FP_DATA = d;
+    const plans = d.plans || [], feats = d.features || [];
+    if (!plans.length || !feats.length) {
+      wrap.innerHTML = '<div style="padding:20px;color:var(--text-muted)">Registry returned no plans or no features.</div>';
+      return;
+    }
+    let h = '<div style="overflow:auto"><table style="width:100%;border-collapse:collapse;min-width:820px">' +
+      '<thead><tr><th style="text-align:left;padding:10px;border-bottom:2px solid var(--border,#333)">Feature</th>';
+    plans.forEach(p => {
+      h += '<th style="text-align:center;padding:10px;border-bottom:2px solid var(--border,#333)">' +
+           escapeHtml(p.name || p.slug) + '</th>';
+    });
+    h += '</tr></thead><tbody>';
+    feats.forEach(f => {
+      h += '<tr><td style="padding:10px;border-bottom:1px solid var(--border,#2a2a2a)">' +
+        '<strong>' + escapeHtml(f.label) + '</strong><br>' +
+        '<span style="color:var(--text-muted);font-size:12px">' + escapeHtml(f.key) +
+        ' &middot; ' + escapeHtml(f.module) + '</span></td>';
+      plans.forEach(p => {
+        const v = (p.features || {})[f.key];
+        const on = v === true;
+        h += '<td style="text-align:center;padding:10px;border-bottom:1px solid var(--border,#2a2a2a)">' +
+          '<input type="checkbox" style="width:18px;height:18px;cursor:pointer"' +
+          ' data-plan="' + escapeHtml(p.id) + '" data-slug="' + escapeHtml(p.slug) + '"' +
+          ' data-key="' + escapeHtml(f.key) + '"' + (on ? ' checked' : '') +
+          ' onchange="toggleFeature(this)" title="' +
+          (v === undefined ? 'not set on this plan (allowed)' : (on ? 'enabled' : 'disabled')) + '">' +
+          (v === undefined ? '<div style="font-size:11px;color:var(--text-muted)">unset</div>' : '') +
+          '</td>';
+      });
+      h += '</tr>';
+    });
+    h += '</tbody></table></div>' +
+      '<p style="color:var(--text-secondary);margin-top:14px;max-width:820px">' +
+      'An <strong>unset</strong> box means the plan does not mention that feature, which the server treats as ' +
+      '<em>allowed</em> (so existing tenants are never silently stripped). Unticking writes an explicit ' +
+      '<code>false</code> and is what actually denies the request with HTTP 402. Changes save immediately.</p>';
+    wrap.innerHTML = h;
+  } catch (e) {
+    wrap.innerHTML = '<div style="padding:20px;color:var(--danger,#f66)">Could not load the registry: ' +
+      escapeHtml(e.message) + '</div>';
+  }
+}
+
+async function toggleFeature(el) {
+  const planId = el.dataset.plan, slug = el.dataset.slug, key = el.dataset.key;
+  const on = el.checked;
+  el.disabled = true;
+  try {
+    // features is replaced whole (COALESCE), never merged — so merge client-side or the
+    // plan loses its numeric limits.
+    const plan = ((FP_DATA && FP_DATA.plans) || []).find(p => p.id === planId);
+    const merged = Object.assign({}, (plan && plan.features) || {});
+    merged[key] = on;
+    await API.patch('/billing/plans/' + planId, { features: merged });
+    if (plan) plan.features = merged;
+    toast(key + ' turned ' + (on ? 'ON' : 'OFF') + ' for ' + slug, 'success');
+  } catch (e) {
+    el.checked = !on;
+    toast('Save failed: ' + e.message, 'error');
+  } finally {
+    el.disabled = false;
+  }
+}
 
 // Toast
 function toast(msg, type='info') {
@@ -534,6 +611,7 @@ const ADMIN_MENU = [
     { id:'email-admin', icon:'📧', label:'Private Email Admin' },
     { id:'provider-keys', icon:'🔑', label:'Provider Keys Admin' }
   ]},
+  { id:'features-plans', icon:'🧩', label:'Features & Plans' },
   { type:'group', icon:'⚙️', label:'Admin Settings', children:[
     { id:'configuration', icon:'⚙️', label:'Configuration' }
   ]}
@@ -1000,6 +1078,12 @@ const TAB_RENDERERS = {
       '<button class="btn btn-danger" data-ops="pe-purge-open" onclick="showPurgeModal()">Open Purge Control</button>');
   },
   'provider-keys': () => placeholderPanel('Provider Keys Admin', 'Global API key management for all providers.', '🔑'),
+  'features-plans': () => {
+    let html = pageHeader('Features & Plans', 'Turn modules on or off per plan — enforced on every request') +
+      '<div id="fpWrap"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading feature registry...</div></div>';
+    loadFeatureMatrix();
+    return html;
+  },
   'configuration': () => {
     let html = pageHeader('Site Configuration', 'SEO, analytics, legal pages, and homepage settings') +
     '<div id="siteConfigForm" style="max-width:900px"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading site settings...</div></div>';
