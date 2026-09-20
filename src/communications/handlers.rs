@@ -275,6 +275,89 @@ pub async fn delete_template(
     Ok(Json(json!({"message": "Template deleted"})))
 }
 
+/// Field names that hold a credential inside the communications settings blob.
+const SECRET_HINTS: [&str; 6] = [
+    "api_key",
+    "apikey",
+    "password",
+    "secret",
+    "token",
+    "credential",
+];
+
+fn is_secret_field(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    SECRET_HINTS.iter().any(|h| n.contains(h))
+}
+
+fn mask_secret(value: &str) -> String {
+    if value.len() > 6 {
+        format!("{}...{}", &value[..3], &value[value.len() - 3..])
+    } else {
+        "***".to_string()
+    }
+}
+
+/// Recursively redact secret-looking string values (API responses only).
+fn redact_secrets(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (k, v) in map.iter_mut() {
+                if is_secret_field(k) {
+                    if let Value::String(s) = v {
+                        if !s.is_empty() {
+                            let masked = mask_secret(s);
+                            *s = masked;
+                        }
+                    }
+                } else {
+                    redact_secrets(v);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items.iter_mut() {
+                redact_secrets(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// True when an incoming string looks like one of our masked placeholders
+/// (`abc...xyz`) rather than a real credential.
+fn looks_masked(s: &str) -> bool {
+    s == "***" || s.contains("...")
+}
+
+/// Keep the stored credential when the client echoes a masked placeholder back
+/// (the admin UI pre-fills password inputs from the redacted GET response).
+fn keep_stored_secrets(incoming: &mut Value, stored: Option<&Value>) {
+    match incoming {
+        Value::Object(map) => {
+            let stored_obj = stored.and_then(|s| s.as_object());
+            for (k, v) in map.iter_mut() {
+                if is_secret_field(k) {
+                    let echoed_mask = matches!(v, Value::String(s) if looks_masked(s));
+                    if echoed_mask {
+                        if let Some(prev) = stored_obj.and_then(|o| o.get(k)).cloned() {
+                            *v = prev;
+                        }
+                    }
+                } else {
+                    keep_stored_secrets(v, stored_obj.and_then(|o| o.get(k)));
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items.iter_mut() {
+                keep_stored_secrets(item, None);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// GET /api/comms/providers — Get communication provider config
 pub async fn get_providers(
     State(s): State<AppState>,
@@ -287,7 +370,7 @@ pub async fn get_providers(
     .bind(tid)
     .fetch_optional(&s.db)
     .await?;
-    let merged = config.flatten().unwrap_or(json!({
+    let mut merged = config.flatten().unwrap_or(json!({
         "email_provider": "mailgun",
         "sms_provider": "telnyx",
         "from_email": null,
@@ -300,6 +383,7 @@ pub async fn get_providers(
             }
         }
     }));
+    redact_secrets(&mut merged);
     Ok(Json(json!(merged)))
 }
 
@@ -310,13 +394,23 @@ pub async fn update_providers(
     Json(settings): Json<Value>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    let stored = sqlx::query_scalar::<_, Option<serde_json::Value>>(
+        "SELECT settings->'communications' FROM tenants WHERE id = $1",
+    )
+    .bind(tid)
+    .fetch_optional(&s.db)
+    .await?;
+    let mut settings = settings;
+    keep_stored_secrets(&mut settings, stored.flatten().as_ref());
     let _ = sqlx::query(
         r#"UPDATE tenants SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{communications}', $1::jsonb), updated_at = NOW() WHERE id = $2"#
     )
     .bind(&settings).bind(tid)
     .execute(&s.db).await?;
+    let mut echo = settings.clone();
+    redact_secrets(&mut echo);
     Ok(Json(
-        json!({"message": "Provider settings updated", "settings": settings}),
+        json!({"message": "Provider settings updated", "settings": echo}),
     ))
 }
 

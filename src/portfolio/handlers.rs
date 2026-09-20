@@ -17,6 +17,37 @@ use crate::auth::Claims;
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
 
+/// Mask a stored credential — first/last 3 chars only. The raw value stays
+/// server-side (webhook dispatch reads it straight from the DB).
+fn mask_secret(value: &str) -> String {
+    if value.len() > 6 {
+        format!("{}...{}", &value[..3], &value[value.len() - 3..])
+    } else {
+        "***".to_string()
+    }
+}
+
+/// Project an integration target for API responses with the stored credential
+/// redacted (never emit `api_key` itself).
+fn target_json(t: &IntegrationTarget) -> serde_json::Value {
+    let key_probe = t.api_key.as_deref().unwrap_or("");
+    json!({
+        "id": t.id,
+        "tenant_id": t.tenant_id,
+        "portfolio_company_id": t.portfolio_company_id,
+        "user_id": t.user_id,
+        "name": t.name,
+        "provider": t.provider,
+        "webhook_url": t.webhook_url,
+        "api_key_masked": if key_probe.is_empty() { None } else { Some(mask_secret(key_probe)) },
+        "has_api_key": !key_probe.is_empty(),
+        "events": t.events,
+        "is_active": t.is_active,
+        "created_at": t.created_at,
+        "updated_at": t.updated_at,
+    })
+}
+
 /// GET /api/portfolio — list portfolio companies for the tenant
 pub async fn list(
     State(s): State<AppState>,
@@ -179,7 +210,9 @@ pub async fn list_targets(
     .bind(tenant_id)
     .fetch_all(&s.db)
     .await?;
-    Ok(Json(json!({"integration_targets": targets})))
+    Ok(Json(json!({
+        "integration_targets": targets.iter().map(target_json).collect::<Vec<_>>()
+    })))
 }
 
 /// POST /api/portfolio/internal — internal sync, no JWT
@@ -276,5 +309,5 @@ pub async fn create_target(
     .bind(&req.events)
     .fetch_one(&s.db)
     .await?;
-    Ok((StatusCode::CREATED, Json(json!(target))))
+    Ok((StatusCode::CREATED, Json(target_json(&target))))
 }
