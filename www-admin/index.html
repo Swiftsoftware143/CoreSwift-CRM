@@ -262,7 +262,7 @@ tr:hover td{background:var(--bg-hover)}
     <div id="loginError" class="login-error"></div>
     <div class="form-group">
       <label>Email</label>
-      <input type="email" id="loginEmail" placeholder="admin@example.com" value="swiftsoftware143@yahoo.com">
+      <input type="email" id="loginEmail" placeholder="admin@example.com" value="">
     </div>
     <div class="form-group">
       <label>Password</label>
@@ -422,7 +422,7 @@ async function doLogin() {
       throw new Error(msg);
     }
     const data = await res.json();
-    STATE.token = data.token;
+    STATE.token = data.access_token || data.token;
     STATE.user = data.user || { email, name: email.split('@')[0], role: 'agency_admin' };
     localStorage.setItem('crm_token', STATE.token);
     localStorage.setItem('crm_user', JSON.stringify(STATE.user));
@@ -620,7 +620,7 @@ function getTabLabel(id) {
 // ===== UPGRADE BANNER =====
 async function checkPlan() {
   try {
-    const plans = await API.get('/plans');
+    const plans = await API.get('/billing/plans');
     if (plans && plans.length > 0) {
       // Find user's current plan or default to first
       const current = plans.find(p => p.is_current || p.is_default) || plans[0];
@@ -650,7 +650,7 @@ async function openUpgradeModal() {
   let plansHtml = '<div class="loading-wrap"><div class="spinner"></div> Loading plans...</div>';
   showModal('Upgrade Your Plan', plansHtml, '', true);
   try {
-    const plans = await API.get('/plans');
+    const plans = await API.get('/billing/plans');
     if (!plans || plans.length === 0) {
       document.querySelector('#modalContainer .modal-body').innerHTML = '<p class="empty-state">No plans available</p>';
       return;
@@ -1434,7 +1434,7 @@ const TAB_LOADERS = {
 
   'billing': async () => {
     try {
-      const plans = await API.get('/plans');
+      const plans = await API.get('/billing/plans');
       let html = '';
       if (Array.isArray(plans) && plans.length > 0) {
         html = '<div class="plans-grid">';
