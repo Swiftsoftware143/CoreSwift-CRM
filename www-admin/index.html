@@ -1,0 +1,1760 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CoreSwift CRM Admin</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg-primary:#0f1117;--bg-secondary:#1a1d27;--bg-card:#222532;
+  --bg-hover:#2a2d3a;--bg-active:#2d3152;
+  --text-primary:#e8eaed;--text-secondary:#9aa0a6;--text-muted:#6b7280;
+  --accent:#6366f1;--accent-hover:#818cf8;--accent-subtle:rgba(99,102,241,.12);
+  --success:#22c55e;--warning:#f59e0b;--error:#ef4444;
+  --border:#2d3148;--border-light:#383c52;
+  --radius-sm:4px;--radius:8px;--radius-lg:12px;
+  --sidebar-w:260px;--sidebar-collapsed:60px;--header-h:56px;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.3);--shadow:0 4px 12px rgba(0,0,0,.4);
+  --shadow-lg:0 8px 32px rgba(0,0,0,.5);
+}
+body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg-primary);color:var(--text-primary);display:flex;min-height:100vh;overflow:hidden;line-height:1.5}
+a{color:var(--accent);text-decoration:none}
+a:hover{color:var(--accent-hover)}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--text-muted)}
+
+/* ===== LOGIN ===== */
+.login-wrap{display:flex;align-items:center;justify-content:center;width:100vw;height:100vh;background:var(--bg-primary)}
+.login-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:40px;width:420px;max-width:90vw;box-shadow:var(--shadow-lg)}
+.login-card .logo{font-size:2rem;margin-bottom:8px;text-align:center}
+.login-card h1{font-size:1.4rem;margin-bottom:4px;text-align:center}
+.login-card .sub{color:var(--text-secondary);margin-bottom:28px;text-align:center;font-size:.9rem}
+.login-error{background:rgba(239,68,68,.12);color:var(--error);padding:10px 14px;border-radius:var(--radius-sm);margin-bottom:16px;font-size:.85rem;display:none}
+
+/* ===== FORMS ===== */
+.form-group{margin-bottom:16px}
+.form-group label{display:block;margin-bottom:6px;font-size:.82rem;color:var(--text-secondary);font-weight:500}
+.form-group input,.form-group select,.form-group textarea{width:100%;padding:10px 12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-size:.88rem;outline:none;transition:border-color .2s;font-family:inherit}
+.form-group input:focus,.form-group select:focus,.form-group textarea:focus{border-color:var(--accent)}
+.form-group textarea{resize:vertical;min-height:80px}
+.form-hint{font-size:.78rem;color:var(--text-muted);margin-top:4px}
+
+/* ===== BUTTONS ===== */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:10px 20px;border:none;border-radius:var(--radius-sm);font-size:.88rem;font-weight:500;cursor:pointer;transition:all .2s;font-family:inherit;white-space:nowrap}
+.btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:var(--accent-hover);transform:translateY(-1px)}
+.btn-secondary{background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border)}.btn-secondary:hover{background:var(--bg-hover)}
+.btn-danger{background:var(--error);color:#fff}.btn-danger:hover{opacity:.9}
+.btn-ghost{background:transparent;color:var(--text-secondary);border:1px solid transparent}.btn-ghost:hover{color:var(--text-primary);background:var(--bg-hover)}
+.btn-sm{padding:6px 12px;font-size:.8rem}
+.btn-xs{padding:3px 8px;font-size:.75rem;border-radius:3px}
+.btn-block{width:100%;justify-content:center}
+.btn-icon{background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:1.1rem;padding:4px 8px;border-radius:var(--radius-sm);display:inline-flex;align-items:center;justify-content:center}.btn-icon:hover{color:var(--text-primary);background:var(--bg-hover)}
+
+/* ===== LAYOUT ===== */
+.sidebar{width:var(--sidebar-w);background:var(--bg-secondary);border-right:1px solid var(--border);display:flex;flex-direction:column;height:100vh;position:fixed;left:0;top:0;z-index:100;transition:width .2s ease;overflow:hidden;flex-shrink:0}
+.sidebar.collapsed{width:var(--sidebar-collapsed)}
+.sidebar.collapsed .nav-text,.sidebar.collapsed .nav-arrow,.sidebar.collapsed .sidebar-brand-text,.sidebar.collapsed .nav-group-label{opacity:0;pointer-events:none;transition:opacity .1s}
+.sidebar.collapsed .nav-item{padding:10px 0;justify-content:center}
+.sidebar.collapsed .nav-icon{margin-right:0;font-size:1.2rem}
+.main-wrap{margin-left:var(--sidebar-w);flex:1;display:flex;flex-direction:column;height:100vh;overflow:hidden;transition:margin-left .2s ease}
+.main-wrap.expanded{margin-left:var(--sidebar-collapsed)}
+
+/* ===== HEADER ===== */
+.header{height:var(--header-h);background:var(--bg-secondary);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 24px;flex-shrink:0}
+.header-left{display:flex;align-items:center;gap:12px}
+.header-title{font-size:1.1rem;font-weight:600}
+.header-right{display:flex;align-items:center;gap:12px}
+.user-btn{display:flex;align-items:center;gap:8px;padding:6px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);cursor:pointer;font-size:.85rem;transition:all .2s}
+.user-btn:hover{background:var(--bg-hover)}
+.avatar{width:28px;height:28px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:.75rem;color:#fff;flex-shrink:0}
+.dropdown{position:relative}
+.dropdown-menu{position:absolute;top:100%;right:0;margin-top:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);min-width:200px;box-shadow:var(--shadow-lg);z-index:200;display:none;overflow:hidden}
+.dropdown-menu.show{display:block}
+.dropdown-item{padding:10px 16px;display:flex;align-items:center;gap:8px;cursor:pointer;font-size:.85rem;color:var(--text-primary);transition:background .15s;border:none;background:none;width:100%;text-align:left;font-family:inherit}
+.dropdown-item:hover{background:var(--bg-hover)}
+.dropdown-divider{height:1px;background:var(--border);margin:4px 0}
+
+/* ===== SIDEBAR NAV ===== */
+.sidebar-header{padding:16px 20px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);flex-shrink:0;height:var(--header-h)}
+.sidebar-brand{font-size:1rem;font-weight:700;white-space:nowrap}
+.sidebar-logo{font-size:1.4rem}
+.sidebar-nav{flex:1;overflow-y:auto;padding:8px 0}
+.nav-section{padding:4px 0}
+.nav-divider{padding:8px 20px;font-size:.7rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 20px;cursor:pointer;color:var(--text-secondary);font-size:.88rem;transition:all .15s;border-left:3px solid transparent;white-space:nowrap}
+.nav-item:hover{color:var(--text-primary);background:var(--bg-hover)}
+.nav-item.active{color:#fff;background:var(--accent-subtle);border-left-color:var(--accent)}
+.nav-item .nav-icon{width:20px;text-align:center;flex-shrink:0;font-size:1rem}
+.nav-item .nav-text{flex:1}
+.nav-item .nav-arrow{font-size:.7rem;transition:transform .2s;color:var(--text-muted)}
+.nav-item.group-expanded .nav-arrow{transform:rotate(90deg)}
+.nav-group-items{overflow:hidden;max-height:0;transition:max-height .3s ease}
+.nav-group-items.expanded{max-height:600px}
+.nav-group-items .nav-item{padding-left:44px;font-size:.84rem}
+.sidebar-footer{padding:12px 20px;border-top:1px solid var(--border);flex-shrink:0}
+.collapse-btn{display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--text-muted);font-size:.82rem;background:none;border:none;width:100%;padding:6px 0;font-family:inherit}
+.collapse-btn:hover{color:var(--text-primary)}
+.admin-section{display:none}
+.admin-section.visible{display:block}
+
+/* ===== MAIN CONTENT ===== */
+.content{flex:1;overflow-y:auto;padding:0}
+.content-inner{padding:24px;max-width:1400px}
+.page-header{margin-bottom:24px}
+.page-header h2{font-size:1.5rem;font-weight:600;margin-bottom:4px}
+.page-header p{color:var(--text-secondary);font-size:.9rem}
+.page-actions{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+
+/* ===== BANNER ===== */
+.upgrade-banner{background:linear-gradient(135deg,rgba(99,102,241,.15),rgba(139,92,246,.1));border:1px solid var(--accent);border-radius:var(--radius);padding:14px 20px;display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;gap:12px;flex-wrap:wrap}
+.upgrade-banner p{font-size:.9rem;color:var(--text-primary);margin:0}
+.upgrade-banner .plan-name{color:var(--accent-hover);font-weight:600}
+.upgrade-banner .banner-actions{display:flex;gap:8px;flex-shrink:0}
+.upgrade-banner.dismissed{display:none}
+
+/* ===== CARDS ===== */
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.card-header{padding:14px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;font-weight:600;font-size:.9rem}
+.card-body{padding:20px}
+.card-footer{padding:12px 20px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:flex-end;gap:8px}
+
+/* ===== STATS GRID ===== */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;margin-bottom:24px}
+.stat-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;transition:all .2s;cursor:default}
+.stat-card:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:var(--shadow)}
+.stat-card .stat-icon{font-size:1.5rem;margin-bottom:8px}
+.stat-card .stat-value{font-size:1.8rem;font-weight:700;margin-bottom:2px}
+.stat-card .stat-label{font-size:.82rem;color:var(--text-secondary)}
+.stat-card.accent{border-left:3px solid var(--accent)}
+
+/* ===== TABLE ===== */
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:10px 14px;font-size:.8rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid var(--border);white-space:nowrap}
+td{padding:10px 14px;font-size:.88rem;border-bottom:1px solid var(--border);color:var(--text-primary)}
+tr:hover td{background:var(--bg-hover)}
+.empty-state{text-align:center;padding:60px 20px;color:var(--text-muted)}
+.empty-state .empty-icon{font-size:3rem;margin-bottom:12px}
+.empty-state h3{font-size:1.1rem;margin-bottom:6px;color:var(--text-secondary)}
+.empty-state p{font-size:.88rem;max-width:400px;margin:0 auto 16px}
+
+/* ===== BADGES ===== */
+.badge{display:inline-flex;padding:3px 10px;border-radius:20px;font-size:.75rem;font-weight:500}
+.badge-primary{background:var(--accent-subtle);color:var(--accent-hover)}
+.badge-success{background:rgba(34,197,94,.12);color:var(--success)}
+.badge-warning{background:rgba(245,158,11,.12);color:var(--warning)}
+.badge-error{background:rgba(239,68,68,.12);color:var(--error)}
+.badge-muted{background:var(--bg-secondary);color:var(--text-muted)}
+
+/* ===== TOASTS ===== */
+.toast-container{position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px}
+.toast{padding:12px 18px;border-radius:var(--radius);font-size:.88rem;box-shadow:var(--shadow-lg);animation:slideIn .3s ease;display:flex;align-items:center;gap:10px;min-width:300px;max-width:450px}
+.toast-success{background:#065f46;color:#d1fae5;border:1px solid #059669}
+.toast-error{background:#7f1d1d;color:#fecaca;border:1px solid #dc2626}
+.toast-info{background:#1e3a5f;color:#dbeafe;border:1px solid #3b82f6}
+.toast-warning{background:#78350f;color:#fef3c7;border:1px solid #f59e0b}
+.toast-close{margin-left:auto;cursor:pointer;opacity:.7;background:none;border:none;color:inherit;font-size:1rem}
+.toast-close:hover{opacity:1}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+
+/* ===== MODAL ===== */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:500;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.modal{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);width:520px;max-width:90vw;max-height:85vh;overflow-y:auto;animation:modalIn .2s ease}
+.modal-lg{width:700px}
+.modal-header{padding:18px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:var(--bg-card);z-index:1}
+.modal-header h3{font-size:1.1rem;font-weight:600}
+.modal-body{padding:24px}
+.modal-footer{padding:14px 24px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;position:sticky;bottom:0;background:var(--bg-card)}
+@keyframes modalIn{from{transform:scale(.95) translateY(10px);opacity:0}to{transform:scale(1) translateY(0);opacity:1}}
+
+/* ===== GRID ===== */
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+@media(max-width:768px){.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}}
+
+/* ===== PROVIDER CARDS ===== */
+.provider-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.provider-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;transition:all .2s}
+.provider-card:hover{border-color:var(--accent)}
+.provider-card.connected{border-color:var(--success)}
+.provider-card .provider-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.provider-card .provider-name{font-weight:600;font-size:.95rem}
+.provider-card .provider-status{font-size:.78rem}
+.provider-card .provider-desc{font-size:.82rem;color:var(--text-secondary);margin-bottom:14px}
+.status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
+.status-dot.connected{background:var(--success)}
+.status-dot.disconnected{background:var(--text-muted)}
+
+/* ===== CHAT ===== */
+.chat-container{display:flex;flex-direction:column;height:calc(100vh - 180px);background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.chat-messages{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:12px}
+.chat-msg{padding:10px 14px;border-radius:var(--radius);max-width:80%;font-size:.88rem;line-height:1.5}
+.chat-msg.user{align-self:flex-end;background:var(--accent);color:#fff}
+.chat-msg.assistant{align-self:flex-start;background:var(--bg-secondary);border:1px solid var(--border)}
+.chat-input-area{display:flex;gap:8px;padding:14px;border-top:1px solid var(--border)}
+.chat-input-area input{flex:1;padding:10px 14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-size:.88rem;outline:none}
+.chat-input-area input:focus{border-color:var(--accent)}
+.chat-msg .msg-role{font-size:.72rem;color:var(--text-muted);margin-bottom:4px}
+
+/* ===== SEARCH BAR ===== */
+.search-bar{display:flex;gap:8px;margin-bottom:16px}
+.search-bar input{flex:1;padding:10px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-size:.88rem;outline:none}
+.search-bar input:focus{border-color:var(--accent)}
+
+/* ===== TOGGLE ===== */
+.toggle{position:relative;display:inline-block;width:44px;height:24px}
+.toggle input{opacity:0;width:0;height:0}
+.toggle-slider{position:absolute;cursor:pointer;inset:0;background:var(--border);border-radius:24px;transition:.2s}
+.toggle-slider:before{position:absolute;content:'';height:18px;width:18px;left:3px;bottom:3px;background:var(--text-primary);border-radius:50%;transition:.2s}
+.toggle input:checked+.toggle-slider{background:var(--accent)}
+.toggle input:checked+.toggle-slider:before{transform:translateX(20px)}
+
+/* ===== CONFIG LIST ===== */
+.config-list{display:flex;flex-direction:column;gap:1px;background:var(--border);border-radius:var(--radius);overflow:hidden}
+.config-item{background:var(--bg-card);padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+.config-item .config-info{flex:1}
+.config-item .config-label{font-weight:500;font-size:.9rem}
+.config-item .config-desc{font-size:.8rem;color:var(--text-secondary);margin-top:2px}
+
+/* ===== PLANS ===== */
+.plans-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}
+.plan-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;text-align:center;transition:all .2s;position:relative}
+.plan-card:hover{border-color:var(--accent)}
+.plan-card.current{border-color:var(--accent);background:var(--accent-subtle)}
+.plan-card .plan-badge{position:absolute;top:12px;right:12px}
+.plan-card .plan-name{font-size:1.1rem;font-weight:600;margin-bottom:4px}
+.plan-card .plan-price{font-size:2rem;font-weight:700;margin:12px 0}
+.plan-card .plan-price span{font-size:.9rem;color:var(--text-secondary);font-weight:400}
+.plan-card .plan-features{list-style:none;padding:0;margin:16px 0;text-align:left}
+.plan-card .plan-features li{padding:6px 0;font-size:.85rem;color:var(--text-secondary);display:flex;align-items:center;gap:8px}
+.plan-card .plan-features li.check{color:var(--text-primary)}
+
+/* ===== PLACEHOLDER ===== */
+.placeholder-panel{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;text-align:center}
+.placeholder-panel .placeholder-icon{font-size:3.5rem;margin-bottom:16px}
+.placeholder-panel h3{font-size:1.2rem;margin-bottom:8px}
+.placeholder-panel p{color:var(--text-secondary);font-size:.9rem;max-width:450px;margin:0 auto 20px}
+
+/* ===== LOADING ===== */
+.spinner{display:inline-block;width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-wrap{display:flex;align-items:center;justify-content:center;padding:40px;gap:12px;color:var(--text-secondary)}
+
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+
+
+<div id="loginScreen" class="login-wrap">
+  <div class="login-card">
+    <div class="logo">🏢</div>
+    <h1>CoreSwift CRM</h1>
+    <p class="sub">Admin Dashboard</p>
+    <div id="loginError" class="login-error"></div>
+    <div class="form-group">
+      <label>Email</label>
+      <input type="email" id="loginEmail" placeholder="admin@example.com" value="swiftsoftware143@yahoo.com">
+    </div>
+    <div class="form-group">
+      <label>Password</label>
+      <input type="password" id="loginPassword" placeholder="Enter password">
+    </div>
+    <button class="btn btn-primary btn-block" onclick="doLogin()">Sign In</button>
+  </div>
+</div>
+
+
+<div id="appWrap" class="hidden" style="display:none">
+  <!-- SIDEBAR -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <span class="sidebar-logo">🏢</span>
+      <span class="sidebar-brand sidebar-brand-text">CoreSwift CRM</span>
+    </div>
+    <nav class="sidebar-nav" id="sidebarNav">
+    </nav>
+    <div class="sidebar-footer">
+      <button class="collapse-btn" onclick="toggleSidebar()">
+        <span id="collapseIcon">◀</span>
+        <span class="nav-text">Collapse</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div class="main-wrap" id="mainWrap">
+    <header class="header">
+      <div class="header-left">
+        <span class="header-title" id="pageTitle">Dashboard</span>
+      </div>
+      <div class="header-right">
+        <div class="dropdown">
+          <button class="user-btn" onclick="toggleUserMenu()">
+            <div class="avatar" id="userAvatar">S</div>
+            <span id="userEmail">admin</span>
+            <span style="font-size:.7rem">▾</span>
+          </button>
+          <div class="dropdown-menu" id="userMenu">
+            <button class="dropdown-item" onclick="switchTab('profile')">👤 Profile</button>
+            <button class="dropdown-item" onclick="switchTab('billing')">💳 Plans &amp; Billing</button>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-item" onclick="logout()" style="color:var(--error)">🚪 Sign Out</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div class="content" id="mainContent">
+      <div class="content-inner">
+        <div id="upgradeBanner" class="upgrade-banner dismissed">
+          <p>You're on the <span class="plan-name" id="currentPlanName">Free</span> plan. <span>Upgrade for more features.</span></p>
+          <div class="banner-actions">
+            <button class="btn btn-primary btn-sm" onclick="openUpgradeModal()">Upgrade Now</button>
+            <button class="btn btn-ghost btn-sm" onclick="dismissBanner()">Dismiss</button>
+          </div>
+        </div>
+        <div id="tabPanels"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST CONTAINER -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- MODAL CONTAINER -->
+<div id="modalContainer"></div>
+
+<script>
+
+
+
+const STATE = {
+  token: null,
+  user: null,
+  activeTab: 'dashboard',
+  sidebarCollapsed: false,
+  planName: 'Free',
+  providers: {},
+  integrations: {}
+};
+
+const API = {
+  async call(method, path, body) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (STATE.token) headers['Authorization'] = `Bearer ${STATE.token}`;
+    const opts = { method, headers };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch('/api' + path, opts);
+    if (res.status === 401) { logout(true); throw new Error('Session expired'); }
+    if (res.status === 402) { showUpgradeBanner(); throw new Error('Payment required'); }
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { const e = await res.json(); msg = e.error || e.message || msg; } catch(_){}
+      throw new Error(msg);
+    }
+    return res.status === 204 ? null : res.json();
+  },
+  get(path) { return this.call('GET', path); },
+  post(path, body) { return this.call('POST', path, body); },
+  put(path, body) { return this.call('PUT', path, body); },
+  del(path) { return this.call('DELETE', path); }
+};
+
+// Toast
+function toast(msg, type='info') {
+  const c = document.getElementById('toastContainer');
+  const icons = { success:'✓', error:'✕', info:'ℹ', warning:'⚠' };
+  const t = document.createElement('div');
+  t.className = 'toast toast-'+type;
+  t.innerHTML = `<span>${icons[type]||''}</span><span>${escapeHtml(msg)}</span><button class="toast-close" onclick="this.parentElement.remove()">✕</button>`;
+  c.appendChild(t);
+  setTimeout(() => { if(t.parentElement) t.remove(); }, 5000);
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// Modal
+function showModal(title, bodyHtml, footerHtml, large) {
+  const c = document.getElementById('modalContainer');
+  c.innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+      <div class="modal${large?' modal-lg':''}">
+        <div class="modal-header">
+          <h3>${title}</h3>
+          <button class="btn-icon" onclick="closeModal()">✕</button>
+        </div>
+        <div class="modal-body">${bodyHtml}</div>
+        ${footerHtml ? `<div class="modal-footer">${footerHtml}</div>` : ''}
+      </div>
+    </div>`;
+}
+function closeModal() { document.getElementById('modalContainer').innerHTML = ''; }
+
+// Auth
+async function doLogin() {
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  const errEl = document.getElementById('loginError');
+  if (!email || !password) { errEl.textContent = 'Please enter email and password.'; errEl.style.display='block'; return; }
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({email, password})
+    });
+    if (!res.ok) {
+      let msg = 'Invalid credentials';
+      try { const e = await res.json(); msg = e.error || e.message || msg; } catch(_){}
+      throw new Error(msg);
+    }
+    const data = await res.json();
+    STATE.token = data.token;
+    STATE.user = data.user || { email, name: email.split('@')[0], role: 'agency_admin' };
+    localStorage.setItem('crm_token', STATE.token);
+    localStorage.setItem('crm_user', JSON.stringify(STATE.user));
+    showApp();
+    toast('Welcome back, ' + (STATE.user.name || STATE.user.email), 'success');
+  } catch(e) {
+    errEl.textContent = e.message;
+    errEl.style.display = 'block';
+  }
+}
+
+function logout(silent) {
+  STATE.token = null;
+  STATE.user = null;
+  localStorage.removeItem('crm_token');
+  localStorage.removeItem('crm_user');
+  document.getElementById('appWrap').style.display = 'none';
+  document.getElementById('loginScreen').style.display = 'flex';
+  if (!silent) toast('Signed out', 'info');
+}
+
+function showApp() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('appWrap').style.display = '';
+  document.getElementById('userEmail').textContent = STATE.user.email;
+  document.getElementById('userAvatar').textContent = (STATE.user.name || STATE.user.email)[0].toUpperCase();
+  renderSidebar();
+  switchTab('dashboard');
+  checkPlan();
+}
+
+// Sidebar
+function toggleSidebar() {
+  STATE.sidebarCollapsed = !STATE.sidebarCollapsed;
+  document.getElementById('sidebar').classList.toggle('collapsed', STATE.sidebarCollapsed);
+  document.getElementById('mainWrap').classList.toggle('expanded', STATE.sidebarCollapsed);
+  document.getElementById('collapseIcon').textContent = STATE.sidebarCollapsed ? '▶' : '◀';
+}
+
+function toggleUserMenu() {
+  document.getElementById('userMenu').classList.toggle('show');
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('.dropdown')) {
+    document.getElementById('userMenu').classList.remove('show');
+  }
+});
+
+// ===== SIDEBAR MENU DEFINITION =====
+const MENU = [
+  { id:'dashboard', icon:'📊', label:'Dashboard' },
+  { id:'contacts', icon:'👥', label:'Contacts' },
+  { id:'companies', icon:'🏢', label:'Companies' },
+  { type:'group', icon:'💰', label:'Sales', children:[
+    { id:'pipelines', icon:'📈', label:'Pipelines & Deals' }
+  ]},
+  { type:'group', icon:'📣', label:'Marketing', children:[
+    { id:'campaigns', icon:'📢', label:'Campaigns' },
+    { id:'lists', icon:'📋', label:'Lists' },
+    { id:'analytics', icon:'📊', label:'Analytics' }
+  ]},
+  { type:'group', icon:'⚡', label:'Automation', children:[
+    { id:'rules', icon:'⚙️', label:'Rules' },
+    { id:'tags', icon:'🏷️', label:'Tags' },
+    { id:'lead-scoring', icon:'🎯', label:'Lead Scoring' }
+  ]},
+  { type:'group', icon:'💬', label:'Communication', children:[
+    { id:'email-templates', icon:'✉️', label:'Email Templates' },
+    { id:'messages', icon:'💬', label:'Messages' },
+    { id:'notifications', icon:'🔔', label:'Notifications' },
+    { id:'telnyx', icon:'📱', label:'Telnyx SMS/Voice' },
+    { id:'comm-log', icon:'📜', label:'Communications Log' }
+  ]},
+  { id:'tickets', icon:'🎫', label:'Support Tickets' },
+  { type:'group', icon:'📬', label:'Inbox', children:[
+    { id:'inbox', icon:'📬', label:'Private Email' }
+  ]},
+  { id:'calendar', icon:'📅', label:'Calendar' },
+  { id:'bookings', icon:'📆', label:'Bookings' },
+  { id:'ai-assistant', icon:'🤖', label:'AI Assistant' },
+  { id:'tracked-links', icon:'🔗', label:'Tracked Links' },
+  { type:'group', icon:'🔄', label:'Workflow', children:[
+    { id:'checklists', icon:'✅', label:'Checklists' },
+    { id:'round-robin', icon:'🔄', label:'Round Robin' }
+  ]}
+];
+
+const SETTINGS_MENU = [
+  { id:'profile', icon:'👤', label:'Profile' },
+  { id:'integrations', icon:'🔌', label:'Integration Center' }
+];
+
+const ADMIN_MENU = [
+  { id:'portfolio', icon:'🏢', label:'Portfolio Companies' },
+  { id:'users', icon:'👥', label:'Users' },
+  { type:'group', icon:'💰', label:'Revenue', children:[
+    { id:'billing', icon:'💳', label:'Billing & Plans' },
+    { id:'affiliates', icon:'🤝', label:'Affiliates' }
+  ]},
+  { type:'group', icon:'🔧', label:'Platform', children:[
+    { id:'widgets', icon:'🧩', label:'Widgets' },
+    { id:'webhooks', icon:'🔗', label:'Webhooks' },
+    { id:'native-apps', icon:'📱', label:'Native Apps' },
+    { id:'audit-log', icon:'📝', label:'Audit Log' },
+    { id:'monitoring', icon:'📡', label:'Monitoring' }
+  ]},
+  { type:'group', icon:'📡', label:'Communication Admin', children:[
+    { id:'telnyx-admin', icon:'☎️', label:'Telnyx Admin' },
+    { id:'email-admin', icon:'📧', label:'Private Email Admin' },
+    { id:'provider-keys', icon:'🔑', label:'Provider Keys Admin' }
+  ]},
+  { type:'group', icon:'⚙️', label:'Admin Settings', children:[
+    { id:'configuration', icon:'⚙️', label:'Configuration' }
+  ]}
+];
+
+function renderSidebar() {
+  const nav = document.getElementById('sidebarNav');
+  let h = '';
+  function item(it, indent) {
+    const isGroup = it.type === 'group';
+    if (isGroup) {
+      const gid = 'group-'+it.label.toLowerCase().replace(/[^a-z]/g,'');
+      h += `<div class="nav-item" onclick="toggleGroup('${gid}')" data-group="${gid}">
+        <span class="nav-icon">${it.icon}</span>
+        <span class="nav-text">${it.label}</span>
+        <span class="nav-arrow">▶</span>
+      </div>`;
+      h += `<div class="nav-group-items" id="${gid}">`;
+      it.children.forEach(c => item(c, true));
+      h += '</div>';
+    } else {
+      h += `<div class="nav-item${STATE.activeTab===it.id?' active':''}" onclick="switchTab('${it.id}')" data-tab="${it.id}">
+        <span class="nav-icon">${it.icon}</span>
+        <span class="nav-text">${it.label}</span>
+      </div>`;
+    }
+  }
+  MENU.forEach(it => item(it, false));
+  h += '<div class="nav-divider">── SETTINGS ──</div>';
+  SETTINGS_MENU.forEach(it => item(it, false));
+  if (STATE.user && STATE.user.role === 'agency_admin') {
+    h += '<div class="nav-divider">── ADMIN ──</div>';
+    ADMIN_MENU.forEach(it => item(it, false));
+  }
+  nav.innerHTML = h;
+
+  // Restore expanded groups
+  document.querySelectorAll('.nav-group-items').forEach(g => {
+    if (STATE.expandedGroups && STATE.expandedGroups[g.id]) {
+      g.classList.add('expanded');
+      const btn = g.previousElementSibling;
+      if (btn) btn.classList.add('group-expanded');
+    }
+  });
+}
+
+function toggleGroup(gid) {
+  const items = document.getElementById(gid);
+  const btn = document.querySelector(`[data-group="${gid}"]`);
+  if (!items) return;
+  const isExpanded = items.classList.toggle('expanded');
+  if (btn) btn.classList.toggle('group-expanded', isExpanded);
+  if (!STATE.expandedGroups) STATE.expandedGroups = {};
+  STATE.expandedGroups[gid] = isExpanded;
+}
+
+function switchTab(tabId) {
+  STATE.activeTab = tabId;
+  document.getElementById('pageTitle').textContent = getTabLabel(tabId);
+  // Update sidebar active
+  document.querySelectorAll('.nav-item[data-tab]').forEach(el => {
+    el.classList.toggle('active', el.dataset.tab === tabId);
+  });
+  renderTab(tabId);
+  // Close user menu
+  document.getElementById('userMenu').classList.remove('show');
+}
+
+function getTabLabel(id) {
+  const all = [...MENU, ...SETTINGS_MENU, ...ADMIN_MENU];
+  for (const it of all) {
+    if (it.id === id) return it.label;
+    if (it.type === 'group' && it.children) {
+      for (const c of it.children) if (c.id === id) return c.label;
+    }
+  }
+  return id.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+}
+
+
+
+// ===== UPGRADE BANNER =====
+async function checkPlan() {
+  try {
+    const plans = await API.get('/plans');
+    if (plans && plans.length > 0) {
+      // Find user's current plan or default to first
+      const current = plans.find(p => p.is_current || p.is_default) || plans[0];
+      STATE.planName = current.name || 'Free';
+      document.getElementById('currentPlanName').textContent = STATE.planName;
+      if (STATE.planName.toLowerCase() === 'free' || STATE.planName.toLowerCase() === 'starter') {
+        if (!localStorage.getItem('crm_banner_dismissed')) {
+          showUpgradeBanner();
+        }
+      }
+    }
+  } catch(e) {
+    // Plan endpoint might not exist — that's fine
+  }
+}
+
+function showUpgradeBanner() {
+  document.getElementById('upgradeBanner').classList.remove('dismissed');
+}
+
+function dismissBanner() {
+  document.getElementById('upgradeBanner').classList.add('dismissed');
+  localStorage.setItem('crm_banner_dismissed', '1');
+}
+
+async function openUpgradeModal() {
+  let plansHtml = '<div class="loading-wrap"><div class="spinner"></div> Loading plans...</div>';
+  showModal('Upgrade Your Plan', plansHtml, '', true);
+  try {
+    const plans = await API.get('/plans');
+    if (!plans || plans.length === 0) {
+      document.querySelector('#modalContainer .modal-body').innerHTML = '<p class="empty-state">No plans available</p>';
+      return;
+    }
+    plansHtml = '<div class="plans-grid">';
+    plans.forEach(p => {
+      const isCurrent = p.name === STATE.planName;
+      const price = p.price_monthly || p.price || 0;
+      const features = (p.features || []).slice(0, 6);
+      plansHtml += `<div class="plan-card${isCurrent?' current':''}">
+        ${isCurrent ? '<span class="badge badge-primary plan-badge">Current</span>' : ''}
+        <div class="plan-name">${escapeHtml(p.name)}</div>
+        <div class="plan-price">$${price}<span>/mo</span></div>
+        <ul class="plan-features">
+          ${features.map(f => `<li class="check">✓ ${escapeHtml(typeof f==='string'?f:f.name||f)}</li>`).join('')}
+        </ul>
+        <button class="btn ${isCurrent ? 'btn-secondary' : 'btn-primary'} btn-block" ${isCurrent?'disabled':''}>
+          ${isCurrent ? 'Current Plan' : 'Upgrade'}
+        </button>
+      </div>`;
+    });
+    plansHtml += '</div>';
+    document.querySelector('#modalContainer .modal-body').innerHTML = plansHtml;
+  } catch(e) {
+    document.querySelector('#modalContainer .modal-body').innerHTML = `<p style="color:var(--error)">Failed to load plans: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+// ===== TAB RENDERING =====
+function renderTab(tabId) {
+  const container = document.getElementById('tabPanels');
+  const fn = TAB_RENDERERS[tabId];
+  if (fn) {
+    container.innerHTML = fn();
+    // If there's an async loader, call it
+    if (TAB_LOADERS[tabId]) {
+      TAB_LOADERS[tabId]();
+    }
+  } else {
+    container.innerHTML = placeholderPanel(getTabLabel(tabId), 'This feature is under development.', '🚧');
+  }
+}
+
+function placeholderPanel(title, desc, icon) {
+  return `<div class="placeholder-panel">
+    <div class="placeholder-icon">${icon||'🚧'}</div>
+    <h3>${title}</h3>
+    <p>${desc||'Configure this feature to get started.'}</p>
+    <button class="btn btn-secondary" onclick="switchTab('integrations')">🔌 Open Integration Center</button>
+  </div>`;
+}
+
+function pageHeader(title, desc, actions) {
+  return `<div class="page-header">
+    <h2>${title}</h2>
+    ${desc ? `<p>${desc}</p>` : ''}
+    ${actions ? `<div class="page-actions">${actions}</div>` : ''}
+  </div>`;
+}
+
+function card(header, body, footer) {
+  return `<div class="card">
+    ${header ? `<div class="card-header">${header}</div>` : ''}
+    ${body ? `<div class="card-body">${body}</div>` : ''}
+    ${footer ? `<div class="card-footer">${footer}</div>` : ''}
+  </div>`;
+}
+
+function dataTable(headers, rows, emptyMsg) {
+  if (!rows || rows.length === 0) {
+    return `<div class="card"><div class="card-body"><div class="empty-state">
+      <div class="empty-icon">📭</div>
+      <h3>No data yet</h3>
+      <p>${emptyMsg || 'Nothing to display right now.'}</p>
+    </div></div></div>`;
+  }
+  return `<div class="card"><div class="table-wrap"><table>
+    <thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody>
+  </table></div></div>`;
+}
+
+// ========== SYNC TAB RENDERERS (no API calls needed) ==========
+const TAB_RENDERERS = {
+  'dashboard': () => {
+    return pageHeader('Dashboard', 'Overview of your CRM performance') +
+    '<div class="stats-grid" id="statsGrid"><div class="loading-wrap"><div class="spinner"></div> Loading stats...</div></div>' +
+    '<div id="dashboardExtra"></div>';
+  },
+
+  'contacts': () => {
+    return pageHeader('Contacts', 'Manage your contacts and leads',
+      '<button class="btn btn-primary btn-sm" onclick="showAddContactModal()">+ Add Contact</button>') +
+    '<div class="search-bar"><input type="text" placeholder="Search contacts..." oninput="filterContacts(this.value)"></div>' +
+    '<div id="contactsTable"><div class="loading-wrap"><div class="spinner"></div> Loading contacts...</div></div>';
+  },
+
+  'companies': () => {
+    return pageHeader('Companies', 'Organizations in your CRM',
+      '<button class="btn btn-primary btn-sm" onclick="showAddCompanyModal()">+ Add Company</button>') +
+    '<div class="search-bar"><input type="text" placeholder="Search companies..." oninput="filterCompanies(this.value)"></div>' +
+    '<div id="companiesTable"><div class="loading-wrap"><div class="spinner"></div> Loading companies...</div></div>';
+  },
+
+  'pipelines': () => {
+    return pageHeader('Pipelines & Deals', 'Track deals through your sales pipeline',
+      '<button class="btn btn-primary btn-sm" onclick="showAddDealModal()">+ Add Deal</button>') +
+    '<div id="pipelinesContent"><div class="loading-wrap"><div class="spinner"></div> Loading pipelines...</div></div>';
+  },
+
+  'campaigns': () => {
+    return pageHeader('Campaigns', 'Marketing campaigns and outreach',
+      '<button class="btn btn-primary btn-sm" onclick="showAddCampaignModal()">+ New Campaign</button>') +
+    '<div id="campaignsTable"><div class="loading-wrap"><div class="spinner"></div> Loading campaigns...</div></div>';
+  },
+
+  'lists': () => {
+    return pageHeader('Lists', 'Contact lists for segmentation',
+      '<button class="btn btn-primary btn-sm" onclick="showAddListModal()">+ New List</button>') +
+    '<div id="listsTable"><div class="loading-wrap"><div class="spinner"></div> Loading lists...</div></div>';
+  },
+
+  'analytics': () => {
+    return pageHeader('Analytics', 'Campaign and pipeline performance metrics') +
+    '<div class="stats-grid">' +
+      '<div class="stat-card"><div class="stat-icon">📧</div><div class="stat-value">--</div><div class="stat-label">Emails Sent</div></div>' +
+      '<div class="stat-card"><div class="stat-icon">👆</div><div class="stat-value">--</div><div class="stat-label">Open Rate</div></div>' +
+      '<div class="stat-card"><div class="stat-icon">🖱️</div><div class="stat-value">--</div><div class="stat-label">Click Rate</div></div>' +
+      '<div class="stat-card"><div class="stat-icon">💰</div><div class="stat-value">--</div><div class="stat-label">Conversion Rate</div></div>' +
+    '</div>' +
+    card('Campaign Performance', '<p style="color:var(--text-secondary)">Connect your email provider in the Integration Center to populate analytics data.</p>',
+      '<button class="btn btn-secondary btn-sm" onclick="switchTab('integrations')">🔌 Open Integration Center</button>');
+  },
+
+  'rules': () => {
+    return pageHeader('Automation Rules', 'IF-THIS-THEN-THAT automation engine',
+      '<button class="btn btn-primary btn-sm" onclick="showAddRuleModal()">+ New Rule</button>') +
+    '<div id="rulesContent">' +
+      card('How It Works', '<p style="color:var(--text-secondary);margin-bottom:12px">Create powerful automations with a simple trigger → action model.</p>' +
+        '<div class="grid-2" style="margin-top:12px">' +
+          '<div style="background:var(--bg-secondary);padding:14px;border-radius:var(--radius);border:1px solid var(--border)"><strong>📥 Triggers</strong><br><small style="color:var(--text-secondary)">Contact created, deal stage changed, form submitted, tag added, email opened, link clicked...</small></div>' +
+          '<div style="background:var(--bg-secondary);padding:14px;border-radius:var(--radius);border:1px solid var(--border)"><strong>📤 Actions</strong><br><small style="color:var(--text-secondary)">Send email, add to list, update deal, create task, notify, webhook...</small></div>' +
+        '</div>', '') +
+    '</div>';
+  },
+
+  'tags': () => {
+    return pageHeader('Tags', 'Organize contacts with tags',
+      '<button class="btn btn-primary btn-sm" onclick="showAddTagModal()">+ New Tag</button>') +
+    '<div id="tagsTable"><div class="loading-wrap"><div class="spinner"></div> Loading tags...</div></div>';
+  },
+
+  'lead-scoring': () => {
+    return pageHeader('Lead Scoring', 'Score leads based on behavior and attributes',
+      '<button class="btn btn-primary btn-sm" onclick="showAddScoreRuleModal()">+ Add Criterion</button>') +
+    '<p style="color:var(--text-secondary);margin-bottom:16px">Define scoring criteria. Leads accumulate points based on their actions and profile attributes.</p>' +
+    '<div id="scoringContent">' +
+      card('Score Criteria', '' +
+        '<div class="config-list">' +
+          '<div class="config-item"><div class="config-info"><div class="config-label">Email Opened</div><div class="config-desc">+5 points when a lead opens an email</div></div><span class="badge badge-primary">+5 pts</span></div>' +
+          '<div class="config-item"><div class="config-info"><div class="config-label">Link Clicked</div><div class="config-desc">+10 points when a lead clicks a tracked link</div></div><span class="badge badge-primary">+10 pts</span></div>' +
+          '<div class="config-item"><div class="config-info"><div class="config-label">Form Submitted</div><div class="config-desc">+20 points when a lead submits a form</div></div><span class="badge badge-primary">+20 pts</span></div>' +
+          '<div class="config-item"><div class="config-info"><div class="config-label">Deal Created</div><div class="config-desc">+30 points when a lead enters a pipeline</div></div><span class="badge badge-primary">+30 pts</span></div>' +
+        '</div>', '<button class="btn btn-primary btn-sm">Save Criteria</button>') +
+      '<br>' +
+      card('Score Thresholds', '' +
+        '<div class="config-list">' +
+          '<div class="config-item"><div class="config-info"><div class="config-label">🔴 Cold</div><div class="config-desc">0-20 points</div></div><span class="badge badge-muted">Cold</span></div>' +
+          '<div class="config-item"><div class="config-info"><div class="config-label">🟡 Warm</div><div class="config-desc">21-50 points</div></div><span class="badge badge-warning">Warm</span></div>' +
+          '<div class="config-item"><div class="config-info"><div class="config-label">🟢 Hot</div><div class="config-desc">51+ points</div></div><span class="badge badge-success">Hot</span></div>' +
+        '</div>', '') +
+    '</div>';
+  },
+
+  'email-templates': () => {
+    return pageHeader('Email Templates', 'Reusable email templates',
+      '<button class="btn btn-primary btn-sm" onclick="showAddTemplateModal()">+ New Template</button>') +
+    '<div id="templatesTable"><div class="loading-wrap"><div class="spinner"></div> Loading templates...</div></div>';
+  },
+
+  'messages': () => {
+    return pageHeader('Messages', 'Send and manage communications',
+      '<button class="btn btn-primary btn-sm" onclick="showComposeModal()">✏️ Compose</button>') +
+    '<div id="messagesContent">' +
+      card('Recent Messages', '<div class="empty-state"><div class="empty-icon">💬</div><h3>No messages yet</h3><p>Connect a messaging provider in the Integration Center.</p></div>',
+        '<button class="btn btn-secondary btn-sm" onclick="switchTab('integrations')">🔌 Integration Center</button>') +
+    '</div>';
+  },
+
+  'notifications': () => {
+    return pageHeader('Notifications', 'Platform notifications and alerts') +
+    card('Notification Settings', '' +
+      '<div class="config-list">' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">New Contact Added</div><div class="config-desc">Notify when a new contact is created</div></div><label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label></div>' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">Deal Stage Changed</div><div class="config-desc">Notify when a deal moves between stages</div></div><label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label></div>' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">Email Opened</div><div class="config-desc">Notify when a sent email is opened</div></div><label class="toggle"><input type="checkbox"><span class="toggle-slider"></span></label></div>' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">Task Due</div><div class="config-desc">Remind when tasks are approaching due date</div></div><label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label></div>' +
+      '</div>', '<button class="btn btn-primary btn-sm">Save Settings</button>');
+  },
+
+  'telnyx': () => placeholderPanel('Telnyx SMS/Voice', 'Connect your Telnyx account in the Integration Center to send SMS and make calls.', '📱'),
+
+  'comm-log': () => {
+    return pageHeader('Communications Log', 'History of all communications') +
+    card('Communication History', '<div class="empty-state"><div class="empty-icon">📜</div><h3>No communications yet</h3><p>Your communications log will appear here once you start sending messages.</p></div>');
+  },
+
+  'tickets': () => {
+    return pageHeader('Support Tickets', 'Manage customer support tickets',
+      '<button class="btn btn-primary btn-sm" onclick="showAddTicketModal()">+ New Ticket</button>') +
+    '<div id="ticketsTable"><div class="loading-wrap"><div class="spinner"></div> Loading tickets...</div></div>';
+  },
+
+  'inbox': () => placeholderPanel('Private Email', 'Connect a mail provider (Mailgun, SendGrid) in the Integration Center to enable private email inboxes.', '📬'),
+
+  'calendar': () => {
+    return pageHeader('Calendar', 'Schedule and manage events',
+      '<button class="btn btn-primary btn-sm" onclick="showAddEventModal()">+ New Event</button>') +
+    '<div id="calendarContent"><div class="loading-wrap"><div class="spinner"></div> Loading events...</div></div>';
+  },
+
+  'bookings': () => placeholderPanel('Bookings', 'Manage appointments and bookings. Share your booking link for self-scheduling.', '📆'),
+
+  'ai-assistant': () => {
+    return pageHeader('AI Assistant', 'Your AI-powered CRM assistant') +
+    '<div class="chat-container">' +
+      '<div class="chat-messages" id="chatMessages">' +
+        '<div class="chat-msg assistant">' +
+          '<div class="msg-role">AI Assistant</div>' +
+          'Connect an LLM provider (OpenAI, DeepSeek, Anthropic) in the <a href="#" onclick="switchTab('integrations')">Integration Center</a> to get started.' +
+        '</div>' +
+      '</div>' +
+      '<div class="chat-input-area">' +
+        '<select id="chatModel" style="padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-size:.85rem">' +
+          '<option value="">Select model...</option>' +
+        '</select>' +
+        '<input type="text" id="chatInput" placeholder="Ask me anything about your CRM..." onkeydown="if(event.key==='Enter')sendChat()">' +
+        '<button class="btn btn-primary" onclick="sendChat()">Send</button>' +
+      '</div>' +
+    '</div>';
+  },
+
+  'tracked-links': () => {
+    return pageHeader('Tracked Links', 'Generate trackable URLs for campaigns',
+      '<button class="btn btn-primary btn-sm" onclick="showAddLinkModal()">+ Generate Link</button>') +
+    card('Tracked Links', '<div class="empty-state"><div class="empty-icon">🔗</div><h3>No tracked links yet</h3><p>Generate tracked URLs to monitor clicks and conversions.</p></div>');
+  },
+
+  'checklists': () => placeholderPanel('Checklists', 'Create and manage task checklists for deals, onboarding, and workflows.', '✅'),
+
+  'round-robin': () => {
+    return pageHeader('Round Robin', 'Distribute leads evenly across your team',
+      '<button class="btn btn-primary btn-sm" onclick="showAddMemberModal()">+ Add Member</button>') +
+    '<p style="color:var(--text-secondary);margin-bottom:16px">Configure round robin assignment rules to automatically distribute new contacts to team members.</p>' +
+    card('Team Members', '' +
+      '<div class="config-list" id="roundRobinMembers">' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">No team members added</div><div class="config-desc">Add team members to the rotation</div></div><span class="badge badge-muted">0 leads</span></div>' +
+      '</div>',
+      '<button class="btn btn-primary btn-sm">Start Rotation</button>') +
+    '<br>' +
+    card('Assignment Rules', '' +
+      '<div class="config-list">' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">Assignment Mode</div><div class="config-desc">How leads are distributed</div></div><select style="padding:6px 10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary)"><option>Round Robin (Sequential)</option><option>Weighted (by capacity)</option><option>Random</option></select></div>' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">Max Leads Per Member</div><div class="config-desc">Cap before skipping to next member</div></div><input type="number" value="10" style="width:80px;padding:6px 10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary)"></div>' +
+      '</div>', '<button class="btn btn-primary btn-sm">Save Rules</button>');
+  },
+
+  // === SETTINGS ===
+  'profile': () => {
+    return pageHeader('Profile Settings', 'Manage your account') +
+    card('Profile Information', '' +
+      '<div class="form-group"><label>Name</label><input type="text" id="profileName" value="' + (STATE.user ? escapeHtml(STATE.user.name || '') : '') + '"></div>' +
+      '<div class="form-group"><label>Email</label><input type="email" value="' + (STATE.user ? escapeHtml(STATE.user.email) : '') + '" disabled style="opacity:.6"> <span class="form-hint">Email cannot be changed</span></div>',
+      '<button class="btn btn-primary" onclick="saveProfile()">Save Changes</button>') +
+    '<br>' +
+    card('Change Password', '' +
+      '<div class="form-group"><label>Current Password</label><input type="password" id="currentPw"></div>' +
+      '<div class="form-group"><label>New Password</label><input type="password" id="newPw"></div>' +
+      '<div class="form-group"><label>Confirm New Password</label><input type="password" id="confirmPw"></div>',
+      '<button class="btn btn-primary" onclick="changePassword()">Update Password</button>');
+  },
+
+  'integrations': () => {
+    return pageHeader('Integration Center', 'Manage all your third-party API keys and integrations') +
+    '<div id="providerCards"><div class="loading-wrap"><div class="spinner"></div> Loading providers...</div></div>';
+  },
+
+  // === ADMIN ===
+  'portfolio': () => placeholderPanel('Portfolio Companies', 'Manage companies and their subscriptions across the platform.', '🏢'),
+  'users': () => {
+    return pageHeader('Users', 'Manage platform users and permissions',
+      '<button class="btn btn-primary btn-sm" onclick="showAddUserModal()">+ Add User</button>') +
+    '<div id="usersTable"><div class="loading-wrap"><div class="spinner"></div> Loading users...</div></div>';
+  },
+  'billing': () => {
+    return pageHeader('Billing & Plans', 'Manage subscription plans and pricing') +
+    '<div id="plansContent"><div class="loading-wrap"><div class="spinner"></div> Loading plans...</div></div>';
+  },
+  'affiliates': () => placeholderPanel('Affiliates', 'Manage your affiliate program — track referrals, commissions, and payouts.', '🤝'),
+  'widgets': () => placeholderPanel('Widgets', 'Embeddable CRM widgets for your website — contact forms, chat, booking.', '🧩'),
+  'webhooks': () => placeholderPanel('Webhooks', 'Configure outgoing webhooks for real-time event notifications.', '🔗'),
+  'native-apps': () => placeholderPanel('Native Apps', 'iOS and Android app configuration and deployment.', '📱'),
+  'audit-log': () => {
+    return pageHeader('Audit Log', 'Track all platform activity',
+      '<button class="btn btn-secondary btn-sm">Export CSV</button>') +
+    card('Activity Log', '<div class="empty-state"><div class="empty-icon">📝</div><h3>No audit entries</h3><p>Audit log entries will appear as users interact with the platform.</p></div>');
+  },
+  'monitoring': () => {
+    return pageHeader('Monitoring', 'Server and platform health') +
+    '<div class="stats-grid">' +
+      '<div class="stat-card accent"><div class="stat-icon">🟢</div><div class="stat-value">99.9%</div><div class="stat-label">Uptime</div></div>' +
+      '<div class="stat-card"><div class="stat-icon">⚡</div><div class="stat-value">45ms</div><div class="stat-label">Avg Response</div></div>' +
+      '<div class="stat-card"><div class="stat-icon">💾</div><div class="stat-value">34%</div><div class="stat-label">Disk Usage</div></div>' +
+      '<div class="stat-card"><div class="stat-icon">🧠</div><div class="stat-value">2.1GB</div><div class="stat-label">Memory Used</div></div>' +
+    '</div>' +
+    card('Service Status', '' +
+      '<div class="config-list">' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">API Server</div></div><span class="badge badge-success">● Online</span></div>' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">Database</div></div><span class="badge badge-success">● Online</span></div>' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">n8n</div></div><span class="badge badge-success">● Online</span></div>' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">Redis</div></div><span class="badge badge-success">● Online</span></div>' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">Email Service</div></div><span class="badge badge-warning">● Degraded</span></div>' +
+      '</div>', '<button class="btn btn-secondary btn-sm">Refresh</button>');
+  },
+  'telnyx-admin': () => placeholderPanel('Telnyx Admin', 'Configure Telnyx provider settings for all tenants.', '☎️'),
+  'email-admin': () => placeholderPanel('Private Email Admin', 'Manage email provider configurations across all tenants.', '📧'),
+  'provider-keys': () => placeholderPanel('Provider Keys Admin', 'Global API key management for all providers.', '🔑'),
+  'configuration': () => {
+    let html = pageHeader('Site Configuration', 'SEO, analytics, legal pages, and homepage settings') +
+    '<div id="siteConfigForm" style="max-width:900px"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading site settings...</div></div>';
+    loadSiteConfig();
+    return html;
+  }
+};
+
+
+
+
+// ========== SITE CONFIG ==========
+let SITE_CONFIG = null;
+
+async function loadSiteConfig() {
+  try {
+    SITE_CONFIG = await API.get('/admin/site');
+    renderSiteConfigForm();
+  } catch(e) {
+    document.getElementById('siteConfigForm').innerHTML =
+      '<div class="card" style="text-align:center;padding:40px"><p style="color:var(--error)">Failed to load site config: '+escapeHtml(e.message)+'</p>'+
+      '<button class="btn btn-secondary btn-sm" onclick="loadSiteConfig()">Retry</button></div>';
+  }
+}
+
+function renderSiteConfigForm() {
+  const s = SITE_CONFIG || {};
+  const input = (key, label, desc, type, placeholder) => {
+    const val = s[key] || '';
+    return '<div class="config-item"><div class="config-info"><div class="config-label">'+label+'</div><div class="config-desc">'+desc+'</div></div>'+
+      (type==='textarea'
+        ? '<textarea id="cfg_'+key+'" style="width:400px;min-height:80px;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-family:inherit;resize:vertical" placeholder="'+escapeHtml(placeholder||'')+'">'+escapeHtml(val)+'</textarea>'
+        : '<input id="cfg_'+key+'" type="'+type+'" value="'+escapeHtmlAttr(val)+'" placeholder="'+escapeHtml(placeholder||'')+'" style="width:400px;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">')+
+      '</div>';
+  };
+  const toggle = (key, label, desc) =>
+    '<div class="config-item"><div class="config-info"><div class="config-label">'+label+'</div><div class="config-desc">'+desc+'</div></div><label class="toggle"><input id="cfg_'+key+'" type="checkbox"'+ (s[key] ? ' checked' : '') +'><span class="toggle-slider"></span></label></div>';
+
+  let html = '';
+
+  // SEO Section
+  html += '<div class="card" style="margin-bottom:20px"><div class="card-header">🌐 SEO &amp; Meta</div><div class="card-body"><div class="config-list">';
+  html += toggle('enable_signups', 'Enable Signups', 'Allow new users to register');
+  html += toggle('maintenance_mode', 'Maintenance Mode', 'Put the platform in maintenance mode');
+  html += input('title', 'Page Title', 'Browser tab title (50-60 chars)', 'text', 'CoreSwift CRM | Smart CRM');
+  html += input('description', 'Meta Description', 'Search snippet (150-160 chars)', 'text', 'All-in-one CRM platform...');
+  html += input('keywords', 'Meta Keywords', 'Comma-separated keywords', 'text', 'CRM, sales, pipeline...');
+  html += input('og_title', 'OG Title', 'Open Graph / social share title', 'text', 'CoreSwift CRM — All-in-One Platform');
+  html += input('og_description', 'OG Description', 'Open Graph / social share description', 'text', 'Automated follow-ups...');
+  html += input('og_image_url', 'OG Image URL', 'Full URL to social share image (1200x630px)', 'text', 'https://coreswiftcrm.com/og.png');
+  html += input('favicon_url', 'Favicon URL', 'Browser tab icon URL', 'text', 'https://coreswiftcrm.com/favicon.ico');
+  html += input('canonical_url', 'Canonical URL', 'Preferred URL for search engines', 'text', 'https://coreswiftcrm.com');
+  html += '</div></div></div>';
+
+  // Analytics
+  html += '<div class="card" style="margin-bottom:20px"><div class="card-header">📊 Analytics &amp; Tracking</div><div class="card-body"><div class="config-list">';
+  html += input('ga_id', 'Google Analytics ID', 'e.g. G-XXXXXXXXXX or UA-XXXXX-X', 'text', 'G-XXXXXXXXXX');
+  html += input('gtm_id', 'Google Tag Manager ID', 'e.g. GTM-XXXXXXX', 'text', 'GTM-XXXXXXX');
+  html += input('head_scripts', 'Head Scripts', 'Custom scripts in <head> (one per line)', 'textarea', '<script>...</script>');
+  html += input('body_scripts', 'Body Scripts', 'Custom scripts before </body>', 'textarea', '<script>...</script>');
+  html += '</div></div></div>';
+
+  // Homepage
+  html += '<div class="card" style="margin-bottom:20px"><div class="card-header">🏠 Homepage Content</div><div class="card-body"><div class="config-list">';
+  const hp = s.homepage || {};
+  html += '<div class="config-item"><div class="config-info"><div class="config-label">Headline</div><div class="config-desc">Main hero headline on the marketing page</div></div>'+
+    '<input id="cfg_homepage_headline" type="text" value="'+escapeHtmlAttr(hp.headline||'')+'" placeholder="The CRM That Works While You Sleep" style="width:400px;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"></div>';
+  html += '<div class="config-item"><div class="config-info"><div class="config-label">Sub-headline</div><div class="config-desc">Supporting text below the main headline</div></div>'+
+    '<input id="cfg_homepage_subheadline" type="text" value="'+escapeHtmlAttr(hp.subheadline||'')+'" placeholder="Automated follow-ups, smart pipelines..." style="width:400px;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"></div>';
+  html += '</div></div></div>';
+
+  // Legal Pages
+  html += '<div class="card" style="margin-bottom:20px"><div class="card-header">📜 Legal Pages</div><div class="card-body"><div class="config-list">';
+  html += input('legal_tos', 'Terms of Service', 'Full ToS content (HTML allowed)', 'textarea', '<h2>Terms of Service</h2>...');
+  html += input('legal_privacy', 'Privacy Policy', 'Full privacy policy content (HTML allowed)', 'textarea', '<h2>Privacy Policy</h2>...');
+  html += input('legal_refunds', 'Refund &amp; Cancellation Policy', 'Full refunds policy content (HTML allowed)', 'textarea', '<h2>Refund Policy</h2>...');
+  html += '</div></div></div>';
+
+  // Schema.org
+  html += '<div class="card" style="margin-bottom:20px"><div class="card-header">📋 Schema.org JSON-LD</div><div class="card-body"><div class="config-list">';
+  html += input('schema_json', 'JSON-LD Schema', 'Structured data for search engines (valid JSON)', 'textarea', '{"@context":"https://schema.org"...}');
+  html += '</div></div></div>';
+
+  // Rate Limiting + Session
+  html += '<div class="card" style="margin-bottom:20px"><div class="card-header">⚙️ Platform Settings</div><div class="card-body"><div class="config-list">';
+  html += input('rate_limit', 'Rate Limit', 'Requests per minute per user', 'number', '60');
+  html += input('session_timeout', 'Session Timeout (min)', 'Auto-logout after inactivity', 'number', '30');
+  html += '</div></div></div>';
+
+  html += '<br><button class="btn btn-primary" onclick="saveSiteConfig()">💾 Save Site Configuration</button> ';
+  html += '<button class="btn btn-secondary" onclick="loadSiteConfig()">🔄 Reload</button>';
+
+  document.getElementById('siteConfigForm').innerHTML = html;
+}
+
+async function saveSiteConfig() {
+  const getVal = (id) => {
+    const el = document.getElementById(id);
+    if (!el) return '';
+    if (el.type === 'checkbox') return el.checked;
+    return el.value;
+  };
+
+  const payload = {
+    title: getVal('cfg_title'),
+    description: getVal('cfg_description'),
+    keywords: getVal('cfg_keywords'),
+    og_title: getVal('cfg_og_title'),
+    og_description: getVal('cfg_og_description'),
+    og_image_url: getVal('cfg_og_image_url'),
+    favicon_url: getVal('cfg_favicon_url'),
+    canonical_url: getVal('cfg_canonical_url'),
+    ga_id: getVal('cfg_ga_id'),
+    gtm_id: getVal('cfg_gtm_id'),
+    head_scripts: getVal('cfg_head_scripts'),
+    body_scripts: getVal('cfg_body_scripts'),
+    homepage: {
+      headline: getVal('cfg_homepage_headline'),
+      subheadline: getVal('cfg_homepage_subheadline')
+    },
+    legal_tos: getVal('cfg_legal_tos'),
+    legal_privacy: getVal('cfg_legal_privacy'),
+    legal_refunds: getVal('cfg_legal_refunds'),
+    schema_json: getVal('cfg_schema_json'),
+    enable_signups: getVal('cfg_enable_signups'),
+    maintenance_mode: getVal('cfg_maintenance_mode'),
+    rate_limit: parseInt(getVal('cfg_rate_limit')) || 60,
+    session_timeout: parseInt(getVal('cfg_session_timeout')) || 30
+  };
+
+  try {
+    const res = await API.put('/admin/site', payload);
+    toast('Site configuration saved. Marketing HTML + legal pages regenerated.', 'success');
+    SITE_CONFIG = { ...SITE_CONFIG, ...payload };
+  } catch(e) {
+    toast('Save failed: ' + e.message, 'error');
+  }
+}
+
+function escapeHtmlAttr(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ========== ASYNC TAB LOADERS (fetch real data) ==========
+const TAB_LOADERS = {
+  'dashboard': async () => {
+    try {
+      const stats = await API.get('/dashboard/stats');
+      let html = '';
+      if (stats) {
+        const items = [
+          { icon:'👥', label:'Total Contacts', value: stats.total_contacts || stats.contacts || 0 },
+          { icon:'🏢', label:'Companies', value: stats.total_companies || stats.companies || 0 },
+          { icon:'💰', label:'Active Deals', value: stats.active_deals || stats.deals || 0 },
+          { icon:'📈', label:'Pipelines', value: stats.pipelines || stats.active_pipelines || 0 },
+          { icon:'🎫', label:'Open Tickets', value: stats.open_tickets || stats.tickets || 0 },
+          { icon:'📧', label:'Emails Sent', value: stats.emails_sent || 0 },
+          { icon:'📅', label:'Events This Week', value: stats.events_this_week || 0 },
+          { icon:'🔗', label:'Tracked Links', value: stats.tracked_links || 0 },
+        ];
+        items.forEach(it => {
+          html += `<div class="stat-card${it.icon==='👥'?' accent':''}">
+            <div class="stat-icon">${it.icon}</div>
+            <div class="stat-value">${it.value}</div>
+            <div class="stat-label">${it.label}</div>
+          </div>`;
+        });
+      }
+      document.getElementById('statsGrid').innerHTML = html || '<div class="empty-state"><p>No stats available</p></div>';
+    } catch(e) {
+      document.getElementById('statsGrid').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats endpoint unavailable — will populate once backend routes are active.</p></div></div>`;
+    }
+  },
+
+  'contacts': async () => {
+    try {
+      const contacts = await API.get('/contacts');
+      let rows = [];
+      if (Array.isArray(contacts)) {
+        rows = contacts.slice(0, 50).map(c => [
+          escapeHtml(c.name || c.full_name || '—'),
+          escapeHtml(c.email || '—'),
+          escapeHtml(c.phone || '—'),
+          escapeHtml(c.company || c.company_name || '—'),
+          `<span class="badge ${(c.status||'').toLowerCase()==='active'?'badge-success':'badge-muted'}">${escapeHtml(c.status || 'active')}</span>`,
+          `<button class="btn btn-ghost btn-xs" onclick="editContact('${c.id}')">Edit</button>`
+        ]);
+      }
+      document.getElementById('contactsTable').innerHTML = dataTable(
+        ['Name','Email','Phone','Company','Status',''], rows,
+        'No contacts yet. Add your first contact to get started.'
+      );
+    } catch(e) {
+      document.getElementById('contactsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Contacts endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'companies': async () => {
+    try {
+      const companies = await API.get('/companies');
+      let rows = [];
+      if (Array.isArray(companies)) {
+        rows = companies.slice(0, 50).map(c => [
+          escapeHtml(c.name || '—'),
+          escapeHtml(c.industry || '—'),
+          escapeHtml(c.website || '—'),
+          c.contact_count || c.contacts_count || '0',
+          `<span class="badge badge-muted">${escapeHtml(c.status || 'active')}</span>`,
+          `<button class="btn btn-ghost btn-xs" onclick="editCompany('${c.id}')">Edit</button>`
+        ]);
+      }
+      document.getElementById('companiesTable').innerHTML = dataTable(
+        ['Name','Industry','Website','Contacts','Status',''], rows,
+        'No companies yet. Add your first company.'
+      );
+    } catch(e) {
+      document.getElementById('companiesTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Companies endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'pipelines': async () => {
+    try {
+      const pipelines = await API.get('/pipelines');
+      let html = '';
+      if (Array.isArray(pipelines) && pipelines.length > 0) {
+        pipelines.forEach(p => {
+          html += `<div class="card" style="margin-bottom:16px">
+            <div class="card-header">📈 ${escapeHtml(p.name || 'Pipeline')} <span class="badge badge-primary">${p.deals_count || p.deal_count || 0} deals</span></div>
+            <div class="card-body">
+              <div class="table-wrap"><table>
+                <thead><tr><th>Deal</th><th>Contact</th><th>Value</th><th>Stage</th><th></th></tr></thead>
+                <tbody>`;
+          const deals = p.deals || [];
+          if (deals.length === 0) {
+            html += '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No deals in this pipeline</td></tr>';
+          } else {
+            deals.forEach(d => {
+              html += `<tr>
+                <td>${escapeHtml(d.name || d.title || 'Deal')}</td>
+                <td>${escapeHtml(d.contact_name || '—')}</td>
+                <td>${d.value ? '$'+d.value : '—'}</td>
+                <td><span class="badge badge-warning">${escapeHtml(d.stage || 'New')}</span></td>
+                <td><button class="btn btn-ghost btn-xs">View</button></td>
+              </tr>`;
+            });
+          }
+          html += '</tbody></table></div></div></div>';
+        });
+      } else {
+        html = '<div class="card"><div class="card-body"><div class="empty-state"><div class="empty-icon">📈</div><h3>No pipelines yet</h3><p>Create your first sales pipeline to start tracking deals.</p></div></div></div>';
+      }
+      document.getElementById('pipelinesContent').innerHTML = html;
+    } catch(e) {
+      document.getElementById('pipelinesContent').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Pipelines endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'campaigns': async () => {
+    try {
+      const campaigns = await API.get('/campaigns');
+      let rows = [];
+      if (Array.isArray(campaigns)) {
+        rows = campaigns.slice(0, 50).map(c => [
+          escapeHtml(c.name || '—'),
+          `<span class="badge badge-primary">${escapeHtml(c.type || 'email')}</span>`,
+          escapeHtml(c.status || 'draft'),
+          c.sent_count || c.sent || 0,
+          c.open_rate ? c.open_rate+'%' : '—',
+          `<button class="btn btn-ghost btn-xs">Edit</button>`
+        ]);
+      }
+      document.getElementById('campaignsTable').innerHTML = dataTable(
+        ['Name','Type','Status','Sent','Open Rate',''], rows,
+        'No campaigns yet. Launch your first marketing campaign.'
+      );
+    } catch(e) {
+      document.getElementById('campaignsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Campaigns endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'lists': async () => {
+    try {
+      const lists = await API.get('/lists');
+      let rows = [];
+      if (Array.isArray(lists)) {
+        rows = lists.slice(0, 50).map(l => [
+          escapeHtml(l.name || '—'),
+          l.contact_count || l.count || 0,
+          `<span class="badge badge-muted">${escapeHtml(l.type || 'static')}</span>`,
+          escapeHtml(l.created_at ? new Date(l.created_at).toLocaleDateString() : '—'),
+          `<button class="btn btn-ghost btn-xs">View</button>`
+        ]);
+      }
+      document.getElementById('listsTable').innerHTML = dataTable(
+        ['Name','Contacts','Type','Created',''], rows,
+        'No lists yet. Create a list to segment your contacts.'
+      );
+    } catch(e) {
+      document.getElementById('listsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Lists endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'tags': async () => {
+    try {
+      const tags = await API.get('/tags');
+      let html = '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+      if (Array.isArray(tags) && tags.length > 0) {
+        tags.forEach(t => {
+          html += `<span class="badge" style="background:${t.color||'var(--accent-subtle)'};color:${t.color?'#fff':'var(--accent-hover)'};padding:6px 14px;font-size:.85rem;cursor:pointer">${escapeHtml(t.name||t.label)}</span>`;
+        });
+      } else {
+        html = '<div class="card" style="width:100%"><div class="card-body"><div class="empty-state"><div class="empty-icon">🏷️</div><h3>No tags yet</h3><p>Create tags to organize your contacts.</p></div></div></div>';
+      }
+      html += '</div>';
+      document.getElementById('tagsTable').innerHTML = html;
+    } catch(e) {
+      document.getElementById('tagsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tags endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'email-templates': async () => {
+    try {
+      const templates = await API.get('/templates');
+      let rows = [];
+      if (Array.isArray(templates)) {
+        rows = templates.slice(0, 50).map(t => [
+          escapeHtml(t.name || '—'),
+          escapeHtml(t.subject || '—'),
+          `<span class="badge badge-muted">${escapeHtml(t.type || 'email')}</span>`,
+          escapeHtml(t.updated_at ? new Date(t.updated_at).toLocaleDateString() : '—'),
+          `<button class="btn btn-ghost btn-xs">Edit</button>`
+        ]);
+      }
+      document.getElementById('templatesTable').innerHTML = dataTable(
+        ['Name','Subject','Type','Updated',''], rows,
+        'No templates yet. Create reusable email templates.'
+      );
+    } catch(e) {
+      document.getElementById('templatesTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Templates endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'tickets': async () => {
+    try {
+      const tickets = await API.get('/tickets');
+      let rows = [];
+      if (Array.isArray(tickets)) {
+        rows = tickets.slice(0, 50).map(t => [
+          escapeHtml(t.subject || t.title || '—'),
+          `<span class="badge ${t.status==='open'?'badge-error':t.status==='in_progress'?'badge-warning':'badge-success'}">${escapeHtml(t.status||'open')}</span>`,
+          escapeHtml(t.priority || 'normal'),
+          escapeHtml(t.contact_name || t.requester || '—'),
+          escapeHtml(t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'),
+          `<button class="btn btn-ghost btn-xs">View</button>`
+        ]);
+      }
+      document.getElementById('ticketsTable').innerHTML = dataTable(
+        ['Subject','Status','Priority','Contact','Created',''], rows,
+        'No support tickets. Great job keeping customers happy!'
+      );
+    } catch(e) {
+      document.getElementById('ticketsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tickets endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'calendar': async () => {
+    try {
+      const events = await API.get('/calendar/events');
+      let rows = [];
+      if (Array.isArray(events)) {
+        rows = events.slice(0, 50).map(e => [
+          escapeHtml(e.title || e.name || '—'),
+          escapeHtml(e.date || e.start_date || '—'),
+          escapeHtml(e.time || e.start_time || '—'),
+          `<span class="badge badge-muted">${escapeHtml(e.type || 'meeting')}</span>`,
+          escapeHtml(e.location || '—'),
+          `<button class="btn btn-ghost btn-xs">Edit</button>`
+        ]);
+      }
+      document.getElementById('calendarContent').innerHTML = dataTable(
+        ['Event','Date','Time','Type','Location',''], rows,
+        'No events scheduled. Add your first calendar event.'
+      );
+    } catch(e) {
+      document.getElementById('calendarContent').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Calendar endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'integrations': async () => {
+    const providers = [
+      { id:'mailgun', name:'Mailgun', desc:'Transactional email delivery', icon:'✉️' },
+      { id:'twilio', name:'Twilio', desc:'SMS and voice communications', icon:'💬' },
+      { id:'sendgrid', name:'SendGrid', desc:'Email API service', icon:'📧' },
+      { id:'openai', name:'OpenAI', desc:'GPT-4, embeddings, and more', icon:'🧠' },
+      { id:'deepseek', name:'DeepSeek', desc:'Cost-effective LLM provider', icon:'🤖' },
+      { id:'anthropic', name:'Anthropic', desc:'Claude models', icon:'✨' },
+      { id:'moonshot', name:'Moonshot', desc:'Backup LLM provider', icon:'🌙' },
+      { id:'custom_llm', name:'Custom LLM', desc:'Bring your own LLM endpoint', icon:'🔧' },
+      { id:'telnyx', name:'Telnyx', desc:'SMS, voice, and number provisioning', icon:'📱' },
+      { id:'google', name:'Google', desc:'Calendar, Drive, and more', icon:'🔵' }
+    ];
+
+    // Try to fetch existing provider keys
+    let providerData = {};
+    try {
+      const keys = await API.get('/provider-keys');
+      if (Array.isArray(keys)) {
+        keys.forEach(k => { providerData[k.provider || k.name] = k; });
+      }
+    } catch(e) {}
+
+    let html = '<div class="provider-grid">';
+    providers.forEach(p => {
+      const connected = !!providerData[p.id] || !!providerData[p.name];
+      html += `<div class="provider-card${connected?' connected':''}">
+        <div class="provider-header">
+          <span class="provider-name">${p.icon} ${p.name}</span>
+          <span class="provider-status">
+            <span class="status-dot ${connected?'connected':'disconnected'}"></span>
+            ${connected ? 'Connected' : 'Not connected'}
+          </span>
+        </div>
+        <div class="provider-desc">${p.desc}</div>
+        <button class="btn ${connected?'btn-secondary':'btn-primary'} btn-sm btn-block" onclick="configureProvider('${p.id}','${p.name}','${p.desc}')">
+          ${connected ? 'Reconfigure' : 'Connect'}
+        </button>
+      </div>`;
+    });
+    html += '</div>';
+    document.getElementById('providerCards').innerHTML = html;
+  },
+
+  'billing': async () => {
+    try {
+      const plans = await API.get('/plans');
+      let html = '';
+      if (Array.isArray(plans) && plans.length > 0) {
+        html = '<div class="plans-grid">';
+        plans.forEach(p => {
+          const price = p.price_monthly || p.price || 0;
+          const features = (p.features || []).slice(0, 6);
+          html += `<div class="plan-card">
+            <div class="plan-name">${escapeHtml(p.name)}</div>
+            <div class="plan-price">$${price}<span>/mo</span></div>
+            <ul class="plan-features">
+              ${features.map(f => `<li class="check">✓ ${escapeHtml(typeof f==='string'?f:f.name||f)}</li>`).join('')}
+            </ul>
+            <button class="btn btn-secondary btn-sm btn-block">Edit Plan</button>
+          </div>`;
+        });
+        html += '</div>';
+      } else {
+        html = '<div class="card"><div class="card-body"><div class="empty-state"><div class="empty-icon">💳</div><h3>No plans defined</h3><p>Create subscription plans for your platform.</p></div></div></div>';
+      }
+      document.getElementById('plansContent').innerHTML = html;
+    } catch(e) {
+      document.getElementById('plansContent').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Plans endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  'users': async () => {
+    try {
+      const users = await API.get('/users');
+      let rows = [];
+      if (Array.isArray(users)) {
+        rows = users.slice(0, 50).map(u => [
+          escapeHtml(u.name || '—'),
+          escapeHtml(u.email || '—'),
+          `<span class="badge ${u.role==='agency_admin'?'badge-primary':'badge-muted'}">${escapeHtml(u.role||'user')}</span>`,
+          escapeHtml(u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'),
+          `<button class="btn btn-ghost btn-xs">Edit</button>`
+        ]);
+      }
+      document.getElementById('usersTable').innerHTML = dataTable(
+        ['Name','Email','Role','Created',''], rows,
+        'No users yet.'
+      );
+    } catch(e) {
+      document.getElementById('usersTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Users endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  }
+};
+
+// ========== MODAL GENERATORS ==========
+function configureProvider(id, name, desc) {
+  const fields = {
+    openai: [{name:'api_key',label:'API Key',type:'password'},{name:'model',label:'Default Model',type:'text',default:'gpt-4o'}],
+    deepseek: [{name:'api_key',label:'API Key',type:'password'},{name:'model',label:'Default Model',type:'text',default:'deepseek-chat'}],
+    anthropic: [{name:'api_key',label:'API Key',type:'password'},{name:'model',label:'Default Model',type:'text',default:'claude-sonnet-4-6'}],
+    mailgun: [{name:'api_key',label:'API Key',type:'password'},{name:'domain',label:'Domain',type:'text'}],
+    sendgrid: [{name:'api_key',label:'API Key',type:'password'}],
+    twilio: [{name:'account_sid',label:'Account SID',type:'text'},{name:'auth_token',label:'Auth Token',type:'password'},{name:'phone',label:'From Number',type:'text'}],
+    telnyx: [{name:'api_key',label:'API Key',type:'password'},{name:'phone',label:'Phone Number',type:'text'}],
+    google: [{name:'client_id',label:'Client ID',type:'text'},{name:'client_secret',label:'Client Secret',type:'password'}],
+    moonshot: [{name:'api_key',label:'API Key',type:'password'}],
+    custom_llm: [{name:'api_key',label:'API Key',type:'password'},{name:'endpoint',label:'Endpoint URL',type:'text'},{name:'model',label:'Model Name',type:'text'}]
+  };
+
+  const providerFields = fields[id] || [{name:'api_key',label:'API Key',type:'password'}];
+
+  let formHtml = `<p style="color:var(--text-secondary);margin-bottom:16px">${desc}</p>`;
+  providerFields.forEach(f => {
+    formHtml += `<div class="form-group">
+      <label>${f.label}</label>
+      <input type="${f.type}" id="cfg_${f.name}" value="${escapeHtml(f.default||'')}" placeholder="Enter ${f.label.toLowerCase()}">
+    </div>`;
+  });
+
+  showModal(`Configure ${name}`, formHtml,
+    `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveProvider('${id}')">Connect</button>`);
+}
+
+async function saveProvider(providerId) {
+  const data = { provider: providerId };
+  const inputs = document.querySelectorAll('#modalContainer input');
+  inputs.forEach(inp => {
+    if (inp.id.startsWith('cfg_')) {
+      data[inp.id.replace('cfg_','')] = inp.value;
+    }
+  });
+  try {
+    await API.post('/provider-keys', data);
+    closeModal();
+    toast(`Provider connected successfully`, 'success');
+  } catch(e) {
+    toast('Failed to save: ' + e.message, 'error');
+  }
+}
+
+async function saveProfile() {
+  const name = document.getElementById('profileName').value;
+  try {
+    await API.put('/profile', { name });
+    STATE.user.name = name;
+    document.getElementById('userAvatar').textContent = name[0].toUpperCase();
+    localStorage.setItem('crm_user', JSON.stringify(STATE.user));
+    toast('Profile updated', 'success');
+  } catch(e) {
+    toast('Failed to update profile: ' + e.message, 'error');
+  }
+}
+
+async function changePassword() {
+  const current = document.getElementById('currentPw').value;
+  const newPw = document.getElementById('newPw').value;
+  const confirm = document.getElementById('confirmPw').value;
+  if (newPw !== confirm) { toast('Passwords do not match', 'error'); return; }
+  try {
+    await API.put('/profile/password', { current_password: current, new_password: newPw });
+    toast('Password updated', 'success');
+    document.getElementById('currentPw').value = '';
+    document.getElementById('newPw').value = '';
+    document.getElementById('confirmPw').value = '';
+  } catch(e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+
+// Placeholder modal stubs
+function showAddContactModal() { showModal('Add Contact', '<div class="form-group"><label>Name</label><input type="text"></div><div class="form-group"><label>Email</label><input type="email"></div><div class="form-group"><label>Phone</label><input type="text"></div><div class="form-group"><label>Company</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Contact added','success')">Save</button>'); }
+function editContact(id) { toast('Editing contact: ' + id, 'info'); }
+function showAddCompanyModal(){ showModal('Add Company', '<div class="form-group"><label>Company Name</label><input type="text"></div><div class="form-group"><label>Industry</label><input type="text"></div><div class="form-group"><label>Website</label><input type="url"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Company added','success')">Save</button>'); }
+function editCompany(id){ toast('Editing company: ' + id, 'info'); }
+function showAddDealModal(){ showModal('Add Deal', '<div class="form-group"><label>Deal Name</label><input type="text"></div><div class="form-group"><label>Value</label><input type="number"></div><div class="form-group"><label>Pipeline</label><select><option>Select...</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Deal added','success')">Save</button>'); }
+function showAddCampaignModal(){ showModal('New Campaign', '<div class="form-group"><label>Campaign Name</label><input type="text"></div><div class="form-group"><label>Type</label><select><option>Email</option><option>SMS</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Campaign created','success')">Create</button>'); }
+function showAddListModal(){ showModal('New List', '<div class="form-group"><label>List Name</label><input type="text"></div><div class="form-group"><label>Description</label><textarea></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('List created','success')">Create</button>'); }
+function showAddTagModal(){ showModal('New Tag', '<div class="form-group"><label>Tag Name</label><input type="text"></div><div class="form-group"><label>Color</label><input type="color" value="#6366f1"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Tag created','success')">Create</button>'); }
+function showAddRuleModal(){ showModal('New Rule', '<div class="form-group"><label>Rule Name</label><input type="text"></div><div class="form-group"><label>Trigger</label><select><option>Contact created</option><option>Deal stage changed</option><option>Form submitted</option><option>Tag added</option></select></div><div class="form-group"><label>Action</label><select><option>Send email</option><option>Add to list</option><option>Update deal</option><option>Create task</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Rule created','success')">Create Rule</button>'); }
+function showAddScoreRuleModal(){ showModal('Add Scoring Criterion', '<div class="form-group"><label>Criterion Name</label><input type="text"></div><div class="form-group"><label>Points</label><input type="number" value="5"></div><div class="form-group"><label>Trigger</label><select><option>Email opened</option><option>Link clicked</option><option>Form submitted</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Criterion added','success')">Add</button>'); }
+function showAddTemplateModal(){ showModal('New Template', '<div class="form-group"><label>Template Name</label><input type="text"></div><div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Body</label><textarea rows="6"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Template saved','success')">Save</button>'); }
+function showComposeModal(){ showModal('Compose Message', '<div class="form-group"><label>To</label><input type="text"></div><div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Message</label><textarea rows="5"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Message sent','success')">Send</button>'); }
+function showAddTicketModal(){ showModal('New Ticket', '<div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Description</label><textarea rows="4"></textarea></div><div class="form-group"><label>Priority</label><select><option>Normal</option><option>High</option><option>Urgent</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Ticket created','success')">Create</button>'); }
+function showAddEventModal(){ showModal('New Event', '<div class="form-group"><label>Title</label><input type="text"></div><div class="form-group"><label>Date</label><input type="date"></div><div class="form-group"><label>Time</label><input type="time"></div><div class="form-group"><label>Location</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Event created','success')">Save</button>'); }
+function showAddLinkModal(){ showModal('Generate Tracked Link', '<div class="form-group"><label>Destination URL</label><input type="url"></div><div class="form-group"><label>Campaign</label><select><option>None</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('Link generated','success')">Generate</button>'); }
+function showAddMemberModal(){ toast('Add team member form coming soon', 'info'); }
+function showAddUserModal(){ showModal('Add User', '<div class="form-group"><label>Name</label><input type="text"></div><div class="form-group"><label>Email</label><input type="email"></div><div class="form-group"><label>Role</label><select><option>user</option><option>agency_admin</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast('User added','success')">Create</button>'); }
+
+// Chat
+function sendChat() {
+  const input = document.getElementById('chatInput');
+  const msg = input.value.trim();
+  if (!msg) return;
+  const container = document.getElementById('chatMessages');
+  container.innerHTML += `<div class="chat-msg user"><div class="msg-role">You</div>${escapeHtml(msg)}</div>`;
+  input.value = '';
+  container.innerHTML += `<div class="chat-msg assistant"><div class="msg-role">AI Assistant</div><em style="color:var(--text-muted)">Connect an LLM provider in the Integration Center to enable AI responses.</em></div>`;
+  container.scrollTop = container.scrollHeight;
+}
+
+// Contact/company filters
+function filterContacts(query) {
+  // Simple client-side filter on table text
+  const table = document.querySelector('#contactsTable table');
+  if (!table) return;
+  const rows = table.querySelectorAll('tbody tr');
+  const q = query.toLowerCase();
+  rows.forEach(row => {
+    row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+function filterCompanies(query) {
+  const table = document.querySelector('#companiesTable table');
+  if (!table) return;
+  const rows = table.querySelectorAll('tbody tr');
+  const q = query.toLowerCase();
+  rows.forEach(row => {
+    row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+
+// ========== INIT ==========
+window.addEventListener('DOMContentLoaded', () => {
+  const token = localStorage.getItem('crm_token');
+  const userStr = localStorage.getItem('crm_user');
+  if (token && userStr) {
+    try {
+      STATE.token = token;
+      STATE.user = JSON.parse(userStr);
+      showApp();
+    } catch(e) {
+      logout(true);
+    }
+  }
+  // Dismiss banner if it was dismissed
+  if (localStorage.getItem('crm_banner_dismissed')) {
+    document.getElementById('upgradeBanner').classList.add('dismissed');
+  }
+});
+
+// Close dropdown on outside click
+document.addEventListener('click', e => {
+  if (!e.target.closest('.dropdown')) {
+    document.getElementById('userMenu').classList.remove('show');
+  }
+});
+
+// ===== KEYBOARD SHORTCUTS (added 2026-08-21) =====
+// Gmail-style navigation. ? = help. g + key = go to tab. single keys = quick actions.
+(function () {
+  if (window.__crmShortcutsInstalled) return;
+  window.__crmShortcutsInstalled = true;
+
+  var pendingG = null; // 'g' two-key navigation buffer
+  var gTimer = null;
+
+  // key -> { desc, fn }
+  var NAV = {
+    d: { desc: 'g d  → Dashboard', tab: 'dashboard' },
+    c: { desc: 'g c  → Contacts', tab: 'contacts' },
+    o: { desc: 'g o  → Companies', tab: 'companies' },
+    p: { desc: 'g p  → Pipelines & Deals', tab: 'pipelines' },
+    m: { desc: 'g m  → Campaigns', tab: 'campaigns' },
+    l: { desc: 'g l  → Lists', tab: 'lists' },
+    a: { desc: 'g a  → Analytics', tab: 'analytics' },
+    r: { desc: 'g r  → Rules', tab: 'rules' },
+    t: { desc: 'g t  → Tags', tab: 'tags' },
+    s: { desc: 'g s  → Lead Scoring', tab: 'lead-scoring' },
+    e: { desc: 'g e  → Email Templates', tab: 'email-templates' },
+    i: { desc: 'g i  → Messages', tab: 'messages' },
+    n: { desc: 'g n  → Notifications', tab: 'notifications' },
+    x: { desc: 'g x  → Telnyx SMS/Voice', tab: 'telnyx' },
+    k: { desc: 'g k  → Support Tickets', tab: 'tickets' },
+    b: { desc: 'g b  → Private Email (Inbox)', tab: 'inbox' },
+    y: { desc: 'g y  → Calendar', tab: 'calendar' },
+    u: { desc: 'g u  → Bookings', tab: 'bookings' },
+    q: { desc: 'g q  → AI Assistant', tab: 'ai-assistant' },
+    g: { desc: 'g g  → Tracked Links', tab: 'tracked-links' },
+    h: { desc: 'g h  → Checklists', tab: 'checklists' },
+    w: { desc: 'g w  → Round Robin', tab: 'round-robin' },
+    f: { desc: 'g f  → Profile', tab: 'profile' },
+    z: { desc: 'g z  → Integration Center', tab: 'integrations' }
+  };
+
+  // single-key quick actions
+  var ACTIONS = {
+    c: { desc: 'c  → New Contact', fn: function () { showAddContactModal(); } },
+    o: { desc: 'o  → New Company', fn: function () { showAddCompanyModal(); } },
+    d: { desc: 'd  → New Deal', fn: function () { showAddDealModal(); } },
+    l: { desc: 'l  → New List', fn: function () { showAddListModal(); } },
+    t: { desc: 't  → New Tag', fn: function () { showAddTagModal(); } },
+    k: { desc: 'k  → New Ticket', fn: function () { showAddTicketModal(); } },
+    m: { desc: 'm  → Compose Message', fn: function () { showComposeModal(); } },
+    p: { desc: 'p  → New Campaign', fn: function () { showAddCampaignModal(); } },
+    e: { desc: 'e  → New Email Template', fn: function () { showAddTemplateModal(); } }
+  };
+
+  function isTyping(el) {
+    if (!el) return false;
+    var tag = (el.tagName || '').toLowerCase();
+    var editable = el.isContentEditable || el.getAttribute && el.getAttribute('contenteditable') === 'true';
+    return tag === 'input' || tag === 'textarea' || tag === 'select' || editable;
+  }
+
+  function modalOpen() {
+    var el = document.getElementById('modalContainer');
+    return !!(el && el.innerHTML && el.innerHTML.trim() !== '');
+  }
+
+  function clearG() { pendingG = null; if (gTimer) { clearTimeout(gTimer); gTimer = null; } }
+
+  function toastShortcuts(list) {
+    var rows = list.map(function (it) {
+      var k = it.desc.split('→')[0].trim();
+      var label = it.desc.indexOf('→') > -1 ? it.desc.split('→')[1].trim() : it.desc;
+      return '<div class="shortcut-row" style="display:flex;justify-content:space-between;gap:20px;padding:6px 0;border-bottom:1px solid var(--border,#eee)">' +
+        '<span style="color:var(--muted,#666)">' + escapeHtml(label) + '</span>' +
+        '<code style="background:var(--bg,#f3f4f6);padding:2px 8px;border-radius:4px;font-weight:600;white-space:nowrap">' + escapeHtml(k) + '</code></div>';
+    }).join('');
+    showModal('⌨️ Keyboard Shortcuts',
+      '<div style="font-size:13px;max-height:60vh;overflow:auto">' + rows +
+      '<div class="shortcut-row" style="padding:6px 0;border-bottom:1px solid var(--border,#eee)"><span style="color:var(--muted,#666)">Help — all shortcuts</span><code style="background:var(--bg,#f3f4f6);padding:2px 8px;border-radius:4px;font-weight:600;white-space:nowrap">?</code></div>' +
+      '<div class="shortcut-row" style="padding:6px 0"><span style="color:var(--muted,#666)">Close / cancel</span><code style="background:var(--bg,#f3f4f6);padding:2px 8px;border-radius:4px;font-weight:600;white-space:nowrap">Esc</code></div>' +
+      '</div>',
+      '<button class="btn btn-ghost" onclick="closeModal()">Close</button>');
+  }
+
+  function focusSearch() {
+    var first = document.querySelector('#tabPanels input[type="search"], #tabPanels input[placeholder*="earch"], #tabPanels input[placeholder*="Search"]');
+    if (first) { first.focus(); return true; }
+    return false;
+  }
+
+  document.addEventListener('keydown', function (e) {
+    // Always allow Escape to close modal / clear g-buffer
+    if (e.key === 'Escape') { clearG(); closeModal(); return; }
+
+    if (isTyping(e.target)) return; // never hijack while typing
+
+    // handle 'g' prefix
+    if (pendingG) {
+      var k2 = (e.key || '').toLowerCase();
+      if (e.key === 'Escape' || e.key === '?' || e.key === 'g') { clearG(); }
+      else if (NAV[k2]) {
+        e.preventDefault(); e.stopPropagation();
+        clearG();
+        if (STATE && STATE.user) { switchTab(NAV[k2].tab); }
+      } else { clearG(); return; }
+      return;
+    }
+
+    var key = (e.key || '').toLowerCase();
+    var ctrl = e.ctrlKey || e.metaKey;
+
+    // '?' help
+    if (e.key === '?' || (e.shiftKey && key === '/')) {
+      e.preventDefault();
+      toastShortcuts(Object.keys(NAV).map(function (k) { return NAV[k]; }).concat(
+        Object.keys(ACTIONS).map(function (k) { return ACTIONS[k]; })));
+      return;
+    }
+
+    // '/' global search (non-shift)
+    if (key === '/' && !e.shiftKey && !ctrl) {
+      e.preventDefault();
+      if (!focusSearch()) toastShortcuts([{ desc: 'No search box on this tab' }]);
+      return;
+    }
+
+    // step through modal actions
+    if (modalOpen()) return;
+
+    if (key === 'g') {
+      e.preventDefault(); pendingG = 'g';
+      if (gTimer) clearTimeout(gTimer);
+      gTimer = setTimeout(clearG, 1200);
+      return;
+    }
+
+    if (!ctrl && ACTIONS[key]) {
+      e.preventDefault();
+      ACTIONS[key].fn();
+    }
+  });
+})();
+// ===== END KEYBOARD SHORTCUTS =====
+
+</script>
+</body>
+</html>
+
+
