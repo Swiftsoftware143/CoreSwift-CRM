@@ -12,6 +12,7 @@ use uuid::Uuid;
 use super::models::*;
 use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
+use crate::sql_json::row_json_dml;
 use crate::AppState;
 
 // ──┬─────────────────────────────────────────────
@@ -111,19 +112,18 @@ pub async fn create(
 
     if let Some(ref tag_name) = r.funnelswift_tag {
         // Create tag in CRM Swift
-        let tag = sqlx::query_as::<_, (serde_json::Value,)>(
+        let tag = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml(
             r#"INSERT INTO tags (id, tenant_id, name, color, is_active)
                VALUES ($1, $2, $3, '#3B82F6', true)
                ON CONFLICT (tenant_id, name) DO UPDATE SET is_active = true
                RETURNING id"#,
-        )
+        ))
         .bind(Uuid::new_v4())
         .bind(tid)
         .bind(tag_name)
         .fetch_one(&s.db)
         .await?;
         tag_id = tag
-            .0
             .get("id")
             .and_then(|v| v.as_str())
             .and_then(|s| Uuid::from_str(s).ok());
@@ -494,13 +494,15 @@ pub async fn enroll_contact(
     let _tid = parse_tenant(&c)?;
 
     // Get total steps
-    let total_steps: i32 = sqlx::query_scalar::<_, i32>(
+    // COUNT(*) is bigint, not int4: decoding it into i32 fails at runtime and the
+    // old `.unwrap_or(0)` turned that DB error into "Campaign has no steps" for
+    // every enroll call.
+    let total_steps: i64 = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM email_campaign_steps WHERE campaign_id = $1",
     )
     .bind(id)
     .fetch_one(&s.db)
-    .await
-    .unwrap_or(0) as i32;
+    .await?;
 
     if total_steps == 0 {
         return Err(AppError::Validation("Campaign has no steps".into()));
@@ -528,7 +530,7 @@ pub async fn enroll_contact(
            RETURNING *"#
     )
     .bind(Uuid::new_v4()).bind(id).bind(&entity_type).bind(r.entity_id)
-    .bind(total_steps).bind(next_send)
+    .bind(total_steps as i32).bind(next_send)
     .fetch_optional(&s.db).await?;
 
     Ok((StatusCode::CREATED, Json(json!(enrollment))))
@@ -633,19 +635,18 @@ pub async fn build_campaign(
 
     if let Some(ref tag_name) = r.funnelswift_tag {
         // Create or find the tag in CRM Swift
-        let tag = sqlx::query_as::<_, (serde_json::Value,)>(
+        let tag = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml(
             r#"INSERT INTO tags (id, tenant_id, name, color, is_active)
                VALUES ($1, $2, $3, '#3B82F6', true)
                ON CONFLICT (tenant_id, name) DO UPDATE SET is_active = true
                RETURNING id, name"#,
-        )
+        ))
         .bind(Uuid::new_v4())
         .bind(tid)
         .bind(tag_name)
         .fetch_one(&s.db)
         .await?;
         tag_id = tag
-            .0
             .get("id")
             .and_then(|v| v.as_str())
             .and_then(|s| Uuid::from_str(s).ok());

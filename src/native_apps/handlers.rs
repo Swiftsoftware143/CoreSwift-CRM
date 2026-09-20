@@ -78,7 +78,10 @@ pub async fn connect_app(
     }
 
     // Upsert the connection
-    let existing = sqlx::query_scalar::<_, i32>(
+    // COUNT(*) is bigint; decoding it into i32 fails at runtime ("mismatched
+    // types") which the old `.map_err(|_| Internal("DB error"))` hid behind a
+    // generic 500 -- i.e. connecting any app was impossible.
+    let existing = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM app_connections WHERE tenant_id = $1 AND app_slug = $2",
     )
     .bind(account_id)

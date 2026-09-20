@@ -12,6 +12,7 @@ use crate::affiliates::models::*;
 use crate::auth::models::TeamMember;
 use crate::auth::Claims;
 use crate::errors::{ApiResult, AppError};
+use crate::sql_json::{row_json, row_json_dml};
 use crate::AppState;
 use rust_decimal::Decimal;
 
@@ -426,45 +427,54 @@ async fn handle_create_affiliate_funnelswift(
     .bind(new_tenant_id)
     .bind(new_user_id)
     .bind(&code)
-    .bind(json!(rate))
+    .bind(
+        Decimal::try_from(rate)
+            .map_err(|_| AppError::BadRequest("invalid commission_rate".into()))?,
+    )
     .fetch_one(&s.db)
     .await?;
 
     // Step 3: Create product in affiliate board
-    let product = sqlx::query_as::<_, (serde_json::Value,)>(
-        r#"INSERT INTO affiliate_products (id, tenant_id, name, price, commission_rate, commission_type)
-           VALUES ($1, $2, $3, $4, $5, 'percentage') RETURNING *"#
+    let product = sqlx::query_scalar::<_, serde_json::Value>(
+        &row_json_dml(r#"INSERT INTO affiliate_products (id, tenant_id, name, price, commission_rate, commission_type)
+           VALUES ($1, $2, $3, $4, $5, 'percentage') RETURNING *"#)
     )
     .bind(Uuid::new_v4())
     .bind(new_tenant_id)
     .bind(prod_name)
-    .bind(json!(product_price))
-    .bind(json!(rate))
+    .bind(
+        Decimal::try_from(product_price)
+            .map_err(|_| AppError::BadRequest("invalid price".into()))?,
+    )
+    .bind(
+        Decimal::try_from(rate)
+            .map_err(|_| AppError::BadRequest("invalid commission_rate".into()))?,
+    )
     .fetch_one(&s.db)
     .await?;
 
     // Step 4: Try to create or get a tag for FunnelSwift
-    let tag = sqlx::query_as::<_, (serde_json::Value,)>(
+    let tag = sqlx::query_scalar::<_, serde_json::Value>(&row_json(
         "SELECT * FROM tags WHERE tenant_id = $1 AND name = $2",
-    )
+    ))
     .bind(new_tenant_id)
     .bind(format!("Affiliate: {}", name))
     .fetch_optional(&s.db)
     .await?;
 
     let tag_id: Option<serde_json::Value> = if let Some(ref t) = tag {
-        t.0.get("id").cloned()
+        t.get("id").cloned()
     } else {
-        let new_tag = sqlx::query_as::<_, (serde_json::Value,)>(
+        let new_tag = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml(
             "INSERT INTO tags (id, tenant_id, name, color) VALUES ($1, $2, $3, $4) RETURNING id",
-        )
+        ))
         .bind(Uuid::new_v4())
         .bind(new_tenant_id)
         .bind(format!("Affiliate: {}", name))
         .bind("#10B981") // green
         .fetch_one(&s.db)
         .await?;
-        new_tag.0.get("id").cloned()
+        new_tag.get("id").cloned()
     };
 
     // Update product with tag
@@ -473,7 +483,6 @@ async fn handle_create_affiliate_funnelswift(
             .bind(tid.as_str().and_then(|s| Uuid::parse_str(s).ok()))
             .bind(
                 product
-                    .0
                     .get("id")
                     .and_then(|v| v.as_str())
                     .and_then(|s| Uuid::parse_str(s).ok()),
@@ -483,9 +492,9 @@ async fn handle_create_affiliate_funnelswift(
     }
 
     // Step 5: Trigger Ada campaign trigger for welcome
-    let ada_trigger = sqlx::query_as::<_, (serde_json::Value,)>(
-        r#"INSERT INTO ada_campaign_triggers (id, tenant_id, name, trigger_on, ada_campaign_id, schedule_delay_minutes)
-           VALUES ($1, $2, $3, 'affiliate_activated', 'welcome-affiliate', 0) RETURNING *"#
+    let ada_trigger = sqlx::query_scalar::<_, serde_json::Value>(
+        &row_json_dml(r#"INSERT INTO ada_campaign_triggers (id, tenant_id, name, trigger_on, ada_campaign_id, schedule_delay_minutes)
+           VALUES ($1, $2, $3, 'affiliate_activated', 'welcome-affiliate', 0) RETURNING *"#)
     )
     .bind(Uuid::new_v4())
     .bind(new_tenant_id)
@@ -728,10 +737,10 @@ async fn handle_build_campaign(
     }
 
     // 1. Create campaign
-    let campaign = sqlx::query_as::<_, (serde_json::Value,)>(
+    let campaign = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml(
         r#"INSERT INTO email_campaigns (id, tenant_id, name, description, status, created_by)
            VALUES ($1, $2, $3, $4, 'draft', NULL) RETURNING *"#,
-    )
+    ))
     .bind(Uuid::new_v4())
     .bind(tenant_id)
     .bind(campaign_name)
@@ -740,7 +749,6 @@ async fn handle_build_campaign(
     .await?;
 
     let campaign_id_str = campaign
-        .0
         .get("id")
         .and_then(|v| v.as_str())
         .unwrap_or("")
@@ -759,9 +767,9 @@ async fn handle_build_campaign(
         let body = step.get("body").and_then(|v| v.as_str()).unwrap_or("");
         let delay = step.get("delay_days").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
 
-        let s = sqlx::query_as::<_, (serde_json::Value,)>(
-            r#"INSERT INTO email_campaign_steps (id, campaign_id, step_order, template_name, subject, body, delay_days)
-               VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *"#
+        let s = sqlx::query_scalar::<_, serde_json::Value>(
+            &row_json_dml(r#"INSERT INTO email_campaign_steps (id, campaign_id, step_order, template_name, subject, body, delay_days)
+               VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *"#)
         )
         .bind(Uuid::new_v4()).bind(campaign_id).bind(i as i32 + 1)
         .bind(tn).bind(subj).bind(body).bind(delay)
@@ -770,16 +778,16 @@ async fn handle_build_campaign(
     }
 
     // 3. Handle FunnelSwift tag
-    let mut tag_result: Option<(serde_json::Value,)> = None;
+    let mut tag_result: Option<serde_json::Value> = None;
     let mut funnelswift_result: Option<String> = None;
 
     if let Some(tag_name) = funnelswift_tag {
-        let tag = sqlx::query_as::<_, (serde_json::Value,)>(
+        let tag = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml(
             r#"INSERT INTO tags (id, tenant_id, name, color, is_active)
                VALUES ($1, $2, $3, '#3B82F6', true)
                ON CONFLICT (tenant_id, name) DO UPDATE SET is_active = true
                RETURNING id, name"#,
-        )
+        ))
         .bind(Uuid::new_v4())
         .bind(tenant_id)
         .bind(tag_name)
@@ -789,7 +797,7 @@ async fn handle_build_campaign(
 
         if let Some(tid_val) = tag_result
             .as_ref()
-            .and_then(|t| t.0.get("id"))
+            .and_then(|t| t.get("id"))
             .and_then(|v| v.as_str())
             .and_then(|s| Uuid::parse_str(s).ok())
         {
@@ -826,15 +834,15 @@ async fn handle_build_campaign(
         .iter()
         .enumerate()
         .map(|(i, s)| {
-            let tn =
-                s.0.get("template_name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-            let subj =
-                s.0.get("subject")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("(no subject)");
-            let delay = s.0.get("delay_days").and_then(|v| v.as_i64()).unwrap_or(0);
+            let tn = s
+                .get("template_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let subj = s
+                .get("subject")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(no subject)");
+            let delay = s.get("delay_days").and_then(|v| v.as_i64()).unwrap_or(0);
             format!("  {}. {} — '{}' — {} day(s) delay", i + 1, tn, subj, delay)
         })
         .collect();

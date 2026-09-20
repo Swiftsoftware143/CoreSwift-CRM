@@ -19,6 +19,7 @@ use password_hash::SaltString;
 use super::middleware;
 use super::models::*;
 use crate::errors::{ApiResult, AppError};
+use crate::sql_json::row_json;
 use crate::AppState;
 
 /// POST /api/auth/register — Create a new account.
@@ -281,8 +282,8 @@ pub async fn list_invites(
     }
 
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let invites = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT id, token, role, accepted, expires_at, created_at FROM tenant_invites WHERE tenant_id = $1 ORDER BY created_at DESC"
+    let invites = sqlx::query_scalar::<_, serde_json::Value>(
+        &row_json("SELECT id, token, role, accepted, expires_at, created_at FROM tenant_invites WHERE tenant_id = $1 ORDER BY created_at DESC")
     )
     .bind(tenant_id)
     .fetch_all(&state.db)

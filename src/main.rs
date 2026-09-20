@@ -51,6 +51,7 @@ pub mod provider_keys;
 pub mod rate_limiter;
 pub mod round_robin;
 pub mod scoring;
+pub mod sql_json;
 pub mod support_widgets;
 pub mod tag_provision_handler;
 pub mod tags;

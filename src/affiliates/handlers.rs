@@ -1,6 +1,7 @@
 use super::models::*;
 use crate::auth::models::Claims;
 use crate::errors::{validate_pagination, ApiResult, AppError};
+use crate::sql_json::{row_json, row_json_dml};
 use crate::AppState;
 use axum::{
     extract::{Extension, Json, Path, Query, State},
@@ -452,13 +453,13 @@ pub async fn products_by_tag(
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let products = sqlx::query_as::<_, (serde_json::Value,)>(
+    let products = sqlx::query_scalar::<_, serde_json::Value>(&row_json(
         r#"SELECT ap.*, t.name as tag_name, t.color as tag_color
            FROM affiliate_products ap
            LEFT JOIN tags t ON t.id = ap.tag_id
            WHERE ap.tenant_id = $1 AND ap.is_active = true
            ORDER BY ap.sort_order ASC, ap.name ASC"#,
-    )
+    ))
     .bind(tid)
     .fetch_all(&s.db)
     .await?;
@@ -489,25 +490,25 @@ pub async fn list_my_products(
     ))?;
 
     // Products I'm currently promoting
-    let my_products = sqlx::query_as::<_, (serde_json::Value,)>(
-        r#"SELECT ap.*, aps.is_active as promoting, aps.promo_link, aps.custom_commission_rate, aps.selected_at
+    let my_products = sqlx::query_scalar::<_, serde_json::Value>(
+        &row_json(r#"SELECT ap.*, aps.is_active as promoting, aps.promo_link, aps.custom_commission_rate, aps.selected_at
            FROM affiliate_product_selections aps
            JOIN affiliate_products ap ON ap.id = aps.product_id
            WHERE aps.affiliate_id = $1 AND ap.is_active = true
-           ORDER BY aps.selected_at DESC"#
+           ORDER BY aps.selected_at DESC"#)
     )
     .bind(aff_id)
     .fetch_all(&s.db)
     .await?;
 
     // Products available but not yet selected
-    let available = sqlx::query_as::<_, (serde_json::Value,)>(
-        r#"SELECT ap.*,
+    let available = sqlx::query_scalar::<_, serde_json::Value>(
+        &row_json(r#"SELECT ap.*,
               CASE WHEN aps.id IS NOT NULL THEN true ELSE false END as already_selected
            FROM affiliate_products ap
            LEFT JOIN affiliate_product_selections aps ON aps.product_id = ap.id AND aps.affiliate_id = $1
            WHERE ap.tenant_id = $2 AND ap.is_active = true AND aps.id IS NULL
-           ORDER BY ap.sort_order ASC, ap.name ASC"#
+           ORDER BY ap.sort_order ASC, ap.name ASC"#)
     )
     .bind(aff_id)
     .bind(tid)
@@ -552,22 +553,36 @@ pub async fn select_product(
         return Err(AppError::NotFound("Product not found or not active".into()));
     }
 
-    let selection = sqlx::query_as::<_, (serde_json::Value,)>(
-        r#"INSERT INTO affiliate_product_selections (id, affiliate_id, product_id, is_active, promo_link, custom_commission_rate)
+    // `custom_commission_rate` is numeric in Postgres; a raw serde_json::Value
+    // binds as jsonb and the INSERT dies ("column ... is of type numeric but
+    // expression is of type jsonb"). Convert before binding, and treat an
+    // absent/null value as "no override" rather than 0.
+    let custom_rate: Option<Decimal> = match r.custom_commission_rate.as_ref() {
+        Some(v) if !v.is_null() => Some(
+            Decimal::try_from(v.as_f64().ok_or_else(|| {
+                AppError::BadRequest("custom_commission_rate must be a number".into())
+            })?)
+            .map_err(|_| AppError::BadRequest("invalid custom_commission_rate".into()))?,
+        ),
+        _ => None,
+    };
+
+    let selection = sqlx::query_scalar::<_, serde_json::Value>(
+        &row_json_dml(r#"INSERT INTO affiliate_product_selections (id, affiliate_id, product_id, is_active, promo_link, custom_commission_rate)
            VALUES ($1, $2, $3, true, $4, $5)
            ON CONFLICT (affiliate_id, product_id) DO UPDATE SET is_active = true, updated_at = NOW()
-           RETURNING *"#
+           RETURNING *"#)
     )
     .bind(Uuid::new_v4())
     .bind(aff_id)
     .bind(r.product_id)
     .bind(&r.promo_link)
-    .bind(r.custom_commission_rate)
+    .bind(custom_rate)
     .fetch_one(&s.db)
     .await?;
 
     Ok(Json(
-        json!({"message": "Product selected for promotion", "selection": selection.0}),
+        json!({"message": "Product selected for promotion", "selection": selection}),
     ))
 }
 

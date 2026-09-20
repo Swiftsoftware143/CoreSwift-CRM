@@ -9,16 +9,7 @@ use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-/// Wrap a SELECT so PostgreSQL serialises every row as ONE json object.
-///
-/// The read path decodes with `query_scalar::<_, serde_json::Value>`, which
-/// needs a single json/jsonb column. Decoding several bare columns into a
-/// one-value tuple is impossible for sqlx ("mismatched types" -> HTTP 400 for
-/// every tenant), and when only column 0 happens to be json the other columns
-/// are silently dropped. Letting Postgres build the object fixes both.
-fn row_json(sql: &str) -> String {
-    format!("SELECT row_to_json(t) FROM ({}) t", sql)
-}
+use crate::sql_json::row_json;
 
 /// Route a webhook action to the correct handler.
 /// Returns (status_code, response_body_json).
