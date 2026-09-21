@@ -297,6 +297,10 @@ tr:hover td{background:var(--bg-hover)}
         <span class="header-title" id="pageTitle">Dashboard</span>
       </div>
       <div class="header-right">
+        <button class="user-btn" id="notifBell" onclick="switchTab('notifications')" title="Notifications">
+          <span style="font-size:1rem">🔔</span>
+          <span id="notifBadge" style="display:none;margin-left:2px;background:var(--error,#e5484d);color:#fff;border-radius:9px;padding:1px 6px;font-size:.68rem;font-weight:600">0</span>
+        </button>
         <div class="dropdown">
           <button class="user-btn" onclick="toggleUserMenu()">
             <div class="avatar" id="userAvatar">S</div>
@@ -306,6 +310,8 @@ tr:hover td{background:var(--bg-hover)}
           <div class="dropdown-menu" id="userMenu">
             <button class="dropdown-item" onclick="switchTab('profile')">👤 Profile</button>
             <button class="dropdown-item" onclick="switchTab('billing')">💳 Plans &amp; Billing</button>
+            <div class="dropdown-divider"></div>
+            <div class="dropdown-item" id="userUsage" style="cursor:default;font-size:.75rem;color:var(--text-secondary)">Usage: —</div>
             <div class="dropdown-divider"></div>
             <button class="dropdown-item" onclick="logout()" style="color:var(--error)">🚪 Sign Out</button>
           </div>
@@ -518,6 +524,21 @@ async function doLogin() {
 }
 
 function logout(silent) {
+  // Server-side session invalidation. POST /api/auth/logout blacklists this token in
+  // Redis for its remaining TTL; clearing the token client-side alone left the session
+  // replayable until it expired. Fire-and-forget with keepalive: the local state MUST be
+  // cleared even if the call fails (a dead backend must never trap the user in the shell),
+  // and keepalive lets the request outlive the page transition.
+  if (STATE.token) {
+    try {
+      fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + STATE.token },
+        keepalive: true
+      }).catch(function(){});
+    } catch (_) { /* never block sign-out */ }
+  }
+  stopNotifPoll();
   STATE.token = null;
   STATE.user = null;
   localStorage.removeItem('crm_token');
@@ -541,6 +562,9 @@ function showApp() {
   renderSidebar();
   switchTab('dashboard');
   checkPlan();
+  loadUsage();
+  loadNotifCount();
+  startNotifPoll();
 }
 
 // Sidebar
@@ -941,14 +965,13 @@ const TAB_RENDERERS = {
   },
 
   'notifications': () => {
-    return pageHeader('Notifications', 'Platform notifications and alerts') +
-    card('Notification Settings', '' +
-      '<div class="config-list">' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">New Contact Added</div><div class="config-desc">Notify when a new contact is created</div></div><label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label></div>' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">Deal Stage Changed</div><div class="config-desc">Notify when a deal moves between stages</div></div><label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label></div>' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">Email Opened</div><div class="config-desc">Notify when a sent email is opened</div></div><label class="toggle"><input type="checkbox"><span class="toggle-slider"></span></label></div>' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">Task Due</div><div class="config-desc">Remind when tasks are approaching due date</div></div><label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label></div>' +
-      '</div>', '<button class="btn btn-primary btn-sm">Save Settings</button>');
+    // Real notification feed. The panel that used to live here was four hardcoded toggle
+    // switches and a Save button wired to nothing, while the backend served a complete
+    // per-user notification API (list / unread-count / read-all / :id/read) that no surface
+    // ever called. This page + the header bell now drive those routes.
+    return pageHeader('Notifications', 'Platform notifications and alerts',
+      '<button class="btn btn-secondary btn-sm" onclick="markAllNotificationsRead()">✓ Mark all read</button>') +
+    '<div id="notifList"><div class="loading-wrap"><div class="spinner"></div> Loading notifications...</div></div>';
   },
 
   'telnyx': () => placeholderPanel('Telnyx SMS/Voice', 'Connect your Telnyx account in the Integration Center to send SMS and make calls.', '📱'),
@@ -1063,7 +1086,13 @@ const TAB_RENDERERS = {
     '<div id="usersTable"><div class="loading-wrap"><div class="spinner"></div> Loading users...</div></div>';
   },
   'billing': () => {
+    // NOTE: no "Cancel subscription" action and no payment-history table yet. Both routes are
+    // registered but broken server-side (cancel gates on roles 'client_admin'/'agency_admin'
+    // which no registration path assigns — every real tenant user is 'owner'; checkout_sessions
+    // has no table at all). Wiring them would have shipped a button that always 403s and a table
+    // that always 500s. Both are carded for the owner instead of faked here.
     return pageHeader('Billing & Plans', 'Manage subscription plans and pricing') +
+    '<div id="creditsCard"><div class="loading-wrap"><div class="spinner"></div> Loading credits...</div></div>' +
     '<div id="plansContent"><div class="loading-wrap"><div class="spinner"></div> Loading plans...</div></div>';
   },
   'affiliates': () => placeholderPanel('Affiliates', 'Manage your affiliate program — track referrals, commissions, and payouts.', '🤝'),
@@ -1543,7 +1572,12 @@ const TAB_LOADERS = {
     await loadIntegrationCenter();
   },
 
+  'notifications': async () => {
+    await loadNotifications();
+  },
+
   'billing': async () => {
+    await loadCredits();
     try {
       const plans = await API.get('/billing/plans');
       let html = '';
@@ -2809,6 +2843,138 @@ document.addEventListener('click', e => {
   });
 })();
 // ===== END KEYBOARD SHORTCUTS =====
+
+// ===== ACCOUNT USAGE (GET /api/auth/me/usage) =====
+// Server-side counts for the tenant. The endpoint existed for months with no caller.
+async function loadUsage() {
+  const el = document.getElementById('userUsage');
+  if (!el || !STATE.token) return;
+  try {
+    const u = await API.get('/auth/me/usage');
+    el.textContent = 'Usage: ' + (u.contacts || 0) + ' contacts · ' + (u.users || 0) + ' users · ' + (u.pipelines || 0) + ' pipelines';
+  } catch (_) { el.textContent = 'Usage: unavailable'; }
+}
+
+// ===== NOTIFICATIONS =====
+// Drives GET /api/notifications (feed), GET /api/notifications/unread-count (header bell),
+// POST /api/notifications/read-all and POST /api/notifications/:id/read.
+var notifPollTimer = null;
+
+async function loadNotifCount() {
+  if (!STATE.token) return;
+  try {
+    const d = await API.get('/notifications/unread-count');
+    const n = (d && d.unread_count) || 0;
+    const b = document.getElementById('notifBadge');
+    if (!b) return;
+    b.textContent = n > 99 ? '99+' : String(n);
+    b.style.display = n > 0 ? 'inline-block' : 'none';
+  } catch (_) { /* badge is decoration; never surface a poll failure as a toast */ }
+}
+
+function startNotifPoll() {
+  stopNotifPoll();
+  notifPollTimer = setInterval(loadNotifCount, 60000);
+}
+
+function stopNotifPoll() {
+  if (notifPollTimer) { clearInterval(notifPollTimer); notifPollTimer = null; }
+}
+
+async function loadNotifications() {
+  const el = document.getElementById('notifList');
+  if (!el) return;
+  try {
+    const d = await API.get('/notifications?per_page=50');
+    const items = (d && d.notifications) || [];
+    if (!items.length) {
+      el.innerHTML = card('Inbox', '<div class="empty-state"><div class="empty-icon">🔔</div><h3>No notifications</h3><p>You are all caught up.</p></div>');
+    } else {
+      let h = '<div class="card"><div class="card-body"><div class="config-list">';
+      items.forEach(function (n) {
+        const unread = (n.read === false);
+        const title = n.title || n.message || '(notification)';
+        const body = (n.title && n.message) ? n.message : '';
+        h += '<div class="config-item"' + (unread ? ' style="cursor:pointer" onclick="markNotificationRead(\'' + n.id + '\')"' : '') + '>' +
+          '<div class="config-info">' +
+            '<div class="config-label">' + escapeHtml(title) +
+              (unread ? ' <span class="badge badge-primary">new</span>' : '') + '</div>' +
+            (body ? '<div class="config-desc">' + escapeHtml(body) + '</div>' : '') +
+            (n.created_at ? '<div class="config-desc">' + new Date(n.created_at).toLocaleString() + '</div>' : '') +
+          '</div>' +
+          (unread ? '<span class="config-desc">Mark read</span>' : '<span class="badge badge-muted">read</span>') +
+        '</div>';
+      });
+      h += '</div></div></div>';
+      el.innerHTML = h;
+    }
+  } catch (e) {
+    el.innerHTML = card('Inbox', '<p style="color:var(--text-secondary)">Notifications endpoint: ' + escapeHtml(e.message) + '</p>');
+  }
+  loadNotifCount();
+}
+
+async function markNotificationRead(id) {
+  try {
+    await API.post('/notifications/' + id + '/read');
+  } catch (e) { toast(e.message, 'error'); }
+  if (STATE.activeTab === 'notifications') loadNotifications(); else loadNotifCount();
+}
+
+async function markAllNotificationsRead() {
+  try {
+    const r = await API.post('/notifications/read-all');
+    toast((r && r.message) || 'All marked as read', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+  if (STATE.activeTab === 'notifications') loadNotifications(); else loadNotifCount();
+}
+
+// ===== BILLING: CREDITS =====
+// Credits endpoints (balance / usage) had no caller; the billing page only ever listed plans.
+async function loadCredits() {
+  const el = document.getElementById('creditsCard');
+  if (!el) return;
+  try {
+    const b = await API.get('/billing/credits/balance');
+    const u = await API.get('/billing/credits/usage?per_page=10');
+    const allowance = b.allowance || 0, consumed = b.consumed || 0, remaining = b.remaining || 0;
+    const pct = allowance > 0 ? Math.min(100, Math.round((consumed / allowance) * 100)) : 0;
+    const txns = (u && u.transactions) || [];
+    let rows;
+    if (txns.length) {
+      rows = '<table style="width:100%;border-collapse:collapse;font-size:.82rem"><thead><tr>' +
+        '<th style="text-align:left;padding:6px">Action</th><th style="text-align:right;padding:6px">Credits</th>' +
+        '<th style="text-align:left;padding:6px">Description</th><th style="text-align:left;padding:6px">Date</th>' +
+        '</tr></thead><tbody>' +
+        txns.map(function (t) {
+          // The API serialises each row as a 5-tuple: [id, action_type, credits, description, created_at]
+          const action = Array.isArray(t) ? t[1] : (t.action_type || '');
+          const credits = Array.isArray(t) ? t[2] : (t.credits || 0);
+          const desc = Array.isArray(t) ? t[3] : (t.description || '');
+          const when = Array.isArray(t) ? t[4] : t.created_at;
+          const col = credits < 0 ? 'var(--error,#e5484d)' : 'var(--success,#3fb950)';
+          return '<tr><td style="padding:6px;border-top:1px solid var(--border,#2a2a2a)">' + escapeHtml(String(action)) + '</td>' +
+            '<td style="padding:6px;text-align:right;border-top:1px solid var(--border,#2a2a2a);color:' + col + '">' + credits + '</td>' +
+            '<td style="padding:6px;border-top:1px solid var(--border,#2a2a2a)">' + escapeHtml(String(desc || '')) + '</td>' +
+            '<td style="padding:6px;border-top:1px solid var(--border,#2a2a2a)">' + (when ? new Date(when).toLocaleString() : '—') + '</td></tr>';
+        }).join('') + '</tbody></table>';
+    } else {
+      rows = '<div class="empty-state" style="padding:12px"><p>No credit transactions yet.</p></div>';
+    }
+    el.innerHTML = card('Credits',
+      '<div class="stats-grid">' +
+        '<div class="stat-card accent"><div class="stat-value">' + remaining + '</div><div class="stat-label">Remaining</div></div>' +
+        '<div class="stat-card"><div class="stat-value">' + consumed + ' / ' + allowance + '</div><div class="stat-label">Used this period (' + pct + '%)</div></div>' +
+      '</div>' + rows +
+      '<p class="config-desc" style="margin-top:10px">Credit packs are purchased through checkout. The old self-serve “buy credits” route granted credits with no payment attached and was removed.</p>');
+  } catch (e) {
+    el.innerHTML = card('Credits', '<p style="color:var(--text-secondary)">Credits endpoint: ' + escapeHtml(e.message) + '</p>');
+  }
+}
+
+// Deliberately NOT wired here (both broken server-side, carded): GET /billing/checkout/sessions
+// (no checkout_sessions table exists) and POST /billing/subscription/cancel (gates on
+// 'client_admin'/'agency_admin', roles no registration path assigns).
 
 </script>
 </body>

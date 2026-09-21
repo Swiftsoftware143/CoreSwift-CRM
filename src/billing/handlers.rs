@@ -552,43 +552,10 @@ pub async fn get_credit_usage(
     ))
 }
 
-/// POST /api/billing/credits/buy — Purchase additional credits (placeholder for Stripe/checkout)
-pub async fn buy_credits(
-    State(s): State<AppState>,
-    Extension(c): Extension<Claims>,
-    Json(r): Json<Value>,
-) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-
-    let amount = r.get("amount").and_then(|v| v.as_i64()).unwrap_or(0);
-    if amount <= 0 {
-        return Err(AppError::Validation("Amount must be positive".to_string()));
-    }
-
-    // Price: 100 credits = $1, 1000 = $9, 5000 = $40
-    let price = match amount {
-        a if a >= 5000 => a as f64 * 0.008,
-        a if a >= 1000 => a as f64 * 0.009,
-        _ => amount as f64 * 0.01,
-    };
-
-    let _ = sqlx::query(
-        r#"INSERT INTO credit_transactions (id, tenant_id, action_type, credits, description)
-           VALUES ($1, $2, 'credit_purchase', $3, $4)"#,
-    )
-    .bind(Uuid::new_v4())
-    .bind(tid)
-    .bind(amount)
-    .bind(format!("Purchased {} credits for ${:.2}", amount, price))
-    .execute(&s.db)
-    .await?;
-
-    tracing::info!(tenant = %tid, credits = %amount, price = %price, "Credits purchased");
-
-    Ok(Json(
-        json!({"message": format!("{} credits added to account", amount), "amount": amount, "charged": price}),
-    ))
-}
+// POST /api/billing/credits/buy was DELETED (2026-09-21, dead-endpoint triage t_14f5514f).
+// It had no shipped caller and granted the caller's tenant `amount` credits by inserting a
+// credit_purchase row — no payment, no provider session, no role check. Credits are still
+// bought legitimately via POST /checkout/create; nothing else referenced this handler.
 
 // ──────────────────────────────────────────────
 // Stripe/PayPal/Square/Paddle Checkout
@@ -736,24 +703,12 @@ pub async fn create_checkout_session(
     })))
 }
 
-/// GET /api/billing/checkout/sessions — List checkout sessions for this tenant
-pub async fn list_checkout_sessions(
-    State(s): State<AppState>,
-    Extension(c): Extension<Claims>,
-) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    let sessions = sqlx::query_as::<_, CheckoutSessionSummary>(
-        r#"SELECT id, provider_type, provider_session_id, status, amount, currency, purchasable_type, created_at
-           FROM checkout_sessions
-           WHERE tenant_id = $1
-           ORDER BY created_at DESC LIMIT 50"#
-    )
-    .bind(tenant_id)
-    .fetch_all(&s.db)
-    .await?;
-
-    Ok(Json(json!(sessions)))
-}
+// GET /api/billing/checkout/sessions was DELETED (2026-09-21, dead-endpoint triage t_14f5514f).
+// It read `FROM checkout_sessions` — a table that does not exist in coreswift_crm, so EVERY call
+// returned HTTP 500 (proven live: "Database error: relation \"checkout_sessions\" does not exist"
+// in the container log), and no shipped surface ever called it. Payment history needs a real
+// implementation over credit_transactions / provider webhooks; until then the route is gone
+// rather than serving a guaranteed 500.
 
 // ──────────────────────────────────────────────
 // Stripe/PayPal/Square/Paddle API helpers
@@ -1140,18 +1095,6 @@ async fn create_paypal_session(
 }
 
 // ── Data types ──
-
-#[derive(Debug, sqlx::FromRow, serde::Serialize)]
-struct CheckoutSessionSummary {
-    id: Uuid,
-    provider_type: String,
-    provider_session_id: Option<String>,
-    status: String,
-    amount: Decimal,
-    currency: String,
-    purchasable_type: String,
-    created_at: chrono::DateTime<chrono::Utc>,
-}
 
 #[derive(Debug, sqlx::FromRow)]
 struct UserRow {

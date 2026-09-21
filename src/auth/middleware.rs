@@ -41,6 +41,34 @@ pub async fn auth_middleware(
         .ok_or(AppError::Unauthorized)?;
 
     let claims = verify_token(token, &state.config.jwt_secret)?;
+
+    // Reject tokens invalidated by POST /api/auth/logout. The logout handler has always written
+    // `blacklist:<token>` to Redis, but NOTHING ever read it — so "Logged out successfully" was
+    // a lie and a signed-out token stayed replayable for its full remaining life (proven live
+    // 2026-09-21: after a 200 logout the same bearer token still returned 200 from a protected
+    // route). Fail OPEN on a Redis error or a slow cache: an unreachable blacklist must not lock
+    // every authenticated request out of the app, and the JWT is still signature- and
+    // expiry-checked regardless.
+    {
+        let mut conn = state.redis.clone();
+        let check = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            redis::cmd("GET")
+                .arg(format!("blacklist:{token}"))
+                .query_async::<Option<String>>(&mut conn),
+        )
+        .await;
+        match check {
+            Ok(Ok(Some(_))) => {
+                tracing::warn!("rejected a blacklisted (logged-out) token");
+                return Err(AppError::Unauthorized);
+            }
+            Ok(Ok(None)) => {}
+            Ok(Err(e)) => tracing::warn!(error = %e, "blacklist lookup failed; allowing request"),
+            Err(_) => tracing::warn!("blacklist lookup timed out; allowing request"),
+        }
+    }
+
     req.extensions_mut().insert(claims);
     Ok(next.run(req).await)
 }
