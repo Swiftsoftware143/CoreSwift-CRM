@@ -3174,6 +3174,11 @@ async function loadPipelinesTab() {
           ' <a href="#" title="Delete stage" onclick="plDeleteStage(\'' + p.id + '\',\'' + s.id + '\');return false">🗑</a>' +
         '</span>';
       });
+
+      // Drag a card between stage columns to move a deal. The board and the table below it are two
+      // views of the same data; both call PATCH /api/pipelines/:pid/stages/:sid/move/:oid.
+      h += '<div style="color:var(--text-muted);font-size:12px;margin-bottom:6px">Drag a deal card between stages to move it.</div>';
+      h += plBoard(p, stages, opps);
       h += '</div>';
       const rows = opps.map(function (o) {
         const st = stages.find(function (s) { return s.id === o.stage_id; });
@@ -3286,7 +3291,12 @@ async function plQuickDeal() {
     plAddDeal(p.id);
   } catch (e) { toast(e.message, 'error'); }
 }
-async function plAddDeal(pid) {
+async function plAddDeal(pid, presetStageId) {
+  // the stages of THIS pipeline, for the "Stage" selector (defaults to the first one the API would pick)
+  const plp = plCache(pid);
+  const stageOpts = ((plp && plp.stages) || []).map(function (s) {
+    return '<option value="' + s.id + '"' + (presetStageId === s.id ? ' selected' : '') + '>' + escapeHtml(s.name) + '</option>';
+  }).join('');
   let opts = '<option value="">No contact</option>';
   try {
     const cs = famList(await API.get('/contacts'), 'contacts');
@@ -3298,6 +3308,7 @@ async function plAddDeal(pid) {
   showModal('New Deal',
     '<div class="form-group"><label>Deal name</label><input type="text" id="dlName"></div>' +
     '<div class="form-group"><label>Contact</label><select id="dlContact">' + opts + '</select></div>' +
+    '<div class="form-group"><label>Stage</label><select id="dlStage">' + stageOpts + '</select></div>' +
     '<div class="form-group"><label>Value</label><input type="number" id="dlValue" step="0.01"></div>' +
     '<div class="form-group"><label>Currency</label><input type="text" id="dlCur" value="USD"></div>' +
     '<div class="form-group"><label>Probability %</label><input type="number" id="dlProb" min="0" max="100"></div>' +
@@ -3313,6 +3324,7 @@ async function plCreateDeal(pid) {
   const prob = document.getElementById('dlProb').value;
   const body = {
     name: name,
+    stage_id: document.getElementById('dlStage').value || null,
     contact_id: document.getElementById('dlContact').value || null,
     value: val === '' ? null : parseFloat(val),
     currency: (document.getElementById('dlCur').value || '').trim() || null,
@@ -3326,11 +3338,94 @@ async function plCreateDeal(pid) {
   } catch (e) { toast('Create failed: ' + e.message, 'error'); }
 }
 function plMoveDeal(pid, oppId, stageId) {
+  // the <select> path and the drag-and-drop board share one implementation
   if (!stageId) return;
-  API.patch('/pipelines/' + pid + '/stages/' + stageId + '/move/' + oppId, {})
-    .then(function (r) { toast('Deal moved to ' + (r && r.status ? r.status : 'new stage'), 'success'); loadPipelinesTab(); })
-    .catch(function (e) { toast('Move failed: ' + e.message, 'error'); loadPipelinesTab(); });
+  plMoveDealAsync(pid, oppId, stageId).catch(function () {});
 }
+
+// ---------------------------------------------------------------- DRAG & DROP BOARD
+// HTML5 native drag and drop: the card carries draggable="true", each stage column accepts a drop.
+// `PL_DRAG` is the reliable payload (a JS variable); `dataTransfer` is set as well so a drop from a
+// different tab or a synthetic event still resolves the deal.
+let PL_DRAG = null;
+
+function plBoard(p, stages, opps) {
+  if (!stages.length) return '';
+  const cols = stages.map(function (s) {
+    const cards = opps.filter(function (o) { return o.stage_id === s.id; });
+    return '<div class="pl-col" data-stage="' + s.id + '" data-pipeline="' + p.id + '"' +
+        ' ondragover="plDragOver(event, this)" ondragleave="plDragLeave(this)"' +
+        ' ondrop="plDrop(event, this, \'' + s.id + '\')"' +
+        ' style="flex:1 1 220px;min-width:200px;background:var(--bg-secondary);border:1px dashed var(--border);border-radius:10px;padding:8px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+        '<strong style="font-size:13px">' + fh(s.name) + (s.is_won ? ' 🏆' : '') + (s.is_lost ? ' ✕' : '') + '</strong>' +
+        '<span><span class="badge badge-muted">' + cards.length + '</span> ' +
+        '<button class="btn btn-ghost btn-xs" title="New deal on this stage" onclick="plAddDeal(\'' + p.id + '\',\'' + s.id + '\')">+</button></span>' +
+      '</div>' +
+      (cards.length ? cards.map(function (o) {
+        return '<div class="pl-card" draggable="true" data-opp="' + o.id + '"' +
+          ' ondragstart="plDragStart(event, \'' + p.id + '\', \'' + o.id + '\')" ondragend="plDragEnd(this)"' +
+          ' style="background:var(--bg-primary,#16161a);border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab">' +
+          '<div style="font-weight:600;font-size:13px">' + fh(o.name) + '</div>' +
+          '<div style="color:var(--text-muted);font-size:12px">' +
+            (o.value !== null && o.value !== undefined ? '$' + Number(o.value).toLocaleString() : '—') +
+            (o.probability !== null && o.probability !== undefined ? ' · ' + o.probability + '%' : '') +
+          '</div></div>';
+      }).join('') : '<div style="color:var(--text-muted);font-size:12px;padding:6px">Drop a deal here</div>') +
+    '</div>';
+  }).join('');
+  return '<div style="display:flex;gap:10px;overflow-x:auto;padding-bottom:6px;margin-bottom:14px">' + cols + '</div>';
+}
+
+function plDragStart(ev, pid, oid) {
+  PL_DRAG = { pipelineId: pid, oppId: oid };
+  try { ev.dataTransfer.setData('text/plain', oid); ev.dataTransfer.effectAllowed = 'move'; } catch (_) {}
+  try { ev.currentTarget.style.opacity = '0.5'; } catch (_) {}
+}
+
+function plDragEnd(el) {
+  try { el.style.opacity = '1'; } catch (_) {}
+  PL_DRAG = null;
+}
+
+function plDragOver(ev, col) {
+  ev.preventDefault();                       // without this the drop event never fires
+  try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
+  col.style.borderColor = 'var(--primary,#6366f1)';
+  col.style.background = 'rgba(99,102,241,0.08)';
+}
+
+function plDragLeave(col) {
+  col.style.borderColor = 'var(--border)';
+  col.style.background = 'var(--bg-secondary)';
+}
+
+function plDrop(ev, col, stageId) {
+  ev.preventDefault();
+  plDragLeave(col);
+  const drag = PL_DRAG;
+  let oid = drag ? drag.oppId : null;
+  if (!oid) { try { oid = ev.dataTransfer.getData('text/plain'); } catch (_) {} }
+  const pid = (drag && drag.pipelineId) || col.getAttribute('data-pipeline') || '';
+  if (!oid || !pid) { toast('Nothing to move', 'error'); return; }
+  plMoveDealAsync(pid, oid, stageId);
+}
+
+function plMoveDealAsync(pid, oppId, stageId) {
+  if (!stageId) return Promise.resolve();
+  return API.patch('/pipelines/' + pid + '/stages/' + stageId + '/move/' + oppId, {})
+    .then(function (r) {
+      toast('Deal moved to ' + (r && r.status ? r.status : 'new stage'), 'success');
+      loadPipelinesTab();
+      return r;
+    })
+    .catch(function (e) {
+      toast('Move failed: ' + e.message, 'error');
+      loadPipelinesTab();
+      throw e;
+    });
+}
+
 function plDeleteDeal(pid, oppId) {
   confirmThen('Delete this deal?', function () {
     API.del('/pipelines/' + pid + '/opportunities/' + oppId)

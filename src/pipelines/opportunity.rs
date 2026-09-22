@@ -57,6 +57,10 @@ pub struct OpportunityFull {
 #[derive(Debug, Deserialize)]
 pub struct CreateOpportunityRequest {
     pub name: String,
+    /// Which stage the deal starts on. Optional for backward compatibility: a client that omits it
+    /// gets the pipeline's first stage, which is what every caller got before this field existed.
+    /// A stage that belongs to ANOTHER pipeline is refused rather than silently ignored.
+    pub stage_id: Option<Uuid>,
     pub contact_id: Option<Uuid>,
     pub company_id: Option<Uuid>,
     pub notes: Option<String>,
@@ -175,6 +179,27 @@ pub async fn create(
     .await?
     .ok_or(AppError::BadRequest("Pipeline has no stages".to_string()))?;
 
+    // Honour an explicit stage, but only one that belongs to THIS pipeline — otherwise a caller could
+    // plant a deal on another pipeline's stage (and the board would show it nowhere).
+    let start_stage_id = match req.stage_id {
+        Some(sid) if sid != first_stage.id => {
+            let ok = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM pipeline_stages WHERE id = $1 AND pipeline_id = $2)",
+            )
+            .bind(sid)
+            .bind(pipeline_id)
+            .fetch_one(&state.db)
+            .await?;
+            if !ok {
+                return Err(AppError::Validation(format!(
+                    "Stage {sid} does not belong to pipeline {pipeline_id}"
+                )));
+            }
+            sid
+        }
+        _ => first_stage.id,
+    };
+
     let sql = format!(
         "INSERT INTO opportunities (id, tenant_id, pipeline_id, stage_id, contact_id, company_id, \
             name, notes, value, currency, probability, expected_close_date, source, metadata) \
@@ -184,7 +209,7 @@ pub async fn create(
         .bind(Uuid::new_v4())
         .bind(tenant_id)
         .bind(pipeline_id)
-        .bind(first_stage.id)
+        .bind(start_stage_id)
         .bind(req.contact_id)
         .bind(req.company_id)
         .bind(&req.name)
@@ -204,7 +229,7 @@ pub async fn create(
     )
     .bind(Uuid::new_v4())
     .bind(opp.id)
-    .bind(first_stage.id)
+    .bind(start_stage_id)
     .execute(&state.db)
     .await?;
 
