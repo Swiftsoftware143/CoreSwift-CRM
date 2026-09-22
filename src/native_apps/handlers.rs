@@ -385,11 +385,17 @@ pub async fn sync_history(
 
 // ── Admin-only: get global app config ──
 
-/// Global (platform-level) app configuration may be managed by the platform admin
-/// (`agency_admin`) as well as tenant-level `owner`/`admin` — the fleet's role
-/// vocabulary uses all three and the admin SPA gates on `agency_admin`.
+/// Is this the PLATFORM admin — the one role allowed to read and write GLOBAL (platform-wide)
+/// app configuration, which by definition spans every tenant?
+///
+/// Deliberately a single role. This gate previously accepted tenant-level `owner` and `admin`
+/// as well; every tenant user holds `owner` (measured on production 2026-09-22:
+/// `select role, count(*) from users group by 1` -> owner 38, member 7, admin 1,
+/// agency_admin 1), so 39 of 47 users could read AND write configuration belonging to the
+/// whole platform. Tenant-level `owner`/`admin` keep their tenant-scoped powers via the
+/// tenant handlers — those gates are intentionally left alone — and get 403 here.
 fn is_platform_admin(role: &str) -> bool {
-    matches!(role, "owner" | "admin" | "agency_admin")
+    role == "agency_admin"
 }
 
 pub async fn get_admin_config(
