@@ -184,8 +184,10 @@ pub async fn create_webhook(
         Some(plain) => Some(crate::secret_box::seal(t, plain)?),
         None => None,
     };
+    // `events` is NOT NULL DEFAULT '{}' in the schema, so binding the request's Option directly
+    // stored SQL NULL and answered 500 on any create that omitted the array (t_6718dc86).
     let row = sqlx::query_as::<_, Webhook>("INSERT INTO webhook_endpoints(id,tenant_id,name,url,secret,events,retry_count,timeout_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *")
-        .bind(Uuid::new_v4()).bind(t).bind(&r.name).bind(&r.url).bind(&stored_secret).bind(&r.events).bind(r.retry_count.unwrap_or(3)).bind(r.timeout_ms.unwrap_or(30_000)).fetch_one(&s.db).await?;
+        .bind(Uuid::new_v4()).bind(t).bind(&r.name).bind(&r.url).bind(&stored_secret).bind(r.events.unwrap_or_default()).bind(r.retry_count.unwrap_or(3)).bind(r.timeout_ms.unwrap_or(30_000)).fetch_one(&s.db).await?;
     Ok((StatusCode::CREATED, Json(webhook_json(&row))))
 }
 

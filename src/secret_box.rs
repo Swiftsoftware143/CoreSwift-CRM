@@ -223,6 +223,40 @@ pub async fn validate_provider_key_guard(db: &PgPool) -> Result<bool, AppError> 
     Ok(validated)
 }
 
+/// `migrations/078_webhook_endpoints_sealed_guard.sql` arms the webhook signing-secret guard the
+/// same way: `NOT VALID`, so it could be added to a table that might still hold legacy rows. The
+/// table is empty today, so there is nothing to exempt and validating it leaves the column fully
+/// enforced from the first customer write — the posture `provider_keys` reached above.
+///
+/// Best-effort like its sibling: a missing constraint (migration not applied yet) is a warning at
+/// boot, never a failure. New writes are enforced either way.
+pub async fn validate_webhook_guard(db: &PgPool) -> Result<bool, AppError> {
+    let remaining: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM webhook_endpoints \
+         WHERE secret IS NOT NULL AND secret <> '' AND secret NOT LIKE 'enc:v1:%'",
+    )
+    .fetch_one(db)
+    .await?;
+    if remaining > 0 {
+        tracing::warn!(
+            plaintext_remaining = remaining,
+            "webhook endpoint storage guard stays NOT VALID until every secret is sealed"
+        );
+        return Ok(false);
+    }
+    sqlx::query(
+        "ALTER TABLE webhook_endpoints VALIDATE CONSTRAINT webhook_endpoints_secret_sealed",
+    )
+    .execute(db)
+    .await?;
+    let validated: bool = sqlx::query_scalar(
+        "SELECT convalidated FROM pg_constraint WHERE conname = 'webhook_endpoints_secret_sealed'",
+    )
+    .fetch_one(db)
+    .await?;
+    Ok(validated)
+}
+
 // ── CS-21b: seal-on-WRITE audit ────────────────────────────────────────────────────────────────
 //
 // Every read path is safe (`open` tolerates legacy plaintext), but nothing FAILED LOUDLY when a

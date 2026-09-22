@@ -175,6 +175,17 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!(error = %e, "provider key storage guard not validated"),
     }
 
+    // t_6718dc86: the same posture for the outbound webhook signing secret (`migrations/078`). The
+    // table held no rows when the guard was armed, so nothing is exempt and the constraint can be
+    // fully enforced; a plaintext row still in there keeps it NOT VALID and says so at every boot.
+    match crate::secret_box::validate_webhook_guard(&db).await {
+        Ok(true) => {
+            tracing::info!("webhook endpoint storage guard validated (every secret sealed)")
+        }
+        Ok(false) => tracing::warn!("webhook endpoint storage guard stays NOT VALID"),
+        Err(e) => tracing::warn!(error = %e, "webhook endpoint storage guard not validated"),
+    }
+
     // Seal-on-WRITE assertion (CS-21b). The backfill above repairs history; this makes sure history
     // cannot quietly repeat — a column that holds a plaintext secret is reported on EVERY boot
     // instead of being tolerated forever. `CORESWIFT_SECRET_AUDIT=1` turns it into a one-shot check
