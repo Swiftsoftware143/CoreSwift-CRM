@@ -384,7 +384,28 @@ pub async fn get_providers(
         }
     }));
     redact_secrets(&mut merged);
-    Ok(Json(json!(merged)))
+
+    // t_193e2259: say which transport will actually carry this workspace's email, and whether one
+    // exists at all. Before this, a workspace with no provider configured looked identical to one
+    // that was sending fine, while every message it queued was undeliverable by construction.
+    let tenant_domain = merged
+        .get("mailgun_domain")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let key_present = merged
+        .get("mailgun_api_key")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let has_byok = tenant_domain.is_some() && key_present;
+
+    let mut out = merged.as_object().cloned().unwrap_or_default();
+    out.insert(
+        "email_transport".to_string(),
+        providers::email_transport_status(has_byok, tenant_domain.as_deref()),
+    );
+    Ok(Json(Value::Object(out)))
 }
 
 /// PATCH /api/comms/providers — Update communication provider config
@@ -427,24 +448,24 @@ async fn deliver_message(
 ) {
     tracing::info!(msg = %msg_id, channel = %channel, to = %to, "Delivering message via provider");
 
-    // Load tenant's provider config and deliver
+    // Load the transport (workspace BYOK or the platform's own mail settings) and deliver
     let cfg =
         providers::load_delivery_config(db, msg_id, tenant_id, channel, to, subject, body).await;
 
-    let (success, error) = providers::deliver(&cfg).await;
+    let outcome = providers::deliver(&cfg).await;
 
-    let (status, error_msg) = if success {
-        ("sent".to_string(), None)
-    } else {
-        (
-            "failed".to_string(),
-            error.or(Some("Delivery failed — unknown error".to_string())),
-        )
-    };
-
-    let _ = sqlx::query(
-        "UPDATE outbound_messages SET status = $1, sent_at = NOW(), error_message = $2 WHERE id = $3"
-    )
-    .bind(&status).bind(&error_msg).bind(msg_id)
-    .execute(db).await;
+    // The ONE recording policy, shared with the worker poll: sent with the provider's message id,
+    // a permanent failure, or a transient one requeued with backoff. Two bugs used to live here:
+    // `sent_at` was written even for a failure, and `retry_count` never moved.
+    match providers::record_attempt(db, msg_id, &outcome).await {
+        Ok(record) => tracing::info!(
+            msg = %msg_id,
+            transport = cfg.transport.as_str(),
+            result = ?record,
+            "Delivery attempt recorded"
+        ),
+        Err(e) => {
+            tracing::error!(msg = %msg_id, error = %e, "Failed to record the delivery attempt")
+        }
+    }
 }

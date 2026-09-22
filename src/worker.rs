@@ -176,9 +176,9 @@ async fn process_notification_queue(db: &PgPool) {
         .await;
 
         // Deliver
-        let (ok, err) = crate::communications::providers::deliver(&cfg).await;
+        let outcome = crate::communications::providers::deliver(&cfg).await;
 
-        if ok {
+        if outcome.ok {
             let _ = sqlx::query(
                 "UPDATE notification_queue SET status = 'sent', sent_at = NOW() WHERE id = $1",
             )
@@ -187,7 +187,10 @@ async fn process_notification_queue(db: &PgPool) {
             .await;
             tracing::info!(item = %item_id, channel = %channel, "Notification delivered successfully");
         } else {
-            let err_msg = err.unwrap_or_else(|| "Unknown error".to_string());
+            let err_msg = outcome
+                .error
+                .clone()
+                .unwrap_or_else(|| "Unknown error".to_string());
             let _ = sqlx::query(
                 "UPDATE notification_queue SET status = 'failed', error_message = $2 WHERE id = $1",
             )
@@ -495,12 +498,18 @@ async fn check_abandoned_directory_signups(db: &PgPool) {
 }
 
 /// Process queued email messages from outbound_messages table.
-/// Polls for 'queued' messages with channel='email', sends via configured provider.
+///
+/// Picks up rows that are `queued` AND due — `scheduled_at` is NULL on a fresh message and set to
+/// now+backoff when a transient failure requeues it, so a failing provider is not hammered. Each
+/// row is claimed (a conditional UPDATE, so two overlapping ticks cannot both send it), then the
+/// attempt is recorded through the ONE policy in `providers::record_attempt`:
+/// sent with the provider's message id / permanent failure / requeued with backoff.
 async fn deliver_queued_messages(db: &PgPool) {
-    let messages = match sqlx::query_as::<_, (Uuid, Uuid, String, String, Option<String>, String)>(
-        r#"SELECT id, tenant_id, to_address, body, subject, channel
+    let messages = match sqlx::query_as::<_, (Uuid, Uuid, String, String, Option<String>)>(
+        r#"SELECT id, tenant_id, to_address, body, subject
            FROM outbound_messages
            WHERE status = 'queued' AND channel = 'email'
+             AND (scheduled_at IS NULL OR scheduled_at <= NOW())
            ORDER BY created_at ASC
            LIMIT 10"#,
     )
@@ -518,16 +527,24 @@ async fn deliver_queued_messages(db: &PgPool) {
         return;
     }
 
-    tracing::info!("Processing {} queued messages", messages.len());
+    tracing::info!("Processing {} due queued messages", messages.len());
 
-    for (msg_id, tenant_id, to_address, body, subject, _channel) in &messages {
-        // Mark as sending
-        let _ = sqlx::query("UPDATE outbound_messages SET status = 'sending' WHERE id = $1")
-            .bind(msg_id)
-            .execute(db)
-            .await;
+    for (msg_id, tenant_id, to_address, body, subject) in &messages {
+        // Claim it. Anything already moved on (another tick, the UI send path) is skipped.
+        let claimed = sqlx::query(
+            "UPDATE outbound_messages SET status = 'sending' WHERE id = $1 AND status = 'queued'",
+        )
+        .bind(msg_id)
+        .execute(db)
+        .await
+        .map(|r| r.rows_affected())
+        .unwrap_or(0);
+        if claimed == 0 {
+            continue;
+        }
 
-        // Load delivery config from tenant settings
+        // Load the delivery config — this is where the transport is resolved (workspace BYOK or
+        // the platform's own mail settings).
         let cfg = crate::communications::providers::load_delivery_config(
             db,
             *msg_id,
@@ -539,27 +556,18 @@ async fn deliver_queued_messages(db: &PgPool) {
         )
         .await;
 
-        // Deliver
-        let (ok, err) = crate::communications::providers::deliver(&cfg).await;
+        let outcome = crate::communications::providers::deliver(&cfg).await;
 
-        if ok {
-            let _ = sqlx::query(
-                "UPDATE outbound_messages SET status = 'sent', sent_at = NOW() WHERE id = $1",
-            )
-            .bind(msg_id)
-            .execute(db)
-            .await;
-            tracing::info!(msg = %msg_id, "Email delivered successfully");
-        } else {
-            let err_msg = err.unwrap_or_else(|| "Unknown error".to_string());
-            let _ = sqlx::query(
-                "UPDATE outbound_messages SET status = 'failed', error_message = $2 WHERE id = $1",
-            )
-            .bind(msg_id)
-            .bind(&err_msg)
-            .execute(db)
-            .await;
-            tracing::warn!(msg = %msg_id, error = %err_msg, "Email delivery failed");
+        match crate::communications::providers::record_attempt(db, *msg_id, &outcome).await {
+            Ok(record) => tracing::info!(
+                msg = %msg_id,
+                transport = cfg.transport.as_str(),
+                result = ?record,
+                "Email delivery attempt recorded"
+            ),
+            Err(e) => {
+                tracing::error!(msg = %msg_id, error = %e, "Failed to record the delivery attempt")
+            }
         }
     }
 }

@@ -325,7 +325,11 @@ async fn exec_send_email(
         &body_text,
     )
     .await;
-    let _ = crate::communications::providers::deliver(&cfg).await;
+    // Deliver once, and let the shared policy record the result. Discarding the outcome used to
+    // leave the row 'queued' after an inline send, so the worker poll sent the same message a
+    // second time.
+    let outcome = crate::communications::providers::deliver(&cfg).await;
+    let _ = crate::communications::providers::record_attempt(db, msg_id, &outcome).await;
 
     let _ = sqlx::query(
         "UPDATE automation_rules SET execution_count = execution_count + 1, last_executed_at = NOW() WHERE id = $1"
@@ -403,7 +407,11 @@ async fn exec_send_sms(
         db, msg_id, tenant_id, "sms", &to, None, &body_text,
     )
     .await;
-    let _ = crate::communications::providers::deliver(&cfg).await;
+    // Deliver once, and let the shared policy record the result. Discarding the outcome used to
+    // leave the row 'queued' after an inline send, so the worker poll sent the same message a
+    // second time.
+    let outcome = crate::communications::providers::deliver(&cfg).await;
+    let _ = crate::communications::providers::record_attempt(db, msg_id, &outcome).await;
 
     let _ = sqlx::query(
         "UPDATE automation_rules SET execution_count = execution_count + 1, last_executed_at = NOW() WHERE id = $1"
