@@ -31,13 +31,44 @@ const GOOGLE_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_CALENDAR_API: &str = "https://www.googleapis.com/calendar/v3";
 
-/// Get OAuth2 client configuration from AppConfig or environment
-fn google_oauth_config() -> (String, String, String) {
-    let client_id = std::env::var("GOOGLE_CLIENT_ID").unwrap_or_else(|_| String::new());
-    let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_else(|_| String::new());
-    let redirect_uri = std::env::var("GOOGLE_REDIRECT_URI")
-        .unwrap_or_else(|_| "http://localhost:8080/api/google-calendar/oauth-callback".to_string());
-    (client_id, client_secret, redirect_uri)
+/// OAuth2 client configuration for ONE TENANT.
+///
+/// The tenant's own BYOK slot wins (`provider_keys`, provider `google_calendar`: the client SECRET
+/// in `api_key`, the client ID in `metadata.client_id`); the process environment is only a fallback
+/// for a centrally-configured deployment. Reading the environment alone made this feature
+/// un-configurable by a customer — the "env-var-only is a defect" rule — and the BYOK panel offers
+/// this slot because `migrations/070_google_calendar_tenant_slot.sql` added it to
+/// `available_providers`.
+async fn google_oauth_config(s: &AppState, tid: Uuid) -> (String, String, String) {
+    let nonempty = |v: Option<String>| v.filter(|x| !x.trim().is_empty());
+
+    let row: Option<(String, serde_json::Value)> = sqlx::query_as(
+        "SELECT api_key, metadata FROM provider_keys \
+         WHERE tenant_id = $1 AND provider = 'google_calendar' AND is_active = true",
+    )
+    .bind(tid)
+    .fetch_optional(&s.db)
+    .await
+    .unwrap_or(None);
+
+    let client_secret = nonempty(row.as_ref().map(|r| r.0.clone()))
+        .or_else(|| nonempty(std::env::var("GOOGLE_CLIENT_SECRET").ok()));
+    let client_id = nonempty(
+        row.as_ref()
+            .and_then(|r| r.1.get("client_id"))
+            .and_then(|v| v.as_str())
+            .map(|v| v.to_string()),
+    )
+    .or_else(|| nonempty(std::env::var("GOOGLE_CLIENT_ID").ok()));
+    let redirect_uri = nonempty(std::env::var("GOOGLE_REDIRECT_URI").ok()).unwrap_or_else(|| {
+        "http://localhost:8080/api/google-calendar/oauth-callback".to_string()
+    });
+
+    (
+        client_id.unwrap_or_default(),
+        client_secret.unwrap_or_default(),
+        redirect_uri,
+    )
 }
 
 // ── Route definitions ────────────────────────────────────────────────────
@@ -135,11 +166,14 @@ pub async fn get_connect_url(
     Query(q): Query<HashMap<String, String>>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    let (client_id, _client_secret, redirect_uri) = google_oauth_config();
+    let (client_id, _client_secret, redirect_uri) = google_oauth_config(&s, tid).await;
 
     if client_id.is_empty() {
         return Err(AppError::Validation(
-            "Google Calendar not configured: GOOGLE_CLIENT_ID is not set".to_string(),
+            "Google Calendar is not configured for this account: add your Google client ID and \
+             client secret under Provider Keys (they are stored per tenant), or set \
+             GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET on the server."
+                .to_string(),
         ));
     }
 
@@ -190,7 +224,7 @@ pub async fn oauth_callback(
     let code = params
         .code
         .ok_or_else(|| AppError::Validation("Authorization code missing".to_string()))?;
-    let (client_id, client_secret, redirect_uri) = google_oauth_config();
+    let (client_id, client_secret, redirect_uri) = google_oauth_config(&s, tid).await;
 
     // Exchange auth code for tokens
     let token_params = json!({
@@ -341,8 +375,8 @@ pub async fn sync_calendar(
 
     let google_cal_id = google_cal_id.unwrap_or_else(|| "primary".to_string());
 
-    // Get a fresh access token using the refresh token
-    let access_token = get_access_token(&refresh_token).await?;
+    // Get a fresh access token using the refresh token, with THIS tenant's OAuth client
+    let access_token = get_access_token(&s, tid, &refresh_token).await?;
 
     let _full_sync = q.full_sync.as_deref().unwrap_or("true") == "true";
 
@@ -527,9 +561,10 @@ pub async fn webhook_handler(
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-/// Exchange a refresh token for a fresh access token.
-async fn get_access_token(refresh_token: &str) -> Result<String, AppError> {
-    let (client_id, client_secret, _redirect_uri) = google_oauth_config();
+/// Exchange a refresh token for a fresh access token, using the tenant's own OAuth client
+/// (`google_oauth_config` falls back to the environment only when the tenant has no slot filled).
+async fn get_access_token(s: &AppState, tid: Uuid, refresh_token: &str) -> Result<String, AppError> {
+    let (client_id, client_secret, _redirect_uri) = google_oauth_config(s, tid).await;
 
     let params = json!({
         "client_id": client_id,
