@@ -138,7 +138,7 @@ const GLOBAL_SECRET_COLUMNS: &[(&str, &str)] = &[
     ("telnyx_config", "webhook_secret"),
 ];
 
-/// One stored value that is neither sealed nor decryptable ciphertext.
+/// One stored value that must not be there.
 #[derive(Debug, serde::Serialize)]
 pub struct SecretFinding {
     pub table: &'static str,
@@ -148,9 +148,36 @@ pub struct SecretFinding {
     pub reason: &'static str,
 }
 
-/// Every non-empty secret that is stored in PLAINTEXT. Empty in a healthy database.
-pub async fn audit_plaintext_secrets(db: &PgPool) -> Result<Vec<SecretFinding>, AppError> {
-    let mut findings = Vec::new();
+/// The audit's result. `plaintext` is the dangerous case (a credential readable by anyone with the
+/// dump); `unreadable` is a credential the app itself cannot open — usually a rotated
+/// `CORESWIFT_SECRET` or a row written by another deployment. Both are reported; only the first is a
+/// failure, because a rotation is an incident to look at, not a write path that is leaking.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct SecretAudit {
+    pub plaintext: Vec<SecretFinding>,
+    pub unreadable: Vec<SecretFinding>,
+}
+
+/// Would this value have to be ciphertext to look the way it does?
+///
+/// Used only to separate "a credential was written in the clear" from "ciphertext this key cannot
+/// open". A real credential is almost never valid standard base64 AND long enough to be
+/// nonce+ciphertext+tag (>= 28 bytes); anything holding `-`, `_`, `:` or a space is plainly a
+/// credential. The residual blind spot — a long, purely `[A-Za-z0-9+/]` plaintext secret — still
+/// lands in `unreadable`, i.e. still reported, just not labelled as plaintext.
+fn ciphertext_shaped(stored: &str) -> bool {
+    use base64::engine::general_purpose::STANDARD as B64;
+    use base64::Engine as _;
+    match B64.decode(stored) {
+        Ok(bytes) => bytes.len() >= 28,
+        Err(_) => false,
+    }
+}
+
+/// Every stored secret that is in the clear or that the app cannot open. A healthy database has
+/// `plaintext == []`; `unreadable` should be empty too, and is worth investigating when it is not.
+pub async fn audit_plaintext_secrets(db: &PgPool) -> Result<SecretAudit, AppError> {
+    let mut out = SecretAudit::default();
 
     for (table, column) in TENANT_SECRET_COLUMNS {
         let sql = format!(
@@ -159,7 +186,7 @@ pub async fn audit_plaintext_secrets(db: &PgPool) -> Result<Vec<SecretFinding>, 
         );
         let rows: Vec<(Uuid, Uuid, String)> = sqlx::query_as(&sql).fetch_all(db).await?;
         let mut sealed = 0usize;
-        let mut ciphertext = 0usize;
+        let mut opened = 0usize;
         for (row_id, tenant_id, stored) in rows {
             if is_sealed(&stored) {
                 sealed += 1;
@@ -169,23 +196,34 @@ pub async fn audit_plaintext_secrets(db: &PgPool) -> Result<Vec<SecretFinding>, 
             // shape (that is what the private-email tables store). AES-GCM authenticates, so a
             // plaintext value cannot pass this by accident.
             if crate::private_email::encryption::decrypt_api_key(tenant_id, &stored).is_ok() {
-                ciphertext += 1;
+                opened += 1;
                 continue;
             }
-            findings.push(SecretFinding {
+            let shaped = ciphertext_shaped(&stored);
+            let finding = SecretFinding {
                 table,
                 column,
                 row_id,
                 tenant_id: Some(tenant_id),
-                reason: "not enc:v1:-sealed and not decryptable as ciphertext",
-            });
+                reason: if shaped {
+                    "ciphertext this tenant's key cannot open (rotated secret, or written by another deployment)"
+                } else {
+                    "not enc:v1:-sealed and not decryptable ciphertext — this looks like a plaintext credential"
+                },
+            };
+            if shaped {
+                out.unreadable.push(finding);
+            } else {
+                out.plaintext.push(finding);
+            }
         }
         tracing::info!(
             table,
             column,
             sealed,
-            ciphertext,
-            plaintext = findings.len(),
+            opened,
+            plaintext = out.plaintext.len(),
+            unreadable = out.unreadable.len(),
             "secret column audit"
         );
     }
@@ -196,7 +234,7 @@ pub async fn audit_plaintext_secrets(db: &PgPool) -> Result<Vec<SecretFinding>, 
         );
         let rows: Vec<(Uuid, String)> = sqlx::query_as(&sql).fetch_all(db).await?;
         for (row_id, _stored) in rows {
-            findings.push(SecretFinding {
+            out.plaintext.push(SecretFinding {
                 table,
                 column,
                 row_id,
@@ -207,5 +245,5 @@ pub async fn audit_plaintext_secrets(db: &PgPool) -> Result<Vec<SecretFinding>, 
         }
     }
 
-    Ok(findings)
+    Ok(out)
 }

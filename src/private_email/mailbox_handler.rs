@@ -52,8 +52,17 @@ pub async fn provision_mailbox(
     // If provider is Mailgun, create mailbox and route via API
     // For SMTP/SES/Postmark, skip API calls — user brings their own DNS/mailbox
     let mailgun_id: Option<String> = if domain.provider_type == "mailgun" {
-        let api_key = encryption::decrypt_api_key(account_id, &domain.mailgun_api_key)
-            .map_err(AppError::Internal)?;
+        // A stored key this tenant's secret cannot open is a CONFIGURATION problem the caller can act
+        // on (re-add the domain with a valid key). It used to surface as a bare 500 "Internal server
+        // error", which named neither the cause nor the fix.
+        let api_key =
+            encryption::decrypt_api_key(account_id, &domain.mailgun_api_key).map_err(|_| {
+                AppError::Validation(
+                "This domain's stored Mailgun API key cannot be read — re-add the domain with a \
+                 valid key."
+                    .into(),
+            )
+            })?;
 
         let base_url = if domain.mailgun_region == "eu" {
             "https://api.eu.mailgun.net"

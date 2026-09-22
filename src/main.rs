@@ -141,39 +141,65 @@ async fn main() -> anyhow::Result<()> {
     // restart.
     let audit_requested = std::env::var("CORESWIFT_SECRET_AUDIT").is_ok();
     match crate::secret_box::audit_plaintext_secrets(&db).await {
-        Ok(findings) if findings.is_empty() => {
-            tracing::info!("secret audit: 0 plaintext secrets at rest");
-        }
-        Ok(findings) => {
-            tracing::error!(
-                count = findings.len(),
-                "secret audit: PLAINTEXT SECRETS AT REST — a write path is not sealing"
-            );
-            for f in &findings {
-                tracing::error!(
+        Ok(audit) => {
+            // A credential the app cannot open is not a leak, but it IS broken (rotated
+            // CORESWIFT_SECRET, or a row written by another deployment) — warn, don't cry wolf.
+            for f in &audit.unreadable {
+                tracing::warn!(
                     table = f.table,
                     column = f.column,
                     row = %f.row_id,
                     reason = f.reason,
-                    "plaintext secret"
+                    "stored secret cannot be opened"
                 );
             }
+            if audit.plaintext.is_empty() {
+                tracing::info!(
+                    unreadable = audit.unreadable.len(),
+                    "secret audit: 0 plaintext secrets at rest"
+                );
+                if audit_requested {
+                    println!(
+                        "{}",
+                        serde_json::json!({ "status": "CLEAN", "plaintext_secrets": [],
+                                            "unreadable": audit.unreadable })
+                    );
+                    std::process::exit(0);
+                }
+            } else {
+                tracing::error!(
+                    count = audit.plaintext.len(),
+                    "secret audit: PLAINTEXT SECRETS AT REST — a write path is not sealing"
+                );
+                for f in &audit.plaintext {
+                    tracing::error!(
+                        table = f.table,
+                        column = f.column,
+                        row = %f.row_id,
+                        reason = f.reason,
+                        "plaintext secret"
+                    );
+                }
+                if audit_requested {
+                    println!(
+                        "{}",
+                        serde_json::json!({ "status": "DIRTY", "plaintext_secrets": audit.plaintext,
+                                            "unreadable": audit.unreadable })
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "secret audit skipped");
             if audit_requested {
                 println!(
                     "{}",
-                    serde_json::json!({ "status": "DIRTY", "plaintext_secrets": findings })
+                    serde_json::json!({ "status": "ERROR", "error": e.to_string() })
                 );
-                std::process::exit(1);
+                std::process::exit(2);
             }
         }
-        Err(e) => tracing::warn!(error = %e, "secret audit skipped"),
-    }
-    if audit_requested {
-        println!(
-            "{}",
-            serde_json::json!({ "status": "CLEAN", "plaintext_secrets": [] })
-        );
-        std::process::exit(0);
     }
 
     // Connect to Redis
