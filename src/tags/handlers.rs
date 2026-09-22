@@ -166,7 +166,7 @@ pub async fn create_tag(
     }
     let tag = sqlx::query_as::<_,Tag>("INSERT INTO tags(id,tenant_id,category_id,name,color,parent_id) VALUES($1,$2,$3,$4,$5,$6) RETURNING *")
         .bind(Uuid::new_v4()).bind(t).bind(r.category_id).bind(&r.name).bind(&r.color).bind(r.parent_id).fetch_one(&s.db).await.map_err(|e| {
-            if let sqlx::Error::Database(ref d) = e { if d.constraint() == Some("tags_tenant_id_name_key") { return AppError::Duplicate(format!("Tag '{}' exists", r.name)); } }
+            if let sqlx::Error::Database(ref d) = e { if d.constraint() == Some("idx_tags_name_tenant") { return AppError::Duplicate(format!("Tag '{}' exists", r.name)); } }
             AppError::Database(e)
         })?;
     Ok((StatusCode::CREATED, Json(json!(tag))))
@@ -245,7 +245,7 @@ pub async fn assign_tag(
         .ok_or(AppError::NotFound(format!("Tag {} not found", r.tag_id)))?;
     let a = sqlx::query_as::<_,TagAssignment>("INSERT INTO tag_assignments(id,tag_id,entity_type,entity_id,tenant_id,assigned_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING *")
         .bind(Uuid::new_v4()).bind(r.tag_id).bind(&r.entity_type).bind(r.entity_id).bind(t).bind(uid).fetch_one(&s.db).await.map_err(|e| {
-            if let sqlx::Error::Database(ref d) = e { if d.constraint() == Some("tag_assignments_tag_id_entity_type_entity_id_key") { return AppError::Duplicate("Already assigned".into()); } }
+            if let sqlx::Error::Database(ref d) = e { if d.constraint() == Some("tag_assignments_tag_id_entity_type_entity_id_tenant_id_key") { return AppError::Duplicate("Already assigned".into()); } }
             AppError::Database(e)
         })?;
     crate::automation::engine::fire_tag_trigger(
