@@ -117,6 +117,11 @@ pub struct UpdateProductRequest {
     pub checkout_url: Option<String>,
     pub is_active: Option<bool>,
     pub sort_order: Option<i32>,
+    /// Explicit "remove the tag" signal. `tag_id: null` means "leave the tag alone" (COALESCE), so
+    /// a caller that wants to untag a product has to say so with this flag. Absent = today's
+    /// behaviour.
+    #[serde(default)]
+    pub clear_tag: Option<bool>,
 }
 
 /// Affiliate self-serve: pick products to promote from FunnelSwift back-end

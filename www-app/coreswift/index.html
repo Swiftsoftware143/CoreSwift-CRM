@@ -1036,11 +1036,18 @@ const TAB_RENDERERS = {
     // The tab used to be placeholderPanel(...) over a backend that was never broken: probed live
     // 2026-09-22, the /api/affiliates/* routes answer 200/201 once the caller has an affiliate
     // profile (404 "No affiliate profile" with a real message before that, never a 500).
-    return pageHeader('Affiliates', 'Promote products, track referrals and commission payouts') +
+    // The PRODUCT BOARD (/affiliates/products*) is the workspace catalogue the picker below draws
+    // from; its write verbs are owner/admin only on the server, so the panel is rendered for those
+    // roles and the "Add product" action lives in the header (hidden for members).
+    const boardAction = affIsAdmin()
+      ? '<button class="btn btn-primary btn-sm" id="pbAddBtn" onclick="showProductModal()">+ Add product</button>'
+      : '';
+    return pageHeader('Affiliates', 'Promote products, track referrals and commission payouts', boardAction) +
     '<div id="affSummary"><div class="loading-wrap"><div class="spinner"></div> Loading affiliate profile...</div></div>' +
     '<div id="affReferrals"></div>' +
     '<div id="affPayouts"></div>' +
-    '<div id="affProducts"></div>';
+    '<div id="affProducts"></div>' +
+    '<div id="affBoard"></div>';
   },
   'webhooks': () => placeholderPanel('Webhooks', 'Configure outgoing webhooks for real-time event notifications.', '🔗'),
   'native-apps': () => {
@@ -1429,7 +1436,9 @@ const TAB_LOADERS = {
     }
   },
 
-  'affiliates': async () => { await loadAffiliates(); },
+  // The board is tenant-level, so it must render even when the caller has no affiliate
+  // profile of their own (loadAffiliates renders the join card instead of the rest).
+  'affiliates': async () => { loadAffiliateBoard(); await loadAffiliates(); },
 
   'users': async () => {
     // GET /api/users was never registered (404). People across all tenants live next to the
@@ -3166,6 +3175,238 @@ async function unpromoteProduct(id) {
     toast((e && e.message) || 'Could not unselect that product', 'error');
   }
   await loadAffiliateProducts();
+}
+
+// ============================================================================
+// AFFILIATE PRODUCT BOARD — the workspace catalogue, wired 2026-09-22 (card t_c2a3fea5).
+// These five routes were registered and live but had NO caller in any shipped surface:
+//   GET    /api/affiliates/products        the board (management view — includes inactive rows)
+//   POST   /api/affiliates/products        create
+//   PATCH  /api/affiliates/products/:id    edit / activate / deactivate / clear the tag
+//   DELETE /api/affiliates/products/:id    delete
+//   GET    /api/affiliates/products/tags   the ACTIVE catalogue with tag names, grouped by tag
+// `my-products` below lists what an affiliate may pick from, so the catalogue lives on this tab.
+// Server-side the write verbs are owner/admin only (403 for a member), which is why this panel —
+// and only this panel — renders for those roles; the affiliate's own picker stays for everyone.
+// ============================================================================
+
+const AFF_BOARD_ROLES = ['owner', 'account_owner', 'admin', 'agency_admin'];
+function affIsAdmin() {
+  return !!(STATE.user && AFF_BOARD_ROLES.indexOf(STATE.user.role) >= 0);
+}
+
+// Board state, kept separate from AFF (which is null until an affiliate profile exists).
+let AFFB = { rows: null, tags: null };
+let AFFB_TAGMAP = {};
+
+async function affBoardTags() {
+  if (!AFFB.tags) {
+    try { AFFB.tags = famList(await API.get('/tags'), 'tags'); } catch (_) { AFFB.tags = []; }
+    AFFB_TAGMAP = {};
+    AFFB.tags.forEach(function (t) { AFFB_TAGMAP[t.id] = t.name; });
+  }
+  return AFFB.tags;
+}
+
+function affCommission(p) {
+  if (p.commission_type === 'fixed') return affMoney(p.commission_amount) + ' (fixed)';
+  return String(p.commission_rate != null ? p.commission_rate : '\u2014') + '%';
+}
+
+async function loadAffiliateBoard() {
+  const el = document.getElementById('affBoard');
+  if (!el) return;
+  if (!affIsAdmin()) { el.innerHTML = ''; return; }
+  el.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Loading the product board...</div>';
+  await affBoardTags();
+
+  let h = '';
+  // ── management view: every row, active or not (that is what GET /products returns) ──
+  try {
+    const d = await API.get('/affiliates/products');
+    const rows = famList(d, 'products');
+    AFFB.rows = rows;
+    h += card('Product board',
+      '<p class="config-desc">The catalogue your affiliates promote. Inactive products stay here ' +
+      'but are hidden from the picker they see.</p>') +
+      dataTable(['Product', 'Tag', 'Price', 'Commission', 'Status', 'Order', ''],
+        rows.map(function (p) {
+          const id = escapeHtmlAttr(String(p.id));
+          return [
+            escapeHtml(String(p.name || '\u2014')),
+            escapeHtml(String(AFFB_TAGMAP[p.tag_id] || '\u2014')),
+            affMoney(p.price),
+            escapeHtml(affCommission(p)),
+            p.is_active === false ? '<span class="badge badge-muted">inactive</span>'
+                                  : '<span class="badge badge-primary">active</span>',
+            escapeHtml(String(p.sort_order != null ? p.sort_order : 0)),
+            '<button class="btn btn-ghost btn-sm" onclick="showProductModal(\'' + id + '\')">Edit</button> ' +
+            '<button class="btn btn-ghost btn-sm" onclick="toggleProductActive(\'' + id + '\', ' +
+              (p.is_active === false) + ')">' + (p.is_active === false ? 'Activate' : 'Deactivate') + '</button> ' +
+            '<button class="btn btn-ghost btn-sm" onclick="deleteProductRow(\'' + id + '\', \'' +
+              escapeHtmlAttr(String(p.name || '')) + '\')">Delete</button>'
+          ];
+        }),
+        'No products on the board yet \u2014 use “+ Add product” so your affiliates have something to promote.');
+  } catch (e) {
+    h += card('Product board', '<p class="config-desc">Products endpoint: ' +
+      escapeHtml((e && e.message) || String(e)) + '</p>');
+  }
+
+  // ── affiliate-facing catalogue: ACTIVE rows + tag names (GET /products/tags) ──
+  try {
+    const d = await API.get('/affiliates/products/tags');
+    const rows = famList(d, 'products');
+    const groups = {};
+    const order = [];
+    rows.forEach(function (p) {
+      const k = p.tag_name || 'Untagged';
+      if (!groups[k]) { groups[k] = []; order.push(k); }
+      groups[k].push(p);
+    });
+    let body = '<p class="config-desc">Active products only, grouped by tag \u2014 this is exactly ' +
+      'what the picker above draws from (' + rows.length + ' product' + (rows.length === 1 ? '' : 's') + ').</p>';
+    if (!rows.length) {
+      body += '<div class="empty-state"><h3>Nothing active yet</h3>' +
+        '<p>Activate a product on the board above to make it promotable.</p></div>';
+    }
+    order.forEach(function (k) {
+      body += '<p class="config-desc" style="margin:12px 0 4px"><strong>' + escapeHtml(k) + '</strong> ' +
+        '(' + groups[k].length + ')</p>' +
+        dataTable(['Product', 'Price', 'Commission', 'Checkout'],
+          groups[k].map(function (p) {
+            return [
+              escapeHtml(String(p.name || '\u2014')),
+              affMoney(p.price),
+              escapeHtml(affCommission(p)),
+              p.checkout_url
+                ? '<a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="' +
+                  escapeHtmlAttr(String(p.checkout_url)) + '">Open</a>'
+                : '\u2014'
+            ];
+          }), '');
+    });
+    h += '<div id="affBoardCatalogue">' + card('Catalogue affiliates can promote', body) + '</div>';
+  } catch (e) {
+    h += '<div id="affBoardCatalogue">' + card('Catalogue affiliates can promote',
+      '<p class="config-desc">Catalogue endpoint: ' +
+      escapeHtml((e && e.message) || String(e)) + '</p>') + '</div>';
+  }
+
+  el.innerHTML = h;
+}
+
+async function toggleProductActive(id, makeActive) {
+  try {
+    await API.patch('/affiliates/products/' + id, { is_active: !!makeActive });
+    toast(makeActive ? 'Product activated' : 'Product deactivated', 'success');
+  } catch (e) {
+    toast((e && e.message) || 'Could not change that product', 'error');
+  }
+  await loadAffiliateBoard();
+}
+
+function deleteProductRow(id, name) {
+  confirmThen('Delete “' + name + '” from the product board? Affiliates promoting it lose it.',
+    async function () {
+      try {
+        await API.del('/affiliates/products/' + id);
+        toast('Product deleted', 'success');
+      } catch (e) {
+        toast((e && e.message) || 'Could not delete that product', 'error');
+      }
+      await loadAffiliateBoard();
+    });
+}
+
+async function showProductModal(id) {
+  await affBoardTags();
+  const p = id ? (AFFB.rows || []).find(function (x) { return x.id === id; }) : null;
+  if (id && !p) { toast('Reload the board and try again', 'error'); return; }
+  function v(k, dflt) {
+    return (p && p[k] !== null && p[k] !== undefined) ? String(p[k]) : String(dflt == null ? '' : dflt);
+  }
+  let opts = '<option value="">No tag</option>';
+  (AFFB.tags || []).forEach(function (t) {
+    opts += '<option value="' + escapeHtmlAttr(String(t.id)) + '"' +
+      (p && p.tag_id === t.id ? ' selected' : '') + '>' + escapeHtml(String(t.name)) + '</option>';
+  });
+  const ctype = v('commission_type', 'percentage');
+  showModal(id ? 'Edit product' : 'Add a product',
+    '<div class="form-group"><label>Name</label>' +
+      '<input id="pbName" maxlength="255" value="' + escapeHtmlAttr(v('name')) + '"></div>' +
+    '<div class="form-group"><label>Description</label>' +
+      '<textarea id="pbDesc" rows="2">' + escapeHtml(v('description')) + '</textarea></div>' +
+    '<div class="form-group"><label>Price</label>' +
+      '<input id="pbPrice" type="number" step="0.01" min="0" value="' + escapeHtmlAttr(v('price', '0')) + '"></div>' +
+    '<div class="form-group"><label>Commission type</label>' +
+      '<select id="pbType">' +
+        '<option value="percentage"' + (ctype === 'percentage' ? ' selected' : '') + '>percentage</option>' +
+        '<option value="fixed"' + (ctype === 'fixed' ? ' selected' : '') + '>fixed</option>' +
+      '</select></div>' +
+    '<div class="form-group"><label>Commission rate (% of price)</label>' +
+      '<input id="pbRate" type="number" step="0.01" min="0" value="' + escapeHtmlAttr(v('commission_rate', '10')) + '"></div>' +
+    '<div class="form-group"><label>Commission amount (used when the type is fixed)</label>' +
+      '<input id="pbAmount" type="number" step="0.01" min="0" value="' + escapeHtmlAttr(v('commission_amount', '0')) + '"></div>' +
+    '<div class="form-group"><label>Tag</label><select id="pbTag">' + opts + '</select></div>' +
+    '<div class="form-group"><label>Checkout URL</label>' +
+      '<input id="pbCheckout" value="' + escapeHtmlAttr(v('checkout_url')) + '"></div>' +
+    '<div class="form-group"><label>Image URL</label>' +
+      '<input id="pbImage" value="' + escapeHtmlAttr(v('image_url')) + '"></div>' +
+    '<div class="form-group"><label>Sort order</label>' +
+      '<input id="pbSort" type="number" step="1" value="' + escapeHtmlAttr(v('sort_order', '0')) + '"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="pbSave" onclick="saveProduct(' +
+      (id ? "'" + escapeHtmlAttr(String(id)) + "'" : 'null') + ')">' +
+      (id ? 'Save product' : 'Create product') + '</button>');
+}
+
+async function saveProduct(id) {
+  function val(elId) { const n = document.getElementById(elId); return n ? n.value.trim() : ''; }
+  function num(elId, dflt) {
+    const raw = val(elId);
+    if (raw === '') return dflt;
+    const n = Number(raw);
+    return isNaN(n) ? dflt : n;
+  }
+  const name = val('pbName');
+  if (!name) { toast('A product name is required', 'error'); return; }
+  const tag = val('pbTag');
+  const body = {
+    name: name,
+    price: num('pbPrice', 0),
+    commission_type: val('pbType') || 'percentage',
+    commission_rate: num('pbRate', 10),
+    commission_amount: num('pbAmount', 0),
+    sort_order: num('pbSort', 0)
+  };
+  // PATCH is a partial update: `null` means "leave unchanged" server-side, so text fields are sent
+  // as '' (which clears them) and tag_id has its own explicit `clear_tag` flag — otherwise picking
+  // "No tag" would silently keep the old tag and still report success.
+  if (id) {
+    body.description = val('pbDesc');
+    body.image_url = val('pbImage');
+    body.checkout_url = val('pbCheckout');
+    if (tag) body.tag_id = tag; else body.clear_tag = true;
+  } else {
+    body.description = val('pbDesc') || null;
+    body.image_url = val('pbImage') || null;
+    body.checkout_url = val('pbCheckout') || null;
+    body.tag_id = tag || null;
+  }
+  const btn = document.getElementById('pbSave');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving\u2026'; }
+  try {
+    if (id) await API.patch('/affiliates/products/' + id, body);
+    else await API.post('/affiliates/products', body);
+    closeModal();
+    toast(id ? 'Product updated' : 'Product created', 'success');
+  } catch (e) {
+    toast((e && e.message) || 'Could not save the product', 'error');
+    if (btn) { btn.disabled = false; btn.textContent = id ? 'Save product' : 'Create product'; }
+    return;
+  }
+  await loadAffiliateBoard();
 }
 
 

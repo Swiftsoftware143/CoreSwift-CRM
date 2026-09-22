@@ -322,6 +322,68 @@ pub async fn redeem_code(
 }
 
 // ── Affiliate Product Board ──
+//
+// Every WRITE verb below is a workspace-admin action: `affiliate_products` is the tenant's shared
+// catalogue, so a member may read it but not rewrite what the whole workspace promotes. The read
+// verbs stay open to any authenticated member (the catalogue is display data, and /products/tags is
+// the affiliate-facing listing). Measured before this change: any member of the tenant could
+// create, retag and DELETE the whole board.
+//
+// The helpers also close the write-path defects that only appear once a real caller sends real
+// input: an out-of-vocabulary `commission_type`, an unknown `tag_id`, an over-long `name` and an
+// empty one all reached the CHECK / FK / VARCHAR(255) constraints and came back as
+// `500 Database error` (measured live 2026-09-22 through the first caller ever written for them).
+
+/// 403 unless the caller is this tenant's owner/admin (or the platform operator).
+fn require_board_admin(c: &Claims) -> Result<(), AppError> {
+    if crate::auth::middleware::is_account_admin(&c.role) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
+}
+
+/// The column is `CHECK (commission_type IN ('percentage','fixed'))`.
+fn validate_commission_type(ct: Option<&str>) -> Result<(), AppError> {
+    match ct {
+        None | Some("percentage") | Some("fixed") => Ok(()),
+        Some(other) => Err(AppError::Validation(format!(
+            "commission_type must be 'percentage' or 'fixed' (got '{other}')"
+        ))),
+    }
+}
+
+/// `name` is `VARCHAR(255) NOT NULL` and is driven from a free-text field in the board UI.
+fn validate_product_name(name: &str) -> Result<&str, AppError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::Validation("Product name is required".into()));
+    }
+    if name.chars().count() > 255 {
+        return Err(AppError::Validation(
+            "Product name must be 255 characters or fewer".into(),
+        ));
+    }
+    Ok(name)
+}
+
+/// `tag_id` is a FK to this tenant's `tags`; an unknown or foreign id is a 404, not a 500.
+async fn validate_tag(db: &sqlx::PgPool, tid: Uuid, tag_id: Option<Uuid>) -> Result<(), AppError> {
+    let tag_id = match tag_id {
+        Some(t) => t,
+        None => return Ok(()),
+    };
+    let known: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tags WHERE id = $1 AND tenant_id = $2)")
+            .bind(tag_id)
+            .bind(tid)
+            .fetch_one(db)
+            .await?;
+    if !known {
+        return Err(AppError::NotFound("Tag not found in this workspace".into()));
+    }
+    Ok(())
+}
 
 /// GET /api/affiliates/products — List affiliate products (public for FunnelSwift)
 pub async fn list_products(
@@ -348,9 +410,10 @@ pub async fn create_product(
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
-    if r.name.is_empty() {
-        return Err(AppError::Validation("Product name is required".into()));
-    }
+    require_board_admin(&c)?;
+    let name = validate_product_name(&r.name)?;
+    validate_commission_type(r.commission_type.as_deref())?;
+    validate_tag(&s.db, tid, r.tag_id).await?;
 
     let product = sqlx::query_as::<_, AffiliateProduct>(
         r#"INSERT INTO affiliate_products (id, tenant_id, name, description, price, commission_rate, commission_type, commission_amount, tag_id, image_url, checkout_url, sort_order)
@@ -358,7 +421,7 @@ pub async fn create_product(
     )
     .bind(Uuid::new_v4())
     .bind(tid)
-    .bind(&r.name)
+    .bind(name)
     .bind(&r.description)
     .bind(Decimal::try_from(r.price).unwrap_or(Decimal::ZERO))
     .bind(Decimal::try_from(r.commission_rate.unwrap_or(10.0)).unwrap_or(Decimal::new(10, 1)))
@@ -383,6 +446,16 @@ pub async fn update_product(
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
+    require_board_admin(&c)?;
+    validate_commission_type(r.commission_type.as_deref())?;
+    validate_tag(&s.db, tid, r.tag_id).await?;
+    // A partial update: only a name that is actually sent is validated, and it is trimmed so a
+    // trailing space cannot produce a row the board renders as blank.
+    let patch_name = match r.name.as_deref() {
+        Some(n) => Some(validate_product_name(n)?.to_string()),
+        None => None,
+    };
+
     let product = sqlx::query_as::<_, AffiliateProduct>(
         r#"UPDATE affiliate_products SET
             name = COALESCE($1, name),
@@ -391,7 +464,7 @@ pub async fn update_product(
             commission_rate = COALESCE($4, commission_rate),
             commission_type = COALESCE($5, commission_type),
             commission_amount = COALESCE($6, commission_amount),
-            tag_id = COALESCE($7, tag_id),
+            tag_id = CASE WHEN $14 THEN NULL ELSE COALESCE($7, tag_id) END,
             image_url = COALESCE($8, image_url),
             checkout_url = COALESCE($9, checkout_url),
             is_active = COALESCE($10, is_active),
@@ -399,7 +472,7 @@ pub async fn update_product(
             updated_at = NOW()
            WHERE id = $12 AND tenant_id = $13 RETURNING *"#,
     )
-    .bind(&r.name)
+    .bind(patch_name.as_deref())
     .bind(&r.description)
     .bind(
         r.price
@@ -421,6 +494,7 @@ pub async fn update_product(
     .bind(r.sort_order)
     .bind(id)
     .bind(tid)
+    .bind(r.clear_tag.unwrap_or(false))
     .fetch_optional(&s.db)
     .await?
     .ok_or(AppError::NotFound("Product not found".into()))?;
@@ -435,6 +509,7 @@ pub async fn delete_product(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    require_board_admin(&c)?;
     let r = sqlx::query("DELETE FROM affiliate_products WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tid)
