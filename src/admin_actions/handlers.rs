@@ -1124,6 +1124,12 @@ pub async fn list_all_portfolio_companies(
     Ok(Json(json!({ "portfolio_companies": companies })))
 }
 
+/// A decode miss on the tenants panel used to be invisible: the cell just rendered empty and
+/// nothing was logged (SILENT). Keep the fallback - the panel must still render - but say why.
+fn warn_decode(col: &'static str, e: &sqlx::Error) {
+    tracing::warn!(column = col, error = %e, "admin tenants: column did not decode");
+}
+
 /// GET /api/admin/tenants — list ALL tenants (agency_admin)
 pub async fn list_all_tenants(
     State(s): State<AppState>,
@@ -1132,6 +1138,8 @@ pub async fn list_all_tenants(
     crate::auth::platform_admin::require_platform_admin(&s.db, &c.sub).await?;
 
     use sqlx::Row;
+    // id / created_at are cast to ::text on purpose (they are decoded as &str below), which is
+    // why neither is a uuid/timestamptz decode: with the cast in place sqlx receives TEXT.
     let rows = sqlx::query(
         r#"SELECT t.id::text, t.name, t.slug, (SELECT u.email FROM users u WHERE u.tenant_id = t.id AND u.role = 'owner' LIMIT 1) AS email, t.is_active, t.created_at::text as created_at FROM tenants t ORDER BY t.created_at DESC"#,
     )
@@ -1142,12 +1150,18 @@ pub async fn list_all_tenants(
         .iter()
         .map(|r| {
             json!({
-                "id": r.try_get::<&str,_>("id").unwrap_or(""),
-                "name": r.try_get::<Option<String>,_>("name").ok().flatten(),
-                "slug": r.try_get::<Option<String>,_>("slug").ok().flatten(),
-                "email": r.try_get::<Option<String>,_>("email").ok().flatten(),
-                "is_active": r.try_get::<bool,_>("is_active").unwrap_or(true),
-                "created_at": r.try_get::<&str,_>("created_at").unwrap_or(""),
+                "id": r.try_get::<&str,_>("id")
+                    .map_err(|e| warn_decode("id", &e)).unwrap_or(""),
+                "name": r.try_get::<Option<String>,_>("name")
+                    .map_err(|e| warn_decode("name", &e)).ok().flatten(),
+                "slug": r.try_get::<Option<String>,_>("slug")
+                    .map_err(|e| warn_decode("slug", &e)).ok().flatten(),
+                "email": r.try_get::<Option<String>,_>("email")
+                    .map_err(|e| warn_decode("email", &e)).ok().flatten(),
+                "is_active": r.try_get::<bool,_>("is_active")
+                    .map_err(|e| warn_decode("is_active", &e)).unwrap_or(true),
+                "created_at": r.try_get::<&str,_>("created_at")
+                    .map_err(|e| warn_decode("created_at", &e)).unwrap_or(""),
             })
         })
         .collect();

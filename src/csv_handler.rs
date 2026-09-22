@@ -463,6 +463,9 @@ pub async fn export_opportunities(
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
+    // `opportunities.value` is NUMERIC, and sqlx has no NUMERIC -> f64 decode: without the cast
+    // the WHOLE row fails to decode (OppExportRow.value is Option<f64>), so the export comes back
+    // empty/erroring while the table holds rows. Same cast src/pipelines/opportunity.rs uses.
     let rows = sqlx::query_as::<_, OppExportRow>(
         r#"SELECT
               o.name,
@@ -470,7 +473,7 @@ pub async fn export_opportunities(
               COALESCE(co.name, '') AS company,
               COALESCE(p.name, '') AS pipeline,
               COALESCE(s.name, '') AS stage,
-              o.value,
+              o.value::float8 AS value,
               o.probability,
               o.expected_close_date,
               o.created_at
