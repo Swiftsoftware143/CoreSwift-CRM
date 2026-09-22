@@ -529,7 +529,14 @@ function logout(silent) {
 
 function showApp() {
   document.getElementById('loginScreen').style.display = 'none';
-  document.getElementById('appWrap').style.display = '';
+  // `#appWrap` ships as <div id="appWrap" class="hidden" style="display:none">, and the stylesheet
+  // has `.hidden{display:none!important}`. An inline style cannot beat `!important`, and this
+  // function only cleared the inline one — so a SUCCESSFUL login hid the login card and left the
+  // entire console at display:none: blank page, on login and on every reload (the DOMContentLoaded
+  // restore calls this same function). Drop the class as well; that is the only thing that beats it.
+  const wrap = document.getElementById('appWrap');
+  wrap.classList.remove('hidden');
+  wrap.style.display = '';
   document.getElementById('userEmail').textContent = STATE.user.email;
   document.getElementById('userAvatar').textContent = (STATE.user.name || STATE.user.email)[0].toUpperCase();
   renderSidebar();
@@ -1056,7 +1063,21 @@ const TAB_RENDERERS = {
     return pageHeader('Billing & Plans', 'Manage subscription plans and pricing') +
     '<div id="plansContent"><div class="loading-wrap"><div class="spinner"></div> Loading plans...</div></div>';
   },
-  'affiliates': () => placeholderPanel('Affiliates', 'Manage your affiliate program — track referrals, commissions, and payouts.', '🤝'),
+  'affiliates': () => {
+    // Was placeholderPanel(). The backend was never broken — /api/affiliates/{profile,referrals,
+    // payouts,stats,products,products/tags,my-products,my-products/select,unselect} all answer
+    // once a profile exists — so this panel reads them and shows the real numbers. The module is
+    // plan-gated server-side (features::FeatureGate "affiliates"): a plan whose flag is false
+    // answers 402 and the panel says so in words instead of rendering an empty shell.
+    return pageHeader('Affiliates', 'Your affiliate program — referral profile, referrals, commissions and payouts',
+      '<button class="btn btn-secondary btn-sm" data-ops="affiliate-refresh" onclick="loadAffiliates()">↻ Refresh</button>') +
+    '<div id="affNotice"></div>' +
+    '<div class="stats-grid" id="affStats" data-ops="affiliate-stats"><div class="loading-wrap"><div class="spinner"></div> Loading affiliate stats...</div></div>' +
+    '<div id="affProfile" data-ops="affiliate-profile"><div class="loading-wrap"><div class="spinner"></div> Loading affiliate profile...</div></div>' +
+    '<div id="affProducts" data-ops="affiliate-products"></div>' +
+    '<div id="affReferrals" data-ops="affiliate-referrals"></div>' +
+    '<div id="affPayouts" data-ops="affiliate-payouts"></div>';
+  },
   'widgets': () => placeholderPanel('Widgets', 'Embeddable CRM widgets for your website — contact forms, chat, booking.', '🧩'),
   'webhooks': () => placeholderPanel('Webhooks', 'Configure outgoing webhooks for real-time event notifications.', '🔗'),
   'native-apps': () => {
@@ -1255,7 +1276,204 @@ function escapeHtmlAttr(str) {
 }
 
 // ========== ASYNC TAB LOADERS (fetch real data) ==========
+// ── Affiliates panel ─────────────────────────────────────────────────────────
+// Wired onto the eight routes the affiliates module already served. Kept defensive on purpose:
+// the API answers three different envelopes (`{referrals:…}`, `{promoting:…,available:…}` and a
+// bare object for profile/stats), and the module is plan-gated, so a 402 has to read as a plan
+// message rather than as "no data".
+function affMoney(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? '$' + n.toFixed(2) : '$0.00';
+}
+function affShell(id, inner) {
+  const el = document.getElementById(id);
+  if (el) el.innerHTML = inner;
+}
+
+async function loadAffiliates() {
+  const notice = document.getElementById('affNotice');
+  if (!document.getElementById('affStats')) return;   // tab was switched away mid-load
+
+  let stats = null, profile = null, planBlocked = false;
+  try {
+    stats = await API.get('/affiliates/stats');
+  } catch (e) {
+    planBlocked = /Payment required|plan/i.test(String(e.message || e));
+  }
+  try { profile = await API.get('/affiliates/profile'); } catch (e) {
+    if (!/404/.test(String(e.message || ''))) {
+      if (/Payment required|plan/i.test(String(e.message || e))) planBlocked = true;
+    }
+  }
+
+  if (planBlocked) {
+    notice.innerHTML = '<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">' +
+      '<strong>Affiliates are not included in the current plan.</strong> The server refuses the whole ' +
+      'module with “Payment required” (plan flag <code>affiliates</code>). Switch the flag on for this ' +
+      'plan in <a href="#" onclick="switchTab(\'billing\');return false">Billing &amp; Plans</a> to use it.</p></div></div>';
+    ['affStats', 'affProfile', 'affProducts', 'affReferrals', 'affPayouts'].forEach(id => affShell(id, ''));
+    return;
+  }
+  notice.innerHTML = '';
+
+  // stats
+  if (stats && typeof stats === 'object' && !Array.isArray(stats)) {
+    const items = [
+      { icon: '📨', label: 'Total Referrals', value: stats.total_referrals || 0 },
+      { icon: '⏳', label: 'Pending', value: stats.pending_referrals || 0 },
+      { icon: '✅', label: 'Converted', value: stats.converted_referrals || 0 },
+      { icon: '💵', label: 'Total Earned', value: affMoney(stats.total_earned) },
+      { icon: '🏦', label: 'Total Paid', value: affMoney(stats.total_paid) },
+      { icon: '🔜', label: 'Pending Payout', value: affMoney(stats.pending_payout) },
+    ];
+    affShell('affStats', items.map(it => `<div class="stat-card${it.icon === '💵' ? ' accent' : ''}">
+      <div class="stat-icon">${it.icon}</div><div class="stat-value">${it.value}</div>
+      <div class="stat-label">${it.label}</div></div>`).join(''));
+  } else {
+    affShell('affStats', '');
+  }
+
+  // profile — create it if this account has none yet (self-serve, POST /affiliates/profile)
+  if (!profile || !profile.code) {
+    // Every other section is profile-gated server-side (they answer 404 "No affiliate profile"),
+    // so say that ONCE here instead of rendering three separate error lines.
+    affShell('affStats', '');
+    affShell('affProfile', card('Affiliate Profile', `
+      <p style="color:var(--text-secondary);margin-bottom:12px">No affiliate profile yet. Creating one
+      issues your referral code and starts tracking referrals, commissions and payouts — the sections
+      below fill in as soon as it exists.</p>
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+        <label style="display:block"><span class="stat-label">Commission rate (%)</span>
+          <input id="affRate" type="number" step="0.1" min="0" value="20" style="padding:8px;border:1px solid var(--border);border-radius:6px;width:140px"></label>
+        <label style="display:block"><span class="stat-label">Commission type</span>
+          <select id="affType" style="padding:8px;border:1px solid var(--border);border-radius:6px">
+            <option value="percentage">percentage</option><option value="fixed">fixed</option></select></label>
+        <button class="btn btn-primary btn-sm" data-ops="affiliate-profile-create" onclick="affSaveProfile(true)">Create profile</button>
+      </div>
+      <div id="affProfileMsg" style="margin-top:8px"></div>`));
+    affShell('affProducts', card('Products', '<p style="color:var(--text-secondary)">Products you can promote appear here once your affiliate profile exists.</p>'));
+    affShell('affReferrals', '');
+    affShell('affPayouts', '');
+    return;
+  }
+
+  affShell('affProfile', card('Affiliate Profile', `
+      <div class="stats-grid">
+        <div class="stat-card accent"><div class="stat-icon">🔗</div>
+          <div class="stat-value" style="font-size:18px">${escapeHtml(profile.code || '—')}</div>
+          <div class="stat-label">Referral code</div></div>
+        <div class="stat-card"><div class="stat-icon">📐</div>
+          <div class="stat-value">${escapeHtml(String(profile.commission_rate ?? '—'))}${profile.commission_type === 'fixed' ? '' : '%'}</div>
+          <div class="stat-label">Commission (${escapeHtml(profile.commission_type || 'percentage')})</div></div>
+        <div class="stat-card"><div class="stat-icon">💵</div>
+          <div class="stat-value">${affMoney(profile.total_earned)}</div><div class="stat-label">Earned</div></div>
+        <div class="stat-card"><div class="stat-icon">🏦</div>
+          <div class="stat-value">${affMoney(profile.total_paid)}</div><div class="stat-label">Paid out</div></div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-top:12px">
+        <label style="display:block"><span class="stat-label">Commission rate</span>
+          <input id="affRate" type="number" step="0.1" min="0" value="${escapeHtml(String(profile.commission_rate ?? 0))}" style="padding:8px;border:1px solid var(--border);border-radius:6px;width:140px"></label>
+        <label style="display:block"><span class="stat-label">Type</span>
+          <select id="affType" style="padding:8px;border:1px solid var(--border);border-radius:6px">
+            <option value="percentage"${profile.commission_type === 'percentage' ? ' selected' : ''}>percentage</option>
+            <option value="fixed"${profile.commission_type === 'fixed' ? ' selected' : ''}>fixed</option></select></label>
+        <label style="display:block"><span class="stat-label">Active</span>
+          <select id="affActive" style="padding:8px;border:1px solid var(--border);border-radius:6px">
+            <option value="true"${profile.is_active !== false ? ' selected' : ''}>yes</option>
+            <option value="false"${profile.is_active === false ? ' selected' : ''}>no</option></select></label>
+        <button class="btn btn-primary btn-sm" data-ops="affiliate-profile-save" onclick="affSaveProfile(false)">Save</button>
+      </div>
+      <div id="affProfileMsg" style="margin-top:8px"></div>`));
+
+  // products: what this affiliate promotes vs what the tenant offers
+  try {
+    const mine = await API.get('/affiliates/my-products');
+    const promoting = (mine && mine.promoting) || [];
+    const available = (mine && mine.available) || [];
+    const rows = promoting.map(p => [
+      escapeHtml(p.name || '—'),
+      affMoney(p.price),
+      escapeHtml(String(p.commission_rate ?? '—')) + (p.commission_type === 'fixed' ? '' : '%'),
+      '<span class="badge badge-success">promoting</span>',
+      `<button class="btn btn-secondary btn-sm" data-ops="affiliate-product-unselect" onclick="affUnselectProduct('${p.id}')">Stop promoting</button>`,
+    ]);
+    affShell('affProducts', card('Products you promote (' + promoting.length + ')',
+      dataTable(['Product', 'Price', 'Commission', 'Status', ''], rows, 'Nothing selected yet — pick one below.') +
+      (available.length ? '<div style="margin-top:12px">' + dataTable(['Available to promote', 'Price', 'Commission', '', ''],
+        available.map(p => [
+          escapeHtml(p.name || '—'), affMoney(p.price),
+          escapeHtml(String(p.commission_rate ?? '—')) + (p.commission_type === 'fixed' ? '' : '%'),
+          '', `<button class="btn btn-primary btn-sm" data-ops="affiliate-product-select" onclick="affSelectProduct('${p.id}')">Promote</button>`,
+        ]), '') + '</div>' : '') +
+      '<div id="affProductMsg" style="margin-top:8px"></div>'));
+  } catch (e) {
+    affShell('affProducts', card('Products', '<p style="color:var(--text-secondary)">Could not load products: ' + escapeHtml(String(e.message || e)) + '</p>'));
+  }
+
+  // referrals
+  try {
+    const d = await API.get('/affiliates/referrals');
+    const rows = ((d && d.referrals) || []).map(r => [
+      escapeHtml(r.referred_email || r.referred_tenant_id || '—'),
+      `<span class="badge ${String(r.status).toLowerCase() === 'converted' ? 'badge-success' : 'badge-muted'}">${escapeHtml(r.status || '—')}</span>`,
+      affMoney(r.commission_amount),
+      String(r.created_at || '').slice(0, 10),
+      r.paid_at ? String(r.paid_at).slice(0, 10) : 'not paid',
+    ]);
+    affShell('affReferrals', card('Referrals', dataTable(
+      ['Referred', 'Status', 'Commission', 'Created', 'Paid'], rows, 'No referrals yet.')));
+  } catch (e) {
+    affShell('affReferrals', card('Referrals', '<p style="color:var(--text-secondary)">Could not load referrals: ' + escapeHtml(String(e.message || e)) + '</p>'));
+  }
+
+  // payouts
+  try {
+    const d = await API.get('/affiliates/payouts');
+    const rows = ((d && d.payouts) || []).map(p => [
+      affMoney(p.amount),
+      `<span class="badge ${String(p.status).toLowerCase() === 'paid' ? 'badge-success' : 'badge-muted'}">${escapeHtml(p.status || '—')}</span>`,
+      escapeHtml(p.payment_method || '—'),
+      String(p.created_at || '').slice(0, 10),
+      p.paid_at ? String(p.paid_at).slice(0, 10) : '—',
+    ]);
+    affShell('affPayouts', card('Payouts', dataTable(
+      ['Amount', 'Status', 'Method', 'Created', 'Paid'], rows, 'No payouts recorded yet.')));
+  } catch (e) {
+    affShell('affPayouts', card('Payouts', '<p style="color:var(--text-secondary)">Could not load payouts: ' + escapeHtml(String(e.message || e)) + '</p>'));
+  }
+}
+
+async function affSaveProfile(isCreate) {
+  const msg = document.getElementById('affProfileMsg');
+  const rate = parseFloat((document.getElementById('affRate') || {}).value || '0');
+  const type = (document.getElementById('affType') || {}).value || 'percentage';
+  const activeEl = document.getElementById('affActive');
+  const body = { commission_rate: rate, commission_type: type };
+  if (activeEl) body.is_active = activeEl.value === 'true';
+  try {
+    if (isCreate) await API.post('/affiliates/profile', body);
+    else await API.patch('/affiliates/profile', body);
+    if (msg) msg.innerHTML = '<span style="color:var(--success,#059669)">Saved.</span>';
+    await loadAffiliates();
+  } catch (e) {
+    if (msg) msg.innerHTML = '<span style="color:var(--danger,#dc2626)">' + escapeHtml(String(e.message || e)) + '</span>';
+  }
+}
+
+async function affSelectProduct(id) {
+  const msg = document.getElementById('affProductMsg');
+  try { await API.post('/affiliates/my-products/select', { product_id: id }); await loadAffiliates(); }
+  catch (e) { if (msg) msg.innerHTML = '<span style="color:var(--danger,#dc2626)">' + escapeHtml(String(e.message || e)) + '</span>'; }
+}
+
+async function affUnselectProduct(id) {
+  const msg = document.getElementById('affProductMsg');
+  try { await API.post('/affiliates/my-products/unselect', { product_id: id }); await loadAffiliates(); }
+  catch (e) { if (msg) msg.innerHTML = '<span style="color:var(--danger,#dc2626)">' + escapeHtml(String(e.message || e)) + '</span>'; }
+}
+
 const TAB_LOADERS = {
+  'affiliates': async () => { await loadAffiliates(); },
   'dashboard': async () => {
     try {
       const stats = await API.get('/dashboard/stats');
