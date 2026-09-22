@@ -112,3 +112,100 @@ pub async fn backfill_provider_keys(db: &PgPool) -> Result<usize, AppError> {
     );
     Ok(sealed)
 }
+
+// ── CS-21b: seal-on-WRITE audit ────────────────────────────────────────────────────────────────
+//
+// Every read path is safe (`open` tolerates legacy plaintext), but nothing FAILED LOUDLY when a
+// column held a plaintext secret: `provider_keys` did for months. A new column, a new handler, or
+// one manual `UPDATE` can reintroduce that silently. This audit is the assertion — it runs on every
+// boot and, with `CORESWIFT_SECRET_AUDIT=1`, as a one-shot check that exits non-zero.
+
+/// `(table, secret column)` for tables that carry a `tenant_id`. A value here is acceptable when it
+/// is `enc:v1:`-sealed or a ciphertext this tenant's key can actually open.
+const TENANT_SECRET_COLUMNS: &[(&str, &str)] = &[
+    ("provider_keys", "api_key"),
+    ("private_email_api_keys", "api_key_encrypted"),
+    ("private_email_domains", "mailgun_api_key"),
+    ("private_email_domains", "smtp_password_encrypted"),
+    ("private_email_domains", "webhook_signing_key_encrypted"),
+];
+
+/// `(table, secret column)` for GLOBAL config rows. There is no tenant id to derive a key from, so a
+/// non-empty value here can never be sealed — the only safe state is empty, and a populated value is
+/// reported as a finding so whoever fills it in knows to move it to a tenant slot.
+const GLOBAL_SECRET_COLUMNS: &[(&str, &str)] = &[
+    ("telnyx_config", "api_key"),
+    ("telnyx_config", "webhook_secret"),
+];
+
+/// One stored value that is neither sealed nor decryptable ciphertext.
+#[derive(Debug, serde::Serialize)]
+pub struct SecretFinding {
+    pub table: &'static str,
+    pub column: &'static str,
+    pub row_id: Uuid,
+    pub tenant_id: Option<Uuid>,
+    pub reason: &'static str,
+}
+
+/// Every non-empty secret that is stored in PLAINTEXT. Empty in a healthy database.
+pub async fn audit_plaintext_secrets(db: &PgPool) -> Result<Vec<SecretFinding>, AppError> {
+    let mut findings = Vec::new();
+
+    for (table, column) in TENANT_SECRET_COLUMNS {
+        let sql = format!(
+            "SELECT id, tenant_id, {column} AS v FROM {table} \
+             WHERE {column} IS NOT NULL AND {column} <> ''"
+        );
+        let rows: Vec<(Uuid, Uuid, String)> = sqlx::query_as(&sql).fetch_all(db).await?;
+        let mut sealed = 0usize;
+        let mut ciphertext = 0usize;
+        for (row_id, tenant_id, stored) in rows {
+            if is_sealed(&stored) {
+                sealed += 1;
+                continue;
+            }
+            // Not prefixed: it must still be ciphertext from the older `encryption::encrypt_api_key`
+            // shape (that is what the private-email tables store). AES-GCM authenticates, so a
+            // plaintext value cannot pass this by accident.
+            if crate::private_email::encryption::decrypt_api_key(tenant_id, &stored).is_ok() {
+                ciphertext += 1;
+                continue;
+            }
+            findings.push(SecretFinding {
+                table,
+                column,
+                row_id,
+                tenant_id: Some(tenant_id),
+                reason: "not enc:v1:-sealed and not decryptable as ciphertext",
+            });
+        }
+        tracing::info!(
+            table,
+            column,
+            sealed,
+            ciphertext,
+            plaintext = findings.len(),
+            "secret column audit"
+        );
+    }
+
+    for (table, column) in GLOBAL_SECRET_COLUMNS {
+        let sql = format!(
+            "SELECT id, {column} AS v FROM {table} WHERE {column} IS NOT NULL AND {column} <> ''"
+        );
+        let rows: Vec<(Uuid, String)> = sqlx::query_as(&sql).fetch_all(db).await?;
+        for (row_id, _stored) in rows {
+            findings.push(SecretFinding {
+                table,
+                column,
+                row_id,
+                tenant_id: None,
+                reason:
+                    "global config row: no tenant key to seal with, so the value must stay empty",
+            });
+        }
+    }
+
+    Ok(findings)
+}

@@ -134,6 +134,48 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!(error = %e, "provider key backfill skipped"),
     }
 
+    // Seal-on-WRITE assertion (CS-21b). The backfill above repairs history; this makes sure history
+    // cannot quietly repeat — a column that holds a plaintext secret is reported on EVERY boot
+    // instead of being tolerated forever. `CORESWIFT_SECRET_AUDIT=1` turns it into a one-shot check
+    // that prints the findings and exits non-zero, so the live container can be audited without a
+    // restart.
+    let audit_requested = std::env::var("CORESWIFT_SECRET_AUDIT").is_ok();
+    match crate::secret_box::audit_plaintext_secrets(&db).await {
+        Ok(findings) if findings.is_empty() => {
+            tracing::info!("secret audit: 0 plaintext secrets at rest");
+        }
+        Ok(findings) => {
+            tracing::error!(
+                count = findings.len(),
+                "secret audit: PLAINTEXT SECRETS AT REST — a write path is not sealing"
+            );
+            for f in &findings {
+                tracing::error!(
+                    table = f.table,
+                    column = f.column,
+                    row = %f.row_id,
+                    reason = f.reason,
+                    "plaintext secret"
+                );
+            }
+            if audit_requested {
+                println!(
+                    "{}",
+                    serde_json::json!({ "status": "DIRTY", "plaintext_secrets": findings })
+                );
+                std::process::exit(1);
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "secret audit skipped"),
+    }
+    if audit_requested {
+        println!(
+            "{}",
+            serde_json::json!({ "status": "CLEAN", "plaintext_secrets": [] })
+        );
+        std::process::exit(0);
+    }
+
     // Connect to Redis
     let redis = db::connect_redis(&config.redis_url).await?;
     tracing::info!("Connected to Redis");
