@@ -63,10 +63,11 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/bookings/:id/cancel",
             axum::routing::post(handlers::cancel_booking),
         )
-        .route(
-            "/bookings/:id/adjust-slots",
-            axum::routing::patch(handlers::adjust_slot_config),
-        )
+        // `PATCH /bookings/bookings/:id/adjust-slots` was DELETED (kanban t_4b6f1a5c): it took a
+        // SLOT id under a path that says "bookings", and it was a strict subset of
+        // `PATCH /bookings/calendars/:slug/slots/:slot_id` above (same column, no slug scoping,
+        // no existence check against the slug). Two implementations of one capability is drift;
+        // the slug-scoped one is the survivor the Bookings tab drives.
         // Plan gating — the admin controls this module per plan
         // (the module & feature registry is the source of truth for the admin UI — see src/module_registry).
         .layer(middleware::from_fn_with_state(

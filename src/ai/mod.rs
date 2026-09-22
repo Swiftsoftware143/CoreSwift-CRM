@@ -26,7 +26,6 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/prioritize", axum::routing::post(handlers::prioritize))
         .route("/predict", axum::routing::post(handlers::predict))
         .route("/recommend", axum::routing::post(handlers::recommend))
-        .route("/campaign", axum::routing::post(handlers::campaign))
         .route("/message", axum::routing::post(handlers::compose_message))
         .route("/channel", axum::routing::post(handlers::suggest_channel))
         .route("/timing", axum::routing::post(handlers::suggest_timing))

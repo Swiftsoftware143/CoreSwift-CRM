@@ -838,32 +838,3 @@ pub async fn cancel_booking(
 
     Ok(Json(json!({"success": true, "status": "cancelled"})))
 }
-
-pub async fn adjust_slot_config(
-    State(s): State<AppState>,
-    Extension(c): Extension<Claims>,
-    Path(id): Path<Uuid>,
-    Json(body): Json<serde_json::Value>,
-) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    let slot = sqlx::query_as::<_, CalendarSlot>(
-        r#"UPDATE calendar_slots cs SET
-            total_slots = COALESCE($1, cs.total_slots),
-            updated_at = NOW()
-           FROM booking_calendars bc
-           WHERE cs.calendar_id = bc.id AND bc.tenant_id = $2 AND cs.id = $3
-           RETURNING cs.*"#,
-    )
-    .bind(
-        body.get("total_slots")
-            .and_then(|v| v.as_i64())
-            .map(|v| v as i32),
-    )
-    .bind(tid)
-    .bind(id)
-    .fetch_optional(&s.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Slot not found".into()))?;
-
-    Ok(Json(json!(slot)))
-}

@@ -35,9 +35,23 @@ pub async fn ingest(
     });
 
     // Store event
+    //
+    // `events.title` is NOT NULL (the table began as the calendar-events table and the webhook
+    // columns were added later), so every INSERT here died on 23502 and this endpoint answered
+    // 500 to every caller — which is why nothing in the fleet ever called it (kanban t_4b6f1a5c).
+    // Derive the title from the payload when the producer sends one, otherwise name the event.
+    let title: String = body
+        .payload
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("{} from {}", body.event_type, source))
+        .chars()
+        .take(255)
+        .collect();
     let event = sqlx::query_as::<_, Event>(
-        r#"INSERT INTO events (id, tenant_id, source, event_type, entity_type, entity_id, payload, raw_headers)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *"#
+        r#"INSERT INTO events (id, tenant_id, source, event_type, entity_type, entity_id, payload, raw_headers, title)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *"#,
     )
     .bind(Uuid::new_v4())
     .bind(tid)
@@ -47,6 +61,7 @@ pub async fn ingest(
     .bind(body.entity_id)
     .bind(&body.payload)
     .bind(raw_headers)
+    .bind(&title)
     .fetch_one(&s.db)
     .await?;
 

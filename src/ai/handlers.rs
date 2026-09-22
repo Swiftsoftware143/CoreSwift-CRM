@@ -31,14 +31,18 @@ pub async fn prioritize(
             Option<chrono::DateTime<chrono::Utc>>,
         ),
     >(
-        r#"SELECT c.id, c.name, c.email,
+        // `contacts` has no `name` column (first_name/last_name) — selecting `c.name` made this
+        // endpoint answer 500 Database error the first time it was ever called (kanban t_4b6f1a5c;
+        // the log says "column c.name does not exist"). Same CONCAT idiom as compose_message.
+        // The two LEFT JOINs are also pinned to the tenant: they matched on the entity id alone.
+        r#"SELECT c.id, CONCAT(c.first_name, ' ', c.last_name) AS name, c.email,
                   COALESCE(cs.total_score, 0) as score,
                   ah.score as health_score,
                   ah.risk_level,
                   ah.last_active_at
            FROM contacts c
-           LEFT JOIN scores cs ON cs.contact_id = c.id
-           LEFT JOIN account_health ah ON ah.entity_id = c.id AND ah.entity_type = 'contact'
+           LEFT JOIN scores cs ON cs.contact_id = c.id AND cs.tenant_id = $1
+           LEFT JOIN account_health ah ON ah.entity_id = c.id AND ah.entity_type = 'contact' AND ah.tenant_id = $1
            WHERE c.tenant_id = $1
            ORDER BY ah.score ASC NULLS LAST, cs.total_score DESC NULLS LAST
            LIMIT $2"#,
@@ -156,17 +160,6 @@ pub async fn predict(
 
 /// POST /api/ai/recommend — Get segmentation and campaign recommendations
 pub async fn recommend(
-    State(s): State<AppState>,
-    Extension(c): Extension<Claims>,
-    Json(r): Json<CampaignRequest>,
-) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    let rec = engine::recommend_campaign(&s.db, tid, &r.campaign_goal).await;
-    Ok(Json(json!(rec)))
-}
-
-/// POST /api/ai/campaign — Legacy alias for recommend
-pub async fn campaign(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
     Json(r): Json<CampaignRequest>,

@@ -286,8 +286,13 @@ pub async fn get_entity_tags(
     Path((et, eid)): Path<(String, Uuid)>,
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    Ok(Json(
-        json!({"tags": sqlx::query_as::<_,Tag>("SELECT t.* FROM tags t JOIN tag_assignments ta ON t.id=ta.tag_id WHERE ta.entity_type=$1 AND ta.entity_id=$2 AND ta.tenant_id=$3 AND t.is_active=true")
-        .bind(&et).bind(eid).bind(t).fetch_all(&s.db).await?}),
-    ))
+    let tags = sqlx::query_as::<_,Tag>("SELECT t.* FROM tags t JOIN tag_assignments ta ON t.id=ta.tag_id WHERE ta.entity_type=$1 AND ta.entity_id=$2 AND ta.tenant_id=$3 AND t.is_active=true")
+        .bind(&et).bind(eid).bind(t).fetch_all(&s.db).await?;
+    // `assignments` carries the tag_assignments ROW ID. DELETE /api/tags/assign/:id deletes an
+    // assignment, not a tag, and a tag row cannot express that id (one tag can be assigned to
+    // many entities). Without this the unassign route is unreachable from any UI: it was
+    // registered and callerless (kanban t_4b6f1a5c). `tags` is unchanged for existing consumers.
+    let assignments = sqlx::query_as::<_,TagAssignment>("SELECT * FROM tag_assignments WHERE entity_type=$1 AND entity_id=$2 AND tenant_id=$3 ORDER BY assigned_at DESC")
+        .bind(&et).bind(eid).bind(t).fetch_all(&s.db).await?;
+    Ok(Json(json!({"tags": tags, "assignments": assignments})))
 }

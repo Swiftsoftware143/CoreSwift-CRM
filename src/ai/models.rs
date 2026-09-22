@@ -4,11 +4,16 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+// NOTE (kanban t_4b6f1a5c): the AI request structs used to REQUIRE a client-supplied
+// `tenant_id` while every handler resolved the tenant from the JWT claims (`c.aid`) and
+// ignored the body field. Nothing called these routes, so it never showed — the first caller
+// got `422 missing field tenant_id`. The tenant is never taken from the body on this router:
+// that would let one account read another's contacts. The field is gone, not defaulted.
+
 // ── Lead Prioritization ──
 
 #[derive(Debug, Deserialize)]
 pub struct PrioritizeRequest {
-    pub tenant_id: Uuid,
     pub limit: Option<i32>,
 }
 
@@ -29,7 +34,6 @@ pub struct PrioritizedContact {
 
 #[derive(Debug, Deserialize)]
 pub struct PredictRequest {
-    pub tenant_id: Uuid,
     pub contact_id: Uuid,
 }
 
@@ -47,7 +51,6 @@ pub struct WinPrediction {
 
 #[derive(Debug, Deserialize)]
 pub struct ComposeMessageRequest {
-    pub tenant_id: Uuid,
     pub contact_id: Uuid,
     pub context: String, // "abandoned_signup", "inactive_trial", "checklist_stage_2", "churn_risk", "renewal"
     pub channel: String, // "email" or "sms"
@@ -65,7 +68,6 @@ pub struct ComposedMessage {
 
 #[derive(Debug, Deserialize)]
 pub struct ChannelRequest {
-    pub tenant_id: Uuid,
     pub contact_id: Uuid,
     pub context: String,
 }
@@ -81,7 +83,6 @@ pub struct ChannelSuggestion {
 
 #[derive(Debug, Deserialize)]
 pub struct TimingRequest {
-    pub tenant_id: Uuid,
     pub contact_id: Uuid,
 }
 
@@ -98,7 +99,6 @@ pub struct TimingSuggestion {
 
 #[derive(Debug, Deserialize)]
 pub struct ChurnRequest {
-    pub tenant_id: Uuid,
     pub contact_id: Uuid,
 }
 
@@ -118,7 +118,6 @@ pub struct ChurnAssessment {
 
 #[derive(Debug, Deserialize)]
 pub struct CampaignRequest {
-    pub tenant_id: Uuid,
     pub campaign_goal: String, // "trial_conversion", "reactivation", "upsell", "retention"
 }
 
