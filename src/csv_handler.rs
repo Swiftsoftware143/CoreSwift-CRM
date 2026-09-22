@@ -3,20 +3,20 @@
 //! Provides drag-and-drop CSV upload with column mapping preview,
 //! batch import up to 500 records, and streaming CSV export.
 
+use axum::routing::{get, post};
 use axum::{
     extract::{Multipart, State},
     http::{header, StatusCode},
     response::IntoResponse,
     Extension, Json, Router,
 };
-use axum::routing::{get, post};
 use csv::{ReaderBuilder, WriterBuilder};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::AppState;
 use crate::auth::models::Claims;
-use crate::errors::{AppError, ApiResult};
+use crate::errors::{ApiResult, AppError};
+use crate::AppState;
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -118,15 +118,18 @@ pub async fn import_contacts(
 
         match name.as_str() {
             "file" => file_bytes = Some(data.to_vec()),
-            "mappings" => mappings_str = Some(
-                String::from_utf8(data.to_vec())
-                    .map_err(|_| AppError::BadRequest("mappings must be valid UTF-8".into()))?,
-            ),
+            "mappings" => {
+                mappings_str = Some(
+                    String::from_utf8(data.to_vec())
+                        .map_err(|_| AppError::BadRequest("mappings must be valid UTF-8".into()))?,
+                )
+            }
             _ => {}
         }
     }
 
-    let file_bytes = file_bytes.ok_or_else(|| AppError::BadRequest("Missing 'file' field".into()))?;
+    let file_bytes =
+        file_bytes.ok_or_else(|| AppError::BadRequest("Missing 'file' field".into()))?;
     let mappings_str =
         mappings_str.ok_or_else(|| AppError::BadRequest("Missing 'mappings' field".into()))?;
 
@@ -201,7 +204,11 @@ pub async fn import_contacts(
             return Err(AppError::BadRequest(format!(
                 "Unknown contact field: '{}'. Allowed: {}",
                 contact_field,
-                allowed_fields.iter().cloned().collect::<Vec<_>>().join(", ")
+                allowed_fields
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )));
         }
     }
@@ -228,11 +235,13 @@ pub async fn import_contacts(
             continue;
         }
 
-        let record =
-            result.map_err(|e| AppError::BadRequest(format!("CSV parse error at row {}: {}", row_num, e)))?;
+        let record = result.map_err(|e| {
+            AppError::BadRequest(format!("CSV parse error at row {}: {}", row_num, e))
+        })?;
 
         // Map CSV columns to contact fields
-        let mut mapped: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut mapped: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         for (csv_hdr, contact_field) in &mapping_map {
             if let Some(&idx) = header_indices.get(csv_hdr) {
                 if let Some(value) = record.get(idx) {
@@ -253,10 +262,29 @@ pub async fn import_contacts(
         // Insert
         let first_name = mapped.get("first_name").map(|v| v.trim()).unwrap_or("");
         let last_name = mapped.get("last_name").map(|v| v.trim()).unwrap_or("");
-        let email = mapped.get("email").map(|v| v.trim()).filter(|v| !v.is_empty());
-        let phone = mapped.get("phone").map(|v| v.trim()).filter(|v| !v.is_empty());
-        let title = mapped.get("title").map(|v| v.trim()).filter(|v| !v.is_empty());
-        let notes = mapped.get("notes").map(|v| v.trim()).filter(|v| !v.is_empty());
+        // `company` is in allowed_fields and every caller maps it, but the INSERT never bound it —
+        // the value was accepted and silently dropped (found live 2026-09-22: importing a row with
+        // Company set then exporting it produced an empty company column).
+        let company = mapped
+            .get("company")
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty());
+        let email = mapped
+            .get("email")
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty());
+        let phone = mapped
+            .get("phone")
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty());
+        let title = mapped
+            .get("title")
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty());
+        let notes = mapped
+            .get("notes")
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty());
         let address_line1 = mapped
             .get("address_line1")
             .map(|v| v.trim())
@@ -265,7 +293,10 @@ pub async fn import_contacts(
             .get("address_line2")
             .map(|v| v.trim())
             .filter(|v| !v.is_empty());
-        let city = mapped.get("city").map(|v| v.trim()).filter(|v| !v.is_empty());
+        let city = mapped
+            .get("city")
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty());
         let state = mapped
             .get("state")
             .map(|v| v.trim())
@@ -285,9 +316,9 @@ pub async fn import_contacts(
 
         let result = sqlx::query(
             r#"INSERT INTO contacts
-               (id, tenant_id, email, phone, first_name, last_name, title, notes,
+               (id, tenant_id, email, phone, first_name, last_name, company, title, notes,
                 address_line1, address_line2, city, state, postal_code, country, gender, is_active)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,true)"#,
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,true)"#,
         )
         .bind(Uuid::new_v4())
         .bind(account_id)
@@ -295,6 +326,7 @@ pub async fn import_contacts(
         .bind(phone)
         .bind(first_name)
         .bind(last_name)
+        .bind(company)
         .bind(title)
         .bind(notes)
         .bind(address_line1)
@@ -397,12 +429,21 @@ pub async fn export_contacts(
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
+    // `contacts_extended` does not exist in this app's database (information_schema has only
+    // `contacts`), so this query 500'd on every tenant holding a contact. Read the real table;
+    // `tags` is not a column — it is the tag_assignments/tags pair (entity_type='contact'),
+    // aggregated the same way src/tags/handlers.rs reads them.
     let rows = sqlx::query_as::<_, ContactExportRow>(
-        r#"SELECT first_name, last_name, email, phone, title, company, tags,
-                  created_at, updated_at
-           FROM contacts_extended
-           WHERE tenant_id = $1 AND is_active = true
-           ORDER BY created_at DESC"#,
+        r#"SELECT c.first_name, c.last_name, c.email, c.phone, c.title, c.company,
+                  (SELECT string_agg(t.name, ';' ORDER BY t.name)
+                     FROM tag_assignments ta
+                     JOIN tags t ON t.id = ta.tag_id
+                    WHERE ta.entity_type = 'contact' AND ta.entity_id = c.id
+                      AND t.is_active = true) AS tags,
+                  c.created_at, c.updated_at
+           FROM contacts c
+           WHERE c.tenant_id = $1 AND c.is_active = true
+           ORDER BY c.created_at DESC"#,
     )
     .bind(account_id)
     .fetch_all(&state.db)
@@ -482,7 +523,7 @@ pub async fn export_opportunities(
            LEFT JOIN companies co ON co.id = o.company_id
            LEFT JOIN pipelines p ON p.id = o.pipeline_id
            LEFT JOIN pipeline_stages s ON s.id = o.stage_id
-           WHERE o.account_id = $1
+           WHERE o.tenant_id = $1
            ORDER BY o.created_at DESC"#,
     )
     .bind(account_id)
@@ -511,10 +552,7 @@ pub async fn export_opportunities(
             .expected_close_date
             .map(|d| d.to_string())
             .unwrap_or_default();
-        let created_str = row
-            .created_at
-            .map(|d| d.to_rfc3339())
-            .unwrap_or_default();
+        let created_str = row.created_at.map(|d| d.to_rfc3339()).unwrap_or_default();
 
         wtr.write_record([
             &row.name,

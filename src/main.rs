@@ -23,6 +23,7 @@ pub mod companies;
 mod config;
 pub mod contacts;
 pub mod contacts_internal;
+pub mod csv_handler;
 pub mod dashboard;
 mod db;
 pub mod email;
@@ -271,6 +272,8 @@ async fn main() -> anyhow::Result<()> {
         // called these two paths; until now neither was registered (both answered 405).
         .nest("/api/profile", profile::router(state.clone()))
         .nest("/api/contacts", contacts::router(state.clone()))
+        // CSV import/export — /api/csv/{preview,import/contacts,export/contacts,export/opportunities}
+        .nest("/api/csv", csv_handler::router(state.clone()))
         .nest("/api/internal/contacts", contacts_internal::router())
         // FunnelSwift tag provision webhook — auto-provision free-tier contacts
         .route(

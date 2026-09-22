@@ -882,7 +882,9 @@ const TAB_RENDERERS = {
 
   'contacts': () => {
     return pageHeader('Contacts', 'Manage your contacts and leads',
-      '<button class="btn btn-primary btn-sm" onclick="showAddContactModal()">+ Add Contact</button>') +
+      '<button class="btn btn-primary btn-sm" onclick="showAddContactModal()">+ Add Contact</button>' +
+      '<button class="btn btn-secondary btn-sm" onclick="ctCsvImportPick()">⬆ Import CSV</button>' +
+      '<button class="btn btn-secondary btn-sm" onclick="csvExportContacts()">⬇ Export CSV</button>') +
     '<div class="search-bar"><input type="text" placeholder="Search contacts..." oninput="filterContacts(this.value)"></div>' +
     '<div id="contactsTable"><div class="loading-wrap"><div class="spinner"></div> Loading contacts...</div></div>';
   },
@@ -1266,6 +1268,169 @@ async function saveSiteConfig() {
     SITE_CONFIG = { ...SITE_CONFIG, ...payload };
   } catch(e) {
     toast('Save failed: ' + e.message, 'error');
+  }
+}
+
+// ── CSV import / export — guide.html §19 (kanban t_d1b3f5c4) ────────────────
+// The API is POST /api/csv/preview, POST /api/csv/import/contacts and
+// GET /api/csv/export/contacts. API.call() is JSON-only (it prefixes /api and
+// JSON.stringify()s the body), so these talk to the CSV routes with a raw
+// fetch and carry the tenant's own bearer token.
+let CT_CSV_PENDING = null;
+
+const CT_CSV_FIELDS = [
+  ['first_name', ['firstname', 'givenname', 'fname']],
+  ['last_name', ['lastname', 'surname', 'familyname', 'lname']],
+  ['email', ['email', 'emailaddress', 'mail']],
+  ['phone', ['phone', 'phonenumber', 'mobile', 'tel', 'telephone']],
+  ['title', ['title', 'jobtitle', 'position']],
+  ['company', ['company', 'companyname', 'organization', 'organisation']],
+  ['notes', ['notes', 'note', 'comments']],
+  ['address_line1', ['address', 'addressline1', 'street']],
+  ['city', ['city', 'town']],
+  ['state', ['state', 'province', 'region']],
+  ['postal_code', ['postalcode', 'zip', 'zipcode']],
+  ['country', ['country']]
+];
+
+function ctCsvNorm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+
+function ctCsvMap(headers) {
+  const used = {};
+  const out = [];
+  headers.forEach(function (h) {
+    const n = ctCsvNorm(h);
+    let field = null;
+    CT_CSV_FIELDS.forEach(function (pair) {
+      if (field || used[pair[0]]) return;
+      if (ctCsvNorm(pair[0]) === n || pair[1].indexOf(n) >= 0) field = pair[0];
+    });
+    if (field) { used[field] = true; out.push({ csv_header: String(h), contact_field: field }); }
+  });
+  return out;
+}
+
+async function ctCsvFetch(path, opts) {
+  const o = opts || {};
+  o.headers = Object.assign({}, o.headers || {}, { Authorization: 'Bearer ' + STATE.token });
+  const res = await fetch('/api/csv/' + path, o);
+  if (res.status === 401) { logout(true); throw new Error('Session expired'); }
+  if (!res.ok) {
+    let msg = 'HTTP ' + res.status;
+    try { const e = await res.json(); if (typeof e.message === 'string') msg = e.message; } catch (_) {}
+    throw new Error(msg);
+  }
+  return res;
+}
+
+function ctCsvPreviewBody(headers, map, sample) {
+  const mapped = {};
+  map.forEach(function (m) { mapped[m.csv_header] = m.contact_field; });
+  let chips = '';
+  headers.forEach(function (h) {
+    const f = mapped[h];
+    chips += '<span class="badge ' + (f ? 'badge-success' : 'badge-muted') +
+      '" style="margin:2px;display:inline-block">' + escapeHtml(h) +
+      (f ? ' &rarr; ' + escapeHtml(f) : ' (skipped)') + '</span>';
+  });
+  let table = '';
+  if (sample && sample.length) {
+    table = '<div class="table-wrap" style="margin-top:12px"><table><thead><tr>' +
+      headers.map(function (h) { return '<th>' + escapeHtml(h) + '</th>'; }).join('') +
+      '</tr></thead><tbody>' +
+      sample.map(function (r) {
+        return '<tr>' + headers.map(function (_, i) {
+          return '<td>' + escapeHtml(r[i] || '') + '</td>';
+        }).join('') + '</tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+  return '<p style="margin:0 0 8px">CoreSwift read the header row. Columns map like this; unmatched ones are skipped.</p>' +
+    '<div>' + chips + '</div>' + table +
+    '<p style="margin:12px 0 0;color:var(--text-secondary)">Up to 500 rows per import.</p>';
+}
+
+function ctCsvImportPick() {
+  let inp = document.getElementById('ctCsvFile');
+  if (!inp) {
+    inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = '.csv,text/csv';
+    inp.id = 'ctCsvFile';
+    inp.style.display = 'none';
+    document.body.appendChild(inp);
+    inp.addEventListener('change', function () {
+      if (inp.files && inp.files[0]) ctCsvPreview(inp.files[0]);
+    });
+  }
+  inp.value = '';
+  inp.click();
+}
+
+async function ctCsvPreview(file) {
+  CT_CSV_PENDING = null;
+  showModal('Import contacts from CSV',
+    '<div id="ctCsvBody"><div class="loading-wrap"><div class="spinner"></div> Reading ' +
+      escapeHtml(file.name) + '...</div></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="ctCsvGo" disabled onclick="ctCsvImport()">Import</button>');
+  const fd = new FormData();
+  fd.append('file', file);
+  const body = document.getElementById('ctCsvBody');
+  let d;
+  try {
+    d = await (await ctCsvFetch('preview', { method: 'POST', body: fd })).json();
+  } catch (e) {
+    if (body) body.innerHTML = icErr('Could not read the CSV', e.message);
+    return;
+  }
+  const headers = (d && d.headers) || [];
+  const map = ctCsvMap(headers);
+  if (body && !map.length) {
+    body.innerHTML = icErr('No importable columns found',
+      'None of these headers match a contact field: ' + headers.join(', '));
+    return;
+  }
+  CT_CSV_PENDING = { file: file, map: map };
+  if (body) body.innerHTML = ctCsvPreviewBody(headers, map, (d && d.sample_rows) || []);
+  const go = document.getElementById('ctCsvGo');
+  if (go) go.disabled = false;
+}
+
+async function ctCsvImport() {
+  if (!CT_CSV_PENDING) return;
+  const fd = new FormData();
+  fd.append('file', CT_CSV_PENDING.file);
+  fd.append('mappings', JSON.stringify(CT_CSV_PENDING.map));
+  const body = document.getElementById('ctCsvBody');
+  if (body) body.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Importing...</div>';
+  let d;
+  try {
+    d = await (await ctCsvFetch('import/contacts', { method: 'POST', body: fd })).json();
+  } catch (e) {
+    if (body) body.innerHTML = icErr('Import failed', e.message);
+    return;
+  }
+  closeModal();
+  CT_CSV_PENDING = null;
+  toast('Imported ' + d.imported + ' contact' + (d.imported === 1 ? '' : 's') +
+    (d.skipped ? ' (' + d.skipped + ' skipped)' : ''), d.skipped ? 'info' : 'success');
+  if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['contacts']) TAB_LOADERS['contacts']();
+}
+
+async function csvExportContacts() {
+  try {
+    const res = await ctCsvFetch('export/contacts');
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'contacts_export.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+    toast('Contacts exported', 'success');
+  } catch (e) {
+    toast('Export failed: ' + e.message, 'error');
   }
 }
 
