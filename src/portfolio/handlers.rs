@@ -304,6 +304,14 @@ pub async fn create_target(
             "Name and webhook_url are required".into(),
         ));
     }
+    // `integration_targets.provider` is NOT NULL — a request without it used to reach the INSERT and
+    // come back as a bare 500 "Database error". Validate it where the caller can act on it.
+    let provider = req.provider.as_deref().unwrap_or("").trim().to_string();
+    if provider.is_empty() {
+        return Err(AppError::Validation(
+            "provider is required (webhook, n8n, zapier, slack or generic)".into(),
+        ));
+    }
     // Seal the third-party credential at rest (CS-21 family, t_477d46c2). Nothing consumes the
     // plaintext today — the only other reads of this table are the redacted list and a COUNT(*) —
     // so a future consumer MUST decrypt with `crate::secret_box::open(tenant_id, stored)` and never
@@ -319,7 +327,7 @@ pub async fn create_target(
     .bind(tenant_id)
     .bind(id)
     .bind(&req.name)
-    .bind(&req.provider)
+    .bind(&provider)
     .bind(&req.webhook_url)
     .bind(&stored_api_key)
     .bind(&req.events)

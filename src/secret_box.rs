@@ -244,6 +244,9 @@ const TENANT_SECRET_COLUMNS: &[(&str, &str)] = &[
     // t_6718dc86: the outbound webhook signing secret. Sealed on create/update since this run;
     // the API now returns a mask instead of the raw value.
     ("webhook_endpoints", "secret"),
+    // t_706da9df: the Google OAuth refresh token on a booking calendar — a standing grant on the
+    // tenant's Google account. Sealed on write, opened at the one read-for-use site.
+    ("booking_calendars", "google_refresh_token"),
 ];
 
 /// `(table, secret column)` for GLOBAL config rows. There is no tenant id to derive a key from, so a

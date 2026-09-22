@@ -470,10 +470,15 @@ pub async fn oauth_callback(
 
     // Store the refresh token on the booking_calendars record
     // Also create a Google Calendar if this calendar doesn't have one yet
+    //
+    // t_706da9df: a Google refresh token is a STANDING grant on the tenant's account, so it is
+    // sealed at rest with the same envelope every other credential uses. Any reader MUST go
+    // through `crate::secret_box::open(tid, ..)` — never select the column for direct use.
+    let sealed_refresh_token = crate::secret_box::seal(tid, &refresh_token)?;
     sqlx::query(
         "UPDATE booking_calendars SET google_refresh_token = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3"
     )
-    .bind(&refresh_token)
+    .bind(&sealed_refresh_token)
     .bind(Uuid::parse_str(&calendar_id).map_err(|_| AppError::Validation("Invalid calendar_id".to_string()))?)
     .bind(tid)
     .execute(&s.db)
@@ -576,6 +581,14 @@ pub async fn sync_calendar(
     let refresh_token = refresh_token.ok_or_else(|| {
         AppError::Validation("Google Calendar not connected. Use /connect-url first.".to_string())
     })?;
+    // Sealed at rest since t_706da9df — `open` also tolerates a legacy plaintext row.
+    let refresh_token = crate::secret_box::open(tid, &refresh_token);
+    if refresh_token.is_empty() {
+        return Err(AppError::Validation(
+            "This calendar's stored Google grant cannot be read — reconnect Google Calendar."
+                .to_string(),
+        ));
+    }
 
     let google_cal_id = google_cal_id.unwrap_or_else(|| "primary".to_string());
 

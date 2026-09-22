@@ -164,7 +164,7 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(json!({ "message": message }))))
 }
 
-/// PATCH /api/messages/:id — update read/archive status.
+/// PUT /api/messages/:id — update read/archive status.
 pub async fn update(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
