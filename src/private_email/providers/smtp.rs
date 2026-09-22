@@ -2,7 +2,6 @@
 //! No inbound webhook support (SMTP is send-only via this provider).
 //! Inbound for SMTP domains would use IMAP polling (not yet implemented).
 
-use crate::private_email::encryption;
 use crate::private_email::providers::{EmailProvider, InboundEmail, ProviderConfig, SendResult};
 use async_trait::async_trait;
 use lettre::{
@@ -50,25 +49,29 @@ impl EmailProvider for SmtpProvider {
             }
         };
 
-        let password = match &config.encrypted_smtp_password {
-            Some(p) => match encryption::decrypt_api_key(config.tenant_id, p) {
-                Ok(pw) => pw,
-                Err(e) => {
+        let password =
+            match &config.encrypted_smtp_password {
+                // App-wide reader (see the module note): never fails, so empty means unreadable here.
+                Some(p) => match crate::secret_box::open(config.tenant_id, p) {
+                    pw if pw.trim().is_empty() => return SendResult {
+                        success: false,
+                        provider_message_id: None,
+                        error: Some(
+                            "Stored SMTP password cannot be read by this deployment — re-add the \
+                             domain with a valid password"
+                                .into(),
+                        ),
+                    },
+                    pw => pw,
+                },
+                None => {
                     return SendResult {
                         success: false,
                         provider_message_id: None,
-                        error: Some(format!("Failed to decrypt SMTP password: {}", e)),
+                        error: Some("SMTP password not configured".into()),
                     }
                 }
-            },
-            None => {
-                return SendResult {
-                    success: false,
-                    provider_message_id: None,
-                    error: Some("SMTP password not configured".into()),
-                }
-            }
-        };
+            };
 
         // Build the email
         let mut msg_builder = Message::builder()

@@ -123,13 +123,34 @@ pub async fn inbound_webhook(
 
     // Validate webhook — pass raw body to provider for signature check
     let provider = providers::provider_for(&provider_config);
+    let signing_key_configured = provider_config
+        .encrypted_webhook_key
+        .as_deref()
+        .map(|k| !k.is_empty())
+        .unwrap_or(false);
     let inbound = provider.accept_inbound(&provider_config, body.as_bytes());
 
     let inbound = match inbound {
         Some(i) => i,
         None => {
-            // Signature validation failed — try reconstructing from raw parse
-            // (not all senders configure webhook verification)
+            // A signing key IS configured for this domain, so `None` (the provider's "cannot
+            // validate" answer) means the payload did not authenticate — a missing/mismatched
+            // signature, or a key this deployment cannot open. This endpoint is unauthenticated and
+            // used to PROCESS the email anyway, which made the signature check decorative and let
+            // anyone POST an inbound mail that creates contacts/tickets (t_45772522). No live domain
+            // has a signing key configured (0 rows), so nothing that used to be accepted is refused
+            // by this branch — it is armed for the first tenant that sets one.
+            if signing_key_configured {
+                tracing::warn!(
+                    recipient = %recipient_email,
+                    "inbound webhook rejected: the configured signing key did not validate"
+                );
+                return Ok(Json(json!({
+                    "received": false,
+                    "error": "invalid signature"
+                })));
+            }
+            // No verification configured for this domain — reconstruct from the raw parse, as before.
             let (body_text, subject, body_html, msg_id, in_reply_to) =
                 if let Some(ref p) = mailgun_payload {
                     let text = if !p.stripped_text.is_empty() {

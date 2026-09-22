@@ -1,6 +1,5 @@
 //! Mailgun email provider — send via REST API, receive via webhook.
 
-use crate::private_email::encryption;
 use crate::private_email::providers::{EmailProvider, InboundEmail, ProviderConfig, SendResult};
 use async_trait::async_trait;
 use hmac::{Hmac, Mac};
@@ -26,15 +25,23 @@ impl EmailProvider for MailgunProvider {
         in_reply_to: Option<&str>,
     ) -> SendResult {
         let api_key = match &config.encrypted_api_key {
-            Some(k) => match encryption::decrypt_api_key(config.tenant_id, k) {
-                Ok(key) => key,
-                Err(e) => {
+            // `secret_box::open` is the app-wide reader (enc:v1:, the older prefixless ciphertext,
+            // or a legacy plaintext row) and never fails, so an empty result means "this deployment
+            // cannot read the stored credential". That must be REPORTED — never sent as an empty
+            // Basic-auth password (t_45772522).
+            Some(k) => match crate::secret_box::open(config.tenant_id, k) {
+                key if key.trim().is_empty() => {
                     return SendResult {
                         success: false,
                         provider_message_id: None,
-                        error: Some(format!("Failed to decrypt API key: {}", e)),
+                        error: Some(format!(
+                            "Stored API key for domain {} cannot be read by this deployment — \
+                             re-add the domain with a valid key",
+                            config.domain_id
+                        )),
                     }
                 }
+                key => key,
             },
             None => {
                 return SendResult {
@@ -118,9 +125,21 @@ impl EmailProvider for MailgunProvider {
                 .map(|(_, v)| v.clone())
         };
 
-        // Validate Mailgun signature if webhook key is configured
+        // Validate the Mailgun signature whenever a signing key is configured. Fail CLOSED: a key
+        // that is configured but cannot be opened by this deployment returns None ("cannot
+        // validate") exactly like a bad signature, and the caller now refuses the request instead
+        // of processing it. The previous `if let Ok(..)` skipped the check entirely, so inbound mail
+        // was accepted unauthenticated the moment the stored key stopped opening (t_45772522).
         if let Some(ref encrypted_key) = config.encrypted_webhook_key {
-            if let Ok(signing_key) = encryption::decrypt_api_key(config.tenant_id, encrypted_key) {
+            if !encrypted_key.is_empty() {
+                let signing_key = crate::secret_box::open(config.tenant_id, encrypted_key);
+                if signing_key.trim().is_empty() {
+                    tracing::error!(
+                        tenant = %config.tenant_id,
+                        "inbound webhook signing key cannot be read — the signature cannot be validated"
+                    );
+                    return None;
+                }
                 let token = get("token").unwrap_or_default();
                 let timestamp = get("timestamp").unwrap_or_default();
                 let signature = get("signature").unwrap_or_default();

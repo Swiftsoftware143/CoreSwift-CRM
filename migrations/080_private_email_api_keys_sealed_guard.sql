@@ -1,0 +1,13 @@
+-- t_45772522: make the DATABASE refuse a bare (unsealed) private-email API key.
+--
+-- The write path was sealing with a SECOND envelope: the raw AES-GCM body with no `enc:v1:`
+-- prefix, which only this app's own module could recognise and which the boot audit had to judge
+-- by attempting a decrypt. Writers now go through `secret_box::seal` like every other credential
+-- column, and the readers through `secret_box::open`, so the stored form is one format again.
+--
+-- NOT VALID on purpose, mirroring 075/077/078/079: rows written before the fix are exempt so this
+-- can be armed without a rewrite, while every NEW write is checked immediately. The boot audit
+-- (secret_box::audit_plaintext_secrets) remains the read-side assertion - it reports a plaintext
+-- or unopenable value in this column on every start. No semicolon anywhere in these comments -
+-- the in-app runner executes the whole file.
+ALTER TABLE private_email_api_keys ADD CONSTRAINT private_email_api_keys_sealed CHECK (api_key_encrypted = '' OR api_key_encrypted LIKE 'enc:v1:%') NOT VALID;

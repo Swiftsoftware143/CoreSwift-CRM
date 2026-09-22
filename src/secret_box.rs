@@ -306,9 +306,33 @@ pub async fn audit_plaintext_secrets(db: &PgPool) -> Result<SecretAudit, AppErro
         let rows: Vec<(Uuid, Uuid, String)> = sqlx::query_as(&sql).fetch_all(db).await?;
         let mut sealed = 0usize;
         let mut opened = 0usize;
+        // Counts are per-table deltas, not the running totals: logging `out.plaintext.len()` here
+        // printed the CUMULATIVE number on every table's line, so a single bad row in one table made
+        // eight tables each report `unreadable=2` (t_45772522).
+        let plaintext_before = out.plaintext.len();
+        let unreadable_before = out.unreadable.len();
         for (row_id, tenant_id, stored) in rows {
             if is_sealed(&stored) {
-                sealed += 1;
+                // A PREFIX IS NOT PROOF. `sealed += 1` used to be decided by the string alone, so a
+                // row wearing `enc:v1:` that this deployment cannot open was reported as healthy
+                // forever — the same blindness that hid two dead rows in private_email_api_keys
+                // (t_45772522). A sealed row counts only once the key actually opens it; otherwise
+                // it is a finding, exactly like an unopenable unprefixed value.
+                if opens_with_configured(tenant_id, &stored)
+                    || open_legacy(tenant_id, &stored).is_some()
+                {
+                    sealed += 1;
+                    continue;
+                }
+                out.unreadable.push(SecretFinding {
+                    table,
+                    column,
+                    row_id,
+                    tenant_id: Some(tenant_id),
+                    reason:
+                        "enc:v1:-sealed but neither the configured nor the built-in key opens it \
+                             (rotated or lost master key, or written by another deployment)",
+                });
                 continue;
             }
             // Not prefixed: it must still be ciphertext from the older `encryption::encrypt_api_key`
@@ -344,8 +368,8 @@ pub async fn audit_plaintext_secrets(db: &PgPool) -> Result<SecretAudit, AppErro
             column,
             sealed,
             opened,
-            plaintext = out.plaintext.len(),
-            unreadable = out.unreadable.len(),
+            plaintext = out.plaintext.len() - plaintext_before,
+            unreadable = out.unreadable.len() - unreadable_before,
             "secret column audit"
         );
     }

@@ -5,7 +5,6 @@ use axum::{
 use serde_json::json;
 use uuid::Uuid;
 
-use super::encryption;
 use super::feature_gate;
 use super::models::*;
 
@@ -55,14 +54,14 @@ pub async fn provision_mailbox(
         // A stored key this tenant's secret cannot open is a CONFIGURATION problem the caller can act
         // on (re-add the domain with a valid key). It used to surface as a bare 500 "Internal server
         // error", which named neither the cause nor the fix.
-        let api_key =
-            encryption::decrypt_api_key(account_id, &domain.mailgun_api_key).map_err(|_| {
-                AppError::Validation(
+        let api_key = crate::secret_box::open(account_id, &domain.mailgun_api_key);
+        if api_key.trim().is_empty() {
+            return Err(AppError::Validation(
                 "This domain's stored Mailgun API key cannot be read — re-add the domain with a \
                  valid key."
                     .into(),
-            )
-            })?;
+            ));
+        }
 
         let base_url = if domain.mailgun_region == "eu" {
             "https://api.eu.mailgun.net"

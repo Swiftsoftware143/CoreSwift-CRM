@@ -5,7 +5,6 @@ use axum::{
 use serde_json::json;
 use uuid::Uuid;
 
-use super::encryption;
 use super::feature_gate;
 use super::models::*;
 
@@ -147,8 +146,9 @@ async fn add_mailgun_domain(
         .ok_or_else(|| AppError::NotFound("Saved API key not found".into()))?;
         (row.0, Some(kid))
     } else if let Some(ref raw_key) = req.mailgun_api_key {
-        let encrypted =
-            encryption::encrypt_api_key(account_id, raw_key).map_err(AppError::Internal)?;
+        // Sealed with the app-wide envelope (`enc:v1:`), not the bare AES-GCM body this path used
+        // to write: one format for every credential column (t_45772522).
+        let encrypted = crate::secret_box::seal(account_id, raw_key)?;
         let kid = sqlx::query_as::<_, (Uuid,)>(
             r#"
             INSERT INTO private_email_api_keys (tenant_id, label, provider, api_key_encrypted)
@@ -170,8 +170,18 @@ async fn add_mailgun_domain(
         ));
     };
 
-    let raw_key =
-        encryption::decrypt_api_key(account_id, &encrypted_key).map_err(AppError::Internal)?;
+    // `secret_box::open` is the app-wide reader: it understands an `enc:v1:` row, the older
+    // prefixless ciphertext and a legacy plaintext row, and it never fails. An empty result
+    // therefore means THIS DEPLOYMENT cannot read the stored credential — a configuration problem
+    // the caller can act on, reported instead of a bare 500 (t_45772522).
+    let raw_key = crate::secret_box::open(account_id, &encrypted_key);
+    if raw_key.trim().is_empty() {
+        return Err(AppError::Validation(
+            "This domain's stored Mailgun API key cannot be read — re-add the domain with a valid \
+             key."
+                .into(),
+        ));
+    }
 
     let key_valid = validate_mailgun_domain(&raw_key, &req.domain, &req.mailgun_region).await;
     if !key_valid {
@@ -217,11 +227,12 @@ async fn add_smtp_domain(
         AppError::BadRequest("smtp_password is required for SMTP provider".into())
     })?;
 
-    let encrypted_smtp_password =
-        encryption::encrypt_api_key(account_id, smtp_password).map_err(AppError::Internal)?;
+    let encrypted_smtp_password = crate::secret_box::seal(account_id, smtp_password)?;
 
-    // Store empty mailgun_api_key for backward compat (column is NOT NULL)
-    let empty_key = encryption::encrypt_api_key(account_id, "").map_err(AppError::Internal)?;
+    // Store an EMPTY mailgun_api_key for backward compat (column is NOT NULL). This used to be
+    // `encrypt_api_key(account_id, "")`, i.e. a 28-byte ciphertext of nothing, which made "no key
+    // configured" indistinguishable from "a key is configured" for every reader (t_45772522).
+    let empty_key = String::new();
 
     let row = sqlx::query_as::<_, PrivateEmailDomain>(
         r#"

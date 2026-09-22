@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use super::encryption;
 use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
@@ -67,8 +66,11 @@ pub async fn add_api_key(
 ) -> ApiResult<Json<serde_json::Value>> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let encrypted =
-        encryption::encrypt_api_key(account_id, &req.api_key).map_err(AppError::Internal)?;
+    // One envelope for the whole app (CS-21/t_45772522): `secret_box::seal` writes the `enc:v1:`
+    // form and FAILS CLOSED when the master key is missing. This column used to be written with the
+    // bare AES-GCM body (no prefix), which no reader other than this module could recognise and
+    // which the boot audit could only judge by trying to decrypt it.
+    let encrypted = crate::secret_box::seal(account_id, &req.api_key)?;
 
     let row = sqlx::query_as::<_, ApiKeyRow>(
         r#"
