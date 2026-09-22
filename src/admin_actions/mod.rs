@@ -9,6 +9,7 @@
 //! GET  /api/admin/health — health check
 //! GET  /api/admin/portfolio-companies — list all portfolio companies (admin)
 //! GET  /api/admin/tenants — list all tenants (admin)
+//! GET  /api/admin/users — list users across all tenants (admin)
 //! POST /api/admin/portfolio-sync — cross-app sync
 
 pub mod handlers;
@@ -42,6 +43,9 @@ pub fn router(state: AppState) -> Router<AppState> {
             axum::routing::get(handlers::list_all_portfolio_companies),
         )
         .route("/tenants", axum::routing::get(handlers::list_all_tenants))
+        // People across every tenant — the counterpart of /tenants. The admin shell's Users tab
+        // called a bare /api/users that nothing registered; this is the route it now calls.
+        .route("/users", axum::routing::get(handlers::list_all_users))
         .route(
             "/portfolio-sync",
             axum::routing::post(handlers::cross_app_sync),

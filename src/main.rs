@@ -48,6 +48,7 @@ pub mod pipelines;
 pub mod plans;
 pub mod portfolio;
 pub mod private_email;
+pub mod profile;
 pub mod provider_keys;
 pub mod rate_limiter;
 pub mod round_robin;
@@ -108,6 +109,36 @@ async fn main() -> anyhow::Result<()> {
         .with_target(true)
         .with_thread_ids(true)
         .init();
+
+    // ── Host-side utility mode ────────────────────────────────────────────────────────────────
+    // The static marketing page + legal pages live on the HOST (/opt/swift/nginx/www/coreswift/)
+    // and the server runs in a container with ZERO mounts for them, so the request path never
+    // writes them (that attempt is what made PUT /api/admin/site answer 500 after its row had
+    // already committed). Running the SAME binary on the host with this argument is what
+    // materializes them; /opt/swift/bin/cs-site-apply.sh drives it from cron.
+    //
+    // Checked BEFORE the config/Redis/listener come up: it needs DATABASE_URL and nothing else, and
+    // it must never start a second API against the live port.
+    if std::env::args().nth(1).as_deref() == Some("apply-site-settings") {
+        let url = std::env::var("DATABASE_URL")
+            .map_err(|_| anyhow::anyhow!("DATABASE_URL is not set"))?;
+        let db = db::connect(&url, 1, 4).await?;
+        let settings = crate::admin_actions::site_handler::load_settings(&db).await?;
+        let (written, skipped) = crate::admin_actions::site_handler::apply_to_disk(&settings);
+        for path in &written {
+            tracing::info!(path = %path, "site artifact written");
+        }
+        for (path, reason) in &skipped {
+            tracing::info!(path = %path, reason = %reason, "site artifact skipped");
+        }
+        // Exactly one machine-readable line for the cron log.
+        println!(
+            "site artifacts: written={} skipped={}",
+            written.len(),
+            skipped.len()
+        );
+        return Ok(());
+    }
 
     // Load environment variables
     let config = config::AppConfig::from_env()?;
@@ -227,6 +258,9 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/auth", auth::router(state.clone()))
         // Protected routes
         .nest("/api/account", account::router(state.clone()))
+        // The signed-in user's OWN record — name + password. The workspace Profile tab has always
+        // called these two paths; until now neither was registered (both answered 405).
+        .nest("/api/profile", profile::router(state.clone()))
         .nest("/api/contacts", contacts::router(state.clone()))
         .nest("/api/internal/contacts", contacts_internal::router())
         // FunnelSwift tag provision webhook — auto-provision free-tier contacts

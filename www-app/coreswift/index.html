@@ -1015,8 +1015,10 @@ const TAB_RENDERERS = {
     '<div id="portfolioTable" data-ops="portfolio-companies"><div class="loading-wrap"><div class="spinner"></div> Loading portfolio companies...</div></div>';
   },
   'users': () => {
-    return pageHeader('Users', 'Manage platform users and permissions',
-      '<button class="btn btn-primary btn-sm" onclick="showAddUserModal()">+ Add User</button>') +
+    // Read-only on purpose: there is no platform route that creates a user in an arbitrary
+    // workspace, and the old "+ Add User" button faked one with a modal that toasted success and
+    // sent nothing. People join a workspace through that workspace's own invite flow.
+    return pageHeader('Users', 'Every user on the platform, with the workspace they belong to') +
     '<div id="usersTable"><div class="loading-wrap"><div class="spinner"></div> Loading users...</div></div>';
   },
   'billing': () => {
@@ -1197,6 +1199,7 @@ function renderSiteConfigForm() {
   html += input('session_timeout', 'Session Timeout (min)', 'Auto-logout after inactivity', 'number', '30');
   html += '</div></div></div>';
 
+  html += '<p style="color:var(--text-secondary);font-size:.82rem;margin-top:14px">Saving stores the settings for this account. The public marketing page and the legal pages are static files served by nginx, and they are re-rendered from these settings by the host-side applier within 5 minutes.</p>';
   html += '<br><button class="btn btn-primary" onclick="saveSiteConfig()">💾 Save Site Configuration</button> ';
   html += '<button class="btn btn-secondary" onclick="loadSiteConfig()">🔄 Reload</button>';
 
@@ -1240,7 +1243,13 @@ async function saveSiteConfig() {
 
   try {
     const res = await API.put('/admin/site', payload);
-    toast('Site configuration saved. Marketing HTML + legal pages regenerated.', 'success');
+    // The save is the DB row. The static marketing/legal pages are materialized on the HOST by
+    // /opt/swift/bin/cs-site-apply.sh (the app runs in a container with no mount for them), so the
+    // honest copy names that hop instead of claiming this request rewrote them.
+    const applied = (res && res.static_pages) || null;
+    toast(applied
+      ? 'Site configuration saved. Marketing + legal pages refresh within ' + (applied.within_minutes || 5) + ' minutes.'
+      : 'Site configuration saved.', 'success');
     SITE_CONFIG = { ...SITE_CONFIG, ...payload };
   } catch(e) {
     toast('Save failed: ' + e.message, 'error');
@@ -1330,24 +1339,29 @@ const TAB_LOADERS = {
   },
 
   'email-templates': async () => {
+    // GET /api/templates was never registered on this binary (404), so this tab could only ever
+    // render its own error text. The tenant-facing template store is /api/comms/templates
+    // (message_templates: channel email | sms | whatsapp). It belongs to the comms module, so a
+    // plan without that module answers 402 and API.call raises the upgrade banner — the same
+    // contract every other consumer of that module sees.
+    const el = document.getElementById('templatesTable');
+    if (!el) return;
     try {
-      const templates = await API.get('/templates');
-      let rows = [];
-      if (Array.isArray(templates)) {
-        rows = templates.slice(0, 50).map(t => [
-          escapeHtml(t.name || '—'),
-          escapeHtml(t.subject || '—'),
-          `<span class="badge badge-muted">${escapeHtml(t.type || 'email')}</span>`,
-          escapeHtml(t.updated_at ? new Date(t.updated_at).toLocaleDateString() : '—'),
-          `<button class="btn btn-ghost btn-xs">Edit</button>`
-        ]);
-      }
-      document.getElementById('templatesTable').innerHTML = dataTable(
-        ['Name','Subject','Type','Updated',''], rows,
+      const d = await API.get('/comms/templates?per_page=50');
+      TPL_CACHE = (d && d.templates) || [];
+      const rows = TPL_CACHE.slice(0, 50).map(t => [
+        escapeHtml(t.name || '—'),
+        escapeHtml(t.subject || '—'),
+        `<span class="badge badge-muted">${escapeHtml(t.channel || 'email')}</span>`,
+        escapeHtml(t.updated_at ? new Date(t.updated_at).toLocaleDateString() : '—'),
+        `<button class="btn btn-ghost btn-xs" onclick="editTemplate('${escapeHtml(String(t.id || ''))}')">Edit</button>`
+      ]);
+      el.innerHTML = dataTable(
+        ['Name','Subject','Channel','Updated',''], rows,
         'No templates yet. Create reusable email templates.'
       );
     } catch(e) {
-      document.getElementById('templatesTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Templates endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Templates: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
 
@@ -1418,24 +1432,26 @@ const TAB_LOADERS = {
   'affiliates': async () => { await loadAffiliates(); },
 
   'users': async () => {
+    // GET /api/users was never registered (404). People across all tenants live next to the
+    // tenant list, under the platform-admin gate: GET /api/admin/users.
+    const el = document.getElementById('usersTable');
+    if (!el) return;
     try {
-      const users = await API.get('/users');
-      let rows = [];
-      if (Array.isArray(users)) {
-        rows = users.slice(0, 50).map(u => [
-          escapeHtml(u.name || '—'),
-          escapeHtml(u.email || '—'),
-          `<span class="badge ${u.role==='agency_admin'?'badge-primary':'badge-muted'}">${escapeHtml(u.role||'user')}</span>`,
-          escapeHtml(u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'),
-          `<button class="btn btn-ghost btn-xs">Edit</button>`
-        ]);
-      }
-      document.getElementById('usersTable').innerHTML = dataTable(
-        ['Name','Email','Role','Created',''], rows,
+      const d = await API.get('/admin/users?per_page=50');
+      const users = (d && d.users) || [];
+      const rows = users.slice(0, 50).map(u => [
+        escapeHtml(u.name || '—'),
+        escapeHtml(u.email || '—'),
+        `<span class="badge ${u.is_platform_admin?'badge-primary':'badge-muted'}">${escapeHtml(u.role||'user')}${u.is_platform_admin?' · platform':''}</span>`,
+        escapeHtml(u.tenant_name || '—'),
+        escapeHtml(u.created_at ? new Date(u.created_at).toLocaleDateString() : '—')
+      ]);
+      el.innerHTML = dataTable(
+        ['Name','Email','Role','Workspace','Created'], rows,
         'No users yet.'
       );
     } catch(e) {
-      document.getElementById('usersTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Users endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Users: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
 
@@ -2389,12 +2405,65 @@ function editContact(id) { toast('Editing contact: ' + id, 'info'); }
 function showAddCompanyModal(){ showModal('Add Company', '<div class="form-group"><label>Company Name</label><input type="text"></div><div class="form-group"><label>Industry</label><input type="text"></div><div class="form-group"><label>Website</label><input type="url"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Company added&#39;,&#39;success&#39;)">Save</button>'); }
 function editCompany(id){ toast('Editing company: ' + id, 'info'); }
 function showAddRuleModal(){ showModal('New Rule', '<div class="form-group"><label>Rule Name</label><input type="text"></div><div class="form-group"><label>Trigger</label><select><option>Contact created</option><option>Deal stage changed</option><option>Form submitted</option><option>Tag added</option></select></div><div class="form-group"><label>Action</label><select><option>Send email</option><option>Add to list</option><option>Update deal</option><option>Create task</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Rule created&#39;,&#39;success&#39;)">Create Rule</button>'); }
-function showAddTemplateModal(){ showModal('New Template', '<div class="form-group"><label>Template Name</label><input type="text"></div><div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Body</label><textarea rows="6"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Template saved&#39;,&#39;success&#39;)">Save</button>'); }
+// Email Templates tab — create + edit both go to /api/comms/templates (message_templates).
+// The modal used to be a stub: it toasted "Template saved" and issued no request at all.
+let TPL_CACHE = [];
+
+function templateModal(heading, preset, save) {
+  showModal(heading,
+    '<div class="form-group"><label>Name</label><input type="text" id="tplName" value="' + escapeHtmlAttr(preset.name || '') + '"></div>' +
+    '<div class="form-group"><label>Channel</label><select id="tplChannel">' +
+      ['email','sms','whatsapp'].map(c => '<option value="' + c + '"' + ((preset.channel || 'email') === c ? ' selected' : '') + '>' + c + '</option>').join('') +
+    '</select></div>' +
+    '<div class="form-group"><label>Subject</label><input type="text" id="tplSubject" value="' + escapeHtmlAttr(preset.subject || '') + '"></div>' +
+    '<div class="form-group"><label>Body</label><textarea rows="6" id="tplBody">' + escapeHtml(preset.body || '') + '</textarea></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="tplSave">Save</button>');
+  const b = document.getElementById('tplSave');
+  if (b) b.addEventListener('click', async () => {
+    b.disabled = true;
+    try { await save(b); }
+    catch (e) { toast('Could not save: ' + e.message, 'error'); b.disabled = false; }
+  });
+}
+
+function showAddTemplateModal() {
+  templateModal('New Template', {}, async (b) => {
+    const name = document.getElementById('tplName').value.trim();
+    const body = document.getElementById('tplBody').value.trim();
+    if (!name || !body) { toast('Name and body are required', 'error'); b.disabled = false; return; }
+    await API.post('/comms/templates', {
+      name: name,
+      channel: document.getElementById('tplChannel').value,
+      subject: document.getElementById('tplSubject').value.trim() || null,
+      body: body
+    });
+    closeModal(); toast('Template created', 'success');
+    const el = document.getElementById('templatesTable'); if (el) await TAB_LOADERS['email-templates']();
+  });
+}
+
+function editTemplate(id) {
+  const t = (TPL_CACHE || []).find(x => String(x.id) === String(id));
+  if (!t) { toast('Template not found — reloading', 'error'); return; }
+  templateModal('Edit Template', t, async (b) => {
+    const body = document.getElementById('tplBody').value.trim();
+    if (!body) { toast('Body is required', 'error'); b.disabled = false; return; }
+    // PATCH takes subject/body/variables only — name and channel are fixed at creation.
+    await API.patch('/comms/templates/' + encodeURIComponent(t.id), {
+      subject: document.getElementById('tplSubject').value.trim() || null,
+      body: body
+    });
+    closeModal(); toast('Template updated', 'success');
+    await TAB_LOADERS['email-templates']();
+  });
+}
 function showComposeModal(){ showModal('Compose Message', '<div class="form-group"><label>To</label><input type="text"></div><div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Message</label><textarea rows="5"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Message sent&#39;,&#39;success&#39;)">Send</button>'); }
 function showAddTicketModal(){ showModal('New Ticket', '<div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Description</label><textarea rows="4"></textarea></div><div class="form-group"><label>Priority</label><select><option>Normal</option><option>High</option><option>Urgent</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Ticket created&#39;,&#39;success&#39;)">Create</button>'); }
 function showAddEventModal(){ showModal('New Event', '<div class="form-group"><label>Title</label><input type="text"></div><div class="form-group"><label>Date</label><input type="date"></div><div class="form-group"><label>Time</label><input type="time"></div><div class="form-group"><label>Location</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Event created&#39;,&#39;success&#39;)">Save</button>'); }
 function showAddLinkModal(){ showModal('Generate Tracked Link', '<div class="form-group"><label>Destination URL</label><input type="url"></div><div class="form-group"><label>Campaign</label><select><option>None</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Link generated&#39;,&#39;success&#39;)">Generate</button>'); }
-function showAddUserModal(){ showModal('Add User', '<div class="form-group"><label>Name</label><input type="text"></div><div class="form-group"><label>Email</label><input type="email"></div><div class="form-group"><label>Role</label><select><option>user</option><option>agency_admin</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;User added&#39;,&#39;success&#39;)">Create</button>'); }
+// NOTE: showAddUserModal() was removed here — the Users tab is read-only because no platform
+// route creates a user inside an arbitrary workspace, and the modal only faked one.
 
 // Chat
 function sendChat() {

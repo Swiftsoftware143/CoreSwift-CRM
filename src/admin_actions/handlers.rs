@@ -1,17 +1,17 @@
 //! Chat action handlers — single endpoint to orchestrate multi-app flows
 
 use axum::{
-    extract::{Extension, Json, State},
+    extract::{Extension, Json, Query, State},
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::affiliates::models::*;
 use crate::auth::models::TeamMember;
 use crate::auth::Claims;
-use crate::errors::{ApiResult, AppError};
+use crate::errors::{validate_pagination, ApiResult, AppError};
 use crate::sql_json::{row_json, row_json_dml};
 use crate::AppState;
 use rust_decimal::Decimal;
@@ -1167,6 +1167,67 @@ pub async fn list_all_tenants(
         .collect();
 
     Ok(Json(json!({ "tenants": tenants })))
+}
+
+/// GET /api/admin/users — list users across every tenant (platform admin only).
+///
+/// The admin shell's "Users" tab has always called `GET /api/users`, which no router ever
+/// registered (404) — so the tab could only ever render its own error text. Platform staff list
+/// tenants here already, so the honest home for the same view of people is under /api/admin,
+/// behind the platform-admin gate that router applies to every route it owns.
+///
+/// `role` and the two uuid/timestamp columns are cast to ::text so sqlx receives TEXT and the
+/// enum/timestamp decoders never enter the picture (the same reasoning as list_all_tenants).
+pub async fn list_all_users(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Query(p): Query<Value>,
+) -> ApiResult<impl IntoResponse> {
+    crate::auth::platform_admin::require_platform_admin(&s.db, &c.sub).await?;
+
+    let (page, per_page) = validate_pagination(
+        p.get("page").and_then(|v| v.as_i64()),
+        p.get("per_page").and_then(|v| v.as_i64()),
+    );
+    let offset = (page - 1) * per_page;
+
+    #[derive(sqlx::FromRow, serde::Serialize)]
+    struct AdminUserRow {
+        id: String,
+        tenant_id: String,
+        tenant_name: Option<String>,
+        name: String,
+        email: String,
+        role: String,
+        is_active: bool,
+        is_platform_admin: bool,
+        created_at: String,
+    }
+
+    let users = sqlx::query_as::<_, AdminUserRow>(
+        r#"SELECT u.id::text AS id, u.tenant_id::text AS tenant_id, t.name AS tenant_name,
+                  u.name, u.email, u.role::text AS role, u.is_active, u.is_platform_admin,
+                  u.created_at::text AS created_at
+           FROM users u
+           LEFT JOIN tenants t ON t.id = u.tenant_id
+           ORDER BY u.created_at DESC
+           LIMIT $1 OFFSET $2"#,
+    )
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&s.db)
+    .await?;
+
+    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&s.db)
+        .await?;
+
+    Ok(Json(json!({
+        "users": users,
+        "count": total,
+        "page": page,
+        "per_page": per_page,
+    })))
 }
 
 /// POST /api/admin/portfolio-sync — cross-app sync: create tenant + user + portfolio entry

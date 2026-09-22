@@ -468,7 +468,10 @@ fn extract_claims(request: &Request, state: &AppState) -> Result<Claims, AppErro
 }
 
 /// Hash a password using argon2.
-fn hash_password(password: &str) -> Result<String, AppError> {
+///
+/// `pub(crate)` so `profile::handlers::change_password` hashes with the SAME parameters as
+/// `register`/`login` — a second copy of this is how a hash scheme drifts and users get locked out.
+pub(crate) fn hash_password(password: &str) -> Result<String, AppError> {
     use argon2::{
         password_hash::{PasswordHasher, SaltString},
         Argon2,
@@ -484,7 +487,7 @@ fn hash_password(password: &str) -> Result<String, AppError> {
 }
 
 /// Verify a password against the stored argon2 hash.
-fn verify_password(password: &str, hash: &str) -> Result<bool, AppError> {
+pub(crate) fn verify_password(password: &str, hash: &str) -> Result<bool, AppError> {
     use argon2::{
         password_hash::{PasswordHash, PasswordVerifier},
         Argon2,
