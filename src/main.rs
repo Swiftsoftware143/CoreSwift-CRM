@@ -441,6 +441,33 @@ async fn main() -> anyhow::Result<()> {
             "/s/:tenant_id/widget.js",
             axum::routing::get(tickets::handlers::support_embed_script),
         )
+        // CS-22 — the customer-facing "💬 My Support" portal (public, capability-scoped: the grant
+        // travels in the X-Support-Token header, never in the URL). Reached through nginx's
+        // existing `location /s/` proxy on app.coreswiftcrm.com.
+        .route(
+            "/s/:tenant_id/support",
+            axum::routing::get(tickets::portal::page),
+        )
+        .route(
+            "/s/:tenant_id/support/",
+            axum::routing::get(tickets::portal::page),
+        )
+        .route(
+            "/s/:tenant_id/support/login",
+            axum::routing::post(tickets::portal::login),
+        )
+        .route(
+            "/s/:tenant_id/support/tickets",
+            axum::routing::get(tickets::portal::list).post(tickets::portal::create_ticket),
+        )
+        .route(
+            "/s/:tenant_id/support/tickets/:id",
+            axum::routing::get(tickets::portal::detail),
+        )
+        .route(
+            "/s/:tenant_id/support/tickets/:id/messages",
+            axum::routing::post(tickets::portal::reply),
+        )
         .route(
             "/api/public/contact",
             axum::routing::post(tickets::handlers::public_contact_form),

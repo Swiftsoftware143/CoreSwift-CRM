@@ -11,6 +11,7 @@
 
 pub mod handlers;
 pub mod models;
+pub mod portal;
 
 use crate::AppState;
 use axum::{middleware, Router};

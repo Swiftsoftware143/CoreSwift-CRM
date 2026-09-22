@@ -348,6 +348,7 @@ const STATE = {
   token: null,
   user: null,
   activeTab: 'dashboard',
+  portalUrl: '',   // CS-22: the customer "My Support" URL, filled from GET /api/tickets
   sidebarCollapsed: false,
   planName: 'Free',
   providers: {},
@@ -942,6 +943,9 @@ const TAB_RENDERERS = {
 
   'tickets': () => {
     return pageHeader('Support Tickets', 'Manage customer support tickets',
+      // CS-22: the customer-facing portal. The URL comes from the API (GET /api/tickets ->
+      // portal_url), which builds it from the tenant on the token — nothing hardcoded here.
+      '<button class="btn btn-secondary btn-sm" onclick="openMySupportPortal()">💬 My Support</button>' +
       '<button class="btn btn-primary btn-sm" onclick="showAddTicketModal()">+ New Ticket</button>') +
     '<div id="ticketsTable"><div class="loading-wrap"><div class="spinner"></div> Loading tickets...</div></div>';
   },
@@ -1548,6 +1552,7 @@ const TAB_LOADERS = {
       // CS-22: the API answers {tickets, count} — `Array.isArray` on that is false, which is why
       // this tab always said "No support tickets" no matter what the customer had raised.
       const resp = await API.get('/tickets');
+      if (resp && resp.portal_url) STATE.portalUrl = resp.portal_url;   // CS-22
       const tickets = Array.isArray(resp) ? resp : ((resp && resp.tickets) || []);
       let rows = [];
       if (Array.isArray(tickets)) {
@@ -2671,6 +2676,10 @@ async function openTicket(id) {
       '<p style="color:var(--text-secondary);white-space:pre-wrap">' + escapeHtml(t.description || '') + '</p>' +
       '<p style="color:var(--text-muted);font-size:12px">Status: ' + escapeHtml(t.status || 'open') +
       ' · Priority: ' + escapeHtml(t.priority || 'medium') + ' · Source: ' + escapeHtml(t.source || 'form') + '</p>' +
+      // CS-22: what the customer needs in order to see this request in the 💬 My Support portal —
+      // their address plus a reference. The ticket id is already on screen; nothing is hardcoded.
+      '<p style="color:var(--text-muted);font-size:12px">Customer portal reference: <code>' +
+        escapeHtml(String(t.id || id).slice(0, 8)) + '</code> — the customer opens My Support and signs in with their email address and this reference.</p>' +
       '</div></div>';
     html += '<div class="card" style="margin-top:12px"><div class="card-header">Thread</div><div class="card-body">';
     if (!msgs.length) {
@@ -2697,10 +2706,25 @@ async function replyTicket(id) {
   const message = el ? el.value.trim() : '';
   if (!message) { toast('Write a reply first', 'error'); return; }
   try {
-    await API.post('/tickets/' + id + '/messages', { message: message, sender_type: 'contact' });
+    // CS-22: a reply written in the tenant console is the STAFF side of the thread. It used to be
+    // stored as sender_type 'contact', which made the agent's own answer read as the customer's —
+    // wrong in this console and wrong in the customer portal, where 'contact' renders as "you".
+    await API.post('/tickets/' + id + '/messages', { message: message, sender_type: 'agent' });
     toast('Reply sent', 'success');
     openTicket(id);
   } catch (e) { toast('Reply failed: ' + e.message, 'error'); }
+}
+// CS-22: the customer-facing 💬 My Support portal. The URL is built by the API from the tenant on
+// the token (GET /api/tickets -> portal_url) and cached by the tickets tab loader, so no account
+// id is ever hardcoded in this page.
+function openMySupportPortal() {
+  const open = url => window.open(url, '_blank', 'noopener');
+  if (STATE.portalUrl) { open(STATE.portalUrl); return; }
+  API.get('/tickets').then(d => {
+    STATE.portalUrl = (d && d.portal_url) || '';
+    if (!STATE.portalUrl) { toast('The portal link is unavailable right now', 'error'); return; }
+    open(STATE.portalUrl);
+  }).catch(e => toast('Could not open the customer portal: ' + e.message, 'error'));
 }
 function showAddEventModal(){ showModal('New Event', '<div class="form-group"><label>Title</label><input type="text"></div><div class="form-group"><label>Date</label><input type="date"></div><div class="form-group"><label>Time</label><input type="time"></div><div class="form-group"><label>Location</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Event created&#39;,&#39;success&#39;)">Save</button>'); }
 function showAddLinkModal(){ showModal('Generate Tracked Link', '<div class="form-group"><label>Destination URL</label><input type="url"></div><div class="form-group"><label>Campaign</label><select><option>None</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Link generated&#39;,&#39;success&#39;)">Generate</button>'); }

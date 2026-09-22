@@ -54,7 +54,15 @@ pub async fn list_tickets(
     .fetch_all(&s.db)
     .await?;
 
-    Ok(Json(json!({ "tickets": tickets, "count": tickets.len() })))
+    Ok(Json(json!({
+        "tickets": tickets,
+        "count": tickets.len(),
+        // CS-22 — the customer-facing portal URL, derived on the server from the tenant on the
+        // token so no front end has to hardcode an account id. The customer signs in there with
+        // their address plus this ticket's reference (the first 8 characters of its id).
+        "portal_url": format!("/s/{tid}/support"),
+        "portal_reference_hint": "the first 8 characters of a ticket id"
+    })))
 }
 
 /// GET /api/tickets/:id

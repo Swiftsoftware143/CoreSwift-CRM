@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>💬 My Support</title>
+<style>
+  :root{--bg:#f1f5f9;--card:#fff;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--brand:#0ea5e9;
+        --brand-dark:#0284c7;--ok:#16a34a;--warn:#d97706;--err:#dc2626}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+  header{background:var(--brand);color:#fff;padding:18px 20px}
+  header h1{margin:0;font-size:19px;font-weight:600}
+  header p{margin:4px 0 0;opacity:.9;font-size:13px}
+  main{max-width:760px;margin:0 auto;padding:20px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;
+        margin-bottom:16px;box-shadow:0 1px 3px rgba(15,23,42,.06)}
+  .card h2{margin:0 0 4px;font-size:16px}
+  .card p.hint{margin:0 0 14px;color:var(--muted);font-size:13px}
+  label{display:block;font-size:13px;font-weight:600;margin-bottom:5px}
+  input,textarea,select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;
+        font:inherit;background:#fff;color:inherit}
+  input:focus,textarea:focus,select:focus{outline:none;border-color:var(--brand);
+        box-shadow:0 0 0 3px rgba(14,165,233,.15)}
+  textarea{min-height:90px;resize:vertical}
+  .field{margin-bottom:14px}
+  button{font:inherit;border:none;border-radius:8px;padding:10px 16px;cursor:pointer;
+         background:var(--brand);color:#fff;font-weight:600}
+  button:hover{background:var(--brand-dark)}
+  button.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
+  button.ghost:hover{background:var(--bg);color:var(--ink)}
+  button:disabled{opacity:.6;cursor:default}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .spread{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+  .ticket{border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px;
+          cursor:pointer;background:#fff}
+  .ticket:hover{border-color:var(--brand)}
+  .ticket .sub{font-weight:600;margin-bottom:4px}
+  .meta{color:var(--muted);font-size:12px;display:flex;gap:10px;flex-wrap:wrap}
+  .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;
+         text-transform:uppercase;letter-spacing:.03em}
+  .b-open{background:#dbeafe;color:#1d4ed8}
+  .b-in_progress{background:#fef3c7;color:#b45309}
+  .b-resolved{background:#dcfce7;color:#15803d}
+  .b-closed{background:#e2e8f0;color:#475569}
+  .msg{border-left:3px solid var(--line);padding:6px 10px;margin-bottom:10px}
+  .msg.contact{border-left-color:var(--brand)}
+  .msg .who{font-size:12px;color:var(--muted);margin-bottom:2px}
+  .msg .body{white-space:pre-wrap}
+  .err{background:#fef2f2;color:var(--err);border:1px solid #fecaca;border-radius:8px;
+       padding:10px 12px;font-size:13px;margin-bottom:12px}
+  .ok{background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0;border-radius:8px;
+      padding:10px 12px;font-size:13px;margin-bottom:12px}
+  .empty{color:var(--muted);font-size:14px;text-align:center;padding:22px 10px}
+  .foot{color:var(--muted);font-size:12px;text-align:center;padding:8px 0 30px}
+  .hide{display:none!important}
+</style>
+</head>
+<body>
+<header>
+  <h1>💬 My Support</h1>
+  <p id="brandLine">Your requests, and only yours.</p>
+</header>
+<main>
+  <div id="error" class="err hide"></div>
+  <div id="notice" class="ok hide"></div>
+
+  <!-- 1. Sign in with an address + a reference you already have -->
+  <section id="loginView" class="card">
+    <h2>View your requests</h2>
+    <p class="hint">Use the email address you contacted us with, and the reference from any
+      request of yours.</p>
+    <div class="field">
+      <label for="email">Your email</label>
+      <input id="email" type="email" autocomplete="email" placeholder="you@example.com">
+    </div>
+    <div class="field">
+      <label for="reference">Request reference</label>
+      <input id="reference" type="text" autocomplete="off" placeholder="e.g. 1a2b3c4d">
+    </div>
+    <div class="row">
+      <button id="signInBtn" type="button">View my requests</button>
+    </div>
+  </section>
+
+  <!-- 2. The customer's own request list -->
+  <section id="listView" class="hide">
+    <div class="card">
+      <div class="spread">
+        <div>
+          <h2>Your requests</h2>
+          <p class="hint" id="whoLine" style="margin-bottom:0"></p>
+        </div>
+        <div class="row">
+          <button id="newBtn" type="button">+ New request</button>
+          <button id="outBtn" class="ghost" type="button">Sign out</button>
+        </div>
+      </div>
+    </div>
+    <div id="tickets"></div>
+  </section>
+
+  <!-- 3. One request, with its thread -->
+  <section id="detailView" class="hide">
+    <div class="card">
+      <div class="spread">
+        <div>
+          <h2 id="dSubject">Request</h2>
+          <div class="meta" id="dMeta"></div>
+        </div>
+        <button id="backBtn" class="ghost" type="button">← Back</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Conversation</h2>
+      <div id="dThread"></div>
+      <div class="field" style="margin-top:14px">
+        <label for="replyBox">Reply</label>
+        <textarea id="replyBox" placeholder="Add to this request…"></textarea>
+      </div>
+      <button id="replyBtn" type="button">Send reply</button>
+    </div>
+  </section>
+
+  <!-- 4. A new request -->
+  <section id="newView" class="hide">
+    <div class="card">
+      <div class="spread">
+        <h2>New request</h2>
+        <button id="cancelNewBtn" class="ghost" type="button">← Back</button>
+      </div>
+      <div class="field">
+        <label for="nSubject">Subject</label>
+        <input id="nSubject" type="text" placeholder="Brief summary">
+      </div>
+      <div class="field">
+        <label for="nBody">Details</label>
+        <textarea id="nBody" placeholder="Describe what you need…"></textarea>
+      </div>
+      <div class="field">
+        <label for="nPriority">Priority</label>
+        <select id="nPriority">
+          <option value="low">Low — not urgent</option>
+          <option value="medium" selected>Medium — normal</option>
+          <option value="high">High — need help soon</option>
+          <option value="urgent">Urgent — critical</option>
+        </select>
+      </div>
+      <button id="createBtn" type="button">Submit request</button>
+    </div>
+  </section>
+
+  <div class="foot">Powered by CoreSwift CRM · this page shows only your own requests</div>
+</main>
+
+<script>
+(function () {
+  var TENANT = '__TENANT_ID__';
+  var BASE = '/s/' + TENANT + '/support';
+  var STORE = 'cs_portal_' + TENANT;
+
+  // A credential must never sit in the address bar (it would land in the access log). If a link
+  // carries one anyway, drop it before anything else runs. The grant lives in sessionStorage and
+  // travels in the X-Support-Token header only.
+  try {
+    var q = new URLSearchParams(window.location.search);
+    if (q.has('token') || q.has('access_token') || q.has('t')) {
+      q.delete('token'); q.delete('access_token'); q.delete('t');
+      var qs = q.toString();
+      window.history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : ''));
+    }
+  } catch (e) { /* older browser: nothing to strip */ }
+
+  var $ = function (id) { return document.getElementById(id); };
+  var token = sessionStorage.getItem(STORE) || '';
+
+  function show(id) {
+    ['loginView', 'listView', 'detailView', 'newView'].forEach(function (v) {
+      $(v).classList.toggle('hide', v !== id);
+    });
+  }
+  function clearMsg() { $('error').classList.add('hide'); $('notice').classList.add('hide'); }
+  function fail(msg) { clearMsg(); $('error').textContent = msg; $('error').classList.remove('hide'); }
+  function note(msg) { clearMsg(); $('notice').textContent = msg; $('notice').classList.remove('hide'); }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function when(v) { try { return new Date(v).toLocaleString(); } catch (e) { return ''; } }
+
+  function call(path, opts) {
+    opts = opts || {};
+    var headers = { 'Content-Type': 'application/json' };
+    if (token) headers['X-Support-Token'] = token;
+    return fetch(BASE + path, {
+      method: opts.method || 'GET',
+      headers: headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    }).then(function (r) {
+      return r.text().then(function (t) {
+        var data = {};
+        try { data = t ? JSON.parse(t) : {}; } catch (e) { data = { message: t }; }
+        if (!r.ok) {
+          var err = new Error(data.message || data.error || ('HTTP ' + r.status));
+          err.status = r.status;
+          throw err;
+        }
+        return data;
+      });
+    });
+  }
+
+  function signOut(msg) {
+    token = '';
+    sessionStorage.removeItem(STORE);
+    if (msg) fail(msg);
+    show('loginView');
+  }
+
+  // ── sign in ────────────────────────────────────────────────────────────
+  $('signInBtn').addEventListener('click', function () {
+    var email = $('email').value.trim(), ref = $('reference').value.trim();
+    if (!email) { fail('Enter the email address you used.'); return; }
+    if (ref.length < 8) { fail('Enter the reference from one of your requests (8+ characters).'); return; }
+    var btn = $('signInBtn'); btn.disabled = true; btn.textContent = 'Checking…';
+    clearMsg();
+    fetch(BASE + '/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email, reference: ref })
+    }).then(function (r) {
+      return r.text().then(function (t) {
+        var d = {}; try { d = t ? JSON.parse(t) : {}; } catch (e) {}
+        if (!r.ok) {
+          throw new Error(r.status === 401
+            ? 'We could not match that email and reference. Check both and try again.'
+            : (d.message || 'Could not sign in (HTTP ' + r.status + ')'));
+        }
+        return d;
+      });
+    }).then(function (d) {
+      token = d.token || '';
+      if (!token) { throw new Error('The server did not return an access grant.'); }
+      sessionStorage.setItem(STORE, token);
+      $('whoLine').textContent = (d.tenant_name ? d.tenant_name + ' · ' : '') + (d.email || email);
+      loadList();
+    }).catch(function (e) { fail(e.message); })
+      .then(function () { btn.disabled = false; btn.textContent = 'View my requests'; });
+  });
+
+  // ── the list ───────────────────────────────────────────────────────────
+  function loadList() {
+    clearMsg();
+    call('/tickets').then(function (d) {
+      var list = d.tickets || [];
+      if (!list.length) {
+        $('tickets').innerHTML = '<div class="card"><div class="empty">' +
+          'No requests yet. Use “+ New request” to send us one.</div></div>';
+      } else {
+        $('tickets').innerHTML = '<div class="card">' + list.map(function (t) {
+          return '<div class="ticket" data-id="' + esc(t.id) + '">' +
+            '<div class="sub">' + esc(t.subject) + '</div>' +
+            '<div class="meta"><span class="badge b-' + esc(t.status) + '">' + esc(t.status) + '</span>' +
+            '<span>' + esc(t.priority) + ' priority</span>' +
+            '<span>' + esc(t.source) + '</span>' +
+            '<span>' + when(t.created_at) + '</span>' +
+            '<span>' + (t.message_count || 0) + ' repl' + ((t.message_count === 1) ? 'y' : 'ies') + '</span>' +
+            '</div></div>';
+        }).join('') + '</div>';
+        Array.prototype.forEach.call($('tickets').querySelectorAll('.ticket'), function (el) {
+          el.addEventListener('click', function () { openTicket(el.getAttribute('data-id')); });
+        });
+      }
+      show('listView');
+    }).catch(function (e) {
+      if (e.status === 401) { signOut('Your access link expired. Sign in again with your reference.'); return; }
+      fail(e.message);
+    });
+  }
+
+  // ── one request ────────────────────────────────────────────────────────
+  function openTicket(id) {
+    clearMsg();
+    call('/tickets/' + encodeURIComponent(id)).then(function (d) {
+      var t = d.ticket || {}, msgs = d.messages || [];
+      $('dSubject').textContent = t.subject || 'Request';
+      $('dMeta').innerHTML = '<span class="badge b-' + esc(t.status) + '">' + esc(t.status) + '</span>' +
+        '<span>' + esc(t.priority) + ' priority</span>' +
+        '<span>' + esc(t.source) + '</span>' +
+        '<span>opened ' + when(t.created_at) + '</span>';
+      var html = '';
+      if (t.description) {
+        html += '<div class="msg"><div class="who">you · ' + when(t.created_at) + '</div>' +
+          '<div class="body">' + esc(t.description) + '</div></div>';
+      }
+      msgs.forEach(function (m) {
+        var who = m.sender_type === 'contact' ? 'you' : 'support team';
+        html += '<div class="msg ' + esc(m.sender_type) + '"><div class="who">' + esc(who) + ' · ' +
+          when(m.created_at) + '</div><div class="body">' + esc(m.message) + '</div></div>';
+      });
+      if (!html) { html = '<div class="empty">No messages on this request yet.</div>'; }
+      $('dThread').innerHTML = html;
+      $('dThread').setAttribute('data-ticket', id);
+      $('replyBox').value = '';
+      show('detailView');
+    }).catch(function (e) {
+      if (e.status === 401) { signOut('Your access link expired. Sign in again with your reference.'); return; }
+      fail(e.message);
+    });
+  }
+
+  $('replyBtn').addEventListener('click', function () {
+    var id = $('dThread').getAttribute('data-ticket');
+    var body = $('replyBox').value.trim();
+    if (!body) { fail('Write a message first.'); return; }
+    var btn = $('replyBtn'); btn.disabled = true;
+    call('/tickets/' + encodeURIComponent(id) + '/messages', { method: 'POST', body: { message: body } })
+      .then(function () { note('Reply sent — we will get back to you.'); openTicket(id); })
+      .catch(function (e) { fail(e.message); })
+      .then(function () { btn.disabled = false; });
+  });
+
+  // ── a new request ──────────────────────────────────────────────────────
+  $('newBtn').addEventListener('click', function () {
+    clearMsg(); $('nSubject').value = ''; $('nBody').value = ''; show('newView');
+  });
+  $('cancelNewBtn').addEventListener('click', function () { clearMsg(); loadList(); });
+  $('createBtn').addEventListener('click', function () {
+    var subject = $('nSubject').value.trim();
+    if (!subject) { fail('A subject is required.'); return; }
+    var btn = $('createBtn'); btn.disabled = true;
+    call('/tickets', {
+      method: 'POST',
+      body: { subject: subject, message: $('nBody').value, priority: $('nPriority').value }
+    }).then(function () { note('Request received.'); loadList(); })
+      .catch(function (e) { fail(e.message); })
+      .then(function () { btn.disabled = false; });
+  });
+
+  $('outBtn').addEventListener('click', function () { signOut(''); });
+
+  // A stored grant is reused; a stale one is rejected on the first call and signs the customer out.
+  if (token) {
+    $('whoLine').textContent = '';
+    loadList();
+  } else {
+    show('loginView');
+  }
+})();
+</script>
+</body>
+</html>
