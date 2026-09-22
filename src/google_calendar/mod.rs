@@ -84,31 +84,51 @@ async fn google_oauth_config(s: &AppState, tid: Uuid) -> (String, String, Option
     )
 }
 
-/// The redirect URI Google is told to send the user back to.
+/// `(scheme, host)` for a URL that must be reachable from the public internet.
 ///
-/// Derived from the request that starts the flow (`X-Forwarded-Proto` + `Host`, which nginx sets
-/// for the public vhost) so it matches the deployment with no configuration. A tenant pin or the
-/// `GOOGLE_REDIRECT_URI` env var wins, because that tenant's Google project has that exact URI
-/// registered.
-fn resolve_redirect_uri(explicit: Option<String>, headers: &HeaderMap) -> String {
-    if let Some(v) = explicit.filter(|v| !v.trim().is_empty()) {
-        return v;
-    }
+/// The host is the `Host` header nginx sets for the public vhost, so it matches the deployment with
+/// no configuration; `X-Forwarded-Proto` is NOT trusted for the scheme. A LOCAL host is the one
+/// case that may legitimately be http (and the only one Google accepts http for). Anywhere else the
+/// URL must be https: Google refuses `http://` on a public host, and Cloudflare terminates TLS and
+/// reaches nginx over plain HTTP, so trusting `X-Forwarded-Proto` advertised
+/// `http://app.coreswiftcrm.com/...` (proven live 2026-09-22), a value no tenant could register.
+fn public_scheme_host(headers: &HeaderMap) -> (String, String) {
     let host = headers
         .get("host")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost");
+        .unwrap_or("localhost")
+        .to_string();
     let is_local = host.starts_with("localhost")
         || host.starts_with("127.0.0.1")
         || host.starts_with("0.0.0.0")
         || host.starts_with("[::1]");
-    // A LOCAL host is the one case that may legitimately be http (and the only one Google accepts
-    // http for). Anywhere else the URI must be https: Google refuses `http://` on a public host, so
-    // trusting the origin's `X-Forwarded-Proto` was wrong here — Cloudflare terminates TLS and
-    // reaches nginx over plain HTTP, so this deployment advertised
-    // `http://app.coreswiftcrm.com/...` (proven live 2026-09-22), a value no tenant could register.
     let scheme = if is_local { "http" } else { "https" };
+    (scheme.to_string(), host)
+}
+
+/// The redirect URI Google is told to send the user back to.
+///
+/// A tenant pin or the `GOOGLE_REDIRECT_URI` env var wins, because that tenant's Google project has
+/// that exact URI registered; otherwise the request that started the flow decides.
+fn resolve_redirect_uri(explicit: Option<String>, headers: &HeaderMap) -> String {
+    if let Some(v) = explicit.filter(|v| !v.trim().is_empty()) {
+        return v;
+    }
+    let (scheme, host) = public_scheme_host(headers);
     format!("{}://{}/api/google-calendar/oauth-callback", scheme, host)
+}
+
+/// The public HTTPS URL Google must POST push notifications to.
+///
+/// Same derivation as `resolve_redirect_uri` (one implementation, two callers). `GOOGLE_PUSH_WEBHOOK_URL`
+/// / a tenant pin wins for a deployment whose push endpoint is not the vhost that ran the sync —
+/// e.g. a tenant on a custom domain, whose `Host` is not a URL Google will deliver to.
+fn resolve_webhook_url(explicit: Option<String>, headers: &HeaderMap) -> String {
+    if let Some(v) = explicit.filter(|v| !v.trim().is_empty()) {
+        return v;
+    }
+    let (scheme, host) = public_scheme_host(headers);
+    format!("{}://{}/api/google-calendar/webhook", scheme, host)
 }
 
 // ── OAuth `state`: signed, single-purpose, never a bearer token ──────────────────
@@ -536,6 +556,7 @@ pub async fn sync_calendar(
     Extension(c): Extension<Claims>,
     Path(calendar_id): Path<Uuid>,
     Query(q): Query<SyncQuery>,
+    headers: HeaderMap,
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
@@ -714,6 +735,30 @@ pub async fn sync_calendar(
         }
     }
 
+    // ── Push subscription: Google notifies this deployment when the calendar changes ──
+    // Best-effort by design — the sync above is the shipped feature and must not fail because a
+    // tenant's Google project refuses a watch, so the outcome is reported rather than propagated.
+    let push_channel = match ensure_push_channel(
+        &s,
+        tid,
+        calendar_id,
+        &google_cal_id,
+        &access_token,
+        &headers,
+    )
+    .await
+    {
+        Ok(expires_at) => json!({"registered": true, "expires_at": expires_at.to_rfc3339()}),
+        Err(e) => {
+            tracing::warn!(
+                tenant = %tid,
+                error = %e,
+                "Google Calendar push channel not registered"
+            );
+            json!({"registered": false, "error": e.to_string()})
+        }
+    };
+
     Ok(Json(json!({
         "message": "Sync completed",
         "calendar_id": calendar_id.to_string(),
@@ -722,23 +767,265 @@ pub async fn sync_calendar(
         "events_pulled": pulled.len(),
         "pushed_events": pushed,
         "pulled_events": pulled,
+        "push_channel": push_channel,
     })))
 }
 
+// ── Push notification channels (`POST /calendars/{id}/events/watch`) ─────
+//
+// A push notification is a POST from Google with NO Authorization header, so the only thing that can
+// authenticate it is the channel we registered ourselves. Every notification carries:
+//   X-Goog-Channel-ID      the `id` WE chose at registration
+//   X-Goog-Resource-ID     the `resourceId` Google returned at registration
+//   X-Goog-Resource-State  sync | exists | not_exists
+//   X-Goog-Channel-Token   the `token` WE chose at registration, echoed back verbatim
+// and `google_calendar_push_channels` is what turns "anyone in the world can POST here" into "only
+// Google can". NOTHING is trusted from the request except those lookup keys: the tenant is read from
+// the row the channel resolves to.
+
+/// Google's maximum TTL for a calendar push channel: 7 days.
+const PUSH_CHANNEL_TTL_SECS: i64 = 604_800;
+/// Re-register when less than this much of the current channel is left.
+const PUSH_RENEW_WITHIN_SECS: i64 = 3_600;
+
+/// sha256 hex. The channel token is machine-generated and high-entropy, so a plain digest is the
+/// right store (`personal_api_keys` convention) — there is no guessable password here to brute-force.
+fn channel_token_hash(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(token.as_bytes());
+    hex::encode(h.finalize())
+}
+
+fn new_channel_token() -> String {
+    use base64::Engine;
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// Constant-time compare, so a wrong token cannot be told apart from a nearly-right one by timing.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WatchResponse {
+    resource_id: Option<String>,
+    expiration: Option<String>,
+}
+
+/// Register a push channel for one connected calendar, storing the credentials Google must echo back.
+async fn register_push_channel(
+    s: &AppState,
+    tid: Uuid,
+    booking_calendar_id: Uuid,
+    google_cal_id: &str,
+    access_token: &str,
+    webhook_url: &str,
+) -> Result<chrono::DateTime<chrono::Utc>, AppError> {
+    let channel_id = format!("crm-{}", Uuid::new_v4());
+    let token = new_channel_token();
+
+    let resp = reqwest::Client::new()
+        .post(format!(
+            "{}/calendars/{}/events/watch",
+            GOOGLE_CALENDAR_API, google_cal_id
+        ))
+        .bearer_auth(access_token)
+        .json(&json!({
+            "id": channel_id,
+            "type": "web_hook",
+            "address": webhook_url,
+            "token": token,
+            "params": { "ttl": PUSH_CHANNEL_TTL_SECS.to_string() },
+        }))
+        .send()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("Push channel registration failed: {}", e)))?;
+
+    let status = resp.status();
+    let body: Value = resp.json().await.unwrap_or_else(|_| json!({}));
+    // Google's own sentence is the useful half (invalid_client / insufficient permission / ...)
+    let google_msg = body
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+        .map(|m| m.to_string());
+    if !status.is_success() {
+        return Err(AppError::BadRequest(format!(
+            "Push channel refused by Google ({}): {}",
+            status.as_u16(),
+            google_msg.unwrap_or_else(|| body.to_string())
+        )));
+    }
+
+    let watch: WatchResponse = serde_json::from_value(body)
+        .map_err(|e| AppError::BadRequest(format!("Unreadable watch response: {}", e)))?;
+    let resource_id = watch
+        .resource_id
+        .ok_or_else(|| AppError::BadRequest("Watch response had no resourceId".to_string()))?;
+    let expires_at = watch
+        .expiration
+        .and_then(|e| e.parse::<i64>().ok())
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::seconds(PUSH_CHANNEL_TTL_SECS));
+
+    sqlx::query(
+        "INSERT INTO google_calendar_push_channels \
+         (tenant_id, booking_calendar_id, channel_id, resource_id, token_hash, expires_at) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(tid)
+    .bind(booking_calendar_id)
+    .bind(&channel_id)
+    .bind(&resource_id)
+    .bind(channel_token_hash(&token))
+    .bind(expires_at)
+    .execute(&s.db)
+    .await?;
+
+    tracing::info!(
+        tenant = %tid,
+        calendar = %google_cal_id,
+        address = %webhook_url,
+        %expires_at,
+        "Google Calendar push channel registered"
+    );
+    Ok(expires_at)
+}
+
+/// The push channel for a calendar, registered only when there is no usable one left.
+///
+/// The address is deployment configuration, not per-tenant: `GOOGLE_PUSH_WEBHOOK_URL` pins it and
+/// otherwise the request's own public host decides (see `resolve_webhook_url`).
+async fn ensure_push_channel(
+    s: &AppState,
+    tid: Uuid,
+    booking_calendar_id: Uuid,
+    google_cal_id: &str,
+    access_token: &str,
+    headers: &HeaderMap,
+) -> Result<chrono::DateTime<chrono::Utc>, AppError> {
+    let existing: Option<(chrono::DateTime<chrono::Utc>,)> = sqlx::query_as(
+        "SELECT expires_at FROM google_calendar_push_channels \
+         WHERE booking_calendar_id = $1 AND is_active = true \
+           AND expires_at > NOW() + make_interval(secs => $2) \
+         ORDER BY expires_at DESC LIMIT 1",
+    )
+    .bind(booking_calendar_id)
+    .bind(PUSH_RENEW_WITHIN_SECS as f64)
+    .fetch_optional(&s.db)
+    .await?;
+
+    if let Some((expires_at,)) = existing {
+        return Ok(expires_at);
+    }
+
+    let url = resolve_webhook_url(std::env::var("GOOGLE_PUSH_WEBHOOK_URL").ok(), headers);
+    register_push_channel(
+        s,
+        tid,
+        booking_calendar_id,
+        google_cal_id,
+        access_token,
+        &url,
+    )
+    .await
+}
+
 /// POST /api/google-calendar/webhook
-/// Handle push notifications from Google Calendar (channel expiration / sync events).
-/// Placeholder — Google requires channel setup via the Calendar API.
+///
+/// Push notification from Google Calendar. Public by necessity (Google sends no Authorization
+/// header), authenticated by the CHANNEL instead: the three X-Goog-* headers are looked up against
+/// `google_calendar_push_channels`, and anything that does not resolve to an active, unexpired
+/// channel with a matching resource and token is refused. The body is never parsed and never logged
+/// — there is no code path here that acts on caller-supplied content, so a forged notification can
+/// reach neither logs nor data.
 pub async fn webhook_handler(
-    State(_s): State<AppState>,
-    body: axum::extract::Json<Value>,
+    State(s): State<AppState>,
+    headers: HeaderMap,
 ) -> ApiResult<impl IntoResponse> {
-    // Google Calendar push notifications come with X-Goog-* headers and a JSON body.
-    // This is a placeholder; full push notification handling requires:
-    // 1. Registering a channel via POST /calendars/{id}/events/watch with webhook URL
-    // 2. Validating X-Goog-Channel-Id, X-Goog-Resource-Id, X-Goog-Resource-State
-    // 3. Incremental sync on each notification
-    tracing::info!(body = %body.0, "Google Calendar webhook received");
-    Ok(StatusCode::OK)
+    let hdr = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+
+    // Google sends all of these on every delivery. A caller that omits them is not Google.
+    let channel_id = hdr("x-goog-channel-id")
+        .ok_or_else(|| AppError::BadRequest("Missing X-Goog-Channel-ID".to_string()))?;
+    let resource_id = hdr("x-goog-resource-id")
+        .ok_or_else(|| AppError::BadRequest("Missing X-Goog-Resource-ID".to_string()))?;
+    let resource_state = hdr("x-goog-resource-state").unwrap_or_else(|| "unknown".to_string());
+    let token = hdr("x-goog-channel-token").unwrap_or_default();
+
+    let row: Option<(
+        Uuid,
+        Uuid,
+        String,
+        String,
+        chrono::DateTime<chrono::Utc>,
+        bool,
+    )> = sqlx::query_as(
+        "SELECT id, tenant_id, resource_id, token_hash, expires_at, is_active \
+             FROM google_calendar_push_channels WHERE channel_id = $1",
+    )
+    .bind(&channel_id)
+    .fetch_optional(&s.db)
+    .await?;
+
+    // 404 for an unknown/expired/inactive channel, or one whose resource does not match: Google
+    // stops delivering to a 404, and nothing about the reply tells a prober which part was wrong.
+    let (row_id, tenant_id, _resource, token_hash, _expires_at, _is_active) = row
+        .filter(|(_, _, resource, _, expires_at, is_active)| {
+            *is_active && *expires_at > chrono::Utc::now() && *resource == resource_id
+        })
+        .ok_or_else(|| AppError::NotFound("Unknown push channel".to_string()))?;
+
+    // A channel we registered always carries a token (see `register_push_channel`), so a missing or
+    // wrong one is a forgery: refuse it before anything else can run.
+    if !token_is_expected(&token_hash, &token) {
+        tracing::warn!(channel = %channel_id, "Google Calendar push notification with a bad channel token");
+        return Err(AppError::Unauthorized);
+    }
+
+    // Authenticated. Record it against THIS channel's own tenant — the tenant comes from the row, so
+    // a valid channel can only ever touch its own calendar.
+    sqlx::query(
+        "UPDATE google_calendar_push_channels \
+         SET last_notification_at = NOW(), last_resource_state = $1, updated_at = NOW() \
+         WHERE id = $2 AND tenant_id = $3",
+    )
+    .bind(&resource_state)
+    .bind(row_id)
+    .bind(tenant_id)
+    .execute(&s.db)
+    .await?;
+
+    tracing::info!(
+        tenant = %tenant_id,
+        channel = %channel_id,
+        state = %resource_state,
+        "Google Calendar push notification accepted"
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Is `token` the token this channel was registered with? Compares digests in constant time.
+fn token_is_expected(stored_hash: &str, token: &str) -> bool {
+    constant_time_eq(channel_token_hash(token).as_bytes(), stored_hash.as_bytes())
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -822,4 +1109,57 @@ async fn get_access_token(
         .map_err(|e| AppError::BadRequest(format!("Failed to parse refresh response: {}", e)))?;
 
     Ok(token_data.access_token)
+}
+
+#[cfg(test)]
+mod push_channel_tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    fn headers(host: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("host", HeaderValue::from_str(host).unwrap());
+        h
+    }
+
+    #[test]
+    fn push_url_is_https_on_a_public_host_and_http_only_on_localhost() {
+        let public = resolve_webhook_url(None, &headers("app.coreswiftcrm.com"));
+        assert_eq!(
+            public,
+            "https://app.coreswiftcrm.com/api/google-calendar/webhook"
+        );
+        let local = resolve_webhook_url(None, &headers("localhost:8084"));
+        assert_eq!(local, "http://localhost:8084/api/google-calendar/webhook");
+        // a deployment pin wins over the request's own host
+        let pinned = resolve_webhook_url(
+            Some("https://push.example.com/hook".to_string()),
+            &headers("app.coreswiftcrm.com"),
+        );
+        assert_eq!(pinned, "https://push.example.com/hook");
+    }
+
+    #[test]
+    fn a_channel_token_is_accepted_only_when_it_is_the_registered_one() {
+        let token = new_channel_token();
+        assert!(token.len() >= 42, "token must be high entropy: {}", token);
+        let stored = channel_token_hash(&token);
+        assert!(token_is_expected(&stored, &token));
+        assert!(!token_is_expected(&stored, ""));
+        assert!(!token_is_expected(&stored, "forged-token"));
+        assert!(!token_is_expected(&stored, &format!("{}x", token)));
+        // and the digest itself must never be the stored value
+        assert_ne!(stored, token);
+    }
+
+    #[test]
+    fn constant_time_compare_rejects_by_content_and_by_length() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+        assert!(constant_time_eq(b"", b""));
+        let a = new_channel_token();
+        let b = new_channel_token();
+        assert_ne!(a, b, "tokens must not repeat");
+    }
 }
