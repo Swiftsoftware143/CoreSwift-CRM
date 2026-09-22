@@ -5500,7 +5500,7 @@ function txBind(root) {
 }
 
 // ── Private Email tab: domains, mailboxes, auto-replies, send, support box ─────
-const PE = { domains: [], boxes: [], autoReplies: [], support: null, planNote: '', available: true };
+const PE = { domains: [], boxes: [], autoReplies: [], support: null, keys: [], keysError: null, planNote: '', available: true };
 
 function inboxShell() {
   return pageHeader('Private Email', 'Send from your own domains, auto-reply, and turn forwarded mail into tickets',
@@ -5523,7 +5523,13 @@ async function loadInboxTab() {
   try { const d = await API.get('/private-email/auto-replies'); auto = Array.isArray(d) ? d : ((d && (d.items || d.auto_replies)) || []); }
   catch (e) { errs.autoReplies = e.message; }
   try { support = await API.get('/private-email/support-box'); } catch (e) { errs.support = e.message; }
+  // The saved-key store is where a domain's credential can live by reference; read it here so the
+  // tab can show a key that exists but cannot be opened (t_72f0bc83).
+  let keys = [], keysErr = null;
+  try { const d = await API.get('/private-email/keys'); keys = Array.isArray(d) ? d : ((d && (d.items || d.keys)) || []); }
+  catch (e) { keysErr = e.message; }
   PE.domains = domains; PE.boxes = boxes; PE.autoReplies = auto; PE.support = support;
+  PE.keys = keys; PE.keysError = keysErr;
 
   if (errs.support) document.getElementById('peSupport').innerHTML = icErr('Could not read the support box', errs.support);
   else {
@@ -5543,13 +5549,14 @@ async function loadInboxTab() {
       escapeHtml(d.label || '—'),
       escapeHtml(d.provider_type || 'mailgun'),
       d.verified ? '<span class="badge badge-success">verified</span>' : '<span class="badge badge-warning">pending DNS</span>',
-      d.catch_all_enabled ? 'catch-all' : '—'
+      d.catch_all_enabled ? 'catch-all' : '—',
+      peCredentialCell(d)
     ]);
     el.innerHTML = card('🌐 Domains you send from',
       '<p style="color:var(--text-secondary);margin:0">Each domain is the provider-level identity CoreSwift sends and receives with. Credentials are per account, never a platform default.</p>',
       '<button class="btn btn-primary btn-sm" onclick="peOpenAddDomain()">+ Add domain</button>') +
-      dataTable(['Domain', 'Label', 'Provider', 'Verification', 'Catch-all'], rows,
-        'No domains on this account yet.');
+      dataTable(['Domain', 'Label', 'Provider', 'Verification', 'Catch-all', 'Credential'], rows,
+        'No domains on this account yet.') + peKeysCard();
   }
 
   document.getElementById('peBoxes').innerHTML = card('📬 Mailboxes',
@@ -5590,6 +5597,137 @@ async function loadInboxTab() {
     '<button class="btn btn-primary btn-sm" id="peSendBtn"' + (activeBoxes ? '' : ' disabled') + '>Send email</button>');
   const sb = document.getElementById('peSendBtn');
   if (sb) sb.addEventListener('click', peSend);
+}
+
+// ── Credential health: a stored key nobody can open must not read as configured ────────────────
+// The server decides credential_status / key_status by OPENING the stored ciphertext, never from its
+// shape (t_72f0bc83): 'usable' | 'unreadable' | 'empty' | 'missing'. Before this, a row that exists
+// but cannot be opened rendered exactly like a healthy one, and the only symptom was a failed send.
+function peCredentialCell(d) {
+  const s = d.credential_status;
+  if (s === 'usable') return '<span class="badge badge-success">readable</span>';
+  if (s === 'unreadable') {
+    return '<span class="badge badge-error">re-enter key</span> ' +
+      '<button class="btn btn-primary btn-xs" onclick="peReenterDomainKey(\'' + d.id + '\')">Re-enter</button>';
+  }
+  if (s === 'empty') return '<span class="badge badge-warning">empty key</span>';
+  return '<span class="badge badge-muted">no key</span>';
+}
+
+function peKeyStatusBadge(k) {
+  if (k.key_status === 'usable') return '<span class="badge badge-success">readable</span>';
+  if (k.key_status === 'unreadable') return '<span class="badge badge-error">re-enter key</span>';
+  if (k.key_status === 'empty') return '<span class="badge badge-warning">empty</span>';
+  return '<span class="badge badge-muted">—</span>';
+}
+
+function peKeysCard() {
+  if (PE.keysError) return '<br>' + card('🔑 Saved provider keys', icErr('Could not read your saved keys', PE.keysError), '');
+  const keys = PE.keys || [];
+  const bad = keys.filter(function (k) { return k.key_status === 'unreadable'; }).length;
+  const rows = keys.map(function (k) {
+    return [
+      escapeHtml(k.label || '—'),
+      escapeHtml(k.provider || 'mailgun'),
+      peKeyStatusBadge(k),
+      (k.key_status === 'unreadable'
+        ? '<button class="btn btn-primary btn-xs" onclick="peReenterSavedKey(\'' + k.id + '\')">Re-enter</button> '
+        : '') +
+      '<button class="btn btn-ghost btn-xs" onclick="peDeleteSavedKey(\'' + k.id + '\')">Delete</button>'
+    ];
+  });
+  return '<br>' + card('🔑 Saved provider keys',
+    '<p style="color:var(--text-secondary);margin:0">Named keys a domain can pick instead of pasting its own. ' +
+    (bad
+      ? '<strong>' + bad + ' of ' + keys.length + ' cannot be opened by the server</strong> — sends using them fail until the key is entered again.'
+      : 'Every saved key can be opened by the server.') + '</p>',
+    '<button class="btn btn-secondary btn-sm" onclick="peAddSavedKey()">+ Add key</button>') +
+    dataTable(['Label', 'Provider', 'Status', 'Actions'], rows, 'No saved keys yet.');
+}
+
+function peReenterDomainKey(domainId) {
+  const d = (PE.domains || []).filter(function (x) { return x.id === domainId; })[0] || {};
+  const smtp = d.provider_type === 'smtp';
+  showModal('Re-enter the ' + (smtp ? 'SMTP password' : 'Mailgun API key') + ' for ' + (d.domain || 'this domain'),
+    '<p style="color:var(--text-secondary)">' + escapeHtml(d.credential_hint || 'The stored credential cannot be opened by this deployment.') + '</p>' +
+    '<div class="form-group"><label>New ' + (smtp ? 'SMTP password' : 'Mailgun API key') + '</label>' +
+    '<input type="password" id="peReKey" autocomplete="new-password" placeholder="paste the credential">' +
+    '<span class="form-hint">Stored encrypted, never echoed back.</span></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="peReKeySave">Save and re-check</button>');
+  const b = document.getElementById('peReKeySave');
+  if (!b) return;
+  b.addEventListener('click', async function () {
+    const v = String(document.getElementById('peReKey').value || '').trim();
+    if (!v) { toast('Paste the new credential', 'error'); return; }
+    b.disabled = true;
+    try {
+      const r = await API.patch('/private-email/domains/' + encodeURIComponent(domainId),
+        smtp ? { smtp_password: v } : { mailgun_api_key: v });
+      closeModal();
+      if (r && r.credential_status === 'usable') toast('Credential saved — the domain can send again', 'success');
+      else toast('Saved, but the stored credential still cannot be opened', 'error');
+      await loadInboxTab();
+    } catch (e) { toast('Could not save the credential: ' + e.message, 'error'); b.disabled = false; }
+  });
+}
+
+function peReenterSavedKey(keyId) {
+  const k = (PE.keys || []).filter(function (x) { return x.id === keyId; })[0] || {};
+  showModal('Re-enter “' + (k.label || 'saved key') + '”',
+    '<p style="color:var(--text-secondary)">The stored key cannot be opened by the server. Saving here keeps the same key id, so every domain already using it starts working again — no domain has to be re-pointed.</p>' +
+    '<div class="form-group"><label>New key</label><input type="password" id="peReSaved" autocomplete="new-password"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="peReSavedSave">Save and re-check</button>');
+  const b = document.getElementById('peReSavedSave');
+  if (!b) return;
+  b.addEventListener('click', async function () {
+    const v = String(document.getElementById('peReSaved').value || '').trim();
+    if (!v) { toast('Paste the new key', 'error'); return; }
+    b.disabled = true;
+    try {
+      const r = await API.post('/private-email/keys', {
+        label: k.label || 're-entered key',
+        api_key: v,
+        provider: k.provider || 'mailgun',
+        replace_key_id: keyId
+      });
+      closeModal();
+      if (r && r.key_status === 'usable') toast('Key replaced', 'success');
+      else toast('Saved, but the key still cannot be opened', 'error');
+      await loadInboxTab();
+    } catch (e) { toast('Could not replace the key: ' + e.message, 'error'); b.disabled = false; }
+  });
+}
+
+function peAddSavedKey() {
+  showModal('Add a saved key',
+    '<div class="form-group"><label>Label</label><input type="text" id="peNewKeyLabel" placeholder="Mailgun production" autocomplete="off"></div>' +
+    '<div class="form-group"><label>Provider</label><select id="peNewKeyProvider"><option value="mailgun">Mailgun</option></select></div>' +
+    '<div class="form-group"><label>API key</label><input type="password" id="peNewKeyValue" autocomplete="new-password"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="peNewKeySave">Add key</button>');
+  const b = document.getElementById('peNewKeySave');
+  if (!b) return;
+  b.addEventListener('click', async function () {
+    const label = String(document.getElementById('peNewKeyLabel').value || '').trim();
+    const v = String(document.getElementById('peNewKeyValue').value || '').trim();
+    if (!label || !v) { toast('Label and key are required', 'error'); return; }
+    b.disabled = true;
+    try {
+      await API.post('/private-email/keys', { label: label, api_key: v, provider: document.getElementById('peNewKeyProvider').value });
+      closeModal(); toast('Key saved', 'success'); await loadInboxTab();
+    } catch (e) { toast('Could not save the key: ' + e.message, 'error'); b.disabled = false; }
+  });
+}
+
+function peDeleteSavedKey(keyId) {
+  const k = (PE.keys || []).filter(function (x) { return x.id === keyId; })[0];
+  confirmThen('Delete the saved key' + (k && k.label ? ' "' + k.label + '"' : '') + '? Domains using it lose their credential and stop sending until they are given another one.', function () {
+    API.del('/private-email/keys/' + encodeURIComponent(keyId))
+      .then(function () { toast('Key deleted', 'success'); loadInboxTab(); })
+      .catch(function (e) { toast('Could not delete: ' + e.message, 'error'); });
+  });
 }
 
 async function peSend() {
@@ -5754,7 +5892,7 @@ async function icSyncHistory(slug) {
       escapeHtml(h.direction || ''),
       escapeHtml(h.entity_type || ''),
       h.status === 'completed' ? '<span class="badge badge-success">completed</span>'
-        : (h.status === 'failed' ? '<span class="badge badge-danger">failed</span>' : '<span class="badge badge-muted">' + escapeHtml(h.status || '') + '</span>'),
+        : (h.status === 'failed' ? '<span class="badge badge-error">failed</span>' : '<span class="badge badge-muted">' + escapeHtml(h.status || '') + '</span>'),
       escapeHtml(String(h.records_succeeded == null ? 0 : h.records_succeeded)) + ' / ' + escapeHtml(String(h.records_processed == null ? 0 : h.records_processed)),
       escapeHtml(h.started_at ? new Date(h.started_at).toLocaleString() : ''),
       h.error_log ? '<code style="font-size:.7rem">' + escapeHtml(JSON.stringify(h.error_log).slice(0, 160)) + '</code>' : ''

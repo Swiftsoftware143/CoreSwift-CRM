@@ -43,7 +43,100 @@ pub async fn list_domains(
     .await
     .map_err(AppError::Database)?;
 
-    Ok(Json(serde_json::to_value(&domains).unwrap()))
+    // t_72f0bc83: the domain list is where a customer answers "is this configured?", so it has to
+    // answer with the SAME credential question the send path asks — not with row presence. Before
+    // this, a domain whose stored key nobody can open rendered exactly like a healthy one and the
+    // only symptom was a failed send ("Stored API key for domain … cannot be read").
+    let (keys, provider_keys) = load_credential_maps(&state.db, account_id).await?;
+
+    let out: Vec<serde_json::Value> = domains
+        .iter()
+        .map(|d| with_credential_status(account_id, d, &keys, &provider_keys))
+        .collect();
+
+    Ok(Json(serde_json::json!(out)))
+}
+
+/// The two credential stores `send_handler::load_provider_config` resolves a domain's key from, read
+/// once per request: `private_email_api_keys` (mailgun) and `provider_api_keys` (everything else).
+type CredentialMaps = (
+    std::collections::HashMap<Uuid, String>,
+    std::collections::HashMap<Uuid, String>,
+);
+
+async fn load_credential_maps(
+    db: &sqlx::PgPool,
+    tenant_id: Uuid,
+) -> Result<CredentialMaps, AppError> {
+    let keys = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, api_key_encrypted FROM private_email_api_keys WHERE tenant_id = $1",
+    )
+    .bind(tenant_id)
+    .fetch_all(db)
+    .await
+    .map_err(AppError::Database)?
+    .into_iter()
+    .collect();
+    let provider_keys = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, COALESCE(access_key_encrypted, '') FROM provider_api_keys WHERE tenant_id = $1",
+    )
+    .bind(tenant_id)
+    .fetch_all(db)
+    .await
+    .map_err(AppError::Database)?
+    .into_iter()
+    .collect();
+    Ok((keys, provider_keys))
+}
+
+/// Which of `usable | unreadable | empty | missing` this domain's outbound credential is — decided
+/// by OPENING the stored value, mirroring `load_provider_config` field for field: `api_key_id` wins
+/// when set (mailgun → `private_email_api_keys`, other providers → `provider_api_keys`), otherwise
+/// the domain carries its own `smtp_password_encrypted` (smtp) or `mailgun_api_key`.
+fn domain_credential_status(
+    tenant_id: Uuid,
+    d: &PrivateEmailDomain,
+    keys: &std::collections::HashMap<Uuid, String>,
+    provider_keys: &std::collections::HashMap<Uuid, String>,
+) -> &'static str {
+    let stored: Option<&String> = match d.api_key_id {
+        Some(kid) if d.provider_type == "mailgun" => keys.get(&kid),
+        Some(kid) => provider_keys.get(&kid),
+        None if d.provider_type == "smtp" => d.smtp_password_encrypted.as_ref(),
+        None => {
+            if d.mailgun_api_key.trim().is_empty() {
+                None
+            } else {
+                Some(&d.mailgun_api_key)
+            }
+        }
+    };
+    match stored {
+        None => "missing",
+        Some(s) => super::api_keys_handler::stored_key_status(tenant_id, s),
+    }
+}
+
+/// The domain row as the client sees it, plus the credential verdict (never the credential itself:
+/// `PrivateEmailDomain`'s credential columns are `#[serde(skip_serializing)]`).
+fn with_credential_status(
+    tenant_id: Uuid,
+    d: &PrivateEmailDomain,
+    keys: &std::collections::HashMap<Uuid, String>,
+    provider_keys: &std::collections::HashMap<Uuid, String>,
+) -> serde_json::Value {
+    let status = domain_credential_status(tenant_id, d, keys, provider_keys);
+    let mut v = serde_json::to_value(d).unwrap_or_else(|_| json!({}));
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("credential_status".into(), json!(status));
+        if status == "unreadable" {
+            obj.insert(
+                "credential_hint".into(),
+                json!(super::api_keys_handler::REENTER_HINT),
+            );
+        }
+    }
+    v
 }
 
 pub async fn delete_domain(
@@ -86,10 +179,43 @@ pub async fn update_domain(
         }
     }
 
+    // Re-entering a credential THIS deployment cannot open (t_72f0bc83). Sealed on write through the
+    // app-wide envelope, so the row comes back `usable` and the send path stops failing closed. An
+    // empty string means "leave the stored value alone", the convention every other credential write
+    // in this app follows. Without this route a domain whose key stopped opening was unfixable: the
+    // only way to re-add a domain is to delete it, which cascades its mailboxes away.
+    let sealed_mailgun = match req.mailgun_api_key.as_deref() {
+        Some(k) if !k.trim().is_empty() => Some(crate::secret_box::seal(account_id, k)?),
+        _ => None,
+    };
+    let sealed_smtp = match req.smtp_password.as_deref() {
+        Some(k) if !k.trim().is_empty() => Some(crate::secret_box::seal(account_id, k)?),
+        _ => None,
+    };
+
+    // A saved key can only be bound if it belongs to this tenant — otherwise a domain could be
+    // pointed at another tenant's ciphertext, which by construction never opens for this one.
+    if let Some(kid) = req.api_key_id {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM private_email_api_keys WHERE id = $1 AND tenant_id = $2)",
+        )
+        .bind(kid)
+        .bind(account_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(AppError::Database)?;
+        if !exists {
+            return Err(AppError::NotFound("Saved API key not found".into()));
+        }
+    }
+
     let row = sqlx::query_as::<_, PrivateEmailDomain>(
         r#"
         UPDATE private_email_domains
         SET catch_all_enabled = COALESCE($3, catch_all_enabled),
+            mailgun_api_key = COALESCE($4, mailgun_api_key),
+            smtp_password_encrypted = COALESCE($5, smtp_password_encrypted),
+            api_key_id = COALESCE($6, api_key_id),
             updated_at = NOW()
         WHERE id = $1 AND tenant_id = $2
         RETURNING *
@@ -98,12 +224,23 @@ pub async fn update_domain(
     .bind(domain_id)
     .bind(account_id)
     .bind(req.catch_all_enabled)
+    .bind(sealed_mailgun)
+    .bind(sealed_smtp)
+    .bind(req.api_key_id)
     .fetch_optional(&state.db)
     .await
     .map_err(AppError::Database)?;
 
     match row {
-        Some(domain) => Ok(Json(serde_json::to_value(&domain).unwrap())),
+        Some(domain) => {
+            let (keys, provider_keys) = load_credential_maps(&state.db, account_id).await?;
+            Ok(Json(with_credential_status(
+                account_id,
+                &domain,
+                &keys,
+                &provider_keys,
+            )))
+        }
         None => Err(AppError::NotFound("Domain not found".into())),
     }
 }
