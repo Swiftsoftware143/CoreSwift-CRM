@@ -491,10 +491,12 @@ pub async fn list_my_products(
 
     // Products I'm currently promoting
     let my_products = sqlx::query_scalar::<_, serde_json::Value>(
+        // Only ACTIVE selections are "promoting": unselect sets is_active = false, and without
+        // this filter the row kept rendering as promoted (and could never be re-offered below).
         &row_json(r#"SELECT ap.*, aps.is_active as promoting, aps.promo_link, aps.custom_commission_rate, aps.selected_at
            FROM affiliate_product_selections aps
            JOIN affiliate_products ap ON ap.id = aps.product_id
-           WHERE aps.affiliate_id = $1 AND ap.is_active = true
+           WHERE aps.affiliate_id = $1 AND aps.is_active = true AND ap.is_active = true
            ORDER BY aps.selected_at DESC"#)
     )
     .bind(aff_id)
@@ -506,7 +508,7 @@ pub async fn list_my_products(
         &row_json(r#"SELECT ap.*,
               CASE WHEN aps.id IS NOT NULL THEN true ELSE false END as already_selected
            FROM affiliate_products ap
-           LEFT JOIN affiliate_product_selections aps ON aps.product_id = ap.id AND aps.affiliate_id = $1
+           LEFT JOIN affiliate_product_selections aps ON aps.product_id = ap.id AND aps.affiliate_id = $1 AND aps.is_active = true
            WHERE ap.tenant_id = $2 AND ap.is_active = true AND aps.id IS NULL
            ORDER BY ap.sort_order ASC, ap.name ASC"#)
     )

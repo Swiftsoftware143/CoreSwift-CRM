@@ -365,7 +365,16 @@ const API = {
     if (res.status === 402) { showUpgradeBanner(); throw new Error('Payment required'); }
     if (!res.ok) {
       let msg = `HTTP ${res.status}`;
-      try { const e = await res.json(); msg = e.error || e.message || msg; } catch(_){}
+      // Failures answer {"error": true, "message": "<human text>"} (src/errors.rs) — a BOOLEAN
+      // `error` flag with the text in `message`. Reading `e.error` first therefore threw the flag
+      // and every failed request in the workspace reported the literal string "true" instead of
+      // the reason (e.g. 404 "No affiliate profile" rendered as "true"). Only strings are usable.
+      try {
+        const e = await res.json();
+        const pick = [e.error, e.message, e.detail, e.error_description]
+          .find(v => typeof v === 'string' && v.trim());
+        msg = pick || msg;
+      } catch(_){}
       throw new Error(msg);
     }
     return res.status === 204 ? null : res.json();
@@ -1022,7 +1031,16 @@ const TAB_RENDERERS = {
     '<div id="creditsCard"><div class="loading-wrap"><div class="spinner"></div> Loading credits...</div></div>' +
     '<div id="plansContent"><div class="loading-wrap"><div class="spinner"></div> Loading plans...</div></div>';
   },
-  'affiliates': () => placeholderPanel('Affiliates', 'Manage your affiliate program — track referrals, commissions, and payouts.', '🤝'),
+  'affiliates': () => {
+    // The tab used to be placeholderPanel(...) over a backend that was never broken: probed live
+    // 2026-09-22, the /api/affiliates/* routes answer 200/201 once the caller has an affiliate
+    // profile (404 "No affiliate profile" with a real message before that, never a 500).
+    return pageHeader('Affiliates', 'Promote products, track referrals and commission payouts') +
+    '<div id="affSummary"><div class="loading-wrap"><div class="spinner"></div> Loading affiliate profile...</div></div>' +
+    '<div id="affReferrals"></div>' +
+    '<div id="affPayouts"></div>' +
+    '<div id="affProducts"></div>';
+  },
   'webhooks': () => placeholderPanel('Webhooks', 'Configure outgoing webhooks for real-time event notifications.', '🔗'),
   'native-apps': () => {
     return pageHeader('Native App Connectors', 'Global config for the native connector layer (AdaSwift, FunnelSwift, ZaarHub, WorkflowSwift)',
@@ -1418,6 +1436,8 @@ const TAB_LOADERS = {
       document.getElementById('plansContent').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Plans endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
+
+  'affiliates': async () => { await loadAffiliates(); },
 
   'users': async () => {
     try {
@@ -2829,9 +2849,243 @@ async function loadCredits() {
   }
 }
 
-// Deliberately NOT wired here (both broken server-side, carded): GET /billing/checkout/sessions
-// (no checkout_sessions table exists) and POST /billing/subscription/cancel (gates on
-// 'client_admin'/'agency_admin', roles no registration path assigns).
+// Payment history (item 2 of t_05d1f961): measured, not assumed, on 2026-09-22.
+// GET /billing/checkout/sessions stays DELETED — it read a `checkout_sessions` table that does not
+// exist (guaranteed 500), and it was never re-registered.
+//   - There is no payments/invoices table in this schema at all.
+//   - `payment_webhook_events` (provider_type, event_type, event_id, raw_body, headers, status,
+//     error_message, created_at) has NO tenant_id column — it is an ops record of inbound provider
+//     events, so it cannot honestly be rendered as one tenant's payment history.
+//   - The only tenant-scoped money ledger is `credit_transactions`, and it is already on this tab
+//     (loadCredits() renders action / credits / description / date for the signed-in tenant).
+// So payment history = the Credits ledger above; no new route was wired to a non-existent table.
+
+// ===== AFFILIATES =====
+// The tenant Affiliates tab shipped as placeholderPanel(...) over a backend that was never broken.
+// Probed LIVE 2026-09-22 with a real tenant-owner token (before this change):
+//   no affiliate profile: GET /profile /referrals /payouts /stats /my-products -> 404 with a MEANINGFUL
+//     body ("No affiliate profile" / "Affiliate profile not found. Create one first."), /products -> 200
+//   with a profile created through this same API: POST /profile 201; GET /profile|/referrals|/payouts|
+//     /stats|/my-products 200; POST /my-products/unselect -> "Product unselected";
+//     POST /redeem/<unknown code> -> 404 "Invalid or inactive affiliate code" (correct behaviour)
+// => the fix is this surface. Every control below performs a real request (no toast-only buttons).
+// The routes sit behind FeatureGate("affiliates"); a plan that sets it false answers 402, which
+// API.call turns into the upgrade banner — handled below as a plan message, not an error.
+let AFF = { profile: null };
+
+function affMoney(v) { return '$' + (Number(v || 0)).toFixed(2); }
+
+function affJoinCard() {
+  return card('Become an affiliate',
+    '<p class="config-desc">This account has no affiliate profile yet. Create one to get a referral ' +
+    'code and earn commission on the products you promote.</p>' +
+    '<button class="btn btn-primary btn-sm" id="affJoinBtn" onclick="createAffiliateProfile()">Create affiliate profile</button>');
+}
+
+function affProfileCard(p, s) {
+  const ctype = String(p.commission_type || '');
+  const rate = String(p.commission_rate != null ? p.commission_rate : '\u2014') + (ctype === 'percentage' ? '%' : '');
+  let body =
+    '<div class="stats-grid">' +
+      '<div class="stat-card accent"><div class="stat-value" id="affCode">' + escapeHtml(String(p.code || '\u2014')) + '</div><div class="stat-label">Referral code</div></div>' +
+      '<div class="stat-card"><div class="stat-value">' + escapeHtml(rate) + '</div><div class="stat-label">Commission (' + escapeHtml(ctype || '\u2014') + ')</div></div>' +
+      '<div class="stat-card"><div class="stat-value">' + affMoney(p.total_earned) + '</div><div class="stat-label">Total earned</div></div>' +
+      '<div class="stat-card"><div class="stat-value">' + affMoney(p.total_paid) + '</div><div class="stat-label">Total paid</div></div>' +
+    '</div>';
+  if (s) {
+    body +=
+    '<div class="stats-grid" style="margin-top:10px">' +
+      '<div class="stat-card"><div class="stat-value">' + (s.total_referrals || 0) + '</div><div class="stat-label">Referrals</div></div>' +
+      '<div class="stat-card"><div class="stat-value">' + (s.pending_referrals || 0) + '</div><div class="stat-label">Pending</div></div>' +
+      '<div class="stat-card"><div class="stat-value">' + (s.converted_referrals || 0) + '</div><div class="stat-label">Converted</div></div>' +
+      '<div class="stat-card"><div class="stat-value">' + affMoney(s.pending_payout) + '</div><div class="stat-label">Pending payout</div></div>' +
+    '</div>';
+  }
+  body +=
+    '<p class="config-desc" style="margin-top:10px">Share <code>' + escapeHtml(String(p.code || '')) + '</code> \u2014 ' +
+      (p.is_active === false ? 'this profile is currently INACTIVE.' : 'this profile is active.') + '</p>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">' +
+      '<button class="btn btn-secondary btn-sm" onclick="copyAffiliateCode()">Copy referral code</button>' +
+      '<button class="btn btn-ghost btn-sm" onclick="showRedeemCodeModal()">Redeem a code</button>' +
+    '</div>';
+  return card('Affiliate profile', body);
+}
+
+async function loadAffiliates() {
+  const el = document.getElementById('affSummary');
+  if (!el) return;
+  AFF = { profile: null };
+  ['affReferrals', 'affPayouts', 'affProducts'].forEach(function (id) {
+    const n = document.getElementById(id);
+    if (n) n.innerHTML = '';
+  });
+  try {
+    const p = await API.get('/affiliates/profile');
+    AFF.profile = p;
+    el.innerHTML = affProfileCard(p);
+    await loadAffiliateStats();
+    await loadAffiliateReferrals();
+    await loadAffiliatePayouts();
+    await loadAffiliateProducts();
+  } catch (e) {
+    const msg = (e && e.message) || String(e);
+    if (msg.indexOf('Payment required') !== -1) {
+      el.innerHTML = card('Affiliates',
+        '<p class="config-desc">The affiliate program is not enabled on this plan. Upgrade to turn it on.</p>');
+    } else if (/No affiliate profile/i.test(msg)) {
+      el.innerHTML = affJoinCard();
+    } else {
+      el.innerHTML = card('Affiliates', '<p class="config-desc">Affiliates endpoint: ' + escapeHtml(msg) + '</p>');
+    }
+  }
+}
+
+async function loadAffiliateStats() {
+  const el = document.getElementById('affSummary');
+  if (!el || !AFF.profile) return;
+  try {
+    const s = await API.get('/affiliates/stats');
+    el.innerHTML = affProfileCard(AFF.profile, s);
+  } catch (e) {
+    // Stats are additive: the profile card above already rendered.
+  }
+}
+
+async function createAffiliateProfile() {
+  const btn = document.getElementById('affJoinBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Creating\u2026'; }
+  try {
+    await API.post('/affiliates/profile', {});
+    toast('Affiliate profile created', 'success');
+    await loadAffiliates();
+  } catch (e) {
+    toast((e && e.message) || 'Could not create the affiliate profile', 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Create affiliate profile'; }
+  }
+}
+
+async function copyAffiliateCode() {
+  const code = AFF.profile && AFF.profile.code;
+  if (!code) { toast('No referral code yet', 'error'); return; }
+  try {
+    await navigator.clipboard.writeText(code);
+    toast('Referral code copied', 'success');
+  } catch (e) {
+    toast('Referral code: ' + code, 'info');
+  }
+}
+
+function showRedeemCodeModal() {
+  showModal('Redeem an affiliate code',
+    '<div class="form-group"><label>Affiliate code</label><input type="text" id="affRedeemInput" placeholder="e.g. JANEDOE-4F2A"></div>' +
+    '<p class="config-desc">Applies the referring affiliate to this account (POST /api/affiliates/redeem/&lt;code&gt;). ' +
+    'Your own code cannot be redeemed on your own account.</p>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="affRedeemBtn" onclick="redeemAffiliateCode()">Redeem</button>');
+}
+
+async function redeemAffiliateCode() {
+  const i = document.getElementById('affRedeemInput');
+  const code = i && i.value ? i.value.trim() : '';
+  if (!code) { toast('Enter an affiliate code first', 'error'); return; }
+  const btn = document.getElementById('affRedeemBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Redeeming\u2026'; }
+  try {
+    await API.post('/affiliates/redeem/' + encodeURIComponent(code), {});
+    toast('Code applied \u2014 the referral is recorded', 'success');
+    closeModal();
+    await loadAffiliates();
+  } catch (e) {
+    toast((e && e.message) || 'Could not redeem that code', 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Redeem'; }
+  }
+}
+
+async function loadAffiliateReferrals() {
+  const el = document.getElementById('affReferrals');
+  if (!el || !AFF.profile) return;
+  try {
+    const d = await API.get('/affiliates/referrals?per_page=25');
+    const rows = ((d && d.referrals) || []).map(function (r) {
+      const who = r.referred_email || (r.referred_tenant_id ? String(r.referred_tenant_id).slice(0, 8) + '\u2026' : '\u2014');
+      return [escapeHtml(String(who)), escapeHtml(String(r.status || '\u2014')),
+        affMoney(r.commission_amount),
+        r.paid_at ? new Date(r.paid_at).toLocaleDateString() : '\u2014',
+        r.created_at ? new Date(r.created_at).toLocaleDateString() : '\u2014'];
+    });
+    el.innerHTML = dataTable(['Referred', 'Status', 'Commission', 'Paid', 'Signed up'], rows,
+      'No referrals yet \u2014 share your referral code above.');
+  } catch (e) {
+    el.innerHTML = card('Referrals', '<p class="config-desc">Referrals endpoint: ' + escapeHtml((e && e.message) || String(e)) + '</p>');
+  }
+}
+
+async function loadAffiliatePayouts() {
+  const el = document.getElementById('affPayouts');
+  if (!el || !AFF.profile) return;
+  try {
+    const d = await API.get('/affiliates/payouts?per_page=25');
+    const rows = ((d && d.payouts) || []).map(function (p) {
+      return [affMoney(p.amount), escapeHtml(String(p.status || '\u2014')),
+        escapeHtml(String(p.payment_method || '\u2014')),
+        p.paid_at ? new Date(p.paid_at).toLocaleDateString() : '\u2014',
+        p.created_at ? new Date(p.created_at).toLocaleDateString() : '\u2014'];
+    });
+    el.innerHTML = dataTable(['Amount', 'Status', 'Method', 'Paid', 'Requested'], rows,
+      'No commission payouts yet.');
+  } catch (e) {
+    el.innerHTML = card('Payouts', '<p class="config-desc">Payouts endpoint: ' + escapeHtml((e && e.message) || String(e)) + '</p>');
+  }
+}
+
+async function loadAffiliateProducts() {
+  const el = document.getElementById('affProducts');
+  if (!el || !AFF.profile) return;
+  try {
+    const d = await API.get('/affiliates/my-products');
+    const promoting = (d && d.promoting) || [];
+    const available = (d && d.available) || [];
+    let h = dataTable(['Product', 'Promo link', 'Price', ''],
+      promoting.map(function (p) {
+        return [escapeHtml(String(p.name || '\u2014')),
+          escapeHtml(String(p.promo_link || '\u2014')),
+          affMoney(p.price),
+          '<button class="btn btn-ghost btn-sm" onclick="unpromoteProduct(\'' + escapeHtml(String(p.id)) + '\')">Stop promoting</button>'];
+      }),
+      'You are not promoting any product yet \u2014 pick one from the list below.');
+    h += dataTable(['Product', 'Description', 'Price', ''],
+      available.map(function (p) {
+        return [escapeHtml(String(p.name || '\u2014')),
+          escapeHtml(String(p.description || '\u2014')),
+          affMoney(p.price),
+          '<button class="btn btn-primary btn-sm" onclick="promoteProduct(\'' + escapeHtml(String(p.id)) + '\')">Promote</button>'];
+      }),
+      'No products are available to promote right now.');
+    el.innerHTML = h;
+  } catch (e) {
+    el.innerHTML = card('Products', '<p class="config-desc">Products endpoint: ' + escapeHtml((e && e.message) || String(e)) + '</p>');
+  }
+}
+
+async function promoteProduct(id) {
+  try {
+    await API.post('/affiliates/my-products/select', { product_id: id });
+    toast('Product added to your promo board', 'success');
+  } catch (e) {
+    toast((e && e.message) || 'Could not select that product', 'error');
+  }
+  await loadAffiliateProducts();
+}
+
+async function unpromoteProduct(id) {
+  try {
+    await API.post('/affiliates/my-products/unselect', { product_id: id });
+    toast('Product removed from your promo board', 'success');
+  } catch (e) {
+    toast((e && e.message) || 'Could not unselect that product', 'error');
+  }
+  await loadAffiliateProducts();
+}
 
 
 // ============================================================================
