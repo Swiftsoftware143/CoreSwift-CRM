@@ -1086,12 +1086,14 @@ const TAB_RENDERERS = {
     '<div id="usersTable"><div class="loading-wrap"><div class="spinner"></div> Loading users...</div></div>';
   },
   'billing': () => {
-    // NOTE: no "Cancel subscription" action and no payment-history table yet. Both routes are
-    // registered but broken server-side (cancel gates on roles 'client_admin'/'agency_admin'
-    // which no registration path assigns — every real tenant user is 'owner'; checkout_sessions
-    // has no table at all). Wiring them would have shipped a button that always 403s and a table
-    // that always 500s. Both are carded for the owner instead of faked here.
-    return pageHeader('Billing & Plans', 'Manage subscription plans and pricing') +
+    // The cancel route's role gate is FIXED and proven live (2026-09-22, commit 6a2f239): it
+    // previously required 'client_admin', a role no registration path assigns, so every real
+    // tenant got 403. A tenant 'owner' now gets 200 and the plan drops to Free. So the button
+    // below is a real action, not a fake one. Payment history is still absent on purpose:
+    // GET /api/billing/checkout/sessions read a table that does not exist and was deleted.
+    return pageHeader('Billing & Plans', 'Manage subscription plans and pricing',
+      '<button class="btn btn-ghost btn-sm" id="cancelSubBtn" onclick="cancelSubscription()">Cancel subscription</button>') +
+    '<div id="subscriptionCard"><div class="loading-wrap"><div class="spinner"></div> Loading subscription...</div></div>' +
     '<div id="creditsCard"><div class="loading-wrap"><div class="spinner"></div> Loading credits...</div></div>' +
     '<div id="plansContent"><div class="loading-wrap"><div class="spinner"></div> Loading plans...</div></div>';
   },
@@ -1578,6 +1580,7 @@ const TAB_LOADERS = {
 
   'billing': async () => {
     await loadCredits();
+    await loadSubscriptionState();
     try {
       const plans = await API.get('/billing/plans');
       let html = '';
@@ -2927,6 +2930,56 @@ async function markAllNotificationsRead() {
     toast((r && r.message) || 'All marked as read', 'success');
   } catch (e) { toast(e.message, 'error'); }
   if (STATE.activeTab === 'notifications') loadNotifications(); else loadNotifCount();
+}
+
+// ===== BILLING: SUBSCRIPTION =====
+// GET /api/billing/subscription and POST /api/billing/subscription/cancel exist and are
+// live; neither had a caller, so a tenant had no way to see or cancel its plan.
+// NOTE on fields: GET /api/billing/subscription returns only id / tenant_id / plan_id /
+// status / billing_cycle / current_period_* / canceled_at / trial_ends_at / feature_overrides
+// (captured live 2026-09-22). There is no plan_name or plan_slug in this response, so the card
+// deliberately shows the fields that exist rather than a name it would have to invent.
+async function loadSubscriptionState() {
+  const el = document.getElementById('subscriptionCard');
+  if (!el) return;
+  try {
+    const s = await API.get('/billing/subscription');
+    const status = (s && s.status) || 'none';
+    const cycle = (s && s.billing_cycle) || '—';
+    const ends = s && (s.current_period_ends_at || s.canceled_at);
+    const active = status === 'active' || status === 'trialing';
+    el.innerHTML = card('Subscription',
+      '<div class="stats-grid">' +
+        '<div class="stat-card accent"><div class="stat-value">' + escapeHtml(String(status)) + '</div><div class="stat-label">Status</div></div>' +
+        '<div class="stat-card"><div class="stat-value">' + escapeHtml(String(cycle)) + '</div><div class="stat-label">Billing cycle</div></div>' +
+      '</div>' +
+      '<p class="config-desc" style="margin-top:10px">' +
+        (active
+          ? 'Cancelling drops this account to the Free plan immediately. ' + (ends ? 'Current period ends ' + new Date(ends).toLocaleDateString() + '.' : '')
+          : 'No paid subscription is active.') +
+      '</p>');
+    const btn = document.getElementById('cancelSubBtn');
+    if (btn) btn.style.display = active ? '' : 'none';
+  } catch (e) {
+    el.innerHTML = card('Subscription',
+      '<p class="config-desc">' + escapeHtml(e.message || String(e)) + '</p>');
+  }
+}
+
+async function cancelSubscription() {
+  if (!confirm('Cancel your subscription? This account drops to the Free plan immediately.')) return;
+  const btn = document.getElementById('cancelSubBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Cancelling…'; }
+  try {
+    await API.post('/billing/subscription/cancel', {});
+    toast('Subscription cancelled — you are on the Free plan', 'success');
+    await loadSubscriptionState();
+    await loadCredits();
+  } catch (e) {
+    toast(e.message || 'Could not cancel the subscription', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Cancel subscription'; }
+  }
 }
 
 // ===== BILLING: CREDITS =====
