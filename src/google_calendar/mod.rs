@@ -12,7 +12,7 @@
 
 use axum::{
     extract::{Extension, Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
@@ -39,7 +39,7 @@ const GOOGLE_CALENDAR_API: &str = "https://www.googleapis.com/calendar/v3";
 /// un-configurable by a customer — the "env-var-only is a defect" rule — and the BYOK panel offers
 /// this slot because `migrations/070_google_calendar_tenant_slot.sql` added it to
 /// `available_providers`.
-async fn google_oauth_config(s: &AppState, tid: Uuid) -> (String, String, String) {
+async fn google_oauth_config(s: &AppState, tid: Uuid) -> (String, String, Option<String>) {
     let nonempty = |v: Option<String>| v.filter(|x| !x.trim().is_empty());
 
     let row: Option<(String, serde_json::Value)> = sqlx::query_as(
@@ -60,26 +60,154 @@ async fn google_oauth_config(s: &AppState, tid: Uuid) -> (String, String, String
             .map(|v| v.to_string()),
     )
     .or_else(|| nonempty(std::env::var("GOOGLE_CLIENT_ID").ok()));
-    let redirect_uri = nonempty(std::env::var("GOOGLE_REDIRECT_URI").ok()).unwrap_or_else(|| {
-        "http://localhost:8080/api/google-calendar/oauth-callback".to_string()
-    });
+    // Google requires the redirect URI presented at token exchange to be byte-identical to the
+    // one used at consent time, so the VALUE is carried (signed) inside `state` and reused by the
+    // callback. This is only the optional pin: a tenant running its own Google project may set
+    // metadata.redirect_uri, and a centrally-configured deployment may set GOOGLE_REDIRECT_URI.
+    // Otherwise the request that STARTS the flow decides (`resolve_redirect_uri`) — the only value
+    // that can be right for a deployment without anyone configuring it. The old hardcoded
+    // `http://localhost:8080/...` fallback sent a real customer's browser to their OWN machine.
+    let redirect_pin = nonempty(
+        row.as_ref()
+            .and_then(|r| r.1.get("redirect_uri"))
+            .and_then(|v| v.as_str())
+            .map(|v| v.to_string()),
+    )
+    .or_else(|| nonempty(std::env::var("GOOGLE_REDIRECT_URI").ok()));
 
     (
         client_id.unwrap_or_default(),
         client_secret.unwrap_or_default(),
-        redirect_uri,
+        redirect_pin,
     )
+}
+
+/// The redirect URI Google is told to send the user back to.
+///
+/// Derived from the request that starts the flow (`X-Forwarded-Proto` + `Host`, which nginx sets
+/// for the public vhost) so it matches the deployment with no configuration. A tenant pin or the
+/// `GOOGLE_REDIRECT_URI` env var wins, because that tenant's Google project has that exact URI
+/// registered.
+fn resolve_redirect_uri(explicit: Option<String>, headers: &HeaderMap) -> String {
+    if let Some(v) = explicit.filter(|v| !v.trim().is_empty()) {
+        return v;
+    }
+    let host = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("localhost");
+    let is_local = host.starts_with("localhost")
+        || host.starts_with("127.0.0.1")
+        || host.starts_with("0.0.0.0")
+        || host.starts_with("[::1]");
+    // A LOCAL host is the one case that may legitimately be http (and the only one Google accepts
+    // http for). Anywhere else the URI must be https: Google refuses `http://` on a public host, so
+    // trusting the origin's `X-Forwarded-Proto` was wrong here — Cloudflare terminates TLS and
+    // reaches nginx over plain HTTP, so this deployment advertised
+    // `http://app.coreswiftcrm.com/...` (proven live 2026-09-22), a value no tenant could register.
+    let scheme = if is_local { "http" } else { "https" };
+    format!("{}://{}/api/google-calendar/oauth-callback", scheme, host)
+}
+
+// ── OAuth `state`: signed, single-purpose, never a bearer token ──────────────────
+
+/// HMAC key for the OAuth `state`, derived from the JWT secret and domain-separated so a `state`
+/// can never be replayed as an access token.
+fn state_key(secret: &str) -> String {
+    format!("{}:google-calendar-oauth-state", secret)
+}
+
+/// Sign the consent `state` as `v1.<b64url(json)>.<hex hmac>`.
+///
+/// The `state` param travels to Google, into the browser history and into Google's logs, so it
+/// must never be worth stealing: it carries only what the callback needs (tenant, calendar, the
+/// redirect URI used at consent time) plus an issue time. The callback is a browser redirect with
+/// NO Authorization header — that is all Google sends — so this signature is the only thing that
+/// can prove who started the flow.
+fn sign_state(secret: &str, tid: Uuid, calendar_id: Option<Uuid>, redirect_uri: &str) -> String {
+    use base64::Engine;
+    use hmac::{Hmac, Mac};
+    let payload = json!({
+        "aid": tid,
+        "cal": calendar_id,
+        "ru": redirect_uri,
+        "iat": chrono::Utc::now().timestamp(),
+        "n": Uuid::new_v4(),
+    })
+    .to_string();
+    let body = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.as_bytes());
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(state_key(secret).as_bytes())
+        .expect("HMAC accepts keys of any length");
+    mac.update(body.as_bytes());
+    format!("v1.{}.{}", body, hex::encode(mac.finalize().into_bytes()))
+}
+
+/// Verify a consent `state`, returning `(tenant, calendar, redirect_uri)`.
+/// Constant-time signature check; rejects anything older than 30 minutes.
+fn verify_state(secret: &str, state: &str) -> Option<(Uuid, Option<Uuid>, String)> {
+    use base64::Engine;
+    use hmac::{Hmac, Mac};
+    let rest = state.strip_prefix("v1.")?;
+    let (body, sig_hex) = rest.rsplit_once('.')?;
+    let sig = hex::decode(sig_hex).ok()?;
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(state_key(secret).as_bytes()).ok()?;
+    mac.update(body.as_bytes());
+    mac.verify_slice(&sig).ok()?;
+    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(body)
+        .ok()?;
+    let v: Value = serde_json::from_slice(&raw).ok()?;
+    let iat = v.get("iat").and_then(|i| i.as_i64()).unwrap_or(0);
+    if chrono::Utc::now().timestamp() - iat > 1800 {
+        return None;
+    }
+    let tid = Uuid::parse_str(v.get("aid")?.as_str()?).ok()?;
+    let cal = v
+        .get("cal")
+        .and_then(|c| c.as_str())
+        .and_then(|c| Uuid::parse_str(c).ok());
+    let ru = v
+        .get("ru")
+        .and_then(|c| c.as_str())
+        .unwrap_or_default()
+        .to_string();
+    Some((tid, cal, ru))
+}
+
+/// Percent-encode one query-string value (RFC 3986 unreserved set only).
+/// The consent URL used to interpolate `redirect_uri` and `scope` raw.
+fn pct(v: &str) -> String {
+    let mut out = String::with_capacity(v.len());
+    for b in v.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
 }
 
 // ── Route definitions ────────────────────────────────────────────────────
 
 pub fn router(state: AppState) -> axum::Router<AppState> {
     use axum::routing::{get, post};
-    axum::Router::new()
-        .route("/connect-url", get(get_connect_url))
+
+    // Machine surfaces — GOOGLE calls these, and a browser redirect / push notification carries NO
+    // Authorization header. Behind `auth_middleware` they answered 401 to the exact request Google
+    // makes, so the consent handshake could never complete (proven live 2026-09-22:
+    // GET /api/google-calendar/oauth-callback -> 401 "Authentication required"). The callback is
+    // authenticated by its SIGNED `state` instead (see `verify_state`); the plan gate stays on the
+    // route that STARTS the flow, which is the only one a user drives.
+    let public = axum::Router::new()
         .route("/oauth-callback", get(oauth_callback))
+        .route("/webhook", post(webhook_handler));
+
+    let protected = axum::Router::new()
+        .route("/connect-url", get(get_connect_url))
+        .route("/status", get(calendar_status))
         .route("/sync/:calendar_id", post(sync_calendar))
-        .route("/webhook", post(webhook_handler))
         // Plan gating — the admin controls this module per plan
         // (features::FEATURE_REGISTRY is the source of truth for the admin UI).
         .layer(axum::middleware::from_fn_with_state(
@@ -93,7 +221,9 @@ pub fn router(state: AppState) -> axum::Router<AppState> {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,
-        ))
+        ));
+
+    axum::Router::new().merge(public).merge(protected)
 }
 
 // ── Request/Response types ───────────────────────────────────────────────
@@ -163,10 +293,12 @@ struct EventDateTime {
 pub async fn get_connect_url(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
+    headers: HeaderMap,
     Query(q): Query<HashMap<String, String>>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    let (client_id, _client_secret, redirect_uri) = google_oauth_config(&s, tid).await;
+    let (client_id, _client_secret, redirect_pin) = google_oauth_config(&s, tid).await;
+    let redirect_uri = resolve_redirect_uri(redirect_pin, &headers);
 
     if client_id.is_empty() {
         return Err(AppError::Validation(
@@ -182,7 +314,12 @@ pub async fn get_connect_url(
 
     // Verify the calendar exists and belongs to this tenant
     if !calendar_id.is_empty() {
-        let cal: Option<(Uuid,)> =
+        // `query_scalar` decodes exactly ONE column, so the annotation must be the COLUMN type
+        // (`Option<Uuid>`). Annotated `Option<(Uuid,)>` sqlx tried to decode the UUID column as a
+        // SQL RECORD and reported "mismatched types" on EVERY call — so this route answered 500
+        // for any request that named a calendar, which is the only way the Calendar tab can use it
+        // (proven live 2026-09-22: connect-url?calendar_id=<real id> -> 500 "Database error").
+        let cal: Option<Uuid> =
             sqlx::query_scalar("SELECT id FROM booking_calendars WHERE id = $1 AND tenant_id = $2")
                 .bind(
                     Uuid::parse_str(&calendar_id)
@@ -196,15 +333,34 @@ pub async fn get_connect_url(
         }
     }
 
-    let scopes = "https://www.googleapis.com/auth/calendar%20https://www.googleapis.com/auth/calendar.events";
+    let scopes =
+        "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events";
+    let cal = if calendar_id.is_empty() {
+        None
+    } else {
+        Some(
+            Uuid::parse_str(&calendar_id)
+                .map_err(|_| AppError::Validation("Invalid calendar_id".to_string()))?,
+        )
+    };
+    let state = sign_state(&s.config.jwt_secret, tid, cal, &redirect_uri);
+
     let auth_url = format!(
         "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent&state={}",
-        GOOGLE_AUTH_URL, client_id, redirect_uri, scopes, calendar_id
+        GOOGLE_AUTH_URL,
+        pct(&client_id),
+        pct(&redirect_uri),
+        pct(scopes),
+        pct(&state)
     );
 
     Ok(Json(json!({
         "connect_url": auth_url,
         "calendar_id": calendar_id,
+        // The exact URI that must be registered on the tenant's own Google OAuth client —
+        // Google rejects the token exchange if the two differ by one byte. The Calendar tab
+        // shows it so a tenant setting up their own client can copy it.
+        "redirect_uri": redirect_uri,
     })))
 }
 
@@ -212,11 +368,8 @@ pub async fn get_connect_url(
 /// Handles the OAuth2 callback from Google, stores refresh token in booking_calendars.
 pub async fn oauth_callback(
     State(s): State<AppState>,
-    Extension(c): Extension<Claims>,
     Query(params): Query<OAuthCallbackParams>,
 ) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-
     if let Some(err) = &params.error {
         return Err(AppError::BadRequest(format!("Google OAuth error: {}", err)));
     }
@@ -224,7 +377,22 @@ pub async fn oauth_callback(
     let code = params
         .code
         .ok_or_else(|| AppError::Validation("Authorization code missing".to_string()))?;
-    let (client_id, client_secret, redirect_uri) = google_oauth_config(&s, tid).await;
+
+    // No Authorization header exists on a browser redirect, so the SIGNED `state` is the
+    // credential: it names the tenant, the calendar and the redirect URI used at consent time.
+    let raw_state = params.state.as_deref().ok_or_else(|| {
+        AppError::Validation(
+            "OAuth state missing — restart the connect flow from the Calendar tab".to_string(),
+        )
+    })?;
+    let (tid, state_calendar, redirect_uri) = verify_state(&s.config.jwt_secret, raw_state)
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "Invalid or expired OAuth state — restart the connect flow from the Calendar tab"
+                    .to_string(),
+            )
+        })?;
+    let (client_id, client_secret, _redirect_pin) = google_oauth_config(&s, tid).await;
 
     // Exchange auth code for tokens
     let token_params = json!({
@@ -243,9 +411,19 @@ pub async fn oauth_callback(
         .await
         .map_err(|e| AppError::BadRequest(format!("Token exchange failed: {}", e)))?;
 
-    let token_data: GoogleTokenResponse = token_resp
-        .json()
-        .await
+    // Surface GOOGLE's own sentence (`invalid_client`, `redirect_uri_mismatch`, `invalid_grant`).
+    // The first failure in a BYOK OAuth flow is almost always a credential or redirect-URI
+    // mismatch, and "Failed to parse token response" hid exactly the text that fixes it.
+    let token_status = token_resp.status();
+    let token_body = token_resp.text().await.unwrap_or_default();
+    if !token_status.is_success() {
+        return Err(AppError::BadRequest(format!(
+            "Google refused the token exchange (HTTP {}): {}",
+            token_status,
+            token_body.chars().take(400).collect::<String>()
+        )));
+    }
+    let token_data: GoogleTokenResponse = serde_json::from_str(&token_body)
         .map_err(|e| AppError::BadRequest(format!("Failed to parse token response: {}", e)))?;
 
     let refresh_token = token_data.refresh_token.ok_or_else(|| {
@@ -254,16 +432,19 @@ pub async fn oauth_callback(
         )
     })?;
 
-    // Optionally get a default calendar ID for this user
-    let calendar_id = params.state.as_deref().unwrap_or("");
-
-    if calendar_id.is_empty() {
-        // No specific calendar_id in state — store on tenant level or return error
-        return Ok(Json(json!({
-            "message": "OAuth successful. Refresh token stored. No calendar_id was provided in state.",
-            "has_refresh_token": true,
-        })));
-    }
+    // The consent URL may or may not name a booking calendar. With no calendar there is nowhere
+    // tenant-scoped to keep the refresh token, so say that plainly instead of implying a link
+    // that does not exist (the old branch answered "Refresh token stored" and stored nothing).
+    let calendar_id = match state_calendar {
+        Some(c) => c.to_string(),
+        None => {
+            return Ok(Json(json!({
+                "message": "Google authorised this account, but no booking calendar was named in the connect flow, so nothing was linked. Start again from the Calendar tab's Connect Google Calendar button.",
+                "has_refresh_token": false,
+                "linked": false,
+            })));
+        }
+    };
 
     // Store the refresh token on the booking_calendars record
     // Also create a Google Calendar if this calendar doesn't have one yet
@@ -271,7 +452,7 @@ pub async fn oauth_callback(
         "UPDATE booking_calendars SET google_refresh_token = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3"
     )
     .bind(&refresh_token)
-    .bind(Uuid::parse_str(calendar_id).map_err(|_| AppError::Validation("Invalid calendar_id".to_string()))?)
+    .bind(Uuid::parse_str(&calendar_id).map_err(|_| AppError::Validation("Invalid calendar_id".to_string()))?)
     .bind(tid)
     .execute(&s.db)
     .await?;
@@ -281,7 +462,7 @@ pub async fn oauth_callback(
         "SELECT google_calendar_id FROM booking_calendars WHERE id = $1 AND tenant_id = $2",
     )
     .bind(
-        Uuid::parse_str(calendar_id)
+        Uuid::parse_str(&calendar_id)
             .map_err(|_| AppError::Validation("Invalid calendar_id".to_string()))?,
     )
     .bind(tid)
@@ -295,7 +476,7 @@ pub async fn oauth_callback(
             "SELECT name FROM booking_calendars WHERE id = $1 AND tenant_id = $2",
         )
         .bind(
-            Uuid::parse_str(calendar_id)
+            Uuid::parse_str(&calendar_id)
                 .map_err(|_| AppError::Validation("Invalid calendar_id".to_string()))?,
         )
         .bind(tid)
@@ -330,7 +511,7 @@ pub async fn oauth_callback(
                 "UPDATE booking_calendars SET google_calendar_id = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3"
             )
             .bind(&created.id)
-            .bind(Uuid::parse_str(calendar_id).map_err(|_| AppError::Validation("Invalid calendar_id".to_string()))?)
+            .bind(Uuid::parse_str(&calendar_id).map_err(|_| AppError::Validation("Invalid calendar_id".to_string()))?)
             .bind(tid)
             .execute(&s.db)
             .await?;
@@ -547,7 +728,6 @@ pub async fn sync_calendar(
 /// Placeholder — Google requires channel setup via the Calendar API.
 pub async fn webhook_handler(
     State(_s): State<AppState>,
-    Extension(_c): Extension<Claims>,
     body: axum::extract::Json<Value>,
 ) -> ApiResult<impl IntoResponse> {
     // Google Calendar push notifications come with X-Goog-* headers and a JSON body.
@@ -561,9 +741,54 @@ pub async fn webhook_handler(
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-/// Exchange a refresh token for a fresh access token, using the tenant's own OAuth client
-/// (`google_oauth_config` falls back to the environment only when the tenant has no slot filled).
-async fn get_access_token(s: &AppState, tid: Uuid, refresh_token: &str) -> Result<String, AppError> {
+/// GET /api/google-calendar/status
+///
+/// Which of THIS tenant's booking calendars are mirrored into Google Calendar — the reader the
+/// Calendar tab needs to be honest, and the reason it exists rather than widening
+/// `GET /api/bookings/calendars`: this shape can carry the Google link state WITHOUT ever
+/// returning `google_refresh_token`, which is a standing grant on the tenant's Google account and
+/// which no surface needs to read back.
+pub async fn calendar_status(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+
+    let rows = sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
+        "SELECT id, name, slug, google_calendar_id FROM booking_calendars \
+         WHERE tenant_id = $1 ORDER BY name",
+    )
+    .bind(tid)
+    .fetch_all(&s.db)
+    .await?;
+
+    let (client_id, _, _) = google_oauth_config(&s, tid).await;
+    let items: Vec<Value> = rows
+        .into_iter()
+        .map(|(id, name, slug, gcal)| {
+            json!({
+                "id": id,
+                "name": name,
+                "slug": slug,
+                "connected": gcal.is_some(),
+                "google_calendar_id": gcal,
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "configured": !client_id.is_empty(),
+        "count": items.len(),
+        "items": items,
+    })))
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+async fn get_access_token(
+    s: &AppState,
+    tid: Uuid,
+    refresh_token: &str,
+) -> Result<String, AppError> {
     let (client_id, client_secret, _redirect_uri) = google_oauth_config(s, tid).await;
 
     let params = json!({

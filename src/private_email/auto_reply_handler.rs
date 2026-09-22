@@ -71,6 +71,39 @@ pub async fn create_auto_reply(
 ) -> ApiResult<Json<serde_json::Value>> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
+    // The domain (and mailbox) must belong to THIS account. Inserting a foreign or unknown id
+    // tripped the foreign key and surfaced as 500 "Database error" (proven live 2026-09-22), which
+    // reads as a broken server instead of the 404 it is — and it is the cross-tenant write path,
+    // so it is refused explicitly rather than by accident.
+    let owns_domain: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM private_email_domains WHERE id = $1 AND tenant_id = $2)",
+    )
+    .bind(req.domain_id)
+    .bind(account_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+    if !owns_domain {
+        return Err(AppError::NotFound(
+            "Domain not found on this account".to_string(),
+        ));
+    }
+    if let Some(mailbox_id) = req.mailbox_id {
+        let owns_mailbox: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM private_email_boxes WHERE id = $1 AND tenant_id = $2)",
+        )
+        .bind(mailbox_id)
+        .bind(account_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(AppError::Database)?;
+        if !owns_mailbox {
+            return Err(AppError::NotFound(
+                "Mailbox not found on this account".to_string(),
+            ));
+        }
+    }
+
     let row = sqlx::query_as::<_, AutoReplyRow>(
         r#"
         INSERT INTO private_email_auto_replies (tenant_id, domain_id, mailbox_id, name, trigger_type, trigger_value, subject, body_html, delay_minutes)

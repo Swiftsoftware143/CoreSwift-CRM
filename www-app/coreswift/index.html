@@ -925,7 +925,7 @@ const TAB_RENDERERS = {
     '<div id="notifList"><div class="loading-wrap"><div class="spinner"></div> Loading notifications...</div></div>';
   },
 
-  'telnyx': () => placeholderPanel('Telnyx SMS/Voice', 'Connect your Telnyx account in the Integration Center to send SMS and make calls.', '📱'),
+  'telnyx': () => telnyxShell(),
 
   'comm-log': () => {
     return pageHeader('Communications Log', 'History of all communications') +
@@ -938,13 +938,9 @@ const TAB_RENDERERS = {
     '<div id="ticketsTable"><div class="loading-wrap"><div class="spinner"></div> Loading tickets...</div></div>';
   },
 
-  'inbox': () => placeholderPanel('Private Email', 'Connect a mail provider (Mailgun, SendGrid) in the Integration Center to enable private email inboxes.', '📬'),
+  'inbox': () => inboxShell(),
 
-  'calendar': () => {
-    return pageHeader('Calendar', 'Schedule and manage events',
-      '<button class="btn btn-primary btn-sm" onclick="showAddEventModal()">+ New Event</button>') +
-    '<div id="calendarContent"><div class="loading-wrap"><div class="spinner"></div> Loading events...</div></div>';
-  },
+  'calendar': () => calendarShell(),
 
   'bookings': () => placeholderPanel('Bookings', 'Manage appointments and bookings. Share your booking link for self-scheduling.', '📆'),
 
@@ -1000,6 +996,9 @@ const TAB_RENDERERS = {
     '<div id="icKeysWrap" data-ops="ic-personal-keys"><div class="loading-wrap"><div class="spinner"></div> Loading API keys...</div></div>' +
     '<br>' +
     '<div id="icNativeWrap" data-ops="ic-native"><div class="loading-wrap"><div class="spinner"></div> Loading native connectors...</div></div>' +
+    '<div id="icSyncWrap" data-ops="ic-sync"></div>' +
+    '<br>' +
+    '<div id="icAdaWrap" data-ops="ic-ada-triggers"><div class="loading-wrap"><div class="spinner"></div> Loading Ada campaign triggers...</div></div>' +
     '<br>' +
     '<div id="icProviderWrap" data-ops="ic-providers"><div class="loading-wrap"><div class="spinner"></div> Loading provider keys...</div></div>' +
     '<br>' +
@@ -1375,28 +1374,7 @@ const TAB_LOADERS = {
     }
   },
 
-  'calendar': async () => {
-    try {
-      const events = await API.get('/calendar/events');
-      let rows = [];
-      if (Array.isArray(events)) {
-        rows = events.slice(0, 50).map(e => [
-          escapeHtml(e.title || e.name || '—'),
-          escapeHtml(e.date || e.start_date || '—'),
-          escapeHtml(e.time || e.start_time || '—'),
-          `<span class="badge badge-muted">${escapeHtml(e.type || 'meeting')}</span>`,
-          escapeHtml(e.location || '—'),
-          `<button class="btn btn-ghost btn-xs">Edit</button>`
-        ]);
-      }
-      document.getElementById('calendarContent').innerHTML = dataTable(
-        ['Event','Date','Time','Type','Location',''], rows,
-        'No events scheduled. Add your first calendar event.'
-      );
-    } catch(e) {
-      document.getElementById('calendarContent').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Calendar endpoint: ${escapeHtml(e.message)}</p></div></div>`;
-    }
-  },
+  // replaced by TAB_LOADERS['calendar'] = loadCalendarTab (see the wiring overrides at the end)
 
   'integrations': async () => {
     await loadIntegrationCenter();
@@ -1871,10 +1849,14 @@ function icBind(el) {
       const act = b.getAttribute('data-ic');
       const slug = b.getAttribute('data-slug');
       const provider = b.getAttribute('data-provider');
+      const id = b.getAttribute('data-id');
       if (act === 'connect') icOpenConnect(slug);
       else if (act === 'disconnect') icDisconnectApp(slug);
       else if (act === 'provider') icOpenProvider(provider);
       else if (act === 'provider-del') icDeleteProvider(provider);
+      else if (act === 'sync') icSyncOpen(slug);
+      else if (act === 'history') icSyncHistory(slug);
+      else if (act === 'ada-del') icDeleteAdaTrigger(id);
     });
   });
   el.querySelectorAll('[data-ic-toggle]').forEach(c => {
@@ -1884,7 +1866,7 @@ function icBind(el) {
 
 async function loadIntegrationCenter() {
   IC.isAdmin = icIsAdmin();
-  await Promise.all([icLoadApps(), icLoadProviders(), icLoadOverview()]);
+  await Promise.all([icLoadApps(), icLoadProviders(), icLoadOverview(), icLoadAdaTriggers()]);
   icRenderUpgradePaths();
   IC.loaded = true;
 }
@@ -1951,6 +1933,15 @@ function icRenderApps() {
         actions += ' <button class="btn btn-ghost btn-xs" data-ic="disconnect" data-slug="' +
           escapeHtmlAttr(a.slug) + '">Disconnect</button>';
       }
+      // The sync half of this contract: pull/push/history were registered with no caller. They are
+      // offered on EVERY connector — History reads this account's own sync log and needs no
+      // credential, and Sync surfaces the API's refusal ("No active connection for '<slug>'") as a
+      // message instead of hiding the feature until a credential exists.
+      actions += '<div style="margin-top:4px">' +
+        '<button class="btn btn-secondary btn-xs" data-ic="sync" data-slug="' +
+        escapeHtmlAttr(a.slug) + '">Sync</button> ' +
+        '<button class="btn btn-ghost btn-xs" data-ic="history" data-slug="' +
+        escapeHtmlAttr(a.slug) + '">History</button></div>';
     } else {
       actions += '<span style="font-size:.72rem;color:var(--text-muted)">platform-admin connection</span>';
     }
@@ -2124,6 +2115,16 @@ function icOpenProvider(pkey) {
       '<input type="text" id="icPk_base_url" value="' + escapeHtmlAttr((existing && existing.base_url) || '') + '" autocomplete="off">' +
       '<span class="form-hint">' + escapeHtml(IC_FIELD_HINT.base_url) + '</span></div>';
   }
+  // The catalogue can require companion fields beside the secret (`requires_metadata`).
+  // google_calendar asks for `client_id`; before this, the slot existed in the catalogue but no
+  // shipped surface could ever fill it — the same "a customer cannot configure this" defect as an
+  // env-var-only key.
+  (p.requires_metadata || []).forEach(f => {
+    const cur = (existing && existing.metadata && existing.metadata[f]) || '';
+    body += '<div class="form-group"><label>' + escapeHtml(f) + '</label>' +
+      '<input type="text" id="icPkMeta_' + escapeHtmlAttr(f) + '" value="' + escapeHtmlAttr(cur) + '" autocomplete="off">' +
+      '<span class="form-hint">' + escapeHtml(IC_FIELD_HINT[f] || ('Required by ' + p.name + ' alongside the key.')) + '</span></div>';
+  });
   body += '<p class="form-hint">Stored on this account only. ' +
     (existing ? 'Saving replaces the current key immediately. ' : '') +
     'The full key is never shown again after saving.</p>';
@@ -2145,10 +2146,21 @@ async function icSaveProvider(pkey) {
   if (btn) btn.disabled = true;
   const payload = { provider: pkey, api_key: apiKey, is_active: true };
   if (baseEl && baseEl.value.trim()) payload.base_url = baseEl.value.trim();
+  const prov = IC.providers.find(x => x.key === pkey) || {};
+  const required = (prov.requires_metadata || []);
+  const meta = {};
+  required.forEach(f => {
+    const el = document.getElementById('icPkMeta_' + f);
+    if (el && el.value.trim()) meta[f] = el.value.trim();
+  });
+  if (Object.keys(meta).length) payload.metadata = meta;
+  const missing = required.filter(f => !meta[f]);
   try {
     await API.post('/provider-keys', payload);
     closeModal();
-    toast('Key saved for this account', 'success');
+    toast(missing.length
+      ? 'Key saved, but ' + missing.join(', ') + ' is still empty — the provider will refuse until it is filled'
+      : 'Key saved for this account', missing.length ? 'info' : 'success');
     await icLoadProviders();
   } catch (e) {
     toast('Save failed: ' + e.message, 'error');
@@ -4457,6 +4469,719 @@ TAB_RENDERERS['checklists'] = checklistsShell;
 TAB_RENDERERS['round-robin'] = roundRobinShell;
 TAB_RENDERERS['monitoring'] = monitoringShell;
 TAB_RENDERERS['widgets'] = widgetsShell;
+
+// ── BYOK / OAuth-gated blocks (t_cb0ddb83) ─────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// BYOK / OAuth-gated blocks — google-calendar, telnyx, private-email, native sync
+//
+// Every route in these four blocks was registered on the backend with no shipped
+// caller. This is the caller. Ground rules that shaped it:
+//  * a PER-TENANT credential (provider_keys, via the Integration Center) is the only
+//    way in. With no key there is no fake success: each surface renders the exact
+//    sentence the API answered, plus where to fix it;
+//  * a machine surface (Google's OAuth redirect, provider webhooks) is never driven
+//    from here — Google calls it, this only STARTS the flow;
+//  * every request body is what the Rust struct actually requires, probed live first
+//    (send-sms wants from/to/body; numbers wants `number`; sync/pull wants
+//    entity_type; auto-replies wants domain_id; send wants from_address).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── Calendar tab: booking calendars + the Google Calendar each mirrors ─────────
+const GC = { configured: false, items: [], loaded: false };
+
+function calendarShell() {
+  return pageHeader('Calendar', 'Booking calendars, and the Google Calendar each one mirrors into',
+    '<button class="btn btn-secondary btn-sm" onclick="gcOpenNewCalendar()">+ New Calendar</button>' +
+    '<button class="btn btn-secondary btn-sm" onclick="switchTab(\'integrations\')">🔑 Google credentials</button>') +
+    '<div id="gcContent"><div class="loading-wrap"><div class="spinner"></div> Loading calendars...</div></div>' +
+    '<div id="gcFlow"></div>';
+}
+
+async function loadCalendarTab() {
+  const el = document.getElementById('gcContent');
+  if (!el) return;
+  let d;
+  try {
+    d = await API.get('/google-calendar/status');
+  } catch (e) {
+    el.innerHTML = icErr('Could not read the calendar / Google link state', e.message);
+    return;
+  }
+  GC.configured = !!(d && d.configured);
+  GC.items = (d && d.items) || [];
+  GC.loaded = true;
+  gcRender();
+}
+
+function gcRender() {
+  const el = document.getElementById('gcContent');
+  if (!el) return;
+  const rows = GC.items.map(c => {
+    const badge = c.connected
+      ? '<span class="badge badge-success">linked</span>' +
+        '<div style="font-size:.72rem;color:var(--text-muted)">' + escapeHtml(c.google_calendar_id || '') + '</div>'
+      : '<span class="badge badge-muted">not linked</span>';
+    let actions = '<button class="btn btn-primary btn-xs" data-gc="connect" data-id="' +
+      escapeHtmlAttr(c.id) + '">Connect Google Calendar</button>';
+    if (c.connected) {
+      actions += ' <button class="btn btn-secondary btn-xs" data-gc="sync" data-id="' +
+        escapeHtmlAttr(c.id) + '">Sync now</button>';
+    }
+    return [escapeHtml(c.name), '<code>' + escapeHtml(c.slug) + '</code>', badge, actions];
+  });
+
+  el.innerHTML = card('📅 Booking calendars &rarr; Google Calendar',
+      '<p style="color:var(--text-secondary);margin:0">CoreSwift pushes a calendar\'s bookings OUT as Google Calendar events and pulls busy times back IN. ' +
+      (GC.configured
+        ? 'A Google OAuth client is stored on this account, so consent can start now.'
+        : '<strong>No Google OAuth client is stored on this account yet.</strong> Add your client ID and secret under <em>Provider keys</em> in the ' +
+          'Integration Center — the connect button will then print the exact redirect URI to register on your Google client.') +
+      '</p>') +
+    dataTable(['Calendar', 'Slug', 'Google Calendar', ''], rows,
+      'No booking calendars yet — use “+ New Calendar” to create one.');
+  gcBind(el);
+}
+
+function gcBind(root) {
+  root.querySelectorAll('[data-gc]').forEach(b => {
+    b.addEventListener('click', () => {
+      const act = b.getAttribute('data-gc');
+      const id = b.getAttribute('data-id');
+      if (act === 'connect') gcConnect(id, b);
+      else if (act === 'sync') gcSync(id, b);
+    });
+  });
+}
+
+async function gcConnect(calendarId, btn) {
+  const flow = document.getElementById('gcFlow');
+  if (btn) btn.disabled = true;
+  try {
+    const d = await API.get('/google-calendar/connect-url?calendar_id=' + encodeURIComponent(calendarId));
+    if (flow) {
+      flow.innerHTML = card('🔗 Finish the Google handshake',
+        '<p style="color:var(--text-secondary)">1. This deployment\'s callback URL — it must be registered byte-for-byte on your Google OAuth client:<br>' +
+        '<code>' + escapeHtml(d.redirect_uri || '') + '</code></p>' +
+        '<p style="color:var(--text-secondary)">2. Open the consent screen and approve. Google sends the browser back to CoreSwift, which stores the refresh token on this calendar.</p>' +
+        '<a class="btn btn-primary btn-sm" href="' + escapeHtmlAttr(d.connect_url || '#') + '" target="_blank" rel="noopener">Open Google consent</a>');
+    }
+  } catch (e) {
+    if (flow) flow.innerHTML = icErr('Google Calendar is not ready for this account', e.message);
+    toast('Connect failed: ' + e.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function gcSync(calendarId, btn) {
+  const flow = document.getElementById('gcFlow');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await API.post('/google-calendar/sync/' + encodeURIComponent(calendarId), { full_sync: true });
+    const pushed = (r && r.pushed_events) || [];
+    const pulled = (r && r.pulled_events) || [];
+    toast('Sync complete — pushed ' + pushed.length + ', pulled ' + pulled.length, 'success');
+    if (flow) {
+      flow.innerHTML = card('🔄 Last sync',
+        '<p style="color:var(--text-secondary);margin:0">pushed ' + pushed.length + ' · pulled ' + pulled.length + '</p>');
+    }
+  } catch (e) {
+    toast('Sync failed: ' + e.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function gcOpenNewCalendar() {
+  showModal('New booking calendar',
+    '<div class="form-group"><label>Name</label>' +
+    '<input type="text" id="gcNewName" placeholder="Consults — Miami" autocomplete="off"></div>' +
+    '<div class="form-group"><label>Slug</label>' +
+    '<input type="text" id="gcNewSlug" placeholder="consults-miami" autocomplete="off">' +
+    '<span class="form-hint">Used in the public booking URL; must be unique on this account.</span></div>' +
+    '<div class="form-group"><label>Type</label>' +
+    '<input type="text" id="gcNewType" value="generic" autocomplete="off"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="gcNewSave">Create calendar</button>');
+  const b = document.getElementById('gcNewSave');
+  if (b) b.addEventListener('click', async () => {
+    const name = document.getElementById('gcNewName').value.trim();
+    const slug = document.getElementById('gcNewSlug').value.trim();
+    if (!name || !slug) { toast('Name and slug are required', 'error'); return; }
+    b.disabled = true;
+    try {
+      await API.post('/bookings/calendars', {
+        name: name, slug: slug,
+        calendar_type: document.getElementById('gcNewType').value.trim() || 'generic'
+      });
+      closeModal(); toast('Calendar created', 'success'); await loadCalendarTab();
+    } catch (e) { toast('Could not create: ' + e.message, 'error'); b.disabled = false; }
+  });
+}
+
+// ── Telnyx tab: the account's own Telnyx key, numbers and outbound SMS ─────────
+const TX = { config: null, numbers: [], available: null };
+
+function telnyxShell() {
+  return pageHeader('Telnyx SMS/Voice', 'Send SMS and manage the numbers this account owns',
+    '<button class="btn btn-secondary btn-sm" onclick="switchTab(\'integrations\')">🔑 Telnyx credentials</button>') +
+    '<div id="txConfig"><div class="loading-wrap"><div class="spinner"></div> Loading Telnyx configuration...</div></div>' +
+    '<br><div id="txNumbers"><div class="loading-wrap"><div class="spinner"></div> Loading numbers...</div></div>' +
+    '<br><div id="txSend"></div>' +
+    '<br><div id="txAvailable"></div>';
+}
+
+async function loadTelnyxTab() {
+  const cfgEl = document.getElementById('txConfig');
+  if (!cfgEl) return;
+  let cfg = null, cfgErr = null, nums = [], numErr = null;
+  try { cfg = await API.get('/telnyx/config'); } catch (e) { cfgErr = e.message; }
+  try { const d = await API.get('/telnyx/numbers'); nums = (d && d.items) || []; } catch (e) { numErr = e.message; }
+  TX.config = cfg; TX.numbers = nums;
+
+  if (cfgErr) {
+    cfgEl.innerHTML = icErr('Could not read the Telnyx configuration', cfgErr);
+  } else {
+    const on = !!(cfg && cfg.api_key_set);
+    cfgEl.innerHTML = card('☎️ Telnyx configuration',
+      '<p style="color:var(--text-secondary)">Mode: <strong>' + escapeHtml((cfg && cfg.mode) || 'none') + '</strong>' +
+      (on ? ' · key <code>' + escapeHtml((cfg && cfg.api_key_masked) || '') + '</code>' : '') + '</p>' +
+      (on
+        ? '<p style="color:var(--text-secondary);margin:0">Reads and sends below use the key stored on THIS account.</p>'
+        : '<p style="color:var(--text-secondary);margin:0"><strong>Telnyx is not configured for this account.</strong> Number search and sending both call ' +
+          'api.telnyx.com, so nothing below can succeed until a key is stored. Add it here or under <em>Provider keys</em> in the ' +
+          'Integration Center — both write the same per-account slot (never a platform-wide default).</p>'),
+      '<button class="btn ' + (on ? 'btn-secondary' : 'btn-primary') + ' btn-sm" onclick="txOpenKey()">' +
+      (on ? 'Replace Telnyx key' : 'Add Telnyx key') + '</button>');
+  }
+
+  const numEl = document.getElementById('txNumbers');
+  if (numErr) {
+    numEl.innerHTML = icErr('Could not read this account\'s numbers', numErr);
+  } else {
+    const rows = TX.numbers.map(n => [
+      '<code>' + escapeHtml(n.phone_number || '') + '</code>',
+      escapeHtml(n.friendly_name || '—'),
+      escapeHtml(n.provider || 'telnyx'),
+      n.is_active ? '<span class="badge badge-success">active</span>' : '<span class="badge badge-muted">inactive</span>',
+      '<button class="btn btn-ghost btn-xs" data-tx="release" data-id="' + escapeHtmlAttr(n.id) + '">Release</button>'
+    ]);
+    numEl.innerHTML = card('📱 Numbers this account owns',
+      '<p style="color:var(--text-secondary);margin:0">An outbound SMS can only be sent FROM a number listed here — the API refuses any other sender.</p>',
+      '<button class="btn btn-primary btn-sm" onclick="txOpenAddNumber()">+ Add number</button>') +
+      dataTable(['Number', 'Name', 'Provider', 'State', ''], rows,
+        'No numbers on this account yet — add one, or search Telnyx for an available number below.');
+  }
+  txRenderSend();
+  txRenderAvailable();
+  txBind(document.getElementById('tabPanels'));
+}
+
+function txConfigured() { return !!(TX.config && TX.config.api_key_set); }
+
+function txRenderSend() {
+  const el = document.getElementById('txSend');
+  if (!el) return;
+  const options = TX.numbers.filter(n => n.is_active)
+    .map(n => '<option value="' + escapeHtmlAttr(n.phone_number) + '">' + escapeHtml(n.phone_number) + '</option>').join('');
+  const blocked = !txConfigured()
+    ? 'Telnyx is not configured for this account — add a key above before sending.'
+    : (TX.numbers.length === 0
+        ? 'This account owns no numbers yet, and the API only sends from a number you own.'
+        : '');
+  el.innerHTML = card('✉️ Send an SMS',
+    (blocked ? '<p style="color:var(--text-secondary)">' + escapeHtml(blocked) + '</p>' : '') +
+    '<div class="form-group"><label>From</label><select id="txFrom">' + (options || '<option value="">no numbers</option>') + '</select></div>' +
+    '<div class="form-group"><label>To</label><input type="text" id="txTo" placeholder="+15551234567" autocomplete="off"></div>' +
+    '<div class="form-group"><label>Message</label><input type="text" id="txBody" placeholder="Hello from CoreSwift" autocomplete="off"></div>',
+    '<button class="btn btn-primary btn-sm" id="txSendBtn"' + (blocked ? ' disabled' : '') + '>Send SMS</button>');
+  const b = document.getElementById('txSendBtn');
+  if (b) b.addEventListener('click', txSend);
+}
+
+async function txSend() {
+  const el = document.getElementById('txSendBtn');
+  const from = document.getElementById('txFrom').value.trim();
+  const to = document.getElementById('txTo').value.trim();
+  const body = document.getElementById('txBody').value.trim();
+  if (!from || !to || !body) { toast('From, To and Message are all required', 'error'); return; }
+  if (el) el.disabled = true;
+  try {
+    const r = await API.post('/telnyx/send-sms', { from: from, to: to, body: body });
+    toast('SMS sent — ' + ((r && r.status) || 'ok'), 'success');
+    document.getElementById('txBody').value = '';
+  } catch (e) {
+    toast('Send failed: ' + e.message, 'error');
+  } finally {
+    if (el) el.disabled = false;
+  }
+}
+
+function txRenderAvailable() {
+  const el = document.getElementById('txAvailable');
+  if (!el) return;
+  let body = '<p style="color:var(--text-secondary)">Searches Telnyx for numbers you can buy. This call goes straight to api.telnyx.com with this account\'s key.</p>';
+  if (TX.available === null) {
+    body += '<div class="form-group"><label>Starts with</label>' +
+      '<input type="text" id="txFilter" value="305" autocomplete="off"><span class="form-hint">Area code or prefix.</span></div>';
+  } else {
+    const rows = (TX.available || []).map(n => [
+      '<code>' + escapeHtml(n.phone_number || '') + '</code>',
+      escapeHtml(n.region || '—'),
+      escapeHtml(n.rate_center || '—'),
+      escapeHtml(n.cost || '—'),
+      '<button class="btn btn-secondary btn-xs" data-tx="claim" data-number="' + escapeHtmlAttr(n.phone_number || '') + '">Claim</button>'
+    ]);
+    body = dataTable(['Number', 'Region', 'Rate center', 'Monthly', ''], rows,
+      'Telnyx returned no numbers for that search.') +
+      '<button class="btn btn-ghost btn-sm" style="margin-top:8px" id="txSearchAgain">Search again</button>';
+  }
+  el.innerHTML = card('🔎 Search available numbers', body,
+    TX.available === null ? '<button class="btn btn-secondary btn-sm" id="txSearchBtn"' + (txConfigured() ? '' : ' disabled') + '>Search Telnyx</button>' : '');
+  const sb = document.getElementById('txSearchBtn');
+  if (sb) sb.addEventListener('click', txSearchAvailable);
+  const sa = document.getElementById('txSearchAgain');
+  if (sa) sa.addEventListener('click', () => { TX.available = null; txRenderAvailable(); txBind(document.getElementById('tabPanels')); });
+  txBind(el);
+}
+
+async function txSearchAvailable() {
+  const filter = (document.getElementById('txFilter') || {}).value || '305';
+  const btn = document.getElementById('txSearchBtn');
+  if (btn) btn.disabled = true;
+  try {
+    const d = await API.get('/telnyx/available?filter=' + encodeURIComponent(filter.trim()) + '&limit=10');
+    TX.available = (d && d.items) || [];
+    txRenderAvailable();
+  } catch (e) {
+    TX.available = [];
+    txRenderAvailable();
+    toast('Search failed: ' + e.message, 'error');
+  }
+}
+
+function txOpenKey() {
+  showModal('Telnyx API key',
+    '<p style="color:var(--text-secondary);margin-bottom:14px">Stored on THIS account only (provider_keys, provider <code>telnyx</code>) — the same slot the Integration Center writes. Never a platform-wide default.</p>' +
+    '<div class="form-group"><label>API key</label>' +
+    '<input type="password" id="txKey" placeholder="KEY..." autocomplete="off"></div>' +
+    '<div class="form-group"><label>Messaging profile ID (optional)</label>' +
+    '<input type="text" id="txProfile" autocomplete="off"><span class="form-hint">Only needed if your Telnyx account sends through a messaging profile.</span></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="txKeySave">Save key</button>');
+  const b = document.getElementById('txKeySave');
+  if (b) b.addEventListener('click', async () => {
+    const key = document.getElementById('txKey').value.trim();
+    if (!key) { toast('Enter the API key', 'error'); return; }
+    b.disabled = true;
+    const payload = { api_key: key };
+    const prof = document.getElementById('txProfile').value.trim();
+    if (prof) payload.messaging_profile_id = prof;
+    try {
+      await API.put('/telnyx/config', payload);
+      closeModal(); toast('Telnyx configuration saved for this account', 'success'); await loadTelnyxTab();
+    } catch (e) { toast('Could not save: ' + e.message, 'error'); b.disabled = false; }
+  });
+}
+
+function txOpenAddNumber() {
+  showModal('Add a number to this account',
+    '<p style="color:var(--text-secondary);margin-bottom:14px">If Telnyx does not already own this number on your account, claiming it can PURCHASE it and incur a Telnyx charge. Only add numbers you already own or intend to buy.</p>' +
+    '<div class="form-group"><label>Number (E.164)</label>' +
+    '<input type="text" id="txNewNumber" placeholder="+13055551234" autocomplete="off"></div>' +
+    '<div class="form-group"><label>Friendly name (optional)</label>' +
+    '<input type="text" id="txNewName" autocomplete="off"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="txAddSave">Add number</button>');
+  const b = document.getElementById('txAddSave');
+  if (b) b.addEventListener('click', async () => {
+    const number = document.getElementById('txNewNumber').value.trim();
+    if (!number) { toast('Enter the number', 'error'); return; }
+    b.disabled = true;
+    const payload = { number: number };
+    const nm = document.getElementById('txNewName').value.trim();
+    if (nm) payload.friendly_name = nm;
+    try {
+      await API.post('/telnyx/numbers', payload);
+      closeModal(); toast('Number added', 'success'); await loadTelnyxTab();
+    } catch (e) { toast('Could not add: ' + e.message, 'error'); b.disabled = false; }
+  });
+}
+
+async function txRelease(id) {
+  if (!confirm('Release this number from your account? Inbound SMS to it will stop arriving as leads.')) return;
+  try {
+    await API.del('/telnyx/numbers/' + encodeURIComponent(id));
+    toast('Number released', 'success'); await loadTelnyxTab();
+  } catch (e) { toast('Could not release: ' + e.message, 'error'); }
+}
+
+async function txClaim(number) {
+  if (!number) return;
+  if (!confirm('Claim ' + number + '? If your Telnyx account does not own it, this PURCHASES it and can incur a charge.')) return;
+  try {
+    await API.post('/telnyx/numbers', { number: number });
+    toast(number + ' added to this account', 'success');
+    TX.available = null; await loadTelnyxTab();
+  } catch (e) { toast('Could not claim: ' + e.message, 'error'); }
+}
+
+function txBind(root) {
+  if (!root) return;
+  root.querySelectorAll('[data-tx]').forEach(b => {
+    b.addEventListener('click', () => {
+      const act = b.getAttribute('data-tx');
+      if (act === 'release') txRelease(b.getAttribute('data-id'));
+      else if (act === 'claim') txClaim(b.getAttribute('data-number'));
+    });
+  });
+}
+
+// ── Private Email tab: domains, mailboxes, auto-replies, send, support box ─────
+const PE = { domains: [], boxes: [], autoReplies: [], support: null, planNote: '', available: true };
+
+function inboxShell() {
+  return pageHeader('Private Email', 'Send from your own domains, auto-reply, and turn forwarded mail into tickets',
+    '<button class="btn btn-secondary btn-sm" onclick="switchTab(\'integrations\')">🔑 Mail provider keys</button>') +
+    '<div id="peSupport"><div class="loading-wrap"><div class="spinner"></div> Loading support box...</div></div>' +
+    '<br><div id="peDomains"><div class="loading-wrap"><div class="spinner"></div> Loading domains...</div></div>' +
+    '<br><div id="peBoxes"></div>' +
+    '<br><div id="peAuto"><div class="loading-wrap"><div class="spinner"></div> Loading auto-replies...</div></div>' +
+    '<br><div id="peSend"></div>';
+}
+
+async function loadInboxTab() {
+  const el = document.getElementById('peDomains');
+  if (!el) return;
+  let domains = [], boxes = [], auto = [], support = null, errs = {};
+  try { const d = await API.get('/private-email/domains'); domains = Array.isArray(d) ? d : ((d && (d.items || d.domains)) || []); }
+  catch (e) { errs.domains = e.message; }
+  try { const d = await API.get('/private-email/boxes'); boxes = Array.isArray(d) ? d : ((d && (d.items || d.boxes)) || []); }
+  catch (e) { errs.boxes = e.message; }
+  try { const d = await API.get('/private-email/auto-replies'); auto = Array.isArray(d) ? d : ((d && (d.items || d.auto_replies)) || []); }
+  catch (e) { errs.autoReplies = e.message; }
+  try { support = await API.get('/private-email/support-box'); } catch (e) { errs.support = e.message; }
+  PE.domains = domains; PE.boxes = boxes; PE.autoReplies = auto; PE.support = support;
+
+  if (errs.support) document.getElementById('peSupport').innerHTML = icErr('Could not read the support box', errs.support);
+  else {
+    const on = !!(support && support.configured);
+    document.getElementById('peSupport').innerHTML = card('🎫 Support box &rarr; tickets',
+      '<p style="color:var(--text-secondary);margin:0">' + (on
+        ? 'Mail forwarded to <code>' + escapeHtml(support.email_address || '') + '</code> becomes a support ticket automatically.' +
+          (support.forwarding_instructions ? '<br>' + escapeHtml(support.forwarding_instructions) : '')
+        : 'No support box yet. Pick one of this account\'s mailboxes and forwarding to it will open tickets automatically.') + '</p>',
+      '<button class="btn btn-primary btn-sm" onclick="peOpenSupportBox()">' + (on ? 'Change support box' : 'Set support box') + '</button>');
+  }
+
+  if (errs.domains) el.innerHTML = icErr('Could not read your domains', errs.domains);
+  else {
+    const rows = PE.domains.map(d => [
+      '<code>' + escapeHtml(d.domain || '') + '</code>',
+      escapeHtml(d.label || '—'),
+      escapeHtml(d.provider_type || 'mailgun'),
+      d.verified ? '<span class="badge badge-success">verified</span>' : '<span class="badge badge-warning">pending DNS</span>',
+      d.catch_all_enabled ? 'catch-all' : '—'
+    ]);
+    el.innerHTML = card('🌐 Domains you send from',
+      '<p style="color:var(--text-secondary);margin:0">Each domain is the provider-level identity CoreSwift sends and receives with. Credentials are per account, never a platform default.</p>',
+      '<button class="btn btn-primary btn-sm" onclick="peOpenAddDomain()">+ Add domain</button>') +
+      dataTable(['Domain', 'Label', 'Provider', 'Verification', 'Catch-all'], rows,
+        'No domains on this account yet.');
+  }
+
+  document.getElementById('peBoxes').innerHTML = card('📬 Mailboxes',
+    '<p style="color:var(--text-secondary);margin:0">A mailbox is an address on one of your domains. Outbound mail can only be sent FROM a mailbox.</p>') +
+    dataTable(['Address', 'Local part', 'Status', 'Forwarding'],
+      PE.boxes.map(b => [
+        '<code>' + escapeHtml(b.email_address || '') + '</code>',
+        escapeHtml(b.local_part || ''),
+        b.status === 'active' ? '<span class="badge badge-success">active</span>' : '<span class="badge badge-muted">' + escapeHtml(b.status || '') + '</span>',
+        b.forwarding_enabled ? 'on' : 'off'
+      ]),
+      'No mailboxes yet — add a domain first.');
+
+  if (errs.autoReplies) document.getElementById('peAuto').innerHTML = icErr('Could not read auto-replies', errs.autoReplies);
+  else {
+    document.getElementById('peAuto').innerHTML = card('↩️ Auto-replies',
+      '<p style="color:var(--text-secondary);margin:0">Automatic answers for inbound mail on one of your domains.</p>',
+      '<button class="btn btn-primary btn-sm" onclick="peOpenAutoReply()">+ New auto-reply</button>') +
+      dataTable(['Name', 'Trigger', 'Subject', 'Delay', 'Active'],
+        PE.autoReplies.map(a => [
+          escapeHtml(a.name || ''),
+          escapeHtml(a.trigger_type || '') + (a.trigger_value ? ': ' + escapeHtml(a.trigger_value) : ''),
+          escapeHtml(a.subject || '—'),
+          escapeHtml(String(a.delay_minutes == null ? 0 : a.delay_minutes)) + ' min',
+          a.is_active ? '<span class="badge badge-success">on</span>' : '<span class="badge badge-muted">off</span>'
+        ]),
+        'No auto-replies yet.');
+  }
+
+  const activeBoxes = PE.boxes.filter(b => b.status === 'active')
+    .map(b => '<option value="' + escapeHtmlAttr(b.email_address) + '">' + escapeHtml(b.email_address) + '</option>').join('');
+  document.getElementById('peSend').innerHTML = card('✉️ Send from your domain',
+    (activeBoxes ? '' : '<p style="color:var(--text-secondary)">No active mailbox on this account yet, and outbound mail must be sent FROM one.</p>') +
+    '<div class="form-group"><label>From</label><select id="peFrom">' + (activeBoxes || '<option value="">no mailboxes</option>') + '</select></div>' +
+    '<div class="form-group"><label>To</label><input type="text" id="peTo" placeholder="lead@example.com" autocomplete="off"></div>' +
+    '<div class="form-group"><label>Subject</label><input type="text" id="peSubject" autocomplete="off"></div>' +
+    '<div class="form-group"><label>Body</label><input type="text" id="peBody" autocomplete="off"></div>',
+    '<button class="btn btn-primary btn-sm" id="peSendBtn"' + (activeBoxes ? '' : ' disabled') + '>Send email</button>');
+  const sb = document.getElementById('peSendBtn');
+  if (sb) sb.addEventListener('click', peSend);
+}
+
+async function peSend() {
+  const btn = document.getElementById('peSendBtn');
+  const from = document.getElementById('peFrom').value.trim();
+  const to = document.getElementById('peTo').value.trim();
+  const subject = document.getElementById('peSubject').value.trim();
+  const body = document.getElementById('peBody').value.trim();
+  if (!from || !to || !subject || !body) { toast('From, To, Subject and Body are required', 'error'); return; }
+  if (btn) btn.disabled = true;
+  try {
+    await API.post('/private-email/send', { from_address: from, to: to, subject: subject, body: body });
+    toast('Email sent', 'success');
+    document.getElementById('peBody').value = '';
+  } catch (e) { toast('Send failed: ' + e.message, 'error'); }
+  finally { if (btn) btn.disabled = false; }
+}
+
+function peOpenAddDomain() {
+  showModal('Add a domain',
+    '<div class="form-group"><label>Domain</label>' +
+    '<input type="text" id="peNewDomain" placeholder="mail.yourdomain.com" autocomplete="off"></div>' +
+    '<div class="form-group"><label>Label (optional)</label><input type="text" id="peNewLabel" autocomplete="off"></div>' +
+    '<div class="form-group"><label>Provider</label>' +
+    '<select id="peNewProvider"><option value="mailgun">Mailgun</option><option value="sendgrid">SendGrid</option><option value="smtp">SMTP</option></select>' +
+    '<span class="form-hint">The provider\'s own API key is stored with the domain; add a platform provider key under the Integration Center if you use a shared account.</span></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="peDomainSave">Add domain</button>');
+  const b = document.getElementById('peDomainSave');
+  if (b) b.addEventListener('click', async () => {
+    const domain = document.getElementById('peNewDomain').value.trim();
+    if (!domain) { toast('Enter the domain', 'error'); return; }
+    b.disabled = true;
+    const payload = { domain: domain, provider_type: document.getElementById('peNewProvider').value };
+    const label = document.getElementById('peNewLabel').value.trim();
+    if (label) payload.label = label;
+    try {
+      await API.post('/private-email/domains', payload);
+      closeModal(); toast('Domain added', 'success'); await loadInboxTab();
+    } catch (e) {
+      // A plan gate is a real answer, not a bug — show it where the user is standing.
+      toast('Could not add the domain: ' + e.message, 'error');
+      b.disabled = false;
+    }
+  });
+}
+
+function peOpenAutoReply() {
+  const opts = PE.domains.map(d => '<option value="' + escapeHtmlAttr(d.id) + '">' + escapeHtml(d.domain || '') + '</option>').join('');
+  showModal('New auto-reply',
+    (opts ? '' : '<p style="color:var(--text-secondary)">An auto-reply belongs to a domain, and this account has none yet.</p>') +
+    '<div class="form-group"><label>Domain</label><select id="peArDomain">' + (opts || '<option value="">no domains</option>') + '</select></div>' +
+    '<div class="form-group"><label>Name</label><input type="text" id="peArName" autocomplete="off"></div>' +
+    '<div class="form-group"><label>Trigger</label>' +
+    '<select id="peArTrigger"><option value="all">every message</option><option value="keyword">keyword</option><option value="sender">sender</option></select></div>' +
+    '<div class="form-group"><label>Trigger value (for keyword/sender)</label><input type="text" id="peArValue" autocomplete="off"></div>' +
+    '<div class="form-group"><label>Subject</label><input type="text" id="peArSubject" autocomplete="off"></div>' +
+    '<div class="form-group"><label>Body (HTML)</label><input type="text" id="peArBody" autocomplete="off"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="peArSave"' + (opts ? '' : ' disabled') + '>Create auto-reply</button>');
+  const b = document.getElementById('peArSave');
+  if (b) b.addEventListener('click', async () => {
+    const domainId = document.getElementById('peArDomain').value;
+    const name = document.getElementById('peArName').value.trim();
+    const body = document.getElementById('peArBody').value.trim();
+    if (!domainId || !name || !body) { toast('Domain, Name and Body are required', 'error'); return; }
+    b.disabled = true;
+    const payload = {
+      domain_id: domainId, name: name,
+      trigger_type: document.getElementById('peArTrigger').value,
+      body_html: body
+    };
+    const val = document.getElementById('peArValue').value.trim();
+    if (val) payload.trigger_value = val;
+    const subj = document.getElementById('peArSubject').value.trim();
+    if (subj) payload.subject = subj;
+    try {
+      await API.post('/private-email/auto-replies', payload);
+      closeModal(); toast('Auto-reply created', 'success'); await loadInboxTab();
+    } catch (e) { toast('Could not create: ' + e.message, 'error'); b.disabled = false; }
+  });
+}
+
+function peOpenSupportBox() {
+  const opts = PE.boxes.filter(b => b.status === 'active')
+    .map(b => '<option value="' + escapeHtmlAttr(b.id) + '"' + (PE.support && PE.support.box_id === b.id ? ' selected' : '') + '>' + escapeHtml(b.email_address) + '</option>').join('');
+  showModal('Support box',
+    (opts ? '<p style="color:var(--text-secondary);margin-bottom:14px">Mail forwarded to the chosen mailbox opens a support ticket automatically.</p>'
+          : '<p style="color:var(--text-secondary)">This account has no active mailbox yet, so there is nothing to forward to.</p>') +
+    '<div class="form-group"><label>Mailbox</label><select id="peSbBox">' + (opts || '<option value="">no mailboxes</option>') + '</select></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="peSbSave"' + (opts ? '' : ' disabled') + '>Save</button>');
+  const b = document.getElementById('peSbSave');
+  if (b) b.addEventListener('click', async () => {
+    const boxId = document.getElementById('peSbBox').value;
+    if (!boxId) { toast('Pick a mailbox', 'error'); return; }
+    b.disabled = true;
+    try {
+      await API.put('/private-email/support-box', { box_id: boxId });
+      closeModal(); toast('Support box saved', 'success'); await loadInboxTab();
+    } catch (e) { toast('Could not save: ' + e.message, 'error'); b.disabled = false; }
+  });
+}
+
+// ── Native connector SYNC — the unfinished half of the connectors contract ─────
+// connect/disconnect/test were wired; pull/push/history and the Ada campaign triggers
+// were registered with no caller. Both directions post what the Rust struct requires.
+const IC_SYNC_ENTITIES = ['contacts', 'lists', 'tags'];
+
+function icSyncOpen(slug) {
+  const opts = IC_SYNC_ENTITIES.map(e => '<option value="' + e + '">' + e + '</option>').join('');
+  showModal('Sync ' + slug,
+    ((IC.status[slug] || {}).connected ? '' :
+      '<p style="color:var(--warning,#f0ad4e);margin-bottom:10px"><strong>This connector has no credentials stored</strong> — ' +
+      'the API will refuse a pull or push for it, and the refusal is shown here verbatim rather than hidden.</p>') +
+    '<p style="color:var(--text-secondary);margin-bottom:14px">Pull asks ' + escapeHtml(slug) +
+      ' for its records; push sends the payload below to it. Both are logged to this account\'s sync history either way.</p>' +
+    '<div class="form-group"><label>Entity</label><select id="icSyncEntity">' + opts + '</select></div>' +
+    '<div class="form-group"><label>Push payload (JSON)</label>' +
+    '<input type="text" id="icSyncData" value="[]" autocomplete="off">' +
+    '<span class="form-hint">Only used by Push — it is sent verbatim to the partner app.</span></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-secondary" id="icPullBtn">Pull from ' + escapeHtml(slug) + '</button>' +
+    '<button class="btn btn-primary" id="icPushBtn">Push to ' + escapeHtml(slug) + '</button>');
+  const pb = document.getElementById('icPullBtn');
+  const ub = document.getElementById('icPushBtn');
+  if (pb) pb.addEventListener('click', () => icSyncRun(slug, 'pull', pb));
+  if (ub) ub.addEventListener('click', () => icSyncRun(slug, 'push', ub));
+}
+
+async function icSyncRun(slug, direction, btn) {
+  const entity = document.getElementById('icSyncEntity').value;
+  let payload = { entity_type: entity };
+  if (direction === 'push') {
+    const raw = document.getElementById('icSyncData').value.trim() || '[]';
+    try { payload.data = JSON.parse(raw); }
+    catch (e) { toast('Push payload is not valid JSON: ' + e.message, 'error'); return; }
+  }
+  if (btn) btn.disabled = true;
+  try {
+    const r = await API.post('/native/apps/' + encodeURIComponent(slug) + '/sync/' + direction, payload);
+    closeModal();
+    toast(direction + ' ok — ' + ((r && r.records) || 0) + ' record(s)', 'success');
+    const wrap = document.getElementById('icSyncWrap');
+    if (wrap) wrap.innerHTML = card('🔄 Last ' + direction + ' (' + escapeHtml(slug) + ')',
+      '<p style="color:var(--text-secondary);margin:0">' + escapeHtml(entity) + ' · status ' + escapeHtml((r && r.status) || '?') +
+      ' · records ' + escapeHtml(String((r && r.records) || 0)) + '</p>');
+  } catch (e) {
+    toast(direction + ' failed: ' + e.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function icSyncHistory(slug) {
+  const wrap = document.getElementById('icSyncWrap');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Loading sync history...</div>';
+  try {
+    const d = await API.get('/native/apps/' + encodeURIComponent(slug) + '/sync/history');
+    const rows = ((d && d.sync_history) || []).map(h => [
+      escapeHtml(h.direction || ''),
+      escapeHtml(h.entity_type || ''),
+      h.status === 'completed' ? '<span class="badge badge-success">completed</span>'
+        : (h.status === 'failed' ? '<span class="badge badge-danger">failed</span>' : '<span class="badge badge-muted">' + escapeHtml(h.status || '') + '</span>'),
+      escapeHtml(String(h.records_succeeded == null ? 0 : h.records_succeeded)) + ' / ' + escapeHtml(String(h.records_processed == null ? 0 : h.records_processed)),
+      escapeHtml(h.started_at ? new Date(h.started_at).toLocaleString() : ''),
+      h.error_log ? '<code style="font-size:.7rem">' + escapeHtml(JSON.stringify(h.error_log).slice(0, 160)) + '</code>' : ''
+    ]);
+    wrap.innerHTML = card('🕓 Sync history — ' + escapeHtml(slug),
+      '<p style="color:var(--text-secondary);margin:0">Every pull and push on this account, with what it moved and what it failed on.</p>') +
+      dataTable(['Direction', 'Entity', 'Status', 'OK / seen', 'Started', 'Error'], rows,
+        'No sync has run for this connector yet.');
+  } catch (e) {
+    wrap.innerHTML = icErr('Could not read the sync history for ' + slug, e.message);
+  }
+}
+
+// ── Ada campaign triggers (automation rule → AdaSwift campaign) ────────────────
+const IC_ADA_TRIGGERS = [
+  'user_created', 'contact_created', 'account_activated', 'scan_complete',
+  'referral_confirmed', 'commission_earned', 'payout_processed', 'affiliate_activated'
+];
+
+async function icLoadAdaTriggers() {
+  const wrap = document.getElementById('icAdaWrap');
+  if (!wrap) return;
+  let triggers = [], err = null;
+  try {
+    const d = await API.get('/native/apps/ada-campaigns');
+    triggers = (d && d.triggers) || [];
+  } catch (e) { err = e.message; }
+  if (err) { wrap.innerHTML = icErr('Could not read Ada campaign triggers', err); return; }
+  const rows = triggers.map(t => [
+    escapeHtml(t.name || ''),
+    '<code>' + escapeHtml(t.trigger_on || '') + '</code>',
+    '<code>' + escapeHtml(t.ada_campaign_id || '') + '</code>',
+    escapeHtml(String(t.schedule_delay_minutes == null ? 0 : t.schedule_delay_minutes)) + ' min',
+    t.active ? '<span class="badge badge-success">on</span>' : '<span class="badge badge-muted">off</span>',
+    '<button class="btn btn-ghost btn-xs" data-ic="ada-del" data-id="' + escapeHtmlAttr(t.id) + '">Delete</button>'
+  ]);
+  wrap.innerHTML = card('🧨 Ada campaign triggers',
+    '<p style="color:var(--text-secondary);margin:0">Maps a CoreSwift event to a campaign in AdaSwift, so welcome and report mail is sent by Ada instead of a local mail provider.</p>',
+    '<button class="btn btn-primary btn-sm" onclick="icOpenAdaTrigger()">+ New trigger</button>') +
+    dataTable(['Name', 'Fires on', 'Ada campaign', 'Delay', 'Active', ''], rows,
+      'No Ada campaign triggers mapped yet.');
+  icBind(wrap);
+}
+
+function icOpenAdaTrigger() {
+  const opts = IC_ADA_TRIGGERS.map(t => '<option value="' + t + '">' + t + '</option>').join('');
+  showModal('New Ada campaign trigger',
+    '<div class="form-group"><label>Name</label><input type="text" id="icAdaName" placeholder="Welcome email" autocomplete="off"></div>' +
+    '<div class="form-group"><label>Fires on</label><select id="icAdaOn">' + opts + '</select></div>' +
+    '<div class="form-group"><label>Ada campaign ID</label><input type="text" id="icAdaCampaign" autocomplete="off">' +
+    '<span class="form-hint">The campaign\'s id in AdaSwift (copy it from AdaSwift).</span></div>' +
+    '<div class="form-group"><label>Delay (minutes)</label><input type="text" id="icAdaDelay" value="0" autocomplete="off"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="icAdaSave">Create trigger</button>');
+  const b = document.getElementById('icAdaSave');
+  if (b) b.addEventListener('click', async () => {
+    const name = document.getElementById('icAdaName').value.trim();
+    const campaign = document.getElementById('icAdaCampaign').value.trim();
+    if (!name || !campaign) { toast('Name and Ada campaign ID are required', 'error'); return; }
+    b.disabled = true;
+    const delay = parseInt(document.getElementById('icAdaDelay').value, 10);
+    try {
+      await API.post('/native/apps/ada-campaigns', {
+        name: name,
+        trigger_on: document.getElementById('icAdaOn').value,
+        ada_campaign_id: campaign,
+        schedule_delay_minutes: isNaN(delay) ? 0 : delay,
+        active: true
+      });
+      closeModal(); toast('Trigger created', 'success'); await icLoadAdaTriggers();
+    } catch (e) { toast('Could not create: ' + e.message, 'error'); b.disabled = false; }
+  });
+}
+
+async function icDeleteAdaTrigger(id) {
+  if (!confirm('Delete this Ada campaign trigger?')) return;
+  try {
+    await API.del('/native/apps/ada-campaigns/' + encodeURIComponent(id));
+    toast('Trigger deleted', 'success'); await icLoadAdaTriggers();
+  } catch (e) { toast('Could not delete: ' + e.message, 'error'); }
+}
+
+TAB_RENDERERS['telnyx'] = telnyxShell;
+TAB_RENDERERS['inbox'] = inboxShell;
+TAB_RENDERERS['calendar'] = calendarShell;
+TAB_LOADERS['telnyx'] = loadTelnyxTab;
+TAB_LOADERS['inbox'] = loadInboxTab;
+TAB_LOADERS['calendar'] = loadCalendarTab;
+
 TAB_LOADERS['pipelines'] = loadPipelinesTab;
 TAB_LOADERS['campaigns'] = loadCampaignsTab;
 TAB_LOADERS['lists'] = loadListsTab;

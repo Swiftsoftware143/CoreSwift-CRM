@@ -188,14 +188,27 @@ async fn resolve_telnyx_api_key(db: &sqlx::PgPool, tenant_id: Uuid) -> Result<St
         }
     }
 
-    // Fall back to global config
-    let global = get_global_config(db)
-        .await?
-        .ok_or_else(|| AppError::Internal("Telnyx not configured".into()))?;
+    // Fall back to a centrally-configured deployment.
+    //
+    // "No credential stored" is a USER-FIXABLE state, not a server fault. Answering 500 made every
+    // Telnyx surface look broken for an account that has simply not added a key (proven live
+    // 2026-09-22: GET /api/telnyx/available -> 500 "Internal server error" for a tenant with an
+    // empty BYOK slot and no global config). A 422 that says where to fix it is the honest answer,
+    // and it matches what google_calendar already answers when its own slot is empty.
+    let global = get_global_config(db).await?.ok_or_else(|| {
+        AppError::Validation(
+            "Telnyx is not configured for this account: add your Telnyx API key under Provider Keys \
+             in the Integration Center. Number search and sending both call api.telnyx.com, so a key \
+             is required before either can work."
+                .into(),
+        )
+    })?;
 
     if global.api_key.is_empty() {
-        return Err(AppError::Internal(
-            "Telnyx API key is empty in global config".into(),
+        return Err(AppError::Validation(
+            "Telnyx is not configured for this account: the platform-wide Telnyx key is empty. Add \
+             your own key under Provider Keys in the Integration Center."
+                .into(),
         ));
     }
 
@@ -896,9 +909,12 @@ pub async fn get_config(
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    // Check BYOK first
+    // Check BYOK first. `api_key <> ''` matters: an empty slot (is_active=true, no secret) is not
+    // a configuration, and treating it as one made this endpoint answer `mode: "byok"` with
+    // `api_key_set: false` while every real call fell through to a 500.
     let byok_key: Option<String> = sqlx::query_scalar(
-        "SELECT api_key FROM provider_keys WHERE tenant_id = $1 AND provider = 'telnyx' AND is_active = true"
+        "SELECT api_key FROM provider_keys WHERE tenant_id = $1 AND provider = 'telnyx' \
+         AND is_active = true AND api_key <> ''",
     )
     .bind(tenant_id)
     .fetch_optional(&state.db)
