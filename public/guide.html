@@ -1389,8 +1389,9 @@ Authorization: Bearer &lt;token&gt;</pre>
        <code>native_apps</code> flag above.</p>
     <h3>Private Email</h3>
     <p>Bring your own domain (Mailgun, SMTP, SES or Postmark), provision mailboxes such as
-       <code>info@yourcompany.com</code>, send with DKIM/SPF signing, and have inbound replies create
-       contact activity on the CRM timeline. Domain and mailbox counts are plan limits; provider
+       <code>info@yourcompany.com</code>, send through your provider's DKIM/SPF signing (the provider
+       signs each message — this app hands it over and never signs it itself), and have inbound replies
+       create contact activity on the CRM timeline. Domain and mailbox counts are plan limits; provider
        credentials are encrypted at rest.</p>
     <h3>Also included</h3>
     <ul>
