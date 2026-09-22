@@ -103,8 +103,7 @@ pub async fn list(
 
 /// The feature keys the admin can toggle per plan, plus every plan's current values.
 /// Read straight from the module registry tables now — the catalogue is DATA, so a newly
-/// registered module appears here with no code change (it used to be `features::FEATURE_REGISTRY`,
-/// a Rust const). Shape kept identical for the existing admin console:
+/// registered module appears here with no code change — the catalogue used to be a Rust const. Shape kept identical for the existing admin console:
 /// `{ "features": [{key, label, module, note}], "plans": [{slug, name, features}] }`.
 pub async fn feature_registry(
     State(s): State<AppState>,

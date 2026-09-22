@@ -209,7 +209,7 @@ pub fn router(state: AppState) -> axum::Router<AppState> {
         .route("/status", get(calendar_status))
         .route("/sync/:calendar_id", post(sync_calendar))
         // Plan gating — the admin controls this module per plan
-        // (features::FEATURE_REGISTRY is the source of truth for the admin UI).
+        // (the module & feature registry is the source of truth for the admin UI — see src/module_registry).
         .layer(axum::middleware::from_fn_with_state(
             crate::features::FeatureGate::new(
                 state.db.clone(),

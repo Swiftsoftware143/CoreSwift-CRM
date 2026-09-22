@@ -14,7 +14,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/rules/:id", axum::routing::patch(handlers::update_rule))
         .route("/rules/:id", axum::routing::delete(handlers::delete_rule))
         // Plan gating — the admin controls this module per plan
-        // (features::FEATURE_REGISTRY is the source of truth for the admin UI).
+        // (the module & feature registry is the source of truth for the admin UI — see src/module_registry).
         .layer(middleware::from_fn_with_state(
             crate::features::FeatureGate::new(state.db.clone(), "automation", "Automations"),
             crate::features::gate_mw,

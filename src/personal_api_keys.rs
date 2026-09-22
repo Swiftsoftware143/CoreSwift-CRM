@@ -191,7 +191,7 @@ pub fn router(state: AppState) -> axum::Router<AppState> {
         .route("/:id", delete(revoke_key))
         .route("/:id/rotate", post(rotate_key))
         // Plan gating — the admin controls this module per plan
-        // (features::FEATURE_REGISTRY is the source of truth for the admin UI).
+        // (the module & feature registry is the source of truth for the admin UI — see src/module_registry).
         .layer(middleware::from_fn_with_state(
             crate::features::FeatureGate::new(state.db.clone(), "api_access", "API access"),
             crate::features::gate_mw,

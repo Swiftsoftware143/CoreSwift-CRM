@@ -43,7 +43,7 @@ pub fn router(state: AppState) -> Router<AppState> {
             axum::routing::delete(handlers::delete_webhook),
         )
         // Plan gating — the admin controls this module per plan
-        // (features::FEATURE_REGISTRY is the source of truth for the admin UI).
+        // (the module & feature registry is the source of truth for the admin UI — see src/module_registry).
         .layer(middleware::from_fn_with_state(
             crate::features::FeatureGate::new(state.db.clone(), "ai_enabled", "AI scoring"),
             crate::features::gate_mw,

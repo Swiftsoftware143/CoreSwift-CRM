@@ -5,9 +5,9 @@
 //! `plan_module_features` tables that the ADMIN assigns through `/api/admin/plans/:slug/*`.
 //!
 //! Removed in this change (they were the hardcoding David asked to delete):
-//!   * `FEATURE_REGISTRY` — the catalogue as a Rust const
-//!   * `PLAN_KEY_ALIASES` / `plan_key_for` — a bridge table whose own comment warned that drift made
-//!     the gate "silently stop enforcing". The four alias pairs are now `modules.legacy_feature_key`
+//!   * the catalogue as a Rust const (the `FeatureDef` list)
+//!   * the alias bridge table next to it, whose own comment warned that drift made the gate
+//!     "silently stop enforcing". The four alias pairs are now `modules.legacy_feature_key`
 //!     DATA, folded into the seed by migration 072.
 //!   * `feature_registry_json` — the admin UI now reads the catalogue from the database via
 //!     `GET /api/admin/modules`.
@@ -184,7 +184,8 @@ async fn count_usage(db: &PgPool, tenant_id: Uuid, feature_key: &str) -> Result<
 //   2. the tenant's active plan's assignment rows        plan_modules / plan_module_features
 //   3. DENY                                              (fail-closed)
 //
-// It used to be `plans.features->>'<key>'` with `unset => ALLOWED`, bridged by PLAN_KEY_ALIASES.
+// It used to be a JSONB lookup on `plans.features` with `unset => ALLOWED`, bridged by a
+// hardcoded alias table.
 // An unset key being allowed meant a module could ship ungated and a renamed key could silently stop
 // enforcing; the registry replaced both. Seeding `plan_modules` from the same `plans.features` data
 // (migration 072) is what kept that switch behaviour-preserving.
