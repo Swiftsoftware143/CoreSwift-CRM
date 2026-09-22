@@ -43,10 +43,20 @@ async fn exec_add_tag(
         Uuid::parse_str(tid_str).map_err(|_| AppError::Validation("Invalid tag_id".into()))?;
     // `tag_assignments.entity_type` is varchar(50); the dropped `::entity_type` cast named a type
     // that does not exist (42704), and the caller swallows the error, so AddTag silently did nothing.
-    let exists: bool = sqlx::query_scalar("SELECT COUNT(*) FROM tag_assignments WHERE tag_id=$1 AND entity_type=$2 AND entity_id=$3 AND tenant_id=$4").bind(tag_id).bind(entity_type).bind(entity_id).bind(tenant_id).fetch_one(db).await.unwrap_or(0) > 0;
-    if !exists {
-        sqlx::query("INSERT INTO tag_assignments(id,tag_id,entity_type,entity_id,tenant_id) VALUES($1,$2,$3,$4,$5)").bind(Uuid::new_v4()).bind(tag_id).bind(entity_type).bind(entity_id).bind(tenant_id).execute(db).await?;
+    // `EXISTS` returns a real BOOL. The previous shape (`SELECT COUNT(*) ... .unwrap_or(0) > 0`)
+    // decoded INT8 into the binding's integer type, which sqlx refuses (`INT8` is not compatible
+    // with `INT4`), so the decode error was swallowed by `unwrap_or` and the guard answered `false`
+    // on EVERY call: the INSERT below then tripped tag_assignments' unique constraint and that
+    // error was dropped by the caller (`let _ =` in engine.rs). Failures must not read as
+    // "not assigned" either, hence `?` instead of a default.
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tag_assignments WHERE tag_id=$1 AND entity_type=$2 AND entity_id=$3 AND tenant_id=$4)").bind(tag_id).bind(entity_type).bind(entity_id).bind(tenant_id).fetch_one(db).await?;
+    if exists {
+        // Idempotent no-op, but not invisible: without this line a skipped AddTag and a failed one
+        // leave identical rows and no trace. Enable with RUST_LOG=info,crm_swift::automation=debug.
+        tracing::debug!(rule = %rule.id, tag = %tag_id, entity = %entity_id, "AddTag skipped: tag already assigned");
+        return Ok(());
     }
+    sqlx::query("INSERT INTO tag_assignments(id,tag_id,entity_type,entity_id,tenant_id) VALUES($1,$2,$3,$4,$5)").bind(Uuid::new_v4()).bind(tag_id).bind(entity_type).bind(entity_id).bind(tenant_id).execute(db).await?;
     Ok(())
 }
 
@@ -471,4 +481,56 @@ async fn exec_scoring_update(
     ).bind(rule.id).execute(db).await;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+
+    const OLD_GUARD_SQL: &str = "SELECT COUNT(*) FROM tag_assignments WHERE tag_id=$1 AND entity_type=$2 AND entity_id=$3 AND tenant_id=$4";
+    const EXISTS_GUARD_SQL: &str = "SELECT EXISTS(SELECT 1 FROM tag_assignments WHERE tag_id=$1 AND entity_type=$2 AND entity_id=$3 AND tenant_id=$4)";
+
+    /// kanban t_42017533: the "already assigned" guard must not read a lookup FAILURE as
+    /// "not assigned" — that is what made the pre-fix shape INSERT on every call and swallow the
+    /// unique-constraint violation it then produced. The pool below points at a port nothing
+    /// listens on, so the failure is real; the control leg shows the old shape answering `false`.
+    #[test]
+    fn add_tag_guard_reports_a_failed_lookup_instead_of_assuming_not_assigned() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (old_exists, new_exists) = rt.block_on(async {
+            let db = sqlx::postgres::PgPoolOptions::new()
+                .acquire_timeout(std::time::Duration::from_millis(500))
+                .connect_lazy("postgres://probe:probe@127.0.0.1:1/none")
+                .unwrap();
+            let (tag_id, entity_id, tenant_id) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+            let old: bool = sqlx::query_scalar(OLD_GUARD_SQL)
+                .bind(tag_id)
+                .bind("contact")
+                .bind(entity_id)
+                .bind(tenant_id)
+                .fetch_one(&db)
+                .await
+                .unwrap_or(0)
+                > 0;
+            let new: Result<bool, sqlx::Error> = sqlx::query_scalar(EXISTS_GUARD_SQL)
+                .bind(tag_id)
+                .bind("contact")
+                .bind(entity_id)
+                .bind(tenant_id)
+                .fetch_one(&db)
+                .await;
+            (old, new)
+        });
+        assert!(
+            !old_exists,
+            "control leg: the pre-fix shape hides the failed lookup as 'not assigned'"
+        );
+        assert!(
+            new_exists.is_err(),
+            "the shipped guard must propagate the lookup failure, got {new_exists:?}"
+        );
+    }
 }

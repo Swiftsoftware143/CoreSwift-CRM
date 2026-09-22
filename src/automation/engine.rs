@@ -63,7 +63,13 @@ pub async fn evaluate_tag_triggers(
                 };
 
             if matches {
-                let _ = actions::execute_action(db, &rule, tenant_id, entity_type, entity_id).await;
+                // A failing action used to be dropped here (`let _ =`), so an AddTag that tripped
+                // tag_assignments' unique constraint was a silent no-op with no operator signal.
+                if let Err(e) =
+                    actions::execute_action(db, &rule, tenant_id, entity_type, entity_id).await
+                {
+                    tracing::warn!(rule = %rule.id, action = %rule.action_type, error = %e, "Automation action failed");
+                }
             }
         }
     }
