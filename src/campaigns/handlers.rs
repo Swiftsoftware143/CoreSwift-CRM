@@ -312,12 +312,23 @@ pub async fn add_step(
 ) -> ApiResult<impl IntoResponse> {
     let tid = parse_tenant(&c)?;
 
+    // The route is not campaign-scoped, so the campaign must be named in the body and prove ownership.
+    let owned: Option<Uuid> = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM email_campaigns WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(r.campaign_id)
+    .bind(tid)
+    .fetch_optional(&s.db)
+    .await?;
+    if owned.is_none() {
+        return Err(AppError::NotFound("Campaign not found".into()));
+    }
+
     // Get the max step_order for this campaign
     let max_order: i32 = sqlx::query_scalar::<_, i32>(
-        "SELECT COALESCE(MAX(step_order), 0) FROM email_campaign_steps esc
-         JOIN email_campaigns ec ON ec.id = esc.campaign_id WHERE ec.tenant_id = $1",
+        "SELECT COALESCE(MAX(step_order), 0) FROM email_campaign_steps WHERE campaign_id = $1",
     )
-    .bind(tid)
+    .bind(r.campaign_id)
     .fetch_one(&s.db)
     .await
     .unwrap_or(0);
@@ -326,11 +337,17 @@ pub async fn add_step(
 
     let step = sqlx::query_as::<_, CampaignStep>(
         r#"INSERT INTO email_campaign_steps (id, campaign_id, step_order, template_name, subject, body, delay_days)
-           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *"#
+           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *"#,
     )
-    .bind(Uuid::new_v4()).bind(r.step_order.map(|_| Uuid::nil()).unwrap_or(Uuid::nil())) // placeholder — need campaign_id
-    .bind(order).bind(&r.template_name).bind(&r.subject).bind(&r.body).bind(r.delay_days.unwrap_or(0))
-    .fetch_one(&s.db).await?;
+    .bind(Uuid::new_v4())
+    .bind(r.campaign_id)
+    .bind(order)
+    .bind(&r.template_name)
+    .bind(&r.subject)
+    .bind(&r.body)
+    .bind(r.delay_days.unwrap_or(0))
+    .fetch_one(&s.db)
+    .await?;
 
     Ok((StatusCode::CREATED, Json(json!(step))))
 }

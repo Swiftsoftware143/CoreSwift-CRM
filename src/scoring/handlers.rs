@@ -76,7 +76,7 @@ pub async fn get_score(
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     engine::ensure_score_record(&s.db, t, cid).await?;
     Ok(Json(json!(sqlx::query_as::<_, Score>(
-        "SELECT * FROM contact_scores WHERE tenant_id=$1 AND contact_id=$2"
+        "SELECT * FROM scores WHERE tenant_id=$1 AND contact_id=$2"
     )
     .bind(t)
     .bind(cid)
@@ -109,7 +109,7 @@ pub async fn get_score_history(
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     Ok(Json(
-        json!({"history": sqlx::query_as::<_,ScoreHistory>("SELECT * FROM score_history WHERE tenant_id=$1 AND contact_id=$2 ORDER BY created_at DESC").bind(t).bind(cid).fetch_all(&s.db).await?}),
+        json!({"history": sqlx::query_as::<_,ScoreHistory>("SELECT * FROM score_history WHERE contact_id=$2 AND EXISTS (SELECT 1 FROM scores s WHERE s.contact_id=$2 AND s.tenant_id=$1) ORDER BY created_at DESC").bind(t).bind(cid).fetch_all(&s.db).await?}),
     ))
 }
 
@@ -118,7 +118,7 @@ pub async fn score_distribution(
     Extension(c): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    let dist = sqlx::query_as::<_,(String,i64)>("SELECT category, COUNT(*) FROM contact_scores WHERE tenant_id=$1 GROUP BY category ORDER BY category").bind(t).fetch_all(&s.db).await?;
+    let dist = sqlx::query_as::<_,(String,i64)>("SELECT category, COUNT(*) FROM scores WHERE tenant_id=$1 GROUP BY category ORDER BY category").bind(t).fetch_all(&s.db).await?;
     let total: i64 = dist.iter().map(|(_, c)| c).sum();
     Ok(Json(json!({"distribution":dist,"total":total})))
 }

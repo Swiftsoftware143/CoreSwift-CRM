@@ -13,7 +13,6 @@ pub struct AccountHealth {
     pub risk_level: String,
     pub signals: serde_json::Value,
     pub last_intervention_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 

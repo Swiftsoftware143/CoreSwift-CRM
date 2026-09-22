@@ -879,36 +879,6 @@ const TAB_RENDERERS = {
     '<div id="companiesTable"><div class="loading-wrap"><div class="spinner"></div> Loading companies...</div></div>';
   },
 
-  'pipelines': () => {
-    return pageHeader('Pipelines & Deals', 'Track deals through your sales pipeline',
-      '<button class="btn btn-primary btn-sm" onclick="showAddDealModal()">+ Add Deal</button>') +
-    '<div id="pipelinesContent"><div class="loading-wrap"><div class="spinner"></div> Loading pipelines...</div></div>';
-  },
-
-  'campaigns': () => {
-    return pageHeader('Campaigns', 'Marketing campaigns and outreach',
-      '<button class="btn btn-primary btn-sm" onclick="showAddCampaignModal()">+ New Campaign</button>') +
-    '<div id="campaignsTable"><div class="loading-wrap"><div class="spinner"></div> Loading campaigns...</div></div>';
-  },
-
-  'lists': () => {
-    return pageHeader('Lists', 'Contact lists for segmentation',
-      '<button class="btn btn-primary btn-sm" onclick="showAddListModal()">+ New List</button>') +
-    '<div id="listsTable"><div class="loading-wrap"><div class="spinner"></div> Loading lists...</div></div>';
-  },
-
-  'analytics': () => {
-    return pageHeader('Analytics', 'Campaign and pipeline performance metrics') +
-    '<div class="stats-grid">' +
-      '<div class="stat-card"><div class="stat-icon">📧</div><div class="stat-value">--</div><div class="stat-label">Emails Sent</div></div>' +
-      '<div class="stat-card"><div class="stat-icon">👆</div><div class="stat-value">--</div><div class="stat-label">Open Rate</div></div>' +
-      '<div class="stat-card"><div class="stat-icon">🖱️</div><div class="stat-value">--</div><div class="stat-label">Click Rate</div></div>' +
-      '<div class="stat-card"><div class="stat-icon">💰</div><div class="stat-value">--</div><div class="stat-label">Conversion Rate</div></div>' +
-    '</div>' +
-    card('Campaign Performance', '<p style="color:var(--text-secondary)">Connect your email provider in the Integration Center to populate analytics data.</p>',
-    '<button class="btn btn-secondary btn-sm" onclick="switchTab(&#39;integrations&#39;)">🔌 Open Integration Center</button>');
-  },
-
   'rules': () => {
     return pageHeader('Automation Rules', 'IF-THIS-THEN-THAT automation engine',
       '<button class="btn btn-primary btn-sm" onclick="showAddRuleModal()">+ New Rule</button>') +
@@ -917,34 +887,6 @@ const TAB_RENDERERS = {
         '<div class="grid-2" style="margin-top:12px">' +
           '<div style="background:var(--bg-secondary);padding:14px;border-radius:var(--radius);border:1px solid var(--border)"><strong>📥 Triggers</strong><br><small style="color:var(--text-secondary)">Contact created, deal stage changed, form submitted, tag added, email opened, link clicked...</small></div>' +
           '<div style="background:var(--bg-secondary);padding:14px;border-radius:var(--radius);border:1px solid var(--border)"><strong>📤 Actions</strong><br><small style="color:var(--text-secondary)">Send email, add to list, update deal, create task, notify, webhook...</small></div>' +
-        '</div>', '') +
-    '</div>';
-  },
-
-  'tags': () => {
-    return pageHeader('Tags', 'Organize contacts with tags',
-      '<button class="btn btn-primary btn-sm" onclick="showAddTagModal()">+ New Tag</button>') +
-    '<div id="tagsTable"><div class="loading-wrap"><div class="spinner"></div> Loading tags...</div></div>';
-  },
-
-  'lead-scoring': () => {
-    return pageHeader('Lead Scoring', 'Score leads based on behavior and attributes',
-      '<button class="btn btn-primary btn-sm" onclick="showAddScoreRuleModal()">+ Add Criterion</button>') +
-    '<p style="color:var(--text-secondary);margin-bottom:16px">Define scoring criteria. Leads accumulate points based on their actions and profile attributes.</p>' +
-    '<div id="scoringContent">' +
-      card('Score Criteria', '' +
-        '<div class="config-list">' +
-          '<div class="config-item"><div class="config-info"><div class="config-label">Email Opened</div><div class="config-desc">+5 points when a lead opens an email</div></div><span class="badge badge-primary">+5 pts</span></div>' +
-          '<div class="config-item"><div class="config-info"><div class="config-label">Link Clicked</div><div class="config-desc">+10 points when a lead clicks a tracked link</div></div><span class="badge badge-primary">+10 pts</span></div>' +
-          '<div class="config-item"><div class="config-info"><div class="config-label">Form Submitted</div><div class="config-desc">+20 points when a lead submits a form</div></div><span class="badge badge-primary">+20 pts</span></div>' +
-          '<div class="config-item"><div class="config-info"><div class="config-label">Deal Created</div><div class="config-desc">+30 points when a lead enters a pipeline</div></div><span class="badge badge-primary">+30 pts</span></div>' +
-        '</div>', '<button class="btn btn-primary btn-sm">Save Criteria</button>') +
-      '<br>' +
-      card('Score Thresholds', '' +
-        '<div class="config-list">' +
-          '<div class="config-item"><div class="config-info"><div class="config-label">🔴 Cold</div><div class="config-desc">0-20 points</div></div><span class="badge badge-muted">Cold</span></div>' +
-          '<div class="config-item"><div class="config-info"><div class="config-label">🟡 Warm</div><div class="config-desc">21-50 points</div></div><span class="badge badge-warning">Warm</span></div>' +
-          '<div class="config-item"><div class="config-info"><div class="config-label">🟢 Hot</div><div class="config-desc">51+ points</div></div><span class="badge badge-success">Hot</span></div>' +
         '</div>', '') +
     '</div>';
   },
@@ -1022,24 +964,6 @@ const TAB_RENDERERS = {
     card('Tracked Links', '<div class="empty-state"><div class="empty-icon">🔗</div><h3>No tracked links yet</h3><p>Generate tracked URLs to monitor clicks and conversions.</p></div>');
   },
 
-  'checklists': () => placeholderPanel('Checklists', 'Create and manage task checklists for deals, onboarding, and workflows.', '✅'),
-
-  'round-robin': () => {
-    return pageHeader('Round Robin', 'Distribute leads evenly across your team',
-      '<button class="btn btn-primary btn-sm" onclick="showAddMemberModal()">+ Add Member</button>') +
-    '<p style="color:var(--text-secondary);margin-bottom:16px">Configure round robin assignment rules to automatically distribute new contacts to team members.</p>' +
-    card('Team Members', '' +
-      '<div class="config-list" id="roundRobinMembers">' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">No team members added</div><div class="config-desc">Add team members to the rotation</div></div><span class="badge badge-muted">0 leads</span></div>' +
-      '</div>',
-      '<button class="btn btn-primary btn-sm">Start Rotation</button>') +
-    '<br>' +
-    card('Assignment Rules', '' +
-      '<div class="config-list">' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">Assignment Mode</div><div class="config-desc">How leads are distributed</div></div><select style="padding:6px 10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary)"><option>Round Robin (Sequential)</option><option>Weighted (by capacity)</option><option>Random</option></select></div>' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">Max Leads Per Member</div><div class="config-desc">Cap before skipping to next member</div></div><input type="number" value="10" style="width:80px;padding:6px 10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary)"></div>' +
-      '</div>', '<button class="btn btn-primary btn-sm">Save Rules</button>');
-  },
 
   // === SETTINGS ===
   'profile': () => {
@@ -1070,6 +994,8 @@ const TAB_RENDERERS = {
     '<br>' +
     '<div id="icProviderWrap" data-ops="ic-providers"><div class="loading-wrap"><div class="spinner"></div> Loading provider keys...</div></div>' +
     '<br>' +
+    '<div id="icMappingsWrap" data-ops="ic-tag-mappings"><div class="loading-wrap"><div class="spinner"></div> Loading tag mappings...</div></div>' +
+    '<br>' +
     '<div id="icUpgradeWrap" data-ops="ic-upgrades"></div>';
   },
 
@@ -1086,11 +1012,10 @@ const TAB_RENDERERS = {
     '<div id="usersTable"><div class="loading-wrap"><div class="spinner"></div> Loading users...</div></div>';
   },
   'billing': () => {
-    // The cancel route's role gate is FIXED and proven live (2026-09-22, commit 6a2f239): it
-    // previously required 'client_admin', a role no registration path assigns, so every real
-    // tenant got 403. A tenant 'owner' now gets 200 and the plan drops to Free. So the button
-    // below is a real action, not a fake one. Payment history is still absent on purpose:
-    // GET /api/billing/checkout/sessions read a table that does not exist and was deleted.
+    // NOTE: payment history is still absent on purpose — GET /api/billing/checkout/sessions read
+    // a table that does not exist and was deleted. The CANCEL action, by contrast, works now:
+    // its role gate used to require 'client_admin', which no registration path assigns, so every
+    // real tenant got 403. Fixed + proved live 2026-09-22 (owner -> 200, plan drops to Free).
     return pageHeader('Billing & Plans', 'Manage subscription plans and pricing',
       '<button class="btn btn-ghost btn-sm" id="cancelSubBtn" onclick="cancelSubscription()">Cancel subscription</button>') +
     '<div id="subscriptionCard"><div class="loading-wrap"><div class="spinner"></div> Loading subscription...</div></div>' +
@@ -1098,7 +1023,6 @@ const TAB_RENDERERS = {
     '<div id="plansContent"><div class="loading-wrap"><div class="spinner"></div> Loading plans...</div></div>';
   },
   'affiliates': () => placeholderPanel('Affiliates', 'Manage your affiliate program — track referrals, commissions, and payouts.', '🤝'),
-  'widgets': () => placeholderPanel('Widgets', 'Embeddable CRM widgets for your website — contact forms, chat, booking.', '🧩'),
   'webhooks': () => placeholderPanel('Webhooks', 'Configure outgoing webhooks for real-time event notifications.', '🔗'),
   'native-apps': () => {
     return pageHeader('Native App Connectors', 'Global config for the native connector layer (AdaSwift, FunnelSwift, ZaarHub, WorkflowSwift)',
@@ -1110,23 +1034,9 @@ const TAB_RENDERERS = {
       '<button class="btn btn-secondary btn-sm">Export CSV</button>') +
     card('Activity Log', '<div class="empty-state"><div class="empty-icon">📝</div><h3>No audit entries</h3><p>Audit log entries will appear as users interact with the platform.</p></div>');
   },
-  'monitoring': () => {
-    return pageHeader('Monitoring', 'Server and platform health') +
-    '<div class="stats-grid">' +
-      '<div class="stat-card accent"><div class="stat-icon">🟢</div><div class="stat-value">99.9%</div><div class="stat-label">Uptime</div></div>' +
-      '<div class="stat-card"><div class="stat-icon">⚡</div><div class="stat-value">45ms</div><div class="stat-label">Avg Response</div></div>' +
-      '<div class="stat-card"><div class="stat-icon">💾</div><div class="stat-value">34%</div><div class="stat-label">Disk Usage</div></div>' +
-      '<div class="stat-card"><div class="stat-icon">🧠</div><div class="stat-value">2.1GB</div><div class="stat-label">Memory Used</div></div>' +
-    '</div>' +
-    card('Service Status', '' +
-      '<div class="config-list">' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">API Server</div></div><span class="badge badge-success">● Online</span></div>' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">Database</div></div><span class="badge badge-success">● Online</span></div>' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">n8n</div></div><span class="badge badge-success">● Online</span></div>' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">Redis</div></div><span class="badge badge-success">● Online</span></div>' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">Email Service</div></div><span class="badge badge-warning">● Degraded</span></div>' +
-      '</div>', '<button class="btn btn-secondary btn-sm">Refresh</button>');
-  },
+  // The former 'monitoring' panel was a hand-written fake (99.9% uptime, 34% disk, 2.1GB RAM
+  // are not measured anywhere). It is replaced by monitoringShell() at the bottom of this file,
+  // which renders GET /api/monitoring/health + /thresholds + the account-health routes.
   'telnyx-admin': () => placeholderPanel('Telnyx Admin', 'Configure Telnyx provider settings for all tenants.', '☎️'),
   'email-admin': () => {
     return pageHeader('Private Email Admin', 'Per-tenant email limits, data retention and purge controls',
@@ -1402,106 +1312,6 @@ const TAB_LOADERS = {
     }
   },
 
-  'pipelines': async () => {
-    try {
-      const pipelines = await API.get('/pipelines');
-      let html = '';
-      if (Array.isArray(pipelines) && pipelines.length > 0) {
-        pipelines.forEach(p => {
-          html += `<div class="card" style="margin-bottom:16px">
-            <div class="card-header">📈 ${escapeHtml(p.name || 'Pipeline')} <span class="badge badge-primary">${p.deals_count || p.deal_count || 0} deals</span></div>
-            <div class="card-body">
-              <div class="table-wrap"><table>
-                <thead><tr><th>Deal</th><th>Contact</th><th>Value</th><th>Stage</th><th></th></tr></thead>
-                <tbody>`;
-          const deals = p.deals || [];
-          if (deals.length === 0) {
-            html += '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No deals in this pipeline</td></tr>';
-          } else {
-            deals.forEach(d => {
-              html += `<tr>
-                <td>${escapeHtml(d.name || d.title || 'Deal')}</td>
-                <td>${escapeHtml(d.contact_name || '—')}</td>
-                <td>${d.value ? '$'+d.value : '—'}</td>
-                <td><span class="badge badge-warning">${escapeHtml(d.stage || 'New')}</span></td>
-                <td><button class="btn btn-ghost btn-xs">View</button></td>
-              </tr>`;
-            });
-          }
-          html += '</tbody></table></div></div></div>';
-        });
-      } else {
-        html = '<div class="card"><div class="card-body"><div class="empty-state"><div class="empty-icon">📈</div><h3>No pipelines yet</h3><p>Create your first sales pipeline to start tracking deals.</p></div></div></div>';
-      }
-      document.getElementById('pipelinesContent').innerHTML = html;
-    } catch(e) {
-      document.getElementById('pipelinesContent').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Pipelines endpoint: ${escapeHtml(e.message)}</p></div></div>`;
-    }
-  },
-
-  'campaigns': async () => {
-    try {
-      const campaigns = await API.get('/campaigns');
-      let rows = [];
-      if (Array.isArray(campaigns)) {
-        rows = campaigns.slice(0, 50).map(c => [
-          escapeHtml(c.name || '—'),
-          `<span class="badge badge-primary">${escapeHtml(c.type || 'email')}</span>`,
-          escapeHtml(c.status || 'draft'),
-          c.sent_count || c.sent || 0,
-          c.open_rate ? c.open_rate+'%' : '—',
-          `<button class="btn btn-ghost btn-xs">Edit</button>`
-        ]);
-      }
-      document.getElementById('campaignsTable').innerHTML = dataTable(
-        ['Name','Type','Status','Sent','Open Rate',''], rows,
-        'No campaigns yet. Launch your first marketing campaign.'
-      );
-    } catch(e) {
-      document.getElementById('campaignsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Campaigns endpoint: ${escapeHtml(e.message)}</p></div></div>`;
-    }
-  },
-
-  'lists': async () => {
-    try {
-      const lists = await API.get('/lists');
-      let rows = [];
-      if (Array.isArray(lists)) {
-        rows = lists.slice(0, 50).map(l => [
-          escapeHtml(l.name || '—'),
-          l.contact_count || l.count || 0,
-          `<span class="badge badge-muted">${escapeHtml(l.type || 'static')}</span>`,
-          escapeHtml(l.created_at ? new Date(l.created_at).toLocaleDateString() : '—'),
-          `<button class="btn btn-ghost btn-xs">View</button>`
-        ]);
-      }
-      document.getElementById('listsTable').innerHTML = dataTable(
-        ['Name','Contacts','Type','Created',''], rows,
-        'No lists yet. Create a list to segment your contacts.'
-      );
-    } catch(e) {
-      document.getElementById('listsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Lists endpoint: ${escapeHtml(e.message)}</p></div></div>`;
-    }
-  },
-
-  'tags': async () => {
-    try {
-      const tags = await API.get('/tags');
-      let html = '<div style="display:flex;gap:8px;flex-wrap:wrap">';
-      if (Array.isArray(tags) && tags.length > 0) {
-        tags.forEach(t => {
-          html += `<span class="badge" style="background:${t.color||'var(--accent-subtle)'};color:${t.color?'#fff':'var(--accent-hover)'};padding:6px 14px;font-size:.85rem;cursor:pointer">${escapeHtml(t.name||t.label)}</span>`;
-        });
-      } else {
-        html = '<div class="card" style="width:100%"><div class="card-body"><div class="empty-state"><div class="empty-icon">🏷️</div><h3>No tags yet</h3><p>Create tags to organize your contacts.</p></div></div></div>';
-      }
-      html += '</div>';
-      document.getElementById('tagsTable').innerHTML = html;
-    } catch(e) {
-      document.getElementById('tagsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tags endpoint: ${escapeHtml(e.message)}</p></div></div>`;
-    }
-  },
-
   'email-templates': async () => {
     try {
       const templates = await API.get('/templates');
@@ -1572,6 +1382,7 @@ const TAB_LOADERS = {
 
   'integrations': async () => {
     await loadIntegrationCenter();
+    await loadTagMappings();
   },
 
   'notifications': async () => {
@@ -2545,18 +2356,12 @@ function showAddContactModal() { showModal('Add Contact', '<div class="form-grou
 function editContact(id) { toast('Editing contact: ' + id, 'info'); }
 function showAddCompanyModal(){ showModal('Add Company', '<div class="form-group"><label>Company Name</label><input type="text"></div><div class="form-group"><label>Industry</label><input type="text"></div><div class="form-group"><label>Website</label><input type="url"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Company added&#39;,&#39;success&#39;)">Save</button>'); }
 function editCompany(id){ toast('Editing company: ' + id, 'info'); }
-function showAddDealModal(){ showModal('Add Deal', '<div class="form-group"><label>Deal Name</label><input type="text"></div><div class="form-group"><label>Value</label><input type="number"></div><div class="form-group"><label>Pipeline</label><select><option>Select...</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Deal added&#39;,&#39;success&#39;)">Save</button>'); }
-function showAddCampaignModal(){ showModal('New Campaign', '<div class="form-group"><label>Campaign Name</label><input type="text"></div><div class="form-group"><label>Type</label><select><option>Email</option><option>SMS</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Campaign created&#39;,&#39;success&#39;)">Create</button>'); }
-function showAddListModal(){ showModal('New List', '<div class="form-group"><label>List Name</label><input type="text"></div><div class="form-group"><label>Description</label><textarea></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;List created&#39;,&#39;success&#39;)">Create</button>'); }
-function showAddTagModal(){ showModal('New Tag', '<div class="form-group"><label>Tag Name</label><input type="text"></div><div class="form-group"><label>Color</label><input type="color" value="#6366f1"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Tag created&#39;,&#39;success&#39;)">Create</button>'); }
 function showAddRuleModal(){ showModal('New Rule', '<div class="form-group"><label>Rule Name</label><input type="text"></div><div class="form-group"><label>Trigger</label><select><option>Contact created</option><option>Deal stage changed</option><option>Form submitted</option><option>Tag added</option></select></div><div class="form-group"><label>Action</label><select><option>Send email</option><option>Add to list</option><option>Update deal</option><option>Create task</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Rule created&#39;,&#39;success&#39;)">Create Rule</button>'); }
-function showAddScoreRuleModal(){ showModal('Add Scoring Criterion', '<div class="form-group"><label>Criterion Name</label><input type="text"></div><div class="form-group"><label>Points</label><input type="number" value="5"></div><div class="form-group"><label>Trigger</label><select><option>Email opened</option><option>Link clicked</option><option>Form submitted</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Criterion added&#39;,&#39;success&#39;)">Add</button>'); }
 function showAddTemplateModal(){ showModal('New Template', '<div class="form-group"><label>Template Name</label><input type="text"></div><div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Body</label><textarea rows="6"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Template saved&#39;,&#39;success&#39;)">Save</button>'); }
 function showComposeModal(){ showModal('Compose Message', '<div class="form-group"><label>To</label><input type="text"></div><div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Message</label><textarea rows="5"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Message sent&#39;,&#39;success&#39;)">Send</button>'); }
 function showAddTicketModal(){ showModal('New Ticket', '<div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Description</label><textarea rows="4"></textarea></div><div class="form-group"><label>Priority</label><select><option>Normal</option><option>High</option><option>Urgent</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Ticket created&#39;,&#39;success&#39;)">Create</button>'); }
 function showAddEventModal(){ showModal('New Event', '<div class="form-group"><label>Title</label><input type="text"></div><div class="form-group"><label>Date</label><input type="date"></div><div class="form-group"><label>Time</label><input type="time"></div><div class="form-group"><label>Location</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Event created&#39;,&#39;success&#39;)">Save</button>'); }
 function showAddLinkModal(){ showModal('Generate Tracked Link', '<div class="form-group"><label>Destination URL</label><input type="url"></div><div class="form-group"><label>Campaign</label><select><option>None</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Link generated&#39;,&#39;success&#39;)">Generate</button>'); }
-function showAddMemberModal(){ toast('Add team member form coming soon', 'info'); }
 function showAddUserModal(){ showModal('Add User', '<div class="form-group"><label>Name</label><input type="text"></div><div class="form-group"><label>Email</label><input type="email"></div><div class="form-group"><label>Role</label><select><option>user</option><option>agency_admin</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;User added&#39;,&#39;success&#39;)">Create</button>'); }
 
 // Chat
@@ -2748,12 +2553,12 @@ document.addEventListener('click', e => {
   var ACTIONS = {
     c: { desc: 'c  → New Contact', fn: function () { showAddContactModal(); } },
     o: { desc: 'o  → New Company', fn: function () { showAddCompanyModal(); } },
-    d: { desc: 'd  → New Deal', fn: function () { showAddDealModal(); } },
-    l: { desc: 'l  → New List', fn: function () { showAddListModal(); } },
-    t: { desc: 't  → New Tag', fn: function () { showAddTagModal(); } },
+    d: { desc: 'd  → New Deal', fn: function () { plQuickDeal(); } },
+    l: { desc: 'l  → New List', fn: function () { switchTab('lists'); lsNewList(); } },
+    t: { desc: 't  → New Tag', fn: function () { switchTab('tags'); tgNewTag(); } },
     k: { desc: 'k  → New Ticket', fn: function () { showAddTicketModal(); } },
     m: { desc: 'm  → Compose Message', fn: function () { showComposeModal(); } },
-    p: { desc: 'p  → New Campaign', fn: function () { showAddCampaignModal(); } },
+    p: { desc: 'p  → New Campaign', fn: function () { switchTab('campaigns'); cmNewCampaign(); } },
     e: { desc: 'e  → New Email Template', fn: function () { showAddTemplateModal(); } }
   };
 
@@ -2933,12 +2738,11 @@ async function markAllNotificationsRead() {
 }
 
 // ===== BILLING: SUBSCRIPTION =====
-// GET /api/billing/subscription and POST /api/billing/subscription/cancel exist and are
-// live; neither had a caller, so a tenant had no way to see or cancel its plan.
-// NOTE on fields: GET /api/billing/subscription returns only id / tenant_id / plan_id /
-// status / billing_cycle / current_period_* / canceled_at / trial_ends_at / feature_overrides
-// (captured live 2026-09-22). There is no plan_name or plan_slug in this response, so the card
-// deliberately shows the fields that exist rather than a name it would have to invent.
+// GET /api/billing/subscription and POST /api/billing/subscription/cancel exist and are live;
+// neither had a caller, so a tenant had no way to see or cancel its plan.
+// Fields shown are the ones the API actually returns (captured live 2026-09-22): id, tenant_id,
+// plan_id, status, billing_cycle, current_period_*, canceled_at, trial_ends_at. There is no
+// plan_name/plan_slug in this response, so no plan name is invented here.
 async function loadSubscriptionState() {
   const el = document.getElementById('subscriptionCard');
   if (!el) return;
@@ -3028,6 +2832,1387 @@ async function loadCredits() {
 // Deliberately NOT wired here (both broken server-side, carded): GET /billing/checkout/sessions
 // (no checkout_sessions table exists) and POST /billing/subscription/cancel (gates on
 // 'client_admin'/'agency_admin', roles no registration path assigns).
+
+
+// ============================================================================
+// WIRED FAMILIES — every family below was a registered, live backend block that no
+// shipped surface called, sitting under a tab that was a placeholder or a fake.
+// Each surface here renders real rows from the family's own endpoints and every
+// control performs a real request (no toast-only buttons).
+// Server counterpart repaired in the same change: src/pipelines/*, src/scoring/*,
+// src/tags/*, src/integrations/*, src/automation/actions.rs.
+// ============================================================================
+
+function famList(res, key) {
+  if (Array.isArray(res)) return res;
+  if (res && Array.isArray(res[key])) return res[key];
+  if (res && res.data && Array.isArray(res.data)) return res.data;
+  return [];
+}
+function fh(v) { return escapeHtml(String(v === null || v === undefined || v === '' ? '—' : v)); }
+function famErr(el, label, e) {
+  el.innerHTML = card(label, '<p style="color:var(--text-secondary)">' + escapeHtml(label) +
+    ' endpoint: ' + escapeHtml(e.message) + '</p>');
+}
+function confirmThen(msg, fn) { if (window.confirm(msg)) fn(); }
+
+// ---------------------------------------------------------------- PIPELINES
+let PL_DATA = [];
+function plCache(pid) { return PL_DATA.find(function (x) { return x.pipeline.id === pid; }) || null; }
+
+function pipelinesShell() {
+  return pageHeader('Pipelines & Deals', 'Track deals through your sales pipeline',
+    '<button class="btn btn-primary btn-sm" onclick="plNewPipeline()">+ New Pipeline</button>') +
+  '<div id="plContent"><div class="loading-wrap"><div class="spinner"></div> Loading pipelines...</div></div>';
+}
+
+async function loadPipelinesTab() {
+  const el = document.getElementById('plContent');
+  if (!el) return;
+  try {
+    const pipes = famList(await API.get('/pipelines'), 'pipelines');
+    PL_DATA = [];
+    if (!pipes.length) {
+      el.innerHTML = card('Pipelines', '<div class="empty-state"><div class="empty-icon">📈</div>' +
+        '<h3>No pipelines yet</h3><p>Create your first sales pipeline to start tracking deals.</p></div>');
+      return;
+    }
+    let h = '';
+    for (const row of pipes) {
+      const p = row.pipeline || row;
+      let stages = row.stages || [];
+      let opps = [];
+      try { stages = famList(await API.get('/pipelines/' + p.id + '/stages'), 'stages'); } catch (_) {}
+      try { opps = famList(await API.get('/pipelines/' + p.id + '/opportunities?per_page=50'), 'opportunities'); } catch (_) {}
+      PL_DATA.push({ pipeline: p, stages: stages, opps: opps });
+      const won = opps.filter(function (o) { return o.is_won; }).length;
+      const lost = opps.filter(function (o) { return o.is_lost; }).length;
+      const open = opps.length - won - lost;
+      h += '<div class="card" style="margin-bottom:16px">' +
+        '<div class="card-header">📈 ' + fh(p.name) +
+          ' <span class="badge badge-primary">' + opps.length + ' deals</span> ' +
+          '<span class="badge badge-success">' + won + ' won</span> ' +
+          '<span class="badge badge-muted">' + open + ' open</span> ' +
+          '<span class="badge badge-error">' + lost + ' lost</span>' +
+          '<button class="btn btn-secondary btn-xs" onclick="plAddStage(\'' + p.id + '\')">+ Stage</button> ' +
+          '<button class="btn btn-primary btn-xs" onclick="plAddDeal(\'' + p.id + '\')">+ Deal</button> ' +
+          '<button class="btn btn-ghost btn-xs" onclick="plDeletePipeline(\'' + p.id + '\')">Delete pipeline</button>' +
+        '</div><div class="card-body">';
+      h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">';
+      if (!stages.length) h += '<span class="config-desc">No stages on this pipeline — add one to move deals through it.</span>';
+      stages.forEach(function (s) {
+        h += '<span class="badge badge-warning" style="padding:6px 10px">' + fh(s.name) +
+          (s.probability !== null && s.probability !== undefined ? ' · ' + s.probability + '%' : '') +
+          (s.is_won ? ' 🏆' : '') + (s.is_lost ? ' ✕' : '') +
+          ' <a href="#" title="Edit stage" onclick="plEditStage(\'' + p.id + '\',\'' + s.id + '\');return false">✎</a>' +
+          ' <a href="#" title="Delete stage" onclick="plDeleteStage(\'' + p.id + '\',\'' + s.id + '\');return false">🗑</a>' +
+        '</span>';
+      });
+      h += '</div>';
+      const rows = opps.map(function (o) {
+        const st = stages.find(function (s) { return s.id === o.stage_id; });
+        return [
+          fh(o.name),
+          o.value !== null && o.value !== undefined ? '$' + Number(o.value).toLocaleString() : '—',
+          fh(o.currency),
+          st ? fh(st.name) : '—',
+          o.is_won ? '<span class="badge badge-success">won</span>'
+                   : (o.is_lost ? '<span class="badge badge-error">lost</span>'
+                                : '<span class="badge badge-muted">open</span>'),
+          '<select onchange="plMoveDeal(\'' + p.id + '\',\'' + o.id + '\',this.value)" ' +
+            'style="padding:4px 8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
+            '<option value="">Move to…</option>' +
+            stages.map(function (s) { return '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'; }).join('') +
+          '</select>',
+          '<button class="btn btn-ghost btn-xs" onclick="plDeleteDeal(\'' + p.id + '\',\'' + o.id + '\')">Delete</button>'
+        ];
+      });
+      h += dataTable(['Deal', 'Value', 'Cur', 'Stage', 'Status', 'Move', ''], rows,
+        'No deals in this pipeline yet — use “+ Deal”.');
+      h += '</div></div>';
+    }
+    el.innerHTML = h;
+  } catch (e) { famErr(el, 'Pipelines', e); }
+}
+
+function plNewPipeline() {
+  showModal('New Pipeline',
+    '<div class="form-group"><label>Name</label><input type="text" id="plName"></div>' +
+    '<div class="form-group"><label>Description</label><input type="text" id="plDesc"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="plCreatePipeline()">Create</button>');
+}
+async function plCreatePipeline() {
+  const name = (document.getElementById('plName').value || '').trim();
+  if (!name) { toast('Pipeline name is required', 'error'); return; }
+  try {
+    await API.post('/pipelines', { name: name, description: (document.getElementById('plDesc').value || '').trim() || null });
+    closeModal(); toast('Pipeline created', 'success'); loadPipelinesTab();
+  } catch (e) { toast('Create failed: ' + e.message, 'error'); }
+}
+function plDeletePipeline(id) {
+  confirmThen('Delete this pipeline (and its stages)?', function () {
+    API.del('/pipelines/' + id)
+      .then(function () { toast('Pipeline deleted', 'success'); loadPipelinesTab(); })
+      .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+  });
+}
+function plAddStage(pid) {
+  showModal('Add Stage',
+    '<div class="form-group"><label>Name</label><input type="text" id="stName" placeholder="Qualified"></div>' +
+    '<div class="form-group"><label>Position</label><input type="number" id="stPos" value="0"></div>' +
+    '<div class="form-group"><label>Probability %</label><input type="number" id="stProb" min="0" max="100" value="50"></div>' +
+    '<div class="form-group"><label>Colour</label><input type="text" id="stColor" value="#6366f1"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="plCreateStage(\'' + pid + '\')">Add</button>');
+}
+async function plCreateStage(pid) {
+  const name = (document.getElementById('stName').value || '').trim();
+  if (!name) { toast('Stage name is required', 'error'); return; }
+  try {
+    await API.post('/pipelines/' + pid + '/stages', {
+      name: name,
+      position: parseInt(document.getElementById('stPos').value, 10) || 0,
+      probability: parseInt(document.getElementById('stProb').value, 10),
+      color: (document.getElementById('stColor').value || '').trim() || null
+    });
+    closeModal(); toast('Stage added', 'success'); loadPipelinesTab();
+  } catch (e) { toast('Add stage failed: ' + e.message, 'error'); }
+}
+function plEditStage(pid, sid) {
+  const c = plCache(pid);
+  const s = c && c.stages.find(function (x) { return x.id === sid; });
+  if (!s) return;
+  showModal('Edit Stage',
+    '<div class="form-group"><label>Name</label><input type="text" id="stName" value="' + escapeHtml(s.name || '') + '"></div>' +
+    '<div class="form-group"><label>Position</label><input type="number" id="stPos" value="' + (s.position || 0) + '"></div>' +
+    '<div class="form-group"><label>Probability %</label><input type="number" id="stProb" min="0" max="100" value="' + (s.probability || 0) + '"></div>' +
+    '<div class="form-group"><label><input type="checkbox" id="stWon"' + (s.is_won ? ' checked' : '') + '> Won stage</label></div>' +
+    '<div class="form-group"><label><input type="checkbox" id="stLost"' + (s.is_lost ? ' checked' : '') + '> Lost stage</label></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="plSaveStage(\'' + pid + '\',\'' + sid + '\')">Save</button>');
+}
+async function plSaveStage(pid, sid) {
+  try {
+    await API.patch('/pipelines/' + pid + '/stages/' + sid, {
+      name: (document.getElementById('stName').value || '').trim() || null,
+      position: parseInt(document.getElementById('stPos').value, 10),
+      probability: parseInt(document.getElementById('stProb').value, 10),
+      is_won: document.getElementById('stWon').checked,
+      is_lost: document.getElementById('stLost').checked
+    });
+    closeModal(); toast('Stage updated', 'success'); loadPipelinesTab();
+  } catch (e) { toast('Save failed: ' + e.message, 'error'); }
+}
+function plDeleteStage(pid, sid) {
+  confirmThen('Delete this stage? Deals on it stay on the pipeline.', function () {
+    API.del('/pipelines/' + pid + '/stages/' + sid)
+      .then(function () { toast('Stage deleted', 'success'); loadPipelinesTab(); })
+      .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+  });
+}
+async function plQuickDeal() {
+  try {
+    const ps = famList(await API.get('/pipelines'), 'pipelines');
+    if (!ps.length) { toast('Create a pipeline first', 'error'); switchTab('pipelines'); return; }
+    const p = ps[0].pipeline || ps[0];
+    switchTab('pipelines');
+    plAddDeal(p.id);
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function plAddDeal(pid) {
+  let opts = '<option value="">No contact</option>';
+  try {
+    const cs = famList(await API.get('/contacts'), 'contacts');
+    cs.slice(0, 200).forEach(function (c) {
+      const nm = c.name || ((c.first_name || '') + ' ' + (c.last_name || '')).trim() || c.email || c.id;
+      opts += '<option value="' + c.id + '">' + escapeHtml(nm) + '</option>';
+    });
+  } catch (_) {}
+  showModal('New Deal',
+    '<div class="form-group"><label>Deal name</label><input type="text" id="dlName"></div>' +
+    '<div class="form-group"><label>Contact</label><select id="dlContact">' + opts + '</select></div>' +
+    '<div class="form-group"><label>Value</label><input type="number" id="dlValue" step="0.01"></div>' +
+    '<div class="form-group"><label>Currency</label><input type="text" id="dlCur" value="USD"></div>' +
+    '<div class="form-group"><label>Probability %</label><input type="number" id="dlProb" min="0" max="100"></div>' +
+    '<div class="form-group"><label>Expected close</label><input type="date" id="dlClose"></div>' +
+    '<div class="form-group"><label>Notes</label><textarea id="dlNotes" rows="3"></textarea></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="plCreateDeal(\'' + pid + '\')">Create</button>');
+}
+async function plCreateDeal(pid) {
+  const name = (document.getElementById('dlName').value || '').trim();
+  if (!name) { toast('Deal name is required', 'error'); return; }
+  const val = document.getElementById('dlValue').value;
+  const prob = document.getElementById('dlProb').value;
+  const body = {
+    name: name,
+    contact_id: document.getElementById('dlContact').value || null,
+    value: val === '' ? null : parseFloat(val),
+    currency: (document.getElementById('dlCur').value || '').trim() || null,
+    probability: prob === '' ? null : parseInt(prob, 10),
+    expected_close_date: document.getElementById('dlClose').value || null,
+    notes: (document.getElementById('dlNotes').value || '').trim() || null
+  };
+  try {
+    await API.post('/pipelines/' + pid + '/opportunities', body);
+    closeModal(); toast('Deal created', 'success'); loadPipelinesTab();
+  } catch (e) { toast('Create failed: ' + e.message, 'error'); }
+}
+function plMoveDeal(pid, oppId, stageId) {
+  if (!stageId) return;
+  API.patch('/pipelines/' + pid + '/stages/' + stageId + '/move/' + oppId, {})
+    .then(function (r) { toast('Deal moved to ' + (r && r.status ? r.status : 'new stage'), 'success'); loadPipelinesTab(); })
+    .catch(function (e) { toast('Move failed: ' + e.message, 'error'); loadPipelinesTab(); });
+}
+function plDeleteDeal(pid, oppId) {
+  confirmThen('Delete this deal?', function () {
+    API.del('/pipelines/' + pid + '/opportunities/' + oppId)
+      .then(function () { toast('Deal deleted', 'success'); loadPipelinesTab(); })
+      .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+  });
+}
+
+// ---------------------------------------------------------------- CAMPAIGNS
+let CM_TAGS = [];
+function cmCache() { return CM_TAGS; }
+
+function campaignsShell() {
+  return pageHeader('Campaigns', 'Marketing campaigns, their steps, triggers and enrollments',
+    '<button class="btn btn-secondary btn-sm" onclick="cmSyncTag()">⇄ Sync tag from FunnelSwift</button> ' +
+    '<button class="btn btn-secondary btn-sm" onclick="cmBuildCampaign()">⚡ Build campaign</button> ' +
+    '<button class="btn btn-primary btn-sm" onclick="cmNewCampaign()">+ New Campaign</button>') +
+  '<div id="cmContent"><div class="loading-wrap"><div class="spinner"></div> Loading campaigns...</div></div>';
+}
+
+// One-shot builder: POST /api/campaigns/build creates a campaign + its email steps in a single call.
+function cmBuildCampaign() {
+  showModal('Build Campaign',
+    '<div class="form-group"><label>Campaign name</label><input id="cbName" placeholder="Onboarding"></div>' +
+    '<div class="form-group"><label>Description</label><input id="cbDesc" placeholder="Optional"></div>' +
+    '<div class="form-group"><label>Step template name</label><input id="cbTpl" value="step-1"></div>' +
+    '<div class="form-group"><label>Subject</label><input id="cbSubject" placeholder="Welcome"></div>' +
+    '<div class="form-group"><label>Body</label><textarea id="cbBody" rows="4"></textarea></div>' +
+    '<div class="form-group"><label>Delay (days)</label><input type="number" id="cbDelay" value="0" min="0"></div>' +
+    '<p class="form-hint">POST /api/campaigns/build — creates the campaign and its first email step together.</p>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="cmSubmitBuild()">Build</button>');
+}
+async function cmSubmitBuild() {
+  const name = (document.getElementById('cbName').value || '').trim();
+  const tpl = (document.getElementById('cbTpl').value || '').trim();
+  const body = (document.getElementById('cbBody').value || '').trim();
+  if (!name || !tpl || !body) { toast('Name, template name and body are required', 'error'); return; }
+  try {
+    await API.post('/campaigns/build', {
+      name: name,
+      description: (document.getElementById('cbDesc').value || '').trim() || null,
+      steps: [{
+        template_name: tpl,
+        subject: (document.getElementById('cbSubject').value || '').trim() || null,
+        body: body,
+        delay_days: parseInt(document.getElementById('cbDelay').value, 10) || 0
+      }]
+    });
+    closeModal(); toast('Campaign built', 'success'); loadCampaignsTab();
+  } catch (e) { toast('Build failed: ' + e.message, 'error'); }
+}
+
+async function loadCampaignsTab() {
+  const el = document.getElementById('cmContent');
+  if (!el) return;
+  try {
+    const camps = famList(await API.get('/campaigns'), 'campaigns');
+    try { CM_TAGS = famList(await API.get('/tags'), 'tags'); } catch (_) { CM_TAGS = []; }
+    const rows = camps.map(function (c) {
+      return [
+        fh(c.name),
+        '<span class="badge ' + (c.status === 'active' ? 'badge-success' : 'badge-muted') + '">' + fh(c.status) + '</span>',
+        fh(c.description),
+        c.created_at ? new Date(c.created_at).toLocaleDateString() : '—',
+        '<button class="btn btn-ghost btn-xs" onclick="cmToggle(\'' + c.id + '\',\'activate\')">Activate</button>' +
+        '<button class="btn btn-ghost btn-xs" onclick="cmToggle(\'' + c.id + '\',\'pause\')">Pause</button>' +
+        '<button class="btn btn-secondary btn-xs" onclick="cmDetails(\'' + c.id + '\')">Details</button>' +
+        '<button class="btn btn-ghost btn-xs" onclick="cmDelete(\'' + c.id + '\')">Delete</button>'
+      ];
+    });
+    el.innerHTML = dataTable(['Name', 'Status', 'Description', 'Created', 'Actions'], rows,
+      'No campaigns yet — create one with “+ New Campaign”.') +
+      '<div id="cmDetail" style="margin-top:16px"></div>';
+  } catch (e) { famErr(el, 'Campaigns', e); }
+}
+
+function cmNewCampaign() {
+  showModal('New Campaign',
+    '<div class="form-group"><label>Name</label><input type="text" id="cmName"></div>' +
+    '<div class="form-group"><label>Description</label><input type="text" id="cmDesc"></div>' +
+    '<p class="form-hint">Steps are added from the campaign’s Details panel, where each step is a real row in email_campaign_steps.</p>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="cmCreateCampaign()">Create</button>');
+}
+async function cmCreateCampaign() {
+  const name = (document.getElementById('cmName').value || '').trim();
+  if (!name) { toast('Campaign name is required', 'error'); return; }
+  try {
+    await API.post('/campaigns', { name: name, description: (document.getElementById('cmDesc').value || '').trim() || null });
+    closeModal(); toast('Campaign created', 'success'); loadCampaignsTab();
+  } catch (e) { toast('Create failed: ' + e.message, 'error'); }
+}
+function cmToggle(id, action) {
+  API.post('/campaigns/' + id + '/' + action, {})
+    .then(function () { toast('Campaign ' + (action === 'activate' ? 'activated' : 'paused'), 'success'); loadCampaignsTab(); })
+    .catch(function (e) { toast('Action failed: ' + e.message, 'error'); });
+}
+function cmDelete(id) {
+  confirmThen('Delete this campaign?', function () {
+    API.del('/campaigns/' + id)
+      .then(function () { toast('Campaign deleted', 'success'); loadCampaignsTab(); })
+      .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+  });
+}
+async function cmDetails(id) {
+  const el = document.getElementById('cmDetail');
+  if (!el) return;
+  el.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Loading campaign detail...</div>';
+  try {
+    const d = await API.get('/campaigns/' + id);
+    const camp = d.campaign || d;
+    const steps = famList(d, 'steps');
+    const triggers = famList(await API.get('/campaigns/' + id + '/triggers'), 'triggers');
+    const enrolls = famList(await API.get('/campaigns/' + id + '/enrollments'), 'enrollments');
+    let h = card('📢 ' + fh(camp.name) + ' — steps',
+      '<div style="margin-bottom:10px"><button class="btn btn-primary btn-sm" onclick="cmNewStep(\'' + id + '\')">Add step</button></div>' +
+      dataTable(['#', 'Template', 'Subject', 'Delay (days)', 'Actions'],
+        steps.map(function (s) {
+          return [
+            s.step_order,
+            fh(s.template_name),
+            fh(s.subject),
+            s.delay_days,
+            '<button class="btn btn-ghost btn-xs" onclick="cmEditStep(\'' + s.id + '\',\'' + escapeHtml(s.subject || '') + '\',' +
+              (s.delay_days || 0) + ')">Edit</button>' +
+            '<button class="btn btn-ghost btn-xs" onclick="cmDeleteStep(\'' + id + '\',\'' + s.id + '\')">Delete</button>'
+          ];
+        }), 'This campaign has no steps yet.'));
+    h += '<br>' + card('Triggers',
+      dataTable(['Tag', 'Trigger type', 'Created', 'Actions'],
+        triggers.map(function (t) {
+          const tag = CM_TAGS.find(function (x) { return x.id === t.tag_id; });
+          return [
+            tag ? fh(tag.name) : fh(t.tag_id),
+            fh(t.trigger_type),
+            t.created_at ? new Date(t.created_at).toLocaleDateString() : '—',
+            '<button class="btn btn-ghost btn-xs" onclick="cmDeleteTrigger(\'' + id + '\',\'' + t.id + '\')">Remove</button>'
+          ];
+        }), 'No triggers — enroll contacts automatically by tag below.') +
+      '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-top:12px">' +
+        '<div><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Tag</label>' +
+        '<select id="cmTrigTag" style="padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
+          (CM_TAGS.length ? CM_TAGS.slice(0, 300).map(function (t) { return '<option value="' + t.id + '">' + escapeHtml(t.name) + '</option>'; }).join('')
+                          : '<option value="">No tags available</option>') +
+        '</select></div>' +
+        '<div><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Trigger type</label>' +
+        '<select id="cmTrigType" style="padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
+          '<option value="tag_assigned">tag_assigned</option><option value="contact_created">contact_created</option>' +
+          '<option value="manual">manual</option></select></div>' +
+        '<button class="btn btn-primary btn-sm" onclick="cmAddTrigger(\'' + id + '\')">Add trigger</button>' +
+      '</div>', '');
+    h += '<br>' + card('Enrollments',
+      dataTable(['Entity', 'Status', 'Step', 'Started', 'Actions'],
+        enrolls.map(function (e2) {
+          return [
+            fh(e2.entity_type) + ' ' + String(e2.entity_id || '').slice(0, 8),
+            fh(e2.status),
+            (e2.current_step || 0) + '/' + (e2.total_steps || 0),
+            e2.started_at ? new Date(e2.started_at).toLocaleDateString() : '—',
+            '<button class="btn btn-ghost btn-xs" onclick="cmSetEnrollment(\'' + id + '\',\'' + e2.id + '\',\'completed\')">Complete</button>' +
+            '<button class="btn btn-ghost btn-xs" onclick="cmSetEnrollment(\'' + id + '\',\'' + e2.id + '\',\'paused\')">Pause</button>'
+          ];
+        }), 'Nobody is enrolled in this campaign yet.'), '');
+    el.innerHTML = h;
+  } catch (e) { famErr(el, 'Campaign detail', e); }
+}
+async function cmEditStep(stepId, subject, delay) {
+  showModal('Edit Step',
+    '<div class="form-group"><label>Subject</label><input type="text" id="csSubject" value="' + escapeHtml(subject) + '"></div>' +
+    '<div class="form-group"><label>Delay (days)</label><input type="number" id="csDelay" value="' + delay + '"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="cmSaveStep(\'' + stepId + '\')">Save</button>');
+}
+async function cmSaveStep(stepId) {
+  try {
+    await API.patch('/campaigns/steps/' + stepId, {
+      subject: (document.getElementById('csSubject').value || '').trim() || null,
+      delay_days: parseInt(document.getElementById('csDelay').value, 10)
+    });
+    closeModal(); toast('Step updated', 'success');
+    if (STATE.activeTab === 'campaigns') loadCampaignsTab();
+  } catch (e) { toast('Save failed: ' + e.message, 'error'); }
+}
+function cmDeleteStep(cid, stepId) {
+  confirmThen('Delete this step?', function () {
+    API.del('/campaigns/steps/' + stepId)
+      .then(function () { toast('Step deleted', 'success'); cmDetails(cid); })
+      .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+  });
+}
+async function cmAddTrigger(cid) {
+  const tagId = document.getElementById('cmTrigTag').value;
+  if (!tagId) { toast('Pick a tag first', 'error'); return; }
+  try {
+    await API.post('/campaigns/' + cid + '/triggers', {
+      tag_id: tagId, trigger_type: document.getElementById('cmTrigType').value
+    });
+    toast('Trigger added', 'success'); cmDetails(cid);
+  } catch (e) { toast('Add trigger failed: ' + e.message, 'error'); }
+}
+function cmDeleteTrigger(cid, triggerId) {
+  confirmThen('Remove this trigger?', function () {
+    API.del('/campaigns/triggers/' + triggerId)
+      .then(function () { toast('Trigger removed', 'success'); cmDetails(cid); })
+      .catch(function (e) { toast('Remove failed: ' + e.message, 'error'); });
+  });
+}
+function cmSetEnrollment(cid, enrollmentId, status) {
+  API.patch('/campaigns/enrollments/' + enrollmentId, { status: status })
+    .then(function () { toast('Enrollment ' + status, 'success'); cmDetails(cid); })
+    .catch(function (e) { toast('Update failed: ' + e.message, 'error'); });
+}
+function cmSyncTag() {
+  showModal('Sync a tag from FunnelSwift',
+    '<p class="config-desc">Creates/updates the tag locally from a FunnelSwift tag name (POST /api/campaigns/sync-tag).</p>' +
+    '<div class="form-group"><label>Tag name</label><input type="text" id="stTagName" placeholder="sp-biz-zh-interested"></div>' +
+    '<div class="form-group"><label>Action</label><select id="stTagAction">' +
+      '<option value="create">create</option><option value="update">update</option><option value="delete">delete</option></select></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="cmSyncTagSubmit()">Sync</button>');
+}
+async function cmSyncTagSubmit() {
+  const name = (document.getElementById('stTagName').value || '').trim();
+  if (!name) { toast('Tag name is required', 'error'); return; }
+  try {
+    await API.post('/campaigns/sync-tag', {
+      tag_name: name, action: document.getElementById('stTagAction').value, source: 'coreswift-ui'
+    });
+    closeModal(); toast('Tag synced', 'success'); loadCampaignsTab();
+  } catch (e) { toast('Sync failed: ' + e.message, 'error'); }
+}
+
+// ---------------------------------------------------------------- LISTS
+function listsShell() {
+  return pageHeader('Lists', 'Contact lists for segmentation',
+    '<button class="btn btn-primary btn-sm" onclick="lsNewList()">+ New List</button>') +
+  '<div id="listsTable"><div class="loading-wrap"><div class="spinner"></div> Loading lists...</div></div>' +
+  '<div id="lsDetail" style="margin-top:16px"></div>';
+}
+async function loadListsTab() {
+  const el = document.getElementById('listsTable');
+  if (!el) return;
+  try {
+    const lists = famList(await API.get('/lists'), 'lists');
+    const rows = lists.map(function (l) {
+      const dyn = l.list_type === 'dynamic';
+      return [
+        fh(l.name),
+        l.member_count !== null && l.member_count !== undefined ? l.member_count : '—',
+        '<span class="badge ' + (dyn ? 'badge-primary' : 'badge-muted') + '">' + fh(l.list_type) + '</span>',
+        l.created_at ? new Date(l.created_at).toLocaleDateString() : '—',
+        '<button class="btn btn-secondary btn-xs" onclick="lsMembers(\'' + l.id + '\')">Members</button>' +
+        (dyn ? '<button class="btn btn-primary btn-xs" onclick="lsEvaluate(\'' + l.id + '\')">Evaluate</button>' : '')
+      ];
+    });
+    el.innerHTML = dataTable(['Name', 'Members', 'Type', 'Created', 'Actions'], rows,
+      'No lists yet. Create a list to segment your contacts.');
+  } catch (e) { famErr(el, 'Lists', e); }
+}
+function lsNewList() {
+  showModal('New List',
+    '<div class="form-group"><label>Name</label><input type="text" id="lsName"></div>' +
+    '<div class="form-group"><label>Description</label><textarea id="lsDesc" rows="2"></textarea></div>' +
+    '<div class="form-group"><label>Type</label><select id="lsType">' +
+      '<option value="static">static — members added by hand</option>' +
+      '<option value="dynamic">dynamic — membership evaluated from rules</option></select></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="lsCreateList()">Create</button>');
+}
+async function lsCreateList() {
+  const name = (document.getElementById('lsName').value || '').trim();
+  if (!name) { toast('List name is required', 'error'); return; }
+  try {
+    await API.post('/lists', {
+      name: name,
+      description: (document.getElementById('lsDesc').value || '').trim() || null,
+      list_type: document.getElementById('lsType').value
+    });
+    closeModal(); toast('List created', 'success'); loadListsTab();
+  } catch (e) { toast('Create failed: ' + e.message, 'error'); }
+}
+async function lsMembers(listId) {
+  const el = document.getElementById('lsDetail');
+  if (!el) return;
+  el.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Loading members...</div>';
+  try {
+    const members = famList(await API.get('/lists/' + listId + '/members'), 'members');
+    el.innerHTML = card('List members (' + members.length + ')',
+      dataTable(['Contact', 'Added', 'Manually', 'Actions'],
+        members.map(function (m) {
+          return [
+            fh(m.name || m.email || m.contact_id),
+            m.added_at ? new Date(m.added_at).toLocaleDateString() : '—',
+            m.added_manually ? 'yes' : 'no',
+            '<button class="btn btn-ghost btn-xs" onclick="lsRemoveMember(\'' + listId + '\',\'' +
+              (m.contact_id || m.id) + '\')">Remove</button>'
+          ];
+        }), 'This list has no members yet.'), '');
+  } catch (e) { famErr(el, 'List members', e); }
+}
+function lsRemoveMember(listId, contactId) {
+  API.del('/lists/' + listId + '/members/' + contactId)
+    .then(function () { toast('Member removed', 'success'); lsMembers(listId); loadListsTab(); })
+    .catch(function (e) { toast('Remove failed: ' + e.message, 'error'); });
+}
+function lsEvaluate(listId) {
+  API.post('/lists/' + listId + '/evaluate', {})
+    .then(function (r) {
+      toast('Evaluated: ' + JSON.stringify(r).slice(0, 120), 'success');
+      lsMembers(listId); loadListsTab();
+    })
+    .catch(function (e) { toast('Evaluate failed: ' + e.message, 'error'); });
+}
+
+// ---------------------------------------------------------------- LEAD SCORING
+let SC_CONTACTS = [];
+let SC_CID = '';
+
+function scoringShell() {
+  return pageHeader('Lead Scoring', 'Score leads from real rules, thresholds and history',
+    '<button class="btn btn-primary btn-sm" onclick="scNewRule()">+ Add Criterion</button> ' +
+    '<button class="btn btn-secondary btn-sm" onclick="scNewThreshold()">+ Add Threshold</button>') +
+  '<div id="scContent"><div class="loading-wrap"><div class="spinner"></div> Loading scoring engine...</div></div>';
+}
+async function loadScoringTab() {
+  const el = document.getElementById('scContent');
+  if (!el) return;
+  try {
+    const rules = famList(await API.get('/scoring/rules'), 'rules');
+    const thresholds = famList(await API.get('/scoring/thresholds'), 'thresholds');
+    const dist = famList(await API.get('/scoring/distribution'), 'distribution');
+    try { SC_CONTACTS = famList(await API.get('/contacts'), 'contacts'); } catch (_) {}
+    let h = card('Score Criteria — ' + rules.length + ' rule(s)',
+      dataTable(['Rule', 'Event', 'Points', 'Direction', 'Active', 'Actions'],
+        rules.map(function (r) {
+          return [
+            fh(r.name), fh(r.event_type),
+            (r.direction === 'subtract' ? '−' : '+') + r.points,
+            fh(r.direction),
+            r.is_active ? '<span class="badge badge-success">active</span>' : '<span class="badge badge-muted">off</span>',
+            '<button class="btn btn-ghost btn-xs" onclick="scDeleteRule(\'' + r.id + '\')">Delete</button>'
+          ];
+        }), 'No scoring rules yet — add a criterion.'), '');
+    h += '<br>' + card('Score Thresholds', dataTable(['Min', 'Max', 'Action', 'Active', 'Actions'],
+      thresholds.map(function (t) {
+        return [t.min_score, t.max_score, fh(t.action),
+          t.is_active ? '<span class="badge badge-success">active</span>' : '<span class="badge badge-muted">off</span>',
+          '<button class="btn btn-ghost btn-xs" onclick="scDeleteThreshold(\'' + t.id + '\')">Delete</button>'];
+      }), 'No thresholds — add one to automate stage moves.'), '');
+    const dtot = dist.reduce(function (a, x) { return a + (x[1] || 0); }, 0);
+    h += '<br>' + card('Score Distribution (live scores for this account)',
+      dist.length
+        ? '<div style="display:flex;gap:10px;flex-wrap:wrap">' + dist.map(function (x) {
+            const pct = dtot ? Math.round((x[1] / dtot) * 100) : 0;
+            return '<div class="stat-card"><div class="stat-value">' + x[1] + '</div><div class="stat-label">' +
+              escapeHtml(String(x[0])) + ' (' + pct + '%)</div></div>';
+          }).join('') + '</div>'
+        : '<div class="empty-state"><div class="empty-icon">🎯</div><h3>No scored contacts yet</h3>' +
+          '<p>Pick a contact below and recalculate to create real score rows.</p></div>', '');
+    h += '<br>' + card('Contact score tools',
+      '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">' +
+        '<div><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Contact</label>' +
+        '<select id="scContact" style="padding:8px;min-width:280px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
+          (SC_CONTACTS.length ? SC_CONTACTS.slice(0, 300).map(function (c) {
+            const nm = c.name || ((c.first_name || '') + ' ' + (c.last_name || '')).trim() || c.email || c.id;
+            return '<option value="' + c.id + '">' + escapeHtml(nm) + '</option>';
+          }).join('') : '<option value="">No contacts available</option>') +
+        '</select></div>' +
+        '<button class="btn btn-secondary btn-sm" onclick="scLoadContact()">Load score</button>' +
+        '<button class="btn btn-secondary btn-sm" onclick="scLoadHistory()">History</button>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-top:12px">' +
+        '<div><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Recalculate on event</label>' +
+        '<select id="scEvent" style="padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
+          '<option value="email_opened">email_opened</option><option value="link_clicked">link_clicked</option>' +
+          '<option value="form_submitted">form_submitted</option><option value="deal_closed">deal_closed</option></select></div>' +
+        '<button class="btn btn-primary btn-sm" onclick="scRecalc()">Recalculate score</button>' +
+      '</div>' +
+      '<div id="scContactOut" style="margin-top:12px"></div>', '');
+    el.innerHTML = h;
+  } catch (e) { famErr(el, 'Lead Scoring', e); }
+}
+function scNewRule() {
+  showModal('Add Scoring Criterion',
+    '<div class="form-group"><label>Name</label><input type="text" id="srName" placeholder="Email opened"></div>' +
+    '<div class="form-group"><label>Event type</label><input type="text" id="srEvent" placeholder="email_opened"></div>' +
+    '<div class="form-group"><label>Points</label><input type="number" id="srPoints" value="5"></div>' +
+    '<div class="form-group"><label>Direction</label><select id="srDir"><option value="add">add</option>' +
+      '<option value="subtract">subtract</option></select></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="scCreateRule()">Add</button>');
+}
+async function scCreateRule() {
+  const name = (document.getElementById('srName').value || '').trim();
+  const ev = (document.getElementById('srEvent').value || '').trim();
+  if (!name || !ev) { toast('Name and event type are required', 'error'); return; }
+  try {
+    await API.post('/scoring/rules', {
+      name: name, event_type: ev,
+      points: parseInt(document.getElementById('srPoints').value, 10) || 0,
+      direction: document.getElementById('srDir').value
+    });
+    closeModal(); toast('Criterion added', 'success'); loadScoringTab();
+  } catch (e) { toast('Add failed: ' + e.message, 'error'); }
+}
+function scDeleteRule(id) {
+  confirmThen('Delete this criterion?', function () {
+    API.del('/scoring/rules/' + id)
+      .then(function () { toast('Rule deleted', 'success'); loadScoringTab(); })
+      .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+  });
+}
+function scNewThreshold() {
+  (async function () {
+    let pipes = [];
+    try { pipes = famList(await API.get('/pipelines'), 'pipelines').map(function (p) { return p.pipeline || p; }); } catch (e) {}
+    showModal('Add Score Threshold',
+      '<div class="form-group"><label>Pipeline</label><select id="thPipeline" onchange="scLoadStages()">' +
+        (pipes.length ? pipes.map(function (p) { return '<option value="' + p.id + '">' + escapeHtml(p.name) + '</option>'; }).join('')
+                      : '<option value="">No pipelines — create one first</option>') +
+      '</select></div>' +
+      '<div class="form-group"><label>Target stage</label><select id="thStage"><option value="">Select a pipeline first</option></select></div>' +
+      '<div class="form-group"><label>Min score</label><input type="number" id="thMin" value="0"></div>' +
+      '<div class="form-group"><label>Max score</label><input type="number" id="thMax" value="100"></div>' +
+      '<div class="form-group"><label>Action</label><select id="thAction">' +
+        '<option value="move_stage">move_stage</option><option value="notify">notify</option>' +
+        '<option value="assign">assign</option></select></div>' +
+      '<p class="form-hint">POST /api/scoring/thresholds — a threshold belongs to a pipeline and a target stage (both are required by the API).</p>',
+      '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+      '<button class="btn btn-primary" onclick="scCreateThreshold()">Add</button>');
+    scLoadStages();
+  })();
+}
+async function scLoadStages() {
+  const pid = (document.getElementById('thPipeline') || {}).value;
+  const sel = document.getElementById('thStage');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">Loading…</option>';
+  if (!pid) { sel.innerHTML = '<option value="">No pipeline selected</option>'; return; }
+  try {
+    const stages = famList(await API.get('/pipelines/' + pid + '/stages'), 'stages');
+    sel.innerHTML = stages.length
+      ? stages.map(function (s) { return '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'; }).join('')
+      : '<option value="">This pipeline has no stages yet</option>';
+  } catch (e) { sel.innerHTML = '<option value="">Could not load stages</option>'; }
+}
+async function scCreateThreshold() {
+  const pipeline_id = (document.getElementById('thPipeline') || {}).value;
+  const target_stage_id = (document.getElementById('thStage') || {}).value;
+  if (!pipeline_id || !target_stage_id) { toast('Pick a pipeline and a target stage', 'error'); return; }
+  try {
+    await API.post('/scoring/thresholds', {
+      pipeline_id: pipeline_id,
+      target_stage_id: target_stage_id,
+      min_score: parseInt(document.getElementById('thMin').value, 10) || 0,
+      max_score: parseInt(document.getElementById('thMax').value, 10) || 0,
+      action: document.getElementById('thAction').value
+    });
+    closeModal(); toast('Threshold added', 'success'); loadScoringTab();
+  } catch (e) { toast('Add failed: ' + e.message, 'error'); }
+}
+// Add a step to a campaign: POST /api/campaigns/steps carries campaign_id in the body.
+function cmNewStep(cid) {
+  showModal('Add Email Step',
+    '<div class="form-group"><label>Template name</label><input id="cnsTemplate" value="step-' + Date.now() + '"></div>' +
+    '<div class="form-group"><label>Subject</label><input id="cnsSubject" placeholder="Welcome"></div>' +
+    '<div class="form-group"><label>Body</label><textarea id="cnsBody" rows="4"></textarea></div>' +
+    '<div class="form-group"><label>Delay (days)</label><input type="number" id="cnsDelay" value="0" min="0"></div>' +
+    '<p class="form-hint">POST /api/campaigns/steps — steps must exist before a campaign can be activated.</p>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="cmAddStep(\'' + cid + '\')">Add</button>');
+}
+async function cmAddStep(cid) {
+  const template_name = (document.getElementById('cnsTemplate').value || '').trim();
+  const body = (document.getElementById('cnsBody').value || '').trim();
+  if (!template_name || !body) { toast('Template name and body are required', 'error'); return; }
+  try {
+    await API.post('/campaigns/steps', {
+      campaign_id: cid,
+      template_name: template_name,
+      subject: (document.getElementById('cnsSubject').value || '').trim() || null,
+      body: body,
+      delay_days: parseInt(document.getElementById('cnsDelay').value, 10) || 0
+    });
+    closeModal(); toast('Step added', 'success'); cmDetails(cid);
+  } catch (e) { toast('Add failed: ' + e.message, 'error'); }
+}
+function scDeleteThreshold(id) {
+  API.del('/scoring/thresholds/' + id)
+    .then(function () { toast('Threshold deleted', 'success'); loadScoringTab(); })
+    .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+}
+function scPickContact() {
+  const sel = document.getElementById('scContact');
+  return sel ? sel.value : '';
+}
+async function scLoadContact() {
+  const cid = scPickContact(), out = document.getElementById('scContactOut');
+  if (!cid) { toast('No contact selected', 'error'); return; }
+  SC_CID = cid;
+  try {
+    const s = await API.get('/scoring/scores/' + cid);
+    out.innerHTML = '<div class="stats-grid"><div class="stat-card accent"><div class="stat-value">' +
+      (s.total_score || 0) + '</div><div class="stat-label">Score</div></div>' +
+      '<div class="stat-card"><div class="stat-value">' + fh(s.category) + '</div><div class="stat-label">Category</div></div>' +
+      '<div class="stat-card"><div class="stat-value">' + fh(s.last_event_type) + '</div><div class="stat-label">Last event</div></div></div>';
+  } catch (e) {
+    out.innerHTML = '<p style="color:var(--text-secondary)">Score for this contact: ' + escapeHtml(e.message) + '</p>';
+  }
+}
+async function scLoadHistory() {
+  const cid = scPickContact(), out = document.getElementById('scContactOut');
+  if (!cid) { toast('No contact selected', 'error'); return; }
+  SC_CID = cid;
+  try {
+    const hist = famList(await API.get('/scoring/history/' + cid), 'history');
+    out.innerHTML = dataTable(['When', 'Event', 'Points', 'Before', 'After', 'Reason'],
+      hist.map(function (x) {
+        return [x.created_at ? new Date(x.created_at).toLocaleString() : '—', fh(x.event_type),
+          x.points, x.previous_score, x.new_score, fh(x.reason)];
+      }), 'No score history for this contact yet.');
+  } catch (e) { famErr(out, 'Score history', e); }
+}
+async function scRecalc() {
+  const cid = scPickContact();
+  if (!cid) { toast('No contact selected', 'error'); return; }
+  try {
+    await API.post('/scoring/calculate/' + cid, { event_type: document.getElementById('scEvent').value });
+    toast('Score recalculated', 'success');
+    SC_CID = cid; scLoadContact(); loadScoringTab();
+  } catch (e) { toast('Recalculate failed: ' + e.message, 'error'); }
+}
+
+// ---------------------------------------------------------------- ANALYTICS
+function analyticsShell() {
+  return pageHeader('Analytics', 'Live counts from the analytics endpoints') +
+    '<div id="anContent"><div class="loading-wrap"><div class="spinner"></div> Loading analytics...</div></div>';
+}
+async function loadAnalyticsTab() {
+  const el = document.getElementById('anContent');
+  if (!el) return;
+  try {
+    const contacts = await API.get('/analytics/contacts');
+    const pipes = famList(await API.get('/analytics/pipelines'), 'pipelines');
+    const scores = famList(await API.get('/analytics/scores'), 'distribution');
+    const tags = famList(await API.get('/analytics/tags'), 'tags');
+    let h = '<div class="stats-grid">' +
+      '<div class="stat-card accent"><div class="stat-icon">👥</div><div class="stat-value">' + (contacts.total_contacts || 0) + '</div><div class="stat-label">Contacts</div></div>' +
+      '<div class="stat-card"><div class="stat-icon">🆙</div><div class="stat-value">' + (contacts.contacts_with_opportunities || 0) + '</div><div class="stat-label">With deals</div></div>' +
+      '<div class="stat-card"><div class="stat-icon">🏷️</div><div class="stat-value">' + (contacts.contacts_with_tags || 0) + '</div><div class="stat-label">Tagged</div></div>' +
+      '<div class="stat-card"><div class="stat-icon">🎯</div><div class="stat-value">' + (contacts.tagged_percentage || 0) + '%</div><div class="stat-label">Tag coverage</div></div>' +
+      '</div>';
+    h += card('Pipeline performance', dataTable(['Pipeline', 'Total', 'Open', 'Won', 'Lost'],
+      pipes.map(function (p) { return [fh(p.pipeline_name), p.total, p.open, p.won, p.lost]; }),
+      'No pipelines to analyse yet.'), '');
+    h += '<br>' + card('Score distribution', dataTable(['Category', 'Contacts'],
+      scores.map(function (s) { return [fh(s[0]), s[1]]; }), 'No scored contacts yet.'), '');
+    h += '<br>' + card('Tag usage', dataTable(['Tag', 'Assignments'],
+      tags.map(function (t) { return [fh(t[1]), t[2]]; }), 'No tag assignments yet.'), '');
+    el.innerHTML = h;
+  } catch (e) { famErr(el, 'Analytics', e); }
+}
+
+// ---------------------------------------------------------------- TAGS
+function tagsShell() {
+  return pageHeader('Tags', 'Tag categories and tags',
+    '<button class="btn btn-secondary btn-sm" onclick="tgNewCategory()">+ New Category</button> ' +
+    '<button class="btn btn-primary btn-sm" onclick="tgNewTag()">+ New Tag</button>') +
+  '<div id="tagsTable"><div class="loading-wrap"><div class="spinner"></div> Loading tags...</div></div>';
+}
+async function loadTagsTab() {
+  const el = document.getElementById('tagsTable');
+  if (!el) return;
+  try {
+    const cats = famList(await API.get('/tags/categories'), 'categories');
+    const tags = famList(await API.get('/tags'), 'tags');
+    let h = card('Categories (' + cats.length + ')',
+      dataTable(['Name', 'Colour', 'Created', 'Actions'],
+        cats.map(function (c) {
+          return [
+            fh(c.name),
+            '<span class="badge" style="background:' + (c.color || 'var(--accent-subtle)') + ';color:#fff">' + fh(c.color) + '</span>',
+            c.created_at ? new Date(c.created_at).toLocaleDateString() : '—',
+            '<button class="btn btn-ghost btn-xs" onclick="tgDeleteCategory(\'' + c.id + '\')">Delete</button>'
+          ];
+        }), 'No categories yet — create one to group your tags.'), '');
+    h += '<br>' + card('Tags (' + tags.length + ')',
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+        (tags.length ? tags.map(function (t) {
+          const cat = cats.find(function (c) { return c.id === t.category_id; });
+          return '<span class="badge" style="background:' + (t.color || 'var(--accent-subtle)') + ';color:#fff;padding:6px 12px">' +
+            escapeHtml(t.name) + (cat ? ' · ' + escapeHtml(cat.name) : '') +
+            ' <a href="#" onclick="tgDeleteTag(\'' + t.id + '\');return false" title="Delete tag">✕</a></span>';
+        }).join('') : '<span class="config-desc">No tags yet.</span>') + '</div>', '');
+    el.innerHTML = h;
+  } catch (e) { famErr(el, 'Tags', e); }
+}
+function tgNewCategory() {
+  showModal('New Tag Category',
+    '<div class="form-group"><label>Name</label><input type="text" id="tgCatName"></div>' +
+    '<div class="form-group"><label>Colour</label><input type="text" id="tgCatColor" value="#6366f1"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="tgCreateCategory()">Create</button>');
+}
+async function tgCreateCategory() {
+  const name = (document.getElementById('tgCatName').value || '').trim();
+  if (!name) { toast('Category name is required', 'error'); return; }
+  try {
+    await API.post('/tags/categories', { name: name, color: (document.getElementById('tgCatColor').value || '').trim() || null });
+    closeModal(); toast('Category created', 'success'); loadTagsTab();
+  } catch (e) { toast('Create failed: ' + e.message, 'error'); }
+}
+function tgDeleteCategory(id) {
+  confirmThen('Delete this category? Tags keep their name but lose the grouping.', function () {
+    API.del('/tags/categories/' + id)
+      .then(function () { toast('Category deleted', 'success'); loadTagsTab(); })
+      .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+  });
+}
+function tgNewTag() {
+  showModal('New Tag',
+    '<div class="form-group"><label>Name</label><input type="text" id="tgName"></div>' +
+    '<div class="form-group"><label>Colour</label><input type="text" id="tgColor" value="#6B7280"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="tgCreateTag()">Create</button>');
+}
+async function tgCreateTag() {
+  const name = (document.getElementById('tgName').value || '').trim();
+  if (!name) { toast('Tag name is required', 'error'); return; }
+  try {
+    await API.post('/tags', { name: name, color: (document.getElementById('tgColor').value || '').trim() || null });
+    closeModal(); toast('Tag created', 'success'); loadTagsTab();
+  } catch (e) { toast('Create failed: ' + e.message, 'error'); }
+}
+function tgDeleteTag(id) {
+  confirmThen('Delete this tag?', function () {
+    API.del('/tags/' + id)
+      .then(function () { toast('Tag deleted', 'success'); loadTagsTab(); })
+      .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+  });
+}
+
+// ---------------------------------------------------------------- CHECKLISTS
+let CK_CONTACTS = [];
+function checklistsShell() {
+  return pageHeader('Checklists', 'Templates and running checklist instances',
+    '<button class="btn btn-primary btn-sm" onclick="ckNewTemplate()">+ New Template</button> ' +
+    '<button class="btn btn-secondary btn-sm" onclick="ckStartInstance()">▶ Start on a contact</button>') +
+  '<div id="ckContent"><div class="loading-wrap"><div class="spinner"></div> Loading checklists...</div></div>';
+}
+async function loadChecklistsTab() {
+  const el = document.getElementById('ckContent');
+  if (!el) return;
+  try {
+    const tpls = famList(await API.get('/checklists/templates'), 'templates');
+    const insts = famList(await API.get('/checklists/instances'), 'instances');
+    try { CK_CONTACTS = famList(await API.get('/contacts'), 'contacts'); } catch (_) {}
+    let h = card('Templates',
+      dataTable(['Name', 'Trigger', 'Stages', 'Days/stage', 'Active', 'Actions'],
+        tpls.map(function (t) {
+          return [fh(t.name), fh(t.trigger_type), t.stage_count, t.days_per_stage,
+            t.is_active === false ? '<span class="badge badge-muted">off</span>' : '<span class="badge badge-success">active</span>',
+            '<button class="btn btn-ghost btn-xs" onclick="ckDeleteTemplate(\'' + t.id + '\')">Delete</button>'];
+        }), 'No checklist templates yet.'), '');
+    h += '<br>' + card('Instances',
+      dataTable(['Entity', 'Stage', 'Completed', 'Started', 'Actions'],
+        insts.map(function (i) {
+          return [fh(i.entity_type) + ' ' + String(i.entity_id || '').slice(0, 8),
+            i.current_stage, i.completed ? 'yes' : 'no',
+            i.started_at ? new Date(i.started_at).toLocaleDateString() : '—',
+            '<button class="btn btn-secondary btn-xs" onclick="ckAdvance(\'' + i.id + '\',' + (i.current_stage || 0) + ')">Advance</button>'];
+        }), 'No checklist instances are running.'), '');
+    el.innerHTML = h;
+  } catch (e) { famErr(el, 'Checklists', e); }
+}
+function ckNewTemplate() {
+  showModal('New Checklist Template',
+    '<div class="form-group"><label>Name</label><input type="text" id="ckName" placeholder="Client onboarding"></div>' +
+    '<div class="form-group"><label>Description</label><input type="text" id="ckDesc"></div>' +
+    '<div class="form-group"><label>Trigger type</label><select id="ckTrigger">' +
+      '<option value="manual">manual</option><option value="deal_created">deal_created</option>' +
+      '<option value="contact_created">contact_created</option></select></div>' +
+    '<div class="form-group"><label>Stages</label><input type="number" id="ckStages" value="3" min="1"></div>' +
+    '<div class="form-group"><label>Days per stage</label><input type="number" id="ckDays" value="2" min="1"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="ckCreateTemplate()">Create</button>');
+}
+async function ckCreateTemplate() {
+  const name = (document.getElementById('ckName').value || '').trim();
+  if (!name) { toast('Template name is required', 'error'); return; }
+  try {
+    await API.post('/checklists/templates', {
+      name: name,
+      description: (document.getElementById('ckDesc').value || '').trim() || null,
+      trigger_type: document.getElementById('ckTrigger').value,
+      stage_count: parseInt(document.getElementById('ckStages').value, 10) || 1,
+      days_per_stage: parseInt(document.getElementById('ckDays').value, 10) || 1
+    });
+    closeModal(); toast('Template created', 'success'); loadChecklistsTab();
+  } catch (e) { toast('Create failed: ' + e.message, 'error'); }
+}
+function ckDeleteTemplate(id) {
+  confirmThen('Delete this template?', function () {
+    API.del('/checklists/templates/' + id)
+      .then(function () { toast('Template deleted', 'success'); loadChecklistsTab(); })
+      .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+  });
+}
+function ckStartInstance() {
+  const opts = CK_CONTACTS.length ? CK_CONTACTS.slice(0, 300).map(function (c) {
+    const nm = c.name || ((c.first_name || '') + ' ' + (c.last_name || '')).trim() || c.email || c.id;
+    return '<option value="' + c.id + '">' + escapeHtml(nm) + '</option>';
+  }).join('') : '<option value="">No contacts available</option>';
+  showModal('Start a Checklist',
+    '<p class="config-desc">Starts the newest active template of this account on the chosen contact ' +
+    '(POST /api/checklists/instances/start/contact/:id).</p>' +
+    '<div class="form-group"><label>Contact</label><select id="ckContact">' + opts + '</select></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="ckStartSubmit()">Start</button>');
+}
+async function ckStartSubmit() {
+  const cid = document.getElementById('ckContact').value;
+  if (!cid) { toast('No contact selected', 'error'); return; }
+  try {
+    await API.post('/checklists/instances/start/contact/' + cid, {});
+    closeModal(); toast('Checklist started', 'success'); loadChecklistsTab();
+  } catch (e) { toast('Start failed: ' + e.message, 'error'); }
+}
+async function ckAdvance(instanceId, currentStage) {
+  try {
+    await API.patch('/checklists/instances/' + instanceId + '/progress', {
+      stage_order: (currentStage || 0) + 1, completed: true
+    });
+    toast('Checklist advanced', 'success'); loadChecklistsTab();
+  } catch (e) { toast('Advance failed: ' + e.message, 'error'); }
+}
+
+// ---------------------------------------------------------------- ROUND ROBIN
+let RR_TEAMS = [];
+function roundRobinShell() {
+  return pageHeader('Round Robin', 'Teams, members and assignment history',
+    '<button class="btn btn-primary btn-sm" onclick="rrNewTeam()">+ New Team</button>') +
+  '<div id="rrContent"><div class="loading-wrap"><div class="spinner"></div> Loading teams...</div></div>';
+}
+async function loadRoundRobinTab() {
+  const el = document.getElementById('rrContent');
+  if (!el) return;
+  try {
+    RR_TEAMS = famList(await API.get('/round-robin/teams'), 'teams');
+    if (!RR_TEAMS.length) {
+      el.innerHTML = card('Teams', '<div class="empty-state"><div class="empty-icon">🔄</div><h3>No round-robin teams yet</h3>' +
+        '<p>Create a team, add members, then assignments distribute automatically.</p></div>', '');
+      return;
+    }
+    let h = '';
+    RR_TEAMS.forEach(function (t) {
+      h += card('🔄 ' + fh(t.name) + ' <span class="badge badge-muted">' + fh(t.strategy) + '</span>' +
+        ' <span class="badge badge-' + (t.is_active ? 'success' : 'muted') + '">' + (t.is_active ? 'active' : 'off') + '</span>',
+        '<div id="rrMembers-' + t.id + '"><div class="loading-wrap"><div class="spinner"></div> Loading members...</div></div>' +
+        '<div style="margin-top:12px"><button class="btn btn-secondary btn-xs" onclick="rrAddMember(\'' + t.id + '\')">+ Add member</button> ' +
+        '<button class="btn btn-ghost btn-xs" onclick="rrAssignments(\'' + t.id + '\')">Assignments</button> ' +
+        '<button class="btn btn-ghost btn-xs" onclick="rrDeleteTeam(\'' + t.id + '\')">Delete team</button></div>' +
+        '<div id="rrAssign-' + t.id + '" style="margin-top:12px"></div>', '');
+      rrLoadMembers(t.id);
+    });
+    el.innerHTML = h;
+  } catch (e) { famErr(el, 'Round Robin', e); }
+}
+async function rrLoadMembers(teamId) {
+  const el = document.getElementById('rrMembers-' + teamId);
+  if (!el) return;
+  try {
+    const members = famList(await API.get('/round-robin/teams/' + teamId + '/members'), 'members');
+    el.innerHTML = dataTable(['Member (user id)', 'Weight', 'Max concurrent', 'Active', 'Actions'],
+      members.map(function (m) {
+        return [fh(m.user_id), m.weight, m.max_concurrent_bookings,
+          m.is_active ? '<span class="badge badge-success">yes</span>' : '<span class="badge badge-muted">no</span>',
+          '<button class="btn btn-ghost btn-xs" onclick="rrRemoveMember(\'' + teamId + '\',\'' + m.id + '\')">Remove</button>'];
+      }), 'No members on this team yet.');
+  } catch (e) { famErr(el, 'Team members', e); }
+}
+function rrNewTeam() {
+  showModal('New Round-Robin Team',
+    '<div class="form-group"><label>Name</label><input type="text" id="rrName"></div>' +
+    '<div class="form-group"><label>Description</label><input type="text" id="rrDesc"></div>' +
+    '<div class="form-group"><label>Strategy</label><select id="rrStrategy">' +
+      '<option value="round_robin">round_robin</option><option value="weighted">weighted</option>' +
+      '<option value="random">random</option></select></div>' +
+    '<div class="form-group"><label>Scope</label><select id="rrScope">' +
+      '<option value="global">global</option><option value="pipeline">pipeline</option></select></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="rrCreateTeam()">Create</button>');
+}
+async function rrCreateTeam() {
+  const name = (document.getElementById('rrName').value || '').trim();
+  if (!name) { toast('Team name is required', 'error'); return; }
+  try {
+    await API.post('/round-robin/teams', {
+      name: name,
+      description: (document.getElementById('rrDesc').value || '').trim() || null,
+      strategy: document.getElementById('rrStrategy').value,
+      scope_type: document.getElementById('rrScope').value
+    });
+    closeModal(); toast('Team created', 'success'); loadRoundRobinTab();
+  } catch (e) { toast('Create failed: ' + e.message, 'error'); }
+}
+function rrDeleteTeam(id) {
+  confirmThen('Delete this team?', function () {
+    API.del('/round-robin/teams/' + id)
+      .then(function () { toast('Team deleted', 'success'); loadRoundRobinTab(); })
+      .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+  });
+}
+function rrAddMember(teamId) {
+  showModal('Add Team Member',
+    '<div class="form-group"><label>User ID</label><input type="text" id="rrUserId" placeholder="uuid of a user in this workspace"></div>' +
+    '<p class="form-hint">The platform exposes no endpoint that lists a workspace’s users, so this takes the user id (found in Team &amp; Invites) rather than faking a picker.</p>' +
+    '<div class="form-group"><label>Weight</label><input type="number" id="rrWeight" value="1" min="1"></div>' +
+    '<div class="form-group"><label>Max concurrent bookings</label><input type="number" id="rrMax" value="10" min="1"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="rrCreateMember(\'' + teamId + '\')">Add</button>');
+}
+async function rrCreateMember(teamId) {
+  const uid = (document.getElementById('rrUserId').value || '').trim();
+  if (!uid) { toast('User id is required', 'error'); return; }
+  try {
+    await API.post('/round-robin/teams/' + teamId + '/members', {
+      user_id: uid,
+      weight: parseInt(document.getElementById('rrWeight').value, 10) || 1,
+      max_concurrent_bookings: parseInt(document.getElementById('rrMax').value, 10) || 10
+    });
+    closeModal(); toast('Member added', 'success'); rrLoadMembers(teamId);
+  } catch (e) { toast('Add failed: ' + e.message, 'error'); }
+}
+function rrRemoveMember(teamId, memberId) {
+  API.del('/round-robin/teams/' + teamId + '/members/' + memberId)
+    .then(function () { toast('Member removed', 'success'); rrLoadMembers(teamId); })
+    .catch(function (e) { toast('Remove failed: ' + e.message, 'error'); });
+}
+async function rrAssignments(teamId) {
+  const el = document.getElementById('rrAssign-' + teamId);
+  if (!el) return;
+  try {
+    const a = famList(await API.get('/round-robin/teams/' + teamId + '/assignments'), 'assignments');
+    el.innerHTML = dataTable(['Assigned', 'Member', 'Contact', 'Status'],
+      a.map(function (x) {
+        return [x.assigned_at ? new Date(x.assigned_at).toLocaleString() : '—',
+          fh(x.member_id), fh(x.contact_id), fh(x.status)];
+      }), 'No assignments yet on this team.');
+  } catch (e) { famErr(el, 'Assignments', e); }
+}
+
+// ---------------------------------------------------------------- MONITORING
+function monitoringShell() {
+  return pageHeader('Monitoring', 'Account health signals and thresholds',
+    '<button class="btn btn-primary btn-sm" onclick="monNewThreshold()">+ New Threshold</button> ' +
+    '<button class="btn btn-secondary btn-sm" onclick="loadMonitoringTab()">↻ Refresh</button>') +
+  '<div id="monContent"><div class="loading-wrap"><div class="spinner"></div> Loading monitoring...</div></div>';
+}
+async function loadMonitoringTab() {
+  const el = document.getElementById('monContent');
+  if (!el) return;
+  try {
+    const health = await API.get('/monitoring/health');
+    const thresholds = famList(await API.get('/monitoring/thresholds'), 'thresholds');
+    let h = '<div class="stats-grid">' +
+      '<div class="stat-card accent"><div class="stat-icon">🧠</div><div class="stat-value">' + (health.score !== undefined ? health.score : '—') + '</div><div class="stat-label">Health score</div></div>' +
+      '<div class="stat-card"><div class="stat-icon">🚦</div><div class="stat-value">' + fh(health.risk_level) + '</div><div class="stat-label">Risk level</div></div>' +
+      '</div>' +
+      card('Signal status', '<p style="color:var(--text-secondary);margin:0">' + fh(health.message) + '</p>', '');
+    h += '<br>' + card('Health thresholds',
+      dataTable(['Name', 'Metric', 'Operator', 'Value', 'Risk', 'Actions'],
+        thresholds.map(function (t) {
+          return [fh(t.name), fh(t.metric), fh(t.operator), t.value, fh(t.risk_level),
+            '<button class="btn btn-ghost btn-xs" onclick="monDeleteThreshold(\'' + t.id + '\')">Delete</button>'];
+        }), 'No thresholds configured.'), '');
+    h += '<br>' + card('Account-health signal',
+      '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">' +
+        '<div><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Business profile id</label>' +
+        '<input type="text" id="monProfile" placeholder="uuid" style="padding:8px;min-width:300px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"></div>' +
+        '<button class="btn btn-secondary btn-sm" onclick="monCheckProfile()">Load status</button>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-top:12px">' +
+        '<div><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Record milestone</label>' +
+        '<select id="monMilestone" style="padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
+          '<option value="first_contact">first_contact</option><option value="first_pipeline">first_pipeline</option>' +
+          '<option value="first_campaign">first_campaign</option><option value="first_automation">first_automation</option></select></div>' +
+        '<button class="btn btn-primary btn-sm" onclick="monRecordMilestone()">Record</button>' +
+      '</div>' +
+      '<p class="config-hint">Note: no endpoint lists business profiles, so the profile id is entered by hand. ' +
+      'The two account-health routes also do not check that the profile belongs to the calling tenant — flagged for the owner.</p>' +
+      '<div id="monProfileOut" style="margin-top:12px"></div>', '');
+    el.innerHTML = h;
+  } catch (e) { famErr(el, 'Monitoring', e); }
+}
+function monNewThreshold() {
+  showModal('New Health Threshold',
+    '<div class="form-group"><label>Name</label><input type="text" id="mhName" placeholder="No login in 14 days"></div>' +
+    '<div class="form-group"><label>Entity type</label><select id="mhEntity">' +
+      '<option value="contact">contact</option><option value="company">company</option><option value="tenant">tenant</option></select></div>' +
+    '<div class="form-group"><label>Metric</label><input type="text" id="mhMetric" placeholder="days_inactive"></div>' +
+    '<div class="form-group"><label>Operator</label><select id="mhOp">' +
+      '<option value="gt">&gt;</option><option value="gte">&gt;=</option><option value="lt">&lt;</option>' +
+      '<option value="lte">&lt;=</option><option value="eq">=</option></select></div>' +
+    '<div class="form-group"><label>Value</label><input type="number" id="mhValue" value="14"></div>' +
+    '<div class="form-group"><label>Risk level</label><select id="mhRisk">' +
+      '<option value="warning">warning</option><option value="critical">critical</option>' +
+      '<option value="info">info</option></select></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="monCreateThreshold()">Create</button>');
+}
+async function monCreateThreshold() {
+  const name = (document.getElementById('mhName').value || '').trim();
+  const metric = (document.getElementById('mhMetric').value || '').trim();
+  if (!name || !metric) { toast('Name and metric are required', 'error'); return; }
+  try {
+    await API.post('/monitoring/thresholds', {
+      name: name,
+      entity_type: document.getElementById('mhEntity').value,
+      metric: metric,
+      operator: document.getElementById('mhOp').value,
+      value: parseInt(document.getElementById('mhValue').value, 10) || 0,
+      risk_level: document.getElementById('mhRisk').value
+    });
+    closeModal(); toast('Threshold created', 'success'); loadMonitoringTab();
+  } catch (e) { toast('Create failed: ' + e.message, 'error'); }
+}
+function monDeleteThreshold(id) {
+  API.del('/monitoring/thresholds/' + id)
+    .then(function () { toast('Threshold deleted', 'success'); loadMonitoringTab(); })
+    .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+}
+async function monCheckProfile() {
+  const pid = (document.getElementById('monProfile').value || '').trim();
+  const out = document.getElementById('monProfileOut');
+  if (!pid) { toast('Enter a business profile id', 'error'); return; }
+  try {
+    const s = await API.get('/monitoring/account-health/status/' + pid);
+    out.innerHTML = '<pre style="white-space:pre-wrap;font-size:.78rem;color:var(--text-secondary)">' +
+      escapeHtml(JSON.stringify(s, null, 2)) + '</pre>';
+  } catch (e) { famErr(out, 'Account health status', e); }
+}
+async function monRecordMilestone() {
+  const pid = (document.getElementById('monProfile').value || '').trim();
+  if (!pid) { toast('Enter a business profile id first', 'error'); return; }
+  try {
+    await API.post('/monitoring/account-health/milestone', {
+      business_profile_id: pid, milestone_type: document.getElementById('monMilestone').value
+    });
+    toast('Milestone recorded', 'success'); monCheckProfile();
+  } catch (e) { toast('Record failed: ' + e.message, 'error'); }
+}
+
+// ---------------------------------------------------------------- WIDGETS
+function widgetsShell() {
+  return pageHeader('Widgets', 'Support widgets and their inboxes',
+    '<button class="btn btn-secondary btn-sm" onclick="wgNewInbox()">+ New Inbox</button> ' +
+    '<button class="btn btn-primary btn-sm" onclick="wgNewWidget()">+ New Widget</button>') +
+  '<div id="wgContent"><div class="loading-wrap"><div class="spinner"></div> Loading widgets...</div></div>';
+}
+async function loadWidgetsTab() {
+  const el = document.getElementById('wgContent');
+  if (!el) return;
+  try {
+    const widgets = famList(await API.get('/widgets'), 'widgets');
+    const inboxes = famList(await API.get('/widgets/inboxes'), 'inboxes');
+    let h = card('Inboxes',
+      dataTable(['Name', 'Forward address', 'Created', 'Actions'],
+        inboxes.map(function (i) {
+          return [fh(i.name), fh(i.email_fwd), i.created_at ? new Date(i.created_at).toLocaleDateString() : '—',
+            '<button class="btn btn-ghost btn-xs" onclick="wgDeleteInbox(\'' + i.id + '\')">Delete</button>'];
+        }), 'No inboxes yet — create one before adding a widget.'), '');
+    h += '<br>' + card('Widgets',
+      dataTable(['Name', 'Slug', 'Inbox', 'Position', 'Active', 'Actions'],
+        widgets.map(function (w) {
+          const inb = inboxes.find(function (i) { return i.id === w.inbox_id; });
+          return [fh(w.name), fh(w.slug), inb ? fh(inb.name) : '—', fh(w.position),
+            w.is_active ? '<span class="badge badge-success">yes</span>' : '<span class="badge badge-muted">no</span>',
+            '<button class="btn btn-ghost btn-xs" onclick="wgDeleteWidget(\'' + w.id + '\')">Delete</button>'];
+        }), 'No widgets yet.'), '');
+    el.innerHTML = h;
+  } catch (e) { famErr(el, 'Widgets', e); }
+}
+function wgNewInbox() {
+  showModal('New Ticket Inbox',
+    '<div class="form-group"><label>Name</label><input type="text" id="wgInboxName" placeholder="Support"></div>' +
+    '<div class="form-group"><label>Forward address</label><input type="email" id="wgInboxFwd" placeholder="support@yourdomain.com"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="wgCreateInbox()">Create</button>');
+}
+async function wgCreateInbox() {
+  const name = (document.getElementById('wgInboxName').value || '').trim();
+  if (!name) { toast('Inbox name is required', 'error'); return; }
+  try {
+    await API.post('/widgets/inboxes', {
+      name: name, email_fwd: (document.getElementById('wgInboxFwd').value || '').trim() || null
+    });
+    closeModal(); toast('Inbox created', 'success'); loadWidgetsTab();
+  } catch (e) { toast('Create failed: ' + e.message, 'error'); }
+}
+function wgDeleteInbox(id) {
+  confirmThen('Delete this inbox?', function () {
+    API.del('/widgets/inboxes/' + id)
+      .then(function () { toast('Inbox deleted', 'success'); loadWidgetsTab(); })
+      .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+  });
+}
+function wgNewWidget() {
+  showModal('New Support Widget',
+    '<div class="form-group"><label>Name</label><input type="text" id="wgName" placeholder="Website chat"></div>' +
+    '<div class="form-group"><label>Theme colour</label><input type="text" id="wgColor" value="#6366f1"></div>' +
+    '<div class="form-group"><label>Greeting</label><input type="text" id="wgGreeting" placeholder="Hi! How can we help?"></div>' +
+    '<div class="form-group"><label>Position</label><select id="wgPos">' +
+      '<option value="bottom-right">bottom-right</option><option value="bottom-left">bottom-left</option></select></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="wgCreateWidget()">Create</button>');
+}
+async function wgCreateWidget() {
+  const name = (document.getElementById('wgName').value || '').trim();
+  if (!name) { toast('Widget name is required', 'error'); return; }
+  try {
+    await API.post('/widgets', {
+      name: name,
+      theme_color: (document.getElementById('wgColor').value || '').trim() || null,
+      greeting: (document.getElementById('wgGreeting').value || '').trim() || null,
+      position: document.getElementById('wgPos').value
+    });
+    closeModal(); toast('Widget created', 'success'); loadWidgetsTab();
+  } catch (e) { toast('Create failed: ' + e.message, 'error'); }
+}
+function wgDeleteWidget(id) {
+  confirmThen('Delete this widget?', function () {
+    API.del('/widgets/' + id)
+      .then(function () { toast('Widget deleted', 'success'); loadWidgetsTab(); })
+      .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+  });
+}
+
+// ---------------------------------------------- INTEGRATION TAG MAPPINGS
+// GET/POST /api/integrations/:id/mappings + DELETE /api/integrations/mappings/:id
+// (the audited "integrations sweep-probe mappings" family). Rendered inside the
+// Integration Center rather than a new tab.
+let IM_INTEGRATIONS = [];
+let IM_TAGS = [];
+let IM_SELECTED = '';
+async function loadTagMappings() {
+  const el = document.getElementById('icMappingsWrap');
+  if (!el) return;
+  try {
+    IM_INTEGRATIONS = famList(await API.get('/integrations'), 'integrations');
+    IM_TAGS = famList(await API.get('/tags'), 'tags');
+    if (!IM_INTEGRATIONS.length) {
+      el.innerHTML = card('🔁 Tag mappings', '<p style="color:var(--text-secondary);margin:0">No integrations ' +
+        'registered for this account yet — create one and its external tag mappings appear here.</p>' +
+        '<div id="icMappingsBody"></div>', '');
+      return;
+    }
+    if (!IM_SELECTED || !IM_INTEGRATIONS.some(function (i) { return i.id === IM_SELECTED; })) {
+      IM_SELECTED = IM_INTEGRATIONS[0].id;
+    }
+    el.innerHTML = card('🔁 Tag mappings',
+      '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px">' +
+        '<div><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Integration</label>' +
+        '<select id="imIntegration" onchange="imPick(this.value)" style="padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
+          IM_INTEGRATIONS.map(function (i) {
+            return '<option value="' + i.id + '"' + (i.id === IM_SELECTED ? ' selected' : '') + '>' +
+              escapeHtml(i.name + ' (' + i.provider + ')') + '</option>';
+          }).join('') + '</select></div>' +
+        '<div><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Local tag</label>' +
+        '<select id="imTag" style="padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
+          (IM_TAGS.length ? IM_TAGS.slice(0, 300).map(function (t) {
+            return '<option value="' + t.id + '">' + escapeHtml(t.name) + '</option>';
+          }).join('') : '<option value="">No tags available</option>') + '</select></div>' +
+        '<button class="btn btn-primary btn-sm" onclick="imCreateMapping()">+ Map tag</button>' +
+      '</div>' +
+      '<div id="icMappingsBody"><div class="loading-wrap"><div class="spinner"></div> Loading mappings...</div></div>', '');
+    imLoadMappings();
+  } catch (e) { famErr(el, 'Tag mappings', e); }
+}
+function imPick(id) { IM_SELECTED = id; imLoadMappings(); }
+async function imLoadMappings() {
+  const body = document.getElementById('icMappingsBody');
+  if (!body || !IM_SELECTED) return;
+  try {
+    const maps = famList(await API.get('/integrations/' + IM_SELECTED + '/mappings'), 'mappings');
+    body.innerHTML = dataTable(['Local tag', 'External system', 'External id', 'External name', 'Direction', 'Actions'],
+      maps.map(function (m) {
+        const tag = IM_TAGS.find(function (t) { return t.id === m.tag_id; });
+        return [tag ? fh(tag.name) : fh(m.tag_id), fh(m.external_system), fh(m.external_id),
+          fh(m.external_name), fh(m.direction),
+          '<button class="btn btn-ghost btn-xs" onclick="imDeleteMapping(\'' + m.id + '\')">Delete</button>'];
+      }), 'No tag mappings on this integration yet.');
+  } catch (e) { famErr(body, 'Tag mappings', e); }
+}
+function imCreateMapping() {
+  const tagId = document.getElementById('imTag') ? document.getElementById('imTag').value : '';
+  if (!tagId) { toast('Pick a local tag first', 'error'); return; }
+  showModal('Map Tag to External System',
+    '<div class="form-group"><label>External system</label><input type="text" id="imSystem" placeholder="funnelswift"></div>' +
+    '<div class="form-group"><label>External tag id</label><input type="text" id="imExternalId" placeholder="sp-biz-zh-interested"></div>' +
+    '<div class="form-group"><label>External name</label><input type="text" id="imExternalName"></div>' +
+    '<div class="form-group"><label>Direction</label><select id="imDirection">' +
+      '<option value="bidirectional">bidirectional</option><option value="inbound">inbound</option>' +
+      '<option value="outbound">outbound</option></select></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="imCreateMappingSubmit(\'' + tagId + '\')">Save</button>');
+}
+async function imCreateMappingSubmit(tagId) {
+  const system = (document.getElementById('imSystem').value || '').trim();
+  const extId = (document.getElementById('imExternalId').value || '').trim();
+  if (!system || !extId) { toast('External system and id are required', 'error'); return; }
+  try {
+    await API.post('/integrations/' + IM_SELECTED + '/mappings', {
+      tag_id: tagId, external_system: system, external_id: extId,
+      external_name: (document.getElementById('imExternalName').value || '').trim() || null,
+      direction: document.getElementById('imDirection').value
+    });
+    closeModal(); toast('Mapping created', 'success'); imLoadMappings();
+  } catch (e) { toast('Create failed: ' + e.message, 'error'); }
+}
+function imDeleteMapping(id) {
+  API.del('/integrations/mappings/' + id)
+    .then(function () { toast('Mapping deleted', 'success'); imLoadMappings(); })
+    .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+}
+
+// ---- wiring overrides: replace the placeholder/fake renderers and loaders ----
+TAB_RENDERERS['pipelines'] = pipelinesShell;
+TAB_RENDERERS['campaigns'] = campaignsShell;
+TAB_RENDERERS['lists'] = listsShell;
+TAB_RENDERERS['lead-scoring'] = scoringShell;
+TAB_RENDERERS['analytics'] = analyticsShell;
+TAB_RENDERERS['tags'] = tagsShell;
+TAB_RENDERERS['checklists'] = checklistsShell;
+TAB_RENDERERS['round-robin'] = roundRobinShell;
+TAB_RENDERERS['monitoring'] = monitoringShell;
+TAB_RENDERERS['widgets'] = widgetsShell;
+TAB_LOADERS['pipelines'] = loadPipelinesTab;
+TAB_LOADERS['campaigns'] = loadCampaignsTab;
+TAB_LOADERS['lists'] = loadListsTab;
+TAB_LOADERS['lead-scoring'] = loadScoringTab;
+TAB_LOADERS['analytics'] = loadAnalyticsTab;
+TAB_LOADERS['tags'] = loadTagsTab;
+TAB_LOADERS['checklists'] = loadChecklistsTab;
+TAB_LOADERS['round-robin'] = loadRoundRobinTab;
+TAB_LOADERS['monitoring'] = loadMonitoringTab;
+TAB_LOADERS['widgets'] = loadWidgetsTab;
 
 </script>
 </body>

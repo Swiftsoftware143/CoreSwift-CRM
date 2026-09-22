@@ -31,13 +31,12 @@ pub struct Score {
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct ScoreHistory {
     pub id: Uuid,
-    pub score_id: Uuid,
     pub contact_id: Uuid,
     pub rule_id: Option<Uuid>,
-    pub tenant_id: Uuid,
     pub points: i32,
     pub previous_score: i32,
     pub new_score: i32,
+    pub reason: Option<String>,
     pub event_type: String,
     pub created_at: DateTime<Utc>,
 }

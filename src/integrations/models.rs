@@ -18,14 +18,13 @@ pub struct Integration {
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct TagMapping {
     pub id: Uuid,
-    pub tenant_id: Uuid,
     pub integration_id: Uuid,
-    pub local_tag_id: Uuid,
+    pub tag_id: Uuid,
     pub external_system: String,
     pub external_id: String,
+    pub external_name: Option<String>,
     pub direction: String,
     pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -37,7 +36,7 @@ pub struct Webhook {
     pub secret: Option<String>,
     pub events: Option<Vec<String>>,
     pub retry_count: i32,
-    pub timeout_seconds: i32,
+    pub timeout_ms: i32,
     pub is_active: bool,
     pub last_triggered_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
@@ -60,9 +59,10 @@ pub struct UpdateIntegrationRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateMappingRequest {
-    pub local_tag_id: Uuid,
+    pub tag_id: Uuid,
     pub external_system: String,
     pub external_id: String,
+    pub external_name: Option<String>,
     pub direction: Option<String>,
 }
 
@@ -73,7 +73,7 @@ pub struct CreateWebhookRequest {
     pub secret: Option<String>,
     pub events: Option<Vec<String>>,
     pub retry_count: Option<i32>,
-    pub timeout_seconds: Option<i32>,
+    pub timeout_ms: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,6 +83,6 @@ pub struct UpdateWebhookRequest {
     pub secret: Option<String>,
     pub events: Option<Vec<String>>,
     pub retry_count: Option<i32>,
-    pub timeout_seconds: Option<i32>,
+    pub timeout_ms: Option<i32>,
     pub is_active: Option<bool>,
 }

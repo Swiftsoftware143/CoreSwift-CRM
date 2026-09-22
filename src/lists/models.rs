@@ -11,6 +11,7 @@ pub struct List {
     pub list_type: String,
     #[sqlx(rename = "dynamic_rules")]
     pub rules: Option<serde_json::Value>,
+    pub member_count: Option<i32>,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -23,7 +24,7 @@ pub struct ListMember {
     pub contact_id: Uuid,
     pub tenant_id: Uuid,
     pub added_manually: bool,
-    pub created_at: DateTime<Utc>,
+    pub added_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

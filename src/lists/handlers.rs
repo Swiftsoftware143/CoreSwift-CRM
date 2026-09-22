@@ -94,7 +94,7 @@ pub async fn list_members(
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     Ok(Json(
-        json!({"members": sqlx::query_as::<_,ListMember>("SELECT * FROM list_members WHERE list_id=$1 AND tenant_id=$2 ORDER BY created_at DESC").bind(id).bind(t).fetch_all(&s.db).await?}),
+        json!({"members": sqlx::query_as::<_,ListMember>("SELECT * FROM list_members WHERE list_id=$1 AND tenant_id=$2 ORDER BY added_at DESC").bind(id).bind(t).fetch_all(&s.db).await?}),
     ))
 }
 pub async fn add_member(

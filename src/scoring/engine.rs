@@ -20,19 +20,18 @@ pub async fn calculate_score(
     .fetch_all(db)
     .await?;
 
-    let mut score = sqlx::query_as::<_, Score>(
-        "SELECT * FROM contact_scores WHERE tenant_id=$1 AND contact_id=$2",
-    )
-    .bind(tenant_id)
-    .bind(contact_id)
-    .fetch_optional(db)
-    .await?;
+    let mut score =
+        sqlx::query_as::<_, Score>("SELECT * FROM scores WHERE tenant_id=$1 AND contact_id=$2")
+            .bind(tenant_id)
+            .bind(contact_id)
+            .fetch_optional(db)
+            .await?;
 
     let score_id = if let Some(ref s) = score {
         s.id
     } else {
         let ns = sqlx::query_as::<_, Score>(
-            "INSERT INTO contact_scores(id,tenant_id,contact_id,total_score,category,updated_at) VALUES($1,$2,$3,0,'interested',NOW()) RETURNING *"
+            "INSERT INTO scores(id,tenant_id,contact_id,total_score,category,updated_at) VALUES($1,$2,$3,0,'interested',NOW()) RETURNING *"
         )
         .bind(Uuid::new_v4())
         .bind(tenant_id)
@@ -57,13 +56,11 @@ pub async fn calculate_score(
         let new_score_val = (current_score + total_points).max(0);
 
         sqlx::query(
-            "INSERT INTO score_history(id,score_id,contact_id,rule_id,tenant_id,points,previous_score,new_score,event_type) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)"
+            "INSERT INTO score_history(id,contact_id,rule_id,points,previous_score,new_score,event_type) VALUES($1,$2,$3,$4,$5,$6,$7)"
         )
         .bind(Uuid::new_v4())
-        .bind(score_id)
         .bind(contact_id)
         .bind(rule.id)
-        .bind(tenant_id)
         .bind(pts)
         .bind(previous)
         .bind(new_score_val)
@@ -79,7 +76,7 @@ pub async fn calculate_score(
         .unwrap_or_else(|| "interested".to_string());
 
     let updated = sqlx::query_as::<_, Score>(
-        "UPDATE contact_scores SET total_score=$1, category=$2, last_event_type=$3, last_event_at=NOW(), updated_at=NOW() WHERE id=$4 RETURNING *"
+        "UPDATE scores SET total_score=$1, category=$2, last_event_type=$3, last_event_at=NOW(), updated_at=NOW() WHERE id=$4 RETURNING *"
     )
     .bind(final_score)
     .bind(category)
@@ -263,7 +260,7 @@ pub async fn ensure_score_record(
     tenant_id: Uuid,
     contact_id: Uuid,
 ) -> Result<Score, crate::errors::AppError> {
-    Ok(match sqlx::query_as::<_, Score>("SELECT * FROM contact_scores WHERE tenant_id=$1 AND contact_id=$2")
+    Ok(match sqlx::query_as::<_, Score>("SELECT * FROM scores WHERE tenant_id=$1 AND contact_id=$2")
         .bind(tenant_id)
         .bind(contact_id)
         .fetch_optional(db)
@@ -271,7 +268,7 @@ pub async fn ensure_score_record(
     {
         Some(s) => s,
         None => sqlx::query_as::<_, Score>(
-            "INSERT INTO contact_scores(id,tenant_id,contact_id,total_score,category,updated_at) VALUES($1,$2,$3,0,'interested',NOW()) RETURNING *"
+            "INSERT INTO scores(id,tenant_id,contact_id,total_score,category,updated_at) VALUES($1,$2,$3,0,'interested',NOW()) RETURNING *"
         )
         .bind(Uuid::new_v4())
         .bind(tenant_id)

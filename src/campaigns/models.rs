@@ -80,6 +80,8 @@ pub struct UpdateCampaignRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct AddStepRequest {
+    /// POST /api/campaigns/steps is not campaign-scoped in the path: the caller names the campaign here.
+    pub campaign_id: Uuid,
     pub step_order: Option<i32>,
     pub template_name: String,
     pub subject: Option<String>,

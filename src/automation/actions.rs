@@ -87,12 +87,14 @@ async fn exec_move_pipeline(
     .execute(db)
     .await?;
     if r.rows_affected() > 0 {
-        sqlx::query("INSERT INTO stage_history(id,opportunity_id,to_stage_id) VALUES($1,$2,$3)")
-            .bind(Uuid::new_v4())
-            .bind(entity_id)
-            .bind(stage_id)
-            .execute(db)
-            .await?;
+        sqlx::query(
+            "INSERT INTO opportunity_stage_history(id,opportunity_id,to_stage_id) VALUES($1,$2,$3)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(entity_id)
+        .bind(stage_id)
+        .execute(db)
+        .await?;
     }
     Ok(())
 }
@@ -418,7 +420,7 @@ async fn exec_scoring_update(
 
     if points != 0 {
         let score_id = match sqlx::query_as::<_, (Uuid,)>(
-            "SELECT id FROM contact_scores WHERE tenant_id=$1 AND contact_id=$2",
+            "SELECT id FROM scores WHERE tenant_id=$1 AND contact_id=$2",
         )
         .bind(tenant_id)
         .bind(entity_id)
@@ -429,7 +431,7 @@ async fn exec_scoring_update(
             None => {
                 let sid = Uuid::new_v4();
                 sqlx::query(
-                    "INSERT INTO contact_scores(id,tenant_id,contact_id,total_score,category,updated_at) VALUES($1,$2,$3,0,'interested',NOW())"
+                    "INSERT INTO scores(id,tenant_id,contact_id,total_score,category,updated_at) VALUES($1,$2,$3,0,'interested',NOW())"
                 )
                 .bind(sid)
                 .bind(tenant_id)
@@ -441,7 +443,7 @@ async fn exec_scoring_update(
         };
 
         sqlx::query(
-            "UPDATE contact_scores SET total_score = GREATEST(0, total_score + $1), last_event_type = 'automation', last_event_at = NOW(), updated_at = NOW() WHERE id = $2"
+            "UPDATE scores SET total_score = GREATEST(0, total_score + $1), last_event_type = 'automation', last_event_at = NOW(), updated_at = NOW() WHERE id = $2"
         )
         .bind(points)
         .bind(score_id)

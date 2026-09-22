@@ -19,11 +19,10 @@ pub struct PipelineStage {
     pub id: Uuid,
     pub pipeline_id: Uuid,
     pub name: String,
-    pub description: Option<String>,
     pub color: Option<String>,
     pub position: i32,
-    pub is_won_stage: bool,
-    pub is_lost_stage: bool,
+    pub is_won: bool,
+    pub is_lost: bool,
     pub probability: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -36,7 +35,7 @@ pub struct StageHistory {
     pub from_stage_id: Option<Uuid>,
     pub to_stage_id: Uuid,
     pub moved_by: Option<Uuid>,
-    pub created_at: DateTime<Utc>,
+    pub moved_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -86,7 +85,6 @@ pub struct UpdatePipelineRequest {
 #[derive(Debug, Deserialize)]
 pub struct CreateStageRequest {
     pub name: String,
-    pub description: Option<String>,
     pub color: Option<String>,
     pub position: Option<i32>,
     pub probability: Option<i32>,
@@ -95,11 +93,10 @@ pub struct CreateStageRequest {
 #[derive(Debug, Deserialize)]
 pub struct UpdateStageRequest {
     pub name: Option<String>,
-    pub description: Option<String>,
     pub color: Option<String>,
     pub position: Option<i32>,
-    pub is_won_stage: Option<bool>,
-    pub is_lost_stage: Option<bool>,
+    pub is_won: Option<bool>,
+    pub is_lost: Option<bool>,
     pub probability: Option<i32>,
 }
 

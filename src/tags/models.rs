@@ -9,7 +9,6 @@ pub struct TagCategory {
     pub name: String,
     pub color: Option<String>,
     pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -49,7 +48,7 @@ pub struct TagAssignment {
     pub entity_id: Uuid,
     pub tenant_id: Uuid,
     pub assigned_by: Option<Uuid>,
-    pub created_at: DateTime<Utc>,
+    pub assigned_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]

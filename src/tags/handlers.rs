@@ -56,7 +56,7 @@ pub async fn update_category(
     Json(r): Json<UpdateCategoryRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    Ok(Json(json!(sqlx::query_as::<_,TagCategory>("UPDATE tag_categories SET name=COALESCE($1,name), color=COALESCE($2,color), updated_at=NOW() WHERE id=$3 AND tenant_id=$4 RETURNING *")
+    Ok(Json(json!(sqlx::query_as::<_,TagCategory>("UPDATE tag_categories SET name=COALESCE($1,name), color=COALESCE($2,color) WHERE id=$3 AND tenant_id=$4 RETURNING *")
         .bind(&r.name).bind(&r.color).bind(id).bind(t).fetch_optional(&s.db).await?.ok_or(AppError::NotFound(format!("Category {id} not found")))?)))
 }
 pub async fn delete_category(
