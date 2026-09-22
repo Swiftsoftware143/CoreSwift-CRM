@@ -1,4 +1,10 @@
 //! Message handlers: CRUD + webhook ingest with auto-routing.
+//!
+//! CS-5: every statement here is written against the columns `cs_messages` actually has
+//! (`sender_id -> users`, `recipient_id -> contacts`, `read`, `is_archived`, `metadata`).
+//! The previous revision selected and filtered on `sender_name` / `sender_email` / `is_read`
+//! / `contact_id`, none of which exist — so `?status=unread` and `?search=` answered a live
+//! 500 and every non-empty row failed to decode.
 
 use axum::{
     extract::{Json, Path, Query, State},
@@ -6,7 +12,7 @@ use axum::{
     response::IntoResponse,
     Extension,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use super::models::*;
@@ -34,7 +40,7 @@ pub async fn list(
         sqlx::query_as::<_, Message>(
             r#"SELECT * FROM cs_messages
                WHERE tenant_id = $1
-                 AND (sender_name ILIKE $2 OR subject ILIKE $2 OR body ILIKE $2 OR sender_email ILIKE $2)
+                 AND (subject ILIKE $2 OR body ILIKE $2)
                ORDER BY created_at DESC
                LIMIT $3 OFFSET $4"#,
         )
@@ -49,7 +55,9 @@ pub async fn list(
         match status_filter.as_str() {
             "unread" => sqlx::query_as::<_, Message>(
                 r#"SELECT * FROM cs_messages
-                       WHERE tenant_id = $1 AND is_read = false AND is_archived = false
+                       WHERE tenant_id = $1
+                         AND COALESCE(read, false) = false
+                         AND COALESCE(is_archived, false) = false
                        ORDER BY created_at DESC
                        LIMIT $2 OFFSET $3"#,
             )
@@ -75,7 +83,7 @@ pub async fn list(
                 // "all" — exclude archived
                 sqlx::query_as::<_, Message>(
                     r#"SELECT * FROM cs_messages
-                       WHERE tenant_id = $1 AND is_archived = false
+                       WHERE tenant_id = $1 AND COALESCE(is_archived, false) = false
                        ORDER BY created_at DESC
                        LIMIT $2 OFFSET $3"#,
                 )
@@ -124,20 +132,31 @@ pub async fn create(
     Json(payload): Json<CreateMessageRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    // The sender is the logged-in team member. `sub` is resolved through `users` so a
+    // subject that is not a user id becomes NULL instead of an FK violation.
+    let sender_id: Option<Uuid> = Uuid::parse_str(&claims.sub).ok();
+
+    // The free-form sender details live in `metadata` — the table has no columns for them.
+    let metadata = json!({
+        "sender_name": payload.sender_name,
+        "sender_email": payload.sender_email,
+        "sender_phone": payload.sender_phone,
+        "source": "manual",
+    });
 
     let message = sqlx::query_as::<_, Message>(
-        r#"INSERT INTO cs_messages (tenant_id, contact_id, sender_name, sender_email,
-           sender_phone, subject, body, source)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'manual')
+        r#"INSERT INTO cs_messages
+             (tenant_id, sender_id, recipient_id, subject, body, channel, direction, status, read, metadata)
+           VALUES ($1, (SELECT id FROM users WHERE id = $2::uuid), $3, $4, $5,
+                   'manual', 'outbound', 'new', false, $6)
            RETURNING *"#,
     )
     .bind(tenant_id)
+    .bind(sender_id)
     .bind(payload.contact_id)
-    .bind(&payload.sender_name)
-    .bind(&payload.sender_email)
-    .bind(&payload.sender_phone)
     .bind(&payload.subject)
     .bind(&payload.body)
+    .bind(&metadata)
     .fetch_one(&state.db)
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -156,7 +175,7 @@ pub async fn update(
 
     let message = sqlx::query_as::<_, Message>(
         r#"UPDATE cs_messages
-           SET is_read = COALESCE($3, is_read),
+           SET read = COALESCE($3, read),
                is_archived = COALESCE($4, is_archived),
                updated_at = NOW()
            WHERE id = $1 AND tenant_id = $2
@@ -258,22 +277,29 @@ pub async fn webhook_receive(
         None
     };
 
-    // Insert the message
+    // The sender details have no columns on `cs_messages`; keep them in `metadata`.
+    let metadata: Value = json!({
+        "sender_name": payload.sender_name,
+        "sender_email": payload.sender_email,
+        "sender_phone": payload.sender_phone,
+        "source": source,
+        "source_id": payload.source_id,
+    });
+
+    // Insert the message. `recipient_id` is the contact on the other side of the thread
+    // (FK -> contacts); an inbound webhook message has no tenant user as its sender.
     let result = sqlx::query_as::<_, Message>(
-        r#"INSERT INTO cs_messages (tenant_id, contact_id, sender_name, sender_email,
-           sender_phone, subject, body, source, source_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        r#"INSERT INTO cs_messages
+             (tenant_id, recipient_id, subject, body, channel, direction, status, read, metadata)
+           VALUES ($1, (SELECT id FROM contacts WHERE id = $2::uuid), $3, $4,
+                   'webhook', 'inbound', 'new', false, $5)
            RETURNING *"#,
     )
     .bind(tenant_id)
     .bind(contact_id)
-    .bind(&payload.sender_name)
-    .bind(&payload.sender_email)
-    .bind(&payload.sender_phone)
     .bind(&payload.subject)
     .bind(&payload.body)
-    .bind(&source)
-    .bind(&payload.source_id)
+    .bind(&metadata)
     .fetch_one(&state.db)
     .await;
 
