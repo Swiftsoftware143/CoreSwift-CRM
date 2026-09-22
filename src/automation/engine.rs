@@ -103,7 +103,12 @@ pub async fn fire_score_trigger(
             }
         };
         if should {
-            let _ = actions::execute_action(db, &rule, tenant_id, "contact", contact_id).await;
+            // Same as the tag path below: a dropped action error left no trace anywhere.
+            if let Err(e) =
+                actions::execute_action(db, &rule, tenant_id, "contact", contact_id).await
+            {
+                tracing::warn!(rule = %rule.id, action = %rule.action_type, error = %e, "Automation action failed");
+            }
         }
     }
 }
@@ -124,8 +129,11 @@ pub async fn fire_list_trigger(
         if let Some(lid_str) = rule.trigger_config.get("list_id").and_then(|v| v.as_str()) {
             if let Ok(conf_lid) = Uuid::parse_str(lid_str) {
                 if conf_lid == list_id {
-                    let _ =
-                        actions::execute_action(db, &rule, tenant_id, "contact", contact_id).await;
+                    if let Err(e) =
+                        actions::execute_action(db, &rule, tenant_id, "contact", contact_id).await
+                    {
+                        tracing::warn!(rule = %rule.id, action = %rule.action_type, error = %e, "Automation action failed");
+                    }
                 }
             }
         }
