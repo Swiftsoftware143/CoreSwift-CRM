@@ -534,7 +534,9 @@ pub async fn get_credit_balance(
     Extension(c): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    let summary = credits::get_credit_summary(&s.db, tid).await;
+    // `get_credit_summary` now propagates a failed usage query instead of answering with a
+    // zeroed summary, so this is a real error path, not decoration (t_5d7f823e).
+    let summary = credits::get_credit_summary(&s.db, tid).await?;
     Ok(Json(summary))
 }
 

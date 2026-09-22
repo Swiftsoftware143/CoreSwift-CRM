@@ -88,20 +88,29 @@ pub async fn list_tags(
     .fetch_all(&s.db)
     .await?;
 
-    // Fetch contact counts via tag_assignments
+    // Fetch contact counts via tag_assignments.
+    // The three count queries below used to swallow their error into an empty map (0 next to every
+    // tag) with no log line; they now log and still fall back, so the tab keeps rendering
+    // (t_5d7f823e — same silent class as the decode swallows).
     let contact_rows = sqlx::query("SELECT tag_id, COUNT(*)::int8 FROM tag_assignments WHERE tenant_id=$1 AND entity_type='contact' GROUP BY tag_id")
-        .bind(t).fetch_all(&s.db).await.unwrap_or_default();
+        .bind(t).fetch_all(&s.db).await
+        .map_err(|e| tracing::error!(tenant = %t, error = %e, "list_tags: contact-count query failed — contact counts render as 0"))
+        .unwrap_or_default();
 
     // Fetch workflow counts: search JSONB trigger_config/action_config for tag_id references
     // Checks both 'tag_ids' array and 'tag_id' single value
     let workflow_rows = sqlx::query(
         "SELECT t.id, (SELECT COUNT(*)::int8 FROM automation_rules a WHERE a.tenant_id=$1 AND a.is_active=true AND (a.trigger_config->'tag_ids' ? t.id::text OR a.trigger_config->>'tag_id' = t.id::text OR a.action_config->'tag_ids' ? t.id::text OR a.action_config->>'tag_id' = t.id::text))::int8 FROM tags t WHERE t.tenant_id=$1 AND t.is_active=true"
-    ).bind(t).fetch_all(&s.db).await.unwrap_or_default();
+    ).bind(t).fetch_all(&s.db).await
+        .map_err(|e| tracing::error!(tenant = %t, error = %e, "list_tags: workflow-count query failed — workflow counts render as 0"))
+        .unwrap_or_default();
 
     // Fetch integration counts: search JSONB config for tag_id references
     let integration_rows = sqlx::query(
         "SELECT t.id, (SELECT COUNT(*)::int8 FROM integrations i WHERE i.tenant_id=$1 AND i.is_active=true AND (i.config->'tag_ids' ? t.id::text))::int8 FROM tags t WHERE t.tenant_id=$1 AND t.is_active=true"
-    ).bind(t).fetch_all(&s.db).await.unwrap_or_default();
+    ).bind(t).fetch_all(&s.db).await
+        .map_err(|e| tracing::error!(tenant = %t, error = %e, "list_tags: integration-count query failed — integration counts render as 0"))
+        .unwrap_or_default();
 
     // Build maps
     let mut contact_counts = std::collections::HashMap::new();

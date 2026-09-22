@@ -67,18 +67,31 @@ pub async fn check_credits(
 
 /// Get current monthly credit allowance and remaining for a tenant.
 pub async fn get_credits_remaining(db: &PgPool, tenant_id: Uuid) -> i32 {
-    // Get plan's monthly credit allowance
-    let allowance = sqlx::query_scalar::<_, Option<i32>>(
+    // Get plan's monthly credit allowance.
+    // A tenant with no active plan legitimately has no row here, so the miss is fetched
+    // optionally and stays quiet; a real query/decode failure is logged rather than turning the
+    // tenant into "0 credits left" with nothing in the logs (t_5d7f823e).
+    let allowance = match sqlx::query_scalar::<_, Option<i32>>(
         "SELECT COALESCE(p.monthly_credits, 0) FROM plans p
          JOIN tenant_plans tp ON tp.plan_id = p.id
          WHERE tp.tenant_id = $1 AND tp.status IN ('active', 'trialing')
          LIMIT 1",
     )
     .bind(tenant_id)
-    .fetch_one(db)
+    .fetch_optional(db)
     .await
-    .unwrap_or(None)
-    .unwrap_or(0);
+    {
+        Ok(Some(allowance)) => allowance.unwrap_or(0),
+        Ok(None) => 0, // no active plan — expected, not an error
+        Err(e) => {
+            tracing::error!(
+                tenant = %tenant_id,
+                error = %e,
+                "credits: plan allowance query failed — treating the tenant as having no credits"
+            );
+            0
+        }
+    };
 
     if allowance == 0 {
         return 0; // No plan or no credits
@@ -89,7 +102,13 @@ pub async fn get_credits_remaining(db: &PgPool, tenant_id: Uuid) -> i32 {
         "SELECT COALESCE(SUM(ABS(credits)), 0) FROM credit_transactions
          WHERE tenant_id = $1 AND credits < 0
            AND created_at >= (SELECT current_period_starts_at FROM tenant_plans WHERE tenant_id = $1 AND status IN ('active', 'trialing') LIMIT 1)"
-    ).bind(tenant_id).fetch_one(db).await.unwrap_or(None).unwrap_or(0);
+    ).bind(tenant_id).fetch_one(db).await
+     .map_err(|e| tracing::error!(
+         tenant = %tenant_id,
+         error = %e,
+         "credits: consumed-credits query failed — treating this period's consumption as 0"
+     ))
+     .unwrap_or(None).unwrap_or(0);
 
     (allowance - consumed as i32).max(0)
 }
@@ -126,9 +145,20 @@ pub async fn consume_credits(
 }
 
 /// Get credit usage summary for the current billing period.
-pub async fn get_credit_summary(db: &PgPool, tenant_id: Uuid) -> serde_json::Value {
+///
+/// Falls over to `Err` when the usage query fails: an empty `breakdown` reads as "this tenant has
+/// consumed nothing", which is a lie, and that is exactly what the old
+/// `.unwrap_or_default()` produced with no log line (t_5d7f823e).
+pub async fn get_credit_summary(
+    db: &PgPool,
+    tenant_id: Uuid,
+) -> Result<serde_json::Value, sqlx::Error> {
     let remaining = get_credits_remaining(db, tenant_id).await;
 
+    // A tenant with no active plan legitimately has no row here, so the miss is fetched
+    // optionally: "no plan" must not become an error. A genuine query/decode failure is logged
+    // and still reported as "no plan" — the usage query below fails with it, so the request does
+    // not answer 200 in that case either.
     let (allowance, period_start, period_end) = sqlx::query_as::<
         _,
         (
@@ -142,13 +172,23 @@ pub async fn get_credit_summary(db: &PgPool, tenant_id: Uuid) -> serde_json::Val
          WHERE tp.tenant_id = $1 AND tp.status IN ('active', 'trialing') LIMIT 1",
     )
     .bind(tenant_id)
-    .fetch_one(db)
+    .fetch_optional(db)
     .await
+    .map_err(|e| {
+        tracing::error!(
+            tenant = %tenant_id,
+            error = %e,
+            "credit summary: plan/period query failed — reporting no plan"
+        )
+    })
+    .ok()
+    .flatten()
     .unwrap_or((None, None, None));
 
     let consumed = allowance.unwrap_or(0) - remaining;
 
-    // Get breakdown by action type
+    // Get breakdown by action type. Propagates instead of swallowing: a failed/decode-broken
+    // breakdown must not be served as `breakdown: []`.
     let breakdown = sqlx::query_as::<_, (String, i64)>(
         "SELECT action_type, SUM(ABS(credits)) as total
          FROM credit_transactions
@@ -159,10 +199,9 @@ pub async fn get_credit_summary(db: &PgPool, tenant_id: Uuid) -> serde_json::Val
     .bind(tenant_id)
     .bind(period_start)
     .fetch_all(db)
-    .await
-    .unwrap_or_default();
+    .await?;
 
-    serde_json::json!({
+    Ok(serde_json::json!({
         "allowance": allowance.unwrap_or(0),
         "consumed": consumed,
         "remaining": remaining,
@@ -171,5 +210,5 @@ pub async fn get_credit_summary(db: &PgPool, tenant_id: Uuid) -> serde_json::Val
         "breakdown": breakdown.into_iter().map(|(action, total)| {
             serde_json::json!({"action": action, "credits": total})
         }).collect::<Vec<_>>()
-    })
+    }))
 }

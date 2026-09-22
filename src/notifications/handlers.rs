@@ -283,7 +283,6 @@ pub async fn list_queue(
     struct NQueueItem {
         id: Uuid,
         tenant_id: Uuid,
-        rule_id: Option<Uuid>,
         channel: String,
         to_address: Option<String>,
         subject: Option<String>,
@@ -294,17 +293,41 @@ pub async fn list_queue(
         created_at: chrono::DateTime<chrono::Utc>,
     }
 
-    let items: Vec<serde_json::Value> = if !status_filter.is_empty() {
+    // The struct above used to carry a `rule_id: Option<Uuid>` field and both statements read
+    // `SELECT *`. `notification_queue` has never had a `rule_id` column (nothing in this repo
+    // writes or reads one; the FK-ish column here is `template_id`), so the field was a decode
+    // that could only ever fail: with 0 rows the endpoint answered `200 []` and the first queue
+    // item made it 500 with "Database error" (proven live, t_5d7f823e). The field is gone and
+    // the column list is explicit, so what the SELECT returns and what the struct needs are the
+    // same thing by construction.
+    let rows: Vec<NQueueItem> = if !status_filter.is_empty() {
         sqlx::query_as::<_, NQueueItem>(
-            "SELECT * FROM notification_queue WHERE tenant_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4"
+            "SELECT id, tenant_id, channel, to_address, subject, body, status, error_message, sent_at, created_at FROM notification_queue WHERE tenant_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4"
         ).bind(tid).bind(status_filter).bind(per_page).bind(offset).fetch_all(&s.db).await?
-            .into_iter().map(|i| serde_json::to_value(i).unwrap_or_default()).collect()
     } else {
         sqlx::query_as::<_, NQueueItem>(
-            "SELECT * FROM notification_queue WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
+            "SELECT id, tenant_id, channel, to_address, subject, body, status, error_message, sent_at, created_at FROM notification_queue WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
         ).bind(tid).bind(per_page).bind(offset).fetch_all(&s.db).await?
-            .into_iter().map(|i| serde_json::to_value(i).unwrap_or_default()).collect()
     };
+
+    // A row that cannot serialise must not be silently replaced by `null` in the list (the old
+    // `serde_json::to_value(i).unwrap_or_default()`): it is logged and left out, so the list
+    // stays well-formed and the failure is visible in the logs.
+    let items: Vec<serde_json::Value> = rows
+        .into_iter()
+        .filter_map(|i| match serde_json::to_value(&i) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                tracing::error!(
+                    item_id = %i.id,
+                    tenant = %i.tenant_id,
+                    error = %e,
+                    "notification queue: item could not be serialised and was dropped from the list"
+                );
+                None
+            }
+        })
+        .collect();
 
     Ok(Json(
         json!({"items": items, "page": page, "per_page": per_page}),
