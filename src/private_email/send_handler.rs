@@ -129,47 +129,96 @@ pub async fn load_provider_config(
     .map_err(|e| format!("Database error: {}", e))?
     .ok_or_else(|| "Domain not found".to_string())?;
 
+    // Every field below keeps the fallback it needs (the live probe domain has NULL smtp_host /
+    // smtp_port / smtp_username / smtp_password_encrypted / webhook_signing_key_encrypted, so a
+    // propagating error would 500 sends that work today) - but the fallback is no longer SILENT:
+    // a decode failure is logged with the column, so a schema drift cannot pass as a default
+    // (kanban t_31ae74fa, same class as the row-level card t_5d7f823e).
     let provider_type: String = row
         .try_get("provider_type")
+        .inspect_err(|e| tracing::warn!(column = "provider_type", error = %e, "decode failed"))
         .unwrap_or_else(|_| "mailgun".into());
-    let region: Option<String> = row.try_get("mailgun_region").ok();
-    let encrypted_api_key: Option<String> = row.try_get("mailgun_api_key").ok();
+    let region: Option<String> = row
+        .try_get("mailgun_region")
+        .inspect_err(|e| tracing::warn!(column = "mailgun_region", error = %e, "decode failed"))
+        .ok();
+    let encrypted_api_key: Option<String> = row
+        .try_get("mailgun_api_key")
+        .inspect_err(|e| tracing::warn!(column = "mailgun_api_key", error = %e, "decode failed"))
+        .ok();
+
+    // api_key_id is decoded ONCE. It used to be decoded twice in this statement (:140 to test, :149
+    // to pass) - two silent defaults that could disagree with each other on a decode failure.
+    let api_key_id: Option<Uuid> = row
+        .try_get::<Option<Uuid>, _>("api_key_id")
+        .inspect_err(|e| tracing::warn!(column = "api_key_id", error = %e, "decode failed"))
+        .ok()
+        .flatten();
 
     // For backward compat: if api_key_id is set, resolve the key
-    let final_encrypted_key = if row
-        .try_get::<Option<Uuid>, _>("api_key_id")
-        .ok()
-        .flatten()
-        .is_some()
-    {
+    let final_encrypted_key = if api_key_id.is_some() {
         // Resolve from the key table based on provider_type
-        resolve_api_key(
-            db,
-            tenant_id,
-            row.try_get("api_key_id").ok().flatten(),
-            &provider_type,
-        )
-        .await
+        resolve_api_key(db, tenant_id, api_key_id, &provider_type).await
     } else {
         encrypted_api_key
     };
 
+    // The five NULLABLE columns below are decoded as `Option<T>`: with `.ok()` alone, try_get
+    // inferred the NON-Option `T` (the `.ok()` supplies the Option), so a NULL row raised
+    // "unexpected null" on EVERY send and the fallback swallowed it - the app was using a
+    // swallowed decode error as its NULL handling. As Option<T> a NULL is data (None, no log) and
+    // a real type mismatch still logs (kanban t_31ae74fa).
     Ok(ProviderConfig {
         tenant_id,
         domain_id,
-        domain: row.try_get("domain").unwrap_or_default(),
+        domain: row
+            .try_get("domain")
+            .inspect_err(|e| tracing::warn!(column = "domain", error = %e, "decode failed"))
+            .unwrap_or_default(),
         provider_type,
         encrypted_api_key: final_encrypted_key,
         region,
-        smtp_host: row.try_get("smtp_host").ok(),
-        smtp_port: row.try_get("smtp_port").ok(),
-        smtp_username: row.try_get("smtp_username").ok(),
-        encrypted_smtp_password: row.try_get("smtp_password_encrypted").ok(),
-        smtp_tls: row.try_get("smtp_tls").unwrap_or(true),
+        smtp_host: row
+            .try_get::<Option<String>, _>("smtp_host")
+            .inspect_err(|e| tracing::warn!(column = "smtp_host", error = %e, "decode failed"))
+            .ok()
+            .flatten(),
+        smtp_port: row
+            .try_get::<Option<i32>, _>("smtp_port")
+            .inspect_err(|e| tracing::warn!(column = "smtp_port", error = %e, "decode failed"))
+            .ok()
+            .flatten(),
+        smtp_username: row
+            .try_get::<Option<String>, _>("smtp_username")
+            .inspect_err(|e| tracing::warn!(column = "smtp_username", error = %e, "decode failed"))
+            .ok()
+            .flatten(),
+        encrypted_smtp_password: row
+            .try_get::<Option<String>, _>("smtp_password_encrypted")
+            .inspect_err(
+                |e| tracing::warn!(column = "smtp_password_encrypted", error = %e, "decode failed"),
+            )
+            .ok()
+            .flatten(),
+        smtp_tls: row
+            .try_get("smtp_tls")
+            .inspect_err(|e| tracing::warn!(column = "smtp_tls", error = %e, "decode failed"))
+            .unwrap_or(true),
         inbound_mode: row
             .try_get("inbound_mode")
+            .inspect_err(|e| tracing::warn!(column = "inbound_mode", error = %e, "decode failed"))
             .unwrap_or_else(|_| "webhook".into()),
-        encrypted_webhook_key: row.try_get("webhook_signing_key_encrypted").ok(),
+        encrypted_webhook_key: row
+            .try_get::<Option<String>, _>("webhook_signing_key_encrypted")
+            .inspect_err(|e| {
+                tracing::warn!(
+                    column = "webhook_signing_key_encrypted",
+                    error = %e,
+                    "decode failed"
+                )
+            })
+            .ok()
+            .flatten(),
     })
 }
 
@@ -189,8 +238,18 @@ async fn resolve_api_key(
             .bind(tenant_id)
             .fetch_optional(db)
             .await
+            .inspect_err(|e| {
+                tracing::warn!(table = "private_email_api_keys", error = %e,
+                    "key lookup failed: this domain resolves no API key from the key table")
+            })
             .ok()??;
-            Some(row.try_get::<String, _>("api_key_encrypted").ok()?)
+            Some(
+                row.try_get::<String, _>("api_key_encrypted")
+                    .inspect_err(|e| {
+                        tracing::warn!(column = "api_key_encrypted", error = %e, "decode failed")
+                    })
+                    .ok()?,
+            )
         }
         _ => {
             // Provider api keys (SES, Postmark)
@@ -202,8 +261,21 @@ async fn resolve_api_key(
             .bind(provider_type)
             .fetch_optional(db)
             .await
+            .inspect_err(|e| {
+                tracing::warn!(table = "provider_api_keys", error = %e,
+                    "key lookup failed: this domain resolves no API key from the key table")
+            })
             .ok()??;
-            Some(row.try_get::<String, _>("access_key_encrypted").ok()?)
+            // provider_api_keys.access_key_encrypted is NULLABLE (information_schema: text, YES).
+            // Decoding it as a non-Option String turned a NULL row into a decode error that `.ok()`
+            // swallowed into "no key" - indistinguishable from a real mismatch, and invisible.
+            // Decode it as the column actually is.
+            row.try_get::<Option<String>, _>("access_key_encrypted")
+                .inspect_err(|e| {
+                    tracing::warn!(column = "access_key_encrypted", error = %e, "decode failed")
+                })
+                .ok()
+                .flatten()
         }
     }
 }
