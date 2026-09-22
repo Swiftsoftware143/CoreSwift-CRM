@@ -1,5 +1,5 @@
 use super::actions;
-use super::models::AutomationRule;
+use super::models::{AutomationRule, RULE_COLUMNS};
 use crate::errors::AppError;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -35,9 +35,9 @@ pub async fn evaluate_tag_triggers(
     };
 
     for tt in &trigger_types {
-        let rules = sqlx::query_as::<_, AutomationRule>(
-            "SELECT * FROM automation_rules WHERE tenant_id=$1 AND trigger_type=$2 AND is_enabled=true"
-        )
+        let rules = sqlx::query_as::<_, AutomationRule>(&format!(
+            "SELECT {RULE_COLUMNS} FROM automation_rules WHERE tenant_id=$1 AND trigger_type=$2 AND is_active IS NOT FALSE"
+        ))
         .bind(tenant_id).bind(tt).fetch_all(db).await?;
 
         for rule in rules {
@@ -77,7 +77,7 @@ pub async fn fire_score_trigger(
     total_score: i32,
     category: &str,
 ) {
-    let Ok(rules) = sqlx::query_as::<_, AutomationRule>("SELECT * FROM automation_rules WHERE tenant_id=$1 AND trigger_type='ScoreChanged' AND is_enabled=true")
+    let Ok(rules) = sqlx::query_as::<_, AutomationRule>(&format!("SELECT {RULE_COLUMNS} FROM automation_rules WHERE tenant_id=$1 AND trigger_type='ScoreChanged' AND is_active IS NOT FALSE"))
         .bind(tenant_id).fetch_all(db).await else { return };
     for rule in rules {
         let should = match rule.trigger_config.get("category").and_then(|v| v.as_str()) {
@@ -109,7 +109,10 @@ pub async fn fire_list_trigger(
     list_id: Uuid,
     trigger_type: &str,
 ) {
-    let Ok(rules) = sqlx::query_as::<_, AutomationRule>("SELECT * FROM automation_rules WHERE tenant_id=$1 AND trigger_type=$2::trigger_type AND is_enabled=true")
+    // `trigger_type` is a plain varchar(50) column — the dropped `::trigger_type` cast named an
+    // enum type that does not exist in this database (42704), which silently turned every
+    // list-triggered rule into a no-op (the `let Ok(...) else { return }` below swallowed it).
+    let Ok(rules) = sqlx::query_as::<_, AutomationRule>(&format!("SELECT {RULE_COLUMNS} FROM automation_rules WHERE tenant_id=$1 AND trigger_type=$2 AND is_active IS NOT FALSE"))
         .bind(tenant_id).bind(trigger_type).fetch_all(db).await else { return };
     for rule in rules {
         if let Some(lid_str) = rule.trigger_config.get("list_id").and_then(|v| v.as_str()) {

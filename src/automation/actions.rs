@@ -41,7 +41,9 @@ async fn exec_add_tag(
         .ok_or(AppError::Validation("Missing tag_id".into()))?;
     let tag_id =
         Uuid::parse_str(tid_str).map_err(|_| AppError::Validation("Invalid tag_id".into()))?;
-    let exists: bool = sqlx::query_scalar("SELECT COUNT(*) FROM tag_assignments WHERE tag_id=$1 AND entity_type=$2::entity_type AND entity_id=$3 AND tenant_id=$4").bind(tag_id).bind(entity_type).bind(entity_id).bind(tenant_id).fetch_one(db).await.unwrap_or(0) > 0;
+    // `tag_assignments.entity_type` is varchar(50); the dropped `::entity_type` cast named a type
+    // that does not exist (42704), and the caller swallows the error, so AddTag silently did nothing.
+    let exists: bool = sqlx::query_scalar("SELECT COUNT(*) FROM tag_assignments WHERE tag_id=$1 AND entity_type=$2 AND entity_id=$3 AND tenant_id=$4").bind(tag_id).bind(entity_type).bind(entity_id).bind(tenant_id).fetch_one(db).await.unwrap_or(0) > 0;
     if !exists {
         sqlx::query("INSERT INTO tag_assignments(id,tag_id,entity_type,entity_id,tenant_id) VALUES($1,$2,$3,$4,$5)").bind(Uuid::new_v4()).bind(tag_id).bind(entity_type).bind(entity_id).bind(tenant_id).execute(db).await?;
     }
@@ -61,7 +63,12 @@ async fn exec_remove_tag(
         .ok_or(AppError::Validation("Missing tag_id".into()))?;
     let tag_id =
         Uuid::parse_str(tid_str).map_err(|_| AppError::Validation("Invalid tag_id".into()))?;
-    sqlx::query("DELETE FROM tag_assignments WHERE tag_id=$1 AND entity_type=$2::entity_type AND entity_id=$3").bind(tag_id).bind(entity_type).bind(entity_id).execute(db).await?;
+    sqlx::query("DELETE FROM tag_assignments WHERE tag_id=$1 AND entity_type=$2 AND entity_id=$3")
+        .bind(tag_id)
+        .bind(entity_type)
+        .bind(entity_id)
+        .execute(db)
+        .await?;
     Ok(())
 }
 
