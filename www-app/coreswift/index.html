@@ -5746,24 +5746,103 @@ async function peSend() {
   finally { if (btn) btn.disabled = false; }
 }
 
+// ── Add a domain: the credential step (kanban t_ff03e048) ───────────────────
+// This modal used to collect Domain / Label / Provider and post exactly those, so
+// EVERY "Add domain" was a 400 from a handler that requires a credential:
+//   mailgun -> "Either mailgun_api_key or api_key_id is required"
+//   smtp    -> "smtp_host is required for SMTP provider"
+// Add-domain is the front door of the whole Private Email feature (domains ->
+// mailboxes -> send/inbound), so the feature could not be entered at all.
+// The provider list also offered SendGrid, which this deployment does not
+// implement: add_domain() routes everything that is not "smtp" to
+// add_mailgun_domain(), which stores provider_type='mailgun' — picking SendGrid
+// silently created a Mailgun domain that then demanded a Mailgun key.
+// Mailgun needs the key of the account that ALREADY carries the domain
+// (validate_mailgun_domain does GET /v3/domains/<domain> with that key), so a
+// platform-wide key is not an option for a customer's own domain; the key field
+// is required and the copy says why.
+function peProviderFields() {
+  const p = document.getElementById('peNewProvider');
+  if (!p) return;
+  const mg = document.getElementById('peMailgunFields');
+  const sm = document.getElementById('peSmtpFields');
+  if (mg) mg.style.display = (p.value === 'smtp' ? 'none' : '');
+  if (sm) sm.style.display = (p.value === 'smtp' ? '' : 'none');
+  const t = document.getElementById('peDomainSave');
+  if (t) t.disabled = false;
+}
+
 function peOpenAddDomain() {
+  const savedKeys = (PE.keys || []).filter(function (k) { return (k.provider || 'mailgun') === 'mailgun'; });
+  const keyOpts = savedKeys.map(function (k) {
+    return '<option value="' + escapeHtmlAttr(k.id) + '">' + escapeHtml(k.label || 'saved key') +
+      (k.key_status === 'unreadable' ? ' — cannot be opened by the server' : '') + '</option>';
+  }).join('');
   showModal('Add a domain',
     '<div class="form-group"><label>Domain</label>' +
-    '<input type="text" id="peNewDomain" placeholder="mail.yourdomain.com" autocomplete="off"></div>' +
+    '<input type="text" id="peNewDomain" placeholder="mail.yourdomain.com" autocomplete="off">' +
+    '<span class="form-hint">The sending domain, spelled exactly as the provider knows it.</span></div>' +
     '<div class="form-group"><label>Label (optional)</label><input type="text" id="peNewLabel" autocomplete="off"></div>' +
     '<div class="form-group"><label>Provider</label>' +
-    '<select id="peNewProvider"><option value="mailgun">Mailgun</option><option value="sendgrid">SendGrid</option><option value="smtp">SMTP</option></select>' +
-    '<span class="form-hint">The provider\'s own API key is stored with the domain; add a platform provider key under the Integration Center if you use a shared account.</span></div>',
+    '<select id="peNewProvider" onchange="peProviderFields()">' +
+    '<option value="mailgun">Mailgun</option>' +
+    '<option value="smtp">SMTP (a mail server you run)</option>' +
+    '</select>' +
+    '<span class="form-hint">SendGrid / SES / Postmark are not implemented in this deployment, so they are not offered — choosing one here used to silently create a Mailgun domain.</span></div>' +
+    '<div id="peMailgunFields">' +
+    '<div class="form-group"><label>Mailgun API key</label>' +
+    '<input type="password" id="peNewKey" autocomplete="new-password" placeholder="key-...">' +
+    '<span class="form-hint">Required. Use the key of the Mailgun account that already carries this domain: the domain is verified against that account before it is saved, so a shared platform key cannot add your domain. Stored encrypted with the domain, never echoed back.</span></div>' +
+    (keyOpts
+      ? '<div class="form-group"><label>or use a saved key</label>' +
+        '<select id="peNewSavedKey"><option value="">(paste a new key above)</option>' + keyOpts + '</select>' +
+        '<span class="form-hint">Saved keys are the ones listed in "Saved provider keys" below; a domain can point at one instead of carrying its own copy.</span></div>'
+      : '') +
+    '<div class="form-group"><label>Region</label>' +
+    '<select id="peNewRegion"><option value="us">US (api.mailgun.net)</option><option value="eu">EU (api.eu.mailgun.net)</option></select></div>' +
+    '</div>' +
+    '<div id="peSmtpFields" style="display:none">' +
+    '<p style="color:var(--text-secondary);margin:0">Nothing is sent to the mail server before the domain is saved, so a wrong host or password is only reported by the first send.</p>' +
+    '<div class="form-group"><label>SMTP host</label>' +
+    '<input type="text" id="peNewSmtpHost" placeholder="smtp.yourdomain.com" autocomplete="off"></div>' +
+    '<div class="form-group"><label>Port</label><input type="number" id="peNewSmtpPort" value="587"></div>' +
+    '<div class="form-group"><label>Username</label><input type="text" id="peNewSmtpUser" autocomplete="off"></div>' +
+    '<div class="form-group"><label>Password</label><input type="password" id="peNewSmtpPass" autocomplete="new-password"></div>' +
+    '<div class="form-group"><label><input type="checkbox" id="peNewSmtpTls" checked> Use STARTTLS</label></div>' +
+    '</div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
     '<button class="btn btn-primary" id="peDomainSave">Add domain</button>');
+  peProviderFields();
   const b = document.getElementById('peDomainSave');
   if (b) b.addEventListener('click', async () => {
     const domain = document.getElementById('peNewDomain').value.trim();
     if (!domain) { toast('Enter the domain', 'error'); return; }
-    b.disabled = true;
-    const payload = { domain: domain, provider_type: document.getElementById('peNewProvider').value };
+    const provider = document.getElementById('peNewProvider').value;
     const label = document.getElementById('peNewLabel').value.trim();
+    const payload = { domain: domain, provider_type: provider };
     if (label) payload.label = label;
+    if (provider === 'smtp') {
+      const host = document.getElementById('peNewSmtpHost').value.trim();
+      const user = document.getElementById('peNewSmtpUser').value.trim();
+      const pass = document.getElementById('peNewSmtpPass').value;
+      if (!host || !user || !pass) { toast('SMTP needs a host, a username and a password', 'error'); return; }
+      payload.smtp_host = host;
+      payload.smtp_port = parseInt(document.getElementById('peNewSmtpPort').value, 10) || 587;
+      payload.smtp_username = user;
+      payload.smtp_password = pass;
+      payload.smtp_tls = !!document.getElementById('peNewSmtpTls').checked;
+    } else {
+      const savedEl = document.getElementById('peNewSavedKey');
+      const chosen = savedEl ? savedEl.value : '';
+      const key = document.getElementById('peNewKey').value.trim();
+      payload.mailgun_region = document.getElementById('peNewRegion').value;
+      // A saved key wins when one is picked; otherwise the pasted key is required.
+      // Failing here beats a 400 after submit, which is what this modal always did.
+      if (chosen) payload.api_key_id = chosen;
+      else if (key) payload.mailgun_api_key = key;
+      else { toast('Paste the Mailgun API key for this domain, or pick a saved key', 'error'); return; }
+    }
+    b.disabled = true;
     try {
       await API.post('/private-email/domains', payload);
       closeModal(); toast('Domain added', 'success'); await loadInboxTab();
