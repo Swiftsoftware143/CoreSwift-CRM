@@ -1,5 +1,9 @@
 //! Admin module — chat actions + legacy admin API routes
 //!
+//! PLATFORM-ONLY: every protected route here is gated on platform-admin authority
+//! (`auth::platform_admin`), resolved from the database by token subject. Tenant users hold
+//! `role='owner'`, which grants nothing platform-wide.
+//!
 //! POST /api/admin/chat-action — run business actions from chat
 //! POST /api/admin/impersonate — admin JWT tenant switch
 //! GET  /api/admin/health — health check
@@ -46,6 +50,17 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/site",
             axum::routing::get(site_handler::get_site).put(site_handler::update_site),
         )
+        // TWO layers. `Router::layer` wraps outermost-last, so listing the platform-admin gate
+        // FIRST makes `auth_middleware` run first and inject `Claims`; the gate then reads them.
+        // The gate sits on the ROUTER, not in each handler, so a route added to this router cannot
+        // ship ungated. Before it existed, 6 of the 8 protected admin routes answered an ordinary
+        // tenant user (`role='owner'`, 38 of 47 production users): /site, /portfolio-sync,
+        // /chat-action, /chat-action/intents, /stop-impersonation and the private-email admin
+        // surfaces (kanban t_d5cf6cad).
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::platform_admin::require_platform_admin_middleware,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,

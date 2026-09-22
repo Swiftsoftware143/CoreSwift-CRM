@@ -6,6 +6,7 @@
 pub mod handlers;
 pub mod middleware;
 pub mod models;
+pub mod platform_admin;
 
 // Re-export Claims for convenience (used by all modules)
 pub use models::Claims;

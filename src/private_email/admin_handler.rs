@@ -1,5 +1,8 @@
 //! Admin endpoints for tenant email limits.
-//! All routes require agency_admin or owner role.
+//! PLATFORM-ONLY: every route below requires platform-admin authority, resolved from the
+//! database by token subject (`crate::auth::platform_admin`). `owner` is a TENANT role held by
+//! all 38 real tenants and grants nothing here — it used to pass, on a purge that spans every
+//! tenant.
 
 use axum::{
     extract::{Path, State},
@@ -17,14 +20,6 @@ use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
 
-/// Require agency_admin (or owner). Returns Forbidden if not.
-fn require_agency_admin(claims: &Claims) -> Result<(), AppError> {
-    if claims.role != "agency_admin" && claims.role != "owner" {
-        return Err(AppError::Forbidden);
-    }
-    Ok(())
-}
-
 /// GET /api/v1/private-email/admin/limits/:tenant_id
 /// Returns the tenant's plan defaults, any overrides, and effective limits.
 pub async fn get_tenant_limits(
@@ -32,7 +27,7 @@ pub async fn get_tenant_limits(
     Extension(claims): Extension<Claims>,
     Path(tenant_id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    require_agency_admin(&claims)?;
+    crate::auth::platform_admin::require_platform_admin(&state.db, &claims.sub).await?;
 
     let features = feature_gate::get_plan_features(&state.db, tenant_id)
         .await?
@@ -69,7 +64,7 @@ pub async fn set_tenant_limits(
     Path(tenant_id): Path<Uuid>,
     Json(req): Json<SetTenantEmailLimitsRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    require_agency_admin(&claims)?;
+    crate::auth::platform_admin::require_platform_admin(&state.db, &claims.sub).await?;
 
     // Upsert: insert or update the override row
     sqlx::query(
@@ -125,7 +120,7 @@ pub async fn list_all_overrides(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    require_agency_admin(&claims)?;
+    crate::auth::platform_admin::require_platform_admin(&state.db, &claims.sub).await?;
 
     let rows = sqlx::query_as::<_, TenantEmailLimits>(
         "SELECT * FROM tenant_email_limits ORDER BY created_at DESC",
@@ -146,7 +141,7 @@ pub async fn get_retention(
     Extension(claims): Extension<Claims>,
     Path(tenant_id): Path<Uuid>,
 ) -> ApiResult<Json<SerdeJson>> {
-    require_agency_admin(&claims)?;
+    crate::auth::platform_admin::require_platform_admin(&state.db, &claims.sub).await?;
 
     let row: Option<(Option<i32>, Option<DateTime<Utc>>)> = sqlx::query_as(
         "SELECT retention_days, last_purged_at FROM tenant_email_limits WHERE tenant_id = $1",
@@ -179,7 +174,7 @@ pub async fn set_retention(
     Path(tenant_id): Path<Uuid>,
     Json(req): Json<SetRetentionRequest>,
 ) -> ApiResult<Json<SerdeJson>> {
-    require_agency_admin(&claims)?;
+    crate::auth::platform_admin::require_platform_admin(&state.db, &claims.sub).await?;
 
     // Validate range
     if req.retention_days < 30 {
@@ -241,7 +236,7 @@ pub async fn trigger_purge(
         }
     } else {
         // Purge all tenants — agency_admin only
-        require_agency_admin(&claims)?;
+        crate::auth::platform_admin::require_platform_admin(&state.db, &claims.sub).await?;
     }
 
     // Run purge synchronously (for real-time admin trigger)

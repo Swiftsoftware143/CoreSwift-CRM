@@ -385,27 +385,17 @@ pub async fn sync_history(
 
 // ── Admin-only: get global app config ──
 
-/// Is this the PLATFORM admin — the one role allowed to read and write GLOBAL (platform-wide)
-/// app configuration, which by definition spans every tenant?
-///
-/// Deliberately a single role. This gate previously accepted tenant-level `owner` and `admin`
-/// as well; every tenant user holds `owner` (measured on production 2026-09-22:
-/// `select role, count(*) from users group by 1` -> owner 38, member 7, admin 1,
-/// agency_admin 1), so 39 of 47 users could read AND write configuration belonging to the
-/// whole platform. Tenant-level `owner`/`admin` keep their tenant-scoped powers via the
-/// tenant handlers — those gates are intentionally left alone — and get 403 here.
-fn is_platform_admin(role: &str) -> bool {
-    role == "agency_admin"
-}
+/// GLOBAL (platform-wide) app configuration spans every tenant, so it is gated on platform-admin
+/// authority resolved from the database by token subject (`crate::auth::platform_admin`) — see that
+/// module for why no `Claims.role` string can carry it (39 of 47 production users held a role this
+/// gate used to accept).
 
 pub async fn get_admin_config(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
     Path(app_slug): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
-    if !is_platform_admin(&c.role) {
-        return Err(AppError::Forbidden);
-    }
+    crate::auth::platform_admin::require_platform_admin(&s.db, &c.sub).await?;
 
     let config: Option<serde_json::Value> =
         sqlx::query_scalar("SELECT config FROM app_admin_configs WHERE app_slug = $1")
@@ -425,9 +415,7 @@ pub async fn update_admin_config(
     Path(app_slug): Path<String>,
     Json(config): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    if !is_platform_admin(&c.role) {
-        return Err(AppError::Forbidden);
-    }
+    crate::auth::platform_admin::require_platform_admin(&s.db, &c.sub).await?;
 
     sqlx::query(
         "INSERT INTO app_admin_configs (id, app_slug, config) VALUES ($1, $2, $3) ON CONFLICT (app_slug) DO UPDATE SET config = $3, updated_at = NOW()"
@@ -447,9 +435,7 @@ pub async fn list_admin_configs(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    if !is_platform_admin(&c.role) {
-        return Err(AppError::Forbidden);
-    }
+    crate::auth::platform_admin::require_platform_admin(&s.db, &c.sub).await?;
 
     let rows =
         sqlx::query("SELECT app_slug, config, updated_at FROM app_admin_configs ORDER BY app_slug")

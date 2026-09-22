@@ -53,8 +53,12 @@ pub async fn execute_chat_action(
     Extension(c): Extension<Claims>,
     Json(r): Json<ChatActionRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    // Every route in this router is gated by `auth::platform_admin` (see `super::router`), so a
+    // caller that reaches this handler has already been resolved, from the database, as a platform
+    // operator. The line that used to sit here —
+    // `let _is_admin = c.role == "owner" || c.role == "admin";` — was bound to `_` and never read,
+    // so the check it appeared to make never ran at all (kanban t_d5cf6cad).
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    let _is_admin = c.role == "owner" || c.role == "admin";
 
     let result: Result<axum::response::Response, AppError> = match r.intent.as_str() {
         "create_affiliate" => handle_create_affiliate(&s, tenant_id, r.params)
@@ -1042,23 +1046,11 @@ pub async fn health_check(State(s): State<AppState>) -> ApiResult<impl IntoRespo
     })))
 }
 
-/// Is this the PLATFORM admin — the one role allowed to see and act across tenants?
-///
-/// Deliberately a single role. This gate previously also accepted `owner`, which every
-/// tenant user holds, so it admitted any customer: `GET /api/admin/tenants` enumerated
-/// every tenant on the platform and `POST /api/admin/impersonate` minted a 15-minute JWT
-/// for whatever `tenant_id` the caller typed. Measured on production 2026-09-22:
-/// `select role, count(*) from users group by 1` -> owner 38, member 7, admin 1,
-/// agency_admin 1 — 38 of 47 users passed a gate written as if `owner` were rare.
-///
-/// There is no platform-admin column in this schema and no platform claim in the token,
-/// so the role value IS the platform-admin flag; `agency_admin` (exactly one row) is it.
-/// Tenant-level `owner`/`admin` keep their tenant-scoped powers via the tenant handlers
-/// — those gates are a separate question and are deliberately left alone — and get 403
-/// here.
-fn is_platform_admin(role: &str) -> bool {
-    role == "agency_admin"
-}
+/// Platform authority is resolved from the database by token subject (`crate::auth::platform_admin`),
+/// never from `Claims.role`: that claim is ACCOUNT-scoped ("Role within their account") and every
+/// registration path writes `owner` for the first user of a tenant — 38 of 47 production users on
+/// 2026-09-22. The handlers below assert it individually ON TOP of the router-level gate in
+/// `super::router`, so a surface that is ever mounted outside that router cannot ship open.
 
 /// POST /api/admin/impersonate — create a JWT for a different tenant (agency_admin only)
 pub async fn impersonate(
@@ -1066,9 +1058,7 @@ pub async fn impersonate(
     State(s): State<AppState>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    if !is_platform_admin(&c.role) {
-        return Err(AppError::Forbidden);
-    }
+    crate::auth::platform_admin::require_platform_admin(&s.db, &c.sub).await?;
 
     let target_tenant_id = req
         .get("tenant_id")
@@ -1110,9 +1100,7 @@ pub async fn list_all_portfolio_companies(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    if !is_platform_admin(&c.role) {
-        return Err(AppError::Forbidden);
-    }
+    crate::auth::platform_admin::require_platform_admin(&s.db, &c.sub).await?;
 
     #[derive(sqlx::FromRow, serde::Serialize)]
     struct PortfolioRow {
@@ -1141,9 +1129,7 @@ pub async fn list_all_tenants(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    if !is_platform_admin(&c.role) {
-        return Err(AppError::Forbidden);
-    }
+    crate::auth::platform_admin::require_platform_admin(&s.db, &c.sub).await?;
 
     use sqlx::Row;
     let rows = sqlx::query(
@@ -1268,22 +1254,4 @@ pub async fn cross_app_sync(
         "user_id": user_id.to_string(),
         "user_created": true
     })))
-}
-
-#[cfg(test)]
-mod platform_admin_gate {
-    use super::is_platform_admin;
-
-    /// The negative cases are the point: every one of these roles is held by real users
-    /// (owner x38, member x7, admin x1) and none may reach a cross-tenant surface.
-    #[test]
-    fn only_agency_admin_is_a_platform_admin() {
-        assert!(is_platform_admin("agency_admin"));
-        assert!(!is_platform_admin("owner"));
-        assert!(!is_platform_admin("admin"));
-        assert!(!is_platform_admin("member"));
-        assert!(!is_platform_admin("impersonated"));
-        assert!(!is_platform_admin(""));
-        assert!(!is_platform_admin("agency_admin "));
-    }
 }
