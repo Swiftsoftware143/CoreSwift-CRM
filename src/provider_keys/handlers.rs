@@ -58,7 +58,7 @@ pub async fn list_provider_keys(
                 "id": row.get::<Uuid,_>("id"),
                 "tenant_id": row.get::<Uuid,_>("tenant_id"),
                 "provider": row.get::<String,_>("provider"),
-                "api_key_masked": mask_key(&row.get::<String,_>("api_key")),
+                "api_key_masked": mask_key(&crate::secret_box::open(row.get::<Uuid,_>("tenant_id"), &row.get::<String,_>("api_key"))),
                 "base_url": row.get::<Option<String>,_>("base_url"),
                 "metadata": row.get::<Value,_>("metadata"),
                 "is_active": row.get::<bool,_>("is_active"),
@@ -86,7 +86,7 @@ pub async fn get_provider_key(
         "id": row.get::<Uuid,_>("id"),
         "tenant_id": row.get::<Uuid,_>("tenant_id"),
         "provider": row.get::<String,_>("provider"),
-        "api_key_masked": mask_key(&row.get::<String,_>("api_key")),
+        "api_key_masked": mask_key(&crate::secret_box::open(row.get::<Uuid,_>("tenant_id"), &row.get::<String,_>("api_key"))),
         "base_url": row.get::<Option<String>,_>("base_url"),
         "metadata": row.get::<Value,_>("metadata"),
         "is_active": row.get::<bool,_>("is_active"),
@@ -130,16 +130,41 @@ pub async fn upsert_provider_key(
     }
     let metadata = req.metadata.unwrap_or(json!({}));
     let scope = req.scope.unwrap_or_else(|| "tenant".to_string());
+
+    // A client that round-trips the value it was shown would otherwise overwrite the real secret with
+    // the MASK. If the submitted value is exactly the mask of what is already stored, keep the stored
+    // secret and only update the rest of the row.
+    let existing: Option<String> = sqlx::query_scalar(
+        "SELECT api_key FROM provider_keys WHERE tenant_id = $1 AND provider = $2",
+    )
+    .bind(tenant_id)
+    .bind(&req.provider)
+    .fetch_optional(&s.db)
+    .await?;
+    let submitted_is_mask = existing
+        .as_deref()
+        .map(|cur| {
+            let cur_plain = crate::secret_box::open(tenant_id, cur);
+            !cur_plain.is_empty() && mask_key(&cur_plain) == req.api_key
+        })
+        .unwrap_or(false);
+    // Encrypt at rest (CS-21). Reads go through `secret_box::open`, which also understands a legacy
+    // plaintext row, so this is safe on a database that has not been backfilled yet.
+    let stored_secret = if submitted_is_mask {
+        existing.clone().unwrap_or_default()
+    } else {
+        crate::secret_box::seal(tenant_id, &req.api_key)?
+    };
     let row = sqlx::query(
         "INSERT INTO provider_keys (tenant_id, provider, api_key, base_url, metadata, is_active, scope) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (tenant_id, provider) DO UPDATE SET api_key = EXCLUDED.api_key, base_url = COALESCE(EXCLUDED.base_url, provider_keys.base_url), metadata = CASE WHEN EXCLUDED.metadata = '{}'::jsonb THEN provider_keys.metadata ELSE EXCLUDED.metadata END, is_active = COALESCE(EXCLUDED.is_active, provider_keys.is_active), scope = EXCLUDED.scope, updated_at = NOW() RETURNING id, tenant_id, provider, api_key, base_url, metadata, is_active, scope, created_at, updated_at"
-    ).bind(tenant_id).bind(&req.provider).bind(&req.api_key).bind(&req.base_url).bind(&metadata).bind(req.is_active.unwrap_or(true)).bind(&scope).fetch_one(&s.db).await?;
+    ).bind(tenant_id).bind(&req.provider).bind(&stored_secret).bind(&req.base_url).bind(&metadata).bind(req.is_active.unwrap_or(true)).bind(&scope).fetch_one(&s.db).await?;
     Ok((
         StatusCode::CREATED,
         Json(json!({
             "id": row.get::<Uuid,_>("id"),
             "tenant_id": row.get::<Uuid,_>("tenant_id"),
             "provider": row.get::<String,_>("provider"),
-            "api_key_masked": mask_key(&row.get::<String,_>("api_key")),
+            "api_key_masked": mask_key(&crate::secret_box::open(row.get::<Uuid,_>("tenant_id"), &row.get::<String,_>("api_key"))),
             "base_url": row.get::<Option<String>,_>("base_url"),
             "metadata": row.get::<Value,_>("metadata"),
             "is_active": row.get::<bool,_>("is_active"),
@@ -187,7 +212,7 @@ pub async fn update_provider_key(
         "id": row.get::<Uuid,_>("id"),
         "tenant_id": row.get::<Uuid,_>("tenant_id"),
         "provider": row.get::<String,_>("provider"),
-        "api_key_masked": mask_key(&row.get::<String,_>("api_key")),
+        "api_key_masked": mask_key(&crate::secret_box::open(row.get::<Uuid,_>("tenant_id"), &row.get::<String,_>("api_key"))),
         "base_url": row.get::<Option<String>,_>("base_url"),
         "metadata": row.get::<Value,_>("metadata"),
         "is_active": row.get::<bool,_>("is_active"),

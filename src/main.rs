@@ -52,6 +52,7 @@ pub mod provider_keys;
 pub mod rate_limiter;
 pub mod round_robin;
 pub mod scoring;
+pub mod secret_box;
 pub mod sql_json;
 pub mod support_widgets;
 pub mod tag_provision_handler;
@@ -123,6 +124,14 @@ async fn main() -> anyhow::Result<()> {
     match sqlx::migrate!("./migrations").run(&db).await {
         Ok(_) => tracing::info!("Database migrations completed successfully"),
         Err(e) => tracing::warn!("Migration skipped (tables may already exist): {}", e),
+    }
+
+    // Seal any provider key still stored in plaintext (CS-21). Idempotent and non-fatal: every read
+    // path passes through `secret_box::open`, which understands both forms, so a failure here cannot
+    // take the app down or lose a credential.
+    match crate::secret_box::backfill_provider_keys(&db).await {
+        Ok(n) => tracing::info!(sealed = n, "provider keys at rest are encrypted"),
+        Err(e) => tracing::warn!(error = %e, "provider key backfill skipped"),
     }
 
     // Connect to Redis

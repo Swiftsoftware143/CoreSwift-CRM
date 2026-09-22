@@ -51,7 +51,9 @@ async fn google_oauth_config(s: &AppState, tid: Uuid) -> (String, String, Option
     .await
     .unwrap_or(None);
 
-    let client_secret = nonempty(row.as_ref().map(|r| r.0.clone()))
+    // the stored value is encrypted at rest (CS-21); `open` also passes a legacy plaintext row
+    // through untouched, so this works before and after the backfill
+    let client_secret = nonempty(row.as_ref().map(|r| crate::secret_box::open(tid, &r.0)))
         .or_else(|| nonempty(std::env::var("GOOGLE_CLIENT_SECRET").ok()));
     let client_id = nonempty(
         row.as_ref()

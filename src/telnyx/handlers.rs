@@ -183,6 +183,9 @@ async fn resolve_telnyx_api_key(db: &sqlx::PgPool, tenant_id: Uuid) -> Result<St
     .await?;
 
     if let Some(key) = byok_key {
+        // decrypt before use (CS-21); an empty slot or an unreadable value falls through to the
+        // central config, which is the same user-visible behaviour as "no key stored"
+        let key = crate::secret_box::open(tenant_id, &key);
         if !key.is_empty() {
             return Ok(key);
         }
@@ -921,9 +924,18 @@ pub async fn get_config(
     .await?;
 
     if let Some(ref key) = byok_key {
+        let key = crate::secret_box::open(tenant_id, key);
+        if key.is_empty() {
+            // an empty OR unreadable slot is not a configuration; fall through to the central mode
+            return Ok(Json(json!({
+                "mode": "none",
+                "api_key_set": false,
+                "message": "No Telnyx API key stored for this account.",
+            })));
+        }
         return Ok(Json(json!({
             "mode": "byok",
-            "api_key_masked": mask_key(key),
+            "api_key_masked": mask_key(&key),
             "api_key_set": !key.is_empty(),
         })));
     }

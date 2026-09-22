@@ -613,6 +613,7 @@ pub async fn create_checkout_session(
     .fetch_optional(&s.db)
     .await?
     .ok_or_else(|| AppError::Validation(format!("No active {} API key configured", provider_type)))?;
+    let api_key = crate::secret_box::open(tenant_id, &api_key);
 
     // Determine amount and plan info
     let (amount, currency, purchasable_type, purchasable_id) = if let Some(pid) = r.plan_id {
