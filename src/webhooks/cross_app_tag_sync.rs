@@ -336,14 +336,25 @@ async fn create_or_get_list(
         Ok(id)
     } else {
         let id = Uuid::new_v4();
+        // idx_lists_name_tenant (migration 086) makes (tenant_id, name) unique, so two concurrent
+        // provisions used to be able to raise 23505 here; DO NOTHING turns that race into a no-op
+        // and the re-select below returns whichever row won, keeping this a get-or-create.
         sqlx::query(
-            "INSERT INTO lists (id, tenant_id, name, list_type, description) VALUES ($1, $2, $3, 'static', $4)"
+            "INSERT INTO lists (id, tenant_id, name, list_type, description) VALUES ($1, $2, $3, 'static', $4) ON CONFLICT (tenant_id, name) DO NOTHING"
         )
         .bind(id)
         .bind(tenant_id)
         .bind(list_name)
-        .bind("Auto-created by FunnelSwift tag sync".to_string())
+        .bind("Auto-created by FunnelSwift tag sync")
         .execute(db)
+        .await
+        .map_err(AppError::Database)?;
+        let (id,): (Uuid,) = sqlx::query_as(
+            "SELECT id FROM lists WHERE tenant_id = $1 AND name = $2 ORDER BY (list_type = 'static') DESC, created_at LIMIT 1",
+        )
+        .bind(tenant_id)
+        .bind(list_name)
+        .fetch_one(db)
         .await
         .map_err(AppError::Database)?;
         Ok(id)

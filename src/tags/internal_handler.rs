@@ -18,7 +18,9 @@ pub async fn internal_create_tag(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     let expected = s.config.internal_sync_key.clone();
-    if key != expected {
+    // config.rs defaults INTERNAL_SYNC_KEY to "", and an unset key would then authenticate an
+    // empty x-internal-key header. Refuse when the server has no key configured.
+    if expected.is_empty() || key != expected {
         return Err(AppError::Unauthorized);
     }
 
@@ -85,7 +87,7 @@ pub async fn internal_create_tag(
     .await
     .map_err(|e| {
         if let sqlx::Error::Database(ref d) = e {
-            if d.constraint() == Some("tags_tenant_id_name_key") {
+            if d.constraint() == Some("idx_tags_name_tenant") {
                 return AppError::Duplicate(format!("Tag '{}' exists", name));
             }
         }
@@ -113,7 +115,9 @@ pub async fn internal_list_tags(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     let expected = s.config.internal_sync_key.clone();
-    if key != expected {
+    // config.rs defaults INTERNAL_SYNC_KEY to "", and an unset key would then authenticate an
+    // empty x-internal-key header. Refuse when the server has no key configured.
+    if expected.is_empty() || key != expected {
         return Err(AppError::Unauthorized);
     }
 
@@ -148,7 +152,9 @@ pub async fn internal_assign_tag(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     let expected = s.config.internal_sync_key.clone();
-    if key != expected {
+    // config.rs defaults INTERNAL_SYNC_KEY to "", and an unset key would then authenticate an
+    // empty x-internal-key header. Refuse when the server has no key configured.
+    if expected.is_empty() || key != expected {
         return Err(AppError::Unauthorized);
     }
 
@@ -222,7 +228,9 @@ pub async fn internal_delete_tag(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     let expected = s.config.internal_sync_key.clone();
-    if key != expected {
+    // config.rs defaults INTERNAL_SYNC_KEY to "", and an unset key would then authenticate an
+    // empty x-internal-key header. Refuse when the server has no key configured.
+    if expected.is_empty() || key != expected {
         return Err(AppError::Unauthorized);
     }
 

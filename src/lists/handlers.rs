@@ -39,7 +39,7 @@ pub async fn create(
         .map(|r| serde_json::to_value(r).unwrap_or(serde_json::Value::Array(vec![])));
     Ok((StatusCode::CREATED, Json(json!(sqlx::query_as::<_,List>("INSERT INTO lists(id,tenant_id,name,description,list_type,dynamic_rules) VALUES($1,$2,$3,$4,$5,$6) RETURNING *")
         .bind(Uuid::new_v4()).bind(t).bind(&r.name).bind(&r.description).bind(&lt).bind(&rules).fetch_one(&s.db).await.map_err(|e| {
-            if let sqlx::Error::Database(ref d) = e { if d.constraint() == Some("lists_tenant_id_name_key") { return AppError::Duplicate(format!("List '{}' exists", r.name)); } }
+            if let sqlx::Error::Database(ref d) = e { if d.constraint() == Some("idx_lists_name_tenant") { return AppError::Duplicate(format!("List '{}' exists", r.name)); } }
             AppError::Database(e)
         })?))))
 }
@@ -69,7 +69,16 @@ pub async fn update(
         .rules
         .map(|r| serde_json::to_value(r).unwrap_or(serde_json::Value::Array(vec![])));
     Ok(Json(json!(sqlx::query_as::<_,List>("UPDATE lists SET name=COALESCE($1,name), description=COALESCE($2,description), dynamic_rules=COALESCE($3,dynamic_rules), is_active=COALESCE($4,is_active), updated_at=NOW() WHERE id=$5 AND tenant_id=$6 RETURNING *")
-        .bind(&r.name).bind(&r.description).bind(&rules).bind(r.is_active).bind(id).bind(t).fetch_optional(&s.db).await?.ok_or(AppError::NotFound(format!("List {id} not found")))?)))
+        .bind(&r.name).bind(&r.description).bind(&rules).bind(r.is_active).bind(id).bind(t).fetch_optional(&s.db).await.map_err(|e| {
+            // 086 added idx_lists_name_tenant, so renaming a list onto an existing name in the
+            // same tenant is now a real violation on this path too.
+            if let sqlx::Error::Database(ref d) = e {
+                if d.constraint() == Some("idx_lists_name_tenant") {
+                    return AppError::Duplicate(format!("List '{}' exists", r.name.clone().unwrap_or_default()));
+                }
+            }
+            AppError::Database(e)
+        })?.ok_or(AppError::NotFound(format!("List {id} not found")))?)))
 }
 pub async fn delete(
     State(s): State<AppState>,

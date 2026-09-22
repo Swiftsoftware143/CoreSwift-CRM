@@ -1,0 +1,27 @@
+-- 086_unique_names_for_lists_and_tag_categories.sql
+-- Give `tag_categories` and `lists` the per-tenant name uniqueness their handlers already claim.
+--
+-- src/tags/handlers.rs (create_category) and src/lists/handlers.rs (create) each mapped a Postgres
+-- unique violation to a 409 Duplicate with a user-facing name ("Category '<name>' exists",
+-- "List '<name>' exists"), but the constraint name they compared against
+-- (`tag_categories_tenant_id_name_key`, `lists_tenant_id_name_key`) matched NO object in
+-- pg_constraint or pg_indexes. Both 409 arms were therefore unreachable, and a second create with
+-- the same name inside one tenant succeeded silently and left a duplicate row.
+--
+-- The intent is real, so the guard is added rather than the mapping deleted:
+--   * migration 008 gave the SIBLING `tags` table `CREATE UNIQUE INDEX idx_tags_name_tenant
+--     ON tags(tenant_id, name)` in the very same file that created `tag_categories` - the
+--     author gave tags a name-unique index and simply omitted the one for tag_categories.
+--     migration 012 created `lists` with the same omission.
+--   * every other tenant-scoped human name in this schema is already unique per tenant:
+--     tenants_slug_key, plans_slug_key, booking_calendars_tenant_id_slug_key, and campaigns
+--     relies on `ON CONFLICT (tenant_id, name)`.
+--   * the existing create-or-get writers (tag_provision_handler.rs, webhooks/cross_app_tag_sync.rs)
+--     already SELECT by (tenant_id, name) before inserting, i.e. they assume the name is unique.
+--
+-- Duplicate pre-check on the live database before this file shipped (2026-09-22):
+--   tag_categories 13 rows / 13 distinct (tenant_id, name); lists 110 rows / 110 distinct.
+-- Zero duplicates, so a plain (non-CONCURRENTLY) unique index builds cleanly inside the
+-- migration transaction. `IF NOT EXISTS` keeps the file idempotent for a re-run / fresh install.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_categories_name_tenant ON tag_categories (tenant_id, name);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lists_name_tenant ON lists (tenant_id, name);

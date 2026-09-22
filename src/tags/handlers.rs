@@ -41,7 +41,7 @@ pub async fn create_category(
     .await
     .map_err(|e| {
         if let sqlx::Error::Database(ref d) = e {
-            if d.constraint() == Some("tag_categories_tenant_id_name_key") {
+            if d.constraint() == Some("idx_tag_categories_name_tenant") {
                 return AppError::Duplicate(format!("Category '{}' exists", r.name));
             }
         }
@@ -57,7 +57,16 @@ pub async fn update_category(
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     Ok(Json(json!(sqlx::query_as::<_,TagCategory>("UPDATE tag_categories SET name=COALESCE($1,name), color=COALESCE($2,color) WHERE id=$3 AND tenant_id=$4 RETURNING *")
-        .bind(&r.name).bind(&r.color).bind(id).bind(t).fetch_optional(&s.db).await?.ok_or(AppError::NotFound(format!("Category {id} not found")))?)))
+        .bind(&r.name).bind(&r.color).bind(id).bind(t).fetch_optional(&s.db).await.map_err(|e| {
+            // 086 added idx_tag_categories_name_tenant, so renaming a category onto an existing
+            // name in the same tenant is now a real violation on this path too.
+            if let sqlx::Error::Database(ref d) = e {
+                if d.constraint() == Some("idx_tag_categories_name_tenant") {
+                    return AppError::Duplicate(format!("Category '{}' exists", r.name.clone().unwrap_or_default()));
+                }
+            }
+            AppError::Database(e)
+        })?.ok_or(AppError::NotFound(format!("Category {id} not found")))?)))
 }
 pub async fn delete_category(
     State(s): State<AppState>,
