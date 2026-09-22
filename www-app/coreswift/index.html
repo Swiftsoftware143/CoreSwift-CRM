@@ -1380,16 +1380,19 @@ const TAB_LOADERS = {
 
   'tickets': async () => {
     try {
-      const tickets = await API.get('/tickets');
+      // CS-22: the API answers {tickets, count} — `Array.isArray` on that is false, which is why
+      // this tab always said "No support tickets" no matter what the customer had raised.
+      const resp = await API.get('/tickets');
+      const tickets = Array.isArray(resp) ? resp : ((resp && resp.tickets) || []);
       let rows = [];
       if (Array.isArray(tickets)) {
         rows = tickets.slice(0, 50).map(t => [
           escapeHtml(t.subject || t.title || '—'),
           `<span class="badge ${t.status==='open'?'badge-error':t.status==='in_progress'?'badge-warning':'badge-success'}">${escapeHtml(t.status||'open')}</span>`,
           escapeHtml(t.priority || 'normal'),
-          escapeHtml(t.contact_name || t.requester || '—'),
+          escapeHtml(t.contact_name || t.contact_email || t.requester || '—'),
           escapeHtml(t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'),
-          `<button class="btn btn-ghost btn-xs">View</button>`
+          `<button class="btn btn-ghost btn-xs" onclick="openTicket('${t.id}')">View</button>`
         ]);
       }
       document.getElementById('ticketsTable').innerHTML = dataTable(
@@ -2474,7 +2477,66 @@ function editTemplate(id) {
   });
 }
 function showComposeModal(){ showModal('Compose Message', '<div class="form-group"><label>To</label><input type="text"></div><div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Message</label><textarea rows="5"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Message sent&#39;,&#39;success&#39;)">Send</button>'); }
-function showAddTicketModal(){ showModal('New Ticket', '<div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Description</label><textarea rows="4"></textarea></div><div class="form-group"><label>Priority</label><select><option>Normal</option><option>High</option><option>Urgent</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Ticket created&#39;,&#39;success&#39;)">Create</button>'); }
+// CS-22: the old modal only toasted "Ticket created" and posted nothing.
+function showAddTicketModal(){
+  showModal('New Ticket',
+    '<div class="form-group"><label>Subject</label><input type="text" id="tkSubject"></div>' +
+    '<div class="form-group"><label>Description</label><textarea rows="4" id="tkBody"></textarea></div>' +
+    '<div class="form-group"><label>Priority</label><select id="tkPriority"><option value="low">Low</option><option value="medium" selected>Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="createTicket()">Create</button>');
+}
+async function createTicket(){
+  const v = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const subject = v('tkSubject');
+  if (!subject) { toast('A subject is required', 'error'); return; }
+  try {
+    await API.post('/tickets', { subject: subject, description: v('tkBody'), priority: v('tkPriority') || 'medium' });
+    closeModal(); toast('Ticket created', 'success'); renderTab('tickets');
+  } catch(e) { toast('Could not create the ticket: ' + e.message, 'error'); }
+}
+
+// ── CS-22: the customer-facing ticket thread (GET /tickets/:id + POST /tickets/:id/messages) ──
+async function openTicket(id) {
+  try {
+    const data = await API.get('/tickets/' + id);
+    const t = (data && data.ticket) || {};
+    const msgs = (data && data.messages) || [];
+    let html = '<div class="card"><div class="card-body">' +
+      '<p style="margin-bottom:8px"><strong>' + escapeHtml(t.subject || 'Ticket') + '</strong></p>' +
+      '<p style="color:var(--text-secondary);white-space:pre-wrap">' + escapeHtml(t.description || '') + '</p>' +
+      '<p style="color:var(--text-muted);font-size:12px">Status: ' + escapeHtml(t.status || 'open') +
+      ' · Priority: ' + escapeHtml(t.priority || 'medium') + ' · Source: ' + escapeHtml(t.source || 'form') + '</p>' +
+      '</div></div>';
+    html += '<div class="card" style="margin-top:12px"><div class="card-header">Thread</div><div class="card-body">';
+    if (!msgs.length) {
+      html += '<p style="color:var(--text-secondary)">No replies yet.</p>';
+    } else {
+      msgs.forEach(m => {
+        html += '<div style="border-left:3px solid var(--border);padding:6px 10px;margin-bottom:8px">' +
+          '<div style="font-size:12px;color:var(--text-muted)">' + escapeHtml(m.sender_type || '') + ' · ' +
+          escapeHtml(m.created_at ? new Date(m.created_at).toLocaleString() : '') + '</div>' +
+          '<div style="white-space:pre-wrap">' + escapeHtml(m.message || '') + '</div></div>';
+      });
+    }
+    html += '<div class="form-group"><label>Reply</label><textarea rows="3" id="tkReplyBox"></textarea></div>';
+    html += '</div></div>';
+    showModal('🎫 ' + escapeHtml(t.subject || 'Ticket'), html,
+      '<button class="btn btn-ghost" onclick="closeModal()">Close</button>' +
+      '<button class="btn btn-primary" onclick="replyTicket(\'' + id + '\')">Send reply</button>', true);
+  } catch (e) {
+    toast('Could not open the ticket: ' + e.message, 'error');
+  }
+}
+async function replyTicket(id) {
+  const el = document.getElementById('tkReplyBox');
+  const message = el ? el.value.trim() : '';
+  if (!message) { toast('Write a reply first', 'error'); return; }
+  try {
+    await API.post('/tickets/' + id + '/messages', { message: message, sender_type: 'contact' });
+    toast('Reply sent', 'success');
+    openTicket(id);
+  } catch (e) { toast('Reply failed: ' + e.message, 'error'); }
+}
 function showAddEventModal(){ showModal('New Event', '<div class="form-group"><label>Title</label><input type="text"></div><div class="form-group"><label>Date</label><input type="date"></div><div class="form-group"><label>Time</label><input type="time"></div><div class="form-group"><label>Location</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Event created&#39;,&#39;success&#39;)">Save</button>'); }
 function showAddLinkModal(){ showModal('Generate Tracked Link', '<div class="form-group"><label>Destination URL</label><input type="url"></div><div class="form-group"><label>Campaign</label><select><option>None</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Link generated&#39;,&#39;success&#39;)">Generate</button>'); }
 // NOTE: showAddUserModal() was removed here — the Users tab is read-only because no platform
