@@ -1231,10 +1231,9 @@ const TAB_RENDERERS = {
   // entered in the Integration Center, and there is no global paste. Its nav entry is gone
   // too, so there is exactly one place to manage credentials.
   'features-plans': () => {
-    let html = pageHeader('Modules & Plans', 'Every module and every feature, assigned per plan — read from the registry, enforced on every request') +
-      '<div id="fpWrap"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading feature registry...</div></div>';
-    loadFeatureMatrix();
-    return html;
+    // the load itself lives in TAB_LOADERS['features-plans'] — see the note there
+    return pageHeader('Modules & Plans', 'Every module and every feature, assigned per plan — read from the registry, enforced on every request') +
+      '<div id="fpWrap"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading the module registry…</div></div>';
   },
   'configuration': () => {
     let html = pageHeader('Site Configuration', 'SEO, analytics, legal pages, and homepage settings') +
@@ -1578,6 +1577,11 @@ async function affUnselectProduct(id) {
 
 const TAB_LOADERS = {
   'affiliates': async () => { await loadAffiliates(); },
+  // The Modules & Plans panel must load from TAB_LOADERS, not from inside its renderer: the
+  // renderer runs BEFORE its HTML is in the document, so an in-renderer load saw no `#fpWrap`,
+  // bailed out, and the panel sat on "Loading feature registry..." for ever. Every other
+  // server-backed panel here registers a loader for the same reason.
+  'features-plans': async () => { await loadFeatureMatrix(); },
   'dashboard': async () => {
     try {
       const stats = await API.get('/dashboard/stats');
