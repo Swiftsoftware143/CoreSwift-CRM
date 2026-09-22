@@ -389,6 +389,134 @@ pub async fn validate_booking_calendar_guard(db: &PgPool) -> Result<bool, AppErr
     Ok(validated)
 }
 
+/// Seal any portfolio integration-target credential still stored in plaintext (t_477d46c2).
+///
+/// `integration_targets.api_key` is the outbound credential a tenant pastes for a webhook/n8n/Zapier
+/// target. It is SEALED on the create path since this card; this is the other half — a row written
+/// before the fix (or restored from a dump) gets sealed on the next boot instead of sitting in the
+/// clear beside sealed ones. Same contract as `backfill_provider_keys` and
+/// `backfill_booking_calendar_tokens`: idempotent, safe on every boot, and it never touches a value
+/// the configured key cannot open (no double encryption, no lost credential).
+///
+/// READ CONTRACT for future consumers: this column is ciphertext now. Anything that needs the
+/// credential must call `crate::secret_box::open(tenant_id, stored)` — never interpolate
+/// `integration_targets.api_key` into SQL or into an outbound header. Nothing consumes the plaintext
+/// today (the only other reads are the redacted list in `portfolio::handlers` and a `COUNT(*)` in
+/// `features.rs`), so there is deliberately no decrypt-on-read site to add.
+pub async fn backfill_integration_target_keys(db: &PgPool) -> Result<usize, AppError> {
+    let rows: Vec<(Uuid, Uuid, String)> = sqlx::query_as(
+        "SELECT id, tenant_id, api_key FROM integration_targets \
+         WHERE api_key IS NOT NULL AND api_key <> ''",
+    )
+    .fetch_all(db)
+    .await?;
+
+    let mut sealed = 0usize;
+    let mut rekeyed = 0usize;
+    let mut unreadable = 0usize;
+    for (id, tenant_id, stored) in rows {
+        if opens_with_configured(tenant_id, &stored) {
+            continue;
+        }
+        let plaintext = open(tenant_id, &stored);
+        if plaintext.is_empty() {
+            unreadable += 1;
+            tracing::warn!(
+                row = %id,
+                "integration target credential is neither readable nor sealed for this tenant \
+                 — left untouched"
+            );
+            continue;
+        }
+        let out = match seal(tenant_id, &plaintext) {
+            Ok(o) => o,
+            Err(e) => {
+                tracing::error!(
+                    row = %id,
+                    error = %e,
+                    "cannot seal the integration target credential (fail closed)"
+                );
+                continue;
+            }
+        };
+        sqlx::query(
+            "UPDATE integration_targets SET api_key = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(&out)
+        .bind(id)
+        .execute(db)
+        .await?;
+        if is_sealed(&stored) {
+            rekeyed += 1;
+        } else {
+            sealed += 1;
+        }
+        if !opens_with_configured(tenant_id, &out) {
+            tracing::error!(
+                row = %id,
+                "a freshly sealed integration target credential does not read back — INVESTIGATE"
+            );
+        }
+    }
+    tracing::info!(
+        sealed,
+        rekeyed,
+        unreadable,
+        "integration target credentials at rest are encrypted"
+    );
+    Ok(sealed + rekeyed)
+}
+
+/// `migrations/077_integration_targets_sealed_guard.sql` arms this guard `NOT VALID`, exactly like
+/// 075/078/079. It arrived without its second half, so `convalidated` sat at `f` and no boot line
+/// asserted the column. Now that the backfill above has sealed every row there is nothing left to
+/// exempt, so validating it makes the column fully enforced from the first customer write.
+///
+/// Self-healing on purpose: `sqlx::migrate!` embeds its file list at COMPILE time and the runner
+/// records each file once, so a constraint dropped by hand (or a restore that omitted it) would
+/// never come back and `VALIDATE CONSTRAINT` against a missing name only errors. Add-if-missing
+/// first, then validate. Best-effort: a failure here warns at boot, never takes the app down.
+pub async fn validate_integration_target_guard(db: &PgPool) -> Result<bool, AppError> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'integration_targets_api_key_sealed')",
+    )
+    .fetch_one(db)
+    .await?;
+    if !exists {
+        sqlx::query(
+            "ALTER TABLE integration_targets ADD CONSTRAINT integration_targets_api_key_sealed \
+             CHECK (api_key IS NULL OR api_key = '' OR api_key LIKE 'enc:v1:%') NOT VALID",
+        )
+        .execute(db)
+        .await?;
+        tracing::warn!("integration target storage guard was missing — armed NOT VALID");
+    }
+    let remaining: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM integration_targets \
+         WHERE api_key IS NOT NULL AND api_key <> '' AND api_key NOT LIKE 'enc:v1:%'",
+    )
+    .fetch_one(db)
+    .await?;
+    if remaining > 0 {
+        tracing::warn!(
+            plaintext_remaining = remaining,
+            "integration target storage guard stays NOT VALID until every credential is sealed"
+        );
+        return Ok(false);
+    }
+    sqlx::query(
+        "ALTER TABLE integration_targets VALIDATE CONSTRAINT integration_targets_api_key_sealed",
+    )
+    .execute(db)
+    .await?;
+    let validated: bool = sqlx::query_scalar(
+        "SELECT convalidated FROM pg_constraint WHERE conname = 'integration_targets_api_key_sealed'",
+    )
+    .fetch_one(db)
+    .await?;
+    Ok(validated)
+}
+
 // ── CS-21b: seal-on-WRITE audit ────────────────────────────────────────────────────────────────
 //
 // Every read path is safe (`open` tolerates legacy plaintext), but nothing FAILED LOUDLY when a

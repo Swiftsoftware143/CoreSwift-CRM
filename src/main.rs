@@ -203,6 +203,26 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!(error = %e, "booking calendar storage guard not validated"),
     }
 
+    // t_477d46c2: `integration_targets.api_key` is the outbound credential a tenant pastes for a
+    // webhook/n8n/Zapier target. It is sealed on create; these are the two halves every other
+    // credential column has and this one was missing — a backfill so a row written before the fix is
+    // sealed rather than left in the clear beside sealed ones, and the boot validate that turns
+    // `migrations/077`'s armed-`NOT VALID` constraint into a fully enforced one.
+    match crate::secret_box::backfill_integration_target_keys(&db).await {
+        Ok(n) => tracing::info!(
+            sealed = n,
+            "integration target credential backfill complete"
+        ),
+        Err(e) => tracing::warn!(error = %e, "integration target credential backfill skipped"),
+    }
+    match crate::secret_box::validate_integration_target_guard(&db).await {
+        Ok(true) => {
+            tracing::info!("integration target storage guard validated (every credential sealed)")
+        }
+        Ok(false) => tracing::warn!("integration target storage guard stays NOT VALID"),
+        Err(e) => tracing::warn!(error = %e, "integration target storage guard not validated"),
+    }
+
     // Seal-on-WRITE assertion (CS-21b). The backfill above repairs history; this makes sure history
     // cannot quietly repeat — a column that holds a plaintext secret is reported on EVERY boot
     // instead of being tolerated forever. `CORESWIFT_SECRET_AUDIT=1` turns it into a one-shot check
