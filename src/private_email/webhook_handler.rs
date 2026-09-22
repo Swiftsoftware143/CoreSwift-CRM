@@ -219,17 +219,22 @@ pub async fn inbound_webhook(
             //     partial (`idx_contacts_tenant_email ... WHERE email IS NOT NULL`), so it needs the
             //     same predicate in the conflict target.
             // `last_name` is NOT NULL without a default, so the empty string is deliberate.
+            // The id comes back via RETURNING: when two first-time sends from the same sender
+            // overlap, the loser's ON CONFLICT fires and its row is never inserted, so handing the
+            // minted uuid to the caller wrote an entity_id that exists in no contact row into
+            // `events` (proven live: 10 of 36 concurrent sends).
             let local = inbound.from.split('@').next().unwrap_or(&inbound.from);
             let mut parts = local.split_whitespace();
             let first_name = parts.next().unwrap_or(local).to_string();
             let last_name = parts.collect::<Vec<_>>().join(" ");
             let new_id = Uuid::new_v4();
-            sqlx::query(
+            sqlx::query_scalar::<_, Uuid>(
                 r#"
                 INSERT INTO contacts (id, tenant_id, email, first_name, last_name, source, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5, 'inbound_email', NOW(), NOW())
                 ON CONFLICT (tenant_id, email) WHERE email IS NOT NULL
                 DO UPDATE SET updated_at = NOW()
+                RETURNING id
                 "#,
             )
             .bind(new_id)
@@ -237,10 +242,9 @@ pub async fn inbound_webhook(
             .bind(&inbound.from)
             .bind(&first_name)
             .bind(&last_name)
-            .execute(&state.db)
+            .fetch_one(&state.db)
             .await
-            .map_err(AppError::Database)?;
-            new_id
+            .map_err(AppError::Database)?
         }
     };
 
