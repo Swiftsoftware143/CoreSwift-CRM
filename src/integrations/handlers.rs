@@ -118,15 +118,58 @@ pub async fn delete_mapping(
     }
     Ok(Json(json!({"message":"Deleted"})))
 }
+/// First/last three characters — the same shape the provider-key and portfolio panels use.
+fn mask_secret(value: &str) -> String {
+    if value.len() > 6 {
+        format!("{}...{}", &value[..3], &value[value.len() - 3..])
+    } else {
+        "***".to_string()
+    }
+}
+
+/// A webhook endpoint as the API may show it: `secret` is stored SEALED (t_6718dc86) and is
+/// never echoed raw. The field keeps its name so existing callers keep parsing, but it now
+/// carries the MASK; `has_secret` says whether anything is stored at all. The update path
+/// accepts that mask back and keeps the stored secret instead of overwriting it with the mask.
+fn webhook_json(w: &Webhook) -> serde_json::Value {
+    let plain = w
+        .secret
+        .as_deref()
+        .map(|stored| crate::secret_box::open(w.tenant_id, stored))
+        .unwrap_or_default();
+    json!({
+        "id": w.id,
+        "tenant_id": w.tenant_id,
+        "name": w.name,
+        "url": w.url,
+        "secret": if plain.is_empty() { serde_json::Value::Null } else { json!(mask_secret(&plain)) },
+        "has_secret": !plain.is_empty(),
+        "events": w.events,
+        "retry_count": w.retry_count,
+        "timeout_ms": w.timeout_ms,
+        "is_active": w.is_active,
+        "last_triggered_at": w.last_triggered_at,
+        "created_at": w.created_at,
+        "updated_at": w.updated_at,
+    })
+}
+
 pub async fn list_webhooks(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    Ok(Json(
-        json!({"webhooks": sqlx::query_as::<_,Webhook>("SELECT * FROM webhook_endpoints WHERE tenant_id=$1 ORDER BY name").bind(t).fetch_all(&s.db).await?}),
-    ))
+    let rows = sqlx::query_as::<_, Webhook>(
+        "SELECT * FROM webhook_endpoints WHERE tenant_id=$1 ORDER BY name",
+    )
+    .bind(t)
+    .fetch_all(&s.db)
+    .await?;
+    Ok(Json(json!({
+        "webhooks": rows.iter().map(webhook_json).collect::<Vec<_>>()
+    })))
 }
+
 pub async fn create_webhook(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
@@ -136,9 +179,16 @@ pub async fn create_webhook(
     if r.name.is_empty() || r.url.is_empty() {
         return Err(AppError::Validation("Name and url required".into()));
     }
-    Ok((StatusCode::CREATED, Json(json!(sqlx::query_as::<_,Webhook>("INSERT INTO webhook_endpoints(id,tenant_id,name,url,secret,events,retry_count,timeout_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *")
-        .bind(Uuid::new_v4()).bind(t).bind(&r.name).bind(&r.url).bind(&r.secret).bind(&r.events).bind(r.retry_count.unwrap_or(3)).bind(r.timeout_ms.unwrap_or(30_000)).fetch_one(&s.db).await?))))
+    // Seal the signing secret at rest (t_6718dc86). An empty/absent secret stays NULL.
+    let stored_secret = match r.secret.as_deref().filter(|v| !v.is_empty()) {
+        Some(plain) => Some(crate::secret_box::seal(t, plain)?),
+        None => None,
+    };
+    let row = sqlx::query_as::<_, Webhook>("INSERT INTO webhook_endpoints(id,tenant_id,name,url,secret,events,retry_count,timeout_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *")
+        .bind(Uuid::new_v4()).bind(t).bind(&r.name).bind(&r.url).bind(&stored_secret).bind(&r.events).bind(r.retry_count.unwrap_or(3)).bind(r.timeout_ms.unwrap_or(30_000)).fetch_one(&s.db).await?;
+    Ok((StatusCode::CREATED, Json(webhook_json(&row))))
 }
+
 pub async fn update_webhook(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
@@ -146,9 +196,38 @@ pub async fn update_webhook(
     Json(r): Json<UpdateWebhookRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    Ok(Json(json!(sqlx::query_as::<_,Webhook>("UPDATE webhook_endpoints SET name=COALESCE($1,name), url=COALESCE($2,url), secret=COALESCE($3,secret), events=COALESCE($4,events), retry_count=COALESCE($5,retry_count), timeout_ms=COALESCE($6,timeout_ms), is_active=COALESCE($7,is_active), updated_at=NOW() WHERE id=$8 AND tenant_id=$9 RETURNING *")
-        .bind(&r.name).bind(&r.url).bind(&r.secret).bind(&r.events).bind(r.retry_count).bind(r.timeout_ms).bind(r.is_active).bind(id).bind(t).fetch_optional(&s.db).await?.ok_or(AppError::NotFound(format!("Webhook {id} not found")))?)))
+    // A client that round-trips the value it was shown would otherwise overwrite the real secret
+    // with the MASK (the same guard the provider-key upsert uses).
+    let stored_secret = match r.secret.as_deref().filter(|v| !v.is_empty()) {
+        None => None,
+        Some(submitted) => {
+            let existing: Option<String> = sqlx::query_scalar(
+                "SELECT secret FROM webhook_endpoints WHERE id=$1 AND tenant_id=$2",
+            )
+            .bind(id)
+            .bind(t)
+            .fetch_optional(&s.db)
+            .await?
+            .flatten();
+            let submitted_is_mask = existing
+                .as_deref()
+                .map(|cur| {
+                    let cur_plain = crate::secret_box::open(t, cur);
+                    !cur_plain.is_empty() && mask_secret(&cur_plain) == submitted
+                })
+                .unwrap_or(false);
+            if submitted_is_mask {
+                existing
+            } else {
+                Some(crate::secret_box::seal(t, submitted)?)
+            }
+        }
+    };
+    let row = sqlx::query_as::<_, Webhook>("UPDATE webhook_endpoints SET name=COALESCE($1,name), url=COALESCE($2,url), secret=COALESCE($3,secret), events=COALESCE($4,events), retry_count=COALESCE($5,retry_count), timeout_ms=COALESCE($6,timeout_ms), is_active=COALESCE($7,is_active), updated_at=NOW() WHERE id=$8 AND tenant_id=$9 RETURNING *")
+        .bind(&r.name).bind(&r.url).bind(&stored_secret).bind(&r.events).bind(r.retry_count).bind(r.timeout_ms).bind(r.is_active).bind(id).bind(t).fetch_optional(&s.db).await?.ok_or(AppError::NotFound(format!("Webhook {id} not found")))?;
+    Ok(Json(webhook_json(&row)))
 }
+
 pub async fn delete_webhook(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,

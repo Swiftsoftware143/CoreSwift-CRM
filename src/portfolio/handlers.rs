@@ -30,7 +30,15 @@ fn mask_secret(value: &str) -> String {
 /// Project an integration target for API responses with the stored credential
 /// redacted (never emit `api_key` itself).
 fn target_json(t: &IntegrationTarget) -> serde_json::Value {
-    let key_probe = t.api_key.as_deref().unwrap_or("");
+    // `api_key` is stored SEALED (`enc:v1:` — t_477d46c2). Open it before masking, so the mask
+    // describes the credential the customer pasted and not the envelope around it. Any future
+    // consumer of the column must do the same: `crate::secret_box::open(tenant_id, stored)`,
+    // never the raw column.
+    let key_probe = t
+        .api_key
+        .as_deref()
+        .map(|stored| crate::secret_box::open(t.tenant_id, stored))
+        .unwrap_or_default();
     json!({
         "id": t.id,
         "tenant_id": t.tenant_id,
@@ -39,7 +47,7 @@ fn target_json(t: &IntegrationTarget) -> serde_json::Value {
         "name": t.name,
         "provider": t.provider,
         "webhook_url": t.webhook_url,
-        "api_key_masked": if key_probe.is_empty() { None } else { Some(mask_secret(key_probe)) },
+        "api_key_masked": if key_probe.is_empty() { None } else { Some(mask_secret(&key_probe)) },
         "has_api_key": !key_probe.is_empty(),
         "events": t.events,
         "is_active": t.is_active,
@@ -296,6 +304,14 @@ pub async fn create_target(
             "Name and webhook_url are required".into(),
         ));
     }
+    // Seal the third-party credential at rest (CS-21 family, t_477d46c2). Nothing consumes the
+    // plaintext today — the only other reads of this table are the redacted list and a COUNT(*) —
+    // so a future consumer MUST decrypt with `crate::secret_box::open(tenant_id, stored)` and never
+    // interpolate the column. No key submitted => the column stays NULL, as before.
+    let stored_api_key = match req.api_key.as_deref().filter(|k| !k.is_empty()) {
+        Some(key) => Some(crate::secret_box::seal(tenant_id, key)?),
+        None => None,
+    };
     let target = sqlx::query_as::<_, IntegrationTarget>(
         "INSERT INTO integration_targets (id, tenant_id, portfolio_company_id, name, provider, webhook_url, api_key, events) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *"
     )
@@ -305,7 +321,7 @@ pub async fn create_target(
     .bind(&req.name)
     .bind(&req.provider)
     .bind(&req.webhook_url)
-    .bind(&req.api_key)
+    .bind(&stored_api_key)
     .bind(&req.events)
     .fetch_one(&s.db)
     .await?;

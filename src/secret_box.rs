@@ -238,6 +238,12 @@ const TENANT_SECRET_COLUMNS: &[(&str, &str)] = &[
     ("private_email_domains", "mailgun_api_key"),
     ("private_email_domains", "smtp_password_encrypted"),
     ("private_email_domains", "webhook_signing_key_encrypted"),
+    // t_477d46c2: the portfolio integration target's outbound webhook credential. Sealed on
+    // create since this run; the row here makes a regression fail loudly at every boot.
+    ("integration_targets", "api_key"),
+    // t_6718dc86: the outbound webhook signing secret. Sealed on create/update since this run;
+    // the API now returns a mask instead of the raw value.
+    ("webhook_endpoints", "secret"),
 ];
 
 /// `(table, secret column)` for GLOBAL config rows. There is no tenant id to derive a key from, so a
