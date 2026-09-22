@@ -723,12 +723,16 @@ POST /api/lists/:id/members</pre>
 
   <div class="card">
     <h3>Customer Portal</h3>
-    <p>Your <em>end customers</em> log in and see <strong>💬 My Support</strong> — a dedicated portal showing only their requests:</p>
+    <p>Your <em>end customers</em> open <strong>💬 My Support</strong> and see only their own requests. The portal lives at
+    <code>/s/&lt;your-tenant-id&gt;/support</code>, and your team can open it from <strong>Support Tickets → 💬 My Support</strong>.</p>
+    <p>There is no password to issue and no email needed to sign in: the customer enters <strong>their email address</strong>
+    plus the <strong>reference of a request they already have</strong> (the first 8 characters of the ticket id, shown on the
+    ticket in your console). That pair proves the address, and the server hands back an access grant that never travels in a URL.</p>
     <ul>
       <li><strong>Submit new requests</strong> — with priority selection</li>
       <li><strong>View their history</strong> — all past tickets, statuses visible</li>
-      <li><strong>Reply to open tickets</strong> — threaded conversation with your team</li>
-      <li><strong>Tenant-scoped</strong> — customers only see their own data, never other tenants</li>
+      <li><strong>Reply to open tickets</strong> — threaded conversation with your team; replying to a resolved request reopens it</li>
+      <li><strong>Tenant-scoped</strong> — customers only see their own data, never another customer's and never another tenant's</li>
     </ul>
     <p>This is their personal help desk — not your admin panel. They manage their own support experience.</p>
   </div>
