@@ -1,27 +1,8 @@
-//! Plans module — Super Admin plan definitions and feature limits.
+//! Plans module — one live endpoint (see `handlers`).
 //!
-//! Provides CRUD for plan tiers. All endpoints require `agency_admin` role.
-//! Plans define pricing, contact/deal/user limits, and feature toggles.
+//! `router()` and `models` were deleted with the unreachable plan CRUD they served: the router was
+//! never nested in `main.rs`, and `models::Plan` was the last place declaring the phantom `plans`
+//! columns (`max_deals`, `max_users`, `max_storage_mb`, `payment_link` — none exist in the
+//! database). The live paths are `/api/billing/plans*` and `/api/admin/*`.
 
 pub mod handlers;
-pub mod models;
-
-use crate::AppState;
-use axum::{middleware, Router};
-
-/// Build the plans router with auth middleware.
-/// All routes require agency_admin role (enforced in handlers).
-pub fn router(state: AppState) -> Router<AppState> {
-    Router::new()
-        .route("/", axum::routing::get(handlers::list))
-        // Feature toggles the admin can set per plan (drives the admin UI).
-        .route("/registry", axum::routing::get(handlers::feature_registry))
-        .route("/", axum::routing::post(handlers::create))
-        .route("/:id", axum::routing::get(handlers::get))
-        .route("/:id", axum::routing::patch(handlers::update))
-        .route("/:id", axum::routing::delete(handlers::delete))
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            crate::auth::middleware::auth_middleware,
-        ))
-}
