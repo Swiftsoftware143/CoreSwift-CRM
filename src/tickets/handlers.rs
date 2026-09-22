@@ -28,7 +28,8 @@ pub async fn list_tickets(
     let offset = q.offset.unwrap_or(0);
 
     let tickets = sqlx::query_as::<_, Ticket>(
-        r#"SELECT id, tenant_id, subject, description, status, priority, assigned_to, contact_id, created_at, updated_at
+        r#"SELECT id, tenant_id, subject, description, status, priority, assigned_to, contact_id,
+                  created_at, updated_at, source, contact_email, contact_name
            FROM tickets
            WHERE tenant_id = $1
              AND ($2::text IS NULL OR status = $2)
