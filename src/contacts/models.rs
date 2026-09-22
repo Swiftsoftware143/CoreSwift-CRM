@@ -14,6 +14,13 @@ pub struct Contact {
     pub first_name: String,
     pub last_name: String,
     pub title: Option<String>,
+    /// Free-text employer name — the column the product actually fills (CSV import, inbound
+    /// capture, cross-app tag sync) and the one the Contacts tab renders. It was missing from
+    /// this struct, so the `SELECT *` on every contact query silently dropped the column
+    /// before serialization and the Company cell showed an em dash for every row of every
+    /// tenant, including rows whose `contacts.company` is set. `company_id` is the (dangling)
+    /// uuid variant — left in place, not used for display.
+    pub company: Option<String>,
     pub company_id: Option<Uuid>,
     pub gender: Option<String>,
     pub address_line1: Option<String>,
