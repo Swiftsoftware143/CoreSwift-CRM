@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use uuid::Uuid;
 
 /// JWT claims struct stored in access/refresh tokens.
@@ -66,6 +67,24 @@ impl From<TeamMember> for TeamMemberResponse {
     }
 }
 
+/// The auth payload's `team_member`, with the session's RESOLVED platform authority merged in.
+///
+/// `platform_admin` is deliberately NOT a field of `TeamMember`/`TeamMemberResponse`: `TeamMember`
+/// is a `sqlx::FromRow` over `SELECT *` on `users`, so a field added there makes every other query
+/// that decodes it fail (and every `TeamMemberResponse::from` site have to invent a value). The
+/// flag is a property of the SESSION — resolved from `users.is_platform_admin` by token subject on
+/// every request (`crate::auth::platform_admin`) — not of the row, so it is merged into the
+/// serialized object, which is exactly where the SPA reads it (`STATE.user`, taken from
+/// `data.team_member`).
+pub fn team_member_payload(user: TeamMember, platform_admin: bool) -> Value {
+    let mut body = serde_json::to_value(TeamMemberResponse::from(user))
+        .unwrap_or_else(|_| Value::Object(Map::new()));
+    if let Some(obj) = body.as_object_mut() {
+        obj.insert("platform_admin".to_string(), Value::Bool(platform_admin));
+    }
+    body
+}
+
 /// Token response sent after login/register.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenResponse {
@@ -73,7 +92,11 @@ pub struct TokenResponse {
     pub refresh_token: String,
     pub token_type: String,
     pub expires_in: i64,
-    pub team_member: TeamMemberResponse,
+    /// Serialized team member + the resolved `platform_admin` flag (see `team_member_payload`).
+    pub team_member: Value,
+    /// The same resolved value at the top level, for clients that read the payload rather than
+    /// the team member. `false` unless the DATABASE says otherwise.
+    pub platform_admin: bool,
 }
 
 /// Register request body.
@@ -98,9 +121,11 @@ pub struct RegisterResponse {
     pub refresh_token: String,
     pub token_type: String,
     pub expires_in: i64,
-    pub team_member: TeamMemberResponse,
+    pub team_member: Value,
     pub account: AccountResponse,
     pub next_steps: Vec<String>,
+    /// The resolved platform authority for this session (see `team_member_payload`).
+    pub platform_admin: bool,
 }
 
 /// Account info for response (from `tenants` table).

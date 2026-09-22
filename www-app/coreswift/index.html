@@ -690,16 +690,22 @@ function renderSidebar() {
   MENU.forEach(it => item(it, false));
   h += '<div class="nav-divider">── SETTINGS ──</div>';
   SETTINGS_MENU.forEach(it => item(it, false));
-  // Admin menu is for platform operators — the DB uses three admin vocabularies
-  // ('agency_admin' for the platform admin, 'owner'/'admin' for tenant owners).
-  // Platform operators ONLY. 'owner'/'admin' are TENANT-owner vocabularies above — every
-  // real tenant user is 'owner', so including them exposed the whole platform menu
+  // The SERVER decides platform authority from users.is_platform_admin, resolved from the
+  // DATABASE by the token subject (src/auth/platform_admin.rs) — every /api/admin/* route 403s
+  // for anyone else. The role string is not authority: 'owner'/'admin' are TENANT vocabularies
+  // (every real tenant user is 'owner'), so including them exposed the whole platform menu
   // (Features & Plans, Site Configuration, Telnyx/Email admin, Billing, Users) to customers.
-  // The server rejects them anyway (tenant -> 403 on the plan registry), so this was a UI
-  // leak that dead-ends on an error, not an escalation. Keep tenant-visible items in MENU
-  // or SETTINGS_MENU instead.
+  // The nav must follow the SERVER's answer, or the two disagree after the first grant/revoke:
+  // invisible menu for a freshly-granted operator, or a menu whose every page 403s after a
+  // revoke. Keep tenant-visible items in MENU or SETTINGS_MENU instead.
   const PLATFORM_ROLES = ['agency_admin', 'platform_admin', 'superadmin'];
-  if (STATE.user && PLATFORM_ROLES.indexOf(STATE.user.role) >= 0) {
+  // `platform_admin` rides in the auth payload (data.team_member -> STATE.user). An ABSENT
+  // field means UNKNOWN — a session stored in localStorage before this field shipped — and only
+  // then is the old role list consulted, so an already-signed-in operator keeps their menu.
+  const isPlatform = STATE.user && (STATE.user.platform_admin === undefined
+    ? PLATFORM_ROLES.indexOf(STATE.user.role) >= 0
+    : STATE.user.platform_admin === true);
+  if (isPlatform) {
     h += '<div class="nav-divider">── ADMIN ──</div>';
     ADMIN_MENU.forEach(it => item(it, false));
   }

@@ -98,6 +98,12 @@ pub async fn register(
     .fetch_one(&state.db)
     .await?;
 
+    // Platform authority is resolved from the DATABASE by the token subject, never from
+    // `user.role`: a fresh signup is `owner` of its own tenant, which grants nothing
+    // platform-wide. The app shell gates its ADMIN nav on this value, so it ships in the payload.
+    let platform_admin =
+        crate::auth::platform_admin::is_platform_admin(&state.db, &user.id.to_string()).await?;
+
     // Fetch tenant info
     let tenant = sqlx::query_as::<_, crate::account::models::Account>(
         "SELECT id, name, slug, logo_url, primary_color, accent_color, custom_domain, settings, is_active, created_at, updated_at FROM tenants WHERE id = $1"
@@ -146,7 +152,8 @@ pub async fn register(
             refresh_token,
             token_type: "Bearer".to_string(),
             expires_in,
-            team_member: user.into(),
+            team_member: team_member_payload(user, platform_admin),
+            platform_admin,
             account: AccountResponse {
                 id: tenant.id,
                 name: tenant.name,
@@ -181,6 +188,9 @@ pub async fn login(
         .execute(&state.db)
         .await?;
 
+    let platform_admin =
+        crate::auth::platform_admin::is_platform_admin(&state.db, &user.id.to_string()).await?;
+
     let (access_token, refresh_token, expires_in) = generate_tokens(&user, &state)?;
 
     Ok(Json(json!(TokenResponse {
@@ -188,7 +198,8 @@ pub async fn login(
         refresh_token,
         token_type: "Bearer".to_string(),
         expires_in,
-        team_member: user.into(),
+        team_member: team_member_payload(user, platform_admin),
+        platform_admin,
     })))
 }
 
@@ -240,8 +251,14 @@ pub async fn me(State(state): State<AppState>, request: Request) -> ApiResult<im
             .await?
             .ok_or(AppError::Unauthorized)?;
 
+    // The same resolution /api/admin/* uses, so the shell and the router cannot disagree:
+    // one source (`users.is_platform_admin`), one subject (the token), one request.
+    let platform_admin =
+        crate::auth::platform_admin::is_platform_admin(&state.db, &user.id.to_string()).await?;
+
     Ok(Json(json!({
-        "team_member": TeamMemberResponse::from(user),
+        "team_member": team_member_payload(user, platform_admin),
+        "platform_admin": platform_admin,
     })))
 }
 
