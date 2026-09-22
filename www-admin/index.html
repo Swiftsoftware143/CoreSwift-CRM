@@ -371,77 +371,181 @@ const API = {
   del(path) { return this.call('DELETE', path); }
 };
 
-// ── Features & Plans: per-plan feature toggles ───────────────────────────────
-// Source of truth is GET /api/billing/plans/registry (the same 21-key registry the
-// server enforces). The server denies with 402 when a plan's flag is explicitly false;
-// an ABSENT key means allowed.
-let FP_DATA = null;
+// ── Modules & Plans: the data-driven module/feature registry ─────────────────
+// Every tool is a MODULE and everything it can do is a FEATURE of it — both are ROWS in the
+// database now, so there is no hardcoded module list anywhere in this file. The panel renders
+// straight from GET /api/admin/modules and writes back through
+// POST /api/admin/plans/:slug/modules and POST /api/admin/plans/:slug/features.
+let MR_DATA = null;
+const MR_CELL = 'text-align:center;padding:7px 8px;border-bottom:1px solid var(--border,#2a2a2a)';
 
 async function loadFeatureMatrix() {
   const wrap = document.getElementById('fpWrap');
   if (!wrap) return;
   try {
-    const d = await API.get('/billing/plans/registry');
-    FP_DATA = d;
-    const plans = d.plans || [], feats = d.features || [];
-    if (!plans.length || !feats.length) {
-      wrap.innerHTML = '<div style="padding:20px;color:var(--text-muted)">Registry returned no plans or no features.</div>';
-      return;
-    }
-    let h = '<div style="overflow:auto"><table style="width:100%;border-collapse:collapse;min-width:820px">' +
-      '<thead><tr><th style="text-align:left;padding:10px;border-bottom:2px solid var(--border,#333)">Feature</th>';
-    plans.forEach(p => {
-      h += '<th style="text-align:center;padding:10px;border-bottom:2px solid var(--border,#333)">' +
-           escapeHtml(p.name || p.slug) + '</th>';
-    });
-    h += '</tr></thead><tbody>';
-    feats.forEach(f => {
-      h += '<tr><td style="padding:10px;border-bottom:1px solid var(--border,#2a2a2a)">' +
-        '<strong>' + escapeHtml(f.label) + '</strong><br>' +
-        '<span style="color:var(--text-muted);font-size:12px">' + escapeHtml(f.key) +
-        ' &middot; ' + escapeHtml(f.module) + '</span></td>';
-      plans.forEach(p => {
-        const v = (p.features || {})[f.key];
-        const on = v === true;
-        h += '<td style="text-align:center;padding:10px;border-bottom:1px solid var(--border,#2a2a2a)">' +
-          '<input type="checkbox" style="width:18px;height:18px;cursor:pointer"' +
-          ' data-plan="' + escapeHtml(p.id) + '" data-slug="' + escapeHtml(p.slug) + '"' +
-          ' data-key="' + escapeHtml(f.key) + '"' + (on ? ' checked' : '') +
-          ' onchange="toggleFeature(this)" title="' +
-          (v === undefined ? 'not set on this plan (allowed)' : (on ? 'enabled' : 'disabled')) + '">' +
-          (v === undefined ? '<div style="font-size:11px;color:var(--text-muted)">unset</div>' : '') +
-          '</td>';
-      });
-      h += '</tr>';
-    });
-    h += '</tbody></table></div>' +
-      '<p style="color:var(--text-secondary);margin-top:14px;max-width:820px">' +
-      'An <strong>unset</strong> box means the plan does not mention that feature, which the server treats as ' +
-      '<em>allowed</em> (so existing tenants are never silently stripped). Unticking writes an explicit ' +
-      '<code>false</code> and is what actually denies the request with HTTP 402. Changes save immediately.</p>';
-    wrap.innerHTML = h;
+    MR_DATA = await API.get('/admin/modules');
+    renderModuleMatrix();
   } catch (e) {
-    wrap.innerHTML = '<div style="padding:20px;color:var(--danger,#f66)">Could not load the registry: ' +
+    wrap.innerHTML = '<div style="padding:20px;color:var(--danger,#f66)">Could not load the module registry: ' +
       escapeHtml(e.message) + '</div>';
   }
 }
 
-async function toggleFeature(el) {
-  const planId = el.dataset.plan, slug = el.dataset.slug, key = el.dataset.key;
-  const on = el.checked;
+function renderModuleMatrix() {
+  const wrap = document.getElementById('fpWrap');
+  if (!wrap || !MR_DATA) return;
+  const plans = MR_DATA.plans || [], mods = MR_DATA.modules || [];
+  if (!plans.length || !mods.length) {
+    wrap.innerHTML = '<div style="padding:20px;color:var(--text-muted)">The registry returned no plans or no modules.</div>';
+    return;
+  }
+  let h = '<div style="overflow:auto"><table style="width:100%;border-collapse:collapse;min-width:900px">' +
+    '<thead><tr><th style="text-align:left;padding:8px;border-bottom:2px solid var(--border,#333)">Module / feature</th>';
+  plans.forEach(p => {
+    h += '<th style="text-align:center;padding:8px;border-bottom:2px solid var(--border,#333)">' +
+      escapeHtml(p.name || p.slug) + '</th>';
+  });
+  h += '</tr></thead><tbody>';
+  mods.forEach(m => {
+    const ma = m.assignments || {};
+    h += '<tr style="background:rgba(255,255,255,0.035)">' +
+      '<td style="padding:8px;border-bottom:1px solid var(--border,#2a2a2a)">' +
+      '<strong>' + escapeHtml((m.icon ? m.icon + ' ' : '') + m.name) + '</strong>' +
+      (m.is_active ? '' : ' <span style="font-size:11px;color:var(--text-muted)">(inactive)</span>') +
+      '<br><span style="color:var(--text-muted);font-size:11px">module &middot; ' + escapeHtml(m.key) + '</span></td>';
+    plans.forEach(p => {
+      const on = !!(ma[p.slug] && ma[p.slug].enabled);
+      h += '<td style="' + MR_CELL + 'background:rgba(255,255,255,0.035)">' +
+        '<input type="checkbox" style="width:18px;height:18px;cursor:pointer"' + (on ? ' checked' : '') +
+        ' onchange="saveModule(this)" data-slug="' + escapeHtml(p.slug) + '" data-key="' + escapeHtml(m.key) + '"></td>';
+    });
+    h += '</tr>';
+    (m.features || []).forEach(f => {
+      const fa = f.assignments || {};
+      h += '<tr><td style="padding:6px 8px 6px 28px;border-bottom:1px solid var(--border,#222)">' +
+        '<span style="color:var(--text-secondary)">' + escapeHtml(f.name) + '</span><br>' +
+        '<span style="color:var(--text-muted);font-size:11px">' + escapeHtml(f.key) + ' &middot; ' +
+        escapeHtml(f.kind) + (f.unit ? ' (' + escapeHtml(f.unit) + ')' : '') + '</span></td>';
+      plans.forEach(p => {
+        const a = fa[p.slug] || {};
+        h += '<td style="' + MR_CELL + '">';
+        if (f.kind === 'limit') {
+          h += '<input type="number" step="any" placeholder="—" value="' +
+            (a.limit_value === null || a.limit_value === undefined ? '' : escapeHtmlAttr(String(a.limit_value))) + '"' +
+            ' style="width:92px;padding:4px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary)"' +
+            ' onchange="saveFeature(this, true)" data-slug="' + escapeHtml(p.slug) + '" data-key="' + escapeHtml(f.key) + '">';
+        } else {
+          h += '<input type="checkbox" style="width:18px;height:18px;cursor:pointer"' + (a.enabled ? ' checked' : '') +
+            ' onchange="saveFeature(this, false)" data-slug="' + escapeHtml(p.slug) + '" data-key="' + escapeHtml(f.key) + '">';
+        }
+        h += '</td>';
+      });
+      h += '</tr>';
+    });
+  });
+  h += '</tbody></table></div>' +
+    '<p style="color:var(--text-secondary);margin-top:12px;max-width:900px">Tick a <strong>module</strong> to grant the whole tool to a plan, ' +
+    'then fine-tune its individual <strong>features</strong> underneath. A feature of kind <em>limit</em> takes a number (leave it empty to switch the limit off). ' +
+    'Changes save immediately and are enforced on the next request; a key no plan has been assigned denies by default.</p>' +
+    tenantOverrideCard();
+  wrap.innerHTML = h;
+}
+
+function tenantOverrideCard() {
+  return '<div class="card" style="margin-top:22px"><div class="card-header">Per-tenant overrides</div>' +
+    '<div class="card-body"><p style="color:var(--text-secondary);margin-bottom:10px">' +
+    'An override beats the plan for that one account — use it to grant or deny a module or feature to a single tenant.</p>' +
+    '<input id="toTenant" placeholder="tenant id (uuid)" style="width:360px;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"> ' +
+    '<button class="btn btn-secondary btn-sm" onclick="loadTenantEntitlements()">Load entitlements</button>' +
+    '<div id="toResult" style="margin-top:12px"></div></div></div>';
+}
+
+async function loadTenantEntitlements() {
+  const el = document.getElementById('toTenant'), out = document.getElementById('toResult');
+  if (!el || !out) return;
+  const id = (el.value || '').trim();
+  if (!id) { out.innerHTML = '<p style="color:var(--warning,#fa0)">Enter a tenant id first.</p>'; return; }
+  out.innerHTML = '<div style="color:var(--text-muted)">Loading…</div>';
+  try {
+    const d = await API.get('/admin/tenants/' + encodeURIComponent(id) + '/entitlements');
+    const ents = d.entitlements || [];
+    let t = '<div style="color:var(--text-secondary);margin-bottom:8px">Plan: <strong>' +
+      escapeHtml((d.plan && (d.plan.name || d.plan.slug)) || 'none assigned') + '</strong> &middot; denied: ' +
+      escapeHtml((d.denied || []).join(', ') || 'none') + '</div>' +
+      '<div style="overflow:auto;max-height:420px"><table style="width:100%;border-collapse:collapse">' +
+      '<thead><tr><th style="text-align:left;padding:6px 10px;border-bottom:1px solid var(--border,#333)">Key</th>' +
+      '<th style="text-align:left;padding:6px 10px;border-bottom:1px solid var(--border,#333)">Effective</th>' +
+      '<th style="text-align:left;padding:6px 10px;border-bottom:1px solid var(--border,#333)">Limit</th>' +
+      '<th style="text-align:left;padding:6px 10px;border-bottom:1px solid var(--border,#333)">Why</th>' +
+      '<th style="text-align:left;padding:6px 10px;border-bottom:1px solid var(--border,#333)">Override</th></tr></thead><tbody>';
+    ents.forEach(e => {
+      t += '<tr><td style="padding:6px 10px">' + escapeHtml(e.key) + '</td>' +
+        '<td style="padding:6px 10px">' + (e.enabled
+          ? '<span style="color:var(--success,#4c4)">granted</span>'
+          : '<span style="color:var(--danger,#f66)">denied</span>') + '</td>' +
+        '<td style="padding:6px 10px;color:var(--text-muted)">' +
+          escapeHtml(e.limit_value === null || e.limit_value === undefined ? '—' : String(e.limit_value)) + '</td>' +
+        '<td style="padding:6px 10px;color:var(--text-muted)">' + escapeHtml(e.source) + '</td>' +
+        '<td style="padding:6px 10px"><input type="checkbox" style="width:16px;height:16px;cursor:pointer"' +
+          (e.enabled ? ' checked' : '') + ' onchange="saveOverride(this)" data-tenant="' + escapeHtml(id) +
+          '" data-key="' + escapeHtml(e.key) + '">' +
+          (e.source === 'tenant_override' ? ' <span style="font-size:11px;color:var(--accent,#6af)">override</span>' : '') +
+        '</td></tr>';
+    });
+    out.innerHTML = t + '</tbody></table></div>';
+  } catch (e) {
+    out.innerHTML = '<p style="color:var(--danger,#f66)">Could not load entitlements: ' + escapeHtml(e.message) + '</p>';
+  }
+}
+
+async function saveModule(el) {
+  const slug = el.dataset.slug, key = el.dataset.key, on = el.checked;
   el.disabled = true;
   try {
-    // features is replaced whole (COALESCE), never merged — so merge client-side or the
-    // plan loses its numeric limits.
-    const plan = ((FP_DATA && FP_DATA.plans) || []).find(p => p.id === planId);
-    const merged = Object.assign({}, (plan && plan.features) || {});
-    merged[key] = on;
-    await API.patch('/billing/plans/' + planId, { features: merged });
-    if (plan) plan.features = merged;
-    toast(key + ' turned ' + (on ? 'ON' : 'OFF') + ' for ' + slug, 'success');
+    await API.post('/admin/plans/' + encodeURIComponent(slug) + '/modules', { module_key: key, enabled: on });
+    if (MR_DATA) {
+      const m = (MR_DATA.modules || []).find(x => x.key === key);
+      if (m) { m.assignments = m.assignments || {}; m.assignments[slug] = { enabled: on }; }
+    }
+    toast(key + ' module turned ' + (on ? 'ON' : 'OFF') + ' for ' + slug, 'success');
   } catch (e) {
     el.checked = !on;
     toast('Save failed: ' + e.message, 'error');
+  } finally {
+    el.disabled = false;
+  }
+}
+
+async function saveFeature(el, isLimit) {
+  const slug = el.dataset.slug, key = el.dataset.key;
+  let body;
+  if (isLimit) {
+    const raw = (el.value || '').trim();
+    body = { feature_key: key, enabled: raw !== '', limit_value: raw === '' ? null : Number(raw) };
+  } else {
+    body = { feature_key: key, enabled: el.checked };
+  }
+  el.disabled = true;
+  try {
+    await API.post('/admin/plans/' + encodeURIComponent(slug) + '/features', body);
+    toast(key + ' saved for ' + slug, 'success');
+  } catch (e) {
+    toast('Save failed: ' + e.message, 'error');
+  } finally {
+    el.disabled = false;
+  }
+}
+
+async function saveOverride(el) {
+  const tenant = el.dataset.tenant, key = el.dataset.key, on = el.checked;
+  el.disabled = true;
+  try {
+    await API.post('/admin/tenants/' + encodeURIComponent(tenant) + '/overrides', { feature_key: key, enabled: on });
+    toast(key + ' override set to ' + (on ? 'granted' : 'denied'), 'success');
+    loadTenantEntitlements();
+  } catch (e) {
+    el.checked = !on;
+    toast('Override failed: ' + e.message, 'error');
   } finally {
     el.disabled = false;
   }
@@ -623,7 +727,7 @@ const ADMIN_MENU = [
     { id:'telnyx-admin', icon:'☎️', label:'Telnyx Admin' },
     { id:'email-admin', icon:'📧', label:'Private Email Admin' }
   ]},
-  { id:'features-plans', icon:'🧩', label:'Features & Plans' },
+  { id:'features-plans', icon:'🧩', label:'Modules & Plans' },
   { type:'group', icon:'⚙️', label:'Admin Settings', children:[
     { id:'configuration', icon:'⚙️', label:'Configuration' }
   ]}
@@ -1127,7 +1231,7 @@ const TAB_RENDERERS = {
   // entered in the Integration Center, and there is no global paste. Its nav entry is gone
   // too, so there is exactly one place to manage credentials.
   'features-plans': () => {
-    let html = pageHeader('Features & Plans', 'Turn modules on or off per plan — enforced on every request') +
+    let html = pageHeader('Modules & Plans', 'Every module and every feature, assigned per plan — read from the registry, enforced on every request') +
       '<div id="fpWrap"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading feature registry...</div></div>';
     loadFeatureMatrix();
     return html;
@@ -2647,7 +2751,7 @@ function icRenderUpgradePaths() {
   html += '</div>';
   if (IC.isAdmin) {
     html += '<p style="color:var(--text-secondary);margin-top:14px">Need more integrations than this plan allows? ' +
-      '<a href="#" onclick="switchTab(\'features-plans\');return false">Open Features &amp; Plans</a> to see what this account is entitled to.</p>';
+      '<a href="#" onclick="switchTab(\'features-plans\');return false">Open Modules &amp; Plans</a> to see what this account is entitled to.</p>';
   }
   el.innerHTML = html;
 }
