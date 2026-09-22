@@ -1476,7 +1476,7 @@ const TAB_LOADERS = {
       let rows = [];
       if (Array.isArray(contacts)) {
         rows = contacts.slice(0, 50).map(c => [
-          escapeHtml(c.name || c.full_name || '—'),
+          escapeHtml(c.name || c.full_name || ((c.first_name || '') + ' ' + (c.last_name || '')).trim() || '—'),
           escapeHtml(c.email || '—'),
           escapeHtml(c.phone || '—'),
           escapeHtml(c.company || c.company_name || '—'),
