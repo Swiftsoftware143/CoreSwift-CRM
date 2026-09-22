@@ -209,20 +209,34 @@ pub async fn inbound_webhook(
     {
         Some((id,)) => id,
         None => {
-            // Auto-create contact from inbound email
-            let name = inbound.from.split('@').next().unwrap_or(&inbound.from);
+            // Auto-create contact from inbound email.
+            //
+            // Two defects lived here and both made EVERY inbound email from an unknown sender a 500
+            // (the ticket never got created, which is why no ticket in this database had
+            // source='email'):
+            //   * `contacts` has no `name` column — the row is first_name/last_name;
+            //   * `ON CONFLICT (tenant_id, email)` cannot resolve against the REAL index, which is
+            //     partial (`idx_contacts_tenant_email ... WHERE email IS NOT NULL`), so it needs the
+            //     same predicate in the conflict target.
+            // `last_name` is NOT NULL without a default, so the empty string is deliberate.
+            let local = inbound.from.split('@').next().unwrap_or(&inbound.from);
+            let mut parts = local.split_whitespace();
+            let first_name = parts.next().unwrap_or(local).to_string();
+            let last_name = parts.collect::<Vec<_>>().join(" ");
             let new_id = Uuid::new_v4();
             sqlx::query(
                 r#"
-                INSERT INTO contacts (id, tenant_id, email, name, source, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, 'inbound_email', NOW(), NOW())
-                ON CONFLICT (tenant_id, email) DO UPDATE SET updated_at = NOW()
+                INSERT INTO contacts (id, tenant_id, email, first_name, last_name, source, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, 'inbound_email', NOW(), NOW())
+                ON CONFLICT (tenant_id, email) WHERE email IS NOT NULL
+                DO UPDATE SET updated_at = NOW()
                 "#,
             )
             .bind(new_id)
             .bind(tenant_id)
             .bind(&inbound.from)
-            .bind(name)
+            .bind(&first_name)
+            .bind(&last_name)
             .execute(&state.db)
             .await
             .map_err(AppError::Database)?;
