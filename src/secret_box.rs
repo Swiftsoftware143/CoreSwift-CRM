@@ -257,6 +257,138 @@ pub async fn validate_webhook_guard(db: &PgPool) -> Result<bool, AppError> {
     Ok(validated)
 }
 
+/// Seal any Google refresh token still stored in plaintext on a booking calendar (t_706da9df).
+///
+/// Same contract as `backfill_provider_keys`: idempotent, safe on every boot, and it never touches a
+/// row it cannot read. A token that is already sealed with the CONFIGURED key is skipped (the check is
+/// "does the configured key open it", not "has it got the prefix"); a legacy PLAINTEXT row is sealed;
+/// a value sealed under a key this deployment does not have is left alone rather than double-encrypted.
+///
+/// The column held no rows when `migrations/079` armed the guard, so this is insurance for a row that
+/// arrives from an older deployment or a restore — the case the guard's `NOT VALID` exemption covers.
+pub async fn backfill_booking_calendar_tokens(db: &PgPool) -> Result<usize, AppError> {
+    let rows: Vec<(Uuid, Uuid, String)> = sqlx::query_as(
+        "SELECT id, tenant_id, google_refresh_token FROM booking_calendars \
+         WHERE google_refresh_token IS NOT NULL AND google_refresh_token <> ''",
+    )
+    .fetch_all(db)
+    .await?;
+
+    let mut sealed = 0usize;
+    let mut rekeyed = 0usize;
+    let mut unreadable = 0usize;
+    for (id, tenant_id, stored) in rows {
+        if opens_with_configured(tenant_id, &stored) {
+            continue;
+        }
+        let plaintext = open(tenant_id, &stored);
+        if plaintext.is_empty() {
+            unreadable += 1;
+            tracing::warn!(
+                row = %id,
+                "booking calendar Google grant is neither readable nor sealed for this tenant \
+                 — left untouched"
+            );
+            continue;
+        }
+        let out = match seal(tenant_id, &plaintext) {
+            Ok(o) => o,
+            Err(e) => {
+                tracing::error!(
+                    row = %id,
+                    error = %e,
+                    "cannot seal the booking calendar Google grant (fail closed)"
+                );
+                continue;
+            }
+        };
+        sqlx::query(
+            "UPDATE booking_calendars SET google_refresh_token = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(&out)
+        .bind(id)
+        .execute(db)
+        .await?;
+        if is_sealed(&stored) {
+            rekeyed += 1;
+        } else {
+            sealed += 1;
+        }
+        if !opens_with_configured(tenant_id, &out) {
+            tracing::error!(
+                row = %id,
+                "a freshly sealed booking calendar grant does not read back — INVESTIGATE"
+            );
+        }
+    }
+    tracing::info!(
+        sealed,
+        rekeyed,
+        unreadable,
+        "booking calendar Google grants at rest are encrypted"
+    );
+    Ok(sealed + rekeyed)
+}
+
+/// `migrations/079_booking_calendars_sealed_guard.sql` arms this guard `NOT VALID`, exactly like
+/// 075 (provider_keys) and 078 (webhook_endpoints). 079 arrived without its second half, so the
+/// constraint sat at `convalidated = f` and nothing asserted it at boot — an armed guard that no
+/// start-up check ever mentioned, which is the posture that let the missing half of 075 go unnoticed
+/// until t_6718dc86 copied it. Once the backfill above has sealed every row there is nothing left to
+/// exempt, so validating it makes the column fully enforced from the first customer write.
+///
+/// Best-effort by design: a missing constraint (migration not applied yet) is a warning at boot,
+/// never a failure. New writes are enforced either way.
+pub async fn validate_booking_calendar_guard(db: &PgPool) -> Result<bool, AppError> {
+    // Self-heal first: `sqlx::migrate!` embeds its file list at COMPILE time and the runner records
+    // each file once, so a deployment whose 079 row was recorded but whose constraint is gone
+    // (dropped by hand, or restored from a dump that omitted it) would never be guarded again —
+    // `VALIDATE CONSTRAINT` against a missing name errors and the boot would only warn. Arm it
+    // NOT VALID here; the validate below flips it to fully enforced once nothing is unsealed.
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_constraint \
+         WHERE conname = 'booking_calendars_google_token_sealed')",
+    )
+    .fetch_one(db)
+    .await?;
+    if !exists {
+        sqlx::query(
+            "ALTER TABLE booking_calendars ADD CONSTRAINT booking_calendars_google_token_sealed \
+             CHECK (google_refresh_token IS NULL OR google_refresh_token = '' OR \
+             google_refresh_token LIKE 'enc:v1:%') NOT VALID",
+        )
+        .execute(db)
+        .await?;
+        tracing::warn!("booking calendar storage guard was missing — armed NOT VALID");
+    }
+    let remaining: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM booking_calendars \
+         WHERE google_refresh_token IS NOT NULL AND google_refresh_token <> '' \
+         AND google_refresh_token NOT LIKE 'enc:v1:%'",
+    )
+    .fetch_one(db)
+    .await?;
+    if remaining > 0 {
+        tracing::warn!(
+            plaintext_remaining = remaining,
+            "booking calendar storage guard stays NOT VALID until every grant is sealed"
+        );
+        return Ok(false);
+    }
+    sqlx::query(
+        "ALTER TABLE booking_calendars VALIDATE CONSTRAINT booking_calendars_google_token_sealed",
+    )
+    .execute(db)
+    .await?;
+    let validated: bool = sqlx::query_scalar(
+        "SELECT convalidated FROM pg_constraint \
+         WHERE conname = 'booking_calendars_google_token_sealed'",
+    )
+    .fetch_one(db)
+    .await?;
+    Ok(validated)
+}
+
 // ── CS-21b: seal-on-WRITE audit ────────────────────────────────────────────────────────────────
 //
 // Every read path is safe (`open` tolerates legacy plaintext), but nothing FAILED LOUDLY when a

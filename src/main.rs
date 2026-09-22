@@ -186,6 +186,23 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!(error = %e, "webhook endpoint storage guard not validated"),
     }
 
+    // t_706da9df: the Google OAuth refresh token on a booking calendar is a STANDING grant on the
+    // tenant's Google account (it survives key rotation, and the tenant cannot revoke it from
+    // CoreSwift), so it gets both halves every other credential has: a backfill for rows written
+    // before the fix, and the boot validate that makes `migrations/079`'s guard enforced instead of
+    // an armed-but-unasserted NOT VALID constraint.
+    match crate::secret_box::backfill_booking_calendar_tokens(&db).await {
+        Ok(n) => tracing::info!(sealed = n, "booking calendar grant backfill complete"),
+        Err(e) => tracing::warn!(error = %e, "booking calendar grant backfill skipped"),
+    }
+    match crate::secret_box::validate_booking_calendar_guard(&db).await {
+        Ok(true) => {
+            tracing::info!("booking calendar storage guard validated (every grant sealed)")
+        }
+        Ok(false) => tracing::warn!("booking calendar storage guard stays NOT VALID"),
+        Err(e) => tracing::warn!(error = %e, "booking calendar storage guard not validated"),
+    }
+
     // Seal-on-WRITE assertion (CS-21b). The backfill above repairs history; this makes sure history
     // cannot quietly repeat — a column that holds a plaintext secret is reported on EVERY boot
     // instead of being tolerated forever. `CORESWIFT_SECRET_AUDIT=1` turns it into a one-shot check
