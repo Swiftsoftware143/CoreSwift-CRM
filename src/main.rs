@@ -165,6 +165,15 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!(error = %e, "provider key backfill skipped"),
     }
 
+    // The storage guard (`migrations/075_…`) is armed NOT VALID so it could be added to a table that
+    // still held legacy rows; now that the backfill has sealed every row there is nothing to exempt,
+    // so validating it makes the constraint fully enforced. Best-effort: a missing constraint warns.
+    match crate::secret_box::validate_provider_key_guard(&db).await {
+        Ok(true) => tracing::info!("provider key storage guard validated (every row sealed)"),
+        Ok(false) => tracing::warn!("provider key storage guard stays NOT VALID"),
+        Err(e) => tracing::warn!(error = %e, "provider key storage guard not validated"),
+    }
+
     // Seal-on-WRITE assertion (CS-21b). The backfill above repairs history; this makes sure history
     // cannot quietly repeat — a column that holds a plaintext secret is reported on EVERY boot
     // instead of being tolerated forever. `CORESWIFT_SECRET_AUDIT=1` turns it into a one-shot check

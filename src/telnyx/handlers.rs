@@ -967,8 +967,36 @@ pub async fn update_config(
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
+    // CS-21 (t_9da15119): this is the SECOND write path into `provider_keys.api_key`. It used to
+    // bind the raw request value, so a Telnyx key saved here was stored in PLAINTEXT even after the
+    // upsert path had been sealed — a live credential one `select` away. Every writer goes through
+    // `secret_box::seal`; a client that round-trips the MASK it was shown must not overwrite the
+    // real secret with the mask.
+    let existing: Option<String> = sqlx::query_scalar(
+        "SELECT api_key FROM provider_keys WHERE tenant_id = $1 AND provider = 'telnyx'",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let submitted_is_mask = existing
+        .as_deref()
+        .map(|cur| {
+            let cur_plain = crate::secret_box::open(tenant_id, cur);
+            !cur_plain.is_empty() && mask_key(&cur_plain) == req.api_key
+        })
+        .unwrap_or(false);
+    let (stored_secret, plain_for_mask) = if submitted_is_mask {
+        let cur = existing.clone().unwrap_or_default();
+        let plain = crate::secret_box::open(tenant_id, &cur);
+        (cur, plain)
+    } else {
+        (
+            crate::secret_box::seal(tenant_id, &req.api_key)?,
+            req.api_key.clone(),
+        )
+    };
+
     // Upsert into provider_keys for this tenant (BYOK mode)
-    let api_key_clone = req.api_key.clone();
     sqlx::query(
         "INSERT INTO provider_keys (tenant_id, provider, api_key, metadata, is_active, scope)
          VALUES ($1, 'telnyx', $2, $3, true, 'tenant')
@@ -979,7 +1007,7 @@ pub async fn update_config(
                        updated_at = NOW()"
     )
     .bind(tenant_id)
-    .bind(&req.api_key)
+    .bind(&stored_secret)
     .bind(json!({
         "profile_id": req.profile_id,
         "messaging_profile_id": req.messaging_profile_id,
@@ -992,6 +1020,6 @@ pub async fn update_config(
     Ok(Json(json!({
         "message": "Telnyx configuration saved",
         "mode": "byok",
-        "api_key_masked": mask_key(&api_key_clone),
+        "api_key_masked": mask_key(&plain_for_mask),
     })))
 }

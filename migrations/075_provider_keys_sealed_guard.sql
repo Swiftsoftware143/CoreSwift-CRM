@@ -1,0 +1,12 @@
+-- CS-21 (kanban t_9da15119): make the DATABASE refuse a plaintext third-party credential.
+--
+-- Application-level sealing is only half the guard: the upsert path was sealed while the Telnyx
+-- BYOK path still bound the raw request value, and one manual UPDATE would have been enough to put a
+-- live key back in the clear. New writes must be sealed ('enc:v1:') or empty.
+--
+-- NOT VALID on purpose: rows written before the fix are exempt so this can be armed without a
+-- rewrite, while every NEW write is checked immediately. The app validates it at boot once the
+-- backfill has sealed every row (secret_box::validate_provider_key_guard), at which point the
+-- constraint becomes fully enforced. No semicolon anywhere in these comments - the in-app runner
+-- executes the whole file.
+ALTER TABLE provider_keys ADD CONSTRAINT provider_keys_api_key_sealed CHECK (api_key = '' OR api_key LIKE 'enc:v1:%') NOT VALID;
