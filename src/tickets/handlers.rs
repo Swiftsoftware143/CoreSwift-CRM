@@ -352,6 +352,11 @@ pub async fn support_embed_script(
   var d=document;
   if(d.getElementById('crm-support-root'))return;
   var tid='{tid}';
+  // The widget is served by whichever host the customer embedded it from, so the API base is taken
+  // from this script's own URL. It used to be hardcoded to coreswiftcrm.com — a host whose vhost had
+  // no `/s/` proxy at all — so the advertised one-line embed could not post a ticket from anywhere.
+  var me=d.currentScript;
+  var BASE=(me&&me.src?me.src:'').replace(/\/s\/[^\/]+\/widget\.js.*$/,'')||'https://coreswiftcrm.com';
 
   // Styles
   var s=d.createElement('style');
@@ -383,7 +388,7 @@ pub async fn support_embed_script(
     if(!subject){{alert('Please enter a subject');return}}
     btn.disabled=true;btn.textContent='Sending...';
     var payload={{subject:subject,message:d.getElementById('cs-message').value||'',name:d.getElementById('cs-name').value||null,email:d.getElementById('cs-email').value||null,priority:d.getElementById('cs-priority').value||'medium'}};
-    fetch('https://coreswiftcrm.com/s/'+tid+'/ticket',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(payload)}})
+    fetch(BASE+'/s/'+tid+'/ticket',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(payload)}})
       .then(function(r){{return r.json()}})
       .then(function(){{d.getElementById('crm-support-form').style.display='none';d.getElementById('crm-support-thanks').className='crm-support-thanks show'}})
       .catch(function(e){{alert('Error: '+e.message);btn.disabled=false;btn.textContent='Send'}});

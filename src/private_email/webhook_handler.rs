@@ -274,7 +274,13 @@ pub async fn inbound_webhook(
         }
     }
 
-    // Create event for inbound email
+    // Create event for inbound email.
+    //
+    // `events.title` is NOT NULL and the insert below used to omit it, so the whole webhook
+    // answered 500 *after* the ticket had already been created — the caller (Mailgun / any
+    // provider) sees a failure and RETRIES, which is how one email becomes several tickets. The
+    // event is a side effect of a request that has already succeeded, so a failure here is
+    // recorded and not escalated: the ticket is the contract, the event is bookkeeping.
     let event_payload = serde_json::json!({
         "from": inbound.from,
         "to": inbound.to,
@@ -285,18 +291,26 @@ pub async fn inbound_webhook(
         "provider_message_id": inbound.provider_message_id,
         "provider": provider.name(),
     });
-    sqlx::query(
+    let event_title = if inbound.subject.trim().is_empty() {
+        "(no subject)".to_string()
+    } else {
+        inbound.subject.clone()
+    };
+    if let Err(e) = sqlx::query(
         r#"
-        INSERT INTO events (id, tenant_id, source, event_type, entity_type, entity_id, payload, created_at)
-        VALUES (gen_random_uuid(), $1, 'private_email', 'email_received', 'contact', $2, $3, NOW())
+        INSERT INTO events (id, tenant_id, title, source, event_type, entity_type, entity_id, payload, created_at)
+        VALUES (gen_random_uuid(), $1, $2, 'private_email', 'email_received', 'contact', $3, $4, NOW())
         "#,
     )
     .bind(tenant_id)
+    .bind(&event_title)
     .bind(contact_id)
     .bind(&event_payload)
     .execute(&state.db)
     .await
-    .map_err(AppError::Database)?;
+    {
+        tracing::warn!(error = %e, "inbound email processed, but recording the event failed");
+    }
 
     // Fire auto-reply rules
     super::auto_reply_handler::maybe_fire_auto_reply(
