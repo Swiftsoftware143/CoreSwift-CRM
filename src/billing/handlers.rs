@@ -406,6 +406,23 @@ pub async fn update_subscription(
     Ok(Json(json!(sub)))
 }
 
+/// May this caller cancel the tenant's own subscription?
+///
+/// The gate previously tested `role != "client_admin" && role != "agency_admin"`, but NO
+/// code path in this schema ever assigns `client_admin` — the tenant-admin role that is
+/// actually written is `owner` (38 of 47 users; see `admin_actions` tenant creation).
+/// The predicate was therefore unsatisfiable for every real customer: a tenant could not
+/// cancel its own subscription at all. The roles admitted here are the schema's own
+/// definition of tenant admin (`owner`/`admin`, the pair the tenant handlers already gate
+/// on) plus the platform `agency_admin`, who may act on a tenant's behalf.
+///
+/// `member` and `impersonated` are deliberately excluded — the former is not an
+/// administrative role, and an impersonation token is scoped to read a tenant, not to
+/// change what it is billed for.
+fn is_tenant_billing_owner(role: &str) -> bool {
+    matches!(role, "owner" | "admin" | "agency_admin")
+}
+
 /// POST /api/billing/subscription/cancel — Cancel subscription (downgrades to free)
 pub async fn cancel_subscription(
     State(s): State<AppState>,
@@ -414,7 +431,7 @@ pub async fn cancel_subscription(
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
-    if c.role != "client_admin" && c.role != "agency_admin" {
+    if !is_tenant_billing_owner(&c.role) {
         return Err(AppError::Forbidden);
     }
 
