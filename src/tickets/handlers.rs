@@ -43,7 +43,7 @@ pub async fn list_tickets(
                WHEN 'low' THEN 3
              END,
              created_at DESC
-           LIMIT $5 OFFSET $6"#
+           LIMIT $5 OFFSET $6"#,
     )
     .bind(tid)
     .bind(&q.status)
