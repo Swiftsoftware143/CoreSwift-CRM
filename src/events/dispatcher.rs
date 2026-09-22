@@ -255,17 +255,23 @@ pub async fn evaluate_delayed_action(db: &PgPool, action_id: Uuid) {
                 true
             }
         }
-        "no_action" => {
-            // Check if a specific entity action was taken
-            let count: i64 = sqlx::query_scalar::<_, Option<i64>>(
-                "SELECT COUNT(*) FROM delayed_actions WHERE tenant_id = $1 AND trigger_event_id = $2 AND executed = true"
-            )
-            .bind(action.tenant_id)
-            .bind(action.trigger_event_id)
-            .fetch_one(db)
-            .await.unwrap_or(None).unwrap_or(0);
-            count == 0 // fire if no follow-up action taken
-        }
+        "no_action" => match action.trigger_event_id {
+            // trigger_event_id is nullable by design (067: REFERENCES events(id) ON DELETE SET
+            // NULL — and ScheduleDelayedRequest accepts an omitted id). A NULL can never equal a
+            // row's value, so no follow-up can be counted and the action fires, which is the
+            // intent of the "fire if no follow-up action taken" comment below.
+            None => true,
+            Some(trigger_event_id) => {
+                let count: i64 = sqlx::query_scalar::<_, Option<i64>>(
+                    "SELECT COUNT(*) FROM delayed_actions WHERE tenant_id = $1 AND trigger_event_id = $2 AND executed = true"
+                )
+                .bind(action.tenant_id)
+                .bind(trigger_event_id)
+                .fetch_one(db)
+                .await.unwrap_or(None).unwrap_or(0);
+                count == 0 // fire if no follow-up action taken
+            }
+        },
         _ => false,
     };
 
