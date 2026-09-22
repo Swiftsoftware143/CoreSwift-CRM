@@ -39,6 +39,7 @@ pub mod integrations;
 pub mod lists;
 pub mod lists_internal;
 pub mod messages;
+pub mod module_registry;
 pub mod monitoring;
 pub mod native_apps;
 pub mod notifications;

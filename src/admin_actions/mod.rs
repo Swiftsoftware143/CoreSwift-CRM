@@ -50,6 +50,29 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/site",
             axum::routing::get(site_handler::get_site).put(site_handler::update_site),
         )
+        // Data-driven module & feature registry (CS-25..CS-27). The admin assigns MODULES and
+        // individual FEATURES of each module to plans here; the catalogue itself lives in the
+        // database, so a new module registers a row instead of a Rust const.
+        .route(
+            "/modules",
+            axum::routing::get(crate::module_registry::handlers::list_modules),
+        )
+        .route(
+            "/plans/:slug/modules",
+            axum::routing::post(crate::module_registry::handlers::assign_module),
+        )
+        .route(
+            "/plans/:slug/features",
+            axum::routing::post(crate::module_registry::handlers::assign_feature),
+        )
+        .route(
+            "/tenants/:id/overrides",
+            axum::routing::post(crate::module_registry::handlers::set_override),
+        )
+        .route(
+            "/tenants/:id/entitlements",
+            axum::routing::get(crate::module_registry::handlers::tenant_entitlements),
+        )
         // TWO layers. `Router::layer` wraps outermost-last, so listing the platform-admin gate
         // FIRST makes `auth_middleware` run first and inject `Claims`; the gate then reads them.
         // The gate sits on the ROUTER, not in each handler, so a route added to this router cannot

@@ -1,5 +1,18 @@
 //! Feature limit enforcement — reads limits from plans table (JSONB features + dedicated columns).
+//!
+//! Plan-level BOOLEAN gating no longer lives here. It is data-driven: `crate::module_registry`
+//! resolves a tenant's entitlement from the `modules` / `module_features` / `plan_modules` /
+//! `plan_module_features` tables that the ADMIN assigns through `/api/admin/plans/:slug/*`.
+//!
+//! Removed in this change (they were the hardcoding David asked to delete):
+//!   * `FEATURE_REGISTRY` — the catalogue as a Rust const
+//!   * `PLAN_KEY_ALIASES` / `plan_key_for` — a bridge table whose own comment warned that drift made
+//!     the gate "silently stop enforcing". The four alias pairs are now `modules.legacy_feature_key`
+//!     DATA, folded into the seed by migration 072.
+//!   * `feature_registry_json` — the admin UI now reads the catalogue from the database via
+//!     `GET /api/admin/modules`.
 use crate::errors::AppError;
+use crate::module_registry;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -164,50 +177,18 @@ async fn count_usage(db: &PgPool, tenant_id: Uuid, feature_key: &str) -> Result<
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Per-plan BOOLEAN feature gating — "the admin controls what features are
-// available per plan".
+// Per-plan BOOLEAN feature gating.
 //
-// Resolution order (most specific wins):
-//   1. tenant_plans.feature_overrides->>'<key>'   per-tenant override
-//   2. plans.features->>'<key>'                   the plan's own flag
-//   3. unset  -> ALLOWED
+// Resolution order (most specific wins), all of it DATA now — see `module_registry::resolve`:
+//   1. tenant_plans.feature_overrides->>'<key>'          per-tenant override
+//   2. the tenant's active plan's assignment rows        plan_modules / plan_module_features
+//   3. DENY                                              (fail-closed)
 //
-// Unset = allowed is deliberate: plans in the wild do not carry every key, and
-// denying on absence would silently strip modules from existing tenants the
-// moment this shipped. An explicit `false` is what turns a feature off, which is
-// what the admin UI writes. Seed the plans with explicit flags for real tiers.
-//
-// WATCH OUT — the plans were authored BEFORE this registry and spell some keys
-// differently (`automation_enabled`, `support_tickets`, `onboarding_checklists`,
-// `account_health_monitoring`). Looking up the registry spelling against those
-// plans finds nothing, yields `None`, and therefore ALLOWS — a gate that looks
-// wired but never fires. PLAN_KEY_ALIASES below bridges the two vocabularies.
-// Verified against live data: without the aliases only 2 of 21 keys can deny.
-//
-// No active plan -> allowed, matching `enforce_feature_limit`'s behaviour.
+// It used to be `plans.features->>'<key>'` with `unset => ALLOWED`, bridged by PLAN_KEY_ALIASES.
+// An unset key being allowed meant a module could ship ungated and a renamed key could silently stop
+// enforcing; the registry replaced both. Seeding `plan_modules` from the same `plans.features` data
+// (migration 072) is what kept that switch behaviour-preserving.
 // ─────────────────────────────────────────────────────────────────────────────
-/// Registry key -> the spelling the live `plans.features` JSONB actually uses.
-///
-/// The plans predate the registry, so four features exist in the DB under a
-/// different name. Reading the registry spelling alone returns `None` for those,
-/// which this function treats as "allowed" — so the gate silently stops
-/// enforcing. Verified live: `plans.free.features.support_tickets` is `false`,
-/// but gating on `tickets` never saw it. Keep this table in step with the DB.
-pub const PLAN_KEY_ALIASES: &[(&str, &str)] = &[
-    ("automation", "automation_enabled"),
-    ("checklists", "onboarding_checklists"),
-    ("tickets", "support_tickets"),
-    ("monitoring", "account_health_monitoring"),
-];
-
-/// The key to read out of `plans.features` for a given registry key.
-pub fn plan_key_for(registry_key: &str) -> &str {
-    PLAN_KEY_ALIASES
-        .iter()
-        .find(|(k, _)| *k == registry_key)
-        .map(|(_, v)| *v)
-        .unwrap_or(registry_key)
-}
 
 pub async fn enforce_feature_flag(
     db: &PgPool,
@@ -215,187 +196,22 @@ pub async fn enforce_feature_flag(
     feature_key: &str,
     label: &str,
 ) -> Result<(), AppError> {
-    let row: Option<(serde_json::Value, Option<serde_json::Value>)> = sqlx::query_as(
-        "SELECT p.features, tp.feature_overrides
-           FROM tenant_plans tp
-           JOIN plans p ON p.id = tp.plan_id
-          WHERE tp.tenant_id = $1 AND tp.status = 'active'
-          LIMIT 1",
-    )
-    .bind(tenant_id)
-    .fetch_optional(db)
-    .await?;
-
-    let Some((features, overrides)) = row else {
-        return Ok(()); // no active plan — do not lock the tenant out
-    };
-
-    // Overrides are keyed by the registry name (that is what the admin UI
-    // writes); the plan itself is read under its own historical spelling.
-    let plan_key = plan_key_for(feature_key);
-    let enabled = overrides
-        .as_ref()
-        .and_then(|o| o.get(feature_key))
-        .and_then(|v| v.as_bool())
-        .or_else(|| features.get(plan_key).and_then(|v| v.as_bool()));
-
-    match enabled {
-        Some(false) => Err(AppError::UpgradeRequired(format!(
+    let ent = module_registry::resolve(db, tenant_id, feature_key).await?;
+    if ent.enabled {
+        return Ok(());
+    }
+    match ent.source {
+        // No active plan row at all: legacy tolerance, kept so the 81 tenants without one do not
+        // lose every module in a single deploy. Reported, not hidden.
+        "no_plan" => Ok(()),
+        _ => Err(AppError::UpgradeRequired(format!(
             "{} is not available on your current plan. Upgrade to access it.",
             label
         ))),
-        _ => Ok(()),
     }
 }
 
-/// A feature the admin can toggle per plan. This is the single source of truth the
-/// admin UI renders its switches from, so add new keys HERE when gating a module.
-pub struct FeatureDef {
-    pub key: &'static str,
-    pub label: &'static str,
-    pub module: &'static str,
-    pub note: &'static str,
-}
-
-pub const FEATURE_REGISTRY: &[FeatureDef] = &[
-    FeatureDef {
-        key: "campaigns",
-        label: "Campaigns",
-        module: "campaigns",
-        note: "Sequenced email campaigns",
-    },
-    FeatureDef {
-        key: "automation",
-        label: "Automations",
-        module: "automation",
-        note: "Trigger/action engine",
-    },
-    FeatureDef {
-        key: "checklists",
-        label: "Checklists",
-        module: "checklists",
-        note: "Onboarding/process checklists",
-    },
-    FeatureDef {
-        key: "ai_enabled",
-        label: "AI scoring",
-        module: "ai, scoring",
-        note: "Lead scoring and AI helpers",
-    },
-    FeatureDef {
-        key: "tickets",
-        label: "Support tickets",
-        module: "tickets",
-        note: "In-house ticketing + email-to-ticket",
-    },
-    FeatureDef {
-        key: "affiliates",
-        label: "Affiliate system",
-        module: "affiliates",
-        note: "Referral tracking and payouts",
-    },
-    FeatureDef {
-        key: "native_apps",
-        label: "Native app connectors",
-        module: "native_apps",
-        note: "FunnelSwift, ADASwift, MissedCall, WorkflowSwift, CheatLayer, Multi-Directory",
-    },
-    FeatureDef {
-        key: "telnyx",
-        label: "SMS & voice (Telnyx)",
-        module: "telnyx, comms",
-        note: "SMS, number management, call tracking",
-    },
-    FeatureDef {
-        key: "round_robin",
-        label: "Round-robin routing",
-        module: "round_robin",
-        note: "Fair lead distribution across a team",
-    },
-    FeatureDef {
-        key: "events",
-        label: "Event system",
-        module: "events",
-        note: "Internal event bus",
-    },
-    FeatureDef {
-        key: "monitoring",
-        label: "Monitoring & health",
-        module: "monitoring",
-        note: "Account health scoring and thresholds",
-    },
-    FeatureDef {
-        key: "bookings",
-        label: "Bookings & scheduling",
-        module: "bookings",
-        note: "Calendar booking pages",
-    },
-    FeatureDef {
-        key: "google_calendar",
-        label: "Google Calendar sync",
-        module: "google_calendar",
-        note: "Two-way calendar sync",
-    },
-    FeatureDef {
-        key: "api_access",
-        label: "API access",
-        module: "personal_api_keys",
-        note: "Per-tenant API keys",
-    },
-    FeatureDef {
-        key: "webhooks",
-        label: "Webhooks",
-        module: "webhook",
-        note: "Outbound webhook delivery",
-    },
-    FeatureDef {
-        key: "integrations",
-        label: "Integrations",
-        module: "integrations",
-        note: "n8n and third-party integrations",
-    },
-    FeatureDef {
-        key: "provider_keys",
-        label: "Provider keys",
-        module: "provider_keys",
-        note: "Bring-your-own provider credentials",
-    },
-    FeatureDef {
-        key: "support_widgets",
-        label: "Support widgets",
-        module: "support_widgets",
-        note: "Embeddable support surfaces",
-    },
-    FeatureDef {
-        key: "tracked_links",
-        label: "Tracked links",
-        module: "tracked_links",
-        note: "Click tracking links",
-    },
-    FeatureDef {
-        key: "private_email",
-        label: "Private email",
-        module: "private_email",
-        note: "Own domain + mailboxes (also has its own limits)",
-    },
-    FeatureDef {
-        key: "portfolio",
-        label: "Portfolio sync",
-        module: "portfolio",
-        note: "Cross-tenant portfolio management",
-    },
-];
-
-pub fn feature_registry_json() -> serde_json::Value {
-    serde_json::json!(FEATURE_REGISTRY
-        .iter()
-        .map(|f| serde_json::json!({
-            "key": f.key, "label": f.label, "module": f.module, "note": f.note
-        }))
-        .collect::<Vec<_>>())
-}
-
-/// Middleware state for `gate_mw`: which plan flag protects which module.
+/// Middleware state for `gate_mw`: which module protects which router.
 #[derive(Clone)]
 pub struct FeatureGate {
     pub db: PgPool,

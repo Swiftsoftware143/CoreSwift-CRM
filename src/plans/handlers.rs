@@ -102,8 +102,10 @@ pub async fn list(
 }
 
 /// The feature keys the admin can toggle per plan, plus every plan's current values.
-/// The admin UI renders its switches from this — `features::FEATURE_REGISTRY` is the
-/// single source of truth, so a newly-gated module appears here automatically.
+/// Read straight from the module registry tables now — the catalogue is DATA, so a newly
+/// registered module appears here with no code change (it used to be `features::FEATURE_REGISTRY`,
+/// a Rust const). Shape kept identical for the existing admin console:
+/// `{ "features": [{key, label, module, note}], "plans": [{slug, name, features}] }`.
 pub async fn feature_registry(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
@@ -121,8 +123,26 @@ pub async fn feature_registry(
     .fetch_all(&s.db)
     .await?;
 
+    let feats: Vec<(String, String, String, Option<String>, bool)> = sqlx::query_as(
+        "SELECT f.key, f.name, m.key, f.description, f.is_active
+           FROM module_features f JOIN modules m ON m.id = f.module_id
+          WHERE f.kind = 'boolean' AND m.is_active
+          ORDER BY m.sort_order, f.sort_order, f.key",
+    )
+    .fetch_all(&s.db)
+    .await?;
+
     Ok(Json(json!({
-        "features": crate::features::feature_registry_json(),
+        "features": feats
+            .into_iter()
+            .map(|(key, label, module, note, is_active)| json!({
+                "key": key,
+                "label": label,
+                "module": module,
+                "note": note.unwrap_or_default(),
+                "is_active": is_active,
+            }))
+            .collect::<Vec<_>>(),
         "plans": rows
             .into_iter()
             .map(|(slug, name, features)| json!({ "slug": slug, "name": name, "features": features }))
@@ -255,6 +275,18 @@ pub async fn update(
     .fetch_optional(&s.db)
     .await?
     .ok_or(AppError::NotFound(format!("Plan {id} not found")))?;
+
+    // The registry tables are the source of truth for gating now, so a `features` write through this
+    // legacy path has to land there too — otherwise the admin console's switches would look saved
+    // and change nothing. Key mapping comes from `modules.legacy_feature_key` (data), not a const.
+    if let Some(f) = r.features.as_ref() {
+        match crate::module_registry::sync_legacy_features(&s.db, id, f).await {
+            Ok(n) => {
+                tracing::info!(rows = n, plan = %id, "plan features mirrored into module registry")
+            }
+            Err(e) => tracing::warn!(error = %e, "plan feature sync to module registry failed"),
+        }
+    }
 
     // Sync to FunnelSwift affiliate products
     let plan_name_str = r.name.clone().unwrap_or_else(|| plan.name.clone());
