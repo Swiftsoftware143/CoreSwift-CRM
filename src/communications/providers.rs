@@ -360,6 +360,55 @@ fn snippet(s: &str) -> String {
     s.chars().take(200).collect()
 }
 
+/// The reserved (RFC 2606 / RFC 6761) domain this destination sits under, if any.
+///
+/// These names are reserved precisely so they can never exist on the public internet:
+/// `example.com|.net|.org`, the `.invalid`, `.test`, `.example` and `.local` TLDs, and `localhost`.
+/// They are exactly the names a smoke harness invents (`probe.invalid`, `handset-123@example.com`),
+/// and a provider can only ever bounce such a send. Measured on the live provider 2026-09-22, once
+/// transactional mail really started leaving the box (t_193e2259): 16 harness rows were *accepted*
+/// by Mailgun and bounced with code 498 inside five minutes, on a sending domain shared with every
+/// sibling app on the same account — and a sustained bounce rate is how a provider disables a
+/// domain. Refusing locally trades a clear, permanent error on one row for a bounce that would cost
+/// the whole account, and it also stops a customer's typo'd `@example.com` from bouncing.
+pub fn reserved_domain(address: &str) -> Option<String> {
+    let domain = address
+        .rsplit_once('@')
+        .map(|(_, d)| d)
+        .unwrap_or(address)
+        .trim()
+        .trim_matches(|c: char| c == '.' || c == '<' || c == '>' || c.is_whitespace())
+        .to_ascii_lowercase();
+    let labels: Vec<&str> = domain.split('.').filter(|l| !l.is_empty()).collect();
+    match labels.len() {
+        0 => None,
+        // A bare hostname: only `localhost` is reserved, there is no public TLD for it.
+        1 => (labels[0] == "localhost").then_some(domain),
+        n => {
+            let tld = labels[n - 1];
+            if matches!(tld, "invalid" | "test" | "local" | "localhost" | "example") {
+                return Some(domain);
+            }
+            // example.com / example.net / example.org, and anything underneath them.
+            if labels[n - 2] == "example" && matches!(tld, "com" | "net" | "org") {
+                return Some(domain);
+            }
+            None
+        }
+    }
+}
+
+/// The refusal as a pure function, so the send path and the tests read the same decision and the
+/// message a customer sees on the row is the message the tests pin down.
+fn refuse_reserved_destination(to: &str) -> Option<DeliveryOutcome> {
+    let domain = reserved_domain(to)?;
+    Some(DeliveryOutcome::permanent(format!(
+        "destination '{to}' cannot exist: '{domain}' is a name reserved by RFC 2606 / RFC 6761 for \
+         documentation and tests, so it is unreachable from the internet and no provider can deliver \
+         to it. Not dispatched — sending would only produce a bounce against this account."
+    )))
+}
+
 /// Attempt delivery via the configured provider chain.
 pub async fn deliver(cfg: &DeliveryConfig) -> DeliveryOutcome {
     match cfg.channel.as_str() {
@@ -371,6 +420,17 @@ pub async fn deliver(cfg: &DeliveryConfig) -> DeliveryOutcome {
 }
 
 async fn deliver_email(cfg: &DeliveryConfig) -> DeliveryOutcome {
+    // A destination that cannot exist is refused here, before any transport is chosen: this is the
+    // last point before provider traffic, and every email path goes through this function (the
+    // worker's poll, its retry poll, and the manual send in handlers.rs).
+    if let Some(refusal) = refuse_reserved_destination(&cfg.to) {
+        tracing::error!(
+            msg = %cfg.msg_id,
+            to = %cfg.to,
+            "refused to dispatch to a reserved destination (permanent, nothing sent to the provider)"
+        );
+        return refusal;
+    }
     match cfg.email_provider.as_str() {
         "mailgun" => deliver_via_mailgun(cfg).await,
         "smtp" => deliver_via_smtp(cfg).await,
@@ -1180,5 +1240,79 @@ mod tests {
         assert_eq!(v["configured"], true);
         assert!(v.get("api_key").is_none());
         assert!(!v.to_string().contains("key-private"));
+    }
+
+    #[test]
+    fn a_reserved_destination_is_refused_instead_of_bounced() {
+        // Every shape the harnesses (and a customer's typo) actually produce: measured on live
+        // 2026-09-22 the offenders were probe.invalid, example.com, test.local, example.invalid.
+        for addr in [
+            "csdup-a-195612@probe.invalid",
+            "handset-1790122578@example.com",
+            "sub@deeper.example.com", // a subdomain of a reserved name cannot exist either
+            "someone@example.org",
+            "someone@example.net",
+            "a@test.local",
+            "a@t.local",
+            "a@example.invalid",
+            "a@something.test",
+            "a@anything.example",
+            "root@localhost",
+            "a@EXAMPLE.COM",  // case-insensitive
+            "a@example.com.", // fully-qualified trailing root dot
+            "Name <a@example.com>",
+        ] {
+            let refusal = refuse_reserved_destination(addr)
+                .unwrap_or_else(|| panic!("{addr} must be refused, not dispatched"));
+            assert!(refusal.permanent && !refusal.ok, "{addr}");
+            assert!(
+                refusal.provider.is_none() && refusal.provider_message_id.is_none(),
+                "{addr} must not claim a provider accepted it"
+            );
+            let msg = refusal.error.expect("a refusal always carries its reason");
+            assert!(
+                msg.contains(addr),
+                "the reason must name the address: {msg}"
+            );
+            assert!(msg.contains("cannot exist"), "{msg}");
+            assert!(
+                msg.contains("RFC 2606"),
+                "the reason must cite the rule: {msg}"
+            );
+        }
+        // The reserved set is exactly the RFC 2606 / 6761 names, so the domain of the reserved
+        // lookup is inspectable on its own.
+        assert_eq!(
+            reserved_domain("a@example.com").as_deref(),
+            Some("example.com")
+        );
+        assert_eq!(
+            reserved_domain("a@x.example.invalid").as_deref(),
+            Some("x.example.invalid")
+        );
+    }
+
+    #[test]
+    fn a_real_destination_is_still_dispatched() {
+        for addr in [
+            // the t_193e2259 proof row: this one must keep reaching Mailgun
+            "t193-delivery-proof@mail.coreswiftcrm.com",
+            "swiftsoftware143+dupfix@yahoo.com",
+            "hello@coreswiftcrm.com",
+            // a name that merely *starts* with the reserved word is a real domain
+            "a@examplecorp.com",
+            "a@myexample.com",
+            "a@notexample.org",
+            "a@localhost.co",
+            // test.com is a REAL registered domain (not RFC 2606): a false refusal here would
+            // block a legitimate customer, so it stays deliverable even though a harness used it.
+            "a@test.com",
+            "a@localmail.com",
+        ] {
+            assert!(
+                refuse_reserved_destination(addr).is_none(),
+                "{addr} is not RFC-reserved and must still be dispatched"
+            );
+        }
     }
 }
