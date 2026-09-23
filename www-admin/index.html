@@ -766,8 +766,22 @@ function renderSidebar() {
   // The server rejects them anyway (tenant -> 403 on the plan registry), so this was a UI
   // leak that dead-ends on an error, not an escalation. Keep tenant-visible items in MENU
   // or SETTINGS_MENU instead.
+  //
+  // The ROLE STRING is not authority either — it is the same vocabulary. The real flag is
+  // `users.is_platform_admin`, resolved server-side from the token subject
+  // (src/auth/platform_admin.rs), and the API hands it to the client in the login payload
+  // (top level AND inside `team_member`). Measured 2026-09-22 19:1x: a user with
+  // is_platform_admin = true but role 'owner' — i.e. ANY operator granted the documented way —
+  // saw NO admin menu at all (no Modules & Plans, no Affiliates), before AND after a reload,
+  // while every /api/admin/* route would have answered 200. The tenant shell
+  // (www-app/coreswift) already resolved this the same way; this console had not.
+  // An ABSENT field means UNKNOWN (a session stored before this shipped) and only then is the
+  // old role list consulted, so an already-signed-in operator keeps their menu.
   const PLATFORM_ROLES = ['agency_admin', 'platform_admin', 'superadmin'];
-  if (STATE.user && PLATFORM_ROLES.indexOf(STATE.user.role) >= 0) {
+  const isPlatform = STATE.user && (STATE.user.platform_admin === undefined
+    ? PLATFORM_ROLES.indexOf(STATE.user.role) >= 0
+    : STATE.user.platform_admin === true);
+  if (isPlatform) {
     h += '<div class="nav-divider">── ADMIN ──</div>';
     ADMIN_MENU.forEach(it => item(it, false));
   }
@@ -1759,13 +1773,18 @@ const TAB_LOADERS = {
 
   'email-templates': async () => {
     try {
-      const templates = await API.get('/templates');
+      // GET /api/templates was never registered on this binary (404), so this panel could only
+      // ever render its own error text. The template store is /api/email-templates
+      // (src/email_templates.rs, mounted in main.rs) and answers {count, items}. Same fix the
+      // tenant shell already carries for its own Email Templates tab.
+      const tRes = await API.get('/email-templates');
+      const templates = Array.isArray(tRes) ? tRes : (tRes.items || tRes.templates || []);
       let rows = [];
       if (Array.isArray(templates)) {
         rows = templates.slice(0, 50).map(t => [
           escapeHtml(t.name || '—'),
           escapeHtml(t.subject || '—'),
-          `<span class="badge badge-muted">${escapeHtml(t.type || 'email')}</span>`,
+          `<span class="badge badge-muted">${escapeHtml(t.template_type || t.type || 'email')}</span>`,
           escapeHtml(t.updated_at ? new Date(t.updated_at).toLocaleDateString() : '—'),
           `<button class="btn btn-ghost btn-xs">Edit</button>`
         ]);
@@ -1804,7 +1823,10 @@ const TAB_LOADERS = {
 
   'calendar': async () => {
     try {
-      const events = await API.get('/calendar/events');
+      // GET /api/calendar/events was never registered (404) — the calendar panel errors out.
+      // The event store is /api/events (src/events/mod.rs), which answers {events, page, total}.
+      const eRes = await API.get('/events?limit=100');
+      const events = Array.isArray(eRes) ? eRes : (eRes.events || []);
       let rows = [];
       if (Array.isArray(events)) {
         rows = events.slice(0, 50).map(e => [
@@ -1859,7 +1881,11 @@ const TAB_LOADERS = {
 
   'users': async () => {
     try {
-      const users = await API.get('/users');
+      // GET /api/users was never registered (404). People across ALL tenants live next to the
+      // tenant list under the platform-admin gate: GET /api/admin/users -> {users, count}.
+      // (The tenant shell carries this same correction for its own Users tab.)
+      const uRes = await API.get('/admin/users?per_page=50');
+      const users = Array.isArray(uRes) ? uRes : (uRes.users || []);
       let rows = [];
       if (Array.isArray(users)) {
         rows = users.slice(0, 50).map(u => [
