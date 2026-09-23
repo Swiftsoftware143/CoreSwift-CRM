@@ -1345,7 +1345,7 @@ const TAB_LOADERS = {
 
   'companies': async () => {
     try {
-      const companies = await API.get('/companies');
+      const companies = famList(await API.get('/companies'), 'companies');
       let rows = [];
       if (Array.isArray(companies)) {
         rows = companies.slice(0, 50).map(c => [
@@ -1353,12 +1353,18 @@ const TAB_LOADERS = {
           escapeHtml(c.industry || '—'),
           escapeHtml(c.website || '—'),
           c.contact_count || c.contacts_count || '0',
-          `<span class="badge badge-muted">${escapeHtml(c.status || 'active')}</span>`,
+          // The Status cell that used to sit here is gone: it rendered `c.status || 'active'`,
+          // a key GET /api/companies has never returned — `companies` has no `status` column and
+          // `Company` (src/companies/models.rs) has no `status` field — so the badge showed the same
+          // muted text on every row of every tenant. It is deliberately NOT re-fed from `is_active`:
+          // the list (src/companies/handlers.rs:21) filters `WHERE is_active = true`, so a rendered
+          // row is active by construction and a PATCH that clears it makes the row leave the table
+          // (measured live). Removing the column is the honest arm (kanban t_4b1081bf).
           `<button class="btn btn-ghost btn-xs" onclick="editCompany('${c.id}')">Edit</button>`
         ]);
       }
       document.getElementById('companiesTable').innerHTML = dataTable(
-        ['Name','Industry','Website','Contacts','Status',''], rows,
+        ['Name','Industry','Website','Contacts',''], rows,
         'No companies yet. Add your first company.'
       );
     } catch(e) {
