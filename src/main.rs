@@ -152,10 +152,45 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
 
-    // Run database migrations (skip if already applied)
+    // Run database migrations. A failure here is NOT benign and must never be reported as one.
+    //
+    // `sqlx::migrate!` resolves ONE file per version and compares its checksum with the applied row,
+    // so a single duplicate or edited version aborts the WHOLE run, and `run_direct` validates the
+    // applied set BEFORE applying anything — meaning a `VersionMismatch`/`VersionMissing` leaves this
+    // process serving a schema that is silently behind the code it was built from. Measured on this
+    // host 2026-09-22 (card t_10dd6fc7): a duplicate version number (`80_` vs `080_`) aborted every
+    // boot for hours, no pending migration was ever applied, migration 082 had to be applied to live
+    // by hand, and the only signal was a WARN that read like a benign no-op.
+    //
+    // So: ERROR, naming the version in prose via `%e` ("migration 80 was previously applied but has
+    // been modified") and the sqlx error VARIANT via `error_kind` (`VersionMismatch`,
+    // `VersionMissing`, `Dirty`, `ExecuteMigration`, …), then refuse to serve — a schema that does
+    // not match this binary fails the deploy instead of being served. The health signal for that
+    // state is the process itself: the container crash-loops and the docker healthcheck / fleet
+    // watchdog trip. `MIGRATIONS_FATAL=0` is the single documented escape hatch (boot anyway, still
+    // ERROR, and the health payload reports it). There is deliberately no silent mode.
     match sqlx::migrate!("./migrations").run(&db).await {
         Ok(_) => tracing::info!("Database migrations completed successfully"),
-        Err(e) => tracing::warn!("Migration skipped (tables may already exist): {}", e),
+        Err(e) => {
+            let kind = migration_error_kind(&e);
+            tracing::error!(
+                error = %e,
+                error_kind = %kind,
+                "MIGRATION RUN FAILED — no further pending migration was applied, so the schema may be behind this binary"
+            );
+            if migrations_fatal() {
+                tracing::error!(
+                    "Refusing to serve: fix the migration (never edit an applied file — add a new version instead, see docs/fleet-migration-guard-convention-2026-09-21.md) and redeploy, or set MIGRATIONS_FATAL=0 to boot anyway with the schema behind the code."
+                );
+                std::process::exit(1);
+            }
+            // Keep the text for the health payload: this process is about to serve with migrations
+            // UNAPPLIED, and `status: "ok"` on its own would hide that.
+            let _ = MIGRATION_FAILURE.set(e.to_string());
+            tracing::error!(
+                "MIGRATIONS_FATAL=0: booting anyway with migrations UNAPPLIED — the schema may be behind this binary"
+            );
+        }
     }
 
     // Seal any provider key still stored in plaintext (CS-21). Idempotent and non-fatal: every read
@@ -501,16 +536,46 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Set when the boot migration run failed and `MIGRATIONS_FATAL=0` let this process boot anyway.
+/// Reported in the health payload so an "up, but the schema is behind the code" container is
+/// visible over HTTP and not only in its boot log (card t_10dd6fc7).
+static MIGRATION_FAILURE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Whether a failed boot migration run should refuse to serve. Default is FATAL (anything other
+/// than `0`/`false`); `MIGRATIONS_FATAL=0` is the single documented escape hatch. Fleet convention:
+/// docs/fleet-migration-guard-convention-2026-09-21.md.
+fn migrations_fatal() -> bool {
+    std::env::var("MIGRATIONS_FATAL")
+        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+        .unwrap_or(true)
+}
+
+/// The sqlx error VARIANT name only (`VersionMismatch`, `VersionMissing`, `Dirty`, …). `MigrateError`
+/// is `#[non_exhaustive]` and its Debug payload can be an entire `PgDatabaseError`, so the variant is
+/// taken from the derived Debug prefix instead of formatting the whole thing into the log line.
+fn migration_error_kind(e: &sqlx::migrate::MigrateError) -> String {
+    format!("{:?}", e)
+        .split('(')
+        .next()
+        .unwrap_or("MigrateError")
+        .trim()
+        .to_string()
+}
+
 /// Health check endpoint — returns 200 when the service is running
 async fn health_check() -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        axum::Json(serde_json::json!({
-            "status": "ok",
-            "service": "crm-swift",
-            "version": env!("CARGO_PKG_VERSION")
-        })),
-    )
+    let mut body = serde_json::json!({
+        "status": "ok",
+        "service": "crm-swift",
+        "version": env!("CARGO_PKG_VERSION")
+    });
+    // Present ONLY in the `MIGRATIONS_FATAL=0` case: the process is serving with migrations
+    // UNAPPLIED, and a bare `status: "ok"` would hide exactly the condition this card is about.
+    if let Some(error) = MIGRATION_FAILURE.get() {
+        body["migrations"] = serde_json::json!("failed");
+        body["migration_error"] = serde_json::json!(error);
+    }
+    (StatusCode::OK, axum::Json(body))
 }
 
 /// Readiness check endpoint — verifies database connectivity
