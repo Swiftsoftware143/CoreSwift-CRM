@@ -15,7 +15,9 @@ pub async fn internal_create(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     let expected = s.config.internal_sync_key.clone();
-    if key != expected {
+    // config.rs defaults INTERNAL_SYNC_KEY to "", and an unset key would then authenticate an
+    // empty x-internal-key header. Refuse when this server has no key configured (fail closed).
+    if expected.is_empty() || key != expected {
         return Err(AppError::Unauthorized);
     }
 

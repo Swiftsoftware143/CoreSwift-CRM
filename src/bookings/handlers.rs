@@ -64,7 +64,9 @@ pub async fn internal_create_calendar(
         .get("x-internal-key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if key != s.config.internal_sync_key {
+    // config.rs defaults INTERNAL_SYNC_KEY to "", and an unset key would then authenticate an
+    // empty x-internal-key header. Refuse when this server has no key configured (fail closed).
+    if s.config.internal_sync_key.is_empty() || key != s.config.internal_sync_key {
         return Err(AppError::Unauthorized);
     }
 
@@ -126,7 +128,9 @@ pub async fn internal_create_default_slot(
         .get("x-internal-key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if key != s.config.internal_sync_key {
+    // config.rs defaults INTERNAL_SYNC_KEY to "", and an unset key would then authenticate an
+    // empty x-internal-key header. Refuse when this server has no key configured (fail closed).
+    if s.config.internal_sync_key.is_empty() || key != s.config.internal_sync_key {
         return Err(AppError::Unauthorized);
     }
 

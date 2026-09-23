@@ -54,11 +54,15 @@ pub async fn handle_tag_provision(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     let expected = s.config.internal_sync_key.as_str();
-    if key != expected {
+    // config.rs defaults INTERNAL_SYNC_KEY to "", and an unset key would then authenticate an
+    // empty x-internal-key header. Refuse when this server has no key configured (fail closed).
+    // Never log the credential: `expected` is the shared INTERNAL_SYNC_KEY for every Swift
+    // service and WARN is the level that gets shipped to log aggregators. Report lengths only.
+    if expected.is_empty() || key != expected {
         tracing::warn!(
-            "tag_provision: invalid internal key (got {}, expected {})",
-            key,
-            expected
+            "tag_provision: invalid internal key (presented_len={}, configured_len={})",
+            key.len(),
+            expected.len()
         );
         return Err(AppError::Unauthorized);
     }
