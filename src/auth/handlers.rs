@@ -46,16 +46,40 @@ pub async fn register(
         return Err(AppError::Validation("Invalid email format".to_string()));
     }
 
-    // Determine tenant — and, when the signup came through an invite, the role it grants.
-    let (tenant_id, invite_role) = resolve_account(&state, &req).await?;
+    // `users.email` carries a GLOBAL unique constraint (`users_email_key`, migration 002) and
+    // `login` resolves a user by email alone — one address, one workspace, forever. This handler
+    // used to test only `(tenant_id, email)`, while `resolve_account` mints a FRESH tenant for a
+    // signup that carries no invite: the scoped check passed, the INSERT hit the global index, and
+    // AppError mapped the sqlx error to a 500 "Database error". A returning user learned nothing,
+    // and the request had already created a workspace row (an orphan tenant).
+    // Check the constraint the database actually enforces, and check it BEFORE `resolve_account`,
+    // which mints that tenant and consumes the invite token.
+    if sqlx::query_scalar::<_, String>("SELECT email FROM users WHERE email = $1 LIMIT 1")
+        .bind(&req.email)
+        .fetch_optional(&state.db)
+        .await?
+        .is_some()
+    {
+        return Err(email_taken_error(&req.email));
+    }
 
-    // Check for duplicate user
+    // Everything that creates rows — the workspace, the free-plan assignment, the accepted invite
+    // and the user — happens in ONE transaction, so a rejection at any point (including the
+    // duplicate check below, which is the only rejection left) leaves no orphan tenant and no
+    // burned invite behind.
+    let mut tx = state.db.begin().await.map_err(AppError::Database)?;
+
+    // Determine tenant — and, when the signup came through an invite, the role it grants.
+    let (tenant_id, invite_role) = resolve_account(&mut tx, &req).await?;
+
+    // The (tenant_id, email) unique index is the table's other constraint; this is the message
+    // that tells a team member they already belong to THIS workspace.
     let existing = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM users WHERE tenant_id = $1 AND email = $2",
     )
     .bind(tenant_id)
     .bind(&req.email)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await?;
 
     if existing > 0 {
@@ -72,7 +96,7 @@ pub async fn register(
     let is_first_user =
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE tenant_id = $1")
             .bind(tenant_id)
-            .fetch_one(&state.db)
+            .fetch_one(&mut *tx)
             .await?
             == 0;
 
@@ -95,8 +119,21 @@ pub async fn register(
     .bind(&password_hash)
     .bind(&req.name)
     .bind(role)
-    .fetch_one(&state.db)
-    .await?;
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| {
+        // Two signups racing on the same address cannot both pass the pre-check: whichever loses
+        // hit the global index, and that violation has to read as the same 409 instead of a 500.
+        if let sqlx::Error::Database(ref dbe) = e {
+            if matches!(
+                dbe.constraint(),
+                Some("users_email_key") | Some("idx_users_tenant_email")
+            ) {
+                return email_taken_error(&req.email);
+            }
+        }
+        AppError::Database(e)
+    })?;
 
     // Platform authority is resolved from the DATABASE by the token subject, never from
     // `user.role`: a fresh signup is `owner` of its own tenant, which grants nothing
@@ -109,8 +146,12 @@ pub async fn register(
         "SELECT id, name, slug, logo_url, primary_color, accent_color, custom_domain, settings, is_active, created_at, updated_at FROM tenants WHERE id = $1"
     )
     .bind(tenant_id)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await?;
+
+    // The workspace, its free plan and the user are one unit: nothing above this line survives a
+    // failure here.
+    tx.commit().await.map_err(AppError::Database)?;
 
     // Generate tokens
     let (access_token, refresh_token, expires_in) = generate_tokens(&user, &state)?;
@@ -363,11 +404,24 @@ pub async fn logout(
 
 // ========== Private helpers ==========
 
+/// A returning user signing up again is the common case, not an exotic one — and it used to answer
+/// a 500 "Database error". `users.email` is globally unique (`users_email_key`) and `login` resolves
+/// a user by email alone, so an address belongs to exactly one workspace: say that, and say what to
+/// do instead.
+fn email_taken_error(email: &str) -> AppError {
+    AppError::Duplicate(format!(
+        "Email '{}' is already registered — sign in instead",
+        email
+    ))
+}
+
 /// Resolve the tenant for registration — create new account or join via invite.
 /// Every person gets their own isolated tenant (account).
 /// If no account_name/slug provided, auto-generates one from email.
+/// Runs on the caller's transaction: the workspace this mints (and the invite it consumes) is only
+/// real if the whole registration commits.
 async fn resolve_account(
-    state: &AppState,
+    tx: &mut sqlx::PgConnection,
     req: &RegisterRequest,
 ) -> Result<(Uuid, Option<String>), AppError> {
     // If invite token provided, look up the invite, join that tenant, and carry the role the
@@ -377,7 +431,7 @@ async fn resolve_account(
             "SELECT tenant_id, role FROM tenant_invites WHERE token = $1 AND accepted = false AND expires_at > NOW()"
         )
         .bind(token)
-        .fetch_optional(&state.db)
+        .fetch_optional(&mut *tx)
         .await?
         .ok_or_else(|| AppError::NotFound("Invalid or expired invite token".into()))?;
 
@@ -386,7 +440,7 @@ async fn resolve_account(
             "UPDATE tenant_invites SET accepted = true, accepted_at = NOW() WHERE token = $1",
         )
         .bind(token)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?;
 
         return Ok((invite.0, Some(invite.1)));
@@ -399,7 +453,7 @@ async fn resolve_account(
         .bind(Uuid::new_v4())
         .bind(name)
         .bind(slug)
-        .fetch_one(&state.db)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| {
             if let sqlx::Error::Database(ref dbe) = e {
@@ -414,7 +468,7 @@ async fn resolve_account(
             let free_plan_id: uuid::Uuid = sqlx::query_scalar(
                 "SELECT id FROM plans WHERE slug = 'free' AND is_active = true LIMIT 1",
             )
-            .fetch_optional(&state.db)
+            .fetch_optional(&mut *tx)
             .await
             .ok()
             .flatten()
@@ -426,7 +480,7 @@ async fn resolve_account(
             )
             .bind(tenant.id)
             .bind(free_plan_id)
-            .execute(&state.db)
+            .execute(&mut *tx)
             .await;
         }
         Ok((tenant.id, None))
@@ -442,7 +496,7 @@ async fn resolve_account(
         .bind(Uuid::new_v4())
         .bind(&name)
         .bind(&slug)
-        .fetch_one(&state.db)
+        .fetch_one(&mut *tx)
         .await
         .map_err(AppError::Database)?;
         // Auto-assign Free Plan to new tenant
@@ -450,7 +504,7 @@ async fn resolve_account(
             let free_plan_id: uuid::Uuid = sqlx::query_scalar(
                 "SELECT id FROM plans WHERE slug = 'free' AND is_active = true LIMIT 1",
             )
-            .fetch_optional(&state.db)
+            .fetch_optional(&mut *tx)
             .await
             .ok()
             .flatten()
@@ -462,7 +516,7 @@ async fn resolve_account(
             )
             .bind(tenant.id)
             .bind(free_plan_id)
-            .execute(&state.db)
+            .execute(&mut *tx)
             .await;
         }
         Ok((tenant.id, None))
