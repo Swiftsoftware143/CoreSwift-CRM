@@ -157,30 +157,88 @@ pub async fn handle_tag_sync(
                 tenant_id
             );
         } else {
-            // Create new contact
-            contact_id = Uuid::new_v4();
+            // Create new contact.
+            // idx_contacts_tenant_email (partial, WHERE email IS NOT NULL) makes (tenant_id, email)
+            // unique, so N concurrent syncs carrying the SAME lead used to raise 23505 here: the `?`
+            // propagated AppError::Database -> 500 and the rest of the request (tag, list membership,
+            // pipeline stage) was dropped. DO NOTHING absorbs the race and the re-select returns
+            // whichever row won, so this stays a get-or-create.
             let (first_name, last_name) = split_name(&name);
-            sqlx::query(
-                r#"INSERT INTO contacts (id, tenant_id, first_name, last_name, email, company, source, created_at, updated_at)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())"#
-            )
-            .bind(contact_id)
-            .bind(tenant_id)
-            .bind(&first_name)
-            .bind(&last_name)
-            .bind(&email)
-            .bind(&company)
-            .bind(format!("funnelswift:{}", req.source_app))
-            .execute(&s.db)
-            .await?;
-            is_new = true;
-            tracing::info!(
-                "TagSync: Created new contact {} ({} {}) in tenant {}",
-                contact_id,
-                first_name,
-                last_name,
-                tenant_id
-            );
+            let mut created: Option<Uuid> = None;
+            let mut adopted: Option<(Uuid, bool)> = None;
+            for _ in 0..2 {
+                let candidate = Uuid::new_v4();
+                let inserted = sqlx::query(
+                    r#"INSERT INTO contacts (id, tenant_id, first_name, last_name, email, company, source, created_at, updated_at)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+                       ON CONFLICT (tenant_id, email) WHERE email IS NOT NULL DO NOTHING"#
+                )
+                .bind(candidate)
+                .bind(tenant_id)
+                .bind(&first_name)
+                .bind(&last_name)
+                .bind(&email)
+                .bind(&company)
+                .bind(format!("funnelswift:{}", req.source_app))
+                .execute(&s.db)
+                .await?;
+
+                if inserted.rows_affected() == 1 {
+                    created = Some(candidate);
+                    break;
+                }
+
+                // Lost the race: read the winner by the exact key the unique index enforces.
+                let winner: Option<(Uuid, bool)> = sqlx::query_as(
+                    "SELECT id, is_active FROM contacts WHERE tenant_id = $1 AND email = $2 LIMIT 1"
+                )
+                .bind(tenant_id)
+                .bind(&email)
+                .fetch_optional(&s.db)
+                .await?;
+
+                if let Some(found) = winner {
+                    adopted = Some(found);
+                    break;
+                }
+                // The winner vanished before we could read it; the loop retries the insert once.
+            }
+
+            if let Some(id) = created {
+                contact_id = id;
+                is_new = true;
+                tracing::info!(
+                    "TagSync: Created new contact {} ({} {}) in tenant {}",
+                    contact_id,
+                    first_name,
+                    last_name,
+                    tenant_id
+                );
+            } else if let Some((id, active)) = adopted {
+                contact_id = id;
+                is_new = false;
+                if active {
+                    tracing::info!(
+                        "TagSync: adopted concurrently-created contact {} in tenant {}",
+                        contact_id,
+                        tenant_id
+                    );
+                } else {
+                    // The lookup above filters is_active, the unique index does not: a soft-deleted
+                    // contact owns this (tenant_id, email), so its id must be reused rather than
+                    // 500-ing. Warned so the state is observable instead of silent.
+                    tracing::warn!(
+                        "TagSync: reusing INACTIVE contact {} for tenant {} (unique (tenant_id,email))",
+                        contact_id,
+                        tenant_id
+                    );
+                }
+            } else {
+                return Err(AppError::Internal(format!(
+                    "TagSync: no contacts row for tenant {} after 2 insert attempts",
+                    tenant_id
+                )));
+            }
         }
     } else {
         // No email — use name to find or create
@@ -310,11 +368,17 @@ async fn create_or_get_tag(
             .map_err(AppError::Database)?;
 
     if let Some((id,)) = existing {
-        Ok(id)
-    } else {
+        return Ok(id);
+    }
+
+    // idx_tags_name_tenant makes (tenant_id, name) unique, so two concurrent get-or-creates could
+    // raise 23505 here -> AppError::Database -> a 500 that ALSO dropped the rest of the request (the
+    // tag assignment, list membership and pipeline stage). DO NOTHING turns that race into a no-op
+    // and the re-select below returns whichever row won, keeping this a get-or-create.
+    for _ in 0..2 {
         let id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO tags (id, tenant_id, name, color, is_active) VALUES ($1, $2, $3, $4, true)"
+        let inserted = sqlx::query(
+            "INSERT INTO tags (id, tenant_id, name, color, is_active) VALUES ($1, $2, $3, $4, true) ON CONFLICT (tenant_id, name) DO NOTHING"
         )
         .bind(id)
         .bind(tenant_id)
@@ -323,8 +387,36 @@ async fn create_or_get_tag(
         .execute(db)
         .await
         .map_err(AppError::Database)?;
-        Ok(id)
+
+        if inserted.rows_affected() == 1 {
+            return Ok(id);
+        }
+
+        // Lost the race: a peer committed the row between our SELECT and this INSERT.
+        let winner: Option<(Uuid,)> =
+            sqlx::query_as("SELECT id FROM tags WHERE tenant_id = $1 AND name = $2 LIMIT 1")
+                .bind(tenant_id)
+                .bind(tag_name)
+                .fetch_optional(db)
+                .await
+                .map_err(AppError::Database)?;
+
+        if let Some((winner_id,)) = winner {
+            tracing::info!(
+                "TagSync: adopted concurrently-created tag {} ('{}') in tenant {}",
+                winner_id,
+                tag_name,
+                tenant_id
+            );
+            return Ok(winner_id);
+        }
+        // The winner was deleted again before we could read it; the loop retries the insert once.
     }
+
+    Err(AppError::Internal(format!(
+        "create_or_get_tag: no tags row for tenant {} name '{}' after 2 attempts",
+        tenant_id, tag_name
+    )))
 }
 
 /// Get a tag ID by name

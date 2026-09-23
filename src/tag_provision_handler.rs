@@ -277,11 +277,17 @@ async fn create_or_get_tag(
             .await?;
 
     if let Some((id,)) = existing {
-        Ok(id)
-    } else {
+        return Ok(id);
+    }
+
+    // idx_tags_name_tenant makes (tenant_id, name) unique, so two concurrent get-or-creates could
+    // raise 23505 here -> AppError::Database -> 500 that also dropped the rest of the request.
+    // DO NOTHING turns the race into a no-op and the re-select below returns whichever row won, so
+    // this stays a get-or-create instead of erroring.
+    for _ in 0..2 {
         let id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO tags (id, tenant_id, name, color, is_active) VALUES ($1, $2, $3, $4, true)"
+        let inserted = sqlx::query(
+            "INSERT INTO tags (id, tenant_id, name, color, is_active) VALUES ($1, $2, $3, $4, true) ON CONFLICT (tenant_id, name) DO NOTHING"
         )
         .bind(id)
         .bind(tenant_id)
@@ -289,8 +295,35 @@ async fn create_or_get_tag(
         .bind("#4CAF50")
         .execute(db)
         .await?;
-        Ok(id)
+
+        if inserted.rows_affected() == 1 {
+            return Ok(id);
+        }
+
+        // Lost the race: a peer committed the row between our SELECT and this INSERT.
+        let winner: Option<(Uuid,)> =
+            sqlx::query_as("SELECT id FROM tags WHERE tenant_id = $1 AND name = $2 LIMIT 1")
+                .bind(tenant_id)
+                .bind(tag_name)
+                .fetch_optional(db)
+                .await?;
+
+        if let Some((winner_id,)) = winner {
+            tracing::info!(
+                "tag_provision: adopted concurrently-created tag {} ('{}') in tenant {}",
+                winner_id,
+                tag_name,
+                tenant_id
+            );
+            return Ok(winner_id);
+        }
+        // The winner was deleted again before we could read it; the loop retries the insert once.
     }
+
+    Err(AppError::Internal(format!(
+        "create_or_get_tag: no tags row for tenant {} name '{}' after 2 attempts",
+        tenant_id, tag_name
+    )))
 }
 
 /// Create or get a list by name
