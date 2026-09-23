@@ -43,24 +43,44 @@ pub async fn handle_tag_sync(
     headers: HeaderMap,
     Json(req): Json<TagSyncRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    // Internal cross-app sync — trusted between Swift services on localhost
-    // Authentication is optional; if provided, validate it
+    // The shared internal secret is REQUIRED. This route writes into a tenant and, when the
+    // tenant_id in the body is unknown, AUTO-CREATES that tenant — so an unauthenticated caller
+    // could write into, or create, an arbitrary tenant. It is not a public route.
+    //
+    // "localhost trust" is NOT a boundary here and nothing implements one, because it cannot work:
+    // every caller reaches this process from 127.0.0.1. The sibling services run with
+    // network_mode: host and dial http://localhost:8084, and the public vhosts proxy /api/ to
+    // 127.0.0.1:8084 as well — so a peer-address loopback test cannot tell a trusted producer from
+    // an internet caller, and would have refused nothing. The secret is the boundary: every
+    // producer (FunnelSwift, MissedCall, AdaSwift, WorkflowSwift, IncentiveSwift, multi-directory)
+    // sends it as `x-internal-key`.
+    //
+    // config.rs defaults INTERNAL_SYNC_KEY to "", and an unset key would otherwise authenticate a
+    // request whose header is empty; refuse when this server has no key configured (fail closed).
+    let expected = s.config.internal_sync_key.as_str();
     let key = headers
         .get("x-internal-key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    let expected = s.config.internal_sync_key.clone();
-    let key2 = headers
+    // `internal-key` is the legacy spelling of the same header and is still accepted for
+    // compatibility (it must equal the same configured secret; nothing but this file ever sent it).
+    let legacy_key = headers
         .get("internal-key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if !key.is_empty() && key != expected && key2 != expected {
+    if expected.is_empty() || (key != expected && legacy_key != expected) {
+        // Lengths only. This used to log the presented value AND the configured secret at WARN,
+        // which is the one level routinely shipped to log aggregators.
         tracing::warn!(
-            "TagSync webhook received invalid internal key (got: {}, expected: {})",
-            if !key.is_empty() { key } else { key2 },
-            expected
+            "TagSync webhook refused: invalid internal key (presented_len={}, configured_len={})",
+            if key.is_empty() {
+                legacy_key.len()
+            } else {
+                key.len()
+            },
+            expected.len()
         );
-        // Continue anyway for localhost trust
+        return Err(AppError::Unauthorized);
     }
 
     // Parse tenant_id
