@@ -2,9 +2,15 @@
 target/
 **/*.rs.bk
 
-# Environment
+# Environment — no `.env*` file is tracked except the templates the fleet's published-secret
+# gate allowlists (`tracked-secret-check.sh`). `.env.dev` was tracked here and the gate refuses
+# the whole push for it (t_47698f73); it stays on disk, it is just no longer published.
 .env
-.env.local
+.env.*
+!.env.example
+!.env.*.example
+!.env.sample
+!.env.template
 
 # IDE
 .vscode/
