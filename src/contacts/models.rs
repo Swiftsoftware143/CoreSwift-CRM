@@ -34,7 +34,14 @@ pub struct Contact {
     pub country: Option<String>,
     pub notes: Option<String>,
     pub metadata: Option<serde_json::Value>,
-    pub is_active: bool,
+    /// `contacts.is_active` is NULLABLE in the live schema (`\d contacts`: `boolean` default true,
+    /// no NOT NULL) while this field used to be a plain `bool` (t_97b46a98). sqlx then failed the
+    /// decode of the whole row — "unexpected null" — and every route that reads a contact by
+    /// `SELECT *` answered 500 "Database error" for a row whose `is_active` is NULL: measured on the
+    /// deployed binary for `GET /api/contacts/{id}`, for the `POST /api/contacts` dedup read and for
+    /// the `PATCH` `RETURNING *` (2026-09-23). `list`/`search` only looked immune because both filter
+    /// `WHERE is_active = true`. Decoded as what the column is: NULL is data, not an error.
+    pub is_active: Option<bool>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

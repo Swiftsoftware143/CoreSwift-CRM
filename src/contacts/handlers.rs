@@ -234,6 +234,18 @@ pub async fn get(
             .await?
             .ok_or(AppError::NotFound(format!("Contact {} not found", id)))?;
 
+    // t_97b46a98: a NULL `is_active` is decoded as `None` (see `Contact::is_active`) so this route
+    // answers 200 instead of 500. It is still worth one log line: no HTTP path can store a NULL
+    // today (PATCH writes `COALESCE($17, is_active)`), so a NULL here means the column was written
+    // by hand — and such a row is invisible to list/search, which both filter `is_active = true`.
+    if contact.is_active.is_none() {
+        tracing::warn!(
+            contact_id = %contact.id,
+            tenant_id = %contact.tenant_id,
+            "contacts.is_active is NULL in the database (t_97b46a98): reporting is_active = null"
+        );
+    }
+
     Ok(Json(json!(contact)))
 }
 
