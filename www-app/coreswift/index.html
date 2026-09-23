@@ -5515,7 +5515,7 @@ async function loadInboxTab() {
       '<code>' + escapeHtml(d.domain || '') + '</code>',
       escapeHtml(d.label || '—'),
       escapeHtml(d.provider_type || 'mailgun'),
-      d.verified ? '<span class="badge badge-success">verified</span>' : '<span class="badge badge-warning">pending DNS</span>',
+      peVerifyCell(d),
       d.catch_all_enabled ? 'catch-all' : '—',
       peCredentialCell(d)
     ]);
@@ -5585,6 +5585,43 @@ function peCredentialCell(d) {
   }
   if (s === 'empty') return '<span class="badge badge-warning">empty key</span>';
   return '<span class="badge badge-muted">no key</span>';
+}
+
+// ── Verification re-check (t_f02ade57) ────────────────────────────────────────────────────────
+// A domain added while Mailgun still reported it unverified stays `verified=false` until something
+// asks Mailgun again. Only a `verified` row carries this workspace's mail, so without a re-check the
+// customer would have to re-paste an API key that was never wrong to get mail onto a domain Mailgun
+// had already activated. The server decides: Mailgun's own `state` is the verdict, never this page.
+function peVerifyCell(d) {
+  const badge = d.verified
+    ? '<span class="badge badge-success">verified</span>'
+    : '<span class="badge badge-warning">pending DNS</span>';
+  return badge + ' <button class="btn btn-ghost btn-xs" onclick="peRecheckDomain(\'' + d.id + '\')" title="Ask Mailgun again for this domain">Re-check</button>';
+}
+
+// Asks the provider again for THIS domain only (POST /api/private-email/domains/:id/verify), then
+// re-reads the tab so the transport banner above moves with it: the banner is drawn from
+// GET /api/comms/providers — the same store the delivery path reads — so it cannot disagree with
+// where the mail will really leave from.
+async function peRecheckDomain(domainId) {
+  const d = (PE.domains || []).filter(function (x) { return x.id === domainId; })[0] || {};
+  const btns = document.querySelectorAll('[onclick*="peRecheckDomain(\'' + domainId + '\')"]');
+  Array.prototype.forEach.call(btns, function (b) { b.disabled = true; });
+  try {
+    const r = await API.post('/private-email/domains/' + encodeURIComponent(domainId) + '/verify');
+    const st = (r && r.mailgun_state) || 'unknown';
+    if (r && r.verified && r.changed) {
+      toast('Mailgun reports "' + st + '" — mail from this workspace now leaves on ' + (d.domain || 'your domain'), 'success');
+    } else if (r && r.verified) {
+      toast('Mailgun reports "' + st + '" — already verified, nothing changed', 'success');
+    } else {
+      toast('Mailgun still reports "' + st + '" — the platform mail transport keeps carrying your mail until the domain is active', 'error');
+    }
+    await loadInboxTab();
+  } catch (e) {
+    toast('Could not re-check: ' + e.message, 'error');
+    Array.prototype.forEach.call(btns, function (b) { b.disabled = false; });
+  }
 }
 
 function peKeyStatusBadge(k) {

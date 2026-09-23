@@ -271,6 +271,174 @@ pub async fn update_domain(
     }
 }
 
+/// Which credentials may answer "what does the provider think of this domain?" — the row's own
+/// `mailgun_api_key` first, because that is the one the DELIVERY gate reads
+/// (`communications::providers::private_mailgun_byok` selects `mailgun_api_key` and requires it
+/// non-empty), then the saved key `api_key_id` points at, because that is the one the tab's
+/// credential cell reports. Each is opened with `secret_box::open` (the app-wide reader, which
+/// never fails); an empty result means this deployment cannot read it and the caller is told so.
+async fn recheck_credentials(
+    db: &sqlx::PgPool,
+    tenant_id: Uuid,
+    own_key: &str,
+    api_key_id: Option<Uuid>,
+) -> Result<Vec<String>, AppError> {
+    let mut candidates: Vec<String> = Vec::new();
+    let own = crate::secret_box::open(tenant_id, own_key);
+    if !own.trim().is_empty() {
+        candidates.push(own);
+    }
+    if let Some(kid) = api_key_id {
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT api_key_encrypted FROM private_email_api_keys WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(kid)
+        .bind(tenant_id)
+        .fetch_optional(db)
+        .await
+        .map_err(AppError::Database)?;
+        if let Some(sealed) = stored {
+            let opened = crate::secret_box::open(tenant_id, &sealed);
+            if !opened.trim().is_empty() && !candidates.iter().any(|c| c == &opened) {
+                candidates.push(opened);
+            }
+        }
+    }
+    Ok(candidates)
+}
+
+/// `POST /api/private-email/domains/:id/verify` — ask the provider again, now.
+///
+/// The hole this closes (t_f02ade57, residual from t_d9d6120a): `verified` is what lets this
+/// workspace's own domain carry its mail, and it was only ever derived from Mailgun's answer at
+/// ADD time or when a credential was RE-ENTERED. A tenant who added `mail.theirdomain.com` while
+/// Mailgun still reported it `unverified` (DNS/DKIM propagating) stayed `verified = false` for ever
+/// once Mailgun flipped the domain to `active` — their mail kept leaving on the platform transport
+/// while the product told them to add a domain they had already added, and the only way out was to
+/// re-type an API key that was never wrong. This is the explicit re-check: no credential re-entry,
+/// no extra call on the delivery path.
+///
+/// Direction, deliberately: PROMOTE ONLY. Mailgun's `active` is the only state that sets
+/// `verified = true`, and a re-check never clears the column. A re-check is a repair action the
+/// customer presses, so it must not be able to take a working sending identity away — DNS state is
+/// polled from a third party over the network, and one ambiguous read must not knock mail off a
+/// domain that is carrying it (the same reason `update_domain` COALESCEs `verified`). The provider's
+/// verdict is always returned as `mailgun_state`, so a surface can show what Mailgun really says.
+/// Demotion still happens on the credential re-entry path, where the human is already asserting the
+/// configuration is wrong.
+pub async fn verify_domain(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(domain_id): Path<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+
+    let row: Option<(String, String, String, String, Option<Uuid>, bool)> = sqlx::query_as(
+        r#"SELECT domain, mailgun_region, provider_type, mailgun_api_key, api_key_id, verified
+             FROM private_email_domains
+            WHERE id = $1 AND tenant_id = $2"#,
+    )
+    .bind(domain_id)
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    let (domain, region, provider_type, own_key, api_key_id, verified_before) =
+        row.ok_or_else(|| AppError::NotFound("Domain not found".into()))?;
+
+    // An SMTP domain has no provider-side state to read: its credential is a mailbox, and a
+    // "re-check" there would be a lie dressed as a repair.
+    if provider_type != "mailgun" {
+        return Err(AppError::BadRequest(
+            "A re-check only applies to a Mailgun domain — this domain sends over SMTP, so there is \
+             no provider state to re-read."
+                .into(),
+        ));
+    }
+
+    let candidates = recheck_credentials(&state.db, account_id, &own_key, api_key_id).await?;
+    if candidates.is_empty() {
+        return Err(AppError::Validation(
+            "This domain's stored Mailgun API key cannot be read — re-enter it above, then \
+             re-check."
+                .into(),
+        ));
+    }
+
+    // `None` from every candidate means Mailgun did not answer for this domain with this
+    // credential at all (wrong region, revoked key, or the domain is not on that account) — an
+    // undetermined state, which is NOT the same as "unverified" and must leave the row alone.
+    let mut mailgun_state: Option<String> = None;
+    for key in &candidates {
+        if let Some(s) = mailgun_domain_state(key, &domain, &region).await {
+            mailgun_state = Some(s);
+            break;
+        }
+    }
+    let mailgun_state = match mailgun_state {
+        Some(s) => s,
+        None => {
+            return Err(AppError::BadRequest(format!(
+                "Mailgun did not answer for {} with the stored credential (wrong region, revoked \
+                 key, or the domain is not on that account). Nothing was changed — this domain is \
+                 still marked {}.",
+                domain, verified_before
+            )))
+        }
+    };
+
+    let now_active = mailgun_state.eq_ignore_ascii_case("active");
+    let verified_after = verified_before || now_active;
+    let changed = verified_after != verified_before;
+
+    // One statement, so two concurrent re-checks cannot interleave a read and a write: `updated_at`
+    // only moves when the verdict actually changed.
+    let row = sqlx::query_as::<_, PrivateEmailDomain>(
+        r#"
+        UPDATE private_email_domains
+        SET verified = $3,
+            updated_at = CASE WHEN $4 THEN NOW() ELSE updated_at END
+        WHERE id = $1 AND tenant_id = $2
+        RETURNING *
+        "#,
+    )
+    .bind(domain_id)
+    .bind(account_id)
+    .bind(verified_after)
+    .bind(changed)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(AppError::Database)?
+    .ok_or_else(|| AppError::NotFound("Domain not found".into()))?;
+
+    if changed {
+        tracing::info!(
+            tenant = %account_id,
+            domain = %domain,
+            mailgun_state = %mailgun_state,
+            "Mailgun domain state re-checked — this domain now carries the workspace's mail"
+        );
+    } else {
+        tracing::info!(
+            tenant = %account_id,
+            domain = %domain,
+            mailgun_state = %mailgun_state,
+            verified = verified_after,
+            "Mailgun domain state re-checked — no change"
+        );
+    }
+
+    let (keys, provider_keys) = load_credential_maps(&state.db, account_id).await?;
+    let mut body = with_credential_status(account_id, &row, &keys, &provider_keys);
+    if let Some(obj) = body.as_object_mut() {
+        obj.insert("mailgun_state".into(), json!(mailgun_state));
+        obj.insert("verified_before".into(), json!(verified_before));
+        obj.insert("changed".into(), json!(changed));
+    }
+    Ok(Json(body))
+}
+
 /// Mailgun's own verdict on a domain: `Some(state)` when this key can read the domain on the
 /// account, `None` when it cannot (wrong key, wrong region, or the domain is not on the account).
 ///

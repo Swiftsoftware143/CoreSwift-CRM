@@ -27,6 +27,12 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/domains/:id",
             axum::routing::delete(domain_handler::delete_domain),
         )
+        // Re-read the provider's own state for this domain (t_f02ade57): what makes a domain that
+        // Mailgun activates AFTER it was added become usable without re-entering the credential.
+        .route(
+            "/domains/:id/verify",
+            axum::routing::post(domain_handler::verify_domain),
+        )
         // Mailbox management
         .route(
             "/boxes",
