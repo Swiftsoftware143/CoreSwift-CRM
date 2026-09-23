@@ -2588,8 +2588,79 @@ async function changePassword() {
 }
 
 // Placeholder modal stubs
-function showAddContactModal() { showModal('Add Contact', '<div class="form-group"><label>Name</label><input type="text"></div><div class="form-group"><label>Email</label><input type="email"></div><div class="form-group"><label>Phone</label><input type="text"></div><div class="form-group"><label>Company</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Contact added&#39;,&#39;success&#39;)">Save</button>'); }
-function editContact(id) { toast('Editing contact: ' + id, 'info'); }
+// Contact create — POST /api/contacts (kanban t_fbb30c16). Until then this modal rendered its
+// inputs with NO ids and its Save button only called toast('Contact added'), so a contact could
+// never be created by hand and `company` could only arrive via a CSV import or a sister-app
+// capture.
+function showAddContactModal() {
+  showModal('Add Contact',
+    '<div class="form-group"><label>First name *</label><input type="text" id="ctAddFirst"></div>' +
+    '<div class="form-group"><label>Last name *</label><input type="text" id="ctAddLast"></div>' +
+    '<div class="form-group"><label>Email</label><input type="email" id="ctAddEmail"></div>' +
+    '<div class="form-group"><label>Phone</label><input type="text" id="ctAddPhone"></div>' +
+    '<div class="form-group"><label>Company</label><input type="text" id="ctAddCompany"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary btn-sm" data-ops="contact-create" onclick="saveNewContact()">Save</button>');
+}
+
+function ctModalValue(id) { const el = document.getElementById(id); return el ? el.value.trim() : ''; }
+
+async function saveNewContact() {
+  const first = ctModalValue('ctAddFirst'), last = ctModalValue('ctAddLast');
+  if (!first || !last) { toast('First and last name are required', 'error'); return; }
+  const body = { first_name: first, last_name: last };
+  const email = ctModalValue('ctAddEmail'), phone = ctModalValue('ctAddPhone'), company = ctModalValue('ctAddCompany');
+  if (email) body.email = email;
+  if (phone) body.phone = phone;
+  if (company) body.company = company;
+  try {
+    await API.post('/contacts', body);
+    closeModal();
+    toast('Contact created', 'success');
+    if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['contacts']) TAB_LOADERS['contacts']();
+  } catch (e) {
+    toast('Create failed: ' + e.message, 'error');
+  }
+}
+let CT_EDIT_ID = null;
+
+// Contact editor — GET /api/contacts/{id} then PATCH, so an existing contact (its company
+// included) can be corrected by hand. Until t_fbb30c16 this was
+// toast('Editing contact: ' + id): the per-row Edit button fetched nothing and saved nothing.
+async function editContact(id) {
+  let c;
+  try { c = await API.get('/contacts/' + encodeURIComponent(id)); }
+  catch (e) { toast('Could not load contact: ' + e.message, 'error'); return; }
+  if (!c || !c.id) { toast('Contact not found', 'error'); return; }
+  CT_EDIT_ID = id;
+  showModal('Edit Contact',
+    '<div class="form-group"><label>First name *</label><input type="text" id="ctEditFirst" value="' + escapeHtmlAttr(c.first_name || '') + '"></div>' +
+    '<div class="form-group"><label>Last name *</label><input type="text" id="ctEditLast" value="' + escapeHtmlAttr(c.last_name || '') + '"></div>' +
+    '<div class="form-group"><label>Email</label><input type="email" id="ctEditEmail" value="' + escapeHtmlAttr(c.email || '') + '"></div>' +
+    '<div class="form-group"><label>Phone</label><input type="text" id="ctEditPhone" value="' + escapeHtmlAttr(c.phone || '') + '"></div>' +
+    '<div class="form-group"><label>Company</label><input type="text" id="ctEditCompany" value="' + escapeHtmlAttr(c.company || '') + '"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary btn-sm" data-ops="contact-update" onclick="saveContactEdit()">Save</button>');
+}
+
+async function saveContactEdit() {
+  const id = CT_EDIT_ID;
+  if (!id) { toast('No contact selected', 'error'); return; }
+  const first = ctModalValue('ctEditFirst'), last = ctModalValue('ctEditLast');
+  if (!first || !last) { toast('First and last name are required', 'error'); return; }
+  try {
+    await API.patch('/contacts/' + encodeURIComponent(id), {
+      first_name: first, last_name: last,
+      email: ctModalValue('ctEditEmail'), phone: ctModalValue('ctEditPhone'),
+      company: ctModalValue('ctEditCompany'),
+    });
+    closeModal();
+    toast('Contact updated', 'success');
+    if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['contacts']) TAB_LOADERS['contacts']();
+  } catch (e) {
+    toast('Update failed: ' + e.message, 'error');
+  }
+}
 function showAddCompanyModal(){ showModal('Add Company', '<div class="form-group"><label>Company Name</label><input type="text"></div><div class="form-group"><label>Industry</label><input type="text"></div><div class="form-group"><label>Website</label><input type="url"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Company added&#39;,&#39;success&#39;)">Save</button>'); }
 function editCompany(id){ toast('Editing company: ' + id, 'info'); }
 function showAddRuleModal(){ showModal('New Rule', '<div class="form-group"><label>Rule Name</label><input type="text"></div><div class="form-group"><label>Trigger</label><select><option>Contact created</option><option>Deal stage changed</option><option>Form submitted</option><option>Tag added</option></select></div><div class="form-group"><label>Action</label><select><option>Send email</option><option>Add to list</option><option>Update deal</option><option>Create task</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Rule created&#39;,&#39;success&#39;)">Create Rule</button>'); }

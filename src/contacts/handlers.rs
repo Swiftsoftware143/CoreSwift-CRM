@@ -137,8 +137,9 @@ pub async fn create(
                         country = COALESCE($12, country),
                         notes = COALESCE($13, notes),
                         metadata = COALESCE($14, metadata),
+                        company = CASE WHEN $15 IS NULL THEN company ELSE NULLIF(btrim($15), '') END,
                         updated_at = NOW()
-                       WHERE id = $15 AND tenant_id = $16
+                       WHERE id = $16 AND tenant_id = $17
                        RETURNING *"#,
                 )
                 .bind(&req.phone)
@@ -155,6 +156,7 @@ pub async fn create(
                 .bind(&req.country)
                 .bind(&req.notes)
                 .bind(&req.metadata)
+                .bind(&req.company)
                 .bind(existing_contact.id)
                 .bind(account_id)
                 .fetch_one(&state.db)
@@ -165,12 +167,17 @@ pub async fn create(
         }
     }
 
-    // No existing contact found — INSERT as normal
+    // No existing contact found — INSERT as normal.
+    // `company` is the free-text employer the product displays (decision on t_fbb30c16); blank
+    // values for company/email/phone are stored as NULL, not '', so "absent" has one
+    // representation — idx_contacts_tenant_email is UNIQUE WHERE email IS NOT NULL, so a second
+    // ''-email contact in one tenant would otherwise be a 500.
     let contact = sqlx::query_as::<_, Contact>(
         r#"INSERT INTO contacts (id, tenant_id, email, phone, first_name, last_name, title,
             company_id, gender, address_line1, address_line2, city, state, postal_code, country,
-            notes, metadata)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+            notes, metadata, company)
+           VALUES ($1, $2, NULLIF(btrim($3), ''), NULLIF(btrim($4), ''), $5, $6, $7, $8, $9, $10,
+                   $11, $12, $13, $14, $15, $16, $17, NULLIF(btrim($18), ''))
            RETURNING *"#,
     )
     .bind(Uuid::new_v4())
@@ -190,6 +197,7 @@ pub async fn create(
     .bind(&req.country)
     .bind(&req.notes)
     .bind(&req.metadata)
+    .bind(&req.company)
     .fetch_one(&state.db)
     .await?;
 
@@ -245,10 +253,14 @@ pub async fn update(
     }
 
     let existing_id = id;
+    // `company` is the free-text employer the product displays (decision on t_fbb30c16). NULL =
+    // not mentioned -> keep the stored value; a blank string = clear it -> NULL, so "no company"
+    // has one representation. Same normalisation for email/phone here and in `create`: a stored
+    // '' would be a live 500 under idx_contacts_tenant_email (UNIQUE ... WHERE email IS NOT NULL).
     let contact = sqlx::query_as::<_, Contact>(
         r#"UPDATE contacts SET
-            email = COALESCE($1, email),
-            phone = COALESCE($2, phone),
+            email = CASE WHEN $1 IS NULL THEN email ELSE NULLIF(btrim($1), '') END,
+            phone = CASE WHEN $2 IS NULL THEN phone ELSE NULLIF(btrim($2), '') END,
             first_name = COALESCE($3, first_name),
             last_name = COALESCE($4, last_name),
             title = COALESCE($5, title),
@@ -262,9 +274,10 @@ pub async fn update(
             country = COALESCE($13, country),
             notes = COALESCE($14, notes),
             metadata = COALESCE($15, metadata),
-            is_active = COALESCE($16, is_active),
+            company = CASE WHEN $16 IS NULL THEN company ELSE NULLIF(btrim($16), '') END,
+            is_active = COALESCE($17, is_active),
             updated_at = NOW()
-           WHERE id = $17 AND tenant_id = $18
+           WHERE id = $18 AND tenant_id = $19
            RETURNING *"#,
     )
     .bind(&req.email)
@@ -282,6 +295,7 @@ pub async fn update(
     .bind(&req.country)
     .bind(&req.notes)
     .bind(&req.metadata)
+    .bind(&req.company)
     .bind(req.is_active)
     .bind(id)
     .bind(account_id)

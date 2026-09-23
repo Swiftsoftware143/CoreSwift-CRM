@@ -44,6 +44,10 @@ pub struct CreateContactRequest {
     pub last_name: String,
     pub title: Option<String>,
     pub company_id: Option<Uuid>,
+    /// Free-text employer — the column the product renders and every non-CRUD writer fills.
+    /// It is the source of truth for a contact's company (decision on t_fbb30c16): `company_id`
+    /// is accepted for compatibility but has no FK and all 6 live values are dangling.
+    pub company: Option<String>,
     pub gender: Option<String>,
     pub address_line1: Option<String>,
     pub address_line2: Option<String>,
@@ -63,6 +67,10 @@ pub struct UpdateContactRequest {
     pub last_name: Option<String>,
     pub title: Option<String>,
     pub company_id: Option<Uuid>,
+    /// Exclusive-or with `company_id` for display purposes: this text column is the employer a
+    /// contact shows. `None` means "not mentioned, keep the stored value"; a blank string means
+    /// "clear it" and is normalised to NULL on the way in.
+    pub company: Option<String>,
     pub gender: Option<String>,
     pub address_line1: Option<String>,
     pub address_line2: Option<String>,
