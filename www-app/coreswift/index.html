@@ -1484,12 +1484,17 @@ const TAB_LOADERS = {
           escapeHtml(c.email || '—'),
           escapeHtml(c.phone || '—'),
           escapeHtml(c.company || c.company_name || '—'),
-          `<span class="badge ${(c.status||'').toLowerCase()==='active'?'badge-success':'badge-muted'}">${escapeHtml(c.status || 'active')}</span>`,
+          // The Status cell that used to sit here (a badge built from `c.status`) is gone:
+          // GET /api/contacts has never returned a `status` key (`contacts` has no such column), so
+          // the badge showed the same text on every row of every tenant. It is deliberately NOT
+          // replaced with `is_active`: this loader's endpoint (and /api/contacts/search) filter
+          // `WHERE is_active = true`, so a rendered row is active by construction and the badge
+          // still could not vary. Removing the column is the honest arm (kanban t_df4e34aa).
           `<button class="btn btn-ghost btn-xs" onclick="editContact('${c.id}')">Edit</button>`
         ]);
       }
       document.getElementById('contactsTable').innerHTML = dataTable(
-        ['Name','Email','Phone','Company','Status',''], rows,
+        ['Name','Email','Phone','Company',''], rows,
         'No contacts yet. Add your first contact to get started.'
       );
     } catch(e) {
