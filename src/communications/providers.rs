@@ -7,16 +7,25 @@
 //! Delivery is LAYERED, in this order:
 //!   1. **Tenant BYOK** — `tenants.settings->'communications'` holds BOTH a `mailgun_domain` and a
 //!      `mailgun_api_key`. The tenant's own domain and From identity are used.
-//!   2. **Platform transport** — the app's own `EMAIL_API_URL` / `EMAIL_API_KEY` / `EMAIL_FROM`
+//!   2. **Private Email BYOK** (t_d9d6120a) — a `private_email_domains` row the Private Email tab
+//!      wrote: `provider_type = 'mailgun' AND verified AND mailgun_api_key <> ''`. Same effect as
+//!      (1); it exists because a workspace that adds its domain in that tab holds its entire
+//!      sending identity in a store this path never read, so its mail silently left on the
+//!      platform transport (or, before t_193e2259, did not leave at all).
+//!   3. **Platform transport** — the app's own `EMAIL_API_URL` / `EMAIL_API_KEY` / `EMAIL_FROM`
 //!      (verified Mailgun domain). Used by every workspace that has not configured its own
 //!      provider, which before this change was *every* workspace that had ever queued a mail
 //!      (322 of 322): the platform settings existed in the environment but no code path read them,
 //!      so the only outcome was a permanently `failed` row reading "Mailgun domain not configured".
-//!   3. **Nothing** → a PERMANENT failure naming what is missing. Never a silent queue-and-forget.
+//!   4. **Nothing** → a PERMANENT failure naming what is missing. Never a silent queue-and-forget.
 //!
 //! On the platform transport the `From` comes from `EMAIL_FROM` (it must be an address on the
 //! DKIM-signing domain) and the tenant's own `from_email` becomes `h:Reply-To`, so replies still
 //! reach the workspace without spoofing a domain the platform cannot sign for.
+//!
+//! Both BYOK stores are gated the same way and for the same reason: a half-configured identity (a
+//! domain without a key, or a key this deployment cannot open) is NOT an identity — it falls
+//! through to the platform transport, because a password reset must go out either way.
 
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -51,6 +60,103 @@ pub struct PlatformMail {
     pub api_key: String,
     /// Must be an address on the domain `url` sends through, or receivers will DMARC-fail it.
     pub from: String,
+}
+
+/// Which store a workspace's own sending identity was read from. Kept explicit so a log line or the
+/// API surface can say "your Private Email domain carried this", not just "tenant".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ByokSource {
+    /// `tenants.settings->'communications'` — the explicit provider choice.
+    Settings,
+    /// `private_email_domains` — the Private Email tab's own verified domain (t_d9d6120a).
+    PrivateEmail,
+}
+
+impl ByokSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ByokSource::Settings => "settings",
+            ByokSource::PrivateEmail => "private_email_domains",
+        }
+    }
+}
+
+/// A sending identity the workspace itself owns. Both halves are required: a domain without a key
+/// (or the reverse) is not an identity, and neither is a key this deployment cannot open.
+#[derive(Debug, Clone)]
+pub struct ByokMailgun {
+    pub domain: String,
+    pub api_key: String,
+    /// The workspace's own From, when its settings name one.
+    pub from: Option<String>,
+    /// Mailgun region of the domain: `"us"` (default) or `"eu"`.
+    pub region: Option<String>,
+    /// Which store this identity came from.
+    pub source: ByokSource,
+}
+
+/// The non-secret half of a resolved identity, for the API/UI. Deliberately a different type so a
+/// credential can never be serialised into the transport payload by accident.
+#[derive(Debug, Clone)]
+pub struct ByokDisplay {
+    pub domain: String,
+    pub from: Option<String>,
+    pub source: ByokSource,
+}
+
+impl ByokMailgun {
+    /// Build a candidate from a store, or `None` when either half is missing or blank.
+    pub fn new(
+        domain: Option<String>,
+        api_key: Option<String>,
+        from: Option<String>,
+        region: Option<String>,
+        source: ByokSource,
+    ) -> Option<Self> {
+        let clean = |v: Option<String>| -> Option<String> {
+            v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+        };
+        Some(Self {
+            domain: clean(domain)?,
+            api_key: clean(api_key)?,
+            from: clean(from),
+            region: clean(region),
+            source,
+        })
+    }
+
+    /// Mailgun's send endpoint for THIS identity (region-aware).
+    pub fn endpoint(&self) -> String {
+        mailgun_endpoint(&self.domain, self.region.as_deref())
+    }
+
+    pub fn display(&self) -> ByokDisplay {
+        ByokDisplay {
+            domain: self.domain.clone(),
+            from: self.from.clone(),
+            source: self.source,
+        }
+    }
+}
+
+/// Mailgun's send endpoint for a domain in a region. `eu` is the only split region; everything
+/// else (including no region at all) is the US endpoint, which is what the platform env uses.
+pub fn mailgun_endpoint(domain: &str, region: Option<&str>) -> String {
+    let base = match region.map(|r| r.trim().to_ascii_lowercase()).as_deref() {
+        Some("eu") => "https://api.eu.mailgun.net",
+        _ => "https://api.mailgun.net",
+    };
+    format!("{}/v3/{}/messages", base, domain)
+}
+
+/// Pick the workspace's own sending identity, in the order the product promises: the explicit
+/// provider settings first (unchanged from t_193e2259), then a verified domain the workspace added
+/// in the Private Email tab.
+pub fn pick_byok(
+    settings: Option<ByokMailgun>,
+    private_email: Option<ByokMailgun>,
+) -> Option<ByokMailgun> {
+    settings.or(private_email)
 }
 
 /// Result of ONE delivery attempt.
@@ -144,15 +250,23 @@ pub fn platform_from() -> Option<String> {
 
 /// Can a delivery attempt be made at all, and on which transport? Used by the UI/API surface so
 /// "email is not configured" is visible *before* somebody wonders why nothing arrived.
-pub fn email_transport_status(tenant_has_byok: bool, tenant_domain: Option<&str>) -> Value {
-    let (source, domain, from) = if tenant_has_byok {
-        (
+///
+/// `byok` is the identity the DELIVERY path would resolve for this workspace (`pick_byok` of the
+/// settings store and the Private Email store), so the surface cannot disagree with what actually
+/// happens to a queued message. It is the display half only — no key can reach this function.
+pub fn email_transport_status(byok: Option<&ByokDisplay>) -> Value {
+    let (source, domain, from, byok_source) = match byok {
+        Some(b) => (
             TransportSource::Tenant,
-            tenant_domain.map(|d| d.to_string()),
-            None,
-        )
-    } else {
-        match platform_mail() {
+            Some(b.domain.clone()),
+            Some(
+                b.from
+                    .clone()
+                    .unwrap_or_else(|| format!("noreply@{}", b.domain)),
+            ),
+            Some(b.source),
+        ),
+        None => match platform_mail() {
             Some(p) => {
                 let domain = p
                     .url
@@ -160,18 +274,23 @@ pub fn email_transport_status(tenant_has_byok: bool, tenant_domain: Option<&str>
                     .nth(1)
                     .and_then(|rest| rest.split('/').next())
                     .map(|d| d.to_string());
-                (TransportSource::Platform, domain, Some(p.from))
+                (TransportSource::Platform, domain, Some(p.from), None)
             }
-            None => (TransportSource::None, None, None),
-        }
+            None => (TransportSource::None, None, None, None),
+        },
     };
     json!({
         "source": source.as_str(),
         "configured": source != TransportSource::None,
         "domain": domain,
         "from": from,
+        "byok_source": byok_source.map(|s| s.as_str()),
         "note": match source {
-            TransportSource::Tenant => "using this workspace's own provider credentials",
+            TransportSource::Tenant => match byok_source {
+                Some(ByokSource::PrivateEmail) =>
+                    "using this workspace's verified domain from the Private Email tab",
+                _ => "using this workspace's own provider credentials",
+            },
             TransportSource::Platform => "using the platform mail transport (set a provider domain and key to send from your own domain)",
             TransportSource::None => "no email transport is configured for this workspace",
         }
@@ -215,6 +334,8 @@ pub struct DeliveryConfig {
     pub sms_provider: String,
     /// The transport this attempt will use (tenant BYOK / platform / none).
     pub transport: TransportSource,
+    /// Which store supplied the workspace's own identity, when `transport` is `Tenant`.
+    pub byok_source: Option<&'static str>,
     /// Full send-message endpoint for the resolved transport.
     pub mailgun_url: Option<String>,
     /// `h:Reply-To`, set when the From had to come from the platform rather than the tenant.
@@ -314,7 +435,9 @@ async fn deliver_via_mailgun(cfg: &DeliveryConfig) -> DeliveryOutcome {
                     .ok()
                     .and_then(|v| v.get("id").and_then(|i| i.as_str()).map(|s| s.to_string()));
                 tracing::info!(
-                    msg = %cfg.msg_id, transport = cfg.transport.as_str(), domain = %domain,
+                    msg = %cfg.msg_id, transport = cfg.transport.as_str(),
+                    byok_source = cfg.byok_source.unwrap_or("platform"),
+                    domain = %domain,
                     provider_message_id = provider_message_id.as_deref().unwrap_or("(none returned)"),
                     "Mailgun accepted the message"
                 );
@@ -553,6 +676,74 @@ pub fn resolve_email(
     }
 }
 
+/// The same decision when the workspace's identity came from a store that knows its own region and
+/// may not set a From at all (the Private Email tab). Kept beside `resolve_email` rather than folded
+/// into it so the settings path keeps the exact behaviour its tests pin down.
+pub fn resolve_email_byok(byok: ByokMailgun, tenant_from: Option<String>) -> ResolvedEmail {
+    let from = byok
+        .from
+        .clone()
+        .or(tenant_from)
+        // Its own domain is the one Mailgun signs for, so a `noreply@` on that domain is a valid
+        // From; the platform's address would fail DMARC on a domain the platform cannot sign.
+        .unwrap_or_else(|| format!("noreply@{}", byok.domain));
+    ResolvedEmail {
+        transport: TransportSource::Tenant,
+        url: Some(byok.endpoint()),
+        api_key: Some(byok.api_key.clone()),
+        from: Some(from),
+        reply_to: None,
+        tenant_domain: Some(byok.domain.clone()),
+    }
+}
+
+/// Layer 2 — the Private Email tab's own store.
+///
+/// Only a domain Mailgun itself has verified, on the Mailgun provider, with a stored key can win.
+/// The gate is deliberately narrow: the synthetic rows every smoke test leaves behind
+/// (`*.example.com`, `provider_type='smtp'`, no key, `verified=f`) must keep resolving to the
+/// platform transport, or adding this layer becomes a regression for tenants that never
+/// configured anything.
+pub async fn private_mailgun_byok(db: &PgPool, tenant_id: Uuid) -> Option<ByokMailgun> {
+    let row: Option<(String, String, String)> = sqlx::query_as(
+        r#"SELECT domain, mailgun_api_key, mailgun_region
+             FROM private_email_domains
+            WHERE tenant_id = $1
+              AND provider_type = 'mailgun'
+              AND verified
+              AND mailgun_api_key <> ''
+            ORDER BY created_at DESC
+            LIMIT 1"#,
+    )
+    .bind(tenant_id)
+    .fetch_optional(db)
+    .await
+    .inspect_err(|e| tracing::warn!(error = %e, "private_email_domains lookup failed — using the platform mail transport"))
+    .ok()
+    .flatten();
+    let (domain, sealed, region) = row?;
+
+    // The stored key is `enc:v1:` ciphertext; `secret_box::open` is the app-wide reader and never
+    // fails. Empty means THIS deployment cannot read it — which is not an identity, and must not
+    // become a transport that 401s every message.
+    let api_key = crate::secret_box::open(tenant_id, &sealed);
+    if api_key.trim().is_empty() {
+        tracing::warn!(
+            tenant = %tenant_id,
+            domain = %domain,
+            "Private Email domain is verified but its stored Mailgun key cannot be opened — using the platform mail transport"
+        );
+        return None;
+    }
+    ByokMailgun::new(
+        Some(domain),
+        Some(api_key),
+        None,
+        Some(region),
+        ByokSource::PrivateEmail,
+    )
+}
+
 /// Load delivery configuration, resolving WHICH transport this attempt uses (see `resolve_email`).
 pub async fn load_delivery_config(
     db: &PgPool,
@@ -582,11 +773,49 @@ pub async fn load_delivery_config(
             tenant = %tenant_id,
             mailgun_domain_set = tenant_domain.is_some(),
             mailgun_api_key_set = tenant_key.is_some(),
-            "Workspace has half a Mailgun configuration — falling back to the platform mail transport"
+            "Workspace has half a Mailgun configuration — falling back to a verified Private Email domain, else the platform mail transport"
         );
     }
 
-    let resolved = resolve_email(tenant_domain, tenant_key, tenant_from, platform_mail());
+    let settings_byok = ByokMailgun::new(
+        tenant_domain.clone(),
+        tenant_key.clone(),
+        tenant_from.clone(),
+        None,
+        ByokSource::Settings,
+    );
+    // Layer 2 is consulted only when the explicit provider settings hold no complete pair, so a
+    // workspace that configured both halves keeps sending exactly as it did.
+    let private_byok = if settings_byok.is_none() {
+        private_mailgun_byok(db, tenant_id).await
+    } else {
+        None
+    };
+    let byok = pick_byok(settings_byok, private_byok);
+    if let Some(ref b) = byok {
+        tracing::info!(
+            tenant = %tenant_id,
+            byok_source = b.source.as_str(),
+            domain = %b.domain,
+            "Workspace sending identity resolved for this delivery"
+        );
+    }
+
+    // Read the source before the candidate is consumed by the match below (`as_str` is `'static`,
+    // so this does not borrow it).
+    let byok_source = byok.as_ref().map(|b| b.source.as_str());
+
+    let resolved = match byok {
+        Some(b) => resolve_email_byok(b, tenant_from.clone()),
+        // Nothing the workspace owns qualifies: the settings half (if any) rides along exactly as
+        // before, so a platform attempt still names the workspace's own address as Reply-To.
+        None => resolve_email(
+            tenant_domain.clone(),
+            tenant_key,
+            tenant_from.clone(),
+            platform_mail(),
+        ),
+    };
 
     DeliveryConfig {
         tenant_id,
@@ -598,6 +827,7 @@ pub async fn load_delivery_config(
         email_provider: field("email_provider").unwrap_or_else(|| "mailgun".to_string()),
         sms_provider: field("sms_provider").unwrap_or_else(|| "telnyx".to_string()),
         transport: resolved.transport,
+        byok_source,
         mailgun_url: resolved.url,
         reply_to: resolved.reply_to,
         mailgun_domain: resolved.tenant_domain,
@@ -847,5 +1077,108 @@ mod tests {
         let s = snippet(&long);
         assert_eq!(s.chars().count(), 200);
         assert!(!s.contains('\n'));
+    }
+
+    /// A workspace's own verified domain, as the Private Email store resolves it.
+    fn private_byok(domain: &str, region: Option<&str>) -> ByokMailgun {
+        ByokMailgun::new(
+            Some(domain.to_string()),
+            Some("key-private".to_string()),
+            None,
+            region.map(|r| r.to_string()),
+            ByokSource::PrivateEmail,
+        )
+        .expect("both halves present")
+    }
+
+    #[test]
+    fn a_verified_private_email_domain_carries_the_mail_when_the_settings_are_empty() {
+        let r = resolve_email_byok(private_byok("mail.tenant.example", Some("us")), None);
+        assert_eq!(r.transport, TransportSource::Tenant);
+        assert_eq!(
+            r.url.as_deref(),
+            Some("https://api.mailgun.net/v3/mail.tenant.example/messages")
+        );
+        assert_eq!(r.api_key.as_deref(), Some("key-private"));
+        // Its own domain is the one Mailgun signs for; the platform's From would DMARC-fail here.
+        assert_eq!(r.from.as_deref(), Some("noreply@mail.tenant.example"));
+        assert_eq!(r.reply_to, None);
+    }
+
+    #[test]
+    fn the_private_email_layer_is_the_second_choice_never_the_first() {
+        let settings = ByokMailgun::new(
+            Some("mail.settings.example".to_string()),
+            Some("key-settings".to_string()),
+            None,
+            None,
+            ByokSource::Settings,
+        )
+        .expect("both halves present");
+        let private = private_byok("mail.private.example", None);
+        assert_eq!(
+            pick_byok(Some(settings), Some(private.clone()))
+                .unwrap()
+                .source,
+            ByokSource::Settings
+        );
+        assert_eq!(
+            pick_byok(None, Some(private)).unwrap().source,
+            ByokSource::PrivateEmail
+        );
+        assert!(pick_byok(None, None).is_none());
+    }
+
+    #[test]
+    fn half_an_identity_is_not_an_identity_in_either_store() {
+        let mk = |d: Option<&str>, k: Option<&str>| {
+            ByokMailgun::new(
+                d.map(|s| s.to_string()),
+                k.map(|s| s.to_string()),
+                None,
+                None,
+                ByokSource::PrivateEmail,
+            )
+        };
+        assert!(mk(Some("mail.x.example"), None).is_none());
+        assert!(mk(None, Some("key")).is_none());
+        assert!(mk(Some("   "), Some("key")).is_none());
+        assert!(mk(Some("mail.x.example"), Some("")).is_none());
+        assert!(mk(Some("mail.x.example"), Some("key")).is_some());
+    }
+
+    #[test]
+    fn the_workspace_from_is_used_on_its_own_domain_and_the_region_is_honoured() {
+        let r = resolve_email_byok(
+            private_byok("mail.tenant.example", None),
+            Some("hello@tenant.example".to_string()),
+        );
+        assert_eq!(r.from.as_deref(), Some("hello@tenant.example"));
+        // An EU-region row must not be posted to the US endpoint.
+        assert_eq!(
+            mailgun_endpoint("mail.tenant.example", Some("eu")),
+            "https://api.eu.mailgun.net/v3/mail.tenant.example/messages"
+        );
+        assert_eq!(
+            mailgun_endpoint("mail.tenant.example", Some("US")),
+            "https://api.mailgun.net/v3/mail.tenant.example/messages"
+        );
+        assert_eq!(
+            mailgun_endpoint("mail.tenant.example", None),
+            "https://api.mailgun.net/v3/mail.tenant.example/messages"
+        );
+    }
+
+    #[test]
+    fn the_transport_payload_never_carries_a_key() {
+        let shown = private_byok("mail.tenant.example", None).display();
+        let v = email_transport_status(Some(&shown));
+        assert_eq!(v["source"], "tenant");
+        assert_eq!(v["byok_source"], "private_email_domains");
+        assert_eq!(v["domain"], "mail.tenant.example");
+        assert_eq!(v["from"], "noreply@mail.tenant.example");
+        assert_eq!(v["configured"], true);
+        assert!(v.get("api_key").is_none());
+        assert!(!v.to_string().contains("key-private"));
     }
 }

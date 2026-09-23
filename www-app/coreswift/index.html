@@ -5576,16 +5576,44 @@ function txBind(root) {
 }
 
 // ── Private Email tab: domains, mailboxes, auto-replies, send, support box ─────
-const PE = { domains: [], boxes: [], autoReplies: [], support: null, keys: [], keysError: null, planNote: '', available: true };
+const PE = { domains: [], boxes: [], autoReplies: [], support: null, keys: [], keysError: null, planNote: '', available: true, transport: null };
 
 function inboxShell() {
   return pageHeader('Private Email', 'Send from your own domains, auto-reply, and turn forwarded mail into tickets',
     '<button class="btn btn-secondary btn-sm" onclick="switchTab(\'integrations\')">🔑 Mail provider keys</button>') +
+    '<div id="peTransport"><div class="loading-wrap"><div class="spinner"></div> Loading mail transport...</div></div>' +
+    '<br>' +
     '<div id="peSupport"><div class="loading-wrap"><div class="spinner"></div> Loading support box...</div></div>' +
     '<br><div id="peDomains"><div class="loading-wrap"><div class="spinner"></div> Loading domains...</div></div>' +
     '<br><div id="peBoxes"></div>' +
     '<br><div id="peAuto"><div class="loading-wrap"><div class="spinner"></div> Loading auto-replies...</div></div>' +
     '<br><div id="peSend"></div>';
+}
+
+// ── Mail transport banner (t_d9d6120a) ─────────────────────────────────────────
+// Which transport carries THIS workspace's mail, straight from GET /api/comms/providers. The
+// delivery path resolves the transport from the same two stores, so this panel cannot name one the
+// send path would not use. "none" is rendered as an explicit error: without it, messages are
+// queued and then fail permanently without the workspace ever finding out.
+function peTransportCard(t) {
+  if (!t) return icErr('Mail transport unknown', 'the provider panel returned no transport block, so it cannot say where your mail goes.');
+  var dom = escapeHtml(t.domain || ''), from = escapeHtml(t.from || '');
+  if (t.source === 'tenant') {
+    return card('<span class="badge badge-success">your domain</span> Mail transport',
+      '<p style="margin:0">Mail from this workspace leaves on <code>' + dom + '</code>, sent as <code>' + from + '</code>' +
+      (t.byok_source === 'private_email_domains'
+        ? ' &mdash; the verified domain you added in this tab.'
+        : ' &mdash; the provider domain saved in your provider settings.') +
+      ' The transport is decided per message, from this same configuration.</p>');
+  }
+  if (t.source === 'platform') {
+    return card('<span class="badge badge-warning">platform mail transport</span> Mail transport',
+      '<p style="margin:0">Mail from this workspace leaves on the <b>platform mail transport</b> as <code>' + from +
+      '</code>, not on a domain you own, so it is the platform (not your brand) that receivers see. ' +
+      'Add your own domain below &mdash; Mailgun has to report it as <b>verified</b> &mdash; and mail will leave on your domain instead.</p>');
+  }
+  return icErr('No mail transport: email cannot be delivered from this workspace',
+    'Nothing is configured to carry this workspace\u2019s mail, so any message queued now fails permanently. Add a provider domain in this tab before sending.');
 }
 
 async function loadInboxTab() {
@@ -5606,6 +5634,19 @@ async function loadInboxTab() {
   catch (e) { keysErr = e.message; }
   PE.domains = domains; PE.boxes = boxes; PE.autoReplies = auto; PE.support = support;
   PE.keys = keys; PE.keysError = keysErr;
+  // Which transport will carry this workspace's mail (t_d9d6120a). Read from the same endpoint the
+  // delivery path's decision comes from, so this panel cannot promise a transport the send path
+  // would not use.
+  let transport = null, transportErr = null;
+  try { transport = await API.get('/comms/providers'); }
+  catch (e) { transportErr = e.message; }
+  PE.transport = (transport && transport.email_transport) ? transport.email_transport : null;
+  const transportEl = document.getElementById('peTransport');
+  if (transportEl) {
+    transportEl.innerHTML = transportErr
+      ? icErr('Could not read which transport carries your mail', transportErr)
+      : peTransportCard(PE.transport);
+  }
 
   if (errs.support) document.getElementById('peSupport').innerHTML = icErr('Could not read the support box', errs.support);
   else {

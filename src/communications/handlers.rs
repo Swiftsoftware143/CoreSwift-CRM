@@ -388,6 +388,8 @@ pub async fn get_providers(
     // t_193e2259: say which transport will actually carry this workspace's email, and whether one
     // exists at all. Before this, a workspace with no provider configured looked identical to one
     // that was sending fine, while every message it queued was undeliverable by construction.
+    // t_d9d6120a: the answer now comes from the SAME two stores the delivery path resolves from, in
+    // the same order, so this surface cannot name a transport the send path would not use.
     let tenant_domain = merged
         .get("mailgun_domain")
         .and_then(|v| v.as_str())
@@ -398,12 +400,38 @@ pub async fn get_providers(
         .and_then(|v| v.as_str())
         .map(|s| !s.trim().is_empty())
         .unwrap_or(false);
-    let has_byok = tenant_domain.is_some() && key_present;
+
+    let tenant_from = merged
+        .get("from_email")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    // The settings half only needs PRESENCE here, never the value: `merged` is already redacted,
+    // and a display struct is all the transport payload may carry.
+    let settings_byok = match (tenant_domain.clone(), key_present) {
+        (Some(domain), true) => Some(providers::ByokDisplay {
+            domain,
+            from: tenant_from,
+            source: providers::ByokSource::Settings,
+        }),
+        _ => None,
+    };
+    // Layer 2 — the Private Email tab's verified domain, resolved exactly as the send path does it
+    // (key unsealed there; a key this deployment cannot open is not an identity).
+    let private_byok = if settings_byok.is_none() {
+        providers::private_mailgun_byok(&s.db, tid)
+            .await
+            .map(|b| b.display())
+    } else {
+        None
+    };
+    let byok = settings_byok.or(private_byok);
 
     let mut out = merged.as_object().cloned().unwrap_or_default();
     out.insert(
         "email_transport".to_string(),
-        providers::email_transport_status(has_byok, tenant_domain.as_deref()),
+        providers::email_transport_status(byok.as_ref()),
     );
     Ok(Json(Value::Object(out)))
 }

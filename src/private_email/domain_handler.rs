@@ -193,6 +193,30 @@ pub async fn update_domain(
         _ => None,
     };
 
+    // Re-entering a working key also RE-VERIFIES the domain: Mailgun is asked again, so a row added
+    // while its DNS was still propagating does not stay unverified for ever — and therefore does
+    // not stay permanently off the delivery path (t_d9d6120a). `None` means "not determined" and the
+    // stored value is kept (COALESCE below): a failed lookup must never downgrade a working domain.
+    let reverified: Option<bool> = match req.mailgun_api_key.as_deref() {
+        Some(k) if !k.trim().is_empty() => {
+            let meta: Option<(String, String)> = sqlx::query_as(
+                "SELECT domain, mailgun_region FROM private_email_domains WHERE id = $1 AND tenant_id = $2",
+            )
+            .bind(domain_id)
+            .bind(account_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(AppError::Database)?;
+            match meta {
+                Some((domain, region)) => mailgun_domain_state(k, &domain, &region)
+                    .await
+                    .map(|s| s.eq_ignore_ascii_case("active")),
+                None => None,
+            }
+        }
+        _ => None,
+    };
+
     // A saved key can only be bound if it belongs to this tenant — otherwise a domain could be
     // pointed at another tenant's ciphertext, which by construction never opens for this one.
     if let Some(kid) = req.api_key_id {
@@ -216,6 +240,7 @@ pub async fn update_domain(
             mailgun_api_key = COALESCE($4, mailgun_api_key),
             smtp_password_encrypted = COALESCE($5, smtp_password_encrypted),
             api_key_id = COALESCE($6, api_key_id),
+            verified = COALESCE($7, verified),
             updated_at = NOW()
         WHERE id = $1 AND tenant_id = $2
         RETURNING *
@@ -227,6 +252,7 @@ pub async fn update_domain(
     .bind(sealed_mailgun)
     .bind(sealed_smtp)
     .bind(req.api_key_id)
+    .bind(reverified)
     .fetch_optional(&state.db)
     .await
     .map_err(AppError::Database)?;
@@ -245,8 +271,14 @@ pub async fn update_domain(
     }
 }
 
-/// Validate a Mailgun API key by calling GET /v3/domains/{domain}
-async fn validate_mailgun_domain(api_key: &str, domain: &str, region: &str) -> bool {
+/// Mailgun's own verdict on a domain: `Some(state)` when this key can read the domain on the
+/// account, `None` when it cannot (wrong key, wrong region, or the domain is not on the account).
+///
+/// `state` is the provider's word, not ours: `active` means Mailgun's own DNS/ownership checks
+/// passed, which is exactly what `private_email_domains.verified` is supposed to mean. Reading it
+/// here is what makes that column reachable — before t_d9d6120a nothing in the app ever wrote
+/// `verified = true`, so the delivery path's Private Email layer could never fire for anyone.
+async fn mailgun_domain_state(api_key: &str, domain: &str, region: &str) -> Option<String> {
     let base_url = if region == "eu" {
         "https://api.eu.mailgun.net"
     } else {
@@ -254,15 +286,31 @@ async fn validate_mailgun_domain(api_key: &str, domain: &str, region: &str) -> b
     };
 
     let client = reqwest::Client::new();
-    match client
+    let resp = client
         .get(format!("{}/v3/domains/{}", base_url, domain))
         .basic_auth("api", Some(api_key))
         .send()
         .await
-    {
-        Ok(resp) => resp.status().is_success(),
-        Err(_) => false,
+        .inspect_err(
+            |e| tracing::warn!(error = %e, domain = %domain, "Mailgun domain lookup failed"),
+        )
+        .ok()?;
+    if !resp.status().is_success() {
+        tracing::warn!(
+            status = resp.status().as_u16(),
+            domain = %domain,
+            "Mailgun does not serve this domain for this key"
+        );
+        return None;
     }
+    resp.json::<serde_json::Value>()
+        .await
+        .inspect_err(|e| tracing::warn!(error = %e, domain = %domain, "Mailgun domain payload did not parse"))
+        .ok()?
+        .get("domain")
+        .and_then(|d| d.get("state"))
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string())
 }
 
 async fn add_mailgun_domain(
@@ -320,17 +368,26 @@ async fn add_mailgun_domain(
         ));
     }
 
-    let key_valid = validate_mailgun_domain(&raw_key, &req.domain, &req.mailgun_region).await;
-    if !key_valid {
-        return Err(AppError::BadRequest(
-            "Invalid Mailgun API key or domain not configured in Mailgun".into(),
-        ));
-    }
+    // NOT named `state`: that would shadow the `&AppState` parameter this function needs below.
+    let domain_state = match mailgun_domain_state(&raw_key, &req.domain, &req.mailgun_region).await
+    {
+        Some(state) => state,
+        None => {
+            return Err(AppError::BadRequest(
+                "Invalid Mailgun API key or domain not configured in Mailgun".into(),
+            ))
+        }
+    };
+    // `verified` is recorded from Mailgun's answer, not assumed: only `active` means its DNS and
+    // ownership checks passed, and only a verified domain may carry this workspace's mail
+    // (t_d9d6120a). A domain that is still `unverified` on the account is added exactly as before,
+    // it simply does not take over delivery yet.
+    let verified = domain_state.eq_ignore_ascii_case("active");
 
     let row = sqlx::query_as::<_, PrivateEmailDomain>(
         r#"
-        INSERT INTO private_email_domains (tenant_id, domain, mailgun_api_key, mailgun_region, label, api_key_id, provider_type)
-        VALUES ($1, $2, $3, $4, $5, $6, 'mailgun')
+        INSERT INTO private_email_domains (tenant_id, domain, mailgun_api_key, mailgun_region, label, api_key_id, provider_type, verified)
+        VALUES ($1, $2, $3, $4, $5, $6, 'mailgun', $7)
         RETURNING *
         "#,
     )
@@ -340,6 +397,7 @@ async fn add_mailgun_domain(
     .bind(&req.mailgun_region)
     .bind(label)
     .bind(api_key_id)
+    .bind(verified)
     .fetch_one(&state.db)
     .await
     .map_err(AppError::Database)?;
