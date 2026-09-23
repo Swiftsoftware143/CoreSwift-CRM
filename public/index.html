@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+ <meta charset="UTF-8">
+ <meta name="viewport" content="width=device-width, initial-scale=1.0">
+ <title>CoreSwift CRM | Free Single Source of Truth for Your Ecosystem</title>
+ <meta name="description" content="CoreSwift CRM unifies your leads, tags, and pipelines across all satellite tools with zero-maintenance automatic de-duplication and smart routing—completely free to join.">
+ <meta name="robots" content="index, follow">
+ <link rel="canonical" href="https://coreswiftcrm.com/">
+
+ <!-- Open Graph -->
+ <meta property="og:type" content="website">
+ <meta property="og:url" content="https://coreswiftcrm.com/">
+ <meta property="og:title" content="CoreSwift CRM | Unify Your Entire Lead Ecosystem (Free)">
+ <meta property="og:description" content="Stop drowning in fragmented lead lists. CoreSwift CRM automatically merges, tags, and organizes contacts from all your frontend channels into one clean pipeline. Get started for free!">
+ <meta property="og:image" content="https://coreswiftcrm.com/assets/og-coreswift.png">
+
+ <!-- Twitter Card -->
+ <meta name="twitter:card" content="summary_large_image">
+ <meta name="twitter:url" content="https://coreswiftcrm.com/">
+ <meta name="twitter:title" content="CoreSwift CRM | One App Replaces Your Entire Sales Stack">
+ <meta name="twitter:description" content="Automated follow-up. AI scoring. Built-in calendar. SMS campaigns. Deal pipelines. All free.">
+ <meta name="twitter:image" content="https://coreswiftcrm.com/assets/og-coreswift.png">
+
+ <link rel="preconnect" href="https://fonts.googleapis.com">
+ <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+ <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+ <style>
+ :root {
+ --bg-dark: #0a0c10;
+ --card-bg: #121620;
+ --border-color: #21283b;
+ --accent-blue: #3b82f6;
+ --accent-teal: #14b8a6;
+ --text-main: #f3f4f6;
+ --text-muted: #9ca3af;
+ --glow-teal: rgba(20, 184, 166, 0.15);
+ }
+
+ * { box-sizing: border-box; margin: 0; padding: 0; }
+ body {
+ font-family: 'Plus Jakarta Sans', sans-serif;
+ background-color: var(--bg-dark);
+ color: var(--text-main);
+ line-height: 1.6;
+ }
+
+ .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+
+ header { padding: 32px 0; display: flex; justify-content: space-between; align-items: center; }
+ .logo { font-weight: 800; font-size: 1.5rem; color: #fff; text-decoration: none; }
+ .logo span { color: var(--accent-blue); }
+ .nav-btns { display: flex; gap: 12px; align-items: center; }
+ .btn-outline {
+ padding: 8px 20px;
+ border: 1px solid var(--border-color);
+ color: var(--text-main);
+ border-radius: 8px;
+ text-decoration: none;
+ font-weight: 600;
+ font-size: 0.875rem;
+ transition: border-color 0.2s;
+ }
+ .btn-outline:hover { border-color: var(--accent-blue); }
+
+ .hero { padding: 60px 0 40px; text-align: center; }
+ .badge {
+ display: inline-block;
+ padding: 6px 16px;
+ border-radius: 99px;
+ background: rgba(20, 184, 166, 0.1);
+ border: 1px solid var(--accent-teal);
+ color: var(--accent-teal);
+ font-size: 0.875rem;
+ font-weight: 600;
+ margin-bottom: 24px;
+ }
+ .ai-badge {
+ display: inline-block;
+ padding: 4px 10px;
+ border-radius: 99px;
+ background: rgba(139, 92, 246, 0.15);
+ border: 1px solid #8b5cf6;
+ color: #a78bfa;
+ font-size: 0.7rem;
+ font-weight: 700;
+ text-transform: uppercase;
+ letter-spacing: 0.05em;
+ vertical-align: middle;
+ margin-left: 8px;
+ }
+ h1 { font-size: 3.2rem; font-weight: 800; line-height: 1.2; margin-bottom: 24px; }
+ .hero-gradient { background: linear-gradient(135deg, #fff 0%, var(--accent-teal) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+ p.subtitle { font-size: 1.25rem; color: var(--text-muted); max-width: 720px; margin: 0 auto 36px; }
+
+ .cta-button {
+ display: inline-block;
+ padding: 16px 36px;
+ background: linear-gradient(135deg, var(--accent-blue), var(--accent-teal));
+ color: #fff;
+ font-weight: 700;
+ text-decoration: none;
+ border-radius: 8px;
+ transition: transform 0.2s, opacity 0.2s;
+ }
+ .cta-button:hover { opacity: 0.95; transform: translateY(-2px); }
+
+ /* TOOL REPLACEMENT BANNER */
+ .tool-strip { text-align: center; padding: 0 0 60px; }
+ .tool-pills { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+ .tool-pill {
+ padding: 8px 16px;
+ border-radius: 99px;
+ background: var(--card-bg);
+ border: 1px solid var(--border-color);
+ color: var(--text-muted);
+ font-size: 0.8rem;
+ font-weight: 600;
+ }
+ .tool-pill.replaced { border-color: var(--accent-teal); color: var(--accent-teal); background: var(--glow-teal); }
+ .tool-strip-label { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.1em; }
+
+ /* SECTION HEADERS */
+ .section-title { text-align: center; font-size: 2rem; font-weight: 700; margin: 60px 0 30px; }
+ .section-subtitle { text-align: center; font-size: 1.1rem; color: var(--text-muted); max-width: 640px; margin: -20px auto 40px; }
+
+ /* FEATURE CARDS */
+ .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; }
+ .feature-card {
+ background: var(--card-bg);
+ border: 1px solid var(--border-color);
+ padding: 36px;
+ border-radius: 12px;
+ transition: border-color 0.3s;
+ }
+ .feature-card:hover { border-color: var(--accent-blue); }
+ .feature-icon { font-size: 1.8rem; margin-bottom: 16px; }
+ .feature-card h3 { font-size: 1.2rem; margin-bottom: 10px; color: #fff; display: flex; align-items: center; gap: 8px; }
+ .feature-card p { color: var(--text-muted); font-size: 0.95rem; }
+
+ /* COMPARISON TABLES */
+ .table-container { overflow-x: auto; margin: 40px 0; }
+ table { width: 100%; border-collapse: collapse; background: var(--card-bg); border-radius: 8px; overflow: hidden; }
+ th, td { padding: 16px 20px; text-align: left; border-bottom: 1px solid var(--border-color); }
+ th { background-color: #181d2a; font-weight: 700; color: #fff; font-size: 0.9rem; }
+ td { font-size: 0.9rem; }
+ td:first-child { font-weight: 600; color: #fff; }
+ .highlight-col { background: rgba(59, 130, 246, 0.05); }
+ .win { color: var(--accent-teal); font-weight: 700; }
+ .lose { color: #ef4444; }
+ .meh { color: var(--text-muted); }
+
+ /* BONUS SECTION */
+ .bonus-wrapper { padding: 40px 0 60px; border-top: 1px solid var(--border-color); margin-top: 40px; }
+ .bonus-badge {
+ display: inline-block;
+ padding: 4px 12px;
+ border-radius: 99px;
+ background: rgba(20, 184, 166, 0.1);
+ border: 1px solid var(--accent-teal);
+ color: var(--accent-teal);
+ font-size: 0.75rem;
+ font-weight: 700;
+ text-transform: uppercase;
+ letter-spacing: 0.05em;
+ margin-bottom: 12px;
+ }
+ .bonus-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; }
+ .bonus-card {
+ background: linear-gradient(135deg, rgba(20,184,166,0.05), rgba(59,130,246,0.05));
+ border: 1px solid rgba(20,184,166,0.2);
+ padding: 32px;
+ border-radius: 12px;
+ }
+ .bonus-card h3 { font-size: 1.2rem; margin-bottom: 10px; color: #fff; }
+ .bonus-card p { color: var(--text-muted); font-size: 0.95rem; }
+
+ /* STACK COMPARISON */
+ .stack-vs { text-align: center; padding: 60px 0; }
+ .stack-vs h2 { font-size: 2.5rem; font-weight: 800; }
+ .stack-boxes { display: grid; grid-template-columns: 1fr auto 1fr; gap: 24px; align-items: center; max-width: 900px; margin: 40px auto; }
+ .stack-box {
+ background: var(--card-bg);
+ border: 1px solid var(--border-color);
+ padding: 24px;
+ border-radius: 12px;
+ text-align: left;
+ }
+ .stack-box.many { border-color: #ef4444; }
+ .stack-box.one { border-color: var(--accent-teal); background: var(--glow-teal); }
+ .stack-box h3 { font-size: 1.1rem; margin-bottom: 12px; color: #fff; }
+ .stack-box ul { list-style: none; }
+ .stack-box li { padding: 6px 0; color: var(--text-muted); font-size: 0.9rem; }
+ .stack-box li::before { content: '— '; color: var(--text-muted); }
+ .stack-box.one li::before { content: '✓ '; color: var(--accent-teal); }
+ .stack-vs-divider { font-size: 2rem; font-weight: 800; color: var(--text-muted); }
+ .stack-price { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color); font-weight: 700; color: #fff; font-size: 0.9rem; }
+ .stack-price.expensive { color: #ef4444; }
+ .stack-price.free { color: var(--accent-teal); }
+
+ /* FAQ */
+ .faq-container { max-width: 800px; margin: 40px auto; }
+ details {
+ background: var(--card-bg);
+ border: 1px solid var(--border-color);
+ border-radius: 8px;
+ margin-bottom: 16px;
+ padding: 16px 20px;
+ cursor: pointer;
+ }
+ summary { font-weight: 700; font-size: 1.1rem; color: #fff; outline: none; }
+ details p { margin-top: 12px; color: var(--text-muted); font-size: 0.95rem; }
+
+ footer { border-top: 1px solid var(--border-color); padding: 40px 0; text-align: center; color: var(--text-muted); font-size: 0.875rem; margin-top: 80px; }
+
+ @media (max-width: 768px) {
+ h1 { font-size: 2rem; }
+ .stack-boxes { grid-template-columns: 1fr; }
+ .stack-vs-divider { transform: rotate(90deg); }
+ }
+ </style>
+
+ <script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "CoreSwift CRM", "keywords": "CRM, free CRM, unified leads, pipeline management, automatic deduplication, lead routing", "applicationCategory": "BusinessApplication", "offers": {"@type": "Offer", "price": "0.00", "priceCurrency": "USD"}}</script>
+
+  <meta name="keywords" content="CRM, free CRM, unified leads, pipeline management, automatic deduplication, tag routing, CoreSwift CRM, lead management">
+  <meta name="robots" content="index, follow">
+<meta name="language" content="English">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:url" content="https://coreswiftcrm.com/">
+<meta name="twitter:title" content="CoreSwift CRM | Zero-Maintenance Unified Pipelines">
+<meta name="twitter:description" content="The centralized hub that automatically gathers, merges, and routes leads from all your satellite apps without CSV exports. Create a free account today.">
+<meta name="twitter:image" content="https://coreswiftcrm.com/assets/og-coreswift.png">
+  <meta name="robots" content="index, follow">
+<meta name="language" content="English">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:url" content="https://coreswiftcrm.com/">
+<meta name="twitter:title" content="CoreSwift CRM | Zero-Maintenance Unified Pipelines">
+<meta name="twitter:description" content="The centralized hub that automatically gathers, merges, and routes leads from all your satellite apps without CSV exports. Create a free account today.">
+<meta name="twitter:image" content="https://coreswiftcrm.com/assets/og-coreswift.png"><link rel="icon" type="image/svg+xml" href="/favicon-d6446083.svg"><link rel="alternate icon" href="/favicon-d6446083.ico"><link rel="apple-touch-icon" href="/favicon-d6446083.svg">
+  <!-- cs-site:head:start -->
+<meta name="robots" content="index, follow">
+<meta name="language" content="English">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:url" content="https://coreswiftcrm.com/">
+<meta name="twitter:title" content="CoreSwift CRM | Zero-Maintenance Unified Pipelines">
+<meta name="twitter:description" content="The centralized hub that automatically gathers, merges, and routes leads from all your satellite apps without CSV exports. Create a free account today.">
+<meta name="twitter:image" content="https://coreswiftcrm.com/assets/og-coreswift.png">
+  <!-- cs-site:head:end -->
+</head>
+<body>
+
+ <header class="container">
+  <a href="#" class="logo">CoreSwift<span>CRM</span></a>
+  <div class="nav-btns">
+   <a href="https://app.coreswiftcrm.com/login" class="btn-outline">Sign In</a>
+   <a href="https://app.coreswiftcrm.com/register/" class="cta-button" style="padding: 10px 20px; font-size: 0.875rem;">Get Started Free</a>
+  </div>
+ </header>
+
+ <main class="container">
+
+  <!-- HERO -->
+  <section class="hero">
+   <div class="badge">Powered by AI <span class="ai-badge">AI</span></div>
+   <h1>One CRM That Replaces <span class="hero-gradient">6+ Separate Tools</span></h1>
+   <p class="subtitle">Automated follow-up sequences. AI-powered lead scoring. Built-in calendar &amp; bookings. SMS &amp; email campaigns. Deal pipelines. Event management. All included in the free tier — not scattered across six different subscriptions.</p>
+   <a href="https://app.coreswiftcrm.com/register/" class="cta-button">Start Free — No Credit Card</a>
+  </section>
+
+  <!-- TOOL REPLACEMENT STRIP -->
+  <div class="tool-strip">
+   <div class="tool-strip-label">One CoreSwift CRM account replaces all of this:</div>
+   <div class="tool-pills">
+    <span class="tool-pill replaced">Pipedrive / HubSpot CRM</span>
+    <span class="tool-pill replaced">Calendly</span>
+    <span class="tool-pill replaced">Mailchimp / ActiveCampaign</span>
+    <span class="tool-pill replaced">Twilio / SMS tools</span>
+    <span class="tool-pill replaced">Zapier / Make</span>
+    <span class="tool-pill replaced">Eventbrite</span>
+    <span class="tool-pill replaced">Slack follow-up bots</span>
+    <span class="tool-pill">…and more</span>
+   </div>
+  </div>
+
+  <!-- STACK VS STACK -->
+  <div class="stack-vs">
+   <h2 class="section-title">What You'd Pay Elsewhere vs. CoreSwift CRM</h2>
+   <p class="section-subtitle">To get all the features CoreSwift CRM includes for free, here's what you'd need to subscribe to separately.</p>
+   <div class="stack-boxes">
+    <div class="stack-box many">
+     <h3>Their Stack</h3>
+     <ul>
+      <li>HubSpot CRM — contact management</li>
+      <li>Calendly — scheduling &amp; bookings</li>
+      <li>ActiveCampaign — email automation</li>
+      <li>Twilio — SMS messaging</li>
+      <li>Zapier — cross-app workflows</li>
+      <li>Slack — follow-up reminders</li>
+     </ul>
+     <div class="stack-price expensive">~$250+/month combined</div>
+    </div>
+    <div class="stack-vs-divider">VS</div>
+    <div class="stack-box one">
+     <h3>CoreSwift CRM</h3>
+     <ul>
+      <li>Contact management &amp; auto-dedup</li>
+      <li>Built-in calendar &amp; booking pages</li>
+      <li>Automated email &amp; SMS sequences</li>
+      <li>Cross-app tag sync &amp; webhooks</li>
+      <li>AI-powered lead scoring &amp; routing</li>
+      <li>Deal reminders &amp; pipeline automation</li>
+      <li>Event &amp; campaign management</li>
+     </ul>
+     <div class="stack-price free">$0 — All on the Free Tier</div>
+    </div>
+   </div>
+  </div>
+
+  <!-- FEATURE CARDS -->
+  <h2 class="section-title">Everything Your Sales Team Needs — Built In</h2>
+  <p class="section-subtitle">No plugins. No third-party subscriptions. Every core feature ships with the free tier.</p>
+  <div class="feature-grid">
+
+   <div class="feature-card">
+    <div class="feature-icon">🔄</div>
+    <h3>Automated Follow-Up Sequences <span class="ai-badge">AI</span></h3>
+    <p>Set follow-up rules once — when a lead enters a stage, gets tagged, or goes quiet — and CoreSwift CRM handles every touch automatically. SMS, email, and internal nudges fire on schedule without you lifting a finger.</p>
+   </div>
+
+   <div class="feature-card">
+    <div class="feature-icon">🎯</div>
+    <h3>AI-Powered Lead Scoring &amp; Round Robin <span class="ai-badge">AI</span></h3>
+    <p>Leads are automatically scored based on behavior and engagement. Hot leads route instantly to the right rep via round robin — no cherry-picking, no delays, no missed revenue.</p>
+   </div>
+
+   <div class="feature-card">
+    <div class="feature-icon">📊</div>
+    <h3>Visual Deal Pipelines</h3>
+    <p>Drag-and-drop kanban boards with custom stages. Deals auto-advance when triggers fire — email opened, link clicked, form submitted. Full forecasting and timeline tracking built in.</p>
+   </div>
+
+   <div class="feature-card">
+    <div class="feature-icon">📅</div>
+    <h3>Built-in Calendar &amp; Bookings</h3>
+    <p>No Calendly subscription needed. Share your booking link, let leads pick a time, and auto-log every meeting to the contact timeline. Google Calendar sync included.</p>
+   </div>
+
+   <div class="feature-card">
+    <div class="feature-icon">📨</div>
+    <h3>SMS &amp; Email Campaigns</h3>
+    <p>Send one-off messages or multi-step drip sequences from inside the CRM. Trigger campaigns off tags, pipeline stages, or scoring thresholds. No Mailchimp, no Twilio — it's all here.</p>
+   </div>
+
+   <div class="feature-card">
+    <div class="feature-icon">🎪</div>
+    <h3>Events &amp; Campaign Management</h3>
+    <p>Run webinars, workshops, and promotional campaigns. Track RSVPs, send reminders, and log attendance — all connected to contact records and deal pipelines automatically.</p>
+   </div>
+
+   <div class="feature-card">
+    <div class="feature-icon">🔔</div>
+    <h3>Intelligent Deal Nudges <span class="ai-badge">AI</span></h3>
+    <p>Get alerted when a deal stalls, a follow-up is overdue, or a hot lead hasn't been contacted. AI monitors your pipeline 24/7 so nothing slips through the cracks.</p>
+   </div>
+
+   <div class="feature-card">
+    <div class="feature-icon">🔗</div>
+    <h3>Cross-App Ecosystem Sync</h3>
+    <p>Contacts, tags, and events flow automatically between FunnelSwift, MissedCall Respondr, IncentiveSwift, and ADASwift. One contact record, one timeline — no manual data entry, and more.</p>
+   </div>
+
+  </div>
+
+  <!-- COMPARISON: CRM FEATURES -->
+  <h2 class="section-title">How CoreSwift CRM Compares on CRM Features</h2>
+  <div class="table-container">
+   <table>
+    <thead><tr><th>Capability</th><th class="highlight-col">CoreSwift CRM</th><th>GoHighLevel</th><th>HubSpot</th></tr></thead>
+    <tbody>
+     <tr><td>Automated Follow-Up</td><td class="highlight-col win">Built-in, Trigger-Based</td><td class="meh">Workflow Builder Required</td><td class="lose">Marketing Hub Upgrade</td></tr>
+     <tr><td>AI Lead Scoring &amp; Routing</td><td class="highlight-col win">Native / AI-Powered</td><td class="lose">Not Available</td><td class="lose">Enterprise Only</td></tr>
+     <tr><td>Built-in Calendar &amp; Bookings</td><td class="highlight-col win">Included Free</td><td class="meh">Basic Calendar Only</td><td class="lose">Separate Meetings Tool</td></tr>
+     <tr><td>SMS &amp; Email Campaigns</td><td class="highlight-col win">Built-in Both</td><td class="win">Built-in Both</td><td class="meh">Email Only / SMS Add-On</td></tr>
+     <tr><td>Event &amp; Campaign Tracking</td><td class="highlight-col win">Included Free</td><td class="meh">Limited</td><td class="lose">Marketing Hub Add-On</td></tr>
+     <tr><td>Private Email Inbox</td><td class="highlight-col win">Native (Mailgun/SMTP) — Paid Add-On</td><td class="lose">Third-Party Only</td><td class="lose">Third-Party Only</td></tr>
+     <tr><td>Free Tier</td><td class="highlight-col win">Full Core Features</td><td class="lose">No Free Plan</td><td class="meh">Limited Free CRM</td></tr>
+    </tbody>
+   </table>
+  </div>
+
+  <!-- COMPARISON: CALENDAR vs CALENDLY -->
+  <h2 class="section-title">Built-in Scheduling vs. Paying for Calendly</h2>
+  <div class="table-container">
+   <table>
+    <thead><tr><th>Feature</th><th class="highlight-col">CoreSwift CRM Calendar</th><th>Calendly</th></tr></thead>
+    <tbody>
+     <tr><td>Booking Pages</td><td class="highlight-col win">Included Free</td><td class="meh">Free (Basic)</td></tr>
+     <tr><td>CRM-Linked Meetings</td><td class="highlight-col win">Auto-logged to Contact Timeline</td><td class="lose">Requires Zapier/Integration</td></tr>
+     <tr><td>Google Calendar Sync</td><td class="highlight-col win">Included</td><td class="win">Included</td></tr>
+     <tr><td>Automated Reminders</td><td class="highlight-col win">SMS &amp; Email Included</td><td class="meh">Email Only / SMS Upgrade</td></tr>
+     <tr><td>Team Round Robin</td><td class="highlight-col win">Included Free</td><td class="lose">Teams Plan ($20/seat)</td></tr>
+     <tr><td>Monthly Cost</td><td class="highlight-col win">$0</td><td class="lose">$10–$20/seat/month</td></tr>
+    </tbody>
+   </table>
+  </div>
+
+  <!-- BONUS: PRIVATE MAILBOXES -->
+  <div class="bonus-wrapper">
+   <h2 class="section-title"><span class="bonus-badge">Paid Add-On</span><br>Private Mailboxes — Email That Lives Inside Your CRM</h2>
+   <p style="text-align:center;color:var(--text-muted);max-width:600px;margin:0 auto 40px;">Bring your own domain. No third-party inbox, no tab switching — your email lives where your leads live, and more.</p>
+   <div class="bonus-grid">
+    <div class="bonus-card">
+     <h3>Bring Your Own Domain</h3>
+     <p>Connect via Mailgun or SMTP. Every email stays branded to you. Full control over sender reputation.</p>
+    </div>
+    <div class="bonus-card">
+     <h3>Encrypted at Rest</h3>
+     <p>AES-256-GCM encryption on every message. Data retention controls let you decide what stays and what gets purged.</p>
+    </div>
+    <div class="bonus-card">
+     <h3>Smart Auto-Reply &amp; Contact Matching</h3>
+     <p>Incoming mail automatically matches to existing contacts. Trigger-based auto-replies tied to pipeline stages and tags.</p>
+    </div>
+   </div>
+  </div>
+
+  <!-- FAQ -->
+  <h2 class="section-title">Frequently Asked Questions</h2>
+  <div class="faq-container">
+   <details>
+    <summary>How does CoreSwift CRM automate follow-ups?</summary>
+    <p>Set your follow-up rules once — "when a lead enters this stage, send an SMS in 2 hours and an email in 24 hours." CoreSwift CRM handles everything automatically and logs every touch to the contact timeline. No manual reminders, no forgotten leads.</p>
+   </details>
+   <details>
+    <summary>What does the AI actually do?</summary>
+    <p>CoreSwift CRM's AI engine scores every lead based on behavior, engagement, and source. It identifies hot leads, routes them to the right rep via round robin, and nudges you when a deal has gone cold. It works continuously in the background — no configuration needed.</p>
+   </details>
+   <details>
+    <summary>Do I really not need Calendly anymore?</summary>
+    <p>If you're using Calendly for basic scheduling and you want those meetings automatically linked to your CRM contacts — CoreSwift CRM's built-in calendar does that for free. Booking pages, Google Calendar sync, automated reminders, and team round robin are all included.</p>
+   </details>
+   <details>
+    <summary>How much does CoreSwift CRM cost?</summary>
+    <p>The core platform is free — full pipelines, follow-up automation, calendar, SMS/email campaigns, AI scoring, event management, and cross-app sync. Premium features like private mailboxes and advanced workflows are available inside the platform when you're ready to scale, and more.</p>
+   </details>
+   <details>
+    <summary>Does it work with the rest of the SwiftSoftware suite?</summary>
+    <p>Natively. Contacts, tags, and events sync automatically with FunnelSwift, MissedCall Respondr, IncentiveSwift, ADASwift, and WorkflowSwift. Zero configuration — it just works.</p>
+   </details>
+  </div>
+
+ </main>
+
+ <footer>
+  <div class="container">
+   <p>&copy; 2026 CoreSwift CRM / SwiftSoftware. All rights reserved.</p>
+  </div>
+ </footer>
+
+<!-- Cookie Consent Banner -->
+<div id="cookie-banner" style="position:fixed;bottom:0;left:0;right:0;background:#0f172a;color:#e2e8f0;z-index:99999;padding:16px 24px;font-family:system-ui,sans-serif;font-size:13px;box-shadow:0 -4px 20px rgba(0,0,0,.4);display:none">
+  <div style="max-width:1100px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+    <div style="flex:1;min-width:250px">
+      <strong style="font-size:14px">🍪 Cookie Consent</strong>
+      <p style="margin:4px 0 0;color:#94a3b8;line-height:1.5">We use cookies for analytics, security, and to improve your experience. By continuing, you agree to our <a href="/privacy.html" style="color:#38bdf8">Privacy Policy</a> and <a href="/terms.html" style="color:#38bdf8">Terms of Service</a>.</p>
+    </div>
+    <div style="display:flex;gap:8px;flex-shrink:0">
+      <button onclick="acceptCookies()" style="background:#2563eb;color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px">Accept All</button>
+      <button onclick="declineCookies()" style="background:transparent;color:#94a3b8;border:1px solid #475569;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:13px">Decline</button>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var choice = localStorage.getItem('cookie_consent');
+  if (!choice) {
+    document.getElementById('cookie-banner').style.display = 'block';
+  }
+  window.acceptCookies = function(){
+    localStorage.setItem('cookie_consent','accepted');
+    document.getElementById('cookie-banner').style.display = 'none';
+  };
+  window.declineCookies = function(){
+    localStorage.setItem('cookie_consent','declined');
+    document.getElementById('cookie-banner').style.display = 'none';
+    // Disable GA/GTM if present
+    if (typeof gtag === 'function') { window['ga-disable-all'] = true; }
+    var scripts = document.querySelectorAll('script[src*="googletagmanager"],script[src*="analytics"]');
+    scripts.forEach(function(s){ s.remove(); });
+  };
+})();
+</script>
+
+</body>
+</html>
