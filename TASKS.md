@@ -47,7 +47,7 @@ _Last updated: 2026-06-25_
 ### Deployment
 - ✅ Dockerfile (multi-stage build, 1.81-alpine → alpine:3.19)
 - ✅ Docker Compose (Postgres 16, Redis 7, Mailpit, App)
-- ✅ `.env.dev` / `.env.example`
+- ✅ `.env.dev.example` / `.env.example` (real env files are gitignored and never published)
 - ✅ `.gitignore`
 - ✅ Makefile + PowerShell helper
 - ✅ Code verification report (`VERIFICATION.md`)

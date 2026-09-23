@@ -170,11 +170,14 @@ The compose file uses `version: "3.8"` which requires Docker Compose v2 or newer
 
 ## 6. Environment Variable Completeness
 
-**Result:** ✅ **All env vars referenced in `config.rs` are present in `.env.dev` and `.env.example`.**
+**Result:** ✅ **All env vars referenced in `config.rs` are present in `.env.dev.example` and `.env.example`.**
+
+The dev-shape template is `.env.dev.example`; `.env.dev` itself is gitignored and no longer tracked
+(the fleet's `tracked-secret-check.sh` push gate refuses a tree that carries it).
 
 ### Config → .env mapping
 
-| `config.rs` var | `.env.dev` | `.env.example` | `docker-compose.yml` |
+| `config.rs` var | `.env.dev.example` | `.env.example` | `docker-compose.yml` |
 |---|---|---|---|
 | `APP_HOST` | ✅ `0.0.0.0` | ✅ `0.0.0.0` | ✅ `${APP_HOST:-0.0.0.0}` |
 | `APP_PORT` | ✅ `8080` | ✅ `8080` | ✅ `${APP_PORT:-8080}` |
@@ -236,7 +239,7 @@ Changed `version: "3.8"` to `version: "3.3"` in `docker-compose.yml` for compati
 | 3. SQLx migrations (24/24) | ✅ Pass | All present, well-formed SQL |
 | 4. Module connectivity (24 mods) | ✅ Pass | All `mod` declarations resolve to files |
 | 5. Docker build | ⚠️ N/A | Daemon not accessible |
-| 6. Env var completeness | ✅ Pass | All config.rs vars match .env.dev |
+| 6. Env var completeness | ✅ Pass | All config.rs vars match .env.dev.example |
 | 7. Docker compose validity | ✅ Pass | YAML valid; fixed version compat issue |
 
 ### Issues Found & Fixed
