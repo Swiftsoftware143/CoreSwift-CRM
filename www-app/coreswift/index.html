@@ -1275,169 +1275,6 @@ async function saveSiteConfig() {
   }
 }
 
-// ── CSV import / export — guide.html §19 (kanban t_d1b3f5c4) ────────────────
-// The API is POST /api/csv/preview, POST /api/csv/import/contacts and
-// GET /api/csv/export/contacts. API.call() is JSON-only (it prefixes /api and
-// JSON.stringify()s the body), so these talk to the CSV routes with a raw
-// fetch and carry the tenant's own bearer token.
-let CT_CSV_PENDING = null;
-
-const CT_CSV_FIELDS = [
-  ['first_name', ['firstname', 'givenname', 'fname']],
-  ['last_name', ['lastname', 'surname', 'familyname', 'lname']],
-  ['email', ['email', 'emailaddress', 'mail']],
-  ['phone', ['phone', 'phonenumber', 'mobile', 'tel', 'telephone']],
-  ['title', ['title', 'jobtitle', 'position']],
-  ['company', ['company', 'companyname', 'organization', 'organisation']],
-  ['notes', ['notes', 'note', 'comments']],
-  ['address_line1', ['address', 'addressline1', 'street']],
-  ['city', ['city', 'town']],
-  ['state', ['state', 'province', 'region']],
-  ['postal_code', ['postalcode', 'zip', 'zipcode']],
-  ['country', ['country']]
-];
-
-function ctCsvNorm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
-
-function ctCsvMap(headers) {
-  const used = {};
-  const out = [];
-  headers.forEach(function (h) {
-    const n = ctCsvNorm(h);
-    let field = null;
-    CT_CSV_FIELDS.forEach(function (pair) {
-      if (field || used[pair[0]]) return;
-      if (ctCsvNorm(pair[0]) === n || pair[1].indexOf(n) >= 0) field = pair[0];
-    });
-    if (field) { used[field] = true; out.push({ csv_header: String(h), contact_field: field }); }
-  });
-  return out;
-}
-
-async function ctCsvFetch(path, opts) {
-  const o = opts || {};
-  o.headers = Object.assign({}, o.headers || {}, { Authorization: 'Bearer ' + STATE.token });
-  const res = await fetch('/api/csv/' + path, o);
-  if (res.status === 401) { logout(true); throw new Error('Session expired'); }
-  if (!res.ok) {
-    let msg = 'HTTP ' + res.status;
-    try { const e = await res.json(); if (typeof e.message === 'string') msg = e.message; } catch (_) {}
-    throw new Error(msg);
-  }
-  return res;
-}
-
-function ctCsvPreviewBody(headers, map, sample) {
-  const mapped = {};
-  map.forEach(function (m) { mapped[m.csv_header] = m.contact_field; });
-  let chips = '';
-  headers.forEach(function (h) {
-    const f = mapped[h];
-    chips += '<span class="badge ' + (f ? 'badge-success' : 'badge-muted') +
-      '" style="margin:2px;display:inline-block">' + escapeHtml(h) +
-      (f ? ' &rarr; ' + escapeHtml(f) : ' (skipped)') + '</span>';
-  });
-  let table = '';
-  if (sample && sample.length) {
-    table = '<div class="table-wrap" style="margin-top:12px"><table><thead><tr>' +
-      headers.map(function (h) { return '<th>' + escapeHtml(h) + '</th>'; }).join('') +
-      '</tr></thead><tbody>' +
-      sample.map(function (r) {
-        return '<tr>' + headers.map(function (_, i) {
-          return '<td>' + escapeHtml(r[i] || '') + '</td>';
-        }).join('') + '</tr>';
-      }).join('') + '</tbody></table></div>';
-  }
-  return '<p style="margin:0 0 8px">CoreSwift read the header row. Columns map like this; unmatched ones are skipped.</p>' +
-    '<div>' + chips + '</div>' + table +
-    '<p style="margin:12px 0 0;color:var(--text-secondary)">Up to 500 rows per import.</p>';
-}
-
-function ctCsvImportPick() {
-  let inp = document.getElementById('ctCsvFile');
-  if (!inp) {
-    inp = document.createElement('input');
-    inp.type = 'file';
-    inp.accept = '.csv,text/csv';
-    inp.id = 'ctCsvFile';
-    inp.style.display = 'none';
-    document.body.appendChild(inp);
-    inp.addEventListener('change', function () {
-      if (inp.files && inp.files[0]) ctCsvPreview(inp.files[0]);
-    });
-  }
-  inp.value = '';
-  inp.click();
-}
-
-async function ctCsvPreview(file) {
-  CT_CSV_PENDING = null;
-  showModal('Import contacts from CSV',
-    '<div id="ctCsvBody"><div class="loading-wrap"><div class="spinner"></div> Reading ' +
-      escapeHtml(file.name) + '...</div></div>',
-    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
-    '<button class="btn btn-primary" id="ctCsvGo" disabled onclick="ctCsvImport()">Import</button>');
-  const fd = new FormData();
-  fd.append('file', file);
-  const body = document.getElementById('ctCsvBody');
-  let d;
-  try {
-    d = await (await ctCsvFetch('preview', { method: 'POST', body: fd })).json();
-  } catch (e) {
-    if (body) body.innerHTML = icErr('Could not read the CSV', e.message);
-    return;
-  }
-  const headers = (d && d.headers) || [];
-  const map = ctCsvMap(headers);
-  if (body && !map.length) {
-    body.innerHTML = icErr('No importable columns found',
-      'None of these headers match a contact field: ' + headers.join(', '));
-    return;
-  }
-  CT_CSV_PENDING = { file: file, map: map };
-  if (body) body.innerHTML = ctCsvPreviewBody(headers, map, (d && d.sample_rows) || []);
-  const go = document.getElementById('ctCsvGo');
-  if (go) go.disabled = false;
-}
-
-async function ctCsvImport() {
-  if (!CT_CSV_PENDING) return;
-  const fd = new FormData();
-  fd.append('file', CT_CSV_PENDING.file);
-  fd.append('mappings', JSON.stringify(CT_CSV_PENDING.map));
-  const body = document.getElementById('ctCsvBody');
-  if (body) body.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Importing...</div>';
-  let d;
-  try {
-    d = await (await ctCsvFetch('import/contacts', { method: 'POST', body: fd })).json();
-  } catch (e) {
-    if (body) body.innerHTML = icErr('Import failed', e.message);
-    return;
-  }
-  closeModal();
-  CT_CSV_PENDING = null;
-  toast('Imported ' + d.imported + ' contact' + (d.imported === 1 ? '' : 's') +
-    (d.skipped ? ' (' + d.skipped + ' skipped)' : ''), d.skipped ? 'info' : 'success');
-  if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['contacts']) TAB_LOADERS['contacts']();
-}
-
-async function csvExportContacts() {
-  try {
-    const res = await ctCsvFetch('export/contacts');
-    const blob = await res.blob();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'contacts_export.csv';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
-    toast('Contacts exported', 'success');
-  } catch (e) {
-    toast('Export failed: ' + e.message, 'error');
-  }
-}
-
 function escapeHtmlAttr(str) {
   return String(str).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
@@ -1476,7 +1313,11 @@ const TAB_LOADERS = {
 
   'contacts': async () => {
     try {
-      const contacts = await API.get('/contacts');
+      // GET /api/contacts answers {"contacts":[...]}. This reader tested Array.isArray() on the
+      // ENVELOPE, so `rows` stayed empty and the table rendered "No contacts yet" for every
+      // account — which also meant no per-row control (the Tags button wired below, or the
+      // pre-existing Edit button) could ever be clicked (kanban t_4b6f1a5c).
+      const contacts = famList(await API.get('/contacts'), 'contacts');
       let rows = [];
       if (Array.isArray(contacts)) {
         rows = contacts.slice(0, 50).map(c => [
@@ -1490,11 +1331,11 @@ const TAB_LOADERS = {
           // replaced with `is_active`: this loader's endpoint (and /api/contacts/search) filter
           // `WHERE is_active = true`, so a rendered row is active by construction and the badge
           // still could not vary. Removing the column is the honest arm (kanban t_df4e34aa).
-          `<button class="btn btn-ghost btn-xs" onclick="editContact('${c.id}')">Edit</button>`
+          `<button class="btn btn-ghost btn-xs" onclick="editContact('${c.id}')">Edit</button> <button class="btn btn-ghost btn-xs" onclick="ctOpenTags('${c.id}')">Tags</button>`
         ]);
       }
       document.getElementById('contactsTable').innerHTML = dataTable(
-        ['Name','Email','Phone','Company',''], rows,
+        ['Name','Email','Phone','Company','Actions'], rows,
         'No contacts yet. Add your first contact to get started.'
       );
     } catch(e) {
@@ -5260,7 +5101,9 @@ function gcRender() {
         '<div style="font-size:.72rem;color:var(--text-muted)">' + escapeHtml(c.google_calendar_id || '') + '</div>'
       : '<span class="badge badge-muted">not linked</span>';
     let actions = '<button class="btn btn-primary btn-xs" data-gc="connect" data-id="' +
-      escapeHtmlAttr(c.id) + '">Connect Google Calendar</button>';
+      escapeHtmlAttr(c.id) + '">Connect Google Calendar</button>' +
+      ' <button class="btn btn-secondary btn-xs" data-gc="edit" data-id="' +
+      escapeHtmlAttr(c.slug) + '">Edit</button>';
     if (c.connected) {
       actions += ' <button class="btn btn-secondary btn-xs" data-gc="sync" data-id="' +
         escapeHtmlAttr(c.id) + '">Sync now</button>';
@@ -5287,6 +5130,7 @@ function gcBind(root) {
       const id = b.getAttribute('data-id');
       if (act === 'connect') gcConnect(id, b);
       else if (act === 'sync') gcSync(id, b);
+      else if (act === 'edit') gcEditCalendar(id);
     });
   });
 }
@@ -5678,12 +5522,16 @@ async function loadInboxTab() {
 
   document.getElementById('peBoxes').innerHTML = card('📬 Mailboxes',
     '<p style="color:var(--text-secondary);margin:0">A mailbox is an address on one of your domains. Outbound mail can only be sent FROM a mailbox.</p>') +
-    dataTable(['Address', 'Local part', 'Status', 'Forwarding'],
+    dataTable(['Address', 'Local part', 'Status', 'Forwarding', 'Actions'],
       PE.boxes.map(b => [
         '<code>' + escapeHtml(b.email_address || '') + '</code>',
         escapeHtml(b.local_part || ''),
         b.status === 'active' ? '<span class="badge badge-success">active</span>' : '<span class="badge badge-muted">' + escapeHtml(b.status || '') + '</span>',
-        b.forwarding_enabled ? 'on' : 'off'
+        b.forwarding_enabled ? 'on' : 'off',
+        '<button class="btn btn-ghost btn-xs" onclick="peEditBox(\'' + b.id + '\')">Edit</button>' +
+        (b.status === 'active'
+          ? ' <button class="btn btn-ghost btn-xs" onclick="peDeactivateBox(\'' + b.id + '\')">Deactivate</button>'
+          : '')
       ]),
       'No mailboxes yet — add a domain first.');
 
@@ -5692,13 +5540,15 @@ async function loadInboxTab() {
     document.getElementById('peAuto').innerHTML = card('↩️ Auto-replies',
       '<p style="color:var(--text-secondary);margin:0">Automatic answers for inbound mail on one of your domains.</p>',
       '<button class="btn btn-primary btn-sm" onclick="peOpenAutoReply()">+ New auto-reply</button>') +
-      dataTable(['Name', 'Trigger', 'Subject', 'Delay', 'Active'],
+      dataTable(['Name', 'Trigger', 'Subject', 'Delay', 'Active', 'Actions'],
         PE.autoReplies.map(a => [
           escapeHtml(a.name || ''),
           escapeHtml(a.trigger_type || '') + (a.trigger_value ? ': ' + escapeHtml(a.trigger_value) : ''),
           escapeHtml(a.subject || '—'),
           escapeHtml(String(a.delay_minutes == null ? 0 : a.delay_minutes)) + ' min',
-          a.is_active ? '<span class="badge badge-success">on</span>' : '<span class="badge badge-muted">off</span>'
+          a.is_active ? '<span class="badge badge-success">on</span>' : '<span class="badge badge-muted">off</span>',
+          '<button class="btn btn-ghost btn-xs" onclick="peEditAutoReply(\'' + a.id + '\')">Edit</button>' +
+          ' <button class="btn btn-ghost btn-xs" onclick="peDeleteAutoReply(\'' + a.id + '\')">Delete</button>'
         ]),
         'No auto-replies yet.');
   }
@@ -6188,6 +6038,627 @@ TAB_LOADERS['checklists'] = loadChecklistsTab;
 TAB_LOADERS['round-robin'] = loadRoundRobinTab;
 TAB_LOADERS['monitoring'] = loadMonitoringTab;
 TAB_LOADERS['widgets'] = loadWidgetsTab;
+
+// ═══ t_4b6f1a5c residual dead-endpoint wiring ═══
+// Every route below was registered by the backend and called by NO shipped surface
+// (recount: /opt/swift/docs/evidence/coreswift-dead-endpoint-recount-2026-09-22.md).
+// Two nav entries — `ai-assistant` and `bookings` — existed in MENU with NO renderer,
+// so they fell through to renderTab's "under development" placeholder: that is where
+// the AI scoring module and the booking admin surface were meant to live.
+//
+// AI:            POST /ai/prioritize, /predict, /recommend, /timing, /risk, /channel, /message
+// Delay queue:   GET /events/delayed, DELETE /events/delayed/:id   (writers: src/monitoring/*)
+// Private email: PATCH+DELETE /private-email/boxes/:id, /private-email/auto-replies/:id
+// Tags:          POST /tags/assign, DELETE /tags/assign/:id, GET /tags/entity/:type/:id
+// Bookings:      GET /bookings/calendars, GET+PATCH /bookings/calendars/:slug,
+//                GET /bookings/calendars/:slug/slots, PATCH /bookings/calendars/:slug/slots/:id,
+//                GET /bookings/bookings, POST /bookings/bookings/:id/cancel
+// The AI module is a PLAN module (module_registry key `ai_enabled`): when the tenant's
+// plan does not carry it the API answers 402 and this panel says so instead of
+// rendering an empty table.
+
+// ── AI Assistant ────────────────────────────────────────────────────────────
+function aiShell() {
+  return pageHeader('AI Assistant', 'Priority scoring, churn risk and follow-up composition',
+    '<button class="btn btn-secondary btn-sm" id="aiRefresh">↻ Re-score contacts</button>') +
+    '<div id="aiBody"><div class="loading-wrap"><div class="spinner"></div> Scoring your contacts...</div></div>' +
+    '<div id="aiResult"></div>' +
+    '<br><div id="aiRecommend"></div>';
+}
+
+async function loadAiTab() {
+  const el = document.getElementById('aiBody');
+  if (!el) return;
+  const btn = document.getElementById('aiRefresh');
+  if (btn) btn.onclick = function () { loadAiTab(); };
+  let d;
+  try {
+    d = await API.post('/ai/prioritize', { limit: 25 });
+  } catch (e) {
+    el.innerHTML = icErr('AI scoring is not switched on for this account',
+      String(e.message) === 'Payment required'
+        ? 'The AI scoring module (ai_enabled) is not part of this plan. The platform admin turns it on per plan.'
+        : e.message);
+    const rec = document.getElementById('aiRecommend');
+    if (rec) rec.innerHTML = '';
+    return;
+  }
+  const rows = ((d && d.prioritized) || []).map(function (c) {
+    const id = escapeHtmlAttr(c.contact_id);
+    return [
+      escapeHtml(c.name || '—'),
+      escapeHtml(c.email || '—'),
+      '<strong>' + (c.priority_score == null ? '—' : c.priority_score) + '</strong>',
+      escapeHtml(c.risk_level || 'healthy'),
+      c.days_inactive == null ? '—' : c.days_inactive + 'd',
+      escapeHtml(c.recommended_action || '—'),
+      '<button class="btn btn-ghost btn-xs" onclick="aiRun(\'risk\',\'' + id + '\')">Risk</button>' +
+      ' <button class="btn btn-ghost btn-xs" onclick="aiRun(\'predict\',\'' + id + '\')">Win %</button>' +
+      ' <button class="btn btn-ghost btn-xs" onclick="aiRun(\'timing\',\'' + id + '\')">Timing</button>' +
+      ' <button class="btn btn-ghost btn-xs" onclick="aiRun(\'channel\',\'' + id + '\')">Channel</button>' +
+      ' <button class="btn btn-ghost btn-xs" onclick="aiRun(\'message\',\'' + id + '\')">Draft</button>'
+    ];
+  });
+  el.innerHTML = card('Priority queue (' + rows.length + ' of ' + ((d && d.count) || 0) + ')',
+    '<p style="color:var(--text-secondary);margin:0">Ranked by the AI scoring module: score, account health and inactivity. ' +
+    'Pick an action on a row to ask the assistant about that contact.</p>' +
+    dataTable(['Contact', 'Email', 'Priority', 'Risk', 'Inactive', 'Recommended', 'Ask the assistant'],
+      rows, 'No contacts to score yet.'), '');
+
+  const rec2 = document.getElementById('aiRecommend');
+  if (rec2) {
+    rec2.innerHTML = card('🎯 Recommend a campaign',
+      '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">' +
+        '<div style="flex:1;min-width:240px"><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Goal</label>' +
+        '<input type="text" id="aiGoal" placeholder="re-engage trial users who never imported contacts"></div>' +
+        '<button class="btn btn-primary btn-sm" id="aiGoalGo">Recommend</button>' +
+      '</div>', '');
+    const g = document.getElementById('aiGoalGo');
+    if (g) g.addEventListener('click', aiRecommend);
+  }
+}
+
+async function aiRun(action, contactId) {
+  const out = document.getElementById('aiResult');
+  if (out) out.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Asking the assistant...</div>';
+  let d;
+  try {
+    if (action === 'risk') d = await API.post('/ai/risk', { contact_id: contactId });
+    else if (action === 'predict') d = await API.post('/ai/predict', { contact_id: contactId });
+    else if (action === 'timing') d = await API.post('/ai/timing', { contact_id: contactId });
+    else if (action === 'channel') d = await API.post('/ai/channel', { contact_id: contactId, context: 'churn_risk' });
+    else d = await API.post('/ai/message', { contact_id: contactId, context: 'churn_risk', channel: 'email' });
+  } catch (e) {
+    if (out) out.innerHTML = icErr('The assistant could not answer', e.message);
+    return;
+  }
+  aiShow(action, d);
+}
+
+async function aiRecommend() {
+  const goalEl = document.getElementById('aiGoal');
+  const goal = goalEl ? String(goalEl.value || '').trim() : '';
+  if (!goal) { toast('Type a goal first', 'error'); return; }
+  const out = document.getElementById('aiResult');
+  if (out) out.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Building a recommendation...</div>';
+  let d;
+  try { d = await API.post('/ai/recommend', { campaign_goal: goal }); }
+  catch (e) { if (out) out.innerHTML = icErr('The assistant could not answer', e.message); return; }
+  aiShow('recommend', d);
+}
+
+function aiShow(action, d) {
+  const out = document.getElementById('aiResult');
+  if (!out) return;
+  const titles = { risk: '🛑 Churn risk', predict: '📈 Win probability', timing: '⏰ Best send time',
+                   channel: '📣 Suggested channel', message: '✍️ Drafted follow-up',
+                   recommend: '🎯 Campaign recommendation' };
+  let body = '<pre style="white-space:pre-wrap;word-break:break-word;font-size:.82rem;margin:0">' +
+    escapeHtml(JSON.stringify(d, null, 1)) + '</pre>';
+  if (d && d.subject && d.body) {
+    body = '<div class="form-group"><label>Subject</label><input type="text" readonly value="' +
+      escapeHtmlAttr(d.subject) + '"></div>' +
+      '<div class="form-group"><label>Body</label><textarea rows="8" readonly>' + escapeHtml(d.body) + '</textarea></div>' +
+      '<p style="color:var(--text-secondary)">Saved to templates as <code>' + escapeHtml(d.template_slug || '') + '</code> ' +
+      '(message id ' + escapeHtml(String(d.message_id || '')) + ').</p>' + body;
+  }
+  out.innerHTML = card(titles[action] || action, body, '');
+}
+
+// ── Bookings & slots (the `bookings` nav entry had no renderer) ─────────────
+const BK = { calendars: [], slots: {}, bookings: [], error: '' };
+
+function bookingsShell() {
+  return pageHeader('Bookings', 'Slot inventory per calendar, and the bookings taken against it',
+    '<button class="btn btn-secondary btn-sm" onclick="switchTab(\'calendar\')">📅 Calendars</button>') +
+    '<div id="bkCalendars"><div class="loading-wrap"><div class="spinner"></div> Loading calendars...</div></div>' +
+    '<br><div id="bkBookings"><div class="loading-wrap"><div class="spinner"></div> Loading bookings...</div></div>';
+}
+
+async function loadBookingsTab() {
+  const calEl = document.getElementById('bkCalendars');
+  const bkEl = document.getElementById('bkBookings');
+  if (!calEl || !bkEl) return;
+  let cals = [];
+  try { cals = famList(await API.get('/bookings/calendars'), 'calendars'); }
+  catch (e) { calEl.innerHTML = icErr('Could not read your booking calendars', e.message); }
+  BK.calendars = cals;
+  for (let i = 0; i < cals.length; i++) {
+    try { BK.slots[cals[i].slug] = famList(await API.get('/bookings/calendars/' + encodeURIComponent(cals[i].slug) + '/slots'), 'slots'); }
+    catch (e) { BK.slots[cals[i].slug] = { __error: e.message }; }
+  }
+  if (cals.length) {
+    calEl.innerHTML = cals.map(function (c) {
+      const slots = BK.slots[c.slug];
+      if (slots && slots.__error) {
+        return card('📅 ' + escapeHtml(c.name) + ' — <code>' + escapeHtml(c.slug) + '</code>',
+          icErr('Could not read the slot types', slots.__error), '');
+      }
+      const rows = (slots || []).map(function (s) {
+        return [
+          escapeHtml(s.slot_name || ''), String(s.total_slots == null ? '' : s.total_slots),
+          String(s.filled_slots == null ? '' : s.filled_slots) + ' / ' + String(s.total_slots == null ? '' : s.total_slots),
+          escapeHtml(String(s.default_duration_days == null ? '—' : s.default_duration_days)) + 'd',
+          '<button class="btn btn-ghost btn-xs" onclick="bkAdjustSlots(\'' + escapeHtmlAttr(c.slug) + '\',\'' +
+            escapeHtmlAttr(s.id) + '\',' + (s.total_slots == null ? 0 : s.total_slots) + ')">Set total slots</button>'
+        ];
+      });
+      return card('📅 ' + escapeHtml(c.name) + ' — <code>' + escapeHtml(c.slug) + '</code>',
+        '<p style="color:var(--text-secondary);margin:0">' + escapeHtml(c.calendar_type || 'generic') +
+        (c.is_active === false ? ' · inactive' : '') + '</p>' +
+        dataTable(['Slot type', 'Total', 'Filled', 'Duration', ''], rows,
+          'No slot types on this calendar yet.'), '');
+    }).join('<br>');
+  } else if (cals.length === 0) {
+    calEl.innerHTML = card('📅 Booking calendars',
+      '<p style="color:var(--text-secondary);margin:0">No booking calendars yet — create one on the Calendar tab.</p>', '');
+  }
+
+  let bookings = [];
+  try { bookings = famList(await API.get('/bookings/bookings'), 'bookings'); }
+  catch (e) { bkEl.innerHTML = icErr('Could not read bookings', e.message); return; }
+  BK.bookings = bookings;
+  bkEl.innerHTML = card('🗂 Bookings (' + bookings.length + ')',
+    '<p style="color:var(--text-secondary);margin:0">Every booking taken against a slot. Cancelling frees the slot back into the calendar.</p>' +
+    dataTable(['Business', 'Contact', 'Email', 'Dates', 'Status', 'Paid', ''],
+      bookings.map(function (b) {
+        return [
+          escapeHtml(b.business_name || '—'),
+          escapeHtml(b.contact_name || '—'),
+          escapeHtml(b.contact_email || '—'),
+          escapeHtml(String(b.start_date || '')) + ' → ' + escapeHtml(String(b.end_date || '')),
+          b.status === 'cancelled'
+            ? '<span class="badge badge-muted">cancelled</span>'
+            : '<span class="badge badge-success">' + escapeHtml(b.status || '') + '</span>',
+          escapeHtml(String(b.price_paid == null ? '—' : b.price_paid)) + ' ' + escapeHtml(b.currency || ''),
+          b.status === 'cancelled' ? '' :
+            '<button class="btn btn-ghost btn-xs" onclick="bkCancelBooking(\'' + escapeHtmlAttr(b.id) + '\')">Cancel</button>'
+        ];
+      }), 'No bookings yet.'), '');
+}
+
+function bkAdjustSlots(slug, slotId, current) {
+  showModal('Slot inventory',
+    '<div class="form-group"><label>Total slots</label>' +
+    '<input type="number" id="bkSlots" value="' + current + '" min="0">' +
+    '<span class="form-hint">Use -1 for unlimited.</span></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="bkSlotsSave">Save</button>');
+  const b = document.getElementById('bkSlotsSave');
+  if (!b) return;
+  b.addEventListener('click', async function () {
+    const v = parseInt(document.getElementById('bkSlots').value, 10);
+    if (isNaN(v)) { toast('Total slots must be a number', 'error'); return; }
+    b.disabled = true;
+    try {
+      await API.patch('/bookings/calendars/' + encodeURIComponent(slug) + '/slots/' + encodeURIComponent(slotId), { total_slots: v });
+      closeModal(); toast('Slot inventory updated', 'success'); loadBookingsTab();
+    } catch (e) { toast('Could not update: ' + e.message, 'error'); b.disabled = false; }
+  });
+}
+
+function bkCancelBooking(id) {
+  confirmThen('Cancel this booking? The slot goes back on the calendar.', function () {
+    API.post('/bookings/bookings/' + encodeURIComponent(id) + '/cancel', {})
+      .then(function () { toast('Booking cancelled', 'success'); loadBookingsTab(); })
+      .catch(function (e) { toast('Could not cancel: ' + e.message, 'error'); });
+  });
+}
+
+// ── Bookings calendar edit (GET + PATCH /bookings/calendars/:slug) ──────────
+async function gcEditCalendar(slug) {
+  let c;
+  try { c = await API.get('/bookings/calendars/' + encodeURIComponent(slug)); }
+  catch (e) { toast('Could not read the calendar: ' + e.message, 'error'); return; }
+  showModal('Edit booking calendar',
+    '<div class="form-group"><label>Name</label><input type="text" id="gcEditName" value="' + escapeHtmlAttr(c.name || '') + '"></div>' +
+    '<div class="form-group"><label>Description</label><textarea rows="3" id="gcEditDesc">' + escapeHtml(c.description || '') + '</textarea></div>' +
+    '<div class="form-group"><label>Slug</label><input type="text" readonly value="' + escapeHtmlAttr(c.slug || '') + '">' +
+    '<span class="form-hint">The slug is the public booking URL and cannot be changed here.</span></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="gcEditSave">Save</button>');
+  const b = document.getElementById('gcEditSave');
+  if (!b) return;
+  b.addEventListener('click', async function () {
+    const name = String(document.getElementById('gcEditName').value || '').trim();
+    if (!name) { toast('Name is required', 'error'); return; }
+    b.disabled = true;
+    try {
+      await API.patch('/bookings/calendars/' + encodeURIComponent(slug),
+        { name: name, description: String(document.getElementById('gcEditDesc').value || '') });
+      closeModal(); toast('Calendar updated', 'success'); await loadCalendarTab();
+    } catch (e) { toast('Could not save: ' + e.message, 'error'); b.disabled = false; }
+  });
+}
+
+// ── Private email: per-id mailbox + auto-reply actions ──────────────────────
+function peEditBox(id) {
+  const b = PE.boxes.filter(function (x) { return x.id === id; })[0];
+  if (!b) { toast('Mailbox not found — reload the tab', 'error'); return; }
+  showModal('Mailbox ' + (b.email_address || ''),
+    '<div class="form-group"><label>Signature</label><textarea rows="4" id="peBoxSig">' + escapeHtml(b.signature || '') + '</textarea></div>' +
+    '<div class="form-group"><label>Forwarding</label><select id="peBoxFwd">' +
+      '<option value="on"' + (b.forwarding_enabled ? ' selected' : '') + '>on</option>' +
+      '<option value="off"' + (b.forwarding_enabled ? '' : ' selected') + '>off</option></select>' +
+    '<span class="form-hint">Signature is appended to outbound mail sent from this mailbox.</span></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="peBoxSave">Save</button>');
+  const s = document.getElementById('peBoxSave');
+  if (!s) return;
+  s.addEventListener('click', async function () {
+    s.disabled = true;
+    try {
+      await API.patch('/private-email/boxes/' + encodeURIComponent(id), {
+        signature: String(document.getElementById('peBoxSig').value || ''),
+        forwarding_enabled: String(document.getElementById('peBoxFwd').value) === 'on'
+      });
+      closeModal(); toast('Mailbox updated', 'success'); await loadInboxTab();
+    } catch (e) { toast('Could not save: ' + e.message, 'error'); s.disabled = false; }
+  });
+}
+
+function peDeactivateBox(id) {
+  const b = PE.boxes.filter(function (x) { return x.id === id; })[0];
+  const addr = b ? b.email_address : id;
+  confirmThen('Deactivate ' + addr + '? The server marks the mailbox deprovisioned — it keeps its history and stops being usable for outbound mail.', function () {
+    API.del('/private-email/boxes/' + encodeURIComponent(id))
+      .then(function () { toast('Mailbox deactivated', 'success'); loadInboxTab(); })
+      .catch(function (e) { toast('Could not deactivate: ' + e.message, 'error'); });
+  });
+}
+
+function peEditAutoReply(id) {
+  const a = PE.autoReplies.filter(function (x) { return x.id === id; })[0];
+  if (!a) { toast('Auto-reply not found — reload the tab', 'error'); return; }
+  showModal('Auto-reply ' + (a.name || ''),
+    '<div class="form-group"><label>Subject</label><input type="text" id="peArSubject" value="' + escapeHtmlAttr(a.subject || '') + '"></div>' +
+    '<div class="form-group"><label>Body (HTML)</label><textarea rows="6" id="peArBody">' + escapeHtml(a.body_html || '') + '</textarea></div>' +
+    '<div class="form-group"><label>Delay (minutes)</label><input type="number" id="peArDelay" min="0" value="' + (a.delay_minutes == null ? 0 : a.delay_minutes) + '"></div>' +
+    '<div class="form-group"><label>Active</label><select id="peArActive">' +
+      '<option value="on"' + (a.is_active ? ' selected' : '') + '>on</option>' +
+      '<option value="off"' + (a.is_active ? '' : ' selected') + '>off</option></select></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="peArSave">Save</button>');
+  const s = document.getElementById('peArSave');
+  if (!s) return;
+  s.addEventListener('click', async function () {
+    s.disabled = true;
+    try {
+      await API.patch('/private-email/auto-replies/' + encodeURIComponent(id), {
+        subject: String(document.getElementById('peArSubject').value || ''),
+        body_html: String(document.getElementById('peArBody').value || ''),
+        delay_minutes: parseInt(document.getElementById('peArDelay').value, 10) || 0,
+        is_active: String(document.getElementById('peArActive').value) === 'on'
+      });
+      closeModal(); toast('Auto-reply updated', 'success'); await loadInboxTab();
+    } catch (e) { toast('Could not save: ' + e.message, 'error'); s.disabled = false; }
+  });
+}
+
+function peDeleteAutoReply(id) {
+  const a = PE.autoReplies.filter(function (x) { return x.id === id; })[0];
+  confirmThen('Delete the auto-reply' + (a && a.name ? ' "' + a.name + '"' : '') + '? This cannot be undone.', function () {
+    API.del('/private-email/auto-replies/' + encodeURIComponent(id))
+      .then(function () { toast('Auto-reply deleted', 'success'); loadInboxTab(); })
+      .catch(function (e) { toast('Could not delete: ' + e.message, 'error'); });
+  });
+}
+
+// ── Tags on a contact (assign / unassign / read the entity's tags) ──────────
+// ── CSV import / export — guide.html §19 (kanban t_d1b3f5c4) ────────────────
+// The API is POST /api/csv/preview, POST /api/csv/import/contacts and
+// GET /api/csv/export/contacts. API.call() is JSON-only (it prefixes /api and
+// JSON.stringify()s the body), so these talk to the CSV routes with a raw
+// fetch and carry the tenant's own bearer token.
+let CT_CSV_PENDING = null;
+
+const CT_CSV_FIELDS = [
+  ['first_name', ['firstname', 'givenname', 'fname']],
+  ['last_name', ['lastname', 'surname', 'familyname', 'lname']],
+  ['email', ['email', 'emailaddress', 'mail']],
+  ['phone', ['phone', 'phonenumber', 'mobile', 'tel', 'telephone']],
+  ['title', ['title', 'jobtitle', 'position']],
+  ['company', ['company', 'companyname', 'organization', 'organisation']],
+  ['notes', ['notes', 'note', 'comments']],
+  ['address_line1', ['address', 'addressline1', 'street']],
+  ['city', ['city', 'town']],
+  ['state', ['state', 'province', 'region']],
+  ['postal_code', ['postalcode', 'zip', 'zipcode']],
+  ['country', ['country']]
+];
+
+function ctCsvNorm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+
+function ctCsvMap(headers) {
+  const used = {};
+  const out = [];
+  headers.forEach(function (h) {
+    const n = ctCsvNorm(h);
+    let field = null;
+    CT_CSV_FIELDS.forEach(function (pair) {
+      if (field || used[pair[0]]) return;
+      if (ctCsvNorm(pair[0]) === n || pair[1].indexOf(n) >= 0) field = pair[0];
+    });
+    if (field) { used[field] = true; out.push({ csv_header: String(h), contact_field: field }); }
+  });
+  return out;
+}
+
+async function ctCsvFetch(path, opts) {
+  const o = opts || {};
+  o.headers = Object.assign({}, o.headers || {}, { Authorization: 'Bearer ' + STATE.token });
+  const res = await fetch('/api/csv/' + path, o);
+  if (res.status === 401) { logout(true); throw new Error('Session expired'); }
+  if (!res.ok) {
+    let msg = 'HTTP ' + res.status;
+    try { const e = await res.json(); if (typeof e.message === 'string') msg = e.message; } catch (_) {}
+    throw new Error(msg);
+  }
+  return res;
+}
+
+function ctCsvPreviewBody(headers, map, sample) {
+  const mapped = {};
+  map.forEach(function (m) { mapped[m.csv_header] = m.contact_field; });
+  let chips = '';
+  headers.forEach(function (h) {
+    const f = mapped[h];
+    chips += '<span class="badge ' + (f ? 'badge-success' : 'badge-muted') +
+      '" style="margin:2px;display:inline-block">' + escapeHtml(h) +
+      (f ? ' &rarr; ' + escapeHtml(f) : ' (skipped)') + '</span>';
+  });
+  let table = '';
+  if (sample && sample.length) {
+    table = '<div class="table-wrap" style="margin-top:12px"><table><thead><tr>' +
+      headers.map(function (h) { return '<th>' + escapeHtml(h) + '</th>'; }).join('') +
+      '</tr></thead><tbody>' +
+      sample.map(function (r) {
+        return '<tr>' + headers.map(function (_, i) {
+          return '<td>' + escapeHtml(r[i] || '') + '</td>';
+        }).join('') + '</tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+  return '<p style="margin:0 0 8px">CoreSwift read the header row. Columns map like this; unmatched ones are skipped.</p>' +
+    '<div>' + chips + '</div>' + table +
+    '<p style="margin:12px 0 0;color:var(--text-secondary)">Up to 500 rows per import.</p>';
+}
+
+function ctCsvImportPick() {
+  let inp = document.getElementById('ctCsvFile');
+  if (!inp) {
+    inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = '.csv,text/csv';
+    inp.id = 'ctCsvFile';
+    inp.style.display = 'none';
+    document.body.appendChild(inp);
+    inp.addEventListener('change', function () {
+      if (inp.files && inp.files[0]) ctCsvPreview(inp.files[0]);
+    });
+  }
+  inp.value = '';
+  inp.click();
+}
+
+async function ctCsvPreview(file) {
+  CT_CSV_PENDING = null;
+  showModal('Import contacts from CSV',
+    '<div id="ctCsvBody"><div class="loading-wrap"><div class="spinner"></div> Reading ' +
+      escapeHtml(file.name) + '...</div></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="ctCsvGo" disabled onclick="ctCsvImport()">Import</button>');
+  const fd = new FormData();
+  fd.append('file', file);
+  const body = document.getElementById('ctCsvBody');
+  let d;
+  try {
+    d = await (await ctCsvFetch('preview', { method: 'POST', body: fd })).json();
+  } catch (e) {
+    if (body) body.innerHTML = icErr('Could not read the CSV', e.message);
+    return;
+  }
+  const headers = (d && d.headers) || [];
+  const map = ctCsvMap(headers);
+  if (body && !map.length) {
+    body.innerHTML = icErr('No importable columns found',
+      'None of these headers match a contact field: ' + headers.join(', '));
+    return;
+  }
+  CT_CSV_PENDING = { file: file, map: map };
+  if (body) body.innerHTML = ctCsvPreviewBody(headers, map, (d && d.sample_rows) || []);
+  const go = document.getElementById('ctCsvGo');
+  if (go) go.disabled = false;
+}
+
+async function ctCsvImport() {
+  if (!CT_CSV_PENDING) return;
+  const fd = new FormData();
+  fd.append('file', CT_CSV_PENDING.file);
+  fd.append('mappings', JSON.stringify(CT_CSV_PENDING.map));
+  const body = document.getElementById('ctCsvBody');
+  if (body) body.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Importing...</div>';
+  let d;
+  try {
+    d = await (await ctCsvFetch('import/contacts', { method: 'POST', body: fd })).json();
+  } catch (e) {
+    if (body) body.innerHTML = icErr('Import failed', e.message);
+    return;
+  }
+  closeModal();
+  CT_CSV_PENDING = null;
+  toast('Imported ' + d.imported + ' contact' + (d.imported === 1 ? '' : 's') +
+    (d.skipped ? ' (' + d.skipped + ' skipped)' : ''), d.skipped ? 'info' : 'success');
+  if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['contacts']) TAB_LOADERS['contacts']();
+}
+
+async function csvExportContacts() {
+  try {
+    const res = await ctCsvFetch('export/contacts');
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'contacts_export.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+    toast('Contacts exported', 'success');
+  } catch (e) {
+    toast('Export failed: ' + e.message, 'error');
+  }
+}
+
+async function ctOpenTags(cid) {
+  showModal('Tags on this contact',
+    '<div id="ctTagsBody"><div class="loading-wrap"><div class="spinner"></div> Loading tags...</div></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Close</button>');
+  let who = '';
+  try { const c = await API.get('/contacts/' + encodeURIComponent(cid));
+        who = (c && (c.name || ((c.first_name || '') + ' ' + (c.last_name || '')).trim())) || ''; } catch (e) {}
+  const title = document.querySelector('#modalContainer h3');
+  if (title && who) title.textContent = 'Tags — ' + who;
+  await ctLoadTags(cid);
+}
+
+async function ctLoadTags(cid) {
+  const body = document.getElementById('ctTagsBody');
+  if (!body) return;
+  let all = [], mine = [];
+  try {
+    all = famList(await API.get('/tags'), 'tags');
+    const d = await API.get('/tags/entity/contact/' + encodeURIComponent(cid));
+    mine = (d && (d.assignments || d.tags)) || [];
+    if (d && d.assignments) {
+      // `assignments` carries the assignment id the DELETE route needs; `tags` is the
+      // tag rows themselves (kept unchanged for existing consumers).
+      mine = d.assignments.map(function (a) {
+        const t = (d.tags || []).filter(function (x) { return x.id === a.tag_id; })[0] || {};
+        return { assignment_id: a.id, tag_id: a.tag_id, id: a.tag_id, name: t.name, color: t.color };
+      });
+    } else {
+      mine = mine.map(function (t) { return { assignment_id: null, tag_id: t.id, id: t.id, name: t.name, color: t.color }; });
+    }
+  } catch (e) { body.innerHTML = icErr('Could not read tags', e.message); return; }
+
+  const assignedIds = mine.map(function (m) { return m.tag_id; });
+  const avail = all.filter(function (t) { return assignedIds.indexOf(t.id) < 0; });
+  body.innerHTML =
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
+      (mine.length ? mine.map(function (m) {
+        return '<span class="badge" style="background:' + escapeHtmlAttr(m.color || 'var(--accent-subtle)') +
+          ';color:#fff;padding:6px 12px">' + escapeHtml(m.name || m.tag_id) +
+          (m.assignment_id ? ' <a href="#" onclick="ctUnassignTag(\'' + escapeHtmlAttr(cid) + '\',\'' +
+            escapeHtmlAttr(m.assignment_id) + '\');return false" title="Remove tag">✕</a>' : '') +
+          '</span>';
+      }).join('') : '<span class="config-desc">No tags on this contact yet.</span>') +
+    '</div>' +
+    '<div style="display:flex;gap:8px;align-items:flex-end">' +
+      '<div style="flex:1"><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Add a tag</label>' +
+      '<select id="ctTagPick">' + (avail.length
+        ? avail.map(function (t) { return '<option value="' + escapeHtmlAttr(t.id) + '">' + escapeHtml(t.name) + '</option>'; }).join('')
+        : '<option value="">No tags left to add</option>') + '</select></div>' +
+      '<button class="btn btn-primary btn-sm" id="ctTagAdd"' + (avail.length ? '' : ' disabled') + '>Assign</button>' +
+    '</div>' +
+    (all.length ? '' : '<p style="color:var(--text-secondary);margin-top:10px">No tags exist yet — create some on the Tags tab.</p>');
+  const add = document.getElementById('ctTagAdd');
+  if (add) add.addEventListener('click', function () {
+    const sel = document.getElementById('ctTagPick');
+    if (sel && sel.value) ctAssignTag(cid, sel.value);
+  });
+}
+
+async function ctAssignTag(cid, tagId) {
+  try {
+    await API.post('/tags/assign', { tag_id: tagId, entity_type: 'contact', entity_id: cid });
+    toast('Tag assigned', 'success');
+  } catch (e) { toast('Could not assign: ' + e.message, 'error'); }
+  await ctLoadTags(cid);
+  if (typeof loadTagsTab === 'function' && document.getElementById('tagsTable')) loadTagsTab();
+}
+
+async function ctUnassignTag(cid, assignmentId) {
+  try {
+    await API.del('/tags/assign/' + encodeURIComponent(assignmentId));
+    toast('Tag removed', 'success');
+  } catch (e) { toast('Could not remove: ' + e.message, 'error'); }
+  await ctLoadTags(cid);
+  if (typeof loadTagsTab === 'function' && document.getElementById('tagsTable')) loadTagsTab();
+}
+
+// ── Monitoring: the If-Not-Then delay queue (GET list + DELETE cancel) ──────
+async function ruleLoadScheduled() {
+  const el = document.getElementById('ruleScheduled');
+  if (!el) return;
+  let d;
+  try { d = await API.get('/events/delayed?per_page=25'); }
+  catch (e) { el.innerHTML = icErr('Could not read the scheduled follow-up queue', e.message); return; }
+  const rows = ((d && d.delayed_actions) || []).map(function (a) {
+    return [
+      escapeHtml(String(a.condition_type || '')),
+      escapeHtml(String(a.action_type || '')),
+      a.execute_at ? new Date(a.execute_at).toLocaleString() : '—',
+      a.executed ? '<span class="badge badge-muted">executed</span>' :
+        (a.cancelled ? '<span class="badge badge-muted">cancelled</span>' : '<span class="badge badge-success">pending</span>'),
+      a.cancelled ? '' :
+        '<button class="btn btn-ghost btn-xs" onclick="monCancelDelayed(\'' + escapeHtmlAttr(a.id) + '\')">Cancel</button>'
+    ];
+  });
+  el.innerHTML = card('⏱ Scheduled follow-ups (' + ((d && d.total) || 0) + ')',
+    '<p style="color:var(--text-secondary);margin:0">The If-Not-Then delay queue. Account-health monitoring schedules these; ' +
+    'cancelling one stops the follow-up before it fires.</p>' +
+    dataTable(['Condition', 'Action', 'Runs at', 'State', ''], rows, 'Nothing scheduled.'), '');
+}
+
+function monCancelDelayed(id) {
+  confirmThen('Cancel this scheduled follow-up?', function () {
+    API.del('/events/delayed/' + encodeURIComponent(id))
+      .then(function () { toast('Scheduled action cancelled', 'success'); ruleLoadScheduled(); })
+      .catch(function (e) { toast('Could not cancel: ' + e.message, 'error'); });
+  });
+}
+
+// ── registrations (MENU already carries `ai-assistant` and `bookings`) ──────
+TAB_RENDERERS['ai-assistant'] = aiShell;
+TAB_LOADERS['ai-assistant'] = loadAiTab;
+TAB_RENDERERS['bookings'] = bookingsShell;
+TAB_LOADERS['bookings'] = loadBookingsTab;
+
+// The delay queue is the "If-Not-Then" engine, so it lives on the TENANT Rules tab.
+// (It first went on `monitoring` — that entry is in ADMIN_MENU, platform operators only, so a
+// customer could never reach the panel. Measured: the nav entry is absent for a tenant token.)
+(function () {
+  const rulesShell0 = TAB_RENDERERS['rules'];
+  const rulesLoad0 = TAB_LOADERS['rules'];
+  if (rulesShell0) {
+    TAB_RENDERERS['rules'] = function () {
+      return rulesShell0() + '<br><div id="ruleScheduled"></div>';
+    };
+  }
+  TAB_LOADERS['rules'] = async function () {
+    if (rulesLoad0) { try { await rulesLoad0(); } catch (e) { /* the panel below still renders */ } }
+    ruleLoadScheduled();
+  };
+})();
 
 </script>
 </body>
