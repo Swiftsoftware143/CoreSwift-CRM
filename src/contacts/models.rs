@@ -18,9 +18,12 @@ pub struct Contact {
     /// capture, cross-app tag sync) and the one the Contacts tab renders. It was missing from
     /// this struct, so the `SELECT *` on every contact query silently dropped the column
     /// before serialization and the Company cell showed an em dash for every row of every
-    /// tenant, including rows whose `contacts.company` is set. `company_id` is the (dangling)
-    /// uuid variant — left in place, not used for display.
+    /// tenant, including rows whose `contacts.company` is set.
     pub company: Option<String>,
+    /// Machine-readable link to a `companies` row of the SAME tenant — a real reference since
+    /// migration 087 (`contacts_company_id_fkey`, ON DELETE SET NULL) and refused at write time
+    /// unless the company is the caller's (t_47698f73). Deliberately NOT a display source: the
+    /// free-text `company` above is the employer the product renders (decision on t_fbb30c16).
     pub company_id: Option<Uuid>,
     pub gender: Option<String>,
     pub address_line1: Option<String>,
@@ -43,10 +46,13 @@ pub struct CreateContactRequest {
     pub first_name: String,
     pub last_name: String,
     pub title: Option<String>,
+    /// Optional link to a company of the caller's tenant. A uuid that does not name a company of
+    /// this tenant is answered with 404 and is NOT stored (t_47698f73) — before that gate any
+    /// uuid was accepted and kept forever as a reference to nothing.
     pub company_id: Option<Uuid>,
     /// Free-text employer — the column the product renders and every non-CRUD writer fills.
-    /// It is the source of truth for a contact's company (decision on t_fbb30c16): `company_id`
-    /// is accepted for compatibility but has no FK and all 6 live values are dangling.
+    /// It is the source of truth for a contact's company (decision on t_fbb30c16); `company_id`
+    /// is the machine-readable link, validated against `companies` and never rendered.
     pub company: Option<String>,
     pub gender: Option<String>,
     pub address_line1: Option<String>,
@@ -66,10 +72,12 @@ pub struct UpdateContactRequest {
     pub first_name: Option<String>,
     pub last_name: Option<String>,
     pub title: Option<String>,
+    /// Same gate as `CreateContactRequest::company_id`: NULL keeps the stored link, a uuid that
+    /// names no company of this tenant is a 404 (t_47698f73).
     pub company_id: Option<Uuid>,
-    /// Exclusive-or with `company_id` for display purposes: this text column is the employer a
-    /// contact shows. `None` means "not mentioned, keep the stored value"; a blank string means
-    /// "clear it" and is normalised to NULL on the way in.
+    /// The employer a contact shows: this text column wins over `company_id` for display
+    /// (decision on t_fbb30c16). `None` means "not mentioned, keep the stored value"; a blank
+    /// string means "clear it" and is normalised to NULL on the way in.
     pub company: Option<String>,
     pub gender: Option<String>,
     pub address_line1: Option<String>,

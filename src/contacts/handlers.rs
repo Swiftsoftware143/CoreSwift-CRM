@@ -108,6 +108,20 @@ pub async fn create(
         ));
     }
 
+    // t_47698f73: `company_id` may only name a company of the caller's own tenant. Before this,
+    // any client could POST a random uuid and have it stored forever: no FK, no validation, no
+    // reader. The FK in migration 087 now makes a dangling value unstorable, and this makes the
+    // answer a 404 naming the field rather than a 500 from the constraint — and covers the case
+    // the FK cannot see, a real company that belongs to somebody else's tenant.
+    if let Some(company_id) = req.company_id {
+        if !super::company_of_tenant(&state.db, company_id, account_id).await? {
+            return Err(AppError::NotFound(format!(
+                "Company {} not found for this tenant",
+                company_id
+            )));
+        }
+    }
+
     // If email is provided, check for existing contact with same email for this tenant
     if let Some(ref email) = req.email {
         if !email.is_empty() {
@@ -249,6 +263,19 @@ pub async fn update(
                     "Another contact with this email already exists".to_string(),
                 ));
             }
+        }
+    }
+
+    // t_47698f73: same gate as `create` — a PATCH below binds `company_id` straight into the
+    // UPDATE, so without this check a client could re-point an existing contact at a uuid that
+    // names nothing. 404 for a company that is not the caller's, rather than a FK 500 or a
+    // silently stored dangling reference.
+    if let Some(company_id) = req.company_id {
+        if !super::company_of_tenant(&state.db, company_id, account_id).await? {
+            return Err(AppError::NotFound(format!(
+                "Company {} not found for this tenant",
+                company_id
+            )));
         }
     }
 

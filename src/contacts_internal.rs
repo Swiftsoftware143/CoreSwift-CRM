@@ -63,6 +63,19 @@ pub async fn internal_create(
         return Err(AppError::BadRequest("first_name is required".into()));
     }
 
+    // t_47698f73: a reference that resolves to nothing is no longer storable. The FK column
+    // (migration 087) rejects a uuid that names no company at all; it cannot see tenancy, so this
+    // rejects a company belonging to another tenant. Here (internal sync, no JWT) the answer is a
+    // 400 naming the field instead of a 500 raised by the foreign key.
+    if let Some(cid) = company_id {
+        if !crate::contacts::company_of_tenant(&s.db, cid, tenant_id).await? {
+            return Err(AppError::BadRequest(format!(
+                "company_id {} is not a company of tenant {}",
+                cid, tenant_id
+            )));
+        }
+    }
+
     let id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO contacts (id, tenant_id, first_name, last_name, email, phone, company_id, notes, title) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
