@@ -2513,8 +2513,109 @@ async function saveContactEdit() {
     toast('Update failed: ' + e.message, 'error');
   }
 }
-function showAddCompanyModal(){ showModal('Add Company', '<div class="form-group"><label>Company Name</label><input type="text"></div><div class="form-group"><label>Industry</label><input type="text"></div><div class="form-group"><label>Website</label><input type="url"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Company added&#39;,&#39;success&#39;)">Save</button>'); }
-function editCompany(id){ toast('Editing company: ' + id, 'info'); }
+// Company create + editor — POST /api/companies and GET/PATCH /api/companies/{id} (kanban
+// t_f582ff76). Both controls were toast-only: "+ Add Company" rendered three id-less inputs and
+// its Save was closeModal();toast('Company added') — no request, no row — and the per-row Edit
+// button was toast('Editing company: ' + id). A tenant could therefore neither create nor
+// correct a company from this tab, although the API has always supported both.
+const CO_FORM_FIELDS = [
+  { key: 'name',          label: 'Company name *', id: 'Name',     type: 'text' },
+  { key: 'domain',        label: 'Domain',         id: 'Domain',   type: 'text' },
+  { key: 'industry',      label: 'Industry',       id: 'Industry', type: 'text' },
+  { key: 'size',          label: 'Size',           id: 'Size',     type: 'text' },
+  { key: 'phone',         label: 'Phone',          id: 'Phone',    type: 'text' },
+  { key: 'website',       label: 'Website',        id: 'Website',  type: 'url' },
+  { key: 'address_line1', label: 'Address line 1', id: 'Addr1',    type: 'text' },
+  { key: 'address_line2', label: 'Address line 2', id: 'Addr2',    type: 'text' },
+  { key: 'city',          label: 'City',           id: 'City',     type: 'text' },
+  { key: 'state',         label: 'State',          id: 'State',    type: 'text' },
+  { key: 'postal_code',   label: 'Postal code',    id: 'Postal',   type: 'text' },
+  { key: 'country',       label: 'Country',        id: 'Country',  type: 'text' },
+  { key: 'notes',         label: 'Notes',          id: 'Notes',    type: 'textarea' },
+];
+
+function coModalValue(id) { const el = document.getElementById(id); return el ? el.value.trim() : ''; }
+
+function coFieldHtml(prefix, f, val) {
+  const v = (val === null || val === undefined) ? '' : String(val);
+  const control = f.type === 'textarea'
+    ? '<textarea rows="3" id="' + prefix + f.id + '">' + escapeHtml(v) + '</textarea>'
+    : '<input type="' + f.type + '" id="' + prefix + f.id + '" value="' + escapeHtmlAttr(v) + '">';
+  return '<div class="form-group"><label>' + f.label + '</label>' + control + '</div>';
+}
+
+function showAddCompanyModal() {
+  showModal('Add Company',
+    CO_FORM_FIELDS.map(f => coFieldHtml('coAdd', f, '')).join(''),
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary btn-sm" data-ops="company-create" onclick="saveNewCompany()">Save</button>');
+}
+
+async function saveNewCompany() {
+  const name = coModalValue('coAddName');
+  if (!name) { toast('Company name is required', 'error'); return; }
+  // POST /api/companies takes every profile column as OPTIONAL (CreateCompanyRequest; only `name`
+  // is required), so blanks are omitted instead of stored as empty strings.
+  const body = { name: name };
+  CO_FORM_FIELDS.forEach(f => {
+    if (f.key === 'name') return;
+    const v = coModalValue('coAdd' + f.id);
+    if (v) body[f.key] = v;
+  });
+  try {
+    await API.post('/companies', body);
+    closeModal();
+    toast('Company created', 'success');
+    if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['companies']) TAB_LOADERS['companies']();
+  } catch (e) {
+    toast('Create failed: ' + e.message, 'error');
+  }
+}
+
+let CO_EDIT = null;   // { id, orig } — the row the editor was opened on
+
+// Company editor — GET /api/companies/{id} prefills it, PATCH /api/companies/{id} saves it.
+// Until t_f582ff76 this was toast('Editing company: ' + id), so the row was unreadable and
+// uneditable from the tab.
+async function editCompany(id) {
+  let c;
+  try { c = await API.get('/companies/' + encodeURIComponent(id)); }
+  catch (e) { toast('Could not load company: ' + e.message, 'error'); return; }
+  if (!c || !c.id) { toast('Company not found', 'error'); return; }
+  CO_EDIT = { id: id, orig: c };
+  showModal('Edit Company',
+    CO_FORM_FIELDS.map(f => coFieldHtml('coEdit', f, c[f.key])).join(''),
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary btn-sm" data-ops="company-update" onclick="saveCompanyEdit()">Save</button>');
+}
+
+async function saveCompanyEdit() {
+  const cur = CO_EDIT;
+  if (!cur || !cur.id) { toast('No company selected', 'error'); return; }
+  const name = coModalValue('coEditName');
+  if (!name) { toast('Company name is required', 'error'); return; }
+  // Only CHANGED fields are sent: PATCH binds every column as COALESCE($n, column)
+  // (src/companies/handlers.rs::update), so NULL means "leave it alone" and an empty string is the
+  // one value that CLEARS a text column. That is survivable here because `companies.domain` is
+  // indexed but NOT unique — the contact editor's blank-email 500 (idx_contacts_tenant_email) has
+  // no counterpart on this table (measured: \d companies).
+  const body = {};
+  CO_FORM_FIELDS.forEach(f => {
+    const v = coModalValue('coEdit' + f.id);
+    const raw = cur.orig[f.key];
+    const was = (raw === null || raw === undefined) ? '' : String(raw);
+    if (v !== was) body[f.key] = v;
+  });
+  if (!Object.keys(body).length) { closeModal(); toast('No changes to save', 'info'); return; }
+  try {
+    await API.patch('/companies/' + encodeURIComponent(cur.id), body);
+    closeModal();
+    toast('Company updated', 'success');
+    if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['companies']) TAB_LOADERS['companies']();
+  } catch (e) {
+    toast('Update failed: ' + e.message, 'error');
+  }
+}
 function showAddRuleModal(){ showModal('New Rule', '<div class="form-group"><label>Rule Name</label><input type="text"></div><div class="form-group"><label>Trigger</label><select><option>Contact created</option><option>Deal stage changed</option><option>Form submitted</option><option>Tag added</option></select></div><div class="form-group"><label>Action</label><select><option>Send email</option><option>Add to list</option><option>Update deal</option><option>Create task</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Rule created&#39;,&#39;success&#39;)">Create Rule</button>'); }
 // Email Templates tab — create + edit both go to /api/comms/templates (message_templates).
 // The modal used to be a stub: it toasted "Template saved" and issued no request at all.
