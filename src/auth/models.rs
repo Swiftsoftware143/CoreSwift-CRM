@@ -134,7 +134,9 @@ pub struct AccountResponse {
     pub id: Uuid,
     pub name: String,
     pub slug: String,
-    pub is_active: bool,
+    /// Mirrors `Account.is_active`: `tenants.is_active` is NULLABLE, so a NULL tenant is reported
+    /// as JSON null (unknown) rather than being invented as `true`.
+    pub is_active: Option<bool>,
 }
 
 /// Login request body.

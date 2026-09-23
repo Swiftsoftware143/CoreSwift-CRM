@@ -1149,6 +1149,23 @@ pub async fn list_all_tenants(
     let tenants: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
+            // `tenants.is_active` is NULLABLE (boolean, default true, 0 NULLs live) while this read
+            // decoded it as a plain `bool` and fell back to `true`: a NULL tenant was therefore
+            // reported to the admin console as ACTIVE - an invented answer rather than an error,
+            // and the silent half of the class fixed for `contacts.is_active` on t_97b46a98.
+            // Decode honestly (Option<bool>, the t_31ae74fa convention): a NULL is unknown and
+            // travels as JSON null, and it is logged once so the state is observable.
+            let is_active_raw = r.try_get::<Option<bool>, _>("is_active");
+            if let Err(e) = &is_active_raw {
+                warn_decode("is_active", e);
+            }
+            if matches!(&is_active_raw, Ok(None)) {
+                tracing::warn!(
+                    tenant_id = %r.try_get::<&str, _>("id").unwrap_or(""),
+                    "admin tenants: tenants.is_active is NULL - reporting unknown, not active (t_ab7492c4)"
+                );
+            }
+            let is_active: Option<bool> = is_active_raw.ok().flatten();
             json!({
                 "id": r.try_get::<&str,_>("id")
                     .map_err(|e| warn_decode("id", &e)).unwrap_or(""),
@@ -1158,8 +1175,7 @@ pub async fn list_all_tenants(
                     .map_err(|e| warn_decode("slug", &e)).ok().flatten(),
                 "email": r.try_get::<Option<String>,_>("email")
                     .map_err(|e| warn_decode("email", &e)).ok().flatten(),
-                "is_active": r.try_get::<bool,_>("is_active")
-                    .map_err(|e| warn_decode("is_active", &e)).unwrap_or(true),
+                "is_active": is_active,
                 "created_at": r.try_get::<&str,_>("created_at")
                     .map_err(|e| warn_decode("created_at", &e)).unwrap_or(""),
             })

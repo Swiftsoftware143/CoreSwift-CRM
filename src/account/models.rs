@@ -12,7 +12,13 @@ pub struct Account {
     pub accent_color: Option<String>,
     pub custom_domain: Option<String>,
     pub settings: Option<serde_json::Value>,
-    pub is_active: bool,
+    /// `tenants.is_active` is NULLABLE in the live schema (boolean, default true, 0 NULLs live) and
+    /// this struct is decoded from `SELECT *` / `RETURNING *` on `tenants`, so a plain `bool` here
+    /// made a whole-row decode fail (500) the moment a row carried a NULL — the same class as
+    /// `Contact.is_active` on t_97b46a98. A NULL is data (unknown), not `false` / `true`.
+    /// Every INSERT INTO tenants in the fleet omits this column (so the default applies) and the
+    /// only bind is `is_active = COALESCE($n, is_active)`, so no writer can store a NULL today.
+    pub is_active: Option<bool>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
