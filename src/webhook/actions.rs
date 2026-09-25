@@ -664,12 +664,15 @@ pub async fn route_action(
             let mut binds: Vec<String> = vec![];
             let mut param_idx = 2;
             if let Some(u) = unit {
-                sql.push_str(&format!(" AND bp.unit = ${}", param_idx));
+                sql.push_str(&format!(" AND bp.unit = ${}::business_unit", param_idx));
                 binds.push(u.to_string());
                 param_idx += 1;
             }
             if let Some(s) = state_filter {
-                sql.push_str(&format!(" AND bp.current_state = ${}", param_idx));
+                sql.push_str(&format!(
+                    " AND bp.current_state = ${}::user_state",
+                    param_idx
+                ));
                 binds.push(s.to_string());
                 param_idx += 1;
             }
@@ -702,12 +705,15 @@ pub async fn route_action(
             let mut count_binds: Vec<String> = vec![];
             let mut count_idx = 2;
             if let Some(u) = unit {
-                count_sql.push_str(&format!(" AND bp.unit = ${}", count_idx));
+                count_sql.push_str(&format!(" AND bp.unit = ${}::business_unit", count_idx));
                 count_binds.push(u.to_string());
                 count_idx += 1;
             }
             if let Some(s) = state_filter {
-                count_sql.push_str(&format!(" AND bp.current_state = ${}", count_idx));
+                count_sql.push_str(&format!(
+                    " AND bp.current_state = ${}::user_state",
+                    count_idx
+                ));
                 count_binds.push(s.to_string());
             }
             let mut total_q = sqlx::query_as::<_, (i64,)>(&count_sql).bind(tenant_id);
