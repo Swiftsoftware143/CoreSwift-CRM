@@ -461,15 +461,12 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/webhooks/mailgun/inbound",
             axum::routing::post(private_email::webhook_handler::inbound_webhook),
         )
-        // Stripe/PayPal webhooks (no auth)
-        .route(
-            "/api/billing/webhooks/stripe",
-            axum::routing::post(billing::handlers::stripe_webhook),
-        )
-        .route(
-            "/api/billing/webhooks/paypal",
-            axum::routing::post(billing::handlers::paypal_webhook),
-        )
+        // NOTE: POST /api/billing/webhooks/{stripe,paypal} were RETIRED 2026-09-25 (kanban
+        // t_0fe500d4) together with POST /api/billing/checkout/create. They authenticated nothing
+        // (no signature, no shared secret) and their only effect was to complete a
+        // `checkout_sessions` row — a table that no tenant ever had a row in and that migration 097
+        // drops. Leaving them registered would have restored the 42P01 that t_a8a3fa27 had just
+        // closed. See src/billing/handlers.rs for the full retirement note.
         // Public booking endpoints (no auth)
         .nest("/api/public/bookings", bookings::public_router())
         // Tickets public endpoints (root level)

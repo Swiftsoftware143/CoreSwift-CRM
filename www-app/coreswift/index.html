@@ -3319,15 +3319,17 @@ async function loadCredits() {
         '<div class="stat-card accent"><div class="stat-value">' + remaining + '</div><div class="stat-label">Remaining</div></div>' +
         '<div class="stat-card"><div class="stat-value">' + consumed + ' / ' + allowance + '</div><div class="stat-label">Used this period (' + pct + '%)</div></div>' +
       '</div>' + rows +
-      '<p class="config-desc" style="margin-top:10px">Credit packs are purchased through checkout. The old self-serve “buy credits” route granted credits with no payment attached and was removed.</p>');
+      '<p class="config-desc" style="margin-top:10px">Credits are consumed by the features above. There is no self-serve purchase route: the old “buy credits” route granted credits with no payment attached and was removed, and the unfinished checkout route it pointed at was retired rather than shipped (2026-09-25).</p>');
   } catch (e) {
     el.innerHTML = card('Credits', '<p style="color:var(--text-secondary)">Credits endpoint: ' + escapeHtml(e.message) + '</p>');
   }
 }
 
 // Payment history (item 2 of t_05d1f961): measured, not assumed, on 2026-09-22.
-// GET /billing/checkout/sessions stays DELETED — it read a `checkout_sessions` table that does not
-// exist (guaranteed 500), and it was never re-registered.
+// GET /billing/checkout/sessions stays DELETED — it read a `checkout_sessions` table that did not
+// exist (guaranteed 500), and it was never re-registered. The whole checkout surface followed it on
+// 2026-09-25 (t_0fe500d4): the checkout-create route, the four provider session helpers, the two
+// public provider webhooks and migration 097 dropped the table.
 //   - There is no payments/invoices table in this schema at all.
 //   - `payment_webhook_events` (provider_type, event_type, event_id, raw_body, headers, status,
 //     error_message, created_at) has NO tenant_id column — it is an ops record of inbound provider

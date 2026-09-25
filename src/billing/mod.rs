@@ -52,18 +52,19 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/credits/usage",
             axum::routing::get(handlers::get_credit_usage),
         )
-        // NOTE: POST /credits/buy was removed. It inserted a 'credit_purchase' row for the
-        // caller's tenant with no payment, no role check and no provider session — i.e. any
-        // authenticated user could mint credits. Real purchases go through /checkout/create
-        // (provider session) + the provider webhooks below.
-        // Stripe/PayPal checkout
-        .route(
-            "/checkout/create",
-            axum::routing::post(handlers::create_checkout_session),
-        )
-        // NOTE: GET /checkout/sessions was removed 2026-09-21 (dead-endpoint triage
-        // t_14f5514f). It queried a `checkout_sessions` table that does not exist, so every
-        // call was a 500, and no shipped surface called it. See billing/handlers.rs.
+        // NOTE: POST /credits/buy was removed (2026-09-21). It inserted a 'credit_purchase' row for
+        // the caller's tenant with no payment, no role check and no provider session — i.e. any
+        // authenticated user could mint credits.
+        //
+        // NOTE: POST /checkout/create — and with it the Stripe/PayPal/Square/Paddle session
+        // helpers and the two public provider webhooks — was RETIRED (2026-09-25, kanban
+        // t_0fe500d4) as unfinished scaffolding: no shipped surface called it, no plan could gate
+        // it, the four providers were absent from `available_providers` (so no tenant could ever
+        // configure the key it demands), paypal was unimplemented and square/paddle returned a URL
+        // with no implementation behind it. There is therefore no public purchase route in this
+        // module today; plan changes go through POST/PATCH /subscription. See the retirement note
+        // in handlers.rs and /opt/swift/audits/t_0fe500d4/ for the measurements and for what a
+        // deliberate payment build would have to cover.
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,

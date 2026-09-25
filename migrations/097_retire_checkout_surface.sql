@@ -1,0 +1,34 @@
+-- 097_retire_checkout_surface.sql
+-- CoreSwift-CRM: drop `checkout_sessions`, the table migration 096 created for the checkout INSERT.
+--
+-- Card t_0fe500d4 retired the whole checkout surface as unfinished scaffolding: POST
+-- /api/billing/checkout/create, the four provider helpers, the two public provider webhooks and the
+-- credential-delivery path.  Nothing in the repository references this relation any more, and it
+-- never held a row that a real caller produced: 0 rows live, because the only working caller needed
+-- a `provider_keys` row written by hand (see /opt/swift/audits/t_0fe500d4/live-probe-before.txt).
+--
+-- Why the surface went, in one line each (measurements in the audit folder):
+--   * no shipped surface called the route - the workspace shell's upgrade modal rendered a button
+--     with no handler, and no served shell contains the path
+--   * no entitlement existed - no `modules` / `module_features` / `plan_module_features` row for
+--     checkout, payments or billing, so the admin console never offered it
+--   * no tenant could configure it - stripe, paypal, square and paddle are absent from
+--     `available_providers`, so POST /api/provider-keys answered 422 "Unknown provider 'square'"
+--   * three of four arms were not implementations - paypal answered "not yet implemented" and
+--     square/paddle minted a local url that no route serves
+--   * nothing consumed the result - the only credit_transactions writer binds a negative cost
+--
+-- The two public webhooks accepted any unsigned body and could create a tenant plus a user and mail
+-- credentials for it.  They are retired with the route, otherwise the UPDATE they own would put a
+-- 42P01 back into the container log - the defect 096 had just closed.
+--
+-- Rebuilding payment collection is a deliberate build, not a wire-up: seed the four
+-- `available_providers` rows, implement square and paddle (or answer 501 for them), verify provider
+-- webhook signatures, grant the purchase (credits or `tenant_plans`), and give it a caller in the
+-- shell.  If that happens, ship the DDL in a NEW migration next to the code that uses it - do not
+-- extend 096, which a filename-tracked runner has already recorded.
+--
+-- Idempotent, so this converges on a fresh, restored or already-fixed database.
+-- No BEGIN/COMMIT (the runner wraps each migration).  No semicolon inside these comments.
+
+DROP TABLE IF EXISTS checkout_sessions;
