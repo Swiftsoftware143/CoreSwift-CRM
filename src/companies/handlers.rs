@@ -40,17 +40,34 @@ pub async fn create(
         return Err(AppError::Validation("Company name is required".to_string()));
     }
     let company = sqlx::query_as::<_, Company>(
-        r#"INSERT INTO companies AS co (id, tenant_id, name, domain, industry, size, phone,
-            address_line1, address_line2, city, state, postal_code, country, website, notes, metadata)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        r#"INSERT INTO companies AS co (id, tenant_id, name, domain, industry, size, phone, email,
+            address_line1, address_line2, city, state, postal_code, country, website, notes,
+            description, metadata)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                   $17, $18)
            RETURNING co.*, (SELECT COUNT(*) FROM contacts ct
-             WHERE ct.company_id = co.id AND ct.tenant_id = co.tenant_id) AS contact_count"#
-    ).bind(Uuid::new_v4()).bind(tenant_id).bind(&req.name).bind(&req.domain)
-    .bind(&req.industry).bind(&req.size).bind(&req.phone)
-    .bind(&req.address_line1).bind(&req.address_line2).bind(&req.city)
-    .bind(&req.state).bind(&req.postal_code).bind(&req.country)
-    .bind(&req.website).bind(&req.notes).bind(&req.metadata)
-    .fetch_one(&state.db).await?;
+             WHERE ct.company_id = co.id AND ct.tenant_id = co.tenant_id) AS contact_count"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(tenant_id)
+    .bind(&req.name)
+    .bind(&req.domain)
+    .bind(&req.industry)
+    .bind(&req.size)
+    .bind(&req.phone)
+    .bind(&req.email)
+    .bind(&req.address_line1)
+    .bind(&req.address_line2)
+    .bind(&req.city)
+    .bind(&req.state)
+    .bind(&req.postal_code)
+    .bind(&req.country)
+    .bind(&req.website)
+    .bind(&req.notes)
+    .bind(&req.description)
+    .bind(&req.metadata)
+    .fetch_one(&state.db)
+    .await?;
     Ok((StatusCode::CREATED, Json(json!(company))))
 }
 
@@ -88,8 +105,9 @@ pub async fn update(
             state = COALESCE($9, state), postal_code = COALESCE($10, postal_code),
             country = COALESCE($11, country), website = COALESCE($12, website),
             notes = COALESCE($13, notes), metadata = COALESCE($14, metadata),
-            is_active = COALESCE($15, is_active), updated_at = NOW()
-           WHERE id = $16 AND tenant_id = $17
+            is_active = COALESCE($15, is_active), email = COALESCE($16, email),
+            description = COALESCE($17, description), updated_at = NOW()
+           WHERE id = $18 AND tenant_id = $19
            RETURNING co.*, (SELECT COUNT(*) FROM contacts ct
              WHERE ct.company_id = co.id AND ct.tenant_id = co.tenant_id) AS contact_count"#,
     )
@@ -108,6 +126,8 @@ pub async fn update(
     .bind(&req.notes)
     .bind(&req.metadata)
     .bind(req.is_active)
+    .bind(&req.email)
+    .bind(&req.description)
     .bind(id)
     .bind(tenant_id)
     .fetch_optional(&state.db)

@@ -1351,6 +1351,7 @@ const TAB_LOADERS = {
         rows = companies.slice(0, 50).map(c => [
           escapeHtml(c.name || '—'),
           escapeHtml(c.industry || '—'),
+          escapeHtml(c.email || '—'),
           escapeHtml(c.website || '—'),
           c.contact_count || c.contacts_count || '0',
           // The Status cell that used to sit here is gone: it rendered `c.status || 'active'`,
@@ -1364,7 +1365,7 @@ const TAB_LOADERS = {
         ]);
       }
       document.getElementById('companiesTable').innerHTML = dataTable(
-        ['Name','Industry','Website','Contacts',''], rows,
+        ['Name','Industry','Email','Website','Contacts',''], rows,
         'No companies yet. Add your first company.'
       );
     } catch(e) {
@@ -2524,6 +2525,7 @@ const CO_FORM_FIELDS = [
   { key: 'industry',      label: 'Industry',       id: 'Industry', type: 'text' },
   { key: 'size',          label: 'Size',           id: 'Size',     type: 'text' },
   { key: 'phone',         label: 'Phone',          id: 'Phone',    type: 'text' },
+  { key: 'email',         label: 'Email',          id: 'Email',    type: 'email' },
   { key: 'website',       label: 'Website',        id: 'Website',  type: 'url' },
   { key: 'address_line1', label: 'Address line 1', id: 'Addr1',    type: 'text' },
   { key: 'address_line2', label: 'Address line 2', id: 'Addr2',    type: 'text' },
@@ -2531,6 +2533,7 @@ const CO_FORM_FIELDS = [
   { key: 'state',         label: 'State',          id: 'State',    type: 'text' },
   { key: 'postal_code',   label: 'Postal code',    id: 'Postal',   type: 'text' },
   { key: 'country',       label: 'Country',        id: 'Country',  type: 'text' },
+  { key: 'description',   label: 'Description',    id: 'Description', type: 'textarea' },
   { key: 'notes',         label: 'Notes',          id: 'Notes',    type: 'textarea' },
 ];
 

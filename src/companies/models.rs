@@ -11,6 +11,13 @@ pub struct Company {
     pub industry: Option<String>,
     pub size: Option<String>,
     pub phone: Option<String>,
+    /// The company's own inbox (varchar(255), nullable, in `companies` since migration 004).
+    /// It was a column with no writer and no reader: absent from this struct, so every
+    /// `query_as::<_, Company>` site silently dropped it from `SELECT c.*` / `RETURNING co.*`, and
+    /// absent from both request structs, so no caller could ever set it. t_2c890b92 wired it end to
+    /// end (struct + both request structs + the INSERT column list + the UPDATE bind); no migration
+    /// was needed, the column has always been there.
+    pub email: Option<String>,
     pub address_line1: Option<String>,
     pub address_line2: Option<String>,
     pub city: Option<String>,
@@ -19,6 +26,11 @@ pub struct Company {
     pub country: Option<String>,
     pub website: Option<String>,
     pub notes: Option<String>,
+    /// The long-form company profile text (TEXT, nullable, also in `companies` since migration
+    /// 004) — the second of the two columns t_2c890b92 finished wiring. It sits next to `notes`
+    /// because they are the table's two free-text fields: `description` is the profile blurb,
+    /// `notes` is the internal note; the editor labels them accordingly.
+    pub description: Option<String>,
     pub metadata: Option<serde_json::Value>,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
@@ -43,6 +55,7 @@ pub struct CreateCompanyRequest {
     pub industry: Option<String>,
     pub size: Option<String>,
     pub phone: Option<String>,
+    pub email: Option<String>,
     pub address_line1: Option<String>,
     pub address_line2: Option<String>,
     pub city: Option<String>,
@@ -51,6 +64,7 @@ pub struct CreateCompanyRequest {
     pub country: Option<String>,
     pub website: Option<String>,
     pub notes: Option<String>,
+    pub description: Option<String>,
     pub metadata: Option<serde_json::Value>,
 }
 
@@ -61,6 +75,7 @@ pub struct UpdateCompanyRequest {
     pub industry: Option<String>,
     pub size: Option<String>,
     pub phone: Option<String>,
+    pub email: Option<String>,
     pub address_line1: Option<String>,
     pub address_line2: Option<String>,
     pub city: Option<String>,
@@ -69,6 +84,7 @@ pub struct UpdateCompanyRequest {
     pub country: Option<String>,
     pub website: Option<String>,
     pub notes: Option<String>,
+    pub description: Option<String>,
     pub metadata: Option<serde_json::Value>,
     pub is_active: Option<bool>,
 }
