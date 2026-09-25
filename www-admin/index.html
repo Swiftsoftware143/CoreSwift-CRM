@@ -835,8 +835,11 @@ function getTabLabel(id) {
 // ===== UPGRADE BANNER =====
 async function checkPlan() {
   try {
-    const plans = await API.get('/billing/plans');
-    if (plans && plans.length > 0) {
+    // GET /api/billing/plans answers an ENVELOPE ({page,per_page,plans,total}) with the 6 real plans
+    // under `plans`; reading it raw made `plans.length > 0` false for EVERY caller, so STATE.planName
+    // was never set and showUpgradeBanner() never ran — the in-app upsell banner stayed hidden.
+    const plans = famList(await API.get('/billing/plans'), 'plans');
+    if (plans.length > 0) {
       // Find user's current plan or default to first
       const current = plans.find(p => p.is_current || p.is_default) || plans[0];
       STATE.planName = current.name || 'Free';
@@ -865,8 +868,10 @@ async function openUpgradeModal() {
   let plansHtml = '<div class="loading-wrap"><div class="spinner"></div> Loading plans...</div>';
   showModal('Upgrade Your Plan', plansHtml, '', true);
   try {
-    const plans = await API.get('/billing/plans');
-    if (!plans || plans.length === 0) {
+    // same envelope: without the unwrap `plans.forEach` did not exist and the modal could not list a
+    // single plan (it painted an error instead of "No plans available")
+    const plans = famList(await API.get('/billing/plans'), 'plans');
+    if (plans.length === 0) {
       document.querySelector('#modalContainer .modal-body').innerHTML = '<p class="empty-state">No plans available</p>';
       return;
     }
@@ -874,13 +879,13 @@ async function openUpgradeModal() {
     plans.forEach(p => {
       const isCurrent = p.name === STATE.planName;
       const price = p.price_monthly || p.price || 0;
-      const features = (p.features || []).slice(0, 6);
+      const features = planFeatureList(p.features);
       plansHtml += `<div class="plan-card${isCurrent?' current':''}">
         ${isCurrent ? '<span class="badge badge-primary plan-badge">Current</span>' : ''}
         <div class="plan-name">${escapeHtml(p.name)}</div>
         <div class="plan-price">$${price}<span>/mo</span></div>
         <ul class="plan-features">
-          ${features.map(f => `<li class="check">✓ ${escapeHtml(typeof f==='string'?f:f.name||f)}</li>`).join('')}
+          ${features.map(f => `<li class="check">✓ ${escapeHtml(f)}</li>`).join('')}
         </ul>
         <button class="btn ${isCurrent ? 'btn-secondary' : 'btn-primary'} btn-block" ${isCurrent?'disabled':''}>
           ${isCurrent ? 'Current Plan' : 'Upgrade'}
@@ -1908,28 +1913,16 @@ const TAB_LOADERS = {
         html = '<div class="plans-grid">';
         plans.forEach(p => {
           const price = p.price_monthly || p.price || 0;
-          // the keys this plan really enables (true) or sizes (a positive number); an array is still
-          // honoured for a plan that stores a plain list
-          const raw = p.features;
-          const feats = [];
-          if (Array.isArray(raw)) {
-            raw.slice(0, 6).forEach(f => feats.push([typeof f === 'string' ? f : (f && (f.name || f.key)) || '', '']));
-          } else if (raw && typeof raw === 'object') {
-            Object.keys(raw).forEach(k => {
-              const v = raw[k];
-              if (v === true || (typeof v === 'number' && v > 0)) {
-                feats.push([k.replace(/_/g, ' '), typeof v === 'number' ? ' (' + v + ')' : '']);
-              }
-            });
-          }
-          const features = feats.slice(0, 6);
+          // the ONE feature shape lives in planFeatureList() beside famList(); this tab's inline copy
+          // moved onto it so both shells and every plan card render identically
+          const features = planFeatureList(p.features);
           // the dead "Edit Plan" button is gone with it: it had no handler at all (plan editing lives in
           // the admin-only Modules & Plans panel), so it could only ever be a lie on a real card.
           html += `<div class="plan-card">
             <div class="plan-name">${escapeHtml(p.name)}</div>
             <div class="plan-price">$${price}<span>/mo</span></div>
             <ul class="plan-features">
-              ${features.map(f => `<li class="check">✓ ${escapeHtml(f[0] + f[1])}</li>`).join('')}
+              ${features.map(f => `<li class="check">✓ ${escapeHtml(f)}</li>`).join('')}
             </ul>
           </div>`;
         });
@@ -2958,6 +2951,25 @@ function famList(res, key) {
   if (res && Array.isArray(res[key])) return res[key];
   if (res && res.data && Array.isArray(res.data)) return res.data;
   return [];
+}
+
+// ONE feature shape for every plan card in this shell. GET /api/billing/plans returns each plan's
+// `features` as a JSONB OBJECT ({"max_contacts":100,"api_access":true, …}) — NOT a list — so
+// (p.features || []).slice(0, 6) threw "slice is not a function" and no plan card could paint.
+// Show what the plan really enables (true) or sizes (a positive number); a plain array is still
+// honoured for a plan that stores a list.
+function planFeatureList(raw) {
+  const out = [];
+  if (Array.isArray(raw)) {
+    raw.slice(0, 6).forEach(f => out.push(typeof f === 'string' ? f : (f && (f.name || f.key)) || ''));
+  } else if (raw && typeof raw === 'object') {
+    Object.keys(raw).forEach(k => {
+      const v = raw[k];
+      if (v === true) out.push(k.replace(/_/g, ' '));
+      else if (typeof v === 'number' && v > 0) out.push(k.replace(/_/g, ' ') + ' (' + v + ')');
+    });
+  }
+  return out.slice(0, 6);
 }
 function fh(v) { return escapeHtml(String(v === null || v === undefined || v === '' ? '—' : v)); }
 
