@@ -2,7 +2,20 @@
 //!
 //! Manages user industry dashboard selections within CoreSwift CRM.
 //! Industries map to template_categories in the workflowswift database.
-//! Plan limits are enforced via `plans.max_industries`.
+//!
+//! Two numbers exist and they are now the SAME number (kanban t_0986ba98):
+//!
+//!   * `active_count()` — how many industry tabs this TENANT has active. It is the expression the
+//!     plan gate checks (`set_user_industry`) and the one `GET /api/auth/me/usage` reports, so the
+//!     gate and the customer-visible usage read can never disagree. It reads the `industries` view
+//!     (migration 096), i.e. this module is the WRITER behind the read t_a8a3fa27 made real.
+//!   * `industry_limit()` — the plan ceiling, resolved through `module_registry` from the admin's
+//!     `plan_module_features` assignment of `limit_max_industries`. `plans.max_industries` was only
+//!     the SEED for that assignment (migration 072) and is deliberately no longer read here: the
+//!     module used to look it up via `tenants.plan_id`, which is NULL for every one of the 118 live
+//!     tenants, so the "limit" was silently the hardcoded fallback 1 and would not have moved when
+//!     the admin changed the limit in the UI — the exact "gate silently stops enforcing" class the
+//!     registry replaced.
 
 use axum::{
     extract::{Extension, Path, State},
@@ -11,6 +24,7 @@ use axum::{
     Json,
 };
 use serde_json::json;
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::models::*;
@@ -148,7 +162,11 @@ pub async fn list_available() -> ApiResult<impl IntoResponse> {
 }
 
 /// GET /api/industries
-/// Lists the user's active industry dashboards.
+/// Lists the user's ACTIVE industry dashboards.
+///
+/// The route always said "active" and never filtered, so a deactivated tab kept coming back and the
+/// picker could re-select something the user had removed (the soft-delete lie class, kanban
+/// t_0986ba98). The catalogue the SPA pairs this with is `GET /api/industries/available`.
 pub async fn list_user_industries(
     State(s): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -157,7 +175,7 @@ pub async fn list_user_industries(
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let dashboards = sqlx::query_as::<_, UserIndustryDashboard>(
-        "SELECT * FROM user_industry_dashboards WHERE user_id = $1 AND tenant_id = $2 ORDER BY created_at ASC"
+        "SELECT * FROM user_industry_dashboards WHERE user_id = $1 AND tenant_id = $2 AND is_active = true ORDER BY created_at ASC"
     )
     .bind(user_id)
     .bind(tenant_id)
@@ -167,9 +185,54 @@ pub async fn list_user_industries(
     Ok(Json(json!(dashboards)))
 }
 
+// ── The two numbers: ONE usage expression, ONE limit source ─────────────────────────────────────
+
+/// How many industry tabs this TENANT has active right now.
+///
+/// THE shared expression: the plan gate below and `features::get_usage_json`
+/// (`GET /api/auth/me/usage`) both go through it, so the number a customer sees and the number the
+/// gate enforces cannot drift. It reads the `industries` view (migration 096 = a lossless mirror of
+/// `user_industry_dashboards`), which is the name the live usage read already used.
+///
+/// Scoped by TENANT, not user: a plan is assigned to a tenant and every other limit in this app
+/// (`count_usage`'s contacts / users / pipelines / integrations) is tenant-scoped, so "1 industry"
+/// is a workspace entitlement. DISTINCT slug because two users of one workspace activating the same
+/// industry is still one industry tab.
+pub async fn active_count(db: &PgPool, tenant_id: Uuid) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT industry_slug) FROM industries \
+         WHERE tenant_id = $1 AND is_active = true",
+    )
+    .bind(tenant_id)
+    .fetch_one(db)
+    .await
+}
+
+/// The tenant's effective industry ceiling, from the data-driven module registry.
+///
+/// `limit_max_industries` is the admin-assigned limit feature (Features & Plans → the `limits`
+/// module): live it is `enabled = true, limit_value = 1` on all six plans. `None` means NO ceiling:
+/// a negative assignment is the documented unlimited sentinel, and the registry's deliberate
+/// `no_plan` path (a tenant with no active `tenant_plans` row resolves as ALLOWED, source = "no_plan")
+/// reports `limit_value = NULL` — inventing a ceiling there would be this module re-hardcoding a
+/// limit the admin never assigned.
+async fn industry_limit(s: &AppState, tenant_id: Uuid) -> Result<Option<i64>, AppError> {
+    let ent = crate::module_registry::resolve(&s.db, tenant_id, "limit_max_industries").await?;
+    if !ent.enabled {
+        return Err(AppError::UpgradeRequired(
+            "Industry dashboards are not available on your current plan.".to_string(),
+        ));
+    }
+    Ok(match ent.limit_value {
+        Some(v) if v < 0.0 => None,
+        Some(v) => Some(v.floor() as i64),
+        None => None,
+    })
+}
+
 /// POST /api/industries
 /// Sets/activates an industry dashboard for the current user.
-/// Checks plan max_industries limit before allowing a new industry.
+/// Checks the tenant's industry ceiling before activating a NEW industry tab.
 pub async fn set_user_industry(
     State(s): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -184,27 +247,31 @@ pub async fn set_user_industry(
         ));
     }
 
-    // Count current active industries for this user
-    let current_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM user_industry_dashboards WHERE user_id = $1 AND is_active = true",
+    // The ceiling is checked only when this activation would ADD an industry to the workspace.
+    // Re-checking `user_id`-scoped (the old arm) missed the reactivation path: a row that exists with
+    // is_active = false flipped back to true without consuming anything, and no gate ran at all.
+    let already_active: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM industries \
+         WHERE tenant_id = $1 AND industry_slug = $2 AND is_active = true)",
     )
-    .bind(user_id)
+    .bind(tenant_id)
+    .bind(&req.industry_slug)
     .fetch_one(&s.db)
     .await?;
 
-    // Get plan limit — use the tenant's plan's max_industries, default to 1
-    let max_industries: i32 = sqlx::query_scalar(
-        r#"SELECT COALESCE(p.max_industries, 1)
-           FROM tenants t
-           LEFT JOIN plans p ON p.id = t.plan_id
-           WHERE t.id = $1"#,
-    )
-    .bind(tenant_id)
-    .fetch_optional(&s.db)
-    .await?
-    .unwrap_or(1);
+    if !already_active {
+        let usage = active_count(&s.db, tenant_id).await?;
+        if let Some(max) = industry_limit(&s, tenant_id).await? {
+            if usage >= max {
+                return Err(AppError::Validation(format!(
+                    "Industry dashboard limit reached ({}/{}). Upgrade to increase your limit.",
+                    usage, max
+                )));
+            }
+        }
+    }
 
-    // Check if we're adding a new one
+    // Upsert: insert or reactivate
     let existing = sqlx::query_as::<_, UserIndustryDashboard>(
         "SELECT * FROM user_industry_dashboards WHERE user_id = $1 AND industry_slug = $2",
     )
@@ -213,18 +280,10 @@ pub async fn set_user_industry(
     .fetch_optional(&s.db)
     .await?;
 
-    if existing.is_none() && current_count.0 >= max_industries as i64 && max_industries >= 0 {
-        return Err(AppError::Validation(format!(
-            "Industry dashboard limit reached ({}/{})",
-            current_count.0, max_industries
-        )));
-    }
-
     let dashboard_name = req
         .dashboard_name
         .unwrap_or_else(|| format!("{} Dashboard", req.industry_slug.replace('-', " ")));
 
-    // Upsert: insert or reactivate
     let dashboard = if let Some(existing) = existing {
         sqlx::query_as::<_, UserIndustryDashboard>(
             "UPDATE user_industry_dashboards SET is_active = true, dashboard_name = $1, updated_at = NOW() WHERE id = $2 RETURNING *"
@@ -263,11 +322,14 @@ pub async fn remove_user_industry(
     Path(slug): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let result = sqlx::query(
-        "UPDATE user_industry_dashboards SET is_active = false, updated_at = NOW() WHERE user_id = $1 AND industry_slug = $2"
+        "UPDATE user_industry_dashboards SET is_active = false, updated_at = NOW() \
+         WHERE user_id = $1 AND tenant_id = $2 AND industry_slug = $3 AND is_active = true",
     )
     .bind(user_id)
+    .bind(tenant_id)
     .bind(&slug)
     .execute(&s.db)
     .await?;
@@ -278,39 +340,42 @@ pub async fn remove_user_industry(
         ));
     }
 
+    // Deactivating the tenant's default industry leaves a dangling primary: `tenants.industry_slug`
+    // is what a NEW user of this workspace starts on, so point it at the next still-active industry
+    // (or NULL when none remain) instead of advertising a tab nobody has (kanban t_0986ba98).
+    sqlx::query(
+        "UPDATE tenants SET industry_slug = (\
+             SELECT industry_slug FROM user_industry_dashboards \
+             WHERE tenant_id = $1 AND is_active = true ORDER BY created_at ASC LIMIT 1) \
+         WHERE id = $1 AND industry_slug = $2",
+    )
+    .bind(tenant_id)
+    .bind(&slug)
+    .execute(&s.db)
+    .await?;
+
     Ok(Json(json!({"message": "Industry dashboard deactivated"})))
 }
 
 /// GET /api/industries/limit
-/// Returns the user's plan industry limit and current usage.
+/// Returns the workspace plan's industry ceiling and the SAME usage number `GET /api/auth/me/usage`
+/// reports, so the panel and the usage line can never disagree. `max`/`remaining` are `-1` when the
+/// plan sets no ceiling (the sentinel this route has always used for unlimited).
 pub async fn get_industry_limit(
     State(s): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let current_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM user_industry_dashboards WHERE user_id = $1 AND is_active = true",
-    )
-    .bind(user_id)
-    .fetch_one(&s.db)
-    .await?;
-
-    let max_industries: i32 = sqlx::query_scalar(
-        r#"SELECT COALESCE(p.max_industries, 1)
-           FROM tenants t
-           LEFT JOIN plans p ON p.id = t.plan_id
-           WHERE t.id = $1"#,
-    )
-    .bind(tenant_id)
-    .fetch_optional(&s.db)
-    .await?
-    .unwrap_or(1);
+    let current = active_count(&s.db, tenant_id).await?;
+    let max = industry_limit(&s, tenant_id).await?;
 
     Ok(Json(json!({
-        "current": current_count.0,
-        "max": max_industries,
-        "remaining": if max_industries < 0 { -1 } else { max_industries as i64 - current_count.0 }
+        "current": current,
+        "max": max.unwrap_or(-1),
+        "remaining": match max {
+            None => -1,
+            Some(m) => std::cmp::max(0, m - current),
+        }
     })))
 }

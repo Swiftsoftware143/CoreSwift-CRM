@@ -440,6 +440,11 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/automation", automation::router(state.clone()))
         // Tracked links
         .nest("/api/tracked-links", tracked_links::router(state.clone()))
+        // Industry dashboards — the workspace's industry tabs. The module was declared (`pub mod
+        // industries;`) and never nested, so all five routes 404'd and the `industries` number
+        // `GET /api/auth/me/usage` reports could never leave 0 (kanban t_0986ba98). Its ceiling comes
+        // from the admin-assignable `limit_max_industries` module feature, not `plans.max_industries`.
+        .nest("/api/industries", industries::router(state.clone()))
         // Email Templates CRUD (admin only)
         .nest(
             "/api/email-templates",

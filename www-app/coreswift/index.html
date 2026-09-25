@@ -598,7 +598,7 @@ document.addEventListener('click', e => {
 const MENU = [
   { id:'dashboard', icon:'📊', label:'Dashboard' },
   { id:'contacts', icon:'👥', label:'Contacts' },
-  { id:'companies', icon:'🏢', label:'Companies' },
+  { id:'industries', icon:'🏭', label:'Industries' },
   { type:'group', icon:'💰', label:'Sales', children:[
     { id:'pipelines', icon:'📈', label:'Pipelines & Deals' }
   ]},
@@ -880,6 +880,14 @@ function dataTable(headers, rows, emptyMsg) {
 
 // ========== SYNC TAB RENDERERS (no API calls needed) ==========
 const TAB_RENDERERS = {
+  // Industry tabs — the shell half of the industries module. Every string here comes from the API:
+  // GET /api/industries/available (catalogue), GET /api/industries (what is ACTIVE for this user),
+  // GET /api/industries/limit (the SAME current/max GET /api/auth/me/usage reports).
+  'industries': () => {
+    return pageHeader('Industries', 'Activate the industry dashboard this workspace starts from') +
+    '<div id="industriesPanel"><div class="loading-wrap"><div class="spinner"></div> Loading industries...</div></div>';
+  },
+
   'dashboard': () => {
     return pageHeader('Dashboard', 'Overview of your CRM performance') +
     '<div class="stats-grid" id="statsGrid"><div class="loading-wrap"><div class="spinner"></div> Loading stats...</div></div>' +
@@ -1286,6 +1294,7 @@ function escapeHtmlAttr(str) {
 
 // ========== ASYNC TAB LOADERS (fetch real data) ==========
 const TAB_LOADERS = {
+  'industries': async () => { await loadIndustriesPanel(); },
   'team': async () => { await loadInvites(); },
   'dashboard': async () => {
     // EVERY tile names its SOURCE OF TRUTH and only ever renders a number that came back from it.
@@ -3074,6 +3083,69 @@ document.addEventListener('click', e => {
 })();
 // ===== END KEYBOARD SHORTCUTS =====
 
+// ===== INDUSTRIES (GET/POST/DELETE /api/industries) =====
+// The industry-dashboard module ("industry tabs"). Nothing in this panel is invented: the catalogue
+// is GET /industries/available, the Active badges are GET /industries (which filters is_active), and
+// the counter is GET /industries/limit's current/max — the same number GET /auth/me/usage reports,
+// so the panel cannot claim a tab the server does not count. A 402 (the plan's limit_max_industries
+// assignment is off) is reported verbatim instead of being rendered as "0 of 1".
+async function loadIndustriesPanel() {
+  const el = document.getElementById('industriesPanel');
+  if (!el) return;
+  try {
+    const [limit, available, active] = await Promise.all([
+      API.get('/industries/limit'),
+      API.get('/industries/available'),
+      API.get('/industries'),
+    ]);
+    const all = famList(available, 'industries');
+    const activeSlugs = new Set(famList(active, 'industries').map(d => d.industry_slug));
+    const max = (limit && typeof limit.max === 'number') ? limit.max : -1;
+    const current = (limit && typeof limit.current === 'number') ? limit.current : activeSlugs.size;
+    const cap = (max < 0)
+      ? (current + ' active · no ceiling on this plan')
+      : (current + ' of ' + max + ' active');
+    let rows = all.map(i => {
+      const on = activeSlugs.has(i.slug);
+      const action = on
+        ? '<button class="btn btn-secondary btn-sm" onclick="deactivateIndustry(\'' + i.slug + '\')">Deactivate</button>'
+        : '<button class="btn btn-primary btn-sm" onclick="activateIndustry(\'' + i.slug + '\')">Activate</button>';
+      return '<tr>' +
+        '<td>' + escapeHtml((i.icon || '') + ' ' + (i.name || i.slug)) + '</td>' +
+        '<td>' + escapeHtml(i.description || '—') + '</td>' +
+        '<td>' + (on ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-muted">Inactive</span>') + '</td>' +
+        '<td>' + action + '</td></tr>';
+    });
+    const head = card('Industry tabs',
+      '<p style="color:var(--text-secondary);margin-bottom:12px">' + escapeHtml(cap) +
+      ' — an active industry tab is what the workspace dashboard and its automations are shaped from.</p>');
+    el.innerHTML = head + (all.length
+      ? '<div class="card"><div class="table-wrap"><table><thead><tr><th>Industry</th><th>What it configures</th><th>Status</th><th></th></tr></thead><tbody>' + rows.join('') + '</tbody></table></div></div>'
+      : '<div class="card"><div class="card-body"><div class="empty-state"><div class="empty-icon">🏭</div><h3>No industries</h3><p>The catalogue is empty.</p></div></div></div>');
+  } catch (e) {
+    el.innerHTML = card('Industry tabs',
+      '<p style="color:var(--text-secondary)">Industry tabs unavailable: ' + escapeHtml(String(e.message || e)) + '</p>');
+  }
+}
+
+async function activateIndustry(slug) {
+  try {
+    await API.post('/industries', { industry_slug: slug });
+    toast('Industry tab activated', 'success');
+  } catch (e) { toast(String(e.message || e), 'error'); }
+  await loadIndustriesPanel();
+  loadUsage();
+}
+
+async function deactivateIndustry(slug) {
+  try {
+    await API.del('/industries/' + encodeURIComponent(slug));
+    toast('Industry tab deactivated', 'success');
+  } catch (e) { toast(String(e.message || e), 'error'); }
+  await loadIndustriesPanel();
+  loadUsage();
+}
+
 // ===== ACCOUNT USAGE (GET /api/auth/me/usage) =====
 // Server-side counts for the tenant. The endpoint existed for months with no caller.
 async function loadUsage() {
@@ -3081,7 +3153,9 @@ async function loadUsage() {
   if (!el || !STATE.token) return;
   try {
     const u = await API.get('/auth/me/usage');
-    el.textContent = 'Usage: ' + (u.contacts || 0) + ' contacts · ' + (u.users || 0) + ' users · ' + (u.pipelines || 0) + ' pipelines';
+    // `industries` is the count the Industries tab's own gate enforces (same expression,
+    // server-side), so this line and that panel can never disagree.
+    el.textContent = 'Usage: ' + (u.contacts || 0) + ' contacts · ' + (u.users || 0) + ' users · ' + (u.pipelines || 0) + ' pipelines · ' + (u.industries || 0) + ' industries';
   } catch (_) { el.textContent = 'Usage: unavailable'; }
 }
 
