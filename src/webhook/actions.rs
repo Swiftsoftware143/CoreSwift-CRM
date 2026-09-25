@@ -219,12 +219,24 @@ pub async fn route_action(
                 .ok_or("tag_id required")?;
             let cid = Uuid::parse_str(contact_id).map_err(|_| "invalid contact_id".to_string())?;
             let tid = Uuid::parse_str(tag_id).map_err(|_| "invalid tag_id".to_string())?;
-            sqlx::query(
+            let res = sqlx::query(
                 "INSERT INTO tag_assignments (id, tenant_id, entity_type, entity_id, tag_id) VALUES ($1, $2, 'contact', $3, $4) ON CONFLICT DO NOTHING"
             )
             .bind(Uuid::new_v4()).bind(tenant_id).bind(cid).bind(tid)
             .execute(db).await
             .map_err(|e| format!("DB error: {}", e))?;
+            // A TagAdded event is a tag assignment coming INTO EXISTENCE, so the fan-out is gated on
+            // the row actually being inserted. `ON CONFLICT DO NOTHING` makes a repeat assign a
+            // silent no-op, and the app's own route answers 409 Duplicate on that same repeat and
+            // fires nothing (src/tags/handlers.rs::assign_tag) — the response body here is left
+            // byte-identical. Before this, a tag assigned through a tenant's webhook token fired no
+            // TagAdded rule at all while both routes and tags.unassign did (kanban t_4e820d00).
+            if res.rows_affected() > 0 {
+                crate::automation::engine::fire_tag_trigger(
+                    db, tenant_id, "contact", cid, tid, "TagAdded",
+                )
+                .await;
+            }
             Ok((200, json!({"assigned": true})))
         }
         // Inverse of tags.assign above — the app's own route is `DELETE /api/tags/assign/:id`
