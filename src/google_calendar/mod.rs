@@ -43,7 +43,9 @@ async fn google_oauth_config(s: &AppState, tid: Uuid) -> (String, String, Option
     let nonempty = |v: Option<String>| v.filter(|x| !x.trim().is_empty());
 
     let row: Option<(String, serde_json::Value)> = sqlx::query_as(
-        "SELECT api_key, metadata FROM provider_keys \
+        // metadata is NULLABLE with DEFAULT '{}' and the consumer reads metadata.client_id /
+        // metadata.redirect_uri off it: COALESCE names the schema default (t_d6eeea96)
+        "SELECT api_key, COALESCE(metadata, '{}'::jsonb) FROM provider_keys \
          WHERE tenant_id = $1 AND provider = 'google_calendar' AND is_active = true",
     )
     .bind(tid)

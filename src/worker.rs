@@ -109,7 +109,22 @@ pub async fn start_worker(db: PgPool) -> Result<(), Box<dyn std::error::Error + 
 
 /// Process queued notification items — polls notification_queue and sends via comms providers.
 async fn process_notification_queue(db: &PgPool) {
-    let items = match sqlx::query_as::<_, (Uuid, Uuid, String, String, Option<String>, String)>(
+    // t_d6eeea96: tenant_id / channel / to_address / body are NULLABLE in the schema, and a row
+    // that lacks any of them can never be delivered. They decode as `Option` and the row is RETIRED
+    // with the reason recorded below. Decoding them as `Uuid`/`String` made ONE such row fail the
+    // whole-row decode and return early, so every other queued notification in that tick was
+    // skipped with it — a background worker's blast radius is the whole pass, not one route.
+    let items = match sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            Option<Uuid>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
         r#"SELECT id, tenant_id, channel, to_address, subject, body
            FROM notification_queue
            WHERE status = 'queued'
@@ -133,6 +148,33 @@ async fn process_notification_queue(db: &PgPool) {
     tracing::info!("Processing {} notification queue items", items.len());
 
     for (item_id, tenant_id, channel, to_address, subject, body) in &items {
+        // Nothing below can name a transport, a destination or a body without these four: retire the
+        // row with the reason recorded instead of sending an invented substitute (t_d6eeea96).
+        let (Some(tenant_id), Some(channel), Some(to_address), Some(body)) =
+            (tenant_id, channel, to_address, body)
+        else {
+            let missing = [
+                ("tenant_id", tenant_id.is_none()),
+                ("channel", channel.is_none()),
+                ("to_address", to_address.is_none()),
+                ("body", body.is_none()),
+            ]
+            .iter()
+            .filter(|(_, is_null)| *is_null)
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+            .join(", ");
+            let _ = sqlx::query(
+                "UPDATE notification_queue SET status = 'failed', error_message = $2 WHERE id = $1",
+            )
+            .bind(item_id)
+            .bind(format!("undeliverable: NULL {missing}"))
+            .execute(db)
+            .await;
+            tracing::warn!(item = %item_id, missing = %missing, "Notification queue row is undeliverable; retired");
+            continue;
+        };
+
         // Mark as sending
         let _ = sqlx::query("UPDATE notification_queue SET status = 'sending' WHERE id = $1")
             .bind(item_id)
@@ -256,7 +298,10 @@ async fn check_inactive_trials(db: &PgPool) {
 
     // Query 2: business_profiles table (your exact schema query)
     let profiles = match sqlx::query_as::<_, (Uuid, Uuid, String, Option<String>, String)>(
-        r#"SELECT bp.id, u.id as user_id, u.email, u.phone, bp.business_name
+        // the consumer needs a string: `tracing` Display, the "Business: {}" sentence and the
+        // delayed action's JSON template var. COALESCE names the empty value the schema cannot
+        // express (column is NULLABLE with no default) instead of failing the whole query (t_d6eeea96)
+        r#"SELECT bp.id, u.id as user_id, u.email, u.phone, COALESCE(bp.business_name, '')
            FROM business_profiles bp
            JOIN users u ON bp.user_id = u.id
            WHERE bp.unit = 'saas'
@@ -384,8 +429,11 @@ async fn check_inactive_trials(db: &PgPool) {
 /// Recalculate health scores based on last_activity for all active entities.
 async fn recalculate_health_scores(db: &PgPool) {
     // Find contacts who haven't been active in 7 days across active tenants
-    let old = match sqlx::query_as::<_, (Uuid, Uuid, i32)>(
-        r#"SELECT ah.tenant_id, ah.entity_id,
+    // `tp.tenant_id` is the JOIN's own key (tenant_plans.tenant_id is NOT NULL) and is equal to
+    // `ah.tenant_id` on every returned row, so naming it states the non-nullability the join already
+    // guarantees; `ah.entity_id` decodes as Option and a row without one is skipped (t_d6eeea96).
+    let old = match sqlx::query_as::<_, (Uuid, Option<Uuid>, i32)>(
+        r#"SELECT tp.tenant_id, ah.entity_id,
                   EXTRACT(DAY FROM (NOW() - ah.last_active_at))::int as inactive_days
            FROM account_health ah
            JOIN tenant_plans tp ON tp.tenant_id = ah.tenant_id
@@ -405,6 +453,12 @@ async fn recalculate_health_scores(db: &PgPool) {
     };
 
     for (tid, eid, days) in &old {
+        // An account_health row with no entity id is not addressable: record_signal upserts on
+        // tenant_id + entity_type + entity_id, so a NULL here would score an invented entity.
+        let Some(eid) = eid else {
+            tracing::warn!(tenant = %tid, "account_health row has a NULL entity_id; skipped");
+            continue;
+        };
         crate::monitoring::engine::record_signal(db, *tid, "contact", *eid, "days_inactive", *days)
             .await;
     }
@@ -514,7 +568,19 @@ async fn check_abandoned_directory_signups(db: &PgPool) {
 /// attempt is recorded through the ONE policy in `providers::record_attempt`:
 /// sent with the provider's message id / permanent failure / requeued with backoff.
 async fn deliver_queued_messages(db: &PgPool) {
-    let messages = match sqlx::query_as::<_, (Uuid, Uuid, String, String, Option<String>)>(
+    // Same rule as process_notification_queue: tenant_id / to_address / body are NULLABLE and a row
+    // missing any of them is deterministically undeliverable — retire it through the ONE attempt
+    // policy (permanent failure) instead of aborting the whole tick with a decode error (t_d6eeea96).
+    let messages = match sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            Option<Uuid>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
         r#"SELECT id, tenant_id, to_address, body, subject
            FROM outbound_messages
            WHERE status = 'queued' AND channel = 'email'
@@ -539,6 +605,29 @@ async fn deliver_queued_messages(db: &PgPool) {
     tracing::info!("Processing {} due queued messages", messages.len());
 
     for (msg_id, tenant_id, to_address, body, subject) in &messages {
+        let (Some(tenant_id), Some(to_address), Some(body)) = (tenant_id, to_address, body) else {
+            let missing = [
+                ("tenant_id", tenant_id.is_none()),
+                ("to_address", to_address.is_none()),
+                ("body", body.is_none()),
+            ]
+            .iter()
+            .filter(|(_, is_null)| *is_null)
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+            .join(", ");
+            let outcome = crate::communications::providers::DeliveryOutcome::permanent(format!(
+                "undeliverable: NULL {missing}"
+            ));
+            if let Err(e) =
+                crate::communications::providers::record_attempt(db, *msg_id, &outcome).await
+            {
+                tracing::error!(msg = %msg_id, error = %e, "Failed to record an undeliverable message");
+            }
+            tracing::warn!(msg = %msg_id, missing = %missing, "Queued message is undeliverable; recorded as a permanent failure");
+            continue;
+        };
+
         // Claim it. Anything already moved on (another tick, the UI send path) is skipped.
         let claimed = sqlx::query(
             "UPDATE outbound_messages SET status = 'sending' WHERE id = $1 AND status = 'queued'",

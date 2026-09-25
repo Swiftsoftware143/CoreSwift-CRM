@@ -20,7 +20,9 @@ pub async fn record_signal(
 ) {
     // Upsert the account health row
     let existing = sqlx::query_as::<_, (i32, String, Option<chrono::DateTime<Utc>>)>(
-        "SELECT score, risk_level, last_active_at FROM account_health WHERE tenant_id = $1 AND entity_type = $2 AND entity_id = $3"
+        // score DEFAULT 100 / risk_level DEFAULT 'healthy' — the decode is arithmetic (score + 5)
+        // and a String, so COALESCE names the schema's own defaults (t_d6eeea96)
+        "SELECT COALESCE(score, 100), COALESCE(risk_level, 'healthy'), last_active_at FROM account_health WHERE tenant_id = $1 AND entity_type = $2 AND entity_id = $3"
     ).bind(tenant_id).bind(entity_type).bind(entity_id).fetch_optional(db).await;
 
     let (score, _risk, _last_active) = match existing {
@@ -89,7 +91,10 @@ async fn check_interventions(
     risk_level: &str,
 ) {
     let thresholds = sqlx::query_as::<_, (String, serde_json::Value)>(
-        "SELECT intervention_action, intervention_config FROM health_thresholds WHERE tenant_id = $1 AND entity_type = $2 AND risk_level = $3 AND is_active = true LIMIT 1"
+        // intervention_config is NULLABLE with DEFAULT '{}' and is bound straight into
+        // delayed_actions.action_config, which is NOT NULL: the consumer NEEDS a value, so COALESCE
+        // names the schema default (t_d6eeea96)
+        "SELECT intervention_action, COALESCE(intervention_config, '{}'::jsonb) FROM health_thresholds WHERE tenant_id = $1 AND entity_type = $2 AND risk_level = $3 AND is_active = true LIMIT 1"
     ).bind(tenant_id).bind(entity_type).bind(risk_level).fetch_optional(db).await;
 
     if let Ok(Some((action, config))) = thresholds {

@@ -88,9 +88,14 @@ async fn get_purge_targets(
     }
 
     // All tenants that have outbound_messages
-    let rows: Vec<(Uuid,)> = sqlx::query_as("SELECT DISTINCT tenant_id FROM outbound_messages")
-        .fetch_all(pool)
-        .await?;
+    // A row with a NULL tenant_id has no tenant whose retention policy could own it, so it is not a
+    // purge target at all: the predicate says that instead of letting the decode 500 the sweep
+    // (t_d6eeea96). 0 rows carry a NULL today, so the result set is unchanged.
+    let rows: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT DISTINCT tenant_id FROM outbound_messages WHERE tenant_id IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await?;
 
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }

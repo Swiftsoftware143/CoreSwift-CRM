@@ -190,7 +190,9 @@ pub async fn handle_tag_sync(
 
                 // Lost the race: read the winner by the exact key the unique index enforces.
                 let winner: Option<(Uuid, bool)> = sqlx::query_as(
-                    "SELECT id, is_active FROM contacts WHERE tenant_id = $1 AND email = $2 LIMIT 1"
+                    // is_active is NULLABLE with DEFAULT true; the consumer only asks "was the
+                    // winner soft-deleted?", so COALESCE names the schema default (t_d6eeea96)
+                    "SELECT id, COALESCE(is_active, true) FROM contacts WHERE tenant_id = $1 AND email = $2 LIMIT 1"
                 )
                 .bind(tenant_id)
                 .bind(&email)

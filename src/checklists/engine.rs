@@ -36,8 +36,14 @@ pub async fn trigger_checklist(
 
         if let Ok(Some((inst_id,))) = instance {
             // Create progress rows for each stage
-            let stages = sqlx::query_as::<_, (i32, String, String, i32)>(
-                "SELECT stage_order, title, message_template, delay_hours FROM checklist_stages WHERE template_id = $1 ORDER BY stage_order ASC"
+            // message_template is NULLABLE with no default and the sibling decode of the same
+            // column (checklists/models.rs::ChecklistStage) already models it as Option<String>: a
+            // stage with no template text is real data and its delayed action carries a null
+            // "message", which the dispatcher's notify_user arm already requires to be Some.
+            // delay_hours is NULLABLE with DEFAULT 0 and feeds `NOW() + ($4 || ' hours')::INTERVAL`
+            // arithmetic, so COALESCE names that default (t_d6eeea96).
+            let stages = sqlx::query_as::<_, (i32, String, Option<String>, i32)>(
+                "SELECT stage_order, title, message_template, COALESCE(delay_hours, 0) FROM checklist_stages WHERE template_id = $1 ORDER BY stage_order ASC"
             ).bind(template_id).fetch_all(db).await;
 
             if let Ok(stages) = stages {

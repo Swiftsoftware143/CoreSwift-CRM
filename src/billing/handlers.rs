@@ -553,7 +553,10 @@ pub async fn get_credit_usage(
     );
     let offset = (page - 1) * per_page;
 
-    let txns = sqlx::query_as::<_, (Uuid, String, i32, String, Option<chrono::DateTime<chrono::Utc>>)>(
+    // description is NULLABLE with no default and NULL is real data: the served shell already
+    // falls back to '' for it (`String(desc || '')`, www-app/coreswift/index.html), so the element
+    // decodes as Option<String> exactly like contacts.email on t_b25a9002 (t_d6eeea96)
+    let txns = sqlx::query_as::<_, (Uuid, String, i32, Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
         "SELECT id, action_type, credits, description, created_at FROM credit_transactions WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
     ).bind(tid).bind(per_page).bind(offset).fetch_all(&s.db).await?;
 

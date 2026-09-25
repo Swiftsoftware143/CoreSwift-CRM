@@ -963,7 +963,9 @@ pub async fn record_attempt(
     }
 
     let counts: Option<(i32, i32)> = sqlx::query_as(
-        "SELECT retry_count, COALESCE(max_retries, 3) FROM outbound_messages WHERE id = $1",
+        // retry_count is NULLABLE with DEFAULT 0; the sibling position already COALESCEs
+        // max_retries, and the value is arithmetic (attempts = retry_count + 1) (t_d6eeea96)
+        "SELECT COALESCE(retry_count, 0), COALESCE(max_retries, 3) FROM outbound_messages WHERE id = $1",
     )
     .bind(msg_id)
     .fetch_optional(db)

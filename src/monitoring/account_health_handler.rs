@@ -422,7 +422,10 @@ pub async fn profile_health_status(
     Path(profile_id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     // Verify profile exists
-    let profile = sqlx::query_as::<_, (Uuid, Uuid)>(
+    // business_profiles.user_id is NULLABLE: a profile with no linked user is REAL data, and the
+    // lookup below already degrades gracefully (the bind matches no `users` row -> 404 "User not
+    // found"). Decoding it as `Uuid` made the same request a 500 before it got that far (t_d6eeea96).
+    let profile = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
         "SELECT id, user_id FROM business_profiles WHERE id = $1",
     )
     .bind(profile_id)
@@ -456,7 +459,9 @@ pub async fn profile_health_status(
     // Fetch recent event_logs for this profile (last 20)
     let recent_events: Vec<serde_json::Value> =
         sqlx::query_as::<_, (String, serde_json::Value, chrono::DateTime<Utc>)>(
-            r#"SELECT event_name, COALESCE(metadata, '{}'::jsonb), created_at
+            // created_at is NULLABLE with DEFAULT CURRENT_TIMESTAMP and is rendered as an RFC3339
+            // string, so COALESCE names the schema's own default (t_d6eeea96)
+            r#"SELECT event_name, COALESCE(metadata, '{}'::jsonb), COALESCE(created_at, CURRENT_TIMESTAMP)
            FROM event_logs
            WHERE business_profile_id = $1
            ORDER BY created_at DESC

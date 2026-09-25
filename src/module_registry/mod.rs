@@ -199,7 +199,9 @@ pub async fn catalogue(db: &PgPool) -> Result<Json, AppError> {
     .await?;
 
     let plans: Vec<(String, String, i32)> = sqlx::query_as(
-        "SELECT slug, name, sort_order FROM plans ORDER BY sort_order NULLS LAST, slug",
+        // plans.sort_order is NULLABLE with DEFAULT 0: COALESCE names that default so the module
+        // catalogue cannot 500 on the first row inserted without an explicit sort order (t_d6eeea96)
+        "SELECT slug, name, COALESCE(sort_order, 0) FROM plans ORDER BY sort_order NULLS LAST, slug",
     )
     .fetch_all(db)
     .await?;
