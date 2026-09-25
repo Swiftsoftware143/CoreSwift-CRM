@@ -522,10 +522,18 @@ pub async fn route_action(
                 .and_then(|v| v.as_str())
                 .unwrap_or("lead_captured");
 
+            // `unit`/`current_state` are Postgres ENUMs (business_unit / user_state): binding text
+            // without a cast made this action answer 400
+            // ("column \"unit\" is of type business_unit but expression is of type text") for every
+            // caller, measured live 2026-09-25. `tenant_id` is bound too: the webhook token IS the
+            // tenant, and without it the row cannot be reached by the FK's ON DELETE CASCADE
+            // (business_profiles.user_id has no foreign key at all), so retiring the workspace left
+            // the profile behind as an unreachable row (t_9dc0eb64).
             sqlx::query(
-                "INSERT INTO business_profiles (id, user_id, business_name, unit, current_state) VALUES ($1, $2, $3, $4, $5)"
+                "INSERT INTO business_profiles (id, tenant_id, user_id, business_name, unit, current_state) \
+                 VALUES ($1, $2, $3, $4, $5::business_unit, $6::user_state)"
             )
-            .bind(profile_id).bind(user_id).bind(business_name).bind(unit).bind(state)
+            .bind(profile_id).bind(tenant_id).bind(user_id).bind(business_name).bind(unit).bind(state)
             .execute(db).await
             .map_err(|e| format!("DB error: {}", e))?;
 
