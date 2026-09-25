@@ -228,33 +228,35 @@ systemctl restart coreswift-crm
 
 ## Plans & Feature Access
 
-Every feature the admin can switch on/off per plan (source of truth: `features::FEATURE_REGISTRY`):
+Every feature the admin can switch on/off per plan (source of truth: the module registry in the database — `modules` / `module_features`, the switches `GET /api/admin/modules` renders):
 
 | Flag | Feature | Module | Notes |
 |---|---|---|---|
 | `campaigns` | Campaigns | campaigns | Sequenced email campaigns |
 | `automation` | Automations | automation | Trigger/action engine |
 | `checklists` | Checklists | checklists | Onboarding/process checklists |
-| `ai_enabled` | AI scoring | ai, scoring | Lead scoring and AI helpers |
+| `ai_enabled` | AI scoring & helpers | ai_enabled | Lead scoring and AI helpers |
 | `tickets` | Support tickets | tickets | In-house ticketing + email-to-ticket |
 | `affiliates` | Affiliate system | affiliates | Referral tracking and payouts |
 | `native_apps` | Native app connectors | native_apps | FunnelSwift, ADASwift, MissedCall, WorkflowSwift, CheatLayer, Multi-Directory |
-| `telnyx` | SMS & voice (Telnyx) | telnyx, comms | SMS, number management, call tracking |
+| `telnyx` | SMS & voice (Telnyx) | telnyx | SMS, number management, call tracking |
 | `round_robin` | Round-robin routing | round_robin | Fair lead distribution across a team |
 | `events` | Event system | events | Internal event bus |
 | `monitoring` | Monitoring & health | monitoring | Account health scoring and thresholds |
 | `bookings` | Bookings & scheduling | bookings | Calendar booking pages |
 | `google_calendar` | Google Calendar sync | google_calendar | Two-way calendar sync |
-| `api_access` | API access | personal_api_keys | Per-tenant API keys |
-| `webhooks` | Webhooks | webhook | Outbound webhook delivery |
+| `api_access` | API access | api_access | Per-tenant API keys |
+| `webhooks` | Webhooks | webhooks | Outbound webhook delivery |
 | `integrations` | Integrations | integrations | n8n and third-party integrations |
 | `provider_keys` | Provider keys | provider_keys | Bring-your-own provider credentials |
 | `support_widgets` | Support widgets | support_widgets | Embeddable support surfaces |
 | `tracked_links` | Tracked links | tracked_links | Click tracking links |
-| `private_email` | Private email | private_email | Own domain + mailboxes (also has its own limits) |
+| `private_email` | Private mailbox | private_email | Own domain + mailboxes (also has its own limits) |
 | `portfolio` | Portfolio sync | portfolio | Cross-tenant portfolio management |
 
-Behaviour: an explicit `false` on a plan (or a per-tenant `feature_overrides` entry) makes that
-module return **402 Payment Required**. An unset flag is allowed, so plans that predate a flag keep
-working. Toggle them per plan in the admin panel; per-tenant overrides live in
-`tenant_plans.feature_overrides`.
+Behaviour: an explicit per-tenant entry in `tenant_plans.feature_overrides` wins, then the
+tenant's **active plan's** assigned modules (`plan_modules` / `plan_module_features`). A flag
+that resolves to nothing is **denied** — the module returns **402 Payment Required** — so a
+module can no longer ship ungated and a renamed key can no longer silently stop enforcing.
+Toggle them per plan in the admin console. The one tolerance left: a tenant with no active
+plan row at all keeps its modules.

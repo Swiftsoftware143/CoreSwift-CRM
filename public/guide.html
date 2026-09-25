@@ -1366,29 +1366,30 @@ Authorization: Bearer &lt;token&gt;</pre>
       <tr><td><code>campaigns</code></td><td>Campaigns</td><td>campaigns</td><td>Sequenced email campaigns</td></tr>
       <tr><td><code>automation</code></td><td>Automations</td><td>automation</td><td>Trigger/action engine</td></tr>
       <tr><td><code>checklists</code></td><td>Checklists</td><td>checklists</td><td>Onboarding/process checklists</td></tr>
-      <tr><td><code>ai_enabled</code></td><td>AI scoring</td><td>ai, scoring</td><td>Lead scoring and AI helpers</td></tr>
+      <tr><td><code>ai_enabled</code></td><td>AI scoring &amp; helpers</td><td>ai_enabled</td><td>Lead scoring and AI helpers</td></tr>
       <tr><td><code>tickets</code></td><td>Support tickets</td><td>tickets</td><td>In-house ticketing + email-to-ticket</td></tr>
       <tr><td><code>affiliates</code></td><td>Affiliate system</td><td>affiliates</td><td>Referral tracking and payouts</td></tr>
       <tr><td><code>native_apps</code></td><td>Native app connectors</td><td>native_apps</td><td>FunnelSwift, ADASwift, MissedCall, WorkflowSwift, CheatLayer, Multi-Directory</td></tr>
-      <tr><td><code>telnyx</code></td><td>SMS &amp; voice (Telnyx)</td><td>telnyx, comms</td><td>SMS, number management, call tracking</td></tr>
+      <tr><td><code>telnyx</code></td><td>SMS &amp; voice (Telnyx)</td><td>telnyx</td><td>SMS, number management, call tracking</td></tr>
       <tr><td><code>round_robin</code></td><td>Round-robin routing</td><td>round_robin</td><td>Fair lead distribution across a team</td></tr>
       <tr><td><code>events</code></td><td>Event system</td><td>events</td><td>Internal event bus</td></tr>
       <tr><td><code>monitoring</code></td><td>Monitoring &amp; health</td><td>monitoring</td><td>Account health scoring and thresholds</td></tr>
       <tr><td><code>bookings</code></td><td>Bookings &amp; scheduling</td><td>bookings</td><td>Calendar booking pages</td></tr>
       <tr><td><code>google_calendar</code></td><td>Google Calendar sync</td><td>google_calendar</td><td>Two-way calendar sync</td></tr>
-      <tr><td><code>api_access</code></td><td>API access</td><td>personal_api_keys</td><td>Per-tenant API keys</td></tr>
-      <tr><td><code>webhooks</code></td><td>Webhooks</td><td>webhook</td><td>Outbound webhook delivery</td></tr>
+      <tr><td><code>api_access</code></td><td>API access</td><td>api_access</td><td>Per-tenant API keys</td></tr>
+      <tr><td><code>webhooks</code></td><td>Webhooks</td><td>webhooks</td><td>Outbound webhook delivery</td></tr>
       <tr><td><code>integrations</code></td><td>Integrations</td><td>integrations</td><td>n8n and third-party integrations</td></tr>
       <tr><td><code>provider_keys</code></td><td>Provider keys</td><td>provider_keys</td><td>Bring-your-own provider credentials</td></tr>
       <tr><td><code>support_widgets</code></td><td>Support widgets</td><td>support_widgets</td><td>Embeddable support surfaces</td></tr>
       <tr><td><code>tracked_links</code></td><td>Tracked links</td><td>tracked_links</td><td>Click tracking links</td></tr>
-      <tr><td><code>private_email</code></td><td>Private email</td><td>private_email</td><td>Own domain + mailboxes (also has its own limits)</td></tr>
+      <tr><td><code>private_email</code></td><td>Private mailbox</td><td>private_email</td><td>Own domain + mailboxes (also has its own limits)</td></tr>
       <tr><td><code>portfolio</code></td><td>Portfolio sync</td><td>portfolio</td><td>Cross-tenant portfolio management</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="muted">Source of truth: <code>features::FEATURE_REGISTRY</code> in the API, which is also what
-       the admin panel renders its switches from. If a module is added there it appears here and in the
+    <p class="muted">Source of truth: the module registry in the API's database (<code>modules</code> /
+       <code>module_features</code>) — the same switches the admin panel renders, served by
+       <code>GET /api/admin/modules</code>. If a flag is registered there it appears here and in the
        admin automatically.</p>
   </div>
 </section>
