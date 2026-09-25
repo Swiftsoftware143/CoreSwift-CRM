@@ -236,15 +236,27 @@ async fn exec_notify(db: &PgPool, rule: &AutomationRule, tenant_id: Uuid) -> Res
 
     if let Some(uid_str) = user_id_str {
         if let Ok(user_id) = Uuid::parse_str(uid_str) {
-            let _ = sqlx::query(
-                "INSERT INTO notifications(id, tenant_id, user_id, message) VALUES($1, $2, $3, $4)",
+            // notifications.title is NOT NULL with no default: the rule's own label if it carries
+            // one, else the first 255 characters of its own message (t_ed3c2591).
+            let title = crate::notifications::title::resolve(
+                rule.action_config.get("title").and_then(|v| v.as_str()),
+                rule.action_config.get("subject").and_then(|v| v.as_str()),
+                message,
+            );
+            if let Err(e) = sqlx::query(
+                "INSERT INTO notifications(id, tenant_id, user_id, title, message) \
+                 VALUES($1, $2, $3, $4, $5)",
             )
             .bind(Uuid::new_v4())
             .bind(tenant_id)
             .bind(user_id)
+            .bind(title)
             .bind(message)
             .execute(db)
-            .await;
+            .await
+            {
+                tracing::error!(tenant = %tenant_id, user = %user_id, rule = %rule.id, error = %e, "NotifyUser notification not written");
+            }
         }
     }
 

@@ -1,4 +1,5 @@
 pub mod handlers;
+pub mod title;
 
 use crate::AppState;
 use axum::{middleware, Router};

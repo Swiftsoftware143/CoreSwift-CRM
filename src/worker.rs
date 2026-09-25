@@ -123,9 +123,10 @@ async fn process_notification_queue(db: &PgPool) {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
         ),
     >(
-        r#"SELECT id, tenant_id, channel, to_address, subject, body
+        r#"SELECT id, tenant_id, channel, to_address, subject, body, title
            FROM notification_queue
            WHERE status = 'queued'
            ORDER BY created_at ASC
@@ -147,7 +148,7 @@ async fn process_notification_queue(db: &PgPool) {
 
     tracing::info!("Processing {} notification queue items", items.len());
 
-    for (item_id, tenant_id, channel, to_address, subject, body) in &items {
+    for (item_id, tenant_id, channel, to_address, subject, body, title) in &items {
         // Nothing below can name a transport, a destination or a body without these four: retire the
         // row with the reason recorded instead of sending an invented substitute (t_d6eeea96).
         let (Some(tenant_id), Some(channel), Some(to_address), Some(body)) =
@@ -184,24 +185,61 @@ async fn process_notification_queue(db: &PgPool) {
         // For in_app notifications, insert into the notifications table
         if channel == "in_app" {
             // to_address contains user_id
-            if let Ok(user_id) = Uuid::parse_str(to_address) {
-                let _ = sqlx::query(
-                    r#"INSERT INTO notifications (id, tenant_id, user_id, message)
-                       VALUES ($1, $2, $3, $4)"#,
+            // notifications.title is NOT NULL (255) with no default while notification_queue.title
+            // and .subject are NULLABLE, so the title is resolved from the queue row's own labels
+            // (crate::notifications::title). Naming no title raised 23502 here and the error was
+            // discarded by `let _ =`, so the notification was never written at all (t_ed3c2591).
+            let title =
+                crate::notifications::title::resolve(title.as_deref(), subject.as_deref(), body);
+            let written = match Uuid::parse_str(to_address) {
+                Ok(user_id) => sqlx::query(
+                    r#"INSERT INTO notifications (id, tenant_id, user_id, title, message)
+                       VALUES ($1, $2, $3, $4, $5)"#,
                 )
                 .bind(Uuid::new_v4())
                 .bind(tenant_id)
                 .bind(user_id)
+                .bind(title)
                 .bind(body)
                 .execute(db)
-                .await;
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+                Err(e) => Err(format!("to_address is not a user id: {e}")),
+            };
+
+            // `sent` is a claim that the notification exists: only make it once the INSERT landed, and
+            // record the reason on the row instead — a row that claims 'sent' with zero notifications
+            // written is worse than a visible failure (t_ed3c2591).
+            let claim = match written {
+                Ok(()) => sqlx::query(
+                    "UPDATE notification_queue SET status = 'sent', sent_at = NOW() WHERE id = $1",
+                )
+                .bind(item_id)
+                .execute(db)
+                .await
+                .map(|_| ()),
+                Err(reason) => {
+                    tracing::error!(
+                        item = %item_id,
+                        tenant = %tenant_id,
+                        error = %reason,
+                        "in_app notification not written; queue row marked failed"
+                    );
+                    sqlx::query(
+                        "UPDATE notification_queue SET status = 'failed', error_message = $2 \
+                         WHERE id = $1",
+                    )
+                    .bind(item_id)
+                    .bind(format!("in_app notification not written: {reason}"))
+                    .execute(db)
+                    .await
+                    .map(|_| ())
+                }
+            };
+            if let Err(e) = claim {
+                tracing::warn!(item = %item_id, error = %e, "Failed to record the in_app outcome on the queue row");
             }
-            let _ = sqlx::query(
-                "UPDATE notification_queue SET status = 'sent', sent_at = NOW() WHERE id = $1",
-            )
-            .bind(item_id)
-            .execute(db)
-            .await;
             continue;
         }
 
@@ -385,22 +423,30 @@ async fn check_inactive_trials(db: &PgPool) {
             // If critical risk, escalate to human intervention
             if engine::should_escalate_to_human(&assessment).await {
                 tracing::warn!(user = %user_id, churn = %assessment.churn_probability, "AI escalation: contact needs human callback");
-                let _ = sqlx::query(
-                    r#"INSERT INTO notifications (id, tenant_id, user_id, message)
-                       VALUES ($1, $2, $3, $4)"#,
-                )
-                .bind(Uuid::new_v4())
-                .bind(tenant_id)
-                .bind(user_id)
-                .bind(format!(
+                let message = format!(
                     "CRITICAL: {} at {:.0}% churn risk. Business: {}. Intervention: {}",
                     email,
                     assessment.churn_probability * 100.0,
                     business_name,
                     assessment.intervention
-                ))
+                );
+                // This escalation has no label of its own, and notifications.title is NOT NULL: the
+                // title is the first 255 characters of this same message (t_ed3c2591).
+                let title = crate::notifications::title::resolve(None, None, &message);
+                if let Err(e) = sqlx::query(
+                    r#"INSERT INTO notifications (id, tenant_id, user_id, title, message)
+                       VALUES ($1, $2, $3, $4, $5)"#,
+                )
+                .bind(Uuid::new_v4())
+                .bind(tenant_id)
+                .bind(user_id)
+                .bind(title)
+                .bind(&message)
                 .execute(db)
-                .await;
+                .await
+                {
+                    tracing::error!(user = %user_id, tenant = %tenant_id, error = %e, "Churn-risk escalation notification not written");
+                }
             }
 
             // Also queue via delayed_actions (native) with AI-selected template
