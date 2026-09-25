@@ -322,7 +322,7 @@ tr:hover td{background:var(--bg-hover)}
     <div class="content" id="mainContent">
       <div class="content-inner">
         <div id="upgradeBanner" class="upgrade-banner dismissed">
-          <p>You're on the <span class="plan-name" id="currentPlanName">Free</span> plan. <span>Upgrade for more features.</span></p>
+          <p><span id="currentPlanWrap" style="display:none">You're on the <span class="plan-name" id="currentPlanName"></span> plan. </span><span>Upgrade for more features.</span></p>
           <div class="banner-actions">
             <button class="btn btn-primary btn-sm" onclick="openUpgradeModal()">Upgrade Now</button>
             <button class="btn btn-ghost btn-sm" onclick="dismissBanner()">Dismiss</button>
@@ -350,7 +350,8 @@ const STATE = {
   activeTab: 'dashboard',
   portalUrl: '',   // CS-22: the customer "My Support" URL, filled from GET /api/tickets
   sidebarCollapsed: false,
-  planName: 'Free',
+  planName: '',    // set by checkPlan() from the tenant's OWN plan row; '' = not known, never a guess
+  planId: null,    // that plan's id — the upgrade modal's Current badge keys off this, not off a name
   providers: {},
   integrations: {}
 };
@@ -760,23 +761,33 @@ function getTabLabel(id) {
 // ===== UPGRADE BANNER =====
 async function checkPlan() {
   try {
-    // GET /api/billing/plans answers an ENVELOPE ({page,per_page,plans,total}) with the 6 real plans
-    // under `plans`; reading it raw made `plans.length > 0` false for EVERY caller, so STATE.planName
-    // was never set and showUpgradeBanner() never ran — the in-app upsell banner stayed hidden.
-    const plans = famList(await API.get('/billing/plans'), 'plans');
-    if (plans.length > 0) {
-      // Find user's current plan or default to first
-      const current = plans.find(p => p.is_current || p.is_default) || plans[0];
-      STATE.planName = current.name || 'Free';
-      document.getElementById('currentPlanName').textContent = STATE.planName;
-      if (STATE.planName.toLowerCase() === 'free' || STATE.planName.toLowerCase() === 'starter') {
-        if (!localStorage.getItem('crm_banner_dismissed')) {
-          showUpgradeBanner();
-        }
-      }
+    // SOURCE OF TRUTH for "this workspace's plan": GET /api/billing/subscription answers the tenant's
+    // OWN tenant_plans row and its plan_id IS the plan the workspace is on; a tenant with no row gets
+    // the route's own declared default (default_plan = the Free row). The display NAME is then read BY
+    // ID from GET /api/billing/plans/:id — never by position, never hardcoded. This replaces
+    // plans.find(p => p.is_current || p.is_default) || plans[0], which fell back to plans[0] because no
+    // plan carries is_current/is_default — every paid workspace was told it was on Free and upsold.
+    // (GET /api/billing/features was measured as an alternative source and 404s for the 58 tenants with
+    // no tenant_plans row, so it cannot be used here.)
+    const sub = await API.get('/billing/subscription');
+    const mine = (sub && sub.plan_id)
+      ? await API.get('/billing/plans/' + sub.plan_id)
+      : ((sub && sub.default_plan) || null);
+    STATE.planId = (mine && mine.id) ? String(mine.id) : null;
+    STATE.planName = (mine && mine.name) ? String(mine.name) : '';
+    const label = document.getElementById('currentPlanName');
+    if (label) label.textContent = STATE.planName;
+    // The "You're on the X plan." half shows ONLY when a plan was really read: showUpgradeBanner()
+    // also runs on the 402 path (API.call), before/without this, and may not claim a plan it never read.
+    const wrap = document.getElementById('currentPlanWrap');
+    if (wrap) wrap.style.display = STATE.planName ? '' : 'none';
+    // the banner's whole job: upsell a workspace that really is on free/starter. Unknown -> silent.
+    const tier = STATE.planName.toLowerCase();
+    if ((tier === 'free' || tier === 'starter') && !localStorage.getItem('crm_banner_dismissed')) {
+      showUpgradeBanner();
     }
   } catch(e) {
-    // Plan endpoint might not exist — that's fine
+    // No source, no claim: with no plan read we name none, badge none and upsell none.
   }
 }
 
@@ -802,7 +813,9 @@ async function openUpgradeModal() {
     }
     plansHtml = '<div class="plans-grid">';
     plans.forEach(p => {
-      const isCurrent = p.name === STATE.planName;
+      // the workspace's OWN plan row decides the badge (STATE.planId from checkPlan); a name match can
+      // badge two rows, and the plans[0] fallback badged Free for every tenant
+      const isCurrent = String(p.id) === String(STATE.planId);
       const price = p.price_monthly || p.price || 0;
       const features = planFeatureList(p.features);
       plansHtml += `<div class="plan-card${isCurrent?' current':''}">
