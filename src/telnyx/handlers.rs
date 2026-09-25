@@ -624,10 +624,14 @@ pub async fn sms_webhook(
                 })
                 .unwrap_or_else(|| "unknown".to_string());
 
-            // Record inbound SMS as an event
+            // Record inbound SMS as an event.
+            // `events.title` is NOT NULL and this INSERT omitted it: the statement died on 23502 and the
+            // `?` below turned every inbound SMS into a 500 for Telnyx, so `sms.received` was never
+            // recorded (measured live 2026-09-25, t_2cc3384f). Same "<event_type> from <source>"
+            // derivation as src/events/handlers.rs.
             sqlx::query(
-                "INSERT INTO events (id, tenant_id, source, event_type, entity_type, payload)
-                 VALUES ($1, $2, 'telnyx', 'sms.received', 'message', $3)",
+                "INSERT INTO events (id, tenant_id, source, event_type, entity_type, payload, title)
+                 VALUES ($1, $2, 'telnyx', 'sms.received', 'message', $3, $4)",
             )
             .bind(Uuid::new_v4())
             .bind(tenant_id)
@@ -638,6 +642,7 @@ pub async fn sms_webhook(
                 "telnyx_message_id": telnyx_msg_id,
                 "direction": "inbound",
             }))
+            .bind("sms.received from telnyx")
             .execute(&state.db)
             .await?;
 

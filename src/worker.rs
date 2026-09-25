@@ -325,10 +325,14 @@ async fn check_inactive_trials(db: &PgPool) {
 
             tracing::info!(user = %user_id, churn = %assessment.churn_probability, template = %template_slug, channel = %channel, "AI-selected follow-up strategy");
 
-            // Queue a follow-up in followup_queue (your schema) with AI-selected template
+            // Queue a follow-up in followup_queue (your schema) with AI-selected template.
+            // `channel` is the `channel_type` ENUM: a bare text bind answers
+            // `column "channel" is of type channel_type but expression is of type text` and the
+            // error is discarded by `let _ =`, so no follow-up was ever queued (measured
+            // 2026-09-25, t_2cc3384f; suggest_channel only ever returns email/sms/hybrid).
             let _ = sqlx::query(
                 r#"INSERT INTO followup_queue (id, business_profile_id, scheduled_for, channel, template_slug)
-                   VALUES ($1, $2, NOW(), $3, $4)"#
+                   VALUES ($1, $2, NOW(), $3::channel_type, $4)"#
             )
             .bind(Uuid::new_v4()).bind(user_id).bind(channel).bind(template_slug)
             .execute(db).await;
@@ -466,10 +470,11 @@ async fn check_abandoned_directory_signups(db: &PgPool) {
 
         tracing::info!(business = %business_name, channel = %channel, "AI-recommended channel for abandoned signup");
 
-        // Queue a follow-up action with AI-recommended channel
+        // Queue a follow-up action with AI-recommended channel (`channel_type` ENUM -> cast, see
+        // check_inactive_trials above; same measured defect, t_2cc3384f).
         let _ = sqlx::query(
             r#"INSERT INTO followup_queue (id, business_profile_id, scheduled_for, channel, template_slug)
-               VALUES ($1, $2, NOW(), $3, $4)"#
+               VALUES ($1, $2, NOW(), $3::channel_type, $4)"#
         )
         .bind(Uuid::new_v4()).bind(bp_id).bind(channel).bind(template_slug)
         .execute(db).await;

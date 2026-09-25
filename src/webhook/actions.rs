@@ -292,13 +292,24 @@ pub async fn route_action(
                 .and_then(|v| v.as_str())
                 .ok_or("event_type required")?;
             let payload = body.get("payload").cloned().unwrap_or(json!({}));
+            // `events.title` is NOT NULL and this INSERT omitted it, so the statement died on 23502
+            // and this action answered 400 for every caller (measured live 2026-09-25, t_2cc3384f).
+            // Same derivation as the event-ingest route (src/events/handlers.rs, t_4b6f1a5c).
+            let title: String = payload
+                .get("title")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("{} from {}", event_type, source))
+                .chars()
+                .take(255)
+                .collect();
             sqlx::query(
-                "INSERT INTO events (id, tenant_id, source, event_type, payload) VALUES ($1, $2, $3, $4, $5)"
+                "INSERT INTO events (id, tenant_id, source, event_type, payload, title) VALUES ($1, $2, $3, $4, $5, $6)"
             )
-            .bind(Uuid::new_v4()).bind(tenant_id).bind(source).bind(event_type).bind(payload)
+            .bind(Uuid::new_v4()).bind(tenant_id).bind(source).bind(event_type).bind(payload).bind(&title)
             .execute(db).await
             .map_err(|e| format!("DB error: {}", e))?;
-            Ok((201, json!({"ingested": true})))
+            Ok((201, json!({"ingested": true, "title": title})))
         }
 
         // ── AI ──
@@ -603,7 +614,10 @@ pub async fn route_action(
                 param_idx += 1;
             }
             if let Some(_state) = body.get("current_state").and_then(|v| v.as_str()) {
-                sets.push(format!("current_state = ${}", param_idx));
+                // `current_state` is the `user_state` ENUM: a bare text bind answers
+                // `column "current_state" is of type user_state but expression is of type text`,
+                // so this action 400'd for every caller (measured live 2026-09-25, t_2cc3384f).
+                sets.push(format!("current_state = ${}::user_state", param_idx));
                 param_idx += 1;
             }
             if let Some(_sub) = body.get("subscription_active").and_then(|v| v.as_bool()) {
@@ -738,8 +752,11 @@ pub async fn route_action(
 
             // Total listings by state (summary)
             let state_breakdown = if let Some(u) = unit {
+                // `bp.unit` is the `business_unit` ENUM: comparing it to a bare text bind answers
+                // `operator does not exist: business_unit = text`, so this action 400'd for every
+                // caller that passed a unit (measured live 2026-09-25, t_2cc3384f).
                 sqlx::query_scalar::<_, serde_json::Value>(
-                    &row_json("SELECT current_state, COUNT(*) as count FROM business_profiles bp  JOIN users u2 ON u2.id = bp.user_id  WHERE u2.tenant_id = $1 AND bp.unit = $2  GROUP BY current_state ORDER BY count DESC")
+                    &row_json("SELECT current_state, COUNT(*) as count FROM business_profiles bp  JOIN users u2 ON u2.id = bp.user_id  WHERE u2.tenant_id = $1 AND bp.unit = $2::business_unit  GROUP BY current_state ORDER BY count DESC")
                 )
                 .bind(tenant_id).bind(u)
                 .fetch_all(db).await
