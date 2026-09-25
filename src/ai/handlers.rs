@@ -176,21 +176,70 @@ pub async fn compose_message(
     Json(r): Json<ComposeMessageRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    match compose_for_contact(
+        &s.db,
+        tid,
+        r.contact_id,
+        &r.context,
+        &r.channel,
+        r.tone.as_deref(),
+    )
+    .await
+    {
+        Ok(v) => Ok(Json(v)),
+        Err(ComposeError::NotFound) => Err(AppError::NotFound("Contact not found".to_string())),
+        Err(ComposeError::Db(e)) => Err(AppError::Database(e)),
+    }
+}
 
+/// Why a compose request could not be served — the HTTP route maps this onto `AppError`,
+/// the `ai.compose` webhook action (src/webhook/actions.rs) onto its own string form.
+pub enum ComposeError {
+    NotFound,
+    Db(sqlx::Error),
+}
+
+impl From<sqlx::Error> for ComposeError {
+    fn from(e: sqlx::Error) -> Self {
+        ComposeError::Db(e)
+    }
+}
+
+impl std::fmt::Display for ComposeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ComposeError::NotFound => write!(f, "Contact not found"),
+            ComposeError::Db(e) => write!(f, "DB error: {e}"),
+        }
+    }
+}
+
+/// Shared AI-compose implementation: `POST /api/ai/message` and the `ai.compose`
+/// webhook action both call this, so an integrator gets exactly what the app's own
+/// composer returns (t_e041e281 — the action was allow-listed for every tenant while
+/// `route_action()` had no arm for it).
+pub async fn compose_for_contact(
+    db: &sqlx::PgPool,
+    tid: Uuid,
+    contact_id: Uuid,
+    context: &str,
+    channel: &str,
+    tone: Option<&str>,
+) -> Result<serde_json::Value, ComposeError> {
     // Get contact info for personalization
     // `contacts.email` is NULLABLE with no default: NULL is real data (a contact without an address),
     // so it decodes as `Option<String>` and reaches the composer as an absent value instead of failing
     // the whole call (t_b25a9002; measured 500 "column 1: unexpected null" on the pre-fix binary).
     let contact = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
         "SELECT CONCAT(first_name, ' ', last_name) AS name, email, phone FROM contacts WHERE id = $1 AND tenant_id = $2"
-    ).bind(r.contact_id).bind(tid).fetch_optional(&s.db).await?
-    .ok_or(AppError::NotFound("Contact not found".to_string()))?;
+    ).bind(contact_id).bind(tid).fetch_optional(db).await?
+    .ok_or(ComposeError::NotFound)?;
 
     let (name, _email, _phone) = contact;
 
     // Get health context
-    let assessment = engine::assess_churn_risk(&s.db, tid, r.contact_id).await;
-    let template_slug = engine::select_template(&r.context, assessment.churn_probability);
+    let assessment = engine::assess_churn_risk(db, tid, contact_id).await;
+    let template_slug = engine::select_template(context, assessment.churn_probability);
 
     // Try AI-powered composition via DeepSeek (with OpenAI/Anthropic fallback)
     let mut api_keys = std::collections::HashMap::new();
@@ -198,7 +247,7 @@ pub async fn compose_message(
         "SELECT settings->'ai'->'providers' FROM tenants WHERE id = $1",
     )
     .bind(tid)
-    .fetch_one(&s.db)
+    .fetch_one(db)
     .await
     {
         if let Some(obj) = keys.as_object() {
@@ -215,21 +264,16 @@ pub async fn compose_message(
             &api_keys,
             &name,
             &name, // business_name same as contact name for now
-            &r.context,
+            context,
             (assessment.churn_probability * 100.0) as i32,
             assessment.signals_count,
         )
         .await
     } else {
-        compose_body(
-            &r.context,
-            &name,
-            &r.tone.unwrap_or_else(|| "friendly".to_string()),
-            &assessment,
-        )
+        compose_body(context, &name, tone.unwrap_or("friendly"), &assessment)
     };
 
-    let subject = compose_subject(&r.context, &name, &assessment);
+    let subject = compose_subject(context, &name, &assessment);
 
     let msg_id = Uuid::new_v4();
 
@@ -240,21 +284,21 @@ pub async fn compose_message(
     )
     .bind(msg_id)
     .bind(tid)
-    .bind(format!("ai_composed_{}_{}", r.context, r.contact_id))
-    .bind(&r.channel)
+    .bind(format!("ai_composed_{}_{}", context, contact_id))
+    .bind(channel)
     .bind(&subject)
     .bind(&body)
-    .bind(json!({"ai_generated": true, "context": &r.context, "template": template_slug}))
-    .execute(&s.db)
+    .bind(json!({"ai_generated": true, "context": context, "template": template_slug}))
+    .execute(db)
     .await;
 
-    Ok(Json(json!({
+    Ok(json!({
         "subject": subject,
         "body": body,
         "message_id": msg_id,
         "template_slug": template_slug,
         "churn_probability": assessment.churn_probability
-    })))
+    }))
 }
 
 /// POST /api/ai/channel — AI-suggest the best channel for follow-up

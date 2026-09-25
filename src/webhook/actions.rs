@@ -9,7 +9,7 @@ use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::sql_json::row_json;
+use crate::sql_json::{row_json, row_json_dml};
 
 /// Route a webhook action to the correct handler.
 /// Returns (status_code, response_body_json).
@@ -76,6 +76,125 @@ pub async fn route_action(
             .ok_or("contact not found".to_string())?;
             Ok((200, contact))
         }
+        // Same contract as the app's own `PUT /api/contacts/:id` (src/contacts/handlers.rs::update):
+        // same field set, same blank-vs-omitted normalisation (NULL = not mentioned -> keep,
+        // blank = clear -> NULL, because idx_contacts_tenant_email is a UNIQUE ... WHERE email IS
+        // NOT NULL partial index), same company/duplicate guards. Allow-listed for every tenant
+        // while route_action() had no arm for it (t_e041e281).
+        "contacts.update" => {
+            let body = data.ok_or("data required")?;
+            let id = body
+                .get("id")
+                .and_then(|v| v.as_str())
+                .or_else(|| params.and_then(|p| p.get("id").and_then(|v| v.as_str())))
+                .ok_or("contact id required")?;
+            let cid = Uuid::parse_str(id).map_err(|_| "invalid uuid".to_string())?;
+
+            let s = |k: &str| body.get(k).and_then(|v| v.as_str());
+            let email = s("email");
+            let phone = s("phone");
+            let first_name = s("first_name");
+            let last_name = s("last_name");
+            let job_title = s("title");
+            let gender = s("gender");
+            let address_line1 = s("address_line1");
+            let address_line2 = s("address_line2");
+            let city = s("city");
+            let state = s("state");
+            let postal_code = s("postal_code");
+            let country = s("country");
+            let notes = s("notes");
+            let company = s("company");
+            let is_active = body.get("is_active").and_then(|v| v.as_bool());
+            let company_id = match body.get("company_id").and_then(|v| v.as_str()) {
+                Some(v) => Some(Uuid::parse_str(v).map_err(|_| "invalid company_id".to_string())?),
+                None => None,
+            };
+
+            // A company that is not this tenant's must not be re-pointed at (404, not a FK 500
+            // and not a silently stored dangling reference) — same gate as the route.
+            if let Some(co) = company_id {
+                let ok = crate::contacts::company_of_tenant(db, co, tenant_id)
+                    .await
+                    .map_err(|e| format!("DB error: {}", e))?;
+                if !ok {
+                    return Ok((
+                        404,
+                        json!({"updated": false,
+                               "error": format!("Company {} not found for this tenant", co)}),
+                    ));
+                }
+            }
+
+            let dup: i64 = match email {
+                Some(e) if !e.is_empty() => sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM contacts WHERE tenant_id = $1 AND email = $2 AND id <> $3",
+                )
+                .bind(tenant_id)
+                .bind(e)
+                .bind(cid)
+                .fetch_one(db)
+                .await
+                .map_err(|e| format!("DB error: {}", e))?,
+                _ => 0,
+            };
+            if dup > 0 {
+                return Ok((
+                    409,
+                    json!({"updated": false,
+                           "error": "Another contact with this email already exists"}),
+                ));
+            }
+
+            let contact = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml(
+                r#"UPDATE contacts SET
+                    email = CASE WHEN $1 IS NULL THEN email ELSE NULLIF(btrim($1), '') END,
+                    phone = CASE WHEN $2 IS NULL THEN phone ELSE NULLIF(btrim($2), '') END,
+                    first_name = COALESCE($3, first_name),
+                    last_name = COALESCE($4, last_name),
+                    title = COALESCE($5, title),
+                    company_id = COALESCE($6, company_id),
+                    gender = COALESCE($7, gender),
+                    address_line1 = COALESCE($8, address_line1),
+                    address_line2 = COALESCE($9, address_line2),
+                    city = COALESCE($10, city),
+                    state = COALESCE($11, state),
+                    postal_code = COALESCE($12, postal_code),
+                    country = COALESCE($13, country),
+                    notes = COALESCE($14, notes),
+                    company = CASE WHEN $15 IS NULL THEN company ELSE NULLIF(btrim($15), '') END,
+                    is_active = COALESCE($16, is_active),
+                    updated_at = NOW()
+                   WHERE id = $17 AND tenant_id = $18
+                   RETURNING *"#,
+            ))
+            .bind(email)
+            .bind(phone)
+            .bind(first_name)
+            .bind(last_name)
+            .bind(job_title)
+            .bind(company_id)
+            .bind(gender)
+            .bind(address_line1)
+            .bind(address_line2)
+            .bind(city)
+            .bind(state)
+            .bind(postal_code)
+            .bind(country)
+            .bind(notes)
+            .bind(company)
+            .bind(is_active)
+            .bind(cid)
+            .bind(tenant_id)
+            .fetch_optional(db)
+            .await
+            .map_err(|e| format!("DB error: {}", e))?;
+
+            match contact {
+                Some(c) => Ok((200, json!({"updated": true, "contact": c}))),
+                None => Ok((404, json!({"updated": false, "error": "contact not found"}))),
+            }
+        }
 
         // ── Tags ──
         "tags.list" => {
@@ -107,6 +226,46 @@ pub async fn route_action(
             .execute(db).await
             .map_err(|e| format!("DB error: {}", e))?;
             Ok((200, json!({"assigned": true})))
+        }
+        // Inverse of tags.assign above — the app's own route is `DELETE /api/tags/assign/:id`
+        // (src/tags/handlers.rs::unassign_tag, documented in public/guide.html). Allow-listed for
+        // every tenant while route_action() had no arm for it (t_e041e281).
+        "tags.unassign" => {
+            let body = data.ok_or("data required")?;
+            let g = |k: &str| {
+                body.get(k)
+                    .and_then(|v| v.as_str())
+                    .or_else(|| params.and_then(|p| p.get(k).and_then(|v| v.as_str())))
+            };
+            let contact_id = g("contact_id").ok_or("contact_id required")?;
+            let tag_id = g("tag_id").ok_or("tag_id required")?;
+            let cid = Uuid::parse_str(contact_id).map_err(|_| "invalid contact_id".to_string())?;
+            let tid = Uuid::parse_str(tag_id).map_err(|_| "invalid tag_id".to_string())?;
+            let res = sqlx::query(
+                "DELETE FROM tag_assignments WHERE tenant_id = $1 AND entity_type = 'contact' AND entity_id = $2 AND tag_id = $3"
+            )
+            .bind(tenant_id).bind(cid).bind(tid)
+            .execute(db).await
+            .map_err(|e| format!("DB error: {}", e))?;
+            if res.rows_affected() == 0 {
+                Ok((
+                    404,
+                    json!({"unassigned": false, "error": "no such tag assignment"}),
+                ))
+            } else {
+                // Same automation fan-out as the app's own unassign route, so a removal driven
+                // through the webhook behaves like one made in the UI.
+                crate::automation::engine::fire_tag_trigger(
+                    db,
+                    tenant_id,
+                    "contact",
+                    cid,
+                    tid,
+                    "TagRemoved",
+                )
+                .await;
+                Ok((200, json!({"unassigned": true})))
+            }
         }
 
         // ── Lists ──
@@ -279,6 +438,26 @@ pub async fn route_action(
             .map_err(|e| format!("DB error: {}", e))?;
             Ok((201, json!({"message_id": msg_id, "queued": true})))
         }
+        // Read side of the template store the app serves at `GET /api/comms/templates`
+        // (src/communications/handlers.rs::list_templates over message_templates; the admin SPA
+        // reads that same route). Allow-listed for every tenant while route_action() had no arm
+        // for it (t_e041e281).
+        "comms.templates" => {
+            let limit = params
+                .and_then(|p| p.get("limit").and_then(|v| v.as_i64()))
+                .unwrap_or(50);
+            let offset = params
+                .and_then(|p| p.get("offset").and_then(|v| v.as_i64()))
+                .unwrap_or(0);
+            let templates = sqlx::query_scalar::<_, serde_json::Value>(&row_json(
+                "SELECT id, name, channel, subject, body, variables, created_at FROM message_templates WHERE tenant_id = $1 ORDER BY name LIMIT $2 OFFSET $3"
+            ))
+            .bind(tenant_id).bind(limit as i32).bind(offset as i32)
+            .fetch_all(db).await
+            .map_err(|e| format!("DB error: {}", e))?;
+            let total = templates.len();
+            Ok((200, json!({"templates": templates, "total": total})))
+        }
 
         // ── Events ──
         "events.ingest" => {
@@ -328,6 +507,48 @@ pub async fn route_action(
             .await
             .map_err(|e| format!("DB error: {}", e))?;
             Ok((200, json!({"churn_assessment": score})))
+        }
+        // AI-compose a follow-up for one contact — the app's own `POST /api/ai/message`
+        // (src/ai/handlers.rs::compose_message), which now delegates to `compose_for_contact`,
+        // so route and webhook answer from ONE implementation. Uses the tenant's own BYOK
+        // provider keys when set and the deterministic local composer otherwise (no platform
+        // key is spent). Allow-listed for every tenant while route_action() had no arm for it.
+        "ai.compose" => {
+            let body = data.or(params).ok_or("data required")?;
+            let contact_id = body
+                .get("contact_id")
+                .and_then(|v| v.as_str())
+                .ok_or("contact_id required")?;
+            let cid = Uuid::parse_str(contact_id).map_err(|_| "invalid contact_id".to_string())?;
+            let context = body
+                .get("context")
+                .and_then(|v| v.as_str())
+                .unwrap_or("retention");
+            let channel = body
+                .get("channel")
+                .and_then(|v| v.as_str())
+                .unwrap_or("email");
+            let tone = body.get("tone").and_then(|v| v.as_str());
+            match crate::ai::handlers::compose_for_contact(
+                db, tenant_id, cid, context, channel, tone,
+            )
+            .await
+            {
+                Ok(v) => Ok((200, v)),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+        // Segmentation / campaign recommendation — the app's own `POST /api/ai/recommend`
+        // (src/ai/handlers.rs::recommend -> ai::engine::recommend_campaign). That engine is pure
+        // SQL over contacts/account_health, so this arm makes no LLM call. Allow-listed for every
+        // tenant while route_action() had no arm for it (t_e041e281).
+        "ai.recommend" => {
+            let goal = data
+                .and_then(|d| d.get("campaign_goal").and_then(|v| v.as_str()))
+                .or_else(|| params.and_then(|p| p.get("campaign_goal").and_then(|v| v.as_str())))
+                .unwrap_or("retention");
+            let rec = crate::ai::engine::recommend_campaign(db, tenant_id, goal).await;
+            Ok((200, json!(rec)))
         }
 
         // ── Native Apps ──
