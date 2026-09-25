@@ -1627,20 +1627,29 @@ const TAB_LOADERS = {
 
   'contacts': async () => {
     try {
-      const contacts = await API.get('/contacts');
+      // GET /api/contacts answers {"contacts":[...]}. This reader tested Array.isArray() on the
+      // ENVELOPE, so `rows` stayed empty and the table rendered "No contacts yet" for every
+      // account — which also meant no per-row control (the Tags button wired below, or the
+      // pre-existing Edit button) could ever be clicked (kanban t_4b6f1a5c).
+      const contacts = famList(await API.get('/contacts'), 'contacts');
       let rows = [];
       if (Array.isArray(contacts)) {
         rows = contacts.slice(0, 50).map(c => [
-          escapeHtml(c.name || c.full_name || '—'),
+          escapeHtml(c.name || c.full_name || ((c.first_name || '') + ' ' + (c.last_name || '')).trim() || '—'),
           escapeHtml(c.email || '—'),
           escapeHtml(c.phone || '—'),
           escapeHtml(c.company || c.company_name || '—'),
-          `<span class="badge ${(c.status||'').toLowerCase()==='active'?'badge-success':'badge-muted'}">${escapeHtml(c.status || 'active')}</span>`,
-          `<button class="btn btn-ghost btn-xs" onclick="editContact('${c.id}')">Edit</button>`
+          // The Status cell that used to sit here (a badge built from `c.status`) is gone:
+          // GET /api/contacts has never returned a `status` key (`contacts` has no such column), so
+          // the badge showed the same text on every row of every tenant. It is deliberately NOT
+          // replaced with `is_active`: this loader's endpoint (and /api/contacts/search) filter
+          // `WHERE is_active = true`, so a rendered row is active by construction and the badge
+          // still could not vary. Removing the column is the honest arm (kanban t_df4e34aa).
+          `<button class="btn btn-ghost btn-xs" onclick="editContact('${c.id}')">Edit</button> <button class="btn btn-ghost btn-xs" onclick="ctOpenTags('${c.id}')">Tags</button>`
         ]);
       }
       document.getElementById('contactsTable').innerHTML = dataTable(
-        ['Name','Email','Phone','Company','Status',''], rows,
+        ['Name','Email','Phone','Company','Actions'], rows,
         'No contacts yet. Add your first contact to get started.'
       );
     } catch(e) {
@@ -1680,32 +1689,48 @@ const TAB_LOADERS = {
 
   'pipelines': async () => {
     try {
-      const pipelines = await API.get('/pipelines');
+      // GET /api/pipelines answers an ENVELOPE of WRAPPERS — {pipelines:[{pipeline:{…},stages:[…]}]} —
+      // and each pipeline's deals live behind their own route. This reader tested Array.isArray() on the
+      // envelope and then read a nested `deals` key the route has never returned, so the tab painted
+      // "No pipelines yet" for every tenant and its deal table could never hold a row. The unwrap, the
+      // wrapper hop, the opportunities read and the three counters are the TENANT shell's own
+      // (nginx/www-app/coreswift/index.html loadPipelinesTab), copied expression-for-expression.
+      const pipes = famList(await API.get('/pipelines'), 'pipelines');
       let html = '';
-      if (Array.isArray(pipelines) && pipelines.length > 0) {
-        pipelines.forEach(p => {
-          html += `<div class="card" style="margin-bottom:16px">
-            <div class="card-header">📈 ${escapeHtml(p.name || 'Pipeline')} <span class="badge badge-primary">${p.deals_count || p.deal_count || 0} deals</span></div>
-            <div class="card-body">
-              <div class="table-wrap"><table>
-                <thead><tr><th>Deal</th><th>Contact</th><th>Value</th><th>Stage</th><th></th></tr></thead>
-                <tbody>`;
-          const deals = p.deals || [];
-          if (deals.length === 0) {
-            html += '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No deals in this pipeline</td></tr>';
+      if (pipes.length > 0) {
+        for (const row of pipes) {
+          const p = row.pipeline || row;
+          let opps = [];
+          try { opps = famList(await API.get('/pipelines/' + p.id + '/opportunities?per_page=50'), 'opportunities'); } catch (_) {}
+          const won = opps.filter(function (o) { return o.is_won; }).length;
+          const lost = opps.filter(function (o) { return o.is_lost; }).length;
+          const open = opps.length - won - lost;
+          html += '<div class="card" style="margin-bottom:16px">' +
+            '<div class="card-header">📈 ' + fh(p.name) +
+              ' <span class="badge badge-primary">' + opps.length + ' deals</span> ' +
+              '<span class="badge badge-success">' + won + ' won</span> ' +
+              '<span class="badge badge-muted">' + open + ' open</span> ' +
+              '<span class="badge badge-error">' + lost + ' lost</span>' +
+            '</div><div class="card-body">' +
+              '<div class="table-wrap"><table>' +
+                '<thead><tr><th>Deal</th><th>Value</th><th>Probability</th></tr></thead><tbody>';
+          if (opps.length === 0) {
+            html += '<tr><td colspan="3" style="text-align:center;color:var(--text-muted)">No deals in this pipeline</td></tr>';
           } else {
-            deals.forEach(d => {
-              html += `<tr>
-                <td>${escapeHtml(d.name || d.title || 'Deal')}</td>
-                <td>${escapeHtml(d.contact_name || '—')}</td>
-                <td>${d.value ? '$'+d.value : '—'}</td>
-                <td><span class="badge badge-warning">${escapeHtml(d.stage || 'New')}</span></td>
-                <td><button class="btn btn-ghost btn-xs">View</button></td>
-              </tr>`;
+            opps.forEach(o => {
+              // The old Contact and Stage columns are gone rather than re-fed: the opportunity row
+              // carries contact_id/stage_id, not names, and GET /api/pipelines has never returned a
+              // nested `deals` key — both cells were fed by keys that do not exist (t_4b1081bf's rule:
+              // a cell fed by a key the route never returns is a lie; removal is the honest arm).
+              html += '<tr>' +
+                '<td>' + fh(o.name) + '</td>' +
+                '<td>' + (o.value !== null && o.value !== undefined ? '$' + Number(o.value).toLocaleString() : '—') + '</td>' +
+                '<td>' + (o.probability !== null && o.probability !== undefined ? o.probability + '%' : '—') + '</td>' +
+              '</tr>';
             });
           }
           html += '</tbody></table></div></div></div>';
-        });
+        }
       } else {
         html = '<div class="card"><div class="card-body"><div class="empty-state"><div class="empty-icon">📈</div><h3>No pipelines yet</h3><p>Create your first sales pipeline to start tracking deals.</p></div></div></div>';
       }
@@ -1717,20 +1742,23 @@ const TAB_LOADERS = {
 
   'campaigns': async () => {
     try {
-      const campaigns = await API.get('/campaigns');
-      let rows = [];
-      if (Array.isArray(campaigns)) {
-        rows = campaigns.slice(0, 50).map(c => [
-          escapeHtml(c.name || '—'),
-          `<span class="badge badge-primary">${escapeHtml(c.type || 'email')}</span>`,
-          escapeHtml(c.status || 'draft'),
-          c.sent_count || c.sent || 0,
-          c.open_rate ? c.open_rate+'%' : '—',
-          `<button class="btn btn-ghost btn-xs">Edit</button>`
-        ]);
-      }
+      // GET /api/campaigns answers {campaigns:[…]} and a campaign row carries name/status/description/
+      // created_at ONLY — no `type`, no `sent_count`/`sent`, no `open_rate`. The old reader tested
+      // Array.isArray() on the envelope (so the tab painted "No campaigns yet" for every tenant) and its
+      // Type/Sent/Open-Rate cells were fed by those missing keys, rendering the literals 'email', 0 and
+      // '—' on every row. Reader and columns are the tenant shell's own (www-app loadCampaignsTab); its
+      // per-row Activate/Pause/Details buttons are NOT grafted — their cm* module is tenant-only.
+      const campaigns = famList(await API.get('/campaigns'), 'campaigns');
+      const rows = campaigns.slice(0, 50).map(function (c) {
+        return [
+          fh(c.name),
+          '<span class="badge ' + (c.status === 'active' ? 'badge-success' : 'badge-muted') + '">' + fh(c.status) + '</span>',
+          fh(c.description),
+          c.created_at ? new Date(c.created_at).toLocaleDateString() : '—',
+        ];
+      });
       document.getElementById('campaignsTable').innerHTML = dataTable(
-        ['Name','Type','Status','Sent','Open Rate',''], rows,
+        ['Name','Status','Description','Created'], rows,
         'No campaigns yet. Launch your first marketing campaign.'
       );
     } catch(e) {
@@ -1740,19 +1768,24 @@ const TAB_LOADERS = {
 
   'lists': async () => {
     try {
-      const lists = await API.get('/lists');
-      let rows = [];
-      if (Array.isArray(lists)) {
-        rows = lists.slice(0, 50).map(l => [
-          escapeHtml(l.name || '—'),
-          l.contact_count || l.count || 0,
-          `<span class="badge badge-muted">${escapeHtml(l.type || 'static')}</span>`,
-          escapeHtml(l.created_at ? new Date(l.created_at).toLocaleDateString() : '—'),
-          `<button class="btn btn-ghost btn-xs">View</button>`
-        ]);
-      }
+      // GET /api/lists answers {lists:[…]} and a list row carries name/member_count/list_type/
+      // created_at ONLY — no `contact_count`, no `count`, no `type`. The old reader tested
+      // Array.isArray() on the envelope (so the tab painted "No lists yet" for every tenant) and its
+      // Contacts/Type cells read those missing keys, showing "0" and "static" on every row. Reader and
+      // columns are the tenant shell's own (www-app loadListsTab); its per-row Members/Evaluate buttons
+      // are NOT grafted — their ls* module is tenant-only.
+      const lists = famList(await API.get('/lists'), 'lists');
+      const rows = lists.slice(0, 50).map(function (l) {
+        const dyn = l.list_type === 'dynamic';
+        return [
+          fh(l.name),
+          l.member_count !== null && l.member_count !== undefined ? l.member_count : '—',
+          '<span class="badge ' + (dyn ? 'badge-primary' : 'badge-muted') + '">' + fh(l.list_type) + '</span>',
+          l.created_at ? new Date(l.created_at).toLocaleDateString() : '—',
+        ];
+      });
       document.getElementById('listsTable').innerHTML = dataTable(
-        ['Name','Contacts','Type','Created',''], rows,
+        ['Name','Members','Type','Created'], rows,
         'No lists yet. Create a list to segment your contacts.'
       );
     } catch(e) {
@@ -1807,16 +1840,20 @@ const TAB_LOADERS = {
 
   'tickets': async () => {
     try {
-      const tickets = await API.get('/tickets');
+      // CS-22: the API answers {tickets, count} — `Array.isArray` on that is false, which is why
+      // this tab always said "No support tickets" no matter what the customer had raised.
+      const resp = await API.get('/tickets');
+      if (resp && resp.portal_url) STATE.portalUrl = resp.portal_url;   // CS-22
+      const tickets = Array.isArray(resp) ? resp : ((resp && resp.tickets) || []);
       let rows = [];
       if (Array.isArray(tickets)) {
         rows = tickets.slice(0, 50).map(t => [
           escapeHtml(t.subject || t.title || '—'),
           `<span class="badge ${t.status==='open'?'badge-error':t.status==='in_progress'?'badge-warning':'badge-success'}">${escapeHtml(t.status||'open')}</span>`,
           escapeHtml(t.priority || 'normal'),
-          escapeHtml(t.contact_name || t.requester || '—'),
+          escapeHtml(t.contact_name || t.contact_email || t.requester || '—'),
           escapeHtml(t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'),
-          `<button class="btn btn-ghost btn-xs">View</button>`
+          `<button class="btn btn-ghost btn-xs" onclick="openTicket('${t.id}')">View</button>`
         ]);
       }
       document.getElementById('ticketsTable').innerHTML = dataTable(
@@ -1860,20 +1897,40 @@ const TAB_LOADERS = {
 
   'billing': async () => {
     try {
-      const plans = await API.get('/billing/plans');
+      // GET /api/billing/plans answers {page,per_page,plans,total} with 6 real plans; the reader tested
+      // Array.isArray() on that envelope, so the tab painted "No plans defined" for every tenant. Behind
+      // it sat a SECOND defect the envelope bug was hiding: a plan's `features` is a JSONB OBJECT
+      // ({"max_contacts":100,"api_access":true,…}), so `(p.features || []).slice(0, 6)` threw
+      // "slice is not a function" and not one plan card could paint.
+      const plans = famList(await API.get('/billing/plans'), 'plans');
       let html = '';
-      if (Array.isArray(plans) && plans.length > 0) {
+      if (plans.length > 0) {
         html = '<div class="plans-grid">';
         plans.forEach(p => {
           const price = p.price_monthly || p.price || 0;
-          const features = (p.features || []).slice(0, 6);
+          // the keys this plan really enables (true) or sizes (a positive number); an array is still
+          // honoured for a plan that stores a plain list
+          const raw = p.features;
+          const feats = [];
+          if (Array.isArray(raw)) {
+            raw.slice(0, 6).forEach(f => feats.push([typeof f === 'string' ? f : (f && (f.name || f.key)) || '', '']));
+          } else if (raw && typeof raw === 'object') {
+            Object.keys(raw).forEach(k => {
+              const v = raw[k];
+              if (v === true || (typeof v === 'number' && v > 0)) {
+                feats.push([k.replace(/_/g, ' '), typeof v === 'number' ? ' (' + v + ')' : '']);
+              }
+            });
+          }
+          const features = feats.slice(0, 6);
+          // the dead "Edit Plan" button is gone with it: it had no handler at all (plan editing lives in
+          // the admin-only Modules & Plans panel), so it could only ever be a lie on a real card.
           html += `<div class="plan-card">
             <div class="plan-name">${escapeHtml(p.name)}</div>
             <div class="plan-price">$${price}<span>/mo</span></div>
             <ul class="plan-features">
-              ${features.map(f => `<li class="check">✓ ${escapeHtml(typeof f==='string'?f:f.name||f)}</li>`).join('')}
+              ${features.map(f => `<li class="check">✓ ${escapeHtml(f[0] + f[1])}</li>`).join('')}
             </ul>
-            <button class="btn btn-secondary btn-sm btn-block">Edit Plan</button>
           </div>`;
         });
         html += '</div>';
@@ -2823,13 +2880,211 @@ async function changePassword() {
 }
 
 // Placeholder modal stubs
-function showAddContactModal() { showModal('Add Contact', '<div class="form-group"><label>Name</label><input type="text"></div><div class="form-group"><label>Email</label><input type="email"></div><div class="form-group"><label>Phone</label><input type="text"></div><div class="form-group"><label>Company</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Contact added&#39;,&#39;success&#39;)">Save</button>'); }
-function editContact(id) { toast('Editing contact: ' + id, 'info'); }
+// Contact create — POST /api/contacts (kanban t_fbb30c16). Until then this modal rendered its
+// inputs with NO ids and its Save button only called toast('Contact added'), so a contact could
+// never be created by hand and `company` could only arrive via a CSV import or a sister-app
+// capture.
+function showAddContactModal() {
+  showModal('Add Contact',
+    '<div class="form-group"><label>First name *</label><input type="text" id="ctAddFirst"></div>' +
+    '<div class="form-group"><label>Last name *</label><input type="text" id="ctAddLast"></div>' +
+    '<div class="form-group"><label>Email</label><input type="email" id="ctAddEmail"></div>' +
+    '<div class="form-group"><label>Phone</label><input type="text" id="ctAddPhone"></div>' +
+    '<div class="form-group"><label>Company</label><input type="text" id="ctAddCompany"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary btn-sm" data-ops="contact-create" onclick="saveNewContact()">Save</button>');
+}
+
+function ctModalValue(id) { const el = document.getElementById(id); return el ? el.value.trim() : ''; }
+
+async function saveNewContact() {
+  const first = ctModalValue('ctAddFirst'), last = ctModalValue('ctAddLast');
+  if (!first || !last) { toast('First and last name are required', 'error'); return; }
+  const body = { first_name: first, last_name: last };
+  const email = ctModalValue('ctAddEmail'), phone = ctModalValue('ctAddPhone'), company = ctModalValue('ctAddCompany');
+  if (email) body.email = email;
+  if (phone) body.phone = phone;
+  if (company) body.company = company;
+  try {
+    await API.post('/contacts', body);
+    closeModal();
+    toast('Contact created', 'success');
+    if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['contacts']) TAB_LOADERS['contacts']();
+  } catch (e) {
+    toast('Create failed: ' + e.message, 'error');
+  }
+}
+let CT_EDIT_ID = null;
+
+// Contact editor — GET /api/contacts/{id} then PATCH, so an existing contact (its company
+// included) can be corrected by hand. Until t_fbb30c16 this was
+// toast('Editing contact: ' + id): the per-row Edit button fetched nothing and saved nothing.
+async function editContact(id) {
+  let c;
+  try { c = await API.get('/contacts/' + encodeURIComponent(id)); }
+  catch (e) { toast('Could not load contact: ' + e.message, 'error'); return; }
+  if (!c || !c.id) { toast('Contact not found', 'error'); return; }
+  CT_EDIT_ID = id;
+  showModal('Edit Contact',
+    '<div class="form-group"><label>First name *</label><input type="text" id="ctEditFirst" value="' + escapeHtmlAttr(c.first_name || '') + '"></div>' +
+    '<div class="form-group"><label>Last name *</label><input type="text" id="ctEditLast" value="' + escapeHtmlAttr(c.last_name || '') + '"></div>' +
+    '<div class="form-group"><label>Email</label><input type="email" id="ctEditEmail" value="' + escapeHtmlAttr(c.email || '') + '"></div>' +
+    '<div class="form-group"><label>Phone</label><input type="text" id="ctEditPhone" value="' + escapeHtmlAttr(c.phone || '') + '"></div>' +
+    '<div class="form-group"><label>Company</label><input type="text" id="ctEditCompany" value="' + escapeHtmlAttr(c.company || '') + '"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary btn-sm" data-ops="contact-update" onclick="saveContactEdit()">Save</button>');
+}
+
+async function saveContactEdit() {
+  const id = CT_EDIT_ID;
+  if (!id) { toast('No contact selected', 'error'); return; }
+  const first = ctModalValue('ctEditFirst'), last = ctModalValue('ctEditLast');
+  if (!first || !last) { toast('First and last name are required', 'error'); return; }
+  try {
+    await API.patch('/contacts/' + encodeURIComponent(id), {
+      first_name: first, last_name: last,
+      email: ctModalValue('ctEditEmail'), phone: ctModalValue('ctEditPhone'),
+      company: ctModalValue('ctEditCompany'),
+    });
+    closeModal();
+    toast('Contact updated', 'success');
+    if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['contacts']) TAB_LOADERS['contacts']();
+  } catch (e) {
+    toast('Update failed: ' + e.message, 'error');
+  }
+}
 function famList(res, key) {
   if (Array.isArray(res)) return res;
   if (res && Array.isArray(res[key])) return res[key];
   if (res && res.data && Array.isArray(res.data)) return res.data;
   return [];
+}
+function fh(v) { return escapeHtml(String(v === null || v === undefined || v === '' ? '—' : v)); }
+
+async function ctOpenTags(cid) {
+  showModal('Tags on this contact',
+    '<div id="ctTagsBody"><div class="loading-wrap"><div class="spinner"></div> Loading tags...</div></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Close</button>');
+  let who = '';
+  try { const c = await API.get('/contacts/' + encodeURIComponent(cid));
+        who = (c && (c.name || ((c.first_name || '') + ' ' + (c.last_name || '')).trim())) || ''; } catch (e) {}
+  const title = document.querySelector('#modalContainer h3');
+  if (title && who) title.textContent = 'Tags — ' + who;
+  await ctLoadTags(cid);
+}
+
+async function ctLoadTags(cid) {
+  const body = document.getElementById('ctTagsBody');
+  if (!body) return;
+  let all = [], mine = [];
+  try {
+    all = famList(await API.get('/tags'), 'tags');
+    const d = await API.get('/tags/entity/contact/' + encodeURIComponent(cid));
+    mine = (d && (d.assignments || d.tags)) || [];
+    if (d && d.assignments) {
+      // `assignments` carries the assignment id the DELETE route needs; `tags` is the
+      // tag rows themselves (kept unchanged for existing consumers).
+      mine = d.assignments.map(function (a) {
+        const t = (d.tags || []).filter(function (x) { return x.id === a.tag_id; })[0] || {};
+        return { assignment_id: a.id, tag_id: a.tag_id, id: a.tag_id, name: t.name, color: t.color };
+      });
+    } else {
+      mine = mine.map(function (t) { return { assignment_id: null, tag_id: t.id, id: t.id, name: t.name, color: t.color }; });
+    }
+  } catch (e) { body.innerHTML = icErr('Could not read tags', e.message); return; }
+
+  const assignedIds = mine.map(function (m) { return m.tag_id; });
+  const avail = all.filter(function (t) { return assignedIds.indexOf(t.id) < 0; });
+  body.innerHTML =
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
+      (mine.length ? mine.map(function (m) {
+        return '<span class="badge" style="background:' + escapeHtmlAttr(m.color || 'var(--accent-subtle)') +
+          ';color:#fff;padding:6px 12px">' + escapeHtml(m.name || m.tag_id) +
+          (m.assignment_id ? ' <a href="#" onclick="ctUnassignTag(\'' + escapeHtmlAttr(cid) + '\',\'' +
+            escapeHtmlAttr(m.assignment_id) + '\');return false" title="Remove tag">✕</a>' : '') +
+          '</span>';
+      }).join('') : '<span class="config-desc">No tags on this contact yet.</span>') +
+    '</div>' +
+    '<div style="display:flex;gap:8px;align-items:flex-end">' +
+      '<div style="flex:1"><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Add a tag</label>' +
+      '<select id="ctTagPick">' + (avail.length
+        ? avail.map(function (t) { return '<option value="' + escapeHtmlAttr(t.id) + '">' + escapeHtml(t.name) + '</option>'; }).join('')
+        : '<option value="">No tags left to add</option>') + '</select></div>' +
+      '<button class="btn btn-primary btn-sm" id="ctTagAdd"' + (avail.length ? '' : ' disabled') + '>Assign</button>' +
+    '</div>' +
+    (all.length ? '' : '<p style="color:var(--text-secondary);margin-top:10px">No tags exist yet — create some on the Tags tab.</p>');
+  const add = document.getElementById('ctTagAdd');
+  if (add) add.addEventListener('click', function () {
+    const sel = document.getElementById('ctTagPick');
+    if (sel && sel.value) ctAssignTag(cid, sel.value);
+  });
+}
+
+async function ctAssignTag(cid, tagId) {
+  try {
+    await API.post('/tags/assign', { tag_id: tagId, entity_type: 'contact', entity_id: cid });
+    toast('Tag assigned', 'success');
+  } catch (e) { toast('Could not assign: ' + e.message, 'error'); }
+  await ctLoadTags(cid);
+  if (typeof loadTagsTab === 'function' && document.getElementById('tagsTable')) loadTagsTab();
+}
+
+async function ctUnassignTag(cid, assignmentId) {
+  try {
+    await API.del('/tags/assign/' + encodeURIComponent(assignmentId));
+    toast('Tag removed', 'success');
+  } catch (e) { toast('Could not remove: ' + e.message, 'error'); }
+  await ctLoadTags(cid);
+  if (typeof loadTagsTab === 'function' && document.getElementById('tagsTable')) loadTagsTab();
+}
+
+async function openTicket(id) {
+  try {
+    const data = await API.get('/tickets/' + id);
+    const t = (data && data.ticket) || {};
+    const msgs = (data && data.messages) || [];
+    let html = '<div class="card"><div class="card-body">' +
+      '<p style="margin-bottom:8px"><strong>' + escapeHtml(t.subject || 'Ticket') + '</strong></p>' +
+      '<p style="color:var(--text-secondary);white-space:pre-wrap">' + escapeHtml(t.description || '') + '</p>' +
+      '<p style="color:var(--text-muted);font-size:12px">Status: ' + escapeHtml(t.status || 'open') +
+      ' · Priority: ' + escapeHtml(t.priority || 'medium') + ' · Source: ' + escapeHtml(t.source || 'form') + '</p>' +
+      // CS-22: what the customer needs in order to see this request in the 💬 My Support portal —
+      // their address plus a reference. The ticket id is already on screen; nothing is hardcoded.
+      '<p style="color:var(--text-muted);font-size:12px">Customer portal reference: <code>' +
+        escapeHtml(String(t.id || id).slice(0, 8)) + '</code> — the customer opens My Support and signs in with their email address and this reference.</p>' +
+      '</div></div>';
+    html += '<div class="card" style="margin-top:12px"><div class="card-header">Thread</div><div class="card-body">';
+    if (!msgs.length) {
+      html += '<p style="color:var(--text-secondary)">No replies yet.</p>';
+    } else {
+      msgs.forEach(m => {
+        html += '<div style="border-left:3px solid var(--border);padding:6px 10px;margin-bottom:8px">' +
+          '<div style="font-size:12px;color:var(--text-muted)">' + escapeHtml(m.sender_type || '') + ' · ' +
+          escapeHtml(m.created_at ? new Date(m.created_at).toLocaleString() : '') + '</div>' +
+          '<div style="white-space:pre-wrap">' + escapeHtml(m.message || '') + '</div></div>';
+      });
+    }
+    html += '<div class="form-group"><label>Reply</label><textarea rows="3" id="tkReplyBox"></textarea></div>';
+    html += '</div></div>';
+    showModal('🎫 ' + escapeHtml(t.subject || 'Ticket'), html,
+      '<button class="btn btn-ghost" onclick="closeModal()">Close</button>' +
+      '<button class="btn btn-primary" onclick="replyTicket(\'' + id + '\')">Send reply</button>', true);
+  } catch (e) {
+    toast('Could not open the ticket: ' + e.message, 'error');
+  }
+}
+async function replyTicket(id) {
+  const el = document.getElementById('tkReplyBox');
+  const message = el ? el.value.trim() : '';
+  if (!message) { toast('Write a reply first', 'error'); return; }
+  try {
+    // CS-22: a reply written in the tenant console is the STAFF side of the thread. It used to be
+    // stored as sender_type 'contact', which made the agent's own answer read as the customer's —
+    // wrong in this console and wrong in the customer portal, where 'contact' renders as "you".
+    await API.post('/tickets/' + id + '/messages', { message: message, sender_type: 'agent' });
+    toast('Reply sent', 'success');
+    openTicket(id);
+  } catch (e) { toast('Reply failed: ' + e.message, 'error'); }
 }
 
 // Company create + editor — POST /api/companies and GET/PATCH /api/companies/{id} (kanban
