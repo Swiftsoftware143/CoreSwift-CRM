@@ -264,7 +264,26 @@ Response:
     <h3>Global Search</h3>
     <p>Search all entities at once:</p>
     <pre>GET /api/dashboard/search/query?q=david</pre>
-    <p>Matches across contacts (name/email/phone), companies (name/email), and opportunities (name). Returns top 10 per type.</p>
+    <p>Matches across contacts (first name, last name, full name, email, phone), companies (name/email), and opportunities (name). Returns top 10 per type, and only from your own account.</p>
+    <pre>GET /api/dashboard/search/query?q=david
+Authorization: Bearer ***
+
+Response:
+{
+  "query": "david",
+  "total_contacts": 42,
+  "total_companies": 15,
+  "contacts": [
+    { "id": "1f0c...", "first_name": "David", "last_name": "Giraudy", "email": "david@example.com", "phone": "+13055550100" }
+  ],
+  "companies": [
+    { "id": "9a24...", "name": "Acme Corp", "email": "info@acme.example" }
+  ],
+  "opportunities": [
+    { "id": "77c1...", "name": "David renewal", "value": 12000.00, "is_won": false }
+  ]
+}</pre>
+    <p><code>total_contacts</code> and <code>total_companies</code> are your own row totals — the same numbers as <code>GET /api/dashboard/stats</code> — and not the number of matches; the matches are the three arrays. A request with no <code>q</code> (or a blank one) returns those totals with three empty arrays, and so does a query that matches nothing.</p>
   </div>
 </section>
 
