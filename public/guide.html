@@ -204,7 +204,7 @@
     <p>Navigate to:</p>
     <pre>https://coreswiftcrm.com</pre>
     <p>Enter your email and password.</p>
-    <div class="callout info"><strong>Demo Account</strong>  <code>swiftsoftware143@yahoo.com</code> / <code>(rotated - see admin guide)</code></div>
+    <div class="callout info"><strong>Demo Account</strong>  <code>swiftsoftware143&#64;yahoo.com</code> / <code>(rotated - see admin guide)</code></div>
     <p>On success, you receive a JWT access token and refresh token. The app stores these for all API calls. You'll be redirected to the Dashboard.</p>
   </div>
   <div class="card">
@@ -273,10 +273,10 @@ Response:
   "total_contacts": 42,
   "total_companies": 15,
   "contacts": [
-    { "id": "1f0c...", "first_name": "David", "last_name": "Giraudy", "email": "david@example.com", "phone": "+13055550100" }
+    { "id": "1f0c...", "first_name": "David", "last_name": "Giraudy", "email": "david&#64;example.com", "phone": "+13055550100" }
   ],
   "companies": [
-    { "id": "9a24...", "name": "Acme Corp", "email": "info@acme.example" }
+    { "id": "9a24...", "name": "Acme Corp", "email": "info&#64;acme.example" }
   ],
   "opportunities": [
     { "id": "77c1...", "name": "David renewal", "value": 12000.00, "is_won": false }
@@ -324,7 +324,7 @@ Content-Type: application/json
 {
   "first_name": "John",
   "last_name": "Doe",
-  "email": "john@example.com",
+  "email": "john&#64;example.com",
   "phone": "+1234567890",
   "company": "Acme Corp",
   "source": "Website"
@@ -1411,7 +1411,7 @@ Authorization: Bearer &lt;token&gt;</pre>
        <code>native_apps</code> flag above.</p>
     <h3>Private Email</h3>
     <p>Bring your own domain (Mailgun, SMTP, SES or Postmark), provision mailboxes such as
-       <code>info@yourcompany.com</code>, send through your provider's DKIM/SPF signing (the provider
+       <code>info&#64;yourcompany.com</code>, send through your provider's DKIM/SPF signing (the provider
        signs each message — this app hands it over and never signs it itself), and have inbound replies
        create contact activity on the CRM timeline. Domain and mailbox counts are plan limits; provider
        credentials are encrypted at rest.</p>
