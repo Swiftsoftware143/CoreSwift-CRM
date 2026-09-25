@@ -1602,19 +1602,38 @@ const TAB_LOADERS = {
   // server-backed panel here registers a loader for the same reason.
   'features-plans': async () => { await loadFeatureMatrix(); },
   'dashboard': async () => {
+    // EVERY tile names its SOURCE OF TRUTH and only ever renders a number that came back from it.
+    // This loader used to render eight tiles, six of them from keys GET /api/dashboard/stats has
+    // never answered (`stats.active_deals || stats.deals || 0`), so every tenant was shown a hard 0
+    // it could not tell from a real one — and the route's real won value had no surface at all
+    // (kanban t_02c55c8c).
+    //   total_contacts / total_companies / total_opportunities / total_revenue -> GET /api/dashboard/stats
+    //   Pipelines     -> GET /api/pipelines       (the tenant's ACTIVE pipelines — the read its tab makes)
+    //   Open Tickets  -> GET /api/tickets/stats   (count of status = 'open')
+    //   Tracked Links -> GET /api/tracked-links   (the tenant's links)
+    // A source that does not answer (module off -> 402, endpoint down) renders '—', never a fabricated
+    // 0. Two tiles were DROPPED because there is no source to name: "Emails Sent" (nothing in this API
+    // exposes a sent-email count) and "Events This Week" (GET /api/events filters by source /
+    // event_type only — there is no week window, so "this week" could only be guessed). The admin
+    // console carries the SAME tiles from the SAME keys: change the two shells together.
+    const source = async (p) => { try { return await API.get(p); } catch(_) { return null; } };
+    const cnt = (v) => (typeof v === 'number' && isFinite(v)) ? v : '—';
+    const money = (v) => (typeof v === 'number' && isFinite(v)) ? '$' + v.toFixed(2) : '—';
     try {
-      const stats = await API.get('/dashboard/stats');
+      const [stats, pipes, tickets, links] = await Promise.all([
+        source('/dashboard/stats'), source('/pipelines'), source('/tickets/stats'),
+        source('/tracked-links')
+      ]);
       let html = '';
-      if (stats) {
+      if (stats || pipes || tickets || links) {
         const items = [
-          { icon:'👥', label:'Total Contacts', value: stats.total_contacts || stats.contacts || 0 },
-          { icon:'🏢', label:'Companies', value: stats.total_companies || stats.companies || 0 },
-          { icon:'💰', label:'Active Deals', value: stats.active_deals || stats.deals || 0 },
-          { icon:'📈', label:'Pipelines', value: stats.pipelines || stats.active_pipelines || 0 },
-          { icon:'🎫', label:'Open Tickets', value: stats.open_tickets || stats.tickets || 0 },
-          { icon:'📧', label:'Emails Sent', value: stats.emails_sent || 0 },
-          { icon:'📅', label:'Events This Week', value: stats.events_this_week || 0 },
-          { icon:'🔗', label:'Tracked Links', value: stats.tracked_links || 0 },
+          { icon:'👥', label:'Total Contacts', value: cnt(stats && stats.total_contacts) },
+          { icon:'🏢', label:'Companies', value: cnt(stats && stats.total_companies) },
+          { icon:'🎯', label:'Opportunities', value: cnt(stats && stats.total_opportunities) },
+          { icon:'💰', label:'Won Deal Value', value: money(stats && stats.total_revenue) },
+          { icon:'📈', label:'Pipelines', value: cnt(pipes && Array.isArray(pipes.pipelines) ? pipes.pipelines.length : null) },
+          { icon:'🎫', label:'Open Tickets', value: cnt(tickets && tickets.open) },
+          { icon:'🔗', label:'Tracked Links', value: cnt(links && Array.isArray(links.links) ? links.links.length : null) },
         ];
         items.forEach(it => {
           html += `<div class="stat-card${it.icon==='👥'?' accent':''}">
@@ -1624,9 +1643,9 @@ const TAB_LOADERS = {
           </div>`;
         });
       }
-      document.getElementById('statsGrid').innerHTML = html || '<div class="empty-state"><p>No stats available</p></div>';
+      document.getElementById('statsGrid').innerHTML = html || '<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats unavailable — no source answered.</p></div></div>';
     } catch(e) {
-      document.getElementById('statsGrid').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats endpoint unavailable — will populate once backend routes are active.</p></div></div>`;
+      document.getElementById('statsGrid').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats unavailable: ${escapeHtml(String(e.message || e))}</p></div></div>`;
     }
   },
 
