@@ -118,6 +118,10 @@ async fn execute_action(
 
     match action_type {
         "tag_contact" | "add_tag" => {
+            // DELIBERATELY NO TAG FAN-OUT (kanban t_56dddec2). This arm is an automation rule
+            // ACTION (`dispatch_automation` -> here), i.e. it runs inside the evaluator for a rule
+            // whose trigger already fired; firing `TagAdded` from here would re-enter the engine.
+            // See the rule on `crate::automation::engine::fire_tag_trigger`.
             if let (Some(eid), Some(tag_name)) = (
                 entity_id,
                 action_config.get("tag_name").and_then(|v| v.as_str()),

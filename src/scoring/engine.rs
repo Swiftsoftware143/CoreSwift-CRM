@@ -143,6 +143,9 @@ pub async fn apply_thresholds(
                 }
             }
             "assign_tag" => {
+                // DELIBERATELY NO TAG FAN-OUT (kanban t_56dddec2). This is a `scoring_thresholds`
+                // ACTION executed by the evaluator, so firing `TagAdded` here would re-enter it.
+                // See the rule on `crate::automation::engine::fire_tag_trigger`.
                 if let Some(tag_name) = t.action_config.get("tag_name").and_then(|v| v.as_str()) {
                     if let Ok(Some((tag_id,))) = sqlx::query_as::<_, (Uuid,)>(
                         "SELECT id FROM tags WHERE tenant_id = $1 AND name = $2 LIMIT 1",

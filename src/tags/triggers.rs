@@ -1,6 +1,10 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+/// The `tags`-module spelling of `crate::automation::engine::fire_tag_trigger`. It is currently
+/// unused — every fan-out call site uses `crate::automation::engine::fire_tag_trigger` directly.
+/// Use that one (its doc comment carries the full fire / no-fire rule, kanban t_56dddec2) so the
+/// app keeps ONE fan-out entry point.
 pub async fn fire_tag_trigger(
     db: &PgPool,
     tenant_id: Uuid,

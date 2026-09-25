@@ -274,13 +274,21 @@ pub async fn handle_tag_sync(
         }
     }
 
-    // Sync tags: ensure each tag exists in CoreSwift, then assign
+    // Sync tags: ensure each tag exists in CoreSwift, then assign.
+    // A synced tag IS a tag on this tenant's contact, so the assignment fans out to the tenant's
+    // `TagAdded` automations — FunnelSwift (the fleet's capture app) delivers its leads here, and
+    // a tenant that automates on a tag must not have to care which surface carried it
+    // (kanban t_56dddec2). Gated on `rows_affected()`: the statement is `ON CONFLICT DO NOTHING`,
+    // so a repeat sync of unchanged tags writes nothing and fires nothing.
     for tag_name in &req.tags {
         // Create tag if it doesn't exist
         let tag_id = create_or_get_tag(&s.db, tenant_id, tag_name).await?;
 
-        // Assign tag to contact
-        let _ = sqlx::query(
+        // Assign tag to contact.
+        // `.ok()` keeps this path's pre-existing behaviour that a failed tag write does not fail
+        // the whole sync (it was `let _ =` before the fan-out was added); the fan-out still only
+        // happens when a row really appeared.
+        let assigned = sqlx::query(
             "INSERT INTO tag_assignments (id, tag_id, entity_type, entity_id, tenant_id) VALUES ($1, $2, 'contact', $3, $4) ON CONFLICT (tag_id, entity_type, entity_id, tenant_id) DO NOTHING"
         )
         .bind(Uuid::new_v4())
@@ -288,20 +296,41 @@ pub async fn handle_tag_sync(
         .bind(contact_id)
         .bind(tenant_id)
         .execute(&s.db)
-        .await;
+        .await
+        .ok();
+        if assigned.map(|r| r.rows_affected()).unwrap_or(0) > 0 {
+            crate::automation::engine::fire_tag_trigger(
+                &s.db, tenant_id, "contact", contact_id, tag_id, "TagAdded",
+            )
+            .await;
+        }
     }
 
-    // Remove tags that were removed
+    // Remove tags that were removed. Same rule in the other direction: `TagRemoved` <=> a row
+    // actually went away, so a repeat sync (`removed_tags` still listing an already-removed tag)
+    // deletes nothing and fires nothing.
     for tag_name in &req.removed_tags {
         if let Some(tag_id) = get_tag_id_by_name(&s.db, tenant_id, tag_name).await {
-            let _ = sqlx::query(
+            let removed = sqlx::query(
                 "DELETE FROM tag_assignments WHERE tag_id = $1 AND entity_type = 'contact' AND entity_id = $2 AND tenant_id = $3"
             )
             .bind(tag_id)
             .bind(contact_id)
             .bind(tenant_id)
             .execute(&s.db)
-            .await;
+            .await
+            .ok();
+            if removed.map(|r| r.rows_affected()).unwrap_or(0) > 0 {
+                crate::automation::engine::fire_tag_trigger(
+                    &s.db,
+                    tenant_id,
+                    "contact",
+                    contact_id,
+                    tag_id,
+                    "TagRemoved",
+                )
+                .await;
+            }
         }
     }
 

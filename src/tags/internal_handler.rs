@@ -198,8 +198,12 @@ pub async fn internal_assign_tag(
         )));
     }
 
-    // assigned_by is nullable FK to users — use None for system operations
-    sqlx::query(
+    // assigned_by is nullable FK to users — use None for system operations.
+    // `TagAdded` <=> a row came into existence: the statement is `ON CONFLICT DO NOTHING`, so a
+    // repeat internal assign of an already-assigned tag writes nothing and must not re-fire the
+    // tenant's rule (kanban t_56dddec2 — this is the same operation as POST /api/tags/assign, so
+    // it must answer the same way).
+    let assigned = sqlx::query(
         "INSERT INTO tag_assignments (id, tag_id, entity_type, entity_id, tenant_id, assigned_by) VALUES ($1, $2, $3, $4, $5, NULL) ON CONFLICT (tag_id, entity_type, entity_id, tenant_id) DO NOTHING"
     )
     .bind(Uuid::new_v4())
@@ -209,6 +213,17 @@ pub async fn internal_assign_tag(
     .bind(tenant_id)
     .execute(&s.db)
     .await?;
+    if assigned.rows_affected() > 0 {
+        crate::automation::engine::fire_tag_trigger(
+            &s.db,
+            tenant_id,
+            &entity_type,
+            entity_id,
+            tag_id,
+            "TagAdded",
+        )
+        .await;
+    }
 
     Ok(Json(json!({
         "status": "assigned",
@@ -259,7 +274,15 @@ pub async fn internal_delete_tag(
         return Err(AppError::NotFound(format!("Tag {} not found", tag_id)));
     }
 
-    // Cascade handled by FK: ON DELETE CASCADE
+    // Cascade handled by FK: ON DELETE CASCADE.
+    // DELIBERATELY NO TAG FAN-OUT (kanban t_56dddec2). This statement is TAG LIFECYCLE, not an
+    // assignment operation: the caller asked to delete the tag object, and its assignment rows
+    // vanish as a consequence (`tags` -> `tag_assignments` is ON DELETE CASCADE, so this DELETE is
+    // redundant with the FK). Firing `TagRemoved` per removed assignment would turn one tenant
+    // action into N automation runs against a tag that no longer exists — the rule's configured
+    // `tag_id` would point at a deleted tag. Only an assignment-level removal
+    // (POST /api/tags/assign/:id, the webhook `tags.unassign` arm, the inbound tag sync's
+    // `removed_tags`) is a `TagRemoved` event.
     let _ = sqlx::query("DELETE FROM tag_assignments WHERE tag_id = $1")
         .bind(tag_id)
         .execute(&s.db)

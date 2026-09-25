@@ -56,6 +56,11 @@ async fn exec_add_tag(
         tracing::debug!(rule = %rule.id, tag = %tag_id, entity = %entity_id, "AddTag skipped: tag already assigned");
         return Ok(());
     }
+    // DELIBERATELY NO TAG FAN-OUT (kanban t_56dddec2). This is the `AddTag` rule ACTION: it runs
+    // INSIDE the tag/event evaluator, on a rule whose trigger has already fired. Calling
+    // `fire_tag_trigger` here would re-enter that evaluator, so a `TagAdded` rule whose action is
+    // AddTag would chain. The tag triggers are fired by the surfaces a CALLER asked for — the full
+    // rule (fire/no-fire) is documented on `crate::automation::engine::fire_tag_trigger`.
     sqlx::query("INSERT INTO tag_assignments(id,tag_id,entity_type,entity_id,tenant_id) VALUES($1,$2,$3,$4,$5)").bind(Uuid::new_v4()).bind(tag_id).bind(entity_type).bind(entity_id).bind(tenant_id).execute(db).await?;
     Ok(())
 }
@@ -73,6 +78,9 @@ async fn exec_remove_tag(
         .ok_or(AppError::Validation("Missing tag_id".into()))?;
     let tag_id =
         Uuid::parse_str(tid_str).map_err(|_| AppError::Validation("Invalid tag_id".into()))?;
+    // DELIBERATELY NO TAG FAN-OUT — same rule as `exec_add_tag` above: this is the `RemoveTag`
+    // rule ACTION and firing `TagRemoved` from inside the evaluator would re-enter it
+    // (kanban t_56dddec2).
     sqlx::query("DELETE FROM tag_assignments WHERE tag_id=$1 AND entity_type=$2 AND entity_id=$3")
         .bind(tag_id)
         .bind(entity_type)

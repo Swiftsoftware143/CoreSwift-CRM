@@ -202,7 +202,14 @@ pub async fn handle_tag_provision(
         tenant_id
     );
 
-    // 6. Assign a "Free" tag to the contact
+    // 6. Assign a "Free" tag to the contact.
+    // DELIBERATELY NO TAG FAN-OUT (kanban t_56dddec2). Two reasons, both measured: (a) the tag
+    // applied here is CoreSwift's OWN provisioning marker, hard-coded "Free" — the payload's
+    // `tag.name` is only logged, never applied, so this is not a caller-requested tag operation;
+    // (b) the tenant is created by THIS request (step 4, `Uuid::new_v4()`), so the assignment is
+    // the new tenant's birth state and there is provably no rule it could fire (0 rows in
+    // `automation_rules` for that tenant at that moment). The rule for every other writer is on
+    // `crate::automation::engine::fire_tag_trigger`.
     let free_tag_id = create_or_get_tag(&s.db, tenant_id, "Free").await?;
     let _ = sqlx::query(
         r#"INSERT INTO tag_assignments (id, tag_id, entity_type, entity_id, tenant_id)

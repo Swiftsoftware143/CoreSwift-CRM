@@ -398,8 +398,12 @@ async fn apply_tags(
         .await
         .map_err(AppError::Database)?;
 
-        // Assign to contact
-        sqlx::query(
+        // Assign to contact. The statement is `ON CONFLICT DO NOTHING`, so re-pushing the same
+        // lead for an already-tagged contact writes no row. `TagAdded` means a row came into
+        // existence, therefore it is gated on `rows_affected()` — a no-op push must not re-fire
+        // the tenant's automation (kanban t_56dddec2; same semantics as POST /api/tags/assign,
+        // which answers 409 Duplicate on the repeat).
+        let assigned = sqlx::query(
             "INSERT INTO tag_assignments (id, tag_id, entity_type, entity_id, tenant_id)
              VALUES ($1, $2, 'contact', $3, $4)
              ON CONFLICT (tag_id, entity_type, entity_id, tenant_id) DO NOTHING",
@@ -411,6 +415,15 @@ async fn apply_tags(
         .execute(&s.db)
         .await
         .map_err(AppError::Database)?;
+        if assigned.rows_affected() > 0 {
+            // The hub's lead intake is a tenant-facing tag assignment like any other surface, so
+            // it fans out. Before this line, a spoke could push a lead with `tags: ["hot"]` and
+            // the tenant's `TagAdded` rule never fired — the same defect the webhook arm had.
+            crate::automation::engine::fire_tag_trigger(
+                &s.db, tenant_id, "contact", contact_id, tag_id, "TagAdded",
+            )
+            .await;
+        }
     }
     Ok(())
 }

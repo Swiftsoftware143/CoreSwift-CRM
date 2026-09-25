@@ -294,8 +294,11 @@ pub async fn receive_v3_contact_sync(
             // Create or get tag
             let tag_id = create_tag_or_get_id(&state.db, tenant_id, &final_tag_name).await?;
 
-            // Assign tag to contact (skip if already assigned)
-            sqlx::query(
+            // Assign tag to contact (skip if already assigned). `TagAdded` <=> a row came into
+            // existence, so the fan-out is gated on `rows_affected()`: the statement is
+            // `ON CONFLICT DO NOTHING` and a repeat sync must not re-fire the tenant's rule
+            // (kanban t_56dddec2).
+            let assigned = sqlx::query(
                 "INSERT INTO tag_assignments (id, tag_id, entity_type, entity_id, tenant_id, assigned_by)
                  VALUES ($1, $2, 'contact', $3, $4, NULL)
                  ON CONFLICT (tag_id, entity_type, entity_id, tenant_id) DO NOTHING"
@@ -306,6 +309,14 @@ pub async fn receive_v3_contact_sync(
             .bind(tenant_id)
             .execute(&state.db)
             .await?;
+            if assigned.rows_affected() > 0 {
+                // A satellite app that captures a lead already carrying tags is assigning them to
+                // this tenant's contact, so the tenant's `TagAdded` automation must see it.
+                crate::automation::engine::fire_tag_trigger(
+                    &state.db, tenant_id, "contact", contact_id, tag_id, "TagAdded",
+                )
+                .await;
+            }
 
             assigned_tags.push(json!({
                 "name": final_tag_name,
