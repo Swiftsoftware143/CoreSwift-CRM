@@ -266,9 +266,13 @@ pub async fn validate_webhook_guard(db: &PgPool) -> Result<bool, AppError> {
 ///
 /// The column held no rows when `migrations/079` armed the guard, so this is insurance for a row that
 /// arrives from an older deployment or a restore — the case the guard's `NOT VALID` exemption covers.
+///
+/// The select item is COALESCEd to `''` (t_b25a9002): the column is NULLABLE and the WHERE already
+/// excludes NULL/empty, so this is a no-op — it makes the non-nullability visible to the decode type
+/// and to `fleet-dbtype-audit.py`, which judges the position against the column's nullability alone.
 pub async fn backfill_booking_calendar_tokens(db: &PgPool) -> Result<usize, AppError> {
     let rows: Vec<(Uuid, Uuid, String)> = sqlx::query_as(
-        "SELECT id, tenant_id, google_refresh_token FROM booking_calendars \
+        "SELECT id, tenant_id, COALESCE(google_refresh_token, '') AS google_refresh_token FROM booking_calendars \
          WHERE google_refresh_token IS NOT NULL AND google_refresh_token <> ''",
     )
     .fetch_all(db)
@@ -403,9 +407,12 @@ pub async fn validate_booking_calendar_guard(db: &PgPool) -> Result<bool, AppErr
 /// `integration_targets.api_key` into SQL or into an outbound header. Nothing consumes the plaintext
 /// today (the only other reads are the redacted list in `portfolio::handlers` and a `COUNT(*)` in
 /// `features.rs`), so there is deliberately no decrypt-on-read site to add.
+///
+/// The select item is COALESCEd to `''` for the same reason as `backfill_booking_calendar_tokens`
+/// above (t_b25a9002): NULLABLE column, WHERE already excludes NULL/empty, decode stays non-Option.
 pub async fn backfill_integration_target_keys(db: &PgPool) -> Result<usize, AppError> {
     let rows: Vec<(Uuid, Uuid, String)> = sqlx::query_as(
-        "SELECT id, tenant_id, api_key FROM integration_targets \
+        "SELECT id, tenant_id, COALESCE(api_key, '') AS api_key FROM integration_targets \
          WHERE api_key IS NOT NULL AND api_key <> ''",
     )
     .fetch_all(db)

@@ -24,7 +24,7 @@ pub async fn prioritize(
         (
             Uuid,
             String,
-            String,
+            Option<String>, // c.email — NULLABLE in `contacts` (t_b25a9002)
             i32,
             Option<i32>,
             Option<String>,
@@ -178,7 +178,10 @@ pub async fn compose_message(
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Get contact info for personalization
-    let contact = sqlx::query_as::<_, (String, String, Option<String>)>(
+    // `contacts.email` is NULLABLE with no default: NULL is real data (a contact without an address),
+    // so it decodes as `Option<String>` and reaches the composer as an absent value instead of failing
+    // the whole call (t_b25a9002; measured 500 "column 1: unexpected null" on the pre-fix binary).
+    let contact = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
         "SELECT CONCAT(first_name, ' ', last_name) AS name, email, phone FROM contacts WHERE id = $1 AND tenant_id = $2"
     ).bind(r.contact_id).bind(tid).fetch_optional(&s.db).await?
     .ok_or(AppError::NotFound("Contact not found".to_string()))?;

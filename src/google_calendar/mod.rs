@@ -601,8 +601,11 @@ pub async fn sync_calendar(
     let mut pulled: Vec<Value> = Vec::new();
 
     // ── PUSH: CoreSwift bookings → Google Calendar events ──
+    // `sb.contact_name` is NULLABLE and is rendered into the event description below: COALESCE to ''
+    // makes the select item total, so the non-Option decode is provably right (t_b25a9002 — the tuple
+    // position was the NULLABLE-DECODED-AS-NON-OPTION finding; a NULL row would have 500'd the sync).
     let bookings = sqlx::query_as::<_, (Uuid, String, String, String, Option<String>, String, i32, String, String)>(
-        r#"SELECT sb.id, sb.business_name, sb.contact_name, sb.contact_email,
+        r#"SELECT sb.id, sb.business_name, COALESCE(sb.contact_name, '') AS contact_name, sb.contact_email,
                   sb.description, sb.start_date::text, sb.slot_position, sb.status, sb.end_date::text
            FROM slot_bookings sb
            WHERE sb.calendar_id = $1 AND sb.tenant_id = $2 AND sb.status = 'active'

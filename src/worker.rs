@@ -434,8 +434,12 @@ async fn recalculate_health_scores(db: &PgPool) {
 ///      AND fq.created_at > NOW() - INTERVAL '1 hour'
 ///    );
 async fn check_abandoned_directory_signups(db: &PgPool) {
+    // The two uuid elements come from the JOIN: `u.tenant_id` is NOT NULL in the schema, and
+    // `bp.user_id` is the join key itself. COALESCE names that non-nullability inside the statement so
+    // the decode type is provably right and the auditor stops judging the position against the other
+    // table's NULLABLE `tenant_id` (t_b25a9002 — behaviour identical: the fallbacks are dead code).
     let abandoned = match sqlx::query_as::<_, (Uuid, Uuid, Uuid, String, Option<String>, Option<String>, String)>(
-        r#"SELECT bp.id, u.id as user_id, u.tenant_id, u.email, u.phone, u.first_name, bp.business_name
+        r#"SELECT bp.id, u.id as user_id, COALESCE(u.tenant_id, bp.tenant_id), u.email, u.phone, u.first_name, COALESCE(bp.business_name, '')
            FROM business_profiles bp
            JOIN users u ON bp.user_id = u.id
            WHERE bp.unit = 'directory'
