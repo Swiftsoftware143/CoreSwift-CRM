@@ -1065,6 +1065,13 @@ pub async fn impersonate(
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("tenant_id is required".into()))?;
 
+    // `aid` is copied straight into the token below, so an id that names no workspace would mint a
+    // credential that is refused on every route (t_524bfbb9). Refuse at the mint site, with the
+    // real reason, instead of handing back a dead token the caller cannot diagnose.
+    if !crate::auth::middleware::workspace_exists(&s.db, target_tenant_id).await? {
+        return Err(AppError::NotFound("Workspace not found".to_string()));
+    }
+
     use crate::auth::middleware;
     let now = chrono::Utc::now().timestamp() as usize;
     let imp_claims = Claims {
