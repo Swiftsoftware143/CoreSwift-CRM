@@ -385,31 +385,24 @@ pub async fn send_sms(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    // Record the outbound SMS
+    // Record the outbound SMS.  ONE row: this is the app's outbound log (channel='sms') and
+    // `message_id` is its provider-message-id column, so the Telnyx id belongs here.
+    //
+    // The second INSERT into `outbound_sms` that used to sit below is GONE (card t_a8a3fa27): that
+    // relation has never existed in coreswift_crm, so a successful send was logged to
+    // outbound_messages and then the handler answered HTTP 500 — the SMS had already left, and the
+    // caller had no way to learn that.  Nothing in this repository ever read `outbound_sms`; the
+    // only fields it uniquely carried are `from_number` (the tenant's own number, in
+    // `telnyx_numbers`) and the Telnyx message id (`message_id` here).
     let msg_id = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status, sent_at)
-         VALUES ($1, $2, 'sms', $3, NULL, $4, 'sent', NOW())"
+        "INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status, sent_at, message_id)
+         VALUES ($1, $2, 'sms', $3, NULL, $4, 'sent', NOW(), $5)"
     )
     .bind(msg_id)
     .bind(tenant_id)
     .bind(&req.to)
     .bind(&req.body)
-    .execute(&state.db)
-    .await?;
-
-    // Also record in outbound_sms table for Telnyx-specific tracking
-    let sms_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO outbound_sms (id, tenant_id, from_number, to_number, body, status, telnyx_message_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)"
-    )
-    .bind(sms_id)
-    .bind(tenant_id)
-    .bind(&from)
-    .bind(&req.to)
-    .bind(&req.body)
-    .bind("sent")
     .bind(&telnyx_msg_id)
     .execute(&state.db)
     .await?;
@@ -417,7 +410,7 @@ pub async fn send_sms(
     Ok((
         StatusCode::OK,
         Json(json!({
-            "message_id": sms_id,
+            "message_id": msg_id,
             "telnyx_message_id": telnyx_msg_id,
             "status": "sent",
             "from": from,

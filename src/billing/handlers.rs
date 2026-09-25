@@ -729,6 +729,11 @@ pub async fn create_checkout_session(
 // in the container log), and no shipped surface ever called it. Payment history needs a real
 // implementation over credit_transactions / provider webhooks; until then the route is gone
 // rather than serving a guaranteed 500.
+//
+// Status after card t_a8a3fa27: migration 096 now CREATES checkout_sessions, because the INSERT
+// above and the two webhook UPDATEs below genuinely need it (they were the 42P01 this file used to
+// carry). The read route stays deleted — the table existing is not a reason to serve an
+// unfinished listing. If payment history is wanted, implement it deliberately.
 
 // ──────────────────────────────────────────────
 // Stripe/PayPal/Square/Paddle API helpers
