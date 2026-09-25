@@ -1127,9 +1127,13 @@ const TAB_RENDERERS = {
   },
 
   'tracked-links': () => {
+    // The rows come from the loader below (TAB_LOADERS['tracked-links'] -> loadTrackedLinksTab).
+    // This renderer used to return a HARD-CODED "No tracked links yet" empty state and issue NO
+    // request at all, so a workspace whose links really exist was told it had none - while the
+    // dashboard tile counted the very same route (kanban t_bd9470b6).
     return pageHeader('Tracked Links', 'Generate trackable URLs for campaigns',
       '<button class="btn btn-primary btn-sm" onclick="showAddLinkModal()">+ Generate Link</button>') +
-    card('Tracked Links', '<div class="empty-state"><div class="empty-icon">🔗</div><h3>No tracked links yet</h3><p>Generate tracked URLs to monitor clicks and conversions.</p></div>');
+    '<div id="trackedLinksTable"><div class="loading-wrap"><div class="spinner"></div> Loading tracked links...</div></div>';
   },
 
   'checklists': () => placeholderPanel('Checklists', 'Create and manage task checklists for deals, onboarding, and workflows.', '✅'),
@@ -1608,6 +1612,10 @@ async function affUnselectProduct(id) {
 }
 
 const TAB_LOADERS = {
+  // The Tracked Links panel registers a loader instead of loading from inside its renderer: the
+  // renderer runs BEFORE its HTML is in the document, so an in-renderer load sees no #trackedLinksTable
+  // and bails out (the same reason the Features & Plans panel registers one).
+  'tracked-links': async () => { await loadTrackedLinksTab(); },
   'affiliates': async () => { await loadAffiliates(); },
   // The Modules & Plans panel must load from TAB_LOADERS, not from inside its renderer: the
   // renderer runs BEFORE its HTML is in the document, so an in-renderer load saw no `#fpWrap`,
@@ -3246,7 +3254,106 @@ function showAddTemplateModal(){ showModal('New Template', '<div class="form-gro
 function showComposeModal(){ showModal('Compose Message', '<div class="form-group"><label>To</label><input type="text"></div><div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Message</label><textarea rows="5"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Message sent&#39;,&#39;success&#39;)">Send</button>'); }
 function showAddTicketModal(){ showModal('New Ticket', '<div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Description</label><textarea rows="4"></textarea></div><div class="form-group"><label>Priority</label><select><option>Normal</option><option>High</option><option>Urgent</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Ticket created&#39;,&#39;success&#39;)">Create</button>'); }
 function showAddEventModal(){ showModal('New Event', '<div class="form-group"><label>Title</label><input type="text"></div><div class="form-group"><label>Date</label><input type="date"></div><div class="form-group"><label>Time</label><input type="time"></div><div class="form-group"><label>Location</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Event created&#39;,&#39;success&#39;)">Save</button>'); }
-function showAddLinkModal(){ showModal('Generate Tracked Link', '<div class="form-group"><label>Destination URL</label><input type="url"></div><div class="form-group"><label>Campaign</label><select><option>None</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Link generated&#39;,&#39;success&#39;)">Generate</button>'); }
+// ── Tracked Links (kanban t_bd9470b6) ────────────────────────────────────────
+// SOURCE OF TRUTH: GET /api/tracked-links answers {"links":[{id,tenant_id,tag_id,slug,target_url,
+// created_at,click_count,tag_name,tag_color}]} (TrackedLinkWithClicks, src/tracked_links/handlers.rs).
+// EVERY cell below is one of those keys - no column is invented - and the count in the card header is
+// the length of the array the route returned. NOTE the list answer carries NO tracking_url key (only the
+// CREATE response does), so no "tracking URL" column is invented here: the slug is the identifier the
+// row actually holds. (Separate defect, carded, not papered over: the public /track/<slug> redirect is
+// not proxied by this vhost - sites/coreswift.conf proxies only /api/ and /s/, so try_files answers
+// /track/... with the SPA. Measured 200 text/html vs the app's own 303.) `+ Generate Link` POSTs the
+// same route with {tag_id, target_url} (CreateTrackedLinkRequest); a row's Delete calls
+// DELETE /api/tracked-links/:id.
+async function loadTrackedLinksTab() {
+  const el = document.getElementById('trackedLinksTable');
+  if (!el) return;
+  try {
+    const links = famList(await API.get('/tracked-links'), 'links');
+    const rows = links.map(function (l) {
+      const slug = String(l.slug || '');
+      const tag = l.tag_name
+        ? '<span class="badge" style="background:' + (l.tag_color || 'var(--accent-subtle)') + ';color:#fff">' + escapeHtml(l.tag_name) + '</span>'
+        : '—';
+      return [
+        escapeHtml(slug || '—'),
+        tag,
+        l.target_url
+          ? '<a href="' + escapeHtmlAttr(String(l.target_url)) + '" target="_blank" rel="noopener">' + escapeHtml(String(l.target_url)) + '</a>'
+          : '—',
+        (typeof l.click_count === 'number' && isFinite(l.click_count)) ? String(l.click_count) : '—',
+        l.created_at ? new Date(l.created_at).toLocaleDateString() : '—',
+        '<button class="btn btn-ghost btn-xs" onclick="tlDeleteLink(\'' + escapeHtmlAttr(String(l.id)) + '\')">Delete</button>'
+      ];
+    });
+    el.innerHTML = card('Tracked Links (' + links.length + ')',
+      dataTable(['Slug', 'Tag', 'Destination', 'Clicks', 'Created', 'Actions'], rows,
+        'No tracked links yet. Generate a tracked URL to monitor clicks and conversions.'), '');
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    // A 402 is the module gate (FeatureGate "tracked_links", src/tracked_links/mod.rs): this
+    // workspace's plan does not include the module, so NO SOURCE answered. That is not "you have no
+    // links" and it must not be dressed up as an empty list.
+    el.innerHTML = card('Tracked Links', /payment required|402/i.test(msg)
+      ? '<div class="empty-state"><div class="empty-icon">🔒</div>' +
+        '<h3>Tracked Links is not included in this plan</h3>' +
+        '<p>No source answered: the server refused GET /api/tracked-links with “Payment required” - the ' +
+        'tracked_links module is not enabled for this workspace, so nothing is known about links here.</p>' +
+        '<button class="btn btn-secondary" onclick="openUpgradeModal()">View Plans</button></div>'
+      : '<p style="color:var(--text-secondary)">Tracked Links endpoint: ' + escapeHtml(msg) + '</p>');
+  }
+}
+
+// `+ Generate Link`. The modal was a stub: two inputs with NO ids, and a Generate button whose only job
+// was closeModal() + toast('Link generated','success') - POST /api/tracked-links was never called and no
+// row was ever created. The route needs {tag_id, target_url} and refuses a tag that is not one of this
+// workspace's active tags, so the Tag picker is filled from GET /api/tags (the Tags tab's own source).
+async function showAddLinkModal() {
+  showModal('Generate Tracked Link',
+    '<div class="form-group"><label>Tag</label><select id="tlTag"><option value="">Loading tags...</option></select>' +
+      '<span class="form-hint">A tracked link belongs to one of this workspace\u2019s tags.</span></div>' +
+    '<div class="form-group"><label>Destination URL</label>' +
+      '<input type="url" id="tlUrl" placeholder="https://example.com/offer"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="tlCreateLink()">Generate</button>');
+  try {
+    const tags = famList(await API.get('/tags'), 'tags');
+    const sel = document.getElementById('tlTag');
+    if (!sel) return;                    // the modal was closed while the tags were loading
+    sel.innerHTML = tags.length
+      ? tags.map(function (t) {
+          return '<option value="' + escapeHtmlAttr(String(t.id)) + '">' + escapeHtml(t.name) + '</option>';
+        }).join('')
+      : '<option value="">No tags yet - create one on the Tags tab first</option>';
+  } catch (e) {
+    const sel = document.getElementById('tlTag');
+    if (sel) sel.innerHTML = '<option value="">Could not load tags: ' + escapeHtml(String(e.message)) + '</option>';
+  }
+}
+
+async function tlCreateLink() {
+  const url = ((((document.getElementById('tlUrl') || {}).value) || '')).trim();
+  const tag = ((((document.getElementById('tlTag') || {}).value) || '')).trim();
+  if (!tag) { toast('Pick a tag - a tracked link must belong to one', 'error'); return; }
+  if (!url) { toast('Destination URL is required', 'error'); return; }
+  try {
+    const r = await API.post('/tracked-links', { tag_id: tag, target_url: url });
+    closeModal();
+    toast('Tracked link created: ' + ((r && r.tracking_url) || url), 'success');
+    loadTrackedLinksTab();
+  } catch (e) {
+    // the route answers the reason: 404 "Tag ... not found or inactive", 402 when the module is off
+    toast('Could not create link: ' + e.message, 'error');
+  }
+}
+
+function tlDeleteLink(id) {
+  if (!window.confirm('Delete this tracked link? Its tracking URL will stop redirecting.')) return;
+  API.del('/tracked-links/' + id).then(function () {
+    toast('Tracked link deleted', 'success');
+    loadTrackedLinksTab();
+  }).catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+}
 function showAddMemberModal(){ toast('Add team member form coming soon', 'info'); }
 function showAddUserModal(){ showModal('Add User', '<div class="form-group"><label>Name</label><input type="text"></div><div class="form-group"><label>Email</label><input type="email"></div><div class="form-group"><label>Role</label><select><option>user</option><option>agency_admin</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;User added&#39;,&#39;success&#39;)">Create</button>'); }
 
