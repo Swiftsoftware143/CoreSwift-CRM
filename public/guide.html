@@ -236,13 +236,11 @@
   <h2 class="sec-title"><span class="sec-num">2</span> Dashboard</h2>
   <div class="card">
     <h3>Stats Cards</h3>
-    <p>At-a-glance CRM metrics fetched via <code>GET /api/dashboard/stats</code>:</p>
+    <p>At-a-glance CRM metrics for your own account, fetched via <code>GET /api/dashboard/stats</code>. Every counter is scoped to the account in the token.</p>
     <div class="grid">
       <div class="stat"><div class="ico">??</div><div class="val"></div><div class="lbl">Total Contacts</div></div>
-      <div class="stat"><div class="ico">??</div><div class="val"></div><div class="lbl">Open Opps</div></div>
-      <div class="stat"><div class="ico">??</div><div class="val"></div><div class="lbl">Active Pipelines</div></div>
-      <div class="stat"><div class="ico">???</div><div class="val"></div><div class="lbl">Tags</div></div>
-      <div class="stat"><div class="ico">??</div><div class="val">$</div><div class="lbl">Open Deal Value</div></div>
+      <div class="stat"><div class="ico">??</div><div class="val"></div><div class="lbl">Companies</div></div>
+      <div class="stat"><div class="ico">??</div><div class="val"></div><div class="lbl">Opportunities</div></div>
       <div class="stat"><div class="ico">?</div><div class="val">$</div><div class="lbl">Won Deal Value</div></div>
     </div>
     <pre>GET /api/dashboard/stats
@@ -250,11 +248,12 @@ Authorization: Bearer &lt;token&gt;
 
 Response:
 {
-  "contacts": 42,
-  "companies": 15,
-  "deals": 28,
-  "won": 12
+  "total_contacts": 42,
+  "total_companies": 15,
+  "total_opportunities": 28,
+  "total_revenue": 5000.00
 }</pre>
+    <p><code>total_contacts</code>, <code>total_companies</code> and <code>total_opportunities</code> are row counts for your account. <code>total_revenue</code> is money, not a count: it is the sum of <code>opportunities.value</code> over the opportunities you have marked won, and <code>0</code> when you have none. These four are the whole response — no other key is returned.</p>
   </div>
   <div class="card">
     <h3>Pipeline Summary</h3>

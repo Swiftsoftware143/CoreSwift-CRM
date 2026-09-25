@@ -20,34 +20,38 @@ pub async fn stats(
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
+    // Every counter propagates a DB error with `?`. The old `.unwrap_or(0)` folded a failed query
+    // into a fabricated 0, which is indistinguishable — to any consumer — from "this tenant has
+    // no rows of that kind".
     let total_contacts: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE tenant_id = $1")
             .bind(tenant_id)
             .fetch_one(&s.db)
-            .await
-            .unwrap_or(0);
+            .await?;
 
     let total_companies: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM companies WHERE tenant_id = $1")
             .bind(tenant_id)
             .fetch_one(&s.db)
-            .await
-            .unwrap_or(0);
+            .await?;
 
     let total_opportunities: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM opportunities WHERE tenant_id = $1")
             .bind(tenant_id)
             .fetch_one(&s.db)
-            .await
-            .unwrap_or(0);
+            .await?;
 
+    // `opportunities.value` is NUMERIC, and sqlx cannot decode NUMERIC into f64 — the SUM has to
+    // be cast to float8 in the SELECT (same trap documented in `src/pipelines/opportunity.rs`).
+    // Without the cast the decode failed on EVERY call and the old `.unwrap_or(0.0)` folded that
+    // failure into a hard 0.0, so every tenant that had won a deal was told it had won nothing.
     let total_revenue: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(value), 0) FROM opportunities WHERE tenant_id = $1 AND is_won = true",
+        "SELECT COALESCE(SUM(value), 0)::float8 FROM opportunities \
+         WHERE tenant_id = $1 AND is_won = true",
     )
     .bind(tenant_id)
     .fetch_one(&s.db)
-    .await
-    .unwrap_or(0.0);
+    .await?;
 
     Ok(Json(json!({
         "total_contacts": total_contacts,
