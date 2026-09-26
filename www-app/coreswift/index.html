@@ -2812,17 +2812,76 @@ function openMySupportPortal() {
   }).catch(e => toast('Could not open the customer portal: ' + e.message, 'error'));
 }
 function showAddEventModal(){ showModal('New Event', '<div class="form-group"><label>Title</label><input type="text"></div><div class="form-group"><label>Date</label><input type="date"></div><div class="form-group"><label>Time</label><input type="time"></div><div class="form-group"><label>Location</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Event created&#39;,&#39;success&#39;)">Save</button>'); }
-// ── Tracked Links (kanban t_bd9470b6) ────────────────────────────────────────
+// -- Tracked Links (kanban t_bd9470b6; copy-ready URL added by t_8feaf6e0) -------------------
 // SOURCE OF TRUTH: GET /api/tracked-links answers {"links":[{id,tenant_id,tag_id,slug,target_url,
 // created_at,click_count,tag_name,tag_color}]} (TrackedLinkWithClicks, src/tracked_links/handlers.rs).
 // EVERY cell below is one of those keys - no column is invented - and the count in the card header is
-// the length of the array the route returned. NOTE the list answer carries NO tracking_url key (only the
-// CREATE response does), so no "tracking URL" column is invented here: the slug is the identifier the
-// row actually holds. (Separate defect, carded, not papered over: the public /track/<slug> redirect is
-// not proxied by this vhost - sites/coreswift.conf proxies only /api/ and /s/, so try_files answers
-// /track/... with the SPA. Measured 200 text/html vs the app's own 303.) `+ Generate Link` POSTs the
-// same route with {tag_id, target_url} (CreateTrackedLinkRequest); a row's Delete calls
-// DELETE /api/tracked-links/:id.
+// the length of the array the route returned. The list answer carries NO tracking_url key (only the
+// CREATE response does, and that one is host-relative: "/track/<slug>"), so the tracking URL is
+// COMPOSED here from the row's own slug and this page's origin - no API change, no new column.
+// WHY location.origin is the right host: sites/coreswift.conf proxies `location ^~ /track/` to the app
+// on BOTH vhosts that serve this shell (app.coreswiftcrm.com and admin.coreswiftcrm.com, kanban
+// t_0d241bc7), so the host that served this page is exactly the host that resolves the link - which is
+// also what makes rows created BEFORE this change retrievable. `+ Generate Link` POSTs the same route
+// with {tag_id, target_url} (CreateTrackedLinkRequest); a row's Delete calls DELETE /api/tracked-links/:id.
+function tlAbsUrl(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return '';
+  if (/^https?:\/\//i.test(s)) return s;                  // already absolute: leave it alone
+  const origin = (window.location && window.location.origin) || '';
+  return origin + (s.charAt(0) === '/' ? s : '/track/' + encodeURIComponent(s));
+}
+
+// Copy-to-clipboard. navigator.clipboard needs a secure context; the readonly input / rendered text
+// next to every Copy control keeps the URL selectable when it is unavailable.
+function tlCopyUrl(text, btn) {
+  const s = String(text == null ? '' : text);
+  const done = function () {
+    if (btn) { const t = btn.textContent; btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = t; }, 1500); }
+    toast('Copied: ' + s, 'success');
+  };
+  const fallback = function () {
+    const ta = document.createElement('textarea');
+    ta.value = s;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(s).then(done, function () {
+      if (fallback()) { done(); } else { toast('Could not copy - the URL is: ' + s, 'error'); }
+    });
+  } else if (fallback()) { done(); }
+  else { toast('Could not copy - the URL is: ' + s, 'error'); }
+}
+
+// Create success state: the URL stays on screen until the admin dismisses it (the old flow toasted it
+// for 5 s and then closed the modal, so a dismissed-by-accident URL could never be retrieved again).
+function tlShowCreatedLink(abs, target) {
+  if (!abs) {
+    closeModal();
+    toast('Tracked link created, but the route returned no slug to build a URL from', 'error');
+    return;
+  }
+  showModal('Tracked Link Ready',
+    '<div class="form-group"><label>Tracking URL</label>' +
+      '<div style="display:flex;gap:8px;align-items:center">' +
+        '<input type="text" id="tlCreatedUrl" readonly value="' + escapeHtmlAttr(abs) + '" style="flex:1">' +
+        '<button class="btn btn-secondary btn-sm" data-url="' + escapeHtmlAttr(abs) + '"' +
+        ' onclick="tlCopyUrl(this.getAttribute(\'data-url\'), this)">Copy</button>' +
+      '</div>' +
+      '<span class="form-hint">Send this link out. Every click is counted on this row and redirects to the destination below.</span></div>' +
+    '<div class="form-group"><label>Destination</label>' +
+      '<div style="font-size:13px;color:var(--text-secondary)">' + escapeHtml(String(target == null ? '' : target)) + '</div></div>',
+    '<button class="btn btn-primary" onclick="closeModal()">Done</button>');
+}
+
 async function loadTrackedLinksTab() {
   const el = document.getElementById('trackedLinksTable');
   if (!el) return;
@@ -2833,8 +2892,14 @@ async function loadTrackedLinksTab() {
       const tag = l.tag_name
         ? '<span class="badge" style="background:' + (l.tag_color || 'var(--accent-subtle)') + ';color:#fff">' + escapeHtml(l.tag_name) + '</span>'
         : '—';
+      const abs = tlAbsUrl(slug);
       return [
-        escapeHtml(slug || '—'),
+        (abs
+          ? '<a href="' + escapeHtmlAttr(abs) + '" target="_blank" rel="noopener">' + escapeHtml(abs) + '</a>' +
+            ' <button class="btn btn-ghost btn-xs" data-url="' + escapeHtmlAttr(abs) + '"' +
+            ' onclick="tlCopyUrl(this.getAttribute(\'data-url\'), this)" title="Copy this tracking URL">Copy</button>' +
+            '<div style="font-size:11px;color:var(--text-muted)">slug ' + escapeHtml(slug) + '</div>'
+          : '\u2014'),
         tag,
         l.target_url
           ? '<a href="' + escapeHtmlAttr(String(l.target_url)) + '" target="_blank" rel="noopener">' + escapeHtml(String(l.target_url)) + '</a>'
@@ -2845,7 +2910,7 @@ async function loadTrackedLinksTab() {
       ];
     });
     el.innerHTML = card('Tracked Links (' + links.length + ')',
-      dataTable(['Slug', 'Tag', 'Destination', 'Clicks', 'Created', 'Actions'], rows,
+      dataTable(['Tracking URL', 'Tag', 'Destination', 'Clicks', 'Created', 'Actions'], rows,
         'No tracked links yet. Generate a tracked URL to monitor clicks and conversions.'), '');
   } catch (e) {
     const msg = String((e && e.message) || e);
@@ -2896,8 +2961,9 @@ async function tlCreateLink() {
   if (!url) { toast('Destination URL is required', 'error'); return; }
   try {
     const r = await API.post('/tracked-links', { tag_id: tag, target_url: url });
-    closeModal();
-    toast('Tracked link created: ' + ((r && r.tracking_url) || url), 'success');
+    // The success state is a MODAL, not a toast: the URL has to survive the toast's 5 s life so the
+    // customer can still copy it after reading the dialog (kanban t_8feaf6e0).
+    tlShowCreatedLink(tlAbsUrl((r && (r.tracking_url || r.slug)) || ''), url);
     loadTrackedLinksTab();
   } catch (e) {
     // the route answers the reason: 404 "Tag ... not found or inactive", 402 when the module is off
