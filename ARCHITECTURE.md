@@ -1,5 +1,5 @@
 # SwiftSoftware Architecture — Single Source of Truth
-# Last updated: 2026-07-24
+# Last updated: 2026-09-26
 # IF YOU CHANGE ANYTHING BELOW, UPDATE THIS FILE.
 
 ## Golden Rules (Read Before Touching ANY App)
@@ -14,8 +14,10 @@ All 7 apps share this Miami VPS. No app owns the entire machine.
 There is ONE affiliate system and it lives in FunnelSwift.
 - FunnelSwift owns: affiliate codes, tracking links, clicks, conversions, commissions, payouts
 - FunnelSwift admin = affiliate director
-- ALL other apps sync their plans INTO FunnelSwift's `affiliate_products` table
-- NO other app has independent commission/affiliate logic beyond plan sync
+- FunnelSwift owns the commissionable catalogue too (`affiliate_products`) — apps do NOT push their
+  plans into it (see Rule 4)
+- NO other app has independent cross-app commission logic: an app reports a plan upgrade to
+  FunnelSwift and that is all
 
 ### Rule 3: Two Free Plans in FunnelSwift
 | Plan | Slug | Entry Point | What User Gets |
@@ -23,12 +25,24 @@ There is ONE affiliate system and it lives in FunnelSwift.
 | Free | `free` | `app.funnelswift.net/signup` | Full CRM dashboard |
 | Kinetic Free | `kinetic_free` | `funnelswift.net/kinetic` (modal) | Bio-link card + lead capture |
 
-### Rule 4: Plan Sync Pattern
-Every app MUST sync its plans to FunnelSwift when created/updated:
-```
-[App] → POST /api/v1/internal/sync-affiliate-plan → [FunnelSwift]
-```
-Required fields: `plan_name`, `plan_price`, `plan_slug`, `is_active`, `source_app`
+### Rule 4: The Commissionable Catalogue Lives in FunnelSwift
+FunnelSwift owns `affiliate_products` — one row per commissionable product, tagged with `source_app`
+(the app that sells it) — and that table is the source of truth for what an affiliate can promote.
+Apps do NOT push their plans into it:
+- The receiver for that idea exists — `POST /api/v1/internal/sync-affiliate-plan`
+  (`src/api_router.rs`, guarded by the `x-internal-key` header) — but it performs an unconditional
+  INSERT and ignores the payload's `action`, so it cannot update or deactivate a product.
+- No app has a working caller today (measured 2026-09-26 on the live deployment): CoreSwift does not
+  call it at all, and the three senders that do post to it (ADASwift, IncentiveSwift, WorkflowSwift)
+  carry the shared key in the payload body (`api_key`) while the route reads the `x-internal-key`
+  header, so every such call is refused **401 Invalid internal key** and writes nothing.
+- The rows are therefore created inside FunnelSwift: a plan-derived row per FunnelSwift plan, plus one
+  active platform-wide row per sibling service seeded by FunnelSwift's own migrations (`source_app` =
+  `coreswift`, `adaswift`, `workflowswift`, `incentiveswift`, `missedcallrespondr`).
+
+What apps DO send is the commission trigger: `POST /api/v1/internal/affiliate/upgrade-event`
+(`x-internal-key` header) from the app's own plan-change path when a tenant moves onto a paid plan.
+That endpoint resolves the product by `source_app` and writes the commission.
 
 ### Rule 5: Zaarcash ≠ Affiliate
 - **Zaarcash** = loyalty points, owned by IncentiveSwift, used by ZaarHub
@@ -60,7 +74,8 @@ All apps share one Postgres instance (Docker: swift-postgres-1).
 - **AFFILIATE SYSTEM**: Codes, links, tracking, conversions, commissions, payouts
 - **Owns**: `affiliate_products`, `affiliate_users`, `affiliate_clicks`, `affiliate_conversions`, `affiliate_links`
 - **Two free entry points**: Kinetic modal + standard signup page
-- **Plan sync endpoint**: `POST /api/v1/internal/sync-affiliate-plan` (receives from all apps)
+- **Commissionable products**: FunnelSwift-owned `affiliate_products` (one row per product, `source_app`
+  names the selling app); apps do not push plans into it (Rule 4)
 
 ### 2. Multi-Directory — Directory SaaS
 - **Zaarcash loyalty proxy** → IncentiveSwift (routes loyalty requests)
@@ -69,32 +84,37 @@ All apps share one Postgres instance (Docker: swift-postgres-1).
 - Onboarding survey system for city/preference config
 
 ### 3. CoreSwift CRM — CRM Platform
-- **Plan sync to FunnelSwift** via `src/native_apps/connectors/funnelswift.rs`
+- **Connector to FunnelSwift** via `src/native_apps/connectors/funnelswift.rs` — pushes leads,
+  contacts, funnels, tags and product selections (NOT plans)
+- **Commission trigger**: `src/billing/handlers.rs` posts `POST /api/v1/internal/affiliate/upgrade-event`
+  (`x-internal-key`) when a tenant moves onto a paid plan — CoreSwift's only affiliate write
 - **Webhook system** for cross-app events
-- **Branch**: `master` (NOT `main`)
-- **Affiliates module**: plans handler reads from `affiliates` table, syncs to FunnelSwift
+- **Branch**: `main`
+- **Affiliates module** (`/api/affiliates/*`): a tenant-LOCAL programme in this app's own database
+  (profile, products, referrals, payouts); it does not sync to FunnelSwift
 
 ### 4. IncentiveSwift — Loyalty/Zaarcash Engine
 - **OWNS Zaarcash**: points per check-in, credit rate, offers, vouchers, rewards
 - **Credit rate config**: per-tenant, defaults to 10 (10 Zaarcash per $1)
-- **Plan sync to FunnelSwift**: `src/handlers/plans_handler.rs`
+- **Plan-sync sender**: `src/handlers/plans_handler.rs` — does not authenticate today (Rule 4)
 - **DO NOT touch Zaarcash/loyalty code** when modifying affiliate wiring
 
 ### 5. WorkflowSwift — Workflow Automation
-- **Plan sync to FunnelSwift**: `src/handlers/plan_handler.rs`
+- **Plan-sync sender**: `src/handlers/plan_handler.rs` — does not authenticate today (Rule 4)
 - n8n integration via `n8n.swiftsoftware.net:5678`
 - Affiliates handler is thin CRUD for local table only
 
 ### 6. MissedCall Respondr — Missed Call Management
-- **Plan sync + checkout conversions** → FunnelSwift
-- Checkout fires `POST /api/v1/webhooks/conversion` to FunnelSwift
+- **Plan-sync sender + checkout conversions** → FunnelSwift; the checkout posts
+  `POST /api/v1/webhooks/conversion` to FunnelSwift (sender state: Rule 4)
 - Affiliates handler is local CRUD
 
 ### 7. ADA Swift — ADA Compliance Scanning
 - **Service under SwiftImpact Solutions** (not a standalone SaaS)
-- **Plan sync to FunnelSwift**: `src/handlers/plans_handler.rs`
+- **Plan-sync sender**: `src/handlers/plans_handler.rs` — does not authenticate today (Rule 4)
 - Scans are free, affiliates get paid on plan upgrades only
-- `ADASwift Monthly Scan` is INACTIVE in affiliate_products
+- The catalogue's only ADASwift entry is `ADASwift Free`; there is no `ADASwift Monthly Scan` product
+  row (absent, not merely inactive — measured 2026-09-26)
 
 ## Cross-App Flow: Affiliate Signup → Commission
 

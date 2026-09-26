@@ -591,8 +591,8 @@ PATCH /api/companies/:id</pre>
     <p>Manage sales pipelines with custom stages. Track deals through pipeline stages with value, probability, and stage tracking.</p>
     <pre>GET /api/pipelines
 POST /api/pipelines
-GET /api/pipelines/deals
-POST /api/pipelines/deals</pre>
+GET /api/pipelines/:pipeline_id/opportunities
+POST /api/pipelines/:pipeline_id/opportunities</pre>
   </div>
 </section>
 
@@ -1293,40 +1293,30 @@ Authorization: Bearer &lt;token&gt;</pre>
       </ol>
 
       <h3>Products You Can Promote</h3>
+      <p>Commissionable products live in the affiliate portal (FunnelSwift &rarr; <strong>Affiliate
+         Products</strong>) and that list is the source of truth — a paid plan of any service can only
+         be promoted once an admin has added it there. Platform-wide entries are visible to every
+         affiliate; a workspace's own products are visible to its affiliates. Measured 2026-09-26, the
+         catalogue holds:</p>
       <table>
-        <thead><tr><th>Service</th><th>Plan</th><th>Price</th><th>Commission</th></tr></thead>
+        <thead><tr><th>Scope</th><th>Product</th><th>Price</th></tr></thead>
         <tbody>
-          <tr><td rowspan="3"><strong>ADASwift</strong></td><td>Pro Plan</td><td>$79/mo</td><td>10%</td></tr>
-          <tr><td>Enterprise Plan</td><td>$199/mo</td><td>10%</td></tr>
-          <tr><td>Monthly Scan</td><td>$29/mo</td><td>15%</td></tr>
-          <tr><td rowspan="2"><strong>MissedCall Respondr</strong></td><td>Pro Plan</td><td>$49/mo</td><td>10%</td></tr>
-          <tr><td>Credit Packs</td><td>$10–$40</td><td>10%</td></tr>
-          <tr><td rowspan="3"><strong>WorkflowSwift</strong></td><td>Starter Plan</td><td>$29/mo</td><td>10%</td></tr>
-          <tr><td>Professional Plan</td><td>$79/mo</td><td>10%</td></tr>
-          <tr><td>Enterprise Plan</td><td>$199/mo</td><td>10%</td></tr>
+          <tr><td rowspan="5"><strong>All affiliates</strong></td><td>CoreSwift Free</td><td>$0</td></tr>
+          <tr><td>ADASwift Free</td><td>$0</td></tr>
+          <tr><td>IncentiveSwift Free</td><td>$0</td></tr>
+          <tr><td>MissedCall Respondr Free</td><td>$0</td></tr>
+          <tr><td>WorkflowSwift Free</td><td>$0</td></tr>
+          <tr><td rowspan="6"><strong>FunnelSwift workspace</strong></td><td>Capture Free</td><td>$0</td></tr>
+          <tr><td>Capture Starter</td><td>$9/mo</td></tr>
+          <tr><td>Kinetic Free</td><td>$0</td></tr>
+          <tr><td>Kinetic Pro</td><td>$9/mo</td></tr>
+          <tr><td>Suite</td><td>$29/mo</td></tr>
+          <tr><td>Agency / Scale</td><td>$79/mo</td></tr>
         </tbody>
       </table>
-
-      <h3>Affiliate Products (All Services)</h3>
-      <p>The full list of all 13 affiliate products across all SwiftSoftware services:</p>
-      <table>
-        <thead><tr><th>Service</th><th>Product</th><th>Price</th><th>Commission</th></tr></thead>
-        <tbody>
-          <tr><td rowspan="4"><strong>ADASwift</strong></td><td>Free Plan</td><td>$0</td><td>10%</td></tr>
-          <tr><td>Pro Plan</td><td>$79/mo</td><td>10%</td></tr>
-          <tr><td>Enterprise Plan</td><td>$199/mo</td><td>10%</td></tr>
-          <tr><td>Monthly Scan</td><td>$29/mo</td><td>15%</td></tr>
-          <tr><td rowspan="5"><strong>MissedCall</strong></td><td>Free Plan</td><td>$0</td><td>10%</td></tr>
-          <tr><td>Pro Plan</td><td>$49/mo</td><td>10%</td></tr>
-          <tr><td>Credit Pack - 1,000</td><td>$10</td><td>10%</td></tr>
-          <tr><td>Credit Pack - 5,000</td><td>$40</td><td>10%</td></tr>
-          <tr><td>Phone Number</td><td>$5/mo</td><td>5%</td></tr>
-          <tr><td rowspan="4"><strong>WorkflowSwift</strong></td><td>Free Plan</td><td>$0</td><td>10%</td></tr>
-          <tr><td>Starter Plan</td><td>$29/mo</td><td>10%</td></tr>
-          <tr><td>Professional Plan</td><td>$79/mo</td><td>10%</td></tr>
-          <tr><td>Enterprise Plan</td><td>$199/mo</td><td>10%</td></tr>
-        </tbody>
-      </table>
+      <p class="muted">The rate earned on a sale is <strong>your own affiliate rate</strong> — the one on
+         your affiliate account — not a per-product figure. Products, prices and rates are edited on the
+         product record in the portal, so the portal is always the current list.</p>
 
       <h3>Conversion Tracking</h3>
       <p>Attribution lives in FunnelSwift. The trigger is a <strong>plan change in this app</strong> — there is

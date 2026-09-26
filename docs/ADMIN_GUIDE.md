@@ -89,7 +89,7 @@ CoreSwift powers the **Booking CTA slot** on MultiDirectory business listing pag
 | Dashboard | `/api/dashboard/stats` | GET |
 | Contacts | `/api/contacts` | GET, POST |
 | Companies | `/api/companies` | GET, POST |
-| Deals | `/api/pipelines/deals` | GET, POST |
+| Deals | `/api/pipelines/:pipeline_id/opportunities` | GET, POST |
 | Campaigns | `/api/campaigns` | GET, POST |
 | Email Templates | `/api/email-templates` | GET, POST |
 | Message Templates | `/api/comms/templates` | GET, POST |
@@ -102,23 +102,21 @@ CoreSwift powers the **Booking CTA slot** on MultiDirectory business listing pag
 - Health check: `curl http://localhost:8084/api/health`
 - Database: `docker exec -it swift-postgres-1 psql -U swift -d coreswift`
 
-## Affiliate Product Auto-Sync
+## Affiliate Products & Commissions
 
-CoreSwift plans are automatically synced to FunnelSwift's `affiliate_products` table so they appear as commissionable products in the affiliate portal.
+CoreSwift does **not** push its plans to FunnelSwift. The commissionable product catalogue lives in FunnelSwift's `affiliate_products` table and is owned there — FunnelSwift's own plan-derived products, plus one platform-wide entry per sibling service (for example `CoreSwift Free`, `source_app = 'coreswift'`), each with its own price and commission rate. Nothing in this app writes to that table, so creating, renaming or deleting a plan here does not change the affiliate portal's catalogue. Products are managed in the FunnelSwift admin (**Affiliate Products**), which is the source of truth for what an affiliate can promote.
 
-**How it works:**
+What CoreSwift *does* report is the commission trigger: when a tenant's subscription moves onto a **paid** plan, `src/billing/handlers.rs` posts the account owner's email, the plan name and its price to FunnelSwift, fire-and-forget inside a `tokio::spawn` so billing is never delayed:
 
-| Action | What happens |
-|--------|-------------|
-| **Plan created** | `POST /api/v1/internal/sync-affiliate-plan` fires with `action: create`, `source_app: coreswift` |
-| **Plan updated** | Same endpoint with `action: update` |
-| **Plan deleted** | Same endpoint with `action: deactivate` — marks the affiliate product inactive |
+| Event | Call |
+|-------|------|
+| Tenant moves to a paid plan | `POST {FUNNELSWIFT_URL}/api/v1/internal/affiliate/upgrade-event`, with the shared `x-internal-key` header |
 
-The sync fires asynchronously (tokio::spawn) — the plan CRUD returns immediately. FunnelSwift must be reachable at the `FUNNELSWIFT_URL` configured in the environment (default: `http://localhost:8080`).
+FunnelSwift matches that email back to the affiliate lead, credits the commission against the product whose `source_app` is `coreswift`, and ignores a repeat of the same event id, so nothing is credited twice. Attribution is by the email address the referred business signed up with, and only a move onto a **paid** plan counts. See "Conversion Tracking" in the user guide for the full chain.
 
-**Environment variable:** `FUNNELSWIFT_URL` (optional, default `http://localhost:8080`)
+**Environment variables:** `FUNNELSWIFT_URL` (default `http://localhost:8080`) and `INTERNAL_SYNC_KEY` — the shared `x-internal-key` value the receiver checks. If `FUNNELSWIFT_URL` is empty, or the tenant has no owner email, the call is skipped and the rest of the app is unaffected.
 
-This ensures every plan changes is reflected in the affiliate system without manual intervention.
+CoreSwift's own `affiliates` module (`GET /api/affiliates/products`, `/api/affiliates/profile`, `/api/affiliates/referrals`) is a **separate, tenant-local** programme kept in this app's database — it is not FunnelSwift's commissionable catalogue and it does not sync to it.
 
 ## Private Email — Admin Controls
 
