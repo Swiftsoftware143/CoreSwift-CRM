@@ -126,8 +126,10 @@ pub async fn run_health_check(
         )
         .await;
 
-        // Log the event
-        let _ = sqlx::query(
+        // Log the event. Not a re-engagement action (it is the audit record of the scan), but the
+        // same rule applies inside this handler: no write in `run_health_check` is silent
+        // (t_c8c1eded).
+        if let Err(e) = sqlx::query(
             r#"INSERT INTO event_logs (id, business_profile_id, event_name, metadata, created_at)
                VALUES ($1, $2, 'churn_check.inactive_24h', $3, NOW())"#,
         )
@@ -135,10 +137,17 @@ pub async fn run_health_check(
         .bind(profile_id)
         .bind(json!({"detected_by": "account_health_check", "inactive_hours": 24}))
         .execute(&s.db)
-        .await;
+        .await
+        {
+            tracing::error!(profile = %profile_id, error = %e, "Inactive-24h churn event log not written");
+        }
 
-        // Schedule a re-engagement action via delayed_actions
-        let _ = sqlx::query(
+        // Schedule a re-engagement action via delayed_actions.
+        // `stats.re_engagement_sent` counts rows WRITTEN, never attempts (t_c8c1eded): a failed
+        // write is logged and reports zero, so the response cannot claim a nudge that a `let _`
+        // swallowed. This is the only place the field is defined — the other scans increment it the
+        // same way, for the same one meaning.
+        match sqlx::query(
             r#"INSERT INTO delayed_actions (id, tenant_id, condition_type, condition_config, action_type, action_config, execute_at)
                VALUES ($1, $2, 'timeout', '{}'::jsonb, 'send_email',
                        $3::jsonb,
@@ -154,9 +163,13 @@ pub async fn run_health_check(
             "reason": "no_activity_24h"
         }))
         .execute(&s.db)
-        .await;
-
-        stats.re_engagement_sent += 1;
+        .await
+        {
+            Ok(_) => stats.re_engagement_sent += 1,
+            Err(e) => {
+                tracing::error!(tenant = %tenant_id, user = %user_id, error = %e, "No-activity re-engagement action not written");
+            }
+        }
     }
 
     // --- Scan 2: Trial accounts within 3 days of expiration ---
@@ -201,8 +214,10 @@ pub async fn run_health_check(
         // Flag as churn-risky
         stats.churn_flagged += 1;
 
-        // Schedule trial-ending followup
-        let _ = sqlx::query(
+        // Schedule trial-ending followup.
+        // Counted only when written, the same one meaning `stats.re_engagement_sent` has in scan 1
+        // (t_c8c1eded).
+        match sqlx::query(
             r#"INSERT INTO delayed_actions (id, tenant_id, condition_type, condition_config, action_type, action_config, execute_at)
                VALUES ($1, $2, 'timeout', '{}'::jsonb, 'send_email',
                        $3::jsonb,
@@ -219,9 +234,13 @@ pub async fn run_health_check(
         }))
         .bind(trial_ends_at.unwrap_or_else(Utc::now))
         .execute(&s.db)
-        .await;
-
-        stats.re_engagement_sent += 1;
+        .await
+        {
+            Ok(_) => stats.re_engagement_sent += 1,
+            Err(e) => {
+                tracing::error!(tenant = %tenant_id, contact = %contact_id, error = %e, "Trial-ending followup action not written");
+            }
+        }
     }
 
     // --- Scan 3: business_profiles with trial states and old activity ---
@@ -260,7 +279,10 @@ pub async fn run_health_check(
         )
         .await;
 
-        let _ = sqlx::query(
+        // A failed audit write is logged, not swallowed: the sibling legs of the inactive-trial
+        // escalation already report this way, and a silent `let _` is how the escalation spam of
+        // t_7de2edde stayed invisible for three days (t_c8c1eded).
+        if let Err(e) = sqlx::query(
             r#"INSERT INTO event_logs (id, business_profile_id, event_name, metadata, created_at)
                VALUES ($1, $2, 'churn_check.stale_profile', $3, NOW())"#,
         )
@@ -268,18 +290,56 @@ pub async fn run_health_check(
         .bind(profile_id)
         .bind(json!({"detected_by": "account_health_check", "inactive_days": 3}))
         .execute(&s.db)
-        .await;
+        .await
+        {
+            tracing::error!(profile = %profile_id, error = %e, "Stale-profile churn event log not written");
+        }
 
-        let _ = sqlx::query(
+        // ONE reactivation nudge per profile per 24 h WINDOW, claimed by the row itself — the
+        // decided cadence for a HUMAN-TRIGGERED producer (t_c8c1eded). The decisions, stated so
+        // they cannot drift:
+        //   * a window, not "no window": this route is a re-run button, and the caller's intent is
+        //     to find NEW stale profiles, not to re-nudge the ones already nudged. Unguarded, a
+        //     double-click / retry / impatient operator put N identical customer emails
+        //     `scheduled_for` one hour out, one per click — the cadence the customer sees is the
+        //     defect, and it is not something the caller can see or control from the response.
+        //   * 24 h, the same window `check_inactive_trials` (src/worker.rs) now uses: these are
+        //     slow profiles (the scan itself needs 3 idle days), so one human-sized day is the
+        //     first moment a second identical nudge could be news — and one nudge per customer per
+        //     day is the maximum defensible. Deliberately NOT the 1 h this leg schedules the send
+        //     at: a 1 h window still lets two identical nudges out inside a single working session,
+        //     which is the exact click-twice defect.
+        //   * scoped to this slug and this profile, so the disjoint slugs the 5-minute job owns
+        //     ('saas_trial_inactive_24h', 'saas_trial_critical_re_engagement') neither block nor
+        //     are blocked by this guard; and a CANCELLED or already-EXECUTED row still counts, both
+        //     because the nudge was queued/delivered and re-sending the instant an operator cancels
+        //     it is the unguarded behaviour being fixed.
+        //   * a failed claim counts NOTHING (logged): `rows_affected() == 1` is the only thing that
+        //     owns the window, so one statement decides both the queue row and the counter.
+        let claimed = sqlx::query(
             r#"INSERT INTO followup_queue (id, business_profile_id, scheduled_for, channel, template_slug)
-               VALUES ($1, $2, NOW() + INTERVAL '1 hour', 'email', 'trial_reactivation')"#
+               SELECT $1, $2, NOW() + INTERVAL '1 hour', 'email', 'trial_reactivation'
+               WHERE NOT EXISTS (
+                 SELECT 1 FROM followup_queue fq
+                 WHERE fq.business_profile_id = $2
+                   AND fq.template_slug = 'trial_reactivation'
+                   AND fq.created_at > NOW() - INTERVAL '24 hours'
+               )"#,
         )
         .bind(Uuid::new_v4())
         .bind(profile_id)
         .execute(&s.db)
         .await;
 
-        stats.re_engagement_sent += 1;
+        match claimed {
+            Ok(r) if r.rows_affected() == 1 => stats.re_engagement_sent += 1,
+            Ok(_) => {
+                tracing::info!(profile = %profile_id, "Stale-profile reactivation already queued inside the 24h window; nothing written this call");
+            }
+            Err(e) => {
+                tracing::error!(profile = %profile_id, error = %e, "Stale-profile reactivation not queued (followup_queue write failed); nothing written this call");
+            }
+        }
     }
 
     tracing::info!(
