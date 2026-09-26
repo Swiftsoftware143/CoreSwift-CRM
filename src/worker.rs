@@ -373,7 +373,7 @@ async fn check_inactive_trials(db: &PgPool) {
     }
 
     // Process business_profiles records — fetch tenant_id from users table
-    for (_bp_id, user_id, email, _phone, business_name) in &profiles {
+    for (bp_id, user_id, email, _phone, business_name) in &profiles {
         if let Some(tenant_id) =
             sqlx::query_scalar::<_, Option<Uuid>>("SELECT tenant_id FROM users WHERE id = $1")
                 .bind(user_id)
@@ -409,16 +409,61 @@ async fn check_inactive_trials(db: &PgPool) {
             tracing::info!(user = %user_id, churn = %assessment.churn_probability, template = %template_slug, channel = %channel, "AI-selected follow-up strategy");
 
             // Queue a follow-up in followup_queue (your schema) with AI-selected template.
-            // `channel` is the `channel_type` ENUM: a bare text bind answers
-            // `column "channel" is of type channel_type but expression is of type text` and the
-            // error is discarded by `let _ =`, so no follow-up was ever queued (measured
-            // 2026-09-25, t_2cc3384f; suggest_channel only ever returns email/sms/hybrid).
-            let _ = sqlx::query(
+            //
+            // Two things were wrong here and both were invisible: the row is keyed on the PROFILE
+            // (`business_profile_id` REFERENCES business_profiles(id)), so binding `user_id` answered
+            // `23503 ... is not present in table "business_profiles"` — no inactive trial ever got a
+            // follow-up row (measured live 2026-09-25: 0 rows for the two slugs job 2 writes, while
+            // the sibling legs wrote one per tick). `channel` is the `channel_type` ENUM, hence the
+            // cast (the same class of swallowed write, t_2cc3384f; suggest_channel only ever returns
+            // email/sms/hybrid, all three of which are enum labels).
+            //
+            // This INSERT is also the escalation's ONLY idempotency guard (t_7de2edde): the three
+            // writes below are ONE product event ("this inactive trial was escalated"), so the row
+            // carrying the customer-facing half claims the event for the window in the same
+            // statement, and the other two legs fire only when the claim succeeds. What this
+            // replaces re-escalated the same profile on EVERY 5-minute tick for ever (measured:
+            // 939 executed `delayed_actions` rows for ONE tenant in 3 days, ~288 escalation
+            // notifications per day). `rows_affected() == 1` means this tick owns the window; `0`
+            // means another tick already escalated inside it. The decisions, stated so they cannot
+            // drift: window = 24 h, the same interval this job uses to call a profile inactive, and a
+            // cadence a human can act on — deliberately NOT the 1 h of
+            // check_abandoned_directory_signups (a call-back prompt every hour is still spam);
+            // scoped to this job's own template slugs, so the unrelated producer that writes a
+            // profile's queue (the manual POST /api/account-health/check route writes
+            // 'trial_reactivation') neither blocks nor is blocked by this guard; a CANCELLED row
+            // still counts, because the escalation happened and re-nudging the instant a human
+            // cancels it is exactly the unguarded behaviour being fixed; and a failed claim records
+            // NOTHING in all three legs, loudly, rather than falling back to an unguarded write —
+            // the ledger IS the row being written.
+            let claimed = sqlx::query(
                 r#"INSERT INTO followup_queue (id, business_profile_id, scheduled_for, channel, template_slug)
-                   VALUES ($1, $2, NOW(), $3::channel_type, $4)"#
+                   SELECT $1, $2, NOW(), $3::channel_type, $4
+                   WHERE NOT EXISTS (
+                     SELECT 1 FROM followup_queue fq
+                     WHERE fq.business_profile_id = $2
+                       AND fq.template_slug IN ('saas_trial_inactive_24h', 'saas_trial_critical_re_engagement')
+                       AND fq.created_at > NOW() - INTERVAL '24 hours'
+                   )"#,
             )
-            .bind(Uuid::new_v4()).bind(user_id).bind(channel).bind(template_slug)
-            .execute(db).await;
+            .bind(Uuid::new_v4())
+            .bind(*bp_id)
+            .bind(channel)
+            .bind(template_slug)
+            .execute(db)
+            .await;
+
+            match claimed {
+                Ok(r) if r.rows_affected() == 1 => {}
+                Ok(_) => {
+                    tracing::info!(profile = %bp_id, user = %user_id, business = %business_name, template = %template_slug, "Inactive-trial escalation already recorded for this profile inside the 24h window; nothing written this tick");
+                    continue;
+                }
+                Err(e) => {
+                    tracing::error!(profile = %bp_id, user = %user_id, error = %e, "Inactive-trial escalation could not be claimed (followup_queue write failed); nothing written this tick");
+                    continue;
+                }
+            }
 
             // If critical risk, escalate to human intervention
             if engine::should_escalate_to_human(&assessment).await {
@@ -449,8 +494,10 @@ async fn check_inactive_trials(db: &PgPool) {
                 }
             }
 
-            // Also queue via delayed_actions (native) with AI-selected template
-            let _ = sqlx::query(
+            // Also queue via delayed_actions (native) with AI-selected template.
+            // Gated on the claim above: one product event, so the three legs must not diverge (a
+            // failure here is logged, not swallowed — a silent leg is how this spammed for 3 days).
+            if let Err(e) = sqlx::query(
                 r#"INSERT INTO delayed_actions (id, tenant_id, condition_type, condition_config, action_type, action_config, execute_at)
                    VALUES ($1, $2, 'timeout', '{}'::jsonb, 'send_email',
                            $3::jsonb || jsonb_build_object('template_slug', $4),
@@ -467,7 +514,10 @@ async fn check_inactive_trials(db: &PgPool) {
                 "churn_probability": assessment.churn_probability
             }))
             .bind(template_slug)
-            .execute(db).await;
+            .execute(db).await
+            {
+                tracing::error!(profile = %bp_id, user = %user_id, tenant = %tenant_id, error = %e, "Inactive-trial escalation delayed action not written");
+            }
         }
     }
 }
