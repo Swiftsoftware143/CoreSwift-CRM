@@ -413,22 +413,22 @@ pub async fn record_milestone(
     .await
     .map_err(|e| AppError::Internal(format!("Failed to record milestone: {}", e)))?;
 
-    // Record a health signal (positive)
-    let user_id =
-        sqlx::query_scalar::<_, Uuid>("SELECT user_id FROM business_profiles WHERE id = $1")
+    let user_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT user_id FROM business_profiles WHERE id = $1")
             .bind(r.business_profile_id)
             .fetch_one(&s.db)
             .await?;
-
-    crate::monitoring::engine::record_signal(
-        &s.db,
-        tenant_id,
-        "contact",
-        user_id,
-        "feature_used",
-        10, // big positive signal for reaching a milestone
-    )
-    .await;
+    if let Some(uid) = user_id {
+        crate::monitoring::engine::record_signal(
+            &s.db,
+            tenant_id,
+            "contact",
+            uid,
+            "feature_used",
+            10,
+        )
+        .await;
+    }
 
     // If first_automation, trigger congratulatory followup
     if r.milestone_type == "first_automation" {

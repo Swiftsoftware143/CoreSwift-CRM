@@ -318,13 +318,14 @@ async fn exec_send_email(
         body.to_string()
     } else if let Some(tid) = template_id {
         // Load template body
-        sqlx::query_scalar::<_, String>(
+        sqlx::query_scalar::<_, Option<String>>(
             "SELECT body FROM message_templates WHERE id=$1 AND tenant_id=$2",
         )
         .bind(Uuid::parse_str(tid).unwrap_or(Uuid::nil()))
         .bind(tenant_id)
         .fetch_optional(db)
         .await?
+        .flatten()
         .unwrap_or_else(|| "No template body".to_string())
     } else {
         "Automated message".to_string()
@@ -409,13 +410,14 @@ async fn exec_send_sms(
     let body_text = if !body.is_empty() {
         body.to_string()
     } else if let Some(tid) = template_id {
-        sqlx::query_scalar::<_, String>(
+        sqlx::query_scalar::<_, Option<String>>(
             "SELECT body FROM message_templates WHERE id=$1 AND tenant_id=$2",
         )
         .bind(Uuid::parse_str(tid).unwrap_or(Uuid::nil()))
         .bind(tenant_id)
         .fetch_optional(db)
         .await?
+        .flatten()
         .unwrap_or_else(|| "No template body".to_string())
     } else {
         "Automated message".to_string()
