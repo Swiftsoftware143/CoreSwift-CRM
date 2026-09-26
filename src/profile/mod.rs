@@ -21,6 +21,10 @@ pub fn router(state: AppState) -> Router<AppState> {
             get(handlers::get_profile).put(handlers::update_profile),
         )
         .route("/password", axum::routing::put(handlers::change_password))
+        .layer(axum::middleware::from_fn_with_state(
+            crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
+            crate::body_deadline::body_read_deadline_middleware,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,

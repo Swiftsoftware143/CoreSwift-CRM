@@ -20,6 +20,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/", axum::routing::post(create_reminder))
         .route("/{id}/dismiss", axum::routing::put(dismiss_reminder))
         .route("/{id}", axum::routing::get(get_reminder))
+        .layer(axum::middleware::from_fn_with_state(
+            crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
+            crate::body_deadline::body_read_deadline_middleware,
+        ))
         .layer(middleware::from_fn_with_state(state.clone(), crate::auth::middleware::auth_middleware))
 }
 

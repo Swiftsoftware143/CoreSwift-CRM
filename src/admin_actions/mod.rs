@@ -84,6 +84,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         // tenant user (`role='owner'`, 38 of 47 production users): /site, /portfolio-sync,
         // /chat-action, /chat-action/intents, /stop-impersonation and the private-email admin
         // surfaces (kanban t_d5cf6cad).
+        .layer(axum::middleware::from_fn_with_state(
+            crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
+            crate::body_deadline::body_read_deadline_middleware,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::platform_admin::require_platform_admin_middleware,

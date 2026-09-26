@@ -623,6 +623,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/export/contacts", get(export_contacts))
         .route("/export/opportunities", get(export_opportunities))
         .layer(axum::middleware::from_fn_with_state(
+            crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
+            crate::body_deadline::body_read_deadline_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,
         ))

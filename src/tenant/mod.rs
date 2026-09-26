@@ -13,5 +13,9 @@ pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/", axum::routing::get(handlers::get_current_tenant))
         .route("/", axum::routing::put(handlers::update_current_tenant))
+        .layer(axum::middleware::from_fn_with_state(
+            crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
+            crate::body_deadline::body_read_deadline_middleware,
+        ))
         .layer(middleware::from_fn_with_state(state.clone(), crate::auth::middleware::auth_middleware))
 }

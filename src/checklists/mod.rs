@@ -37,6 +37,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/instances/:id", axum::routing::get(handlers::get_instance))
         // Plan gating — the admin controls this module per plan
         // (the module & feature registry is the source of truth for the admin UI — see src/module_registry).
+        .layer(axum::middleware::from_fn_with_state(
+            crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
+            crate::body_deadline::body_read_deadline_middleware,
+        ))
         .layer(middleware::from_fn_with_state(
             crate::features::FeatureGate::new(state.db.clone(), "checklists", "Checklists"),
             crate::features::gate_mw,

@@ -25,9 +25,16 @@ use axum::{middleware, Router};
 ///   PUT  /api/telnyx/config      — Save/update Telnyx config
 pub fn router(state: AppState) -> Router<AppState> {
     // Public routes — Telnyx sends webhook callbacks here
+    // Public webhook receivers — Telnyx calls these with no credential, and both read a JSON body,
+    // so the body-read deadline goes on them (kanban t_59745689). Nothing is behind auth here, so
+    // there is no ordering question: the deadline is simply the innermost layer of this chain.
     let public = Router::new()
         .route("/webhook", axum::routing::post(handlers::webhook))
-        .route("/sms-webhook", axum::routing::post(handlers::sms_webhook));
+        .route("/sms-webhook", axum::routing::post(handlers::sms_webhook))
+        .layer(axum::middleware::from_fn_with_state(
+            crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
+            crate::body_deadline::body_read_deadline_middleware,
+        ));
 
     // Protected routes — require auth
     let protected = Router::new()
@@ -46,6 +53,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/config", axum::routing::put(handlers::update_config))
         // Plan gating — the admin controls this module per plan
         // (the module & feature registry is the source of truth for the admin UI — see src/module_registry).
+        .layer(axum::middleware::from_fn_with_state(
+            crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
+            crate::body_deadline::body_read_deadline_middleware,
+        ))
         .layer(middleware::from_fn_with_state(
             crate::features::FeatureGate::new(state.db.clone(), "telnyx", "SMS & voice (Telnyx)"),
             crate::features::gate_mw,

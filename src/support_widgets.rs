@@ -497,7 +497,9 @@ pub fn router(state: AppState) -> axum::Router<AppState> {
     use axum::middleware;
     use axum::routing::{get, patch, post};
 
-    // Public routes — no auth
+    // Public routes — no auth. Both read a body: `embed.js` is built from a path, but `/submit` is a
+    // `Json` extractor a stranger can post to, so the body-read deadline goes on this chain
+    // (kanban t_59745689). No auth here, so there is no ordering question.
     let public = axum::Router::new()
         .route(
             "/widgets/:tenant_slug/:widget_slug/embed.js",
@@ -506,7 +508,11 @@ pub fn router(state: AppState) -> axum::Router<AppState> {
         .route(
             "/widgets/:tenant_slug/:widget_slug/submit",
             post(widget_submit),
-        );
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
+            crate::body_deadline::body_read_deadline_middleware,
+        ));
 
     // Protected routes
     let protected = axum::Router::new()
@@ -516,6 +522,10 @@ pub fn router(state: AppState) -> axum::Router<AppState> {
         .route("/inboxes/:id", patch(update_inbox).delete(delete_inbox))
         // Plan gating — the admin controls this module per plan
         // (the module & feature registry is the source of truth for the admin UI — see src/module_registry).
+        .layer(axum::middleware::from_fn_with_state(
+            crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
+            crate::body_deadline::body_read_deadline_middleware,
+        ))
         .layer(middleware::from_fn_with_state(
             crate::features::FeatureGate::new(
                 state.db.clone(),

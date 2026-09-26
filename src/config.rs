@@ -24,6 +24,11 @@ pub struct AppConfig {
     pub db_max_connections: u32,
     pub internal_sync_key: String,
     pub funnelswift_url: String,
+    /// How long a request BODY may take to arrive on the routes that read one, measured from the
+    /// headers. A body that has not finished arriving within this many seconds is answered `408`
+    /// and its task, connection and partially-read body buffer are released (kanban t_59745689);
+    /// the handler's own work is not bounded by it. `BODY_READ_DEADLINE_SECS`.
+    pub body_read_deadline_secs: u64,
 }
 
 impl AppConfig {
@@ -110,6 +115,17 @@ impl AppConfig {
         let funnelswift_url =
             env::var("FUNNELSWIFT_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
 
+        // Body-read deadline (kanban t_59745689). Same posture as the rest of this file's non-secret
+        // knobs: unset or unparseable falls back to the default rather than refusing to boot, and the
+        // value is clamped so a mistyped one cannot become an outage — 0 would answer 408 to every
+        // request that carries a body, and a very large value would restore the unbounded hold this
+        // closes.
+        let body_read_deadline_secs = env::var("BODY_READ_DEADLINE_SECS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(crate::body_deadline::DEFAULT_BODY_READ_DEADLINE_SECS)
+            .clamp(5, 300);
+
         Ok(AppConfig {
             host,
             port,
@@ -127,6 +143,7 @@ impl AppConfig {
             db_max_connections,
             internal_sync_key,
             funnelswift_url,
+            body_read_deadline_secs,
         })
     }
 }

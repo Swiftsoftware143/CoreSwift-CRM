@@ -65,6 +65,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         // module today; plan changes go through POST/PATCH /subscription. See the retirement note
         // in handlers.rs and /opt/swift/audits/t_0fe500d4/ for the measurements and for what a
         // deliberate payment build would have to cover.
+        .layer(axum::middleware::from_fn_with_state(
+            crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
+            crate::body_deadline::body_read_deadline_middleware,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,

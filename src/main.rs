@@ -15,6 +15,7 @@ pub mod audit;
 pub mod auth;
 pub mod automation;
 pub mod billing;
+mod body_deadline;
 pub mod bookings;
 pub mod campaigns;
 pub mod checklists;
@@ -340,6 +341,17 @@ async fn main() -> anyhow::Result<()> {
     // Request ID middleware — adds X-Request-Id to every response
     let request_id_middleware = axum::middleware::from_fn(request_id_middleware_fn);
 
+    // Body-read deadline (kanban t_59745689): how long a request body may take to ARRIVE before the
+    // request is answered 408 and its task, connection and partial body buffer are released. In the
+    // boot log for the same reason the migration posture above is — the bound an operator relies on
+    // has to be visible without reading the source.
+    tracing::info!(
+        "Request body-read deadline: {:?} on every route that reads a body, 408 above that (BODY_READ_DEADLINE_SECS)",
+        body_deadline::BodyReadDeadline::from_secs(config.body_read_deadline_secs).duration()
+    );
+    let body_read_deadline =
+        body_deadline::BodyReadDeadline::from_secs(config.body_read_deadline_secs);
+
     // Build the complete router
     let app = Router::new()
         // Health check (no auth required)
@@ -357,27 +369,61 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/contacts", contacts::router(state.clone()))
         // CSV import/export — /api/csv/{preview,import/contacts,export/contacts,export/opportunities}
         .nest("/api/csv", csv_handler::router(state.clone()))
-        .nest("/api/internal/contacts", contacts_internal::router())
+        .nest(
+            "/api/internal/contacts",
+            contacts_internal::router().layer(axum::middleware::from_fn_with_state(
+                body_read_deadline,
+                body_deadline::body_read_deadline_middleware,
+            )),
+        )
         // FunnelSwift tag provision webhook — auto-provision free-tier contacts
         .route(
             "/api/v1/internal/tag-provision",
-            axum::routing::post(tag_provision_handler::handle_tag_provision),
+            axum::routing::post(tag_provision_handler::handle_tag_provision).layer(
+                axum::middleware::from_fn_with_state(
+                    body_read_deadline,
+                    body_deadline::body_read_deadline_middleware,
+                ),
+            ),
         )
         // Unified Inbox — messages webhook from MD/IS (no auth, fire-and-forget)
         .route(
             "/api/messages/webhook",
-            axum::routing::post(messages::handlers::webhook_receive),
+            axum::routing::post(messages::handlers::webhook_receive).layer(
+                axum::middleware::from_fn_with_state(
+                    body_read_deadline,
+                    body_deadline::body_read_deadline_middleware,
+                ),
+            ),
         )
         .nest("/api/companies", companies::router(state.clone()))
         .nest("/api/pipelines", pipelines::router(state.clone()))
         .nest("/api/tags", tags::router(state.clone()))
         .nest("/api/scoring", scoring::router(state.clone()))
         .nest("/api/lists", lists::router(state.clone()))
-        .nest("/api/internal/lists", lists_internal::router())
+        .nest(
+            "/api/internal/lists",
+            lists_internal::router().layer(axum::middleware::from_fn_with_state(
+                body_read_deadline,
+                body_deadline::body_read_deadline_middleware,
+            )),
+        )
         // Unified Inbox — protected CRUD for messages
         .nest("/api/messages", messages::router(state.clone()))
-        .nest("/api/internal/tenants", tenants_internal::router())
-        .nest("/api/internal/tags", tags::internal_handler::router())
+        .nest(
+            "/api/internal/tenants",
+            tenants_internal::router().layer(axum::middleware::from_fn_with_state(
+                body_read_deadline,
+                body_deadline::body_read_deadline_middleware,
+            )),
+        )
+        .nest(
+            "/api/internal/tags",
+            tags::internal_handler::router().layer(axum::middleware::from_fn_with_state(
+                body_read_deadline,
+                body_deadline::body_read_deadline_middleware,
+            )),
+        )
         .nest("/api/integrations", integrations::router(state.clone()))
         // Hub Integration Center — what feeds this CRM (lead sources) + what it feeds
         .nest(
@@ -385,7 +431,13 @@ async fn main() -> anyhow::Result<()> {
             integration_center::router(state.clone()),
         )
         .nest("/api", provider_keys::router(state.clone()))
-        .nest("/api/external", external_api::router())
+        .nest(
+            "/api/external",
+            external_api::router().layer(axum::middleware::from_fn_with_state(
+                body_read_deadline,
+                body_deadline::body_read_deadline_middleware,
+            )),
+        )
         .nest(
             "/api/personal-api-keys",
             personal_api_keys::router(state.clone()),
@@ -406,19 +458,43 @@ async fn main() -> anyhow::Result<()> {
         // Native app connectors (AdaSwift, FunnelSwift, CheatLayer, etc.)
         .nest("/api/native", native_apps::router(state.clone()))
         // Public webhook — single endpoint for OpenClaw, n8n, CheatLayer
-        .nest("/api/webhook", webhook::router())
+        .nest(
+            "/api/webhook",
+            webhook::router().layer(axum::middleware::from_fn_with_state(
+                body_read_deadline,
+                body_deadline::body_read_deadline_middleware,
+            )),
+        )
         // Dashboard — aggregate stats
         .nest("/api/dashboard", dashboard::router(state.clone()))
         // Portfolio — multi-entity portfolio companies
         .nest("/api/portfolio", portfolio::router(state.clone()))
         .nest("/api/bookings", bookings::router(state.clone()))
-        .nest("/api/bookings/internal", bookings::internal_router())
+        .nest(
+            "/api/bookings/internal",
+            bookings::internal_router().layer(axum::middleware::from_fn_with_state(
+                body_read_deadline,
+                body_deadline::body_read_deadline_middleware,
+            )),
+        )
         // Alternative internal calendar creation path (outside auth middleware)
-        .nest("/api/internal/bookings", bookings::internal_router())
+        .nest(
+            "/api/internal/bookings",
+            bookings::internal_router().layer(axum::middleware::from_fn_with_state(
+                body_read_deadline,
+                body_deadline::body_read_deadline_middleware,
+            )),
+        )
         // Round-robin lead assignment
         .nest("/api/round-robin", round_robin::router(state.clone()))
         // Inbound webhook — receive events from satellite apps
-        .nest("/inbound", inbound::router())
+        .nest(
+            "/inbound",
+            inbound::router().layer(axum::middleware::from_fn_with_state(
+                body_read_deadline,
+                body_deadline::body_read_deadline_middleware,
+            )),
+        )
         // Admin chat actions — run the entire business from Telegram
         .nest("/api/admin", admin_actions::router(state.clone()))
         // Onboarding checklists
@@ -430,7 +506,13 @@ async fn main() -> anyhow::Result<()> {
         // Telnyx SMS/Voice integration
         .nest("/api/telnyx", telnyx::router(state.clone()))
         // Cross-app webhooks — receive tag sync events from satellite apps
-        .nest("/api/v1/webhooks", webhooks::cross_app_tag_sync::router())
+        .nest(
+            "/api/v1/webhooks",
+            webhooks::cross_app_tag_sync::router().layer(axum::middleware::from_fn_with_state(
+                body_read_deadline,
+                body_deadline::body_read_deadline_middleware,
+            )),
+        )
         // Google Calendar sync — OAuth2, push/pull events
         .nest(
             "/api/google-calendar",
@@ -459,7 +541,12 @@ async fn main() -> anyhow::Result<()> {
         // Mailgun inbound webhook (no auth — called by Mailgun)
         .route(
             "/api/v1/webhooks/mailgun/inbound",
-            axum::routing::post(private_email::webhook_handler::inbound_webhook),
+            axum::routing::post(private_email::webhook_handler::inbound_webhook).layer(
+                axum::middleware::from_fn_with_state(
+                    body_read_deadline,
+                    body_deadline::body_read_deadline_middleware,
+                ),
+            ),
         )
         // NOTE: POST /api/billing/webhooks/{stripe,paypal} were RETIRED 2026-09-25 (kanban
         // t_0fe500d4) together with POST /api/billing/checkout/create. They authenticated nothing
@@ -468,11 +555,22 @@ async fn main() -> anyhow::Result<()> {
         // drops. Leaving them registered would have restored the 42P01 that t_a8a3fa27 had just
         // closed. See src/billing/handlers.rs for the full retirement note.
         // Public booking endpoints (no auth)
-        .nest("/api/public/bookings", bookings::public_router())
+        .nest(
+            "/api/public/bookings",
+            bookings::public_router().layer(axum::middleware::from_fn_with_state(
+                body_read_deadline,
+                body_deadline::body_read_deadline_middleware,
+            )),
+        )
         // Tickets public endpoints (root level)
         .route(
             "/s/:tenant_id/ticket",
-            axum::routing::post(tickets::handlers::public_submit_ticket),
+            axum::routing::post(tickets::handlers::public_submit_ticket).layer(
+                axum::middleware::from_fn_with_state(
+                    body_read_deadline,
+                    body_deadline::body_read_deadline_middleware,
+                ),
+            ),
         )
         .route(
             "/s/:tenant_id/widget.js",
@@ -491,11 +589,21 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/s/:tenant_id/support/login",
-            axum::routing::post(tickets::portal::login),
+            axum::routing::post(tickets::portal::login).layer(
+                axum::middleware::from_fn_with_state(
+                    body_read_deadline,
+                    body_deadline::body_read_deadline_middleware,
+                ),
+            ),
         )
         .route(
             "/s/:tenant_id/support/tickets",
-            axum::routing::get(tickets::portal::list).post(tickets::portal::create_ticket),
+            axum::routing::get(tickets::portal::list)
+                .post(tickets::portal::create_ticket)
+                .layer(axum::middleware::from_fn_with_state(
+                    body_read_deadline,
+                    body_deadline::body_read_deadline_middleware,
+                )),
         )
         .route(
             "/s/:tenant_id/support/tickets/:id",
@@ -503,11 +611,21 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/s/:tenant_id/support/tickets/:id/messages",
-            axum::routing::post(tickets::portal::reply),
+            axum::routing::post(tickets::portal::reply).layer(
+                axum::middleware::from_fn_with_state(
+                    body_read_deadline,
+                    body_deadline::body_read_deadline_middleware,
+                ),
+            ),
         )
         .route(
             "/api/public/contact",
-            axum::routing::post(tickets::handlers::public_contact_form),
+            axum::routing::post(tickets::handlers::public_contact_form).layer(
+                axum::middleware::from_fn_with_state(
+                    body_read_deadline,
+                    body_deadline::body_read_deadline_middleware,
+                ),
+            ),
         )
         // Layer stack (inner to outer = last to first in call order)
         .layer(CompressionLayer::new())

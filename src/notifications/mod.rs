@@ -22,6 +22,10 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/queue",
             axum::routing::post(handlers::enqueue_notification),
         )
+        .layer(axum::middleware::from_fn_with_state(
+            crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
+            crate::body_deadline::body_read_deadline_middleware,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,

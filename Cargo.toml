@@ -74,6 +74,16 @@ lettre = { version = "0.11", default-features = false, features = ["tokio1-nativ
 serde_urlencoded = "0.7"
 url = "2"
 
+[dev-dependencies]
+# Tests only: `ServiceExt::oneshot` drives a real Router through the middleware stack so the
+# body-read deadline is proven to fire (kanban t_59745689). The production graph does not enable
+# tower's `util` feature, and tests must not widen it.
+tower = { version = "0.4", features = ["util"] }
+# Tests only: a request body that never arrives is built from a `futures_core::Stream` via
+# `Body::from_stream`. futures-core is already in the production graph (axum-core depends on it),
+# so this makes the trait nameable in tests without adding a package.
+futures-core = "0.3"
+
 [profile.release]
 opt-level = 3
 lto = "thin"
