@@ -216,6 +216,12 @@ pub async fn set_override(
 /// the admin console's per-tenant card can show the state it is about to change instead of only a
 /// tier name (kanban t_f1ffb865). `trialing` counts as "on a plan" for the same reason the
 /// tenant-facing reader treats it that way (`billing::handlers::get_features`).
+///
+/// `entitlements` is the per-SOURCE enumeration `resolve_all` returns (a key registered in both
+/// `modules` and `module_features` has two entries, byte-identical, because `resolve()` answers with
+/// the module arm first). `denied` is the human-facing SUMMARY of that set, so it names each denied
+/// key once — measured on `free` before this change it printed
+/// `ai_enabled, ai_enabled, private_email, private_email, tickets, tickets` (kanban t_7b7becec).
 pub async fn tenant_entitlements(
     State(s): State<AppState>,
     Path(tenant_id): Path<Uuid>,
@@ -230,11 +236,14 @@ pub async fn tenant_entitlements(
     .await?;
 
     let resolved = module_registry::resolve_all(&s.db, tenant_id).await?;
-    let denied: Vec<&str> = resolved
-        .iter()
-        .filter(|e| !e.enabled)
-        .map(|e| e.key.as_str())
-        .collect();
+    // First occurrence wins, so the summary keeps the array's own `ORDER BY key` ordering.
+    let mut seen = std::collections::HashSet::new();
+    let mut denied: Vec<&str> = Vec::new();
+    for e in resolved.iter().filter(|e| !e.enabled) {
+        if seen.insert(e.key.as_str()) {
+            denied.push(e.key.as_str());
+        }
+    }
 
     Ok(Json(json!({
         "tenant_id": tenant_id,

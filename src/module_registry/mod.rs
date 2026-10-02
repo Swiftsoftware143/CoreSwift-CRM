@@ -141,6 +141,13 @@ pub async fn resolve(db: &PgPool, tenant_id: Uuid, key: &str) -> Result<Entitlem
 }
 
 /// The effective value for every catalogue key, for one tenant. Used by the admin entitlements view.
+///
+/// ONE entry per registered SOURCE row: the key list is a `UNION ALL`, so a key registered in BOTH
+/// `modules` and `module_features` appears twice — and the two entries are byte-identical, because
+/// `resolve()` answers with the module arm first (measured on live `free`: 50 entries, 30 distinct
+/// keys, all 20 duplicates identical down to `limit_value: null`). That per-source shape is
+/// deliberate and is what the admin panel's table enumerates; the human-facing `denied` SUMMARY in
+/// `handlers::tenant_entitlements` dedupes it (kanban t_7b7becec).
 pub async fn resolve_all(db: &PgPool, tenant_id: Uuid) -> Result<Vec<Entitlement>, AppError> {
     let keys: Vec<(String,)> = sqlx::query_as(
         "SELECT key FROM modules WHERE is_active
