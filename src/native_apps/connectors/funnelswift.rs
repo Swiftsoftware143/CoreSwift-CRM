@@ -1,7 +1,7 @@
 //! FunnelSwift Connector
 //!
 //! FunnelSwift is a mobile (Expo/React Native) sales funnel builder.
-//! Tenants connect their own FunnelSwift account to sync leads, funnels, and contacts.
+//! Tenants connect their own FunnelSwift account to sync leads, funnels and tags.
 //!
 //! Access: Admin + Tenant
 
@@ -43,16 +43,19 @@ pub async fn push_entity(
     let api_url = api_base(creds);
 
     match entity_type {
-        "lead" | "contact" | "funnel" | "tag" => {
-            let url = format!(
-                "{}/v1/{}",
-                api_url,
-                if entity_type == "tag" {
-                    "tags"
-                } else {
-                    entity_type
-                }
-            );
+        // FunnelSwift's routes are PLURAL (`/api/v1/leads`, `/api/v1/funnels`,
+        // `/api/v1/tags`); it serves no singular route and no contact route at all.
+        // Measured live 2026-10-02 (kanban t_e8a7f651) with a real FunnelSwift JWT:
+        // `/api/v1/lead|contact|funnel` -> 404, `/api/v1/leads` -> 200(GET)/400(POST),
+        // `/api/v1/tags` -> 200/422, `/api/v1/funnels` -> 200. `contact` is retired
+        // rather than mapped: FunnelSwift has no contact route and no `contacts` table.
+        "lead" | "funnel" | "tag" => {
+            let path = match entity_type {
+                "lead" => "leads",
+                "funnel" => "funnels",
+                _ => "tags",
+            };
+            let url = format!("{}/v1/{}", api_url, path);
             let resp = reqwest::Client::new()
                 .post(&url)
                 .header("Authorization", format!("Bearer {}", api_key))
@@ -90,7 +93,9 @@ pub async fn pull_entity(
     let api_url = api_base(creds);
 
     match entity_type {
-        "leads" | "contacts" | "funnels" | "tags" => {
+        // `contacts` is retired: FunnelSwift serves no `/api/v1/contacts` (404 live)
+        // and has no `contacts` table, so no request could ever resolve.
+        "leads" | "funnels" | "tags" => {
             let url = format!("{}/v1/{}{}", api_url, entity_type, query);
             let resp = reqwest::Client::new()
                 .get(&url)
@@ -141,8 +146,19 @@ pub fn get_meta() -> serde_json::Value {
         // would mean inventing a product decision, not repairing a claim. The direction stays correct
         // if someone later builds a real consumer, in which case the declaration comes back together
         // with the arm that serves it.
-        "entities": { "push": ["lead", "contact", "funnel", "tag"], "pull": ["leads", "contacts", "funnels", "tags"] },
-        "features": ["Push leads from CRM into FunnelSwift funnels", "Pull completed funnels back into CRM as contacts"]
+        // The declaration names only routes a live request can reach (kanban t_e8a7f651).
+        // `contact` (push) and `contacts` (pull) were retired: measured live 2026-10-02 with a
+        // real FunnelSwift JWT (iss/aud `funnelswift`/`funnelswift-api`, claim set copied from a
+        // real users row) GET/POST `/api/v1/contacts` and `/api/v1/contact` answer 404 —
+        // FunnelSwift serves no contact route and has no `contacts` table. The remaining names
+        // resolve through the plural mapping in `push_entity()`: lead -> `/api/v1/leads`
+        // (400 "needs a name" = handler reached), funnel -> `/api/v1/funnels` (201),
+        // tag -> `/api/v1/tags` (422 missing field); `pull_entity()` GETs `/api/v1/leads`,
+        // `/api/v1/funnels` and `/api/v1/tags` (all 200). `/api/v1/bogus-xyz` answers 404, so a
+        // 404 here is the ROUTER — the auth layer answers 401 for every /api/v1/* path, bogus
+        // included, and would have made this reading vacuous.
+        "entities": { "push": ["lead", "funnel", "tag"], "pull": ["leads", "funnels", "tags"] },
+        "features": ["Push leads from CRM into FunnelSwift funnels", "Pull FunnelSwift leads and funnels back into CRM"]
     })
 }
 
