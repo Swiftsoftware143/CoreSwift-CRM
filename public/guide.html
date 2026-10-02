@@ -983,15 +983,17 @@ Content-Type: application/json
 
   <div class="card">
     <h3>Inbound Webhooks (Receiving Data)</h3>
-    <p>Other apps can send events to CoreSwift using authenticated webhook endpoints. Events are verified with satellite API keys.</p>
-    <pre>POST /ihook/:key_prefix/:event_type
+    <p>Other apps can send events to CoreSwift using authenticated webhook endpoints. The URL carries only the key <em>prefix</em>, which is a public index; the credential is the full key in the <code>X-Satellite-Key</code> header, and its SHA-256 digest must equal the digest stored for that prefix. A missing header or a wrong key is refused with <code>401</code>.</p>
+    <pre>POST /inbound/:key_prefix/:event_type
 X-Satellite-Key: &lt;full-api-key&gt;
 Content-Type: application/json
 
 { "payload": "data" }</pre>
     <p>Or the v2 endpoint:</p>
-    <pre>POST /ihook-v2/:key_prefix/:event_type
+    <pre>POST /inbound/v2/:key_prefix/:event_type
 X-Satellite-Key: &lt;full-api-key&gt;</pre>
+    <p>And the v3 contact-sync endpoint — <code>POST /inbound/v3/:key_prefix/contact-sync</code> (also <code>survey-complete</code> and <code>contact-upsert</code>) — with the same header.</p>
+    <div class="callout info">These three routes are served by the CoreSwift application itself. They are not under <code>/api/</code>, and the public web vhosts proxy only <code>/api/</code>, <code>/s/</code> and <code>/track/</code> to it, so on the shared host a satellite app calls CoreSwift directly rather than through the public site.</div>
     <p><strong>Supported event types from satellite apps:</strong></p>
     <div class="twrap">
       <table>
@@ -1104,13 +1106,13 @@ PATCH /api/account/:id — Update name</pre>
     <h3>API Keys</h3>
     <p>API keys allow satellite apps to authenticate when sending data to CoreSwift via webhooks. Each key has:</p>
     <ul>
-      <li><strong>Key Prefix</strong>  First 4 characters (used in webhook URLs)</li>
-      <li><strong>Full Key</strong>  Shown once at creation; the server stores only a hash</li>
+      <li><strong>Key Prefix</strong>  The leading characters of the key, carried in the webhook URL to select the row. It is public and is <em>not</em> a secret.</li>
+      <li><strong>Full Key</strong>  The credential, sent in the <code>X-Satellite-Key</code> header. The server stores only its SHA-256 digest (<code>key_hash</code>), compares the two in constant time, and can never recover the full key from the row.</li>
       <li><strong>Source App</strong>  Which app this key is for (funnelswift, incentiveswift, etc.)</li>
-      <li><strong>Status</strong>  Active or Disabled</li>
+      <li><strong>Status</strong>  Active or Disabled (a disabled key authenticates nothing)</li>
       <li><strong>Last Used</strong>  Timestamp of most recent usage</li>
     </ul>
-    <p>Satellite keys have no console screen: they are provisioned per tenant by the operator and stored in the <code>satellite_api_keys</code> table (key prefix, source app, active flag, last used). The keys a workspace mints itself are the <strong>Lead-delivery keys</strong> (<code>csk_…</code>) in <strong>Settings &gt; Integration Center</strong>, backed by <code>POST /api/personal-api-keys</code> (list, rotate and revoke alongside).</p>
+    <p>Satellite keys have no console screen: they are provisioned per tenant by the operator, who stores the prefix and the SHA-256 digest of the full key in the <code>satellite_api_keys</code> table (<code>key_prefix</code>, <code>key_hash</code>, source app, active flag, last used). The keys a workspace mints itself are the <strong>Lead-delivery keys</strong> (<code>csk_…</code>) in <strong>Settings &gt; Integration Center</strong>, backed by <code>POST /api/personal-api-keys</code> (list, rotate and revoke alongside).</p>
   </div>
 
   <div class="card">

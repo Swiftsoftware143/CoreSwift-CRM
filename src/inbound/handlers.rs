@@ -1,36 +1,102 @@
 //! Inbound webhook handlers — receive events from satellite apps via API key
 //!
 //! Satellite apps (FunnelSwift, IncentiveSwift, WorkflowSwift, MissedCall Respondr)
-//! push data via these endpoints. Authentication is via key_prefix lookup.
+//! push data via these endpoints.
+//!
+//! Authentication (kanban t_588a15d1): the URL carries only `key_prefix`, which is an
+//! INDEX — it is short and is documented as living in webhook URLs, so it is not a
+//! credential. The credential is the full key, presented in the `X-Satellite-Key`
+//! header; its SHA-256 hex must equal `satellite_api_keys.key_hash`. Before this
+//! change the prefix alone authenticated the call and `key_hash` was read nowhere.
 
 use axum::{
     extract::{Json, Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
 
+/// SHA-256 hex of a presented key — the format `satellite_api_keys.key_hash` must carry.
+/// Same construction as the personal API-key hasher (`src/personal_api_keys.rs`,
+/// `src/external_api.rs`): key material is never stored, only this digest.
+fn sha256_hex(key: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(key.as_bytes());
+    hex::encode(h.finalize())
+}
+
+/// Constant-time byte equality — no early return on the first differing byte.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Authenticate an inbound satellite call -> `(api_key_id, tenant_id, key_name)`.
+///
+/// `key_prefix` selects candidate rows (index); the presented `X-Satellite-Key` must
+/// hash to a row's `key_hash`. Every failure — missing/blank header, unknown prefix,
+/// inactive row, hash mismatch, legacy row whose `key_hash` is not a SHA-256 hex —
+/// answers the SAME 401, so the response cannot be used to probe which prefixes exist.
+/// Fails closed: a row this server cannot verify authenticates nothing.
+async fn authenticate_satellite_key(
+    s: &AppState,
+    headers: &HeaderMap,
+    key_prefix: &str,
+) -> ApiResult<(Uuid, Uuid, String)> {
+    let presented = headers
+        .get("x-satellite-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or(AppError::Unauthorized)?;
+
+    let rows = sqlx::query_as::<_, (Uuid, Uuid, String, String)>(
+        r#"SELECT id, tenant_id, name, key_hash FROM satellite_api_keys
+           WHERE key_prefix = $1 AND is_active = true"#,
+    )
+    .bind(key_prefix)
+    .fetch_all(&s.db)
+    .await?;
+
+    let presented_hash = sha256_hex(presented);
+    let matched = rows
+        .iter()
+        .find(|(_, _, _, key_hash)| ct_eq(presented_hash.as_bytes(), key_hash.as_bytes()))
+        .ok_or(AppError::Unauthorized)?;
+
+    let (key_id, tenant_id, key_name, _) = matched.clone();
+
+    // Best-effort: the key card documents "Last used"; a failed timestamp update must
+    // never refuse an otherwise valid delivery.
+    let _ = sqlx::query("UPDATE satellite_api_keys SET last_used_at = NOW() WHERE id = $1")
+        .bind(key_id)
+        .execute(&s.db)
+        .await;
+
+    Ok((key_id, tenant_id, key_name))
+}
+
 /// POST /inbound/{key_prefix}/{event_type}
-/// Receive an event from a satellite app using API key prefix auth
+/// Receive an event from a satellite app; authenticated by `X-Satellite-Key`.
 pub async fn receive(
     Path((key_prefix, event_type)): Path<(String, String)>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> ApiResult<impl IntoResponse> {
-    // Look up the API key by prefix
-    let key = sqlx::query_as::<_, (Uuid, Uuid, String)>(
-        r#"SELECT id, tenant_id, name FROM satellite_api_keys WHERE key_prefix = $1 AND is_active = true"#,
-    )
-    .bind(&key_prefix)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Invalid webhook key".into()))?;
-
-    let (key_id, tenant_id, _key_name) = key;
+    let (key_id, tenant_id, key_name) =
+        authenticate_satellite_key(&state, &headers, &key_prefix).await?;
 
     // Record inbound event
     let event_id = sqlx::query_scalar::<_, Uuid>(
@@ -40,7 +106,7 @@ pub async fn receive(
     )
     .bind(Uuid::new_v4())
     .bind(tenant_id)
-    .bind(&_key_name)
+    .bind(&key_name)
     .bind(&event_type)
     .bind(&payload)
     .bind(key_id)
@@ -61,9 +127,16 @@ pub async fn receive(
 pub async fn receive_v2(
     Path((key_prefix, event_type)): Path<(String, String)>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> ApiResult<impl IntoResponse> {
-    receive(Path((key_prefix, event_type)), State(state), Json(payload)).await
+    receive(
+        Path((key_prefix, event_type)),
+        State(state),
+        headers,
+        Json(payload),
+    )
+    .await
 }
 
 /// POST /inbound/v3/{key_prefix}/contact-sync
@@ -89,6 +162,7 @@ pub async fn receive_v2(
 pub async fn receive_v3_contact_sync(
     Path((key_prefix, event_type)): Path<(String, String)>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> ApiResult<impl IntoResponse> {
     // Validate event type
@@ -102,16 +176,9 @@ pub async fn receive_v3_contact_sync(
         )));
     }
 
-    // Look up the API key by prefix
-    let key = sqlx::query_as::<_, (Uuid, Uuid, String)>(
-        r#"SELECT id, tenant_id, name FROM satellite_api_keys WHERE key_prefix = $1 AND is_active = true"#,
-    )
-    .bind(&key_prefix)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Invalid webhook key".into()))?;
-
-    let (key_id, tenant_id, key_name) = key;
+    // Authenticate: the prefix selects the row, the X-Satellite-Key header is the credential
+    let (key_id, tenant_id, key_name) =
+        authenticate_satellite_key(&state, &headers, &key_prefix).await?;
 
     // Extract contact fields
     let email = payload.get("email").and_then(|v| v.as_str()).unwrap_or("");
