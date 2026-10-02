@@ -117,8 +117,32 @@ pub fn get_meta() -> serde_json::Value {
         "auth_type": "api_key",
         "auth_fields": ["api_key", "base_url"],
         "access_level": "admin_tenant",
-        "entities": { "push": ["lead", "contact", "funnel", "tag", "product_selection"], "pull": ["leads", "contacts", "funnels", "tags", "affiliate_products", "my_products"] },
-        "features": ["Push leads from CRM into FunnelSwift funnels", "Pull completed funnels back into CRM as contacts", "Affiliates select products to promote from FunnelSwift back-end", "Push product selections to sync with CRM Swift tags"]
+        // The declared entity vocabulary IS the implemented one — nothing more (kanban t_7225a94d).
+        // This list used to advertise `product_selection` (push) and `affiliate_products` +
+        // `my_products` (pull) while `push_entity()`/`pull_entity()` below matched only
+        // lead|contact|funnel|tag and leads|contacts|funnels|tags — so all three fell to the
+        // "does not support ..." arm. An advertised capability the connector itself refuses.
+        //
+        // MEASURED 2026-10-02 before removing them:
+        //   * `grep -rn "affiliate_products|my_products|product_selection" src/` -> the declaration
+        //     itself and nothing else: 0 reads, 0 writes, no route, no consumer surface.
+        //   * `app_connections` = 0 rows and `app_sync_logs` = 0 rows in coreswift_crm: no tenant had
+        //     ever connected a native app, so no pull or push had ever run for ANY entity.
+        //   * the shipped console's sync modal drives its own list (contacts|lists|tags), so the
+        //     declared names were never reachable from the UI either.
+        //   * the names could not have resolved even if wired: FunnelSwift serves
+        //     `/api/v1/affiliate-products` (hyphen) and has no `/api/v1/contacts` at all, while this
+        //     connector builds `{base}/v1/{entity_type}` from the literal below.
+        //
+        // BUILDING THE SYNC WAS DECLINED, NOT DEFERRED. FunnelSwift owns the affiliate programme and
+        // its commissionable catalogue (ARCHITECTURE.md Rules 2 and 4; migration 108 retires
+        // CoreSwift's dead copy of that schema), the products are managed in the FunnelSwift admin
+        // (docs/ADMIN_GUIDE.md), and CoreSwift has no surface that would show them — so wiring a pull
+        // would mean inventing a product decision, not repairing a claim. The direction stays correct
+        // if someone later builds a real consumer, in which case the declaration comes back together
+        // with the arm that serves it.
+        "entities": { "push": ["lead", "contact", "funnel", "tag"], "pull": ["leads", "contacts", "funnels", "tags"] },
+        "features": ["Push leads from CRM into FunnelSwift funnels", "Pull completed funnels back into CRM as contacts"]
     })
 }
 
