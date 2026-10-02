@@ -181,7 +181,7 @@
     <a href="#dashboard">Dashboard</a>
     <a href="#sales">Sales</a>
     <a href="#marketing">Marketing</a>
-    <a href="#operations">Operations</a>
+    <a href="#operations">Events, Portfolio &amp; Lists</a>
     <a href="#support-portal">Support</a>
     <a href="#automation-features">Automation</a>
     <a href="#tags-lists">Tags &amp; Lists</a>
@@ -315,7 +315,7 @@ Response:
       <div class="step"><strong>Navigate to Contacts</strong><p>Click <strong>Contacts</strong> in the sidebar.</p></div>
       <div class="step"><strong>Click "Add Contact"</strong><p>A form modal opens.</p></div>
       <div class="step"><strong>Fill in details</strong><p>First / last name required. Email or phone recommended.</p></div>
-      <div class="step"><strong>Save</strong><p>Click <strong>Create Contact</strong>.</p></div>
+      <div class="step"><strong>Save</strong><p>Click <strong>Save</strong> in the dialog.</p></div>
     </div>
     <pre>POST /api/contacts
 Authorization: Bearer &lt;token&gt;
@@ -333,18 +333,18 @@ Content-Type: application/json
   <div class="card">
     <h3>Edit, Delete &amp; Search</h3>
     <ul>
-      <li><strong>Edit</strong>  Edit icon ? <code>PATCH /api/contacts/:id</code></li>
-      <li><strong>Delete</strong>  Soft delete ? <code>DELETE /api/contacts/:id</code></li>
-      <li><strong>View</strong>  Click name to see tags, lists, and associated opportunities</li>
+      <li><strong>Edit</strong>  The row's <strong>Edit</strong> button &rarr; <code>PATCH /api/contacts/:id</code></li>
+      <li><strong>Delete</strong>  Soft delete by API only (<code>DELETE /api/contacts/:id</code>) &mdash; a contact row has no delete control</li>
+      <li><strong>View / edit</strong>  Every row carries an <strong>Edit</strong> and a <strong>Tags</strong> button; there is no contact detail page</li>
       <li><strong>Search</strong>  <code>GET /api/contacts/search?q=john</code> (name/email/phone)</li>
     </ul>
   </div>
   <div class="card">
     <h3>Assigning Tags</h3>
     <div class="steps">
-      <div class="step"><strong>Open contact detail</strong><p>Click on the contact's name.</p></div>
-      <div class="step"><strong>Tags section</strong><p>Existing tags shown as colored pills.</p></div>
-      <div class="step"><strong>Click "Assign Tag"</strong><p>Select from the dropdown grouped by category.</p></div>
+      <div class="step"><strong>Open the tag panel</strong><p>Click <strong>Tags</strong> on the contact's row.</p></div>
+      <div class="step"><strong>Current tags</strong><p>Existing tags are shown as colored pills, each with an ✕ to unassign.</p></div>
+      <div class="step"><strong>Assign a tag</strong><p>Pick one of the remaining tags listed below the pills.</p></div>
       <div class="step"><strong>Confirm</strong><p>Uses <code>POST /api/tags/assign</code>. Remove via <code>DELETE /api/tags/assign/:id</code>.</p></div>
     </div>
   </div>
@@ -392,12 +392,12 @@ Content-Type: application/json
   <div class="card">
     <h3>Managing Companies</h3>
     <div class="steps">
-      <div class="step"><strong>Go to Companies</strong><p>Click <strong>Companies</strong> in the sidebar.</p></div>
+      <div class="step"><strong>Go to Companies</strong><p>Companies has no sidebar entry — press <strong>g</strong> then <strong>o</strong> to open it.</p></div>
       <div class="step"><strong>Add a Company</strong><p>Name required. Optionally set industry/size.</p><pre>POST /api/companies
 Content-Type: application/json
 
 { "name": "Acme Corp", "industry": "Technology", "size": "51-200" }</pre></div>
-      <div class="step"><strong>Link Contacts</strong><p>From the company detail, view and add associated contacts.</p></div>
+      <div class="step"><strong>Link Contacts</strong><p>Companies have no detail page; a contact carries a free-text <code>company</code> field and the Companies list shows a per-company contact count.</p></div>
       <div class="step"><strong>Edit or Delete</strong><p>Soft delete (<code>is_active = false</code>).</p></div>
     </div>
   </div>
@@ -451,10 +451,10 @@ Content-Type: application/json
   <div class="card">
     <h3>Creating a Pipeline</h3>
     <div class="steps">
-      <div class="step"><strong>Go to Pipelines</strong><p>Click <strong>Pipelines</strong> in the sidebar.</p></div>
+      <div class="step"><strong>Go to Pipelines</strong><p>Click <strong>Pipelines &amp; Deals</strong> under <strong>Sales</strong> in the sidebar.</p></div>
       <div class="step"><strong>Click "New Pipeline"</strong><p>Enter a name and optional description.</p></div>
-      <div class="step"><strong>Add Stages</strong><p>Each stage needs name, color, sort order, probability. Drag to reorder.</p></div>
-      <div class="step"><strong>Save</strong><p>The pipeline appears in the dashboard and opportunity screens.</p></div>
+      <div class="step"><strong>Add Stages</strong><p>Each stage needs name, color, sort order and probability.</p></div>
+      <div class="step"><strong>Save</strong><p>The pipeline appears on the <strong>Pipelines &amp; Deals</strong> screen and counts towards the dashboard <strong>Pipelines</strong> tile.</p></div>
     </div>
     <pre>POST /api/pipelines
 Authorization: Bearer &lt;token&gt;
@@ -507,7 +507,7 @@ Authorization: Bearer &lt;token&gt;
     <h3>Creating an Opportunity</h3>
     <div class="steps">
       <div class="step"><strong>Go to the Pipeline</strong><p>Open the pipeline where you want to add a deal.</p></div>
-      <div class="step"><strong>Click "+ Add Opportunity"</strong><p>A form slides in.</p></div>
+      <div class="step"><strong>Click "+ Deal"</strong><p>The <strong>New Deal</strong> dialog opens.</p></div>
       <div class="step"><strong>Set deal details</strong><p>Name is required. Set value, stage, expected close date. Optionally link a contact and/or company.</p></div>
       <div class="step"><strong>Save</strong><p>The opportunity appears in the correct stage column.</p></div>
     </div>
@@ -532,7 +532,7 @@ Authorization: Bearer ***
     <p>To advance an opportunity to the next stage:</p>
     <ul>
       <li><strong>Drag-and-drop</strong>  Drag an opportunity card from one stage column to another</li>
-      <li><strong>Change stage dropdown</strong>  Use the stage selector on the opportunity detail panel</li>
+      <li><strong>Change stage dropdown</strong>  Use the stage selector on the deal card in its stage column</li>
     </ul>
     <p>Both actions use:</p>
     <pre>PATCH /api/pipelines/:pipeline_id/stages/:stage_id/move/:opportunity_id
@@ -552,13 +552,13 @@ Authorization: Bearer ***
   </div>
   <div class="card">
     <h3>Opportunity Analytics</h3>
-    <p>The dashboard aggregates:</p>
+    <p>The dashboard carries three of these tiles, each read from <code>GET /api/dashboard/stats</code>:</p>
     <ul>
-      <li><strong>Total Deal Value</strong>  Sum of all open (not won/lost) opportunities</li>
-      <li><strong>Won Deal Value</strong>  Sum of all won opportunities</li>
-      <li><strong>Pipeline Stage Counts</strong>  Number of opportunities per stage per pipeline</li>
+      <li><strong>Opportunities</strong>  Opportunity count for the account</li>
+      <li><strong>Won Deal Value</strong>  Won opportunity value</li>
+      <li><strong>Pipelines</strong>  Number of pipelines</li>
     </ul>
-    <p>All computed server-side from <code>opportunities</code> table queries.</p>
+    <p>Per-stage counts are not shown anywhere.</p>
   </div>
 </section>
 
@@ -568,12 +568,12 @@ Authorization: Bearer ***
 
   <div class="card">
     <h3>Sales Group Overview</h3>
-    <p>The Sales group in the sidebar accordion menu contains four modules: <strong>Contacts</strong>, <strong>Companies</strong>, <strong>Pipelines</strong>, and <strong>Deals</strong>. The group is collapsed by default &mdash; click <strong>Sales</strong> in the sidebar to expand it.</p>
+    <p>The sidebar's <strong>Sales</strong> group holds one screen, <strong>Pipelines &amp; Deals</strong> (each pipeline's cards are its deals/opportunities). <strong>Contacts</strong> is a top-level sidebar item of its own, and <strong>Companies</strong> has no sidebar entry &mdash; open it with <strong>g</strong> then <strong>o</strong>. The group is collapsed by default &mdash; click <strong>Sales</strong> to expand it.</p>
     <div class="callout tip"><strong>Tip:</strong> Accordion menus keep your sidebar clean. Collapse groups you don't frequently use.</div>
   </div>
   <div class="card">
     <h3>Contacts</h3>
-    <p>Full contact management with search (<code>/api/contacts</code>), pagination (20/page), add/edit modals, and status tracking.</p>
+    <p>Contact management with search (<code>/api/contacts</code>, <code>GET /api/contacts/search</code>), pagination (50 rows per page by default) and add/edit dialogs. A contact has no status field and the list has no status column.</p>
     <pre>GET /api/contacts
 POST /api/contacts
 PATCH /api/contacts/:id</pre>
@@ -601,7 +601,7 @@ POST /api/pipelines/:pipeline_id/opportunities</pre>
 
   <div class="card">
     <h3>Marketing Group Overview</h3>
-    <p>Contains Campaigns, Email Sequences, Automation Rules, and Checklists. Expand by clicking <strong>Marketing</strong> in the sidebar.</p>
+    <p>Contains <strong>Campaigns</strong>, <strong>Lists</strong> and <strong>Analytics</strong>. Expand it by clicking <strong>Marketing</strong> in the sidebar.</p>
   </div>
 
   <div class="card">
@@ -616,7 +616,7 @@ POST /api/campaigns/:id/pause</pre>
 
   <div class="card">
     <h3>Email Sequences</h3>
-    <p>Build automated email sequences with multiple steps. Each sequence can have triggers, enrollments, and step-based delays. View step count, enrollment numbers, and activate/pause from the UI.</p>
+    <p>Build automated email sequences with multiple steps. Each sequence can have triggers, enrollments, and step-based delays. There is no separate Email Sequences screen &mdash; sequences are campaign records, managed under <strong>Marketing &gt; Campaigns</strong>.</p>
     <pre>GET /api/campaigns
 GET /api/campaigns/:id               (includes steps)
 GET /api/campaigns/:id/enrollments   (view enrolled contacts)</pre>
@@ -645,18 +645,18 @@ GET /api/checklists/instances</pre>
   </div>
 </section>
 
-<!-- ======= 9. OPERATIONS ======= -->
+<!-- ======= 9. EVENTS, PORTFOLIO & LISTS ======= -->
 <section id="operations">
-  <h2 class="sec-title"><span class="sec-num">9</span> Operations</h2>
+  <h2 class="sec-title"><span class="sec-num">9</span> Events, Portfolio &amp; Lists</h2>
 
   <div class="card">
-    <h3>Operations Group Overview</h3>
-    <p>Portfolio, lists, and the recorded event feed.</p>
+    <h3>Where these live</h3>
+    <p>There is no <strong>Operations</strong> group in the sidebar. The recorded event feed is API-only; portfolio companies are managed in the platform console under <strong>Portfolio Companies</strong>; lists live under <strong>Marketing &gt; Lists</strong>.</p>
   </div>
 
   <div class="card">
     <h3>Events</h3>
-    <p>View logged system events — each shows its type, description, related entity, and date.</p>
+    <p>Logged system events — each with its type, description, related entity and date — are read through the API. There is no Events screen in the console.</p>
     <pre>GET /api/events</pre>
   </div>
 
@@ -775,31 +775,31 @@ POST /api/public/contact</pre>
 
   <div class="card">
     <h3>Automation Group Overview</h3>
-    <p>The Automation group (sidebar icon 🤖) contains Agency Sequences, Directory Onboarding, Health Monitor, Message Templates, and Nurture Campaigns. These are the strategy engine features that power intelligent follow-up and client management.</p>
+    <p>The <strong>Automation</strong> group (sidebar icon ⚡) contains <strong>Rules</strong>, <strong>Tags</strong> and <strong>Lead Scoring</strong>. The strategy-engine screens this section used to name are not in the console; each card below says what is API-only instead.</p>
   </div>
 
   <div class="card">
     <h3>Agency Sequences</h3>
-    <p>Dashboard overview of all automated sequences running across your agency users. Shows active rules, total rules, total executions, and a detailed table of each rule with trigger/action preview.</p>
+    <p>There is no Agency Sequences screen. Rules are read through <code>GET /api/automation/rules</code>; the <strong>Rules</strong> screen under <strong>Automation</strong> is the rule UI.</p>
     <pre>GET /api/automation/rules?agency=true</pre>
   </div>
 
   <div class="card">
     <h3>Directory Onboarding</h3>
-    <p>Track directory checklist progress for new listings and profiles. Shows entity, template name, progress bar, status (in_progress/completed), and start date. Uses checklist instances filtered for directory onboarding.</p>
+    <p>There is no Directory Onboarding screen. Checklist instances (entity, stage, progress, start date) are rendered on the <strong>Checklists</strong> screen under <strong>Workflow</strong> and read through <code>GET /api/checklists/instances</code>.</p>
     <pre>GET /api/checklists/instances?directory=true</pre>
   </div>
 
   <div class="card">
     <h3>Health Monitor</h3>
-    <p>Monitor account health scores for contacts and companies. Click "Run Health Check" to trigger an analysis, which categorizes entities as Healthy (score 70+), At Risk (40-69), or Critical (below 40). View score history and risk levels.</p>
+    <p>Account health is computed by the API: <code>POST /api/monitoring/account-health/check</code> runs an analysis and <code>GET /api/monitoring/health</code> reads it. In the console, the platform-admin <strong>Monitoring</strong> screen renders those endpoints; there is no "Run Health Check" button in the tenant workspace.</p>
     <pre>POST /api/monitoring/account-health/check
 GET /api/monitoring/health</pre>
   </div>
 
   <div class="card">
     <h3>Message Templates</h3>
-    <p>Create reusable message templates for email and SMS communications. Each template has a name, channel (email/SMS), subject, body content, and optional variables definition. Templates can be referenced by checklist stages and automation rules.</p>
+    <p>Create reusable message templates for email and SMS communications. Each template has a name, channel, subject and body. Manage them in the console under <strong>Communication &gt; Email Templates</strong>.</p>
     <pre>GET /api/comms/templates
 POST /api/comms/templates
 PATCH /api/comms/templates/:id
@@ -808,7 +808,7 @@ DELETE /api/comms/templates/:id</pre>
 
   <div class="card">
     <h3>Nurture Campaigns</h3>
-    <p>View contact enrollments in nurture email sequences. For each campaign, shows enrolled contacts, their current step, status (pending/active/completed), and enrollment date. Monitor engagement and progression through your nurture flows.</p>
+    <p>Contact enrollments are read through <code>GET /api/campaigns/:id/enrollments</code>. There is no Nurture Campaigns screen; the campaigns themselves are managed under <strong>Marketing &gt; Campaigns</strong>.</p>
     <pre>GET /api/campaigns/:id/enrollments</pre>
   </div>
 </section>
@@ -818,32 +818,32 @@ DELETE /api/comms/templates/:id</pre>
   <h2 class="sec-title"><span class="sec-num">11</span> Settings &amp; Administration</h2>
 
   <div class="card">
-    <h3>Settings (All Users)</h3>
-    <p>The Settings page has three tabs:</p>
-    <ul>
-      <li><strong>General</strong> &mdash; Application name, favicon emoji, footer text</li>
-      <li><strong>SEO</strong> &mdash; Page title, meta description, keywords, Open Graph tags for Facebook/LinkedIn/Discord previews</li>
-      <li><strong>Branding</strong> &mdash; Custom accent color, background color, surface color (hex values)</li>
-    </ul>
-    <div class="callout info"><strong>Persistence:</strong> Settings are stored in localStorage and persist across sessions.</div>
+    <h3>Site Configuration (Platform Admin)</h3>
+    <p>General details, SEO/meta (title, description, keywords, Open Graph) and branding colours are edited in the
+       platform console under <strong>Admin Settings &gt; Configuration</strong> ("Site Configuration"), which reads and
+       writes <code>GET/PUT /api/admin/site</code> &mdash; server-side, not in the browser. The tenant workspace has no
+       Settings page of its own.</p>
   </div>
 
   <div class="card">
-    <h3>Admin Section (Agency Admin Only)</h3>
-    <p>The Admin section at the bottom of the sidebar is only visible to users with the <code>agency_admin</code> role. Expand it by clicking the Admin header. Contains:</p>
+    <h3>Platform Console (Platform Admin Only)</h3>
+    <p>Entries below the <strong>── ADMIN ──</strong> divider appear only for a user the server marks as a platform
+       admin (<code>users.is_platform_admin</code>, carried in the session as <code>platform_admin</code>). A tenant
+       <code>owner</code>/<code>admin</code> role is not platform authority. The entries are:</p>
     <ul>
-      <li><strong>Users</strong> &mdash; Manage all user accounts. View details, assign plans, impersonate, activate/suspend.</li>
-      <li><strong>Plans</strong> &mdash; Create and manage subscription plans with 18 toggleable feature flags. Set pricing, contact/deal/user limits.</li>
-      <li><strong>Audit Log</strong> &mdash; Track administrative actions and system events.</li>
-      <li><strong>Telnyx Config</strong> &mdash; Configure Telnyx API keys for SMS and voice services. View available phone numbers.</li>
-      <li><strong>Feature Management</strong> &mdash; View and toggle all available feature flags that can be assigned to plans.</li>
-      <li><strong>System Health</strong> &mdash; Server health dashboard showing API and database status.</li>
+      <li><strong>Users</strong> &mdash; Every user on the platform with the workspace they belong to (read-only list).</li>
+      <li><strong>Revenue &gt; Billing &amp; Plans</strong> &mdash; Subscription plans, pricing and limits.</li>
+      <li><strong>Platform &gt; Webhooks</strong> (a placeholder screen today), <strong>Widgets</strong>, <strong>Native Apps</strong>, <strong>Audit Log</strong>, <strong>Monitoring</strong>.</li>
+      <li><strong>Communication Admin &gt; Telnyx Admin</strong> and <strong>Private Email Admin</strong>.</li>
+      <li><strong>Modules &amp; Plans</strong> &mdash; the module registry: switch modules and individual features on or off per plan, and override a single workspace.</li>
+      <li><strong>Admin Settings &gt; Configuration</strong> &mdash; site configuration (SEO, legal pages, homepage).</li>
     </ul>
+    <p>There is no Impersonate button in the console: the API can start and stop impersonation, but no screen calls it.</p>
   </div>
 
   <div class="card">
     <h3>Admin: Users &amp; Workspaces</h3>
-    <p>People live in the <strong>Users</strong> tab &#8212; every workspace's users in one list with name, email, role and joined date, 50 per page. Workspaces themselves are listed separately.</p>
+    <p>People live on the <strong>Users</strong> screen &#8212; every workspace's users in one list with name, email, role and joined date.</p>
     <pre>GET /api/admin/users
 GET /api/admin/tenants</pre>
   </div>
@@ -864,9 +864,9 @@ POST /api/admin/tenants/:id/overrides</pre>
     <ul>
       <li><strong>Pricing:</strong> Monthly and yearly price, with optional payment link</li>
       <li><strong>Limits:</strong> Max contacts, deals, and users (set to -1 for unlimited)</li>
-      <li><strong>Feature Toggles:</strong> 18 individual feature flags that enable/disable capabilities</li>
+      <li><strong>Feature Toggles:</strong> the boolean flags of the module registry (<a href="#plans-features">the live list is here</a>)</li>
     </ul>
-    <p><strong>Available features:</strong> API Access, AI Assistant, Campaigns, White Label, Portfolio, Automation, SMS, Email Sequences, Checklists, Directory Onboarding, Account Health, CRM Migration, Call Logs, Message Templates, Nurture Campaigns, Agency Sequences, Lists, Advanced Reports</p>
+    <p><strong>Available features</strong> are not a fixed list: they are the boolean flags in the module registry (<code>modules</code> / <code>module_features</code>) &mdash; the same switches the <strong>Modules &amp; Plans</strong> panel renders. See <a href="#plans-features">Plans &amp; Feature Access</a> for the flags live today.</p>
     <pre>GET /api/billing/plans
 POST /api/billing/plans
 PATCH /api/billing/plans/:id
@@ -875,8 +875,11 @@ GET /api/billing/features</pre>
   </div>
 
   <div class="card">
-    <h3>Admin: Telnyx Configuration</h3>
-    <p>Configure Telnyx integration for SMS and voice. Enter API key (stored securely), messaging profile ID, and webhook secret. View available phone numbers after saving.</p>
+    <h3>Admin: Telnyx Configuration (API only)</h3>
+    <p>Telnyx provider settings are read and written through the API: <code>GET /api/telnyx/config</code>,
+       <code>PUT /api/telnyx/config</code>, and <code>GET /api/telnyx/available</code> for the phone numbers on
+       the account. The console's <strong>Telnyx Admin</strong> entry (Communication Admin group) is a placeholder
+       screen today, so there is no form to paste the key into.</p>
     <pre>GET /api/telnyx/config
 PUT /api/telnyx/config
 GET /api/telnyx/available</pre>
@@ -890,7 +893,7 @@ GET /api/telnyx/available</pre>
 
   <div class="card">
     <h3>Free Access &amp; Upgrades</h3>
-    <p>CoreSwift CRM offers free access with a limited feature set. To unlock additional features, upgrade in-app through the Plans page. Feature availability is determined by your plan's feature flags.</p>
+    <p>CoreSwift CRM offers free access with a limited feature set. When your plan does not cover something, the console shows an upgrade banner with an <strong>Upgrade Now</strong> button. Feature availability is determined by your plan's feature flags.</p>
     <div class="callout tip"><strong>Tip:</strong> The free plan includes basic CRM features. Upgrade to access automation, campaigns, SMS, and advanced capabilities.</div>
   </div>
 </section>
@@ -923,7 +926,7 @@ GET /api/telnyx/available</pre>
 Content-Type: application/json
 
 { "name": "VIP", "color": "#F59E0B", "category_id": "optional-uuid" }</pre></div>
-      <div class="step"><strong>Assign to Contacts/Companies</strong><p>Open any contact or company detail and click "Assign Tag".</p></div>
+      <div class="step"><strong>Assign to Contacts</strong><p>Click <strong>Tags</strong> on a contact's row and pick the tag to assign.</p></div>
       <div class="step"><strong>Filter by Tag</strong><p>Use the tag filter in the contacts and companies list views.</p></div>
     </div>
   </div>
@@ -956,7 +959,7 @@ Content-Type: application/json
   <div class="card">
     <h3>Managing Lists</h3>
     <div class="steps">
-      <div class="step"><strong>Go to Lists</strong><p>Click <strong>Lists</strong> in the sidebar.</p></div>
+      <div class="step"><strong>Go to Lists</strong><p>Click <strong>Lists</strong> under <strong>Marketing</strong> in the sidebar.</p></div>
       <div class="step"><strong>Create a List</strong><p>Name, description, and choose <code>static</code> or <code>dynamic</code>. For dynamic, set rules.</p><pre>POST /api/lists
 Content-Type: application/json
 
@@ -1009,7 +1012,9 @@ X-Satellite-Key: &lt;full-api-key&gt;</pre>
 
   <div class="card">
     <h3>Outgoing Webhook Endpoints (Sending Data)</h3>
-    <p>You can configure endpoints that CoreSwift will POST events to. Configure these in the Webhooks section:</p>
+    <p>You can register endpoints that CoreSwift will POST events to (create, list, update and delete below).
+       There is no configuration form in the console &mdash; the platform console's <strong>Webhooks</strong>
+       screen is a placeholder today &mdash; so these calls go straight to the API:</p>
     <pre>POST /api/integrations/webhooks
 Authorization: Bearer &lt;token&gt;
 
@@ -1058,7 +1063,7 @@ Response: { "ok": true }</pre>
 
   <div class="card">
     <h3>Account Settings</h3>
-    <p>Under <strong>Settings &gt; Account</strong>, you can view and update your profile:</p>
+    <p>Under <strong>Settings &gt; Profile</strong> you can view and update your profile:</p>
     <ul>
       <li><strong>Name</strong>  Your display name</li>
       <li><strong>Email</strong>  Login email (contact support to change)</li>
@@ -1072,7 +1077,7 @@ Authorization: Bearer &lt;token&gt;</pre>
   <div class="card">
     <h3>Change Password</h3>
     <div class="steps">
-      <div class="step"><strong>Go to Settings &gt; Password</strong><p>Click the password tab.</p></div>
+      <div class="step"><strong>Go to Settings &gt; Profile</strong><p>Use the <strong>Change Password</strong> card &mdash; there is no separate password tab.</p></div>
       <div class="step"><strong>Enter current password</strong><p>For security verification.</p></div>
       <div class="step"><strong>Enter new password</strong><p>Must be at least 8 characters.</p></div>
       <div class="step"><strong>Confirm and Save</strong><p>Your token remains valid. Next login uses the new password.</p></div>
@@ -1100,12 +1105,12 @@ PATCH /api/account/:id — Update name</pre>
     <p>API keys allow satellite apps to authenticate when sending data to CoreSwift via webhooks. Each key has:</p>
     <ul>
       <li><strong>Key Prefix</strong>  First 4 characters (used in webhook URLs)</li>
-      <li><strong>Full Key</strong>  Shown once at creation; stored as an Argon2 hash</li>
+      <li><strong>Full Key</strong>  Shown once at creation; the server stores only a hash</li>
       <li><strong>Source App</strong>  Which app this key is for (funnelswift, incentiveswift, etc.)</li>
       <li><strong>Status</strong>  Active or Disabled</li>
       <li><strong>Last Used</strong>  Timestamp of most recent usage</li>
     </ul>
-    <p>Manage API keys from <strong>Settings &gt; API Keys</strong>. Satellite API keys are stored in the <code>satellite_api_keys</code> table with hashed keys for security.</p>
+    <p>Satellite keys have no console screen: they are provisioned per tenant by the operator and stored in the <code>satellite_api_keys</code> table (key prefix, source app, active flag, last used). The keys a workspace mints itself are the <strong>Lead-delivery keys</strong> (<code>csk_…</code>) in <strong>Settings &gt; Integration Center</strong>, backed by <code>POST /api/personal-api-keys</code> (list, rotate and revoke alongside).</p>
   </div>
 
   <div class="card">
@@ -1123,35 +1128,9 @@ PATCH /api/account/:id — Update name</pre>
 <section id="themes">
   <h2 class="sec-title"><span class="sec-num">15</span> Themes &amp; Appearance</h2>
   <div class="card">
-    <h3>Personalize Your Workspace</h3>
-    <p>CoreSwift lets you choose from 9 preset themes or create your own custom color scheme. The theme affects the sidebar gradient, button colors, card accents, and overall look of your workspace.</p>
-  </div>
-  <div class="card">
-    <h3>Preset Themes</h3>
-    <table>
-      <thead><tr><th>Theme</th><th>Vibe</th><th>Sidebar</th></tr></thead>
-      <tbody>
-        <tr><td>Indigo</td><td>Professional, default</td><td>Indigo gradient</td></tr>
-        <tr><td>Emerald</td><td>Growth, sales-focused</td><td>Green gradient</td></tr>
-        <tr><td>Rose</td><td>Warm, relationship-driven</td><td>Rose/pink gradient</td></tr>
-        <tr><td>Amber</td><td>Sunny, casual</td><td>Yellow/orange gradient</td></tr>
-        <tr><td>Purple</td><td>Creative, modern</td><td>Purple gradient</td></tr>
-        <tr><td>Cyan</td><td>Clean, tech</td><td>Cyan/blue gradient</td></tr>
-        <tr><td>Slate</td><td>Minimal, dark sidebarr</td><td>Gray gradient</td></tr>
-        <tr><td>Violet</td><td>Bold, premium</td><td>Deep violet gradient</td></tr>
-        <tr><td>Teal</td><td>Executive, calm</td><td>Teal gradient</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="card">
-    <h3>Custom Theme</h3>
-    <p>In <strong>Settings &gt; Appearance</strong>, you can customize your theme by setting:</p>
-    <ul>
-      <li><strong>Primary Color</strong> — The main accent color used for buttons, links, and active elements</li>
-      <li><strong>Sidebar Start</strong> — Top color of the sidebar gradient</li>
-      <li><strong>Sidebar End</strong> — Bottom color of the sidebar gradient</li>
-    </ul>
-    <p>Themes apply instantly as you select them. No page reload needed. All team members in the same workspace can set their own theme independently.</p>
+    <h3>One built-in look</h3>
+    <p>There is no preset-theme picker and no <strong>Appearance</strong> screen in the console today &mdash; the
+       workspace ships a single built-in look. (A widget's own form carries an accent colour for that widget.)</p>
   </div>
 </section>
 
@@ -1159,22 +1138,9 @@ PATCH /api/account/:id — Update name</pre>
 <section id="reminders">
   <h2 class="sec-title"><span class="sec-num">16</span> Deal Reminders</h2>
   <div class="card">
-    <h3>Set Reminders on Any Deal</h3>
-    <p>From any deal detail view, you can set a reminder to follow up. When the reminder is due, it appears as an overdue badge on the dashboard reminder panel — no email notifications, just an in-app nudge.</p>
-  </div>
-  <div class="card">
-    <h3>Reminder Options</h3>
-    <ul>
-      <li><strong>1 Hour</strong> — Quick follow-up, e.g. after a call</li>
-      <li><strong>3 Hours</strong> — Same-day follow-up</li>
-      <li><strong>Tomorrow</strong> — Next business day check-in</li>
-      <li><strong>3 Days</strong> — Short-term nurture reminder</li>
-      <li><strong>1 Week</strong> — Weekly check-in</li>
-    </ul>
-  </div>
-  <div class="card">
-    <h3>Overdue Reminders</h3>
-    <p>The dashboard shows an <strong>Overdue</strong> count for reminders that have passed. Click the count to view all overdue items. Reminders are scoped to your workspace and user.</p>
+    <h3>Not in the console today</h3>
+    <p>There is no reminder control on a deal, no reminder panel on the dashboard and no Overdue count, and no
+       route that lists or creates reminders &mdash; so there is nothing to set up here yet.</p>
   </div>
 </section>
 
@@ -1182,20 +1148,10 @@ PATCH /api/account/:id — Update name</pre>
 <section id="forecast">
   <h2 class="sec-title"><span class="sec-num">17</span> Revenue Forecast</h2>
   <div class="card">
-    <h3>Pipeline Forecast View</h3>
-    <p>The Forecast page shows your projected revenue based on deals in your pipeline. It calculates a weighted pipeline value by multiplying each deal's value by its stage probability.</p>
-  </div>
-  <div class="card">
-    <h3>How It Works</h3>
-    <ul>
-      <li><strong>Total Pipeline Value</strong> — Sum of all deal values across all stages</li>
-      <li><strong>Weighted Pipeline Value</strong> — Sum of (deal value × stage probability) for each deal</li>
-      <li><strong>Bar Chart by Stage</strong> — Visual breakdown of total deal value per stage, with the won stage highlighted</li>
-    </ul>
-  </div>
-  <div class="card">
-    <h3>Interpretation</h3>
-    <p>The weighted pipeline value gives a realistic estimate of expected revenue. For example, if you have $10,000 in the Discovery stage (30% probability) and $15,000 in the Negotiation stage (70% probability), your weighted forecast is $3,000 + $10,500 = $13,500.</p>
+    <h3>Not in the console today</h3>
+    <p>There is no Forecast screen and no forecast endpoint, so no weighted-pipeline view is shown anywhere.
+       Deal value by stage is visible on <strong>Sales &gt; Pipelines &amp; Deals</strong>, which lists each
+       pipeline's deals with its won / open / lost counts.</p>
   </div>
 </section>
 
@@ -1220,7 +1176,7 @@ PATCH /api/account/:id — Update name</pre>
     <h3>Import Contacts from CSV</h3>
     <p>Migrate your existing contacts from any CRM or spreadsheet with a single CSV import:</p>
     <ol>
-      <li><strong>Go to Contacts</strong> and click the import button (upload icon).</li>
+      <li><strong>Go to Contacts</strong> and click <strong>⬆ Import CSV</strong>.</li>
       <li><strong>Upload your CSV</strong> via drag-and-drop or file browser.</li>
       <li><strong>Preview</strong> — CoreSwift reads the header row and shows you a preview of how fields will be mapped.</li>
       <li><strong>Batch Import</strong> — Click Import and the system creates contacts in bulk (up to 500 per batch).</li>
@@ -1228,16 +1184,14 @@ PATCH /api/account/:id — Update name</pre>
   </div>
   <div class="card">
     <h3>Export to CSV</h3>
-    <p>Export your contacts, deals, or any list to CSV with one click:</p>
+    <p>The console exports contacts to CSV &mdash; no other table has an export control:</p>
     <ul>
-      <li><strong>From Contacts</strong> — Click the export button to download all contacts as CSV</li>
-      <li><strong>From Lists</strong> — Export list members to CSV</li>
-      <li><strong>From Deals</strong> — Export deal data including value, stage, contact, and close date</li>
+      <li><strong>From Contacts</strong> — Click <strong>⬇ Export CSV</strong> on the Contacts screen to download all contacts as CSV</li>
     </ul>
   </div>
   <div class="card">
     <h3>Auto-Create Contact from Deal</h3>
-    <p>When creating a deal, you can simultaneously create a new contact instead of selecting an existing one. Simply fill in the name, email, and phone fields right in the deal form — CoreSwift creates the contact first, then links the deal. This saves a step and keeps your data clean.</p>
+    <p>The <strong>New Deal</strong> dialog links the deal to one of your existing contacts from a dropdown; it has no inline name/email/phone fields, so create the contact first if it is missing.</p>
     <blockquote>This pattern is also available in sister apps (FunnelSwift and IncentiveSwift) for seamless lead-to-deal creation.</blockquote>
   </div>
   <div class="card">
