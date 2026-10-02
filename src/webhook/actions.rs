@@ -778,53 +778,63 @@ pub async fn route_action(
             let name = body.get("business_name").and_then(|v| v.as_str());
             let state = body.get("current_state").and_then(|v| v.as_str());
             let sub = body.get("subscription_active").and_then(|v| v.as_bool());
-            let stripe = body.get("stripe_customer_id").and_then(|v| v.as_str());
+
+            // `stripe_customer_id` — RETIRED (decision, kanban t_b842b6a3). It is NOT a field of a
+            // business profile and this action does not store it. WHY IT CANNOT BE STORED:
+            // `business_profiles` has no such column in the LIVE database (information_schema, 19
+            // columns; `\d` agrees) and `migrations/023`'s `CREATE TABLE IF NOT EXISTS` declares one
+            // that can never come into existence, because `migrations/000_baseline_live_schema.sql`
+            // creates the table first WITHOUT it — so the declaration and the schema disagree and
+            // every caller that passed this field got SQLSTATE 42703
+            // (`column "stripe_customer_id" ... does not exist`). The field was inherited scaffolding
+            // of the multi-directory (ZaarHub) template: there the value has a real home with readers
+            // and writers (multi_directory.directory_tiers.stripe_customer_id,
+            // src/handlers/monetization.rs), and CoreSwift already DROPPED the 13 inherited,
+            // never-read copies of that schema in migration 095 (t_d3e0bab6) — including
+            // `business_subscriptions`, the per-listing subscription table. Nothing in this crate
+            // reads or writes a business-profile Stripe customer id (this action was its only
+            // mention), and no Stripe path could supply one: the checkout and both provider webhooks
+            // were RETIRED 2026-09-25 (t_0fe500d4) and the live DB has no stripe customer column at
+            // all outside `slot_bookings`. Adding the column (the other arm) would create write-only
+            // data with no reader. The refusal keeps the STATUS every such caller already saw (400)
+            // and changes only the message — a raw 42703 becomes the decided answer. A JSON `null` is
+            // not a value and stays ignored, exactly as the old `as_str()` read treated it.
+            if body
+                .get("stripe_customer_id")
+                .and_then(|v| v.as_str())
+                .is_some()
+            {
+                return Err(
+                    "stripe_customer_id is not a field of a business profile: this action stores \
+                     business_name, current_state and subscription_active only"
+                        .to_string(),
+                );
+            }
 
             // Nothing to do — the same refusal the old builder answered with an empty SET list.
-            if name.is_none() && state.is_none() && sub.is_none() && stripe.is_none() {
+            if name.is_none() && state.is_none() && sub.is_none() {
                 return Err("no fields to update".to_string());
             }
 
-            // `stripe_customer_id` is NOT a column of the LIVE `business_profiles` table — measured in
-            // information_schema (0 matches) and with EXPLAIN against the live database; the
-            // from-zero baseline `migrations/000_baseline_live_schema.sql` creates the table without
-            // it while `migrations/023` declares one (its `CREATE TABLE IF NOT EXISTS` is a no-op
-            // behind the baseline), so the declaration and the schema disagree. Passing this field
-            // therefore FAILED for every caller BEFORE this change too (SQLSTATE 42703
-            // `column "stripe_customer_id" ... does not exist`). The second arm keeps that outcome
-            // instead of silently dropping the field, so this refactor changes no reachable
-            // behaviour; the declaration/schema drift is carded separately.
             const UPDATE_LISTING: &str = "UPDATE business_profiles SET \
                  business_name = COALESCE($1::text, business_name), \
                  current_state = COALESCE($2::user_state, current_state), \
                  subscription_active = COALESCE($3::boolean, subscription_active), \
                  updated_at = NOW() \
                  WHERE id = $4";
-            const UPDATE_LISTING_STRIPE: &str = "UPDATE business_profiles SET \
-                 business_name = COALESCE($1::text, business_name), \
-                 current_state = COALESCE($2::user_state, current_state), \
-                 subscription_active = COALESCE($3::boolean, subscription_active), \
-                 stripe_customer_id = $4::text, \
-                 updated_at = NOW() \
-                 WHERE id = $5";
-            let (sql, with_stripe): (&'static str, bool) = if stripe.is_some() {
-                (UPDATE_LISTING_STRIPE, true)
-            } else {
-                (UPDATE_LISTING, false)
-            };
 
-            let mut query = sqlx::query(sql).bind(name).bind(state).bind(sub);
-            if with_stripe {
-                query = query.bind(stripe);
-            }
-            query
+            sqlx::query(UPDATE_LISTING)
+                .bind(name)
+                .bind(state)
+                .bind(sub)
                 .bind(profile_id)
                 .execute(db)
                 .await
                 .map_err(|e| format!("DB error: {}", e))?;
 
             // Log the update event. The payload names the columns the caller supplied, in the order
-            // the old builder listed them.
+            // the old builder listed them. `stripe_customer_id` can never appear here: it is refused
+            // above (see its comment), so no successful call can carry it.
             let mut updated_fields: Vec<&str> = vec![];
             if name.is_some() {
                 updated_fields.push("business_name");
@@ -834,9 +844,6 @@ pub async fn route_action(
             }
             if sub.is_some() {
                 updated_fields.push("subscription_active");
-            }
-            if stripe.is_some() {
-                updated_fields.push("stripe_customer_id");
             }
             let _ = sqlx::query(
                 "INSERT INTO event_logs (id, business_profile_id, event_name, metadata) VALUES ($1, $2, $3, $4)"
