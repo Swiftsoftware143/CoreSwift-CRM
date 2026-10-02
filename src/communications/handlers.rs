@@ -431,7 +431,9 @@ pub async fn get_providers(
     let mut out = merged.as_object().cloned().unwrap_or_default();
     out.insert(
         "email_transport".to_string(),
-        providers::email_transport_status(byok.as_ref()),
+        // Resolved from the admin-editable platform row FIRST (then the environment), which is the
+        // order the delivery path uses — so this surface cannot name a store the send path ignores.
+        providers::email_transport_status_live(&s.db, byok.as_ref()).await,
     );
     Ok(Json(Value::Object(out)))
 }

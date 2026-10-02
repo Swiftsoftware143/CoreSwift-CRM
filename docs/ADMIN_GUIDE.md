@@ -215,6 +215,61 @@ To remove an override and let a tenant revert to their plan defaults, PATCH with
 
 The override row remains but all fields are null, meaning the plan defaults apply for every limit.
 
+## System Email (Platform Mail Transport)
+
+Where: **Admin console → Platform Email → System Email** (`admin.coreswiftcrm.com`).
+
+This is the mail transport CoreSwift itself sends through — the provider and credential used by every
+workspace that has NOT configured its own sending identity. Until this panel existed the credential
+lived only in the container environment (`EMAIL_API_URL` / `EMAIL_API_KEY` / `EMAIL_FROM`), so it could
+not be seen or rotated without a shell edit of `/etc/swift/env/coreswift.env` plus a container
+recreate. It is now stored in the `admin_settings` row keyed `email` and edited from the panel.
+
+### What the panel shows
+
+- **Status** — configured, or not configured at all.
+- **Carried by** — `database` (the credential saved here), `environment` (the server variables), or
+  `database+environment` (the row is filled in part and the environment completes it).
+- **Sending domain / From** — what a receiver will see.
+- **Server environment** — whether `EMAIL_API_URL` and `EMAIL_API_KEY` are present (presence only,
+  never values).
+
+### What the panel edits
+
+| Field | Meaning |
+|---|---|
+| Provider | The platform transport CoreSwift carries (`mailgun`) |
+| Send endpoint (api_url) | Full send endpoint, e.g. `https://api.mailgun.net/v3/mg.example.com/messages`. Empty = use `EMAIL_API_URL` |
+| From name | Display name on the message |
+| From address | Must be an address on the sending domain, or receivers reject the message |
+| API key | The provider credential. Leave the dots to keep the stored key; clear the field to remove it |
+
+Buttons: **Save credential**, **Send test email** (a real send, recorded in the Communications Log
+with the provider's own answer), **Use server environment** (removes the saved credential so the
+`EMAIL_*` variables carry mail again).
+
+### Resolution order
+
+1. the field in the `admin_settings` row keyed `email`;
+2. the `EMAIL_*` variable for **that same field**;
+3. nothing — which is reported as *not configured*.
+
+The order is per field, so a half-filled row still sends (a rotated key with no endpoint of its own
+rides on `EMAIL_API_URL`), and an empty row is not "broken" — it means the environment carries mail.
+
+### API
+
+| Method | Route | Purpose |
+|---|---|---|
+| GET | `/api/admin/email-config` | Masked transport: status, which store carries it, key length — never the key |
+| PUT | `/api/admin/email-config` | Save provider / api_url / api_key / from_address / from_name |
+| DELETE | `/api/admin/email-config` | Remove the saved credential, return to `EMAIL_*` |
+| POST | `/api/admin/email-config/test` | Send one real message through the platform transport |
+
+All four are platform-admin only. The credential is sealed at rest with the app's `enc:v1:` envelope
+(the same one `provider_keys` uses, under a scope of its own), so a database dump yields no usable
+key, and no read route returns the key or a digest of it.
+
 ## Deployment
 
 ```bash

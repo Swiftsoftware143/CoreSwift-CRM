@@ -11,7 +11,12 @@
 //! GET  /api/admin/tenants — list all tenants (admin)
 //! GET  /api/admin/users — list users across all tenants (admin)
 //! POST /api/admin/portfolio-sync — cross-app sync
+//! GET  /api/admin/email-config — platform mail transport, masked (admin)
+//! PUT  /api/admin/email-config — save the platform provider + credential (admin)
+//! DELETE /api/admin/email-config — drop the stored override, use the environment (admin)
+//! POST /api/admin/email-config/test — send a real message through the platform transport (admin)
 
+pub mod email_config;
 pub mod handlers;
 pub mod site_handler;
 
@@ -53,6 +58,19 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route(
             "/site",
             axum::routing::get(site_handler::get_site).put(site_handler::update_site),
+        )
+        // The PLATFORM mail transport (provider + credential) — the half that used to live only in
+        // the container environment, so it could be neither seen nor rotated from the panel
+        // (kanban t_6a330ed2). GET is masked; DELETE drops the override and returns to EMAIL_*.
+        .route(
+            "/email-config",
+            axum::routing::get(email_config::get_config)
+                .put(email_config::update_config)
+                .delete(email_config::delete_config),
+        )
+        .route(
+            "/email-config/test",
+            axum::routing::post(email_config::test_config),
         )
         // Data-driven module & feature registry (CS-25..CS-27). The admin assigns MODULES and
         // individual FEATURES of each module to plans here; the catalogue itself lives in the

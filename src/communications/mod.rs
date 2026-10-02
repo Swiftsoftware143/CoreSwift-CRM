@@ -4,6 +4,7 @@
 //! The dispatcher writes to outbound_messages; this module picks up and sends.
 
 pub mod handlers;
+pub mod platform_mail_config;
 pub mod providers;
 
 use crate::AppState;

@@ -221,13 +221,28 @@ fn env_nonempty(key: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-/// The platform's own mail transport. `None` when it is incomplete — and the missing variables
-/// are named at ERROR level (names only, never values) so an operator sees a misconfiguration
-/// instead of a pile of failed rows.
+/// The raw `EMAIL_*` trio that the platform transport used to be, as `(url, key, from)`.
+///
+/// Exposed so `platform_mail_config` can complete a PARTIALLY filled admin row field by field
+/// (a rotated key with no endpoint of its own still rides on `EMAIL_API_URL`) — one reader of the
+/// environment, so the fallback cannot drift from the transport.
+pub fn platform_mail_env() -> (Option<String>, Option<String>, Option<String>) {
+    (
+        env_nonempty("EMAIL_API_URL"),
+        env_nonempty("EMAIL_API_KEY"),
+        env_nonempty("EMAIL_FROM"),
+    )
+}
+
+/// The platform's own mail transport, read from the ENVIRONMENT only. `None` when it is incomplete
+/// — and the missing variables are named at ERROR level (names only, never values) so an operator
+/// sees a misconfiguration instead of a pile of failed rows.
+///
+/// This is the FALLBACK half: the delivery path resolves `platform_mail_config::resolved(db)`,
+/// which prefers the admin-editable row. Kept public and environment-only so the pure resolution
+/// policy stays unit-testable without a database.
 pub fn platform_mail() -> Option<PlatformMail> {
-    let url = env_nonempty("EMAIL_API_URL");
-    let key = env_nonempty("EMAIL_API_KEY");
-    let from = env_nonempty("EMAIL_FROM");
+    let (url, key, from) = platform_mail_env();
     match (url, key, from) {
         (Some(url), Some(api_key), Some(from)) => Some(PlatformMail { url, api_key, from }),
         (url, key, from) => {
@@ -248,6 +263,17 @@ pub fn platform_from() -> Option<String> {
     env_nonempty("EMAIL_FROM")
 }
 
+/// The Mailgun domain inside a send endpoint (`https://api.mailgun.net/v3/<domain>/messages`).
+/// Display only — one parser, so the transport status and the admin panel cannot name different
+/// domains for the same URL.
+pub fn domain_of(url: &str) -> Option<String> {
+    url.split("/v3/")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .map(|d| d.to_string())
+        .filter(|d| !d.is_empty())
+}
+
 /// Can a delivery attempt be made at all, and on which transport? Used by the UI/API surface so
 /// "email is not configured" is visible *before* somebody wonders why nothing arrived.
 ///
@@ -255,6 +281,23 @@ pub fn platform_from() -> Option<String> {
 /// settings store and the Private Email store), so the surface cannot disagree with what actually
 /// happens to a queued message. It is the display half only — no key can reach this function.
 pub fn email_transport_status(byok: Option<&ByokDisplay>) -> Value {
+    transport_status_from(byok, platform_mail())
+}
+
+/// The same answer with the platform transport resolved from the admin-editable row FIRST
+/// (`platform_mail_config::resolved`), falling back to `EMAIL_*` — the order the delivery path
+/// actually uses, so this surface cannot report "environment" while a saved credential carries the
+/// message (kanban t_6a330ed2).
+pub async fn email_transport_status_live(db: &PgPool, byok: Option<&ByokDisplay>) -> Value {
+    transport_status_from(
+        byok,
+        super::platform_mail_config::resolved(db)
+            .await
+            .map(|t| t.mail()),
+    )
+}
+
+fn transport_status_from(byok: Option<&ByokDisplay>, platform: Option<PlatformMail>) -> Value {
     let (source, domain, from, byok_source) = match byok {
         Some(b) => (
             TransportSource::Tenant,
@@ -266,14 +309,9 @@ pub fn email_transport_status(byok: Option<&ByokDisplay>) -> Value {
             ),
             Some(b.source),
         ),
-        None => match platform_mail() {
+        None => match platform {
             Some(p) => {
-                let domain = p
-                    .url
-                    .split("/v3/")
-                    .nth(1)
-                    .and_then(|rest| rest.split('/').next())
-                    .map(|d| d.to_string());
+                let domain = domain_of(&p.url);
                 (TransportSource::Platform, domain, Some(p.from), None)
             }
             None => (TransportSource::None, None, None, None),
@@ -295,6 +333,49 @@ pub fn email_transport_status(byok: Option<&ByokDisplay>) -> Value {
             TransportSource::None => "no email transport is configured for this workspace",
         }
     })
+}
+
+/// A delivery config carrying the PLATFORM transport, for the admin test-send.
+///
+/// `load_delivery_config` resolves the WORKSPACE's own BYOK first, so reusing it here would
+/// sometimes test a different transport than the operator is looking at. This builds the config
+/// from the platform credential explicitly; everything downstream is the same code the worker and
+/// the workspace send path use, so the answer is the provider's real answer.
+pub fn platform_test_config(
+    tenant_id: Uuid,
+    msg_id: Uuid,
+    to: &str,
+    subject: &str,
+    body: &str,
+    mail: &PlatformMail,
+) -> DeliveryConfig {
+    DeliveryConfig {
+        tenant_id,
+        msg_id,
+        channel: "email".to_string(),
+        to: to.to_string(),
+        subject: Some(subject.to_string()),
+        body: body.to_string(),
+        // The platform transport this app carries is the Mailgun arm; the provider field on the
+        // admin row is informational (see `platform_mail_config::resolved`).
+        email_provider: "mailgun".to_string(),
+        sms_provider: "telnyx".to_string(),
+        transport: TransportSource::Platform,
+        byok_source: None,
+        mailgun_url: Some(mail.url.clone()),
+        reply_to: None,
+        mailgun_domain: domain_of(&mail.url),
+        mailgun_api_key: Some(mail.api_key.clone()),
+        telnyx_api_key: None,
+        smtp_host: None,
+        smtp_port: None,
+        smtp_username: None,
+        smtp_password: None,
+        from_email: Some(mail.from.clone()),
+        from_name: None,
+        whatsapp_phone_number_id: None,
+        whatsapp_api_token: None,
+    }
 }
 
 /// Is an HTTP status from a provider worth retrying? False = permanent.
@@ -869,11 +950,16 @@ pub async fn load_delivery_config(
         Some(b) => resolve_email_byok(b, tenant_from.clone()),
         // Nothing the workspace owns qualifies: the settings half (if any) rides along exactly as
         // before, so a platform attempt still names the workspace's own address as Reply-To.
+        // The platform transport is read from the ADMIN-EDITABLE row first and the environment
+        // second (`platform_mail_config`), so a credential rotated in the panel takes effect on the
+        // next delivery with no redeploy (kanban t_6a330ed2).
         None => resolve_email(
             tenant_domain.clone(),
             tenant_key,
             tenant_from.clone(),
-            platform_mail(),
+            super::platform_mail_config::resolved(db)
+                .await
+                .map(|t| t.mail()),
         ),
     };
 

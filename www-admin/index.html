@@ -728,6 +728,12 @@ const ADMIN_MENU = [
     { id:'telnyx-admin', icon:'☎️', label:'Telnyx Admin' },
     { id:'email-admin', icon:'📧', label:'Private Email Admin' }
   ]},
+  // The PLATFORM mail transport — the provider + credential every workspace without its own
+  // sending identity falls back to. It lived only in the container environment until
+  // kanban t_6a330ed2, so it could be neither seen nor rotated from here.
+  { type:'group', icon:'📤', label:'Platform Email', children:[
+    { id:'system-email', icon:'📤', label:'System Email' }
+  ]},
   { id:'features-plans', icon:'🧩', label:'Modules & Plans' },
   { type:'group', icon:'⚙️', label:'Admin Settings', children:[
     { id:'configuration', icon:'⚙️', label:'Configuration' }
@@ -1248,6 +1254,14 @@ const TAB_RENDERERS = {
       '</div>', '<button class="btn btn-secondary btn-sm">Refresh</button>');
   },
   'telnyx-admin': () => placeholderPanel('Telnyx Admin', 'Configure Telnyx provider settings for all tenants.', '☎️'),
+  // Platform mail transport (kanban t_6a330ed2). The form is rendered by loadSystemEmail() from
+  // GET /api/admin/email-config, so what is on screen is what the database holds — the renderer
+  // below only lays out the shell.
+  'system-email': () => {
+    return pageHeader('System Email', 'The provider and credential every workspace without its own sending identity sends through',
+      '<button class="btn btn-secondary btn-sm" onclick="loadSystemEmail()">🔄 Reload</button>') +
+      '<div id="sysEmailWrap"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading the platform email transport…</div></div>';
+  },
   'email-admin': () => {
     return pageHeader('Private Email Admin', 'Per-tenant email limits, data retention and purge controls',
       '<button class="btn btn-danger btn-sm" data-ops="pe-purge" onclick="showPurgeModal()">🧨 Run Purge</button>') +
@@ -1412,6 +1426,121 @@ async function saveSiteConfig() {
 
 function escapeHtmlAttr(str) {
   return String(str).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ========== PLATFORM EMAIL (System Email panel) ==========
+// kanban t_6a330ed2 — the platform mail transport (the credential CoreSwift itself sends through
+// when a workspace has none of its own) was environment-only, so it could not be seen or rotated
+// from here. Everything below reads GET /api/admin/email-config and writes PUT / DELETE on the
+// same route, and re-renders from the RESPONSE — so the screen is the database's state, never the
+// payload this page just sent.
+async function loadSystemEmail() {
+  const wrap = document.getElementById('sysEmailWrap');
+  if (!wrap) return;                       // the tab was switched away mid-load
+  wrap.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading the platform email transport…</div>';
+  try {
+    renderSystemEmail(await API.get('/admin/email-config'));
+  } catch (e) {
+    wrap.innerHTML = '<div class="card" style="text-align:center;padding:40px">' +
+      '<p style="color:var(--error)">Failed to load the platform email transport: ' + escapeHtml(e.message) + '</p>' +
+      '<button class="btn btn-secondary btn-sm" onclick="loadSystemEmail()">Retry</button></div>';
+  }
+}
+
+function renderSystemEmail(d) {
+  const wrap = document.getElementById('sysEmailWrap');
+  if (!wrap) return;
+  const cfg = d.config || {};
+  const eff = d.effective || null;
+  const env = d.env || {};
+  const row = (label, value, hint) =>
+    '<div class="config-item"><div class="config-info"><div class="config-label">' + label + '</div>' +
+    (hint ? '<div class="config-desc">' + hint + '</div>' : '') + '</div>' +
+    '<div style="font-size:.86rem;color:var(--text-primary);text-align:right;word-break:break-all">' + value + '</div></div>';
+
+  let html = '<div class="card" style="margin-bottom:20px"><div class="card-header">📤 Platform transport</div><div class="card-body">';
+  html += '<div class="config-list">';
+  html += row('Status', d.configured ? '<span class="badge badge-success">● configured</span>' : '<span class="badge badge-error">● not configured</span>',
+    'Whether a delivery attempt can be made on the platform transport at all.');
+  html += row('Carried by', eff ? '<span class="badge badge-primary">' + escapeHtml(eff.source) + '</span>' : '—',
+    eff ? escapeHtml(eff.note) : 'Nothing is configured on either store.');
+  html += row('Sending domain', escapeHtml((eff && eff.domain) || '—'), 'The Mailgun domain the send endpoint posts to.');
+  html += row('From', escapeHtml((eff && eff.from) || '—'), 'What a receiver sees — the address must be on the sending domain.');
+  html += row('Server environment', 'API URL ' + (env.api_url_set ? '<span class="badge badge-muted">set</span>' : '<span class="badge badge-muted">unset</span>') +
+    ' · API key ' + (env.api_key_set ? '<span class="badge badge-muted">set</span>' : '<span class="badge badge-muted">unset</span>'),
+    'EMAIL_API_URL / EMAIL_API_KEY / EMAIL_FROM in the container. Used for any field the saved credential does not carry.');
+  if (cfg.updated_at) html += row('Last saved', escapeHtml(String(cfg.updated_at)) + (cfg.updated_by ? ' by ' + escapeHtml(String(cfg.updated_by)) : ''), '');
+  html += '</div></div></div>';
+
+  html += '<div class="card"><div class="card-header">🔐 Provider + credential</div><div class="card-body">';
+  html += '<div class="form-group"><label>Provider</label><select id="se_provider">';
+  (d.providers || []).forEach(p => {
+    html += '<option value="' + escapeHtmlAttr(p.value) + '"' + ((p.value === cfg.provider) ? ' selected' : '') + '>' + escapeHtml(p.label) + '</option>';
+  });
+  html += '</select><div class="form-hint">This is the transport CoreSwift itself sends through. A workspace\'s own SMTP/SendGrid credentials live in that workspace\'s Integration Center.</div></div>';
+  html += '<div class="form-group"><label>Send endpoint (api_url)</label><input type="text" id="se_api_url" value="' + escapeHtmlAttr(cfg.api_url || '') + '" placeholder="https://api.mailgun.net/v3/mg.yourdomain.com/messages"><div class="form-hint">The full Mailgun send endpoint. Leave empty to use EMAIL_API_URL.</div></div>';
+  html += '<div class="form-group"><label>From name</label><input type="text" id="se_from_name" value="' + escapeHtmlAttr(cfg.from_name || '') + '" placeholder="CoreSwift CRM"></div>';
+  html += '<div class="form-group"><label>From address</label><input type="text" id="se_from_address" value="' + escapeHtmlAttr(cfg.from_address || '') + '" placeholder="noreply@mg.yourdomain.com"><div class="form-hint">Must be an address on the sending domain, or receivers will reject the message.</div></div>';
+  html += '<div class="form-group"><label>API key</label><input type="password" id="se_api_key" value="' + escapeHtmlAttr(cfg.api_key || '') + '" placeholder="paste the provider key">' +
+    '<div class="form-hint">' + (cfg.api_key_set
+      ? 'A key is saved (' + (cfg.api_key_len === null || cfg.api_key_len === undefined ? 'length unknown' : cfg.api_key_len + ' characters') + '). Leave the dots to keep it, or clear the field to remove it.'
+      : 'No key saved here — the server environment is carrying mail.') + '</div></div>';
+  html += '<div class="form-group"><label>Send a test to</label><input type="text" id="se_test_to" value="" placeholder="' + escapeHtmlAttr(STATE.user && STATE.user.email ? STATE.user.email : 'you@yourdomain.com') + '"><div class="form-hint">A real message is sent and recorded in the Communications Log. Empty = your own account address.</div></div>';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+    '<button class="btn btn-primary" onclick="saveSystemEmail()">💾 Save credential</button>' +
+    '<button class="btn btn-secondary" onclick="sendSystemEmailTest()">✉️ Send test email</button>' +
+    '<button class="btn btn-danger" onclick="clearSystemEmail()">↩️ Use server environment</button>' +
+    '</div></div></div>';
+
+  wrap.innerHTML = html;
+}
+
+async function saveSystemEmail() {
+  const v = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+  const payload = {
+    provider: v('se_provider'),
+    api_url: v('se_api_url'),
+    from_name: v('se_from_name'),
+    from_address: v('se_from_address'),
+    api_key: v('se_api_key')
+  };
+  try {
+    const r = await API.put('/admin/email-config', payload);
+    toast(r.configured
+      ? 'Platform email saved — mail can be sent through it now (no redeploy needed).'
+      : 'Saved, but the transport is still incomplete — the server environment carries mail.', r.configured ? 'success' : 'warning');
+    renderSystemEmail(r);
+  } catch (e) {
+    toast('Save failed: ' + e.message, 'error');
+  }
+}
+
+async function sendSystemEmailTest() {
+  const el = document.getElementById('se_test_to');
+  const to = el ? el.value.trim() : '';
+  toast('Sending a test message…', 'info');
+  try {
+    const r = await API.post('/admin/email-config/test', to ? { to: to } : {});
+    if (r.success) {
+      toast('Provider accepted the message — sent to ' + r.to + ' (log status: ' + (r.status || 'sent') + ')', 'success');
+    } else {
+      toast('The provider refused the message: ' + (r.error || r.detail || 'unknown error'), 'error');
+    }
+    loadSystemEmail();
+  } catch (e) {
+    toast('Test failed: ' + e.message, 'error');
+  }
+}
+
+async function clearSystemEmail() {
+  if (!confirm('Remove the saved platform credential and let the server environment (EMAIL_API_URL / EMAIL_API_KEY / EMAIL_FROM) carry platform mail?')) return;
+  try {
+    await API.del('/admin/email-config');
+    toast('Stored credential removed — platform mail now comes from the server environment.', 'success');
+    loadSystemEmail();
+  } catch (e) {
+    toast('Could not remove the stored credential: ' + e.message, 'error');
+  }
 }
 
 // ========== ASYNC TAB LOADERS (fetch real data) ==========
@@ -1617,6 +1746,9 @@ const TAB_LOADERS = {
   // and bails out (the same reason the Features & Plans panel registers one).
   'tracked-links': async () => { await loadTrackedLinksTab(); },
   'affiliates': async () => { await loadAffiliates(); },
+  // Same reason as the two above: the renderer runs before its HTML exists, so the load registers
+  // here and runs against a #sysEmailWrap that is already in the document.
+  'system-email': async () => { await loadSystemEmail(); },
   // The Modules & Plans panel must load from TAB_LOADERS, not from inside its renderer: the
   // renderer runs BEFORE its HTML is in the document, so an in-renderer load saw no `#fpWrap`,
   // bailed out, and the panel sat on "Loading feature registry..." for ever. Every other
