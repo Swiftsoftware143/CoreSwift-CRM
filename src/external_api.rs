@@ -13,6 +13,13 @@
 //! The key hash resolves the tenant — a `tenant_id` / `aid` field in the body is IGNORED,
 //! never trusted. Missing or unknown key → 401.
 //!
+//! ## Metering (t_4ca3ecd7)
+//! Every request that resolves a key is counted in `api_call_usage` for the tenant's UTC day and
+//! refused with **402** once the plan's `limit_api_calls_per_day` ceiling is reached. This is the
+//! ONLY surface that counter covers — the console's own JWT routes are not metered, so a workspace
+//! at its daily ceiling keeps working. Both endpoints below are metered (an api call is an api
+//! call), which is what makes a client that re-pushes the same lead visible.
+//!
 //! ## Base URL (spoke resolution order — never hardcode-only)
 //!   1. `provider_keys.base_url` for provider `coreswift` (tenant override)
 //!   2. `integration_provider_presets.base_url` where key = 'coreswift'
@@ -87,7 +94,8 @@ fn value_to_string(v: &Value) -> Option<String> {
     }
 }
 
-/// Resolve a personal API key -> (tenant_id). Returns Unauthorized on failure.
+/// Resolve a personal API key -> (tenant_id). Returns Unauthorized on failure, and **402** once the
+/// tenant's `limit_api_calls_per_day` ceiling has been reached for the current UTC day.
 async fn resolve_key(s: &AppState, headers: &HeaderMap) -> Result<(Uuid, Uuid), AppError> {
     let key = headers
         .get("authorization")
@@ -118,6 +126,10 @@ async fn resolve_key(s: &AppState, headers: &HeaderMap) -> Result<(Uuid, Uuid), 
         .bind(key_id)
         .execute(&s.db)
         .await;
+
+    // Meter the call — the daily ceiling is checked HERE, on the api-key surface only, so a
+    // workspace at its limit keeps its console (see src/features.rs::meter_api_call).
+    crate::features::meter_api_call(&s.db, tenant_id, "API call").await?;
 
     Ok((tenant_id, key_id))
 }

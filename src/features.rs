@@ -78,11 +78,15 @@ pub async fn get_usage_json(db: &PgPool, tenant_id: Uuid) -> serde_json::Value {
         .unwrap_or(0);
     let pipelines = count_pipelines(db, tenant_id).await;
     let users = count_active_users(db, tenant_id).await;
+    // The api-key surface's daily counter — the SAME `api_call_usage` row `meter_api_call`
+    // increments and the same number its ceiling is compared against (t_4ca3ecd7).
+    let api_calls_today = count_api_calls_today(db, tenant_id).await.unwrap_or(0);
     serde_json::json!({
         "contacts": contacts,
         "industries": industries,
         "pipelines": pipelines,
-        "users": users
+        "users": users,
+        "api_calls_today": api_calls_today
     })
 }
 
@@ -150,6 +154,80 @@ pub async fn enforce_usage_limit(
         return Err(limit_reached_error(label, plural, usage, limit));
     }
     Ok(Some(limit))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE PER-DAY API-CALL CEILING (`limit_api_calls_per_day`).
+//
+// Unlike the stock limits above, this one counts a FLOW, not a collection of rows: the api-key
+// surface (`/api/external`, the endpoint the Integration Centre hands a tenant and the sibling
+// apps push captured leads into). Its counter is therefore its own table, keyed by (tenant, UTC
+// day) — the day boundary is the primary key, so there is no reset job and no clock drift to
+// reason about. One row per tenant per day that the tenant actually used the API.
+//
+// Cost: ONE upsert per authenticated api-key request, and ONLY on that surface — the console's own
+// JWT routes are never metered, so a workspace at its ceiling cannot wedge itself out of its UI.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The registry key (migration 107) — read through the same plan-assignment row the admin's
+/// Features & Plans panel writes, like every other limit in this module.
+pub const API_CALLS_PER_DAY_KEY: &str = "limit_api_calls_per_day";
+
+/// TODAY's (UTC) api-call count for one tenant — the row `meter_api_call` increments, so the
+/// number `GET /api/auth/me/usage` renders and the number the gate compares cannot drift.
+pub async fn count_api_calls_today(db: &PgPool, tenant_id: Uuid) -> Result<i64, AppError> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE((SELECT calls FROM api_call_usage
+                           WHERE tenant_id = $1 AND day = CURRENT_DATE), 0)::bigint",
+    )
+    .bind(tenant_id)
+    .fetch_one(db)
+    .await
+    .map_err(AppError::Database)
+}
+
+/// Meter ONE authenticated api-key request, denying with **402** once the day's ceiling is reached.
+///
+/// Called from `external_api::resolve_key`, which every api-key request passes through exactly
+/// once. The increment is CONDITIONAL on being under the ceiling, so a refused request is not
+/// counted and a hot loop cannot inflate the counter.
+pub async fn meter_api_call(db: &PgPool, tenant_id: Uuid, label: &str) -> Result<(), AppError> {
+    let Some(limit) = usage_ceiling(db, tenant_id, API_CALLS_PER_DAY_KEY).await? else {
+        // No ceiling assigned (or a tenant with no active plan): still count, so the usage readout
+        // is real the moment the admin assigns a number.
+        sqlx::query(
+            "INSERT INTO api_call_usage (tenant_id, day, calls) VALUES ($1, CURRENT_DATE, 1)
+             ON CONFLICT (tenant_id, day)
+             DO UPDATE SET calls = api_call_usage.calls + 1, updated_at = now()",
+        )
+        .bind(tenant_id)
+        .execute(db)
+        .await?;
+        return Ok(());
+    };
+
+    // A disabled limit row is ceiling 0 — "not available on your plan" — and must not be counted.
+    if limit <= 0 {
+        return Err(limit_reached_error(label, "API calls", 0, limit));
+    }
+
+    let counted: Option<i64> = sqlx::query_scalar(
+        "INSERT INTO api_call_usage (tenant_id, day, calls) VALUES ($1, CURRENT_DATE, 1)
+         ON CONFLICT (tenant_id, day)
+         DO UPDATE SET calls = api_call_usage.calls + 1, updated_at = now()
+         WHERE api_call_usage.calls < $2::bigint
+         RETURNING calls::bigint",
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .fetch_optional(db)
+    .await?;
+
+    if counted.is_none() {
+        let used = count_api_calls_today(db, tenant_id).await.unwrap_or(limit);
+        return Err(limit_reached_error(label, "API calls", used, limit));
+    }
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

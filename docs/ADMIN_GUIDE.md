@@ -329,6 +329,7 @@ tier (the most expensive active row) grants every one of them.
 | `limit_max_users` | limits | active users (`users.is_active`) | `POST /api/auth/register` (accepting an invite) |
 | `limit_pipelines` | limits | pipelines | `POST /api/pipelines` |
 | `limit_integrations` | limits | connected integrations | `POST /api/integrations` |
+| `limit_api_calls_per_day` | limits | authenticated api-key requests per **UTC day** (`GET /api/external/lists`, `POST /api/external/contacts`) | `external_api::resolve_key` — every request that resolves a personal API key |
 | `email_domains` | private_email | own sending domains | adding a Private Email domain |
 | `email_mailboxes` | private_email | mailboxes | provisioning a mailbox |
 
@@ -339,17 +340,28 @@ authored numbers: on **free** a workspace sells **0 connected integrations** (`l
 and **1 active user**, so connecting an integration — or inviting a second member — answers
 **402** until the plan changes. Raise those numbers here if that is not the intent.
 
+One ceiling counts a **flow** rather than a collection of rows: `limit_api_calls_per_day` meters the
+api-key surface. The count lives in the `api_call_usage` table, one row per workspace per **UTC**
+day — the day boundary is the primary key, so the quota resets by itself at 00:00 UTC and there is
+no job to run. It is incremented on `GET /api/external/lists` and `POST /api/external/contacts` —
+the two endpoints the Integration Centre hands to a spoke app — and **only** there: the console's
+own routes are never counted, so a workspace that reaches its daily ceiling keeps full use of the
+app and only its API answers **402** until the next UTC day. Both endpoints are metered, so a
+client that re-pushes the same lead (which costs no contact) still consumes calls. The number
+`GET /api/auth/me/usage` renders as `api_calls_today` is the same row the ceiling is compared
+against. A refused call is not counted, and a workspace with no active plan row is not capped.
+
 ### Limits that are NOT in the matrix any more
 
-Three of the eleven limit rows were retired in kanban `t_f49e4299` because nothing could enforce
-them; they are gone from the matrix rather than left as a number that does nothing:
+Two of the eleven limit rows have no enforceable quantity behind them and are absent from the
+matrix rather than left as a number that does nothing:
 
 | Retired key | Why |
 |---|---|
-| `limit_storage_gb` | no size source exists in the app (`account_health.storage_mb` is never written) |
-| `limit_api_calls_per_day` | no request counter exists; building one is a feature of its own |
+| `limit_storage_gb` | **CoreSwift stores no files, and this is permanent.** No `bytea`/blob column exists anywhere in the schema (the only one is the migration ledger's own checksum), there is no upload or attach endpoint, and the only per-workspace content is CRM rows — measured at **210 bytes per contact** on this box. At each tier's OWN contact ceiling that is ~0.02% of the GB ceiling it was priced against (agency: 50,000 contacts ≈ 10.5 MB against 50 GB), and the whole database — every workspace, 106 tables, indexes and all — is 22 MB, below even the free tier's 0.1 GB. A size source could not fire before the contact cap did, so the key stays retired. `account_health.storage_mb` is declared and written by no code path: do not wire it. |
 | `limit_monthly_credits` | duplicate of `plans.monthly_credits`, which the credit engine reads |
 
-The authored numbers survive in plan data (`plans.features` still carries `storage_gb` /
-`api_calls_per_day`; `plans.monthly_credits` is untouched), so re-registering a row is all it takes
-to bring one back once the quantity it counts is measurable.
+`limit_api_calls_per_day` was retired with them in kanban `t_f49e4299` and **re-registered** once
+its counter existed (see the table above). The authored numbers survive in plan data
+(`plans.features` carries `storage_gb` / `api_calls_per_day`; `plans.monthly_credits` is untouched),
+so a retired key comes back the same way once the quantity it counts is measurable.
