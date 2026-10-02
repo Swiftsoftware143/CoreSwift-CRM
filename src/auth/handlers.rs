@@ -5,7 +5,7 @@
 
 use axum::{
     extract::{Extension, Request, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
@@ -22,6 +22,38 @@ use crate::errors::{ApiResult, AppError};
 use crate::sql_json::row_json;
 use crate::AppState;
 
+/// Request header a fleet harness sets to record that the tenant it is about to mint is a probe.
+/// Its value lands verbatim in `tenants.probe_harness` (migration 099). Fleet policy:
+/// `/opt/swift/docs/fleet-probe-residue-policy-2026-09-28.md` (answers 3(b)/3(c), card t_66db3251).
+pub(crate) const HARNESS_HEADER: &str = "x-swift-harness";
+
+/// Validate a harness marker: `trim()`, lowercase, then `^[a-z0-9][a-z0-9._-]{2,63}$`.
+///
+/// A missing header, a non-UTF-8 value, or a value that fails the shape all yield `None`, and the
+/// tenant is created with `probe_harness = NULL` — a rejected value must never fail the signup, so
+/// there is no error path here at all.
+///
+/// The marker is read from this HEADER only, never from a body or query field: the signup body is
+/// attacker-controlled on a public route, and the header is the convention the fleet's harnesses
+/// follow. Validated by hand rather than by `regex` — the crate is not in the dependency graph, and
+/// the check is a byte scan. `to_lowercase()` can lengthen a non-ASCII string, but every byte it
+/// could produce (`0xC3`… `0xFF`) fails the class test below, so a non-ASCII value is always `None`.
+pub(crate) fn harness_marker(headers: &HeaderMap) -> Option<String> {
+    let raw = headers.get(HARNESS_HEADER)?.to_str().ok()?;
+    let value = raw.trim().to_lowercase();
+    let bytes = value.as_bytes();
+    if bytes.len() < 3 || bytes.len() > 64 {
+        return None;
+    }
+    let shaped = bytes.iter().enumerate().all(|(i, b)| match b {
+        b'a'..=b'z' | b'0'..=b'9' => true,
+        // `[a-z0-9._-]{2,63}` — the first character can never be one of these.
+        b'.' | b'_' | b'-' => i > 0,
+        _ => false,
+    });
+    shaped.then_some(value)
+}
+
 /// POST /api/auth/register — Create a new account.
 /// Every signup creates their own isolated tenant (account).
 /// Admins and tenants are both full account holders — no distinction.
@@ -29,6 +61,7 @@ use crate::AppState;
 /// Provide invite_token to join an existing tenant as a team member.
 pub async fn register(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<RegisterRequest>,
 ) -> ApiResult<impl IntoResponse> {
     // Validate input
@@ -70,7 +103,11 @@ pub async fn register(
     let mut tx = state.db.begin().await.map_err(AppError::Database)?;
 
     // Determine tenant — and, when the signup came through an invite, the role it grants.
-    let (tenant_id, invite_role) = resolve_account(&mut tx, &req).await?;
+    // The harness marker is read from the header ONCE, before the tenant exists, and only ever
+    // reaches the two INSERT arms that mint a tenant; the invite arm joins an existing tenant and
+    // has nothing to mark.
+    let harness = harness_marker(&headers);
+    let (tenant_id, invite_role) = resolve_account(&mut tx, &req, harness.as_deref()).await?;
 
     // The (tenant_id, email) unique index is the table's other constraint; this is the message
     // that tells a team member they already belong to THIS workspace.
@@ -423,6 +460,7 @@ fn email_taken_error(email: &str) -> AppError {
 async fn resolve_account(
     tx: &mut sqlx::PgConnection,
     req: &RegisterRequest,
+    harness: Option<&str>,
 ) -> Result<(Uuid, Option<String>), AppError> {
     // If invite token provided, look up the invite, join that tenant, and carry the role the
     // inviter picked (the CHECK on tenant_invites allows only 'admin' and 'member').
@@ -448,11 +486,12 @@ async fn resolve_account(
 
     if let (Some(name), Some(slug)) = (&req.account_name, &req.account_slug) {
         let tenant = sqlx::query_as::<_, crate::account::models::Account>(
-            r#"INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3) RETURNING *"#,
+            r#"INSERT INTO tenants (id, name, slug, probe_harness) VALUES ($1, $2, $3, $4) RETURNING *"#,
         )
         .bind(Uuid::new_v4())
         .bind(name)
         .bind(slug)
+        .bind(harness)
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| {
@@ -491,11 +530,12 @@ async fn resolve_account(
         let name = format!("{}'s Workspace", req.name);
 
         let tenant = sqlx::query_as::<_, crate::account::models::Account>(
-            r#"INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3) RETURNING *"#,
+            r#"INSERT INTO tenants (id, name, slug, probe_harness) VALUES ($1, $2, $3, $4) RETURNING *"#,
         )
         .bind(Uuid::new_v4())
         .bind(&name)
         .bind(&slug)
+        .bind(harness)
         .fetch_one(&mut *tx)
         .await
         .map_err(AppError::Database)?;
