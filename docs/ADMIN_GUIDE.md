@@ -116,7 +116,7 @@ FunnelSwift matches that email back to the affiliate lead, credits the commissio
 
 **Environment variables:** `FUNNELSWIFT_URL` (default `http://localhost:8080`) and `INTERNAL_SYNC_KEY` — the shared `x-internal-key` value the receiver checks. If `FUNNELSWIFT_URL` is empty, or the tenant has no owner email, the call is skipped and the rest of the app is unaffected.
 
-CoreSwift's own `affiliates` module (`GET /api/affiliates/products`, `/api/affiliates/profile`, `/api/affiliates/referrals`) is a **separate, tenant-local** programme kept in this app's database — it is not FunnelSwift's commissionable catalogue and it does not sync to it.
+CoreSwift carries **no** affiliate system of its own (kanban t_3d81b041): the duplicate `/api/affiliates/*` routes, the CRM-side profile / payout / product-board code, the plan flag that gated them and the hub actions that exposed them to integrator webhook tokens were all retired, so the FunnelSwift programme above is the only affiliate system in the fleet. The now-empty schema (`affiliates`, `referrals`, `commission_payouts`, `affiliate_products`, `affiliate_product_selections`) is deliberately left in place — nothing in the app reads or writes it.
 
 ## Private Email — Admin Controls
 
@@ -290,7 +290,6 @@ Every feature the admin can switch on/off per plan (source of truth: the module 
 | `checklists` | Checklists | checklists | Onboarding/process checklists |
 | `ai_enabled` | AI scoring & helpers | ai_enabled | Lead scoring and AI helpers |
 | `tickets` | Support tickets | tickets | In-house ticketing + email-to-ticket |
-| `affiliates` | Affiliate system | affiliates | Referral tracking and payouts |
 | `native_apps` | Native app connectors | native_apps | FunnelSwift, ADASwift, MissedCall, WorkflowSwift, CheatLayer, Multi-Directory |
 | `telnyx` | SMS & voice (Telnyx) | telnyx | SMS, number management, call tracking |
 | `round_robin` | Round-robin routing | round_robin | Fair lead distribution across a team |

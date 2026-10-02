@@ -8,7 +8,6 @@
 
 pub mod account;
 pub mod admin_actions;
-pub mod affiliates;
 pub mod ai;
 pub mod analytics;
 pub mod audit;
@@ -447,8 +446,6 @@ async fn main() -> anyhow::Result<()> {
         // Billing (plan tiers, feature toggles)
         .nest("/api/campaigns", campaigns::router(state.clone()))
         .nest("/api/billing", billing::router(state.clone()))
-        // Affiliates (referral tracking, commissions)
-        .nest("/api/affiliates", affiliates::router(state.clone()))
         // Audit logs (system-wide event trail)
         .nest("/api/audit", audit::router(state.clone()))
         // Event webhook hub
