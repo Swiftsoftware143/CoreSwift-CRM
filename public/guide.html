@@ -333,7 +333,7 @@ Content-Type: application/json
   <div class="card">
     <h3>Edit, Delete &amp; Search</h3>
     <ul>
-      <li><strong>Edit</strong>  Edit icon ? <code>PUT /api/contacts/:id</code></li>
+      <li><strong>Edit</strong>  Edit icon ? <code>PATCH /api/contacts/:id</code></li>
       <li><strong>Delete</strong>  Soft delete ? <code>DELETE /api/contacts/:id</code></li>
       <li><strong>View</strong>  Click name to see tags, lists, and associated opportunities</li>
       <li><strong>Search</strong>  <code>GET /api/contacts/search?q=john</code> (name/email/phone)</li>
@@ -345,7 +345,7 @@ Content-Type: application/json
       <div class="step"><strong>Open contact detail</strong><p>Click on the contact's name.</p></div>
       <div class="step"><strong>Tags section</strong><p>Existing tags shown as colored pills.</p></div>
       <div class="step"><strong>Click "Assign Tag"</strong><p>Select from the dropdown grouped by category.</p></div>
-      <div class="step"><strong>Confirm</strong><p>Uses <code>POST /api/tags/assign</code>. Remove via <code>POST /api/tags/unassign</code>.</p></div>
+      <div class="step"><strong>Confirm</strong><p>Uses <code>POST /api/tags/assign</code>. Remove via <code>DELETE /api/tags/assign/:id</code>.</p></div>
     </div>
   </div>
   <div class="card">
@@ -511,11 +511,10 @@ Authorization: Bearer &lt;token&gt;
       <div class="step"><strong>Set deal details</strong><p>Name is required. Set value, stage, expected close date. Optionally link a contact and/or company.</p></div>
       <div class="step"><strong>Save</strong><p>The opportunity appears in the correct stage column.</p></div>
     </div>
-    <pre>POST /api/opportunities
-Authorization: Bearer &lt;token&gt;
+    <pre>POST /api/pipelines/:pipeline_id/opportunities
+Authorization: Bearer ***
 
 {
-  "pipeline_id": "uuid-of-pipeline",
   "stage_id": "uuid-of-stage",
   "name": "Enterprise Deal - Acme Corp",
   "value": 50000.0,
@@ -536,11 +535,11 @@ Authorization: Bearer &lt;token&gt;
       <li><strong>Change stage dropdown</strong>  Use the stage selector on the opportunity detail panel</li>
     </ul>
     <p>Both actions use:</p>
-    <pre>PATCH /api/opportunities/:id
-Authorization: Bearer &lt;token&gt;
+    <pre>PATCH /api/pipelines/:pipeline_id/stages/:stage_id/move/:opportunity_id
+Authorization: Bearer ***
 
 { "stage_id": "uuid-of-next-stage" }</pre>
-    <p>You can also update value, probability, expected close date, and notes in the same request.</p>
+    <p>Value, probability, expected close date and notes are updated with <code>PATCH /api/pipelines/:pipeline_id/opportunities/:id</code>.</p>
   </div>
   <div class="card">
     <h3>Winning &amp; Losing Deals</h3>
@@ -652,14 +651,13 @@ GET /api/checklists/instances</pre>
 
   <div class="card">
     <h3>Operations Group Overview</h3>
-    <p>Contains Activities, Portfolio, Call Logs, and Lists. Expand by clicking <strong>Operations</strong> in the sidebar.</p>
+    <p>Portfolio, lists, and the recorded event feed.</p>
   </div>
 
   <div class="card">
-    <h3>Activities &amp; Events</h3>
-    <p>View logged activities and system events. Shows type, description, related entity, and date. Pulls from both <code>/api/activities</code> and <code>/api/events</code>.</p>
-    <pre>GET /api/activities
-GET /api/events</pre>
+    <h3>Events</h3>
+    <p>View logged system events — each shows its type, description, related entity, and date.</p>
+    <pre>GET /api/events</pre>
   </div>
 
   <div class="card">
@@ -669,9 +667,8 @@ GET /api/events</pre>
   </div>
 
   <div class="card">
-    <h3>Call Logs</h3>
-    <p>View inbound and outbound call records from Telnyx integration. Shows caller, called number, duration, disposition, cost, and timestamp.</p>
-    <pre>GET /api/telnyx/call-logs</pre>
+    <h3>Call Records</h3>
+    <p>Telnyx call records — caller, called number, duration, disposition, cost and timestamp — are stored for billing and audit. There is no Call Logs screen in the CRM and no endpoint that lists them, so they are not shown in the app today.</p>
   </div>
 
   <div class="card">
@@ -845,13 +842,20 @@ DELETE /api/comms/templates/:id</pre>
   </div>
 
   <div class="card">
-    <h3>Admin: Tenants</h3>
-    <p>Search through all users by name or slug. Click <strong>View</strong> to see user details, user list, plan assignment dropdown, and impersonate/activate/suspend actions.</p>
-    <pre>GET /api/admin/tenants
-PATCH /api/admin/tenants/:id
-GET /api/admin/tenants/:id/users
-PATCH /api/admin/tenants/:id/plan
-POST /api/admin/impersonate</pre>
+    <h3>Admin: Users &amp; Workspaces</h3>
+    <p>People live in the <strong>Users</strong> tab &#8212; every workspace's users in one list with name, email, role and joined date, 50 per page. Workspaces themselves are listed separately.</p>
+    <pre>GET /api/admin/users
+GET /api/admin/tenants</pre>
+  </div>
+
+  <div class="card">
+    <h3>Admin: Plans &amp; Feature Overrides</h3>
+    <p><strong>Modules &amp; Plans</strong> is where each plan's modules and individual features are switched on, and where a single workspace can be granted or denied one feature without touching its plan. Enter a workspace id to load the features it effectively gets, then tick one to override it.</p>
+    <pre>GET /api/admin/modules
+POST /api/admin/plans/:slug/modules
+POST /api/admin/plans/:slug/features
+GET /api/admin/tenants/:id/entitlements
+POST /api/admin/tenants/:id/overrides</pre>
   </div>
 
   <div class="card">
@@ -880,7 +884,7 @@ GET /api/telnyx/available</pre>
 
   <div class="card">
     <h3>Admin: Impersonation</h3>
-    <p>From a user's detail view, click <strong>Impersonate User</strong> to log in as that user. An orange banner appears at the top indicating impersonation mode. Click <strong>Back to Admin</strong> to exit.</p>
+    <p>The platform-admin API can start and stop impersonation, but the admin console has no Impersonate button yet — no screen calls it.</p>
     <div class="callout warn"><strong>Note:</strong> All actions taken while impersonating are logged with the admin's identity.</div>
   </div>
 
@@ -1007,7 +1011,7 @@ X-Satellite-Key: &lt;full-api-key&gt;</pre>
   <div class="card">
     <h3>Outgoing Webhook Endpoints (Sending Data)</h3>
     <p>You can configure endpoints that CoreSwift will POST events to. Configure these in the Webhooks section:</p>
-    <pre>POST /api/webhooks
+    <pre>POST /api/integrations/webhooks
 Authorization: Bearer &lt;token&gt;
 
 {
@@ -1018,7 +1022,7 @@ Authorization: Bearer &lt;token&gt;
   "timeout_ms": 5000
 }</pre>
     <p>List configured webhooks:</p>
-    <pre>GET /api/webhooks
+    <pre>GET /api/integrations/webhooks
 Authorization: Bearer &lt;token&gt;
 
 Response: { "webhooks": [...] }</pre>
@@ -1027,7 +1031,7 @@ Response: { "webhooks": [...] }</pre>
   <div class="card">
     <h3>Integration Targets</h3>
     <p>For portfolio-level integrations, CoreSwift supports <strong>Integration Targets</strong>  named connections to external systems with webhook URLs and API keys:</p>
-    <pre>POST /api/integration-targets
+    <pre>POST /api/portfolio/:id/targets
 Authorization: Bearer &lt;token&gt;
 
 {
@@ -1074,7 +1078,7 @@ Authorization: Bearer &lt;token&gt;</pre>
       <div class="step"><strong>Enter new password</strong><p>Must be at least 8 characters.</p></div>
       <div class="step"><strong>Confirm and Save</strong><p>Your token remains valid. Next login uses the new password.</p></div>
     </div>
-    <pre>PUT /api/auth/password
+    <pre>PUT /api/profile/password
 Authorization: Bearer &lt;token&gt;
 
 { "current_password": "&lt;your-current-password&gt;", "new_password": "NewSecurePass123!" }</pre>
@@ -1088,8 +1092,8 @@ Authorization: Bearer &lt;token&gt;
       <li><strong>Name</strong>  Your company/org name</li>
       <li><strong>Slug</strong>  URL-friendly identifier</li>
     </ul>
-    <pre>GET /api/tenants   ? View details
-PUT /api/tenants   ? Update name</pre>
+    <pre>GET /api/account/:id — View details
+PATCH /api/account/:id — Update name</pre>
   </div>
 
   <div class="card">
@@ -1109,7 +1113,7 @@ PUT /api/tenants   ? Update name</pre>
     <h3>Portal &amp; Portfolio Companies</h3>
     <p>For agency-level accounts, CoreSwift supports:</p>
     <ul>
-      <li><strong>Portfolio Companies</strong>  Track multi-tenant clients under your agency (<code>GET/POST /api/portfolio-companies</code>)</li>
+      <li><strong>Portfolio Companies</strong>  Track multi-tenant clients under your agency (<code>GET/POST /api/portfolio</code>)</li>
       <li><strong>Cross-App Sync</strong>  Push data between apps: <code>POST /api/admin/portfolio-sync</code></li>
       <li><strong>Impersonation</strong>  Admin can impersonate a user: <code>POST /api/admin/impersonate</code></li>
     </ul>
@@ -1198,33 +1202,15 @@ PUT /api/tenants   ? Update name</pre>
 
 <!-- ======= 18. ACTIVITY TIMELINE ======= -->
 <section id="timeline">
-  <h2 class="sec-title"><span class="sec-num">18</span> Activity Timeline</h2>
+  <h2 class="sec-title"><span class="sec-num">18</span> Deal History</h2>
   <div class="card">
-    <h3>Deal Activity History</h3>
-    <p>Each deal has an activity timeline that records every change made — stage moves, value updates, tag changes, contact links, and notes. This gives full audit trail visibility into how a deal has progressed.</p>
+    <h3>What is recorded</h3>
+    <p>Every stage move is written down as it happens — which stage it moved from and to, and who moved it — so a deal's progression is kept.</p>
   </div>
   <div class="card">
-    <h3>Viewing the Timeline</h3>
-    <p>Open any deal detail view and scroll to the <strong>Activity Timeline</strong> section. Events are listed in reverse chronological order with timestamps, action descriptions, and the user who performed the action.</p>
-  </div>
-  <div class="card">
-    <h3>Timeline Events</h3>
-    <ul>
-      <li><strong>Stage Change</strong> — Moved from X to Y (with probability change)</li>
-      <li><strong>Value Change</strong> — Deal value updated ($500 → $1,000)</li>
-      <li><strong>Contact Linked</strong> — Contact associated with the deal</li>
-      <li><strong>Contact Created</strong> — New contact auto-created from deal</li>
-      <li><strong>Tag Added/Removed</strong> — Tags applied or removed</li>
-      <li><strong>Note Added</strong> — Notes on the deal</li>
-      <li><strong>Deal Created</strong> — Initial creation event</li>
-      <li><strong>Deal Won/Lost</strong> — Deal closed</li>
-      <li><strong>Reminder Set</strong> — Follow-up reminder created</li>
-    </ul>
-  </div>
-  <div class="card">
-    <h3>API Access</h3>
-    <pre>GET /api/v1/deals/{deal_id}/timeline
-Authorization: Bearer &lt;token&gt;</pre>
+    <h3>What the app shows</h3>
+    <p>The CRM has no Activity Timeline screen, and no endpoint that lists a deal's history, so that history is not visible in the app today. Platform-wide events (type, description, related entity, date) can be read through the API:</p>
+    <pre>GET /api/events</pre>
   </div>
 </section>
 
