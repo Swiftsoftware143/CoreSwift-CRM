@@ -319,7 +319,11 @@ numeric ceilings apply. It is not on the free tier; it is on the unlimited one. 
 denied list empty, and **Assign plan** on that same card (or `PUT /api/admin/tenants/:id/plan`) ends
 the state — one press, and that press is the only way it ends. Measured 2026-10-02: 14 of the 17
 workspaces on this deployment were in it, and all of them are operator-owned or minted by an ingest
-arm, never a signup (a signup always writes a `free` row).
+arm, never a signup. That state is now a **FIXED population**: every creation path seats the platform
+default (`free`) in the same transaction as the tenant insert, so no route can mint a new row-less
+workspace — five did not before (the two cross-app ingest sinks, the portfolio internal sync,
+`POST /api/account` and the admin portfolio-sync; kanban t_6f225dd4). The workspaces above are the
+ones already in it, and **Assign plan** is what ends each of them.
 
 ### Putting an account on a plan (operator action)
 
@@ -343,7 +347,8 @@ first-time assignment defaults to `monthly`.
 
 It works whether or not the account already has a `tenant_plans` row: an existing row is updated,
 and an account with **no** row gets one created — `created_row` in the answer says which happened.
-Most accounts have no row, because only a signup seat writes one. The answer echoes the plan and the
+Every creation path writes a `free` row as of 2026-10-02, so an account with no row is one minted
+before that. The answer echoes the plan and the
 cycle the server actually wrote, and every call is recorded in the audit log as
 `subscription.plan_assigned`, naming the operator.
 

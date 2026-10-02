@@ -903,12 +903,19 @@ pub async fn cross_app_sync(
     let tenant_id = Uuid::new_v4();
     let tenant_slug = name.to_lowercase().replace(' ', "-");
 
+    // The mint and its plan row commit TOGETHER (kanban t_6f225dd4): a tenant with no
+    // `tenant_plans` row resolves through `module_registry::resolve`'s `no_plan` arm — every
+    // registered module granted and NO numeric ceiling. This cross-app sync used to mint such a
+    // workspace; it now seats the platform default (`free`) a signup gets.
+    let mut tx = s.db.begin().await?;
     sqlx::query("INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)")
         .bind(tenant_id)
         .bind(&name)
         .bind(&tenant_slug)
-        .execute(&s.db)
+        .execute(&mut *tx)
         .await?;
+    crate::billing::seat_default_plan(&mut tx, tenant_id).await?;
+    tx.commit().await?;
 
     let user_id = Uuid::new_v4();
     let generated_password = Uuid::new_v4()

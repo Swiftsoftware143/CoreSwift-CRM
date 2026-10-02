@@ -267,16 +267,24 @@ pub async fn internal_create(
         .to_string();
     let id = Uuid::new_v4();
 
-    // Ensure tenant exists (FK constraint)
-    sqlx::query(
-        "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
+    // Ensure tenant exists (FK constraint). The mint and its plan row commit TOGETHER (kanban
+    // t_6f225dd4): a tenant with no `tenant_plans` row resolves through
+    // `module_registry::resolve`'s `no_plan` arm — every registered module granted and NO numeric
+    // ceiling. An id that ALREADY exists (the ON CONFLICT arm) is deliberately NOT re-seated: this
+    // only writes a plan row for a tenant it actually created.
+    let mut tx = s.db.begin().await?;
+    let created: Option<(Uuid,)> = sqlx::query_as(
+        "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING RETURNING id",
     )
     .bind(tenant_id)
     .bind(&name)
     .bind(&slug)
-    .execute(&s.db)
-    .await
-    .ok();
+    .fetch_optional(&mut *tx)
+    .await?;
+    if created.is_some() {
+        crate::billing::seat_default_plan(&mut tx, tenant_id).await?;
+    }
+    tx.commit().await?;
 
     sqlx::query(
         "INSERT INTO portfolio_companies (id, tenant_id, name, slug, email, description) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING"

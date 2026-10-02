@@ -39,9 +39,16 @@ pub async fn create(
     if r.name.is_empty() || r.slug.is_empty() {
         return Err(AppError::Validation("Name and slug required".to_string()));
     }
+    // The mint and its plan row commit TOGETHER (kanban t_6f225dd4). A sub-account that landed with
+    // no `tenant_plans` row resolved through `module_registry::resolve`'s `no_plan` arm — every
+    // registered module granted and NO numeric ceiling — so an agency admin could mint workspaces
+    // that escaped every allowance. It now gets the same platform default a signup gets.
+    let mut tx = s.db.begin().await?;
     let account = sqlx::query_as::<_, Account>("INSERT INTO tenants(id,name,slug,logo_url,primary_color,accent_color,custom_domain) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *")
         .bind(Uuid::new_v4()).bind(&r.name).bind(&r.slug).bind(&r.logo_url).bind(&r.primary_color).bind(&r.accent_color).bind(&r.custom_domain)
-        .fetch_one(&s.db).await.map_err(|e| { if let sqlx::Error::Database(ref d) = e { if d.constraint() == Some("tenants_slug_key") { return AppError::Duplicate(format!("Slug '{}' exists", r.slug)); } } AppError::Database(e) })?;
+        .fetch_one(&mut *tx).await.map_err(|e| { if let sqlx::Error::Database(ref d) = e { if d.constraint() == Some("tenants_slug_key") { return AppError::Duplicate(format!("Slug '{}' exists", r.slug)); } } AppError::Database(e) })?;
+    crate::billing::seat_default_plan(&mut tx, account.id).await?;
+    tx.commit().await?;
     Ok((StatusCode::CREATED, Json(json!(account))))
 }
 

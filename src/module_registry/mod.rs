@@ -36,6 +36,18 @@
 //! To reverse this decision: seat a plan on every row-less tenant FIRST, then turn
 //! `features::enforce_feature_flag`'s `"no_plan" => Ok(())` arm into the same 402 as every other
 //! source — in that order, or 14 live workspaces lose every gated module in one deploy.
+//!
+//! STEP 1 OF THAT REVERSAL IS DONE FOR THE MINT SIDE (kanban t_6f225dd4, measured 2026-10-02): of
+//! the 9 `INSERT INTO tenants` sites, 4 already seated `free` (the signup's two arms, the admin chat
+//! action, the automation-webhook hub) and the remaining 5 did NOT — the two cross-app ingest sinks
+//! (`tag_provision_handler::handle_tag_provision`, `webhooks::cross_app_tag_sync::handle_tag_sync`),
+//! the portfolio internal sync, `POST /api/account` and `admin_actions::cross_app_sync`. All five now
+//! call `billing::seat_default_plan` inside the SAME transaction as the tenant INSERT, so no creation
+//! path can produce a row-less workspace any more and the 14 above are a FIXED population — the
+//! residue of the paths that used to mint them, ended one by one with `PUT /api/admin/tenants/:id/plan`.
+//! What remains before the arm can flip: those 14 workspaces must be seated (they are the ones this
+//! note has always been about), and the seating must not be to `free` for the three that carry more
+//! rows than `free` allows — see the measurement above.
 
 use crate::errors::AppError;
 use serde_json::Value as Json;

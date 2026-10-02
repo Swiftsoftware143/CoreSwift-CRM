@@ -165,17 +165,29 @@ pub async fn handle_tag_provision(
     // path (one validator, no second copy of the rule); NULL when the header is absent or invalid,
     // which is exactly the pre-existing behaviour, and the column is read by nothing.
     let probe_harness = crate::auth::handlers::harness_marker(&headers);
-    let _ = sqlx::query(
+    // The mint and its plan row commit TOGETHER (kanban t_6f225dd4). A tenant that lands with no
+    // `tenant_plans` row resolves through `module_registry::resolve`'s `no_plan` arm — every
+    // registered module granted and NO numeric ceiling — so this route minted an UNLIMITED workspace
+    // per call. It now seats the same platform default (`free`) a signup gets; the capture below is
+    // unaffected, because this arm writes its contact with its own `INSERT INTO contacts` further
+    // down and consults no ceiling (t_e2364c41).
+    let mut tx = s.db.begin().await?;
+    let created: Option<(Uuid,)> = sqlx::query_as(
         r#"INSERT INTO tenants (id, name, slug, probe_harness, created_at, updated_at)
            VALUES ($1, $2, $3, $4, NOW(), NOW())
-           ON CONFLICT (id) DO NOTHING"#,
+           ON CONFLICT (id) DO NOTHING
+           RETURNING id"#,
     )
     .bind(tenant_id)
     .bind(&tenant_name)
     .bind(tenant_id.to_string())
     .bind(&probe_harness)
-    .execute(&s.db)
-    .await;
+    .fetch_optional(&mut *tx)
+    .await?;
+    if created.is_some() {
+        crate::billing::seat_default_plan(&mut tx, tenant_id).await?;
+    }
+    tx.commit().await?;
 
     tracing::info!(
         "tag_provision: created tenant {} ({})",

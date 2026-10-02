@@ -112,15 +112,25 @@ pub async fn handle_tag_sync(
         // from a customer's on every sweep arm. Same helper as the public signup path; NULL
         // when the header is absent or invalid (= the previous behaviour).
         let probe_harness = crate::auth::handlers::harness_marker(&headers);
-        let _ = sqlx::query(
-            "INSERT INTO tenants (id, name, slug, probe_harness, created_at, updated_at) VALUES ($1, $2, $3, $4, NOW(), NOW())"
+        // The mint and its plan row commit TOGETHER (kanban t_6f225dd4): a tenant with no
+        // `tenant_plans` row resolves as `no_plan` — every module granted, no numeric ceiling — so
+        // this auto-create used to manufacture an unlimited workspace per unknown tenant_id. It now
+        // seats the platform default (`free`) a signup gets, and the lead upsert below is untouched
+        // (it writes its own contact rows and consults no ceiling, t_e2364c41).
+        let mut tx = s.db.begin().await?;
+        let created: Option<(Uuid,)> = sqlx::query_as(
+            "INSERT INTO tenants (id, name, slug, probe_harness, created_at, updated_at) VALUES ($1, $2, $3, $4, NOW(), NOW()) ON CONFLICT (id) DO NOTHING RETURNING id"
         )
         .bind(tenant_id)
         .bind(&tenant_name)
         .bind(tenant_id.to_string())
         .bind(&probe_harness)
-        .execute(&s.db)
-        .await;
+        .fetch_optional(&mut *tx)
+        .await?;
+        if created.is_some() {
+            crate::billing::seat_default_plan(&mut tx, tenant_id).await?;
+        }
+        tx.commit().await?;
 
         tracing::info!(
             "TagSync: Auto-created tenant {} ({})",
