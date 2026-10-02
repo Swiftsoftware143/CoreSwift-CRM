@@ -8,9 +8,17 @@ use uuid::Uuid;
 /// (that is what the column default encodes), and the API therefore always hands back a real
 /// boolean instead of failing to decode a NULL. The engine's filters use `is_active IS NOT FALSE`
 /// for the same reason.
-pub const RULE_COLUMNS: &str = "id, tenant_id, name, description, trigger_type, trigger_config, \
-                                action_type, action_config, COALESCE(is_active, true) AS is_active, \
-                                created_at, updated_at";
+/// The column list as a LITERAL macro, so every statement that projects it is assembled by the
+/// COMPILER via `concat!` rather than by `format!` inside a request (gate rule 5d / class 14: a
+/// query must not be BUILT at run time). The bytes are identical to the `const` this replaced.
+macro_rules! rule_columns {
+    () => {
+        "id, tenant_id, name, description, trigger_type, trigger_config, \
+         action_type, action_config, COALESCE(is_active, true) AS is_active, \
+         created_at, updated_at"
+    };
+}
+pub(crate) use rule_columns;
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct AutomationRule {

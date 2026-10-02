@@ -7,7 +7,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use super::models::*;
-use super::opportunity::{OpportunityFull, OPP_COLS};
+use super::opportunity::{opp_cols, OpportunityFull};
 use crate::audit;
 use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
@@ -252,8 +252,12 @@ pub async fn move_opportunity(
     .ok_or(AppError::NotFound(format!("Stage {} not found", stage_id)))?;
 
     // `value` is NUMERIC in Postgres: decode it as float8 (see OPP_COLS) or sqlx rejects the row.
-    let opp_sql = format!("SELECT {OPP_COLS} FROM opportunities WHERE id = $1 AND tenant_id = $2");
-    let opp = sqlx::query_as::<_, OpportunityFull>(&opp_sql)
+    let opp_sql = concat!(
+        "SELECT ",
+        opp_cols!(),
+        " FROM opportunities WHERE id = $1 AND tenant_id = $2"
+    );
+    let opp = sqlx::query_as::<_, OpportunityFull>(opp_sql)
         .bind(opportunity_id)
         .bind(tenant_id)
         .fetch_optional(&state.db)

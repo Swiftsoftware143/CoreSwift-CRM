@@ -1,5 +1,5 @@
 use super::actions;
-use super::models::{AutomationRule, RULE_COLUMNS};
+use super::models::{rule_columns, AutomationRule};
 use crate::errors::AppError;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -63,8 +63,8 @@ pub async fn evaluate_tag_triggers(
     };
 
     for tt in &trigger_types {
-        let rules = sqlx::query_as::<_, AutomationRule>(&format!(
-            "SELECT {RULE_COLUMNS} FROM automation_rules WHERE tenant_id=$1 AND trigger_type=$2 AND is_active IS NOT FALSE"
+        let rules = sqlx::query_as::<_, AutomationRule>(concat!(
+            "SELECT ", rule_columns!(), " FROM automation_rules WHERE tenant_id=$1 AND trigger_type=$2 AND is_active IS NOT FALSE"
         ))
         .bind(tenant_id).bind(tt).fetch_all(db).await?;
 
@@ -111,7 +111,7 @@ pub async fn fire_score_trigger(
     total_score: i32,
     category: &str,
 ) {
-    let Ok(rules) = sqlx::query_as::<_, AutomationRule>(&format!("SELECT {RULE_COLUMNS} FROM automation_rules WHERE tenant_id=$1 AND trigger_type='ScoreChanged' AND is_active IS NOT FALSE"))
+    let Ok(rules) = sqlx::query_as::<_, AutomationRule>(concat!("SELECT ", rule_columns!(), " FROM automation_rules WHERE tenant_id=$1 AND trigger_type='ScoreChanged' AND is_active IS NOT FALSE"))
         .bind(tenant_id).fetch_all(db).await else { return };
     for rule in rules {
         let should = match rule.trigger_config.get("category").and_then(|v| v.as_str()) {
@@ -151,8 +151,18 @@ pub async fn fire_list_trigger(
     // `trigger_type` is a plain varchar(50) column — the dropped `::trigger_type` cast named an
     // enum type that does not exist in this database (42704), which silently turned every
     // list-triggered rule into a no-op (the `let Ok(...) else { return }` below swallowed it).
-    let Ok(rules) = sqlx::query_as::<_, AutomationRule>(&format!("SELECT {RULE_COLUMNS} FROM automation_rules WHERE tenant_id=$1 AND trigger_type=$2 AND is_active IS NOT FALSE"))
-        .bind(tenant_id).bind(trigger_type).fetch_all(db).await else { return };
+    let Ok(rules) = sqlx::query_as::<_, AutomationRule>(concat!(
+        "SELECT ",
+        rule_columns!(),
+        " FROM automation_rules WHERE tenant_id=$1 AND trigger_type=$2 AND is_active IS NOT FALSE"
+    ))
+    .bind(tenant_id)
+    .bind(trigger_type)
+    .fetch_all(db)
+    .await
+    else {
+        return;
+    };
     for rule in rules {
         if let Some(lid_str) = rule.trigger_config.get("list_id").and_then(|v| v.as_str()) {
             if let Ok(conf_lid) = Uuid::parse_str(lid_str) {

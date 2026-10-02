@@ -25,10 +25,20 @@ use crate::errors::{validate_pagination, ApiResult, AppError};
 use crate::AppState;
 
 /// Column list for reads: `value::float8` is required for f64 decoding.
-pub(crate) const OPP_COLS: &str =
-    "id, tenant_id, pipeline_id, stage_id, contact_id, company_id, name, \
-     notes, value::float8 AS value, currency, probability, expected_close_date, source, metadata, \
-     is_won, is_lost, lost_reason, created_at, updated_at";
+///
+/// It is exposed as a LITERAL macro (and still as a `const` for `&str` uses), so every statement
+/// that projects it is assembled by the COMPILER via `concat!` instead of by `format!` inside a
+/// request: gate rule 5d / class 14 — a query must not be BUILT at run time. `concat!` accepts a
+/// macro that expands to a literal, so the SQL text a request runs is a constant that a reader of
+/// this file can see, and the bytes are identical to what the `const` held before.
+macro_rules! opp_cols {
+    () => {
+        "id, tenant_id, pipeline_id, stage_id, contact_id, company_id, name, \
+         notes, value::float8 AS value, currency, probability, expected_close_date, source, metadata, \
+         is_won, is_lost, lost_reason, created_at, updated_at"
+    };
+}
+pub(crate) use opp_cols;
 
 /// Full opportunity representation used internally.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize)]
@@ -114,8 +124,10 @@ pub async fn list(
             ));
         }
     }
-    let sql = format!(
-        "SELECT {OPP_COLS} FROM opportunities \
+    let sql = concat!(
+        "SELECT ",
+        opp_cols!(),
+        " FROM opportunities \
          WHERE pipeline_id = $1 AND tenant_id = $2 \
            AND ($3::uuid IS NULL OR stage_id = $3) \
            AND ($4::uuid IS NULL OR contact_id = $4) \
@@ -125,7 +137,7 @@ pub async fn list(
                 OR ($5 = 'open' AND NOT is_won AND NOT is_lost)) \
          ORDER BY created_at DESC LIMIT $6 OFFSET $7"
     );
-    let opps = sqlx::query_as::<_, OpportunityFull>(&sql)
+    let opps = sqlx::query_as::<_, OpportunityFull>(sql)
         .bind(pipeline_id)
         .bind(tenant_id)
         .bind(params.stage_id)
@@ -200,12 +212,13 @@ pub async fn create(
         _ => first_stage.id,
     };
 
-    let sql = format!(
+    let sql = concat!(
         "INSERT INTO opportunities (id, tenant_id, pipeline_id, stage_id, contact_id, company_id, \
             name, notes, value, currency, probability, expected_close_date, source, metadata) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::float8,$10,$11,$12,$13,$14) RETURNING {OPP_COLS}"
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::float8,$10,$11,$12,$13,$14) RETURNING ",
+        opp_cols!()
     );
-    let opp = sqlx::query_as::<_, OpportunityFull>(&sql)
+    let opp = sqlx::query_as::<_, OpportunityFull>(sql)
         .bind(Uuid::new_v4())
         .bind(tenant_id)
         .bind(pipeline_id)
@@ -242,10 +255,12 @@ pub async fn get(
     Path((pipeline_id, id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let sql = format!(
-        "SELECT {OPP_COLS} FROM opportunities WHERE id = $1 AND pipeline_id = $2 AND tenant_id = $3"
+    let sql = concat!(
+        "SELECT ",
+        opp_cols!(),
+        " FROM opportunities WHERE id = $1 AND pipeline_id = $2 AND tenant_id = $3"
     );
-    let opp = sqlx::query_as::<_, OpportunityFull>(&sql)
+    let opp = sqlx::query_as::<_, OpportunityFull>(sql)
         .bind(id)
         .bind(pipeline_id)
         .bind(tenant_id)
@@ -262,7 +277,7 @@ pub async fn update(
     Json(req): Json<UpdateOpportunityRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let sql = format!(
+    let sql = concat!(
         r#"UPDATE opportunities SET name = COALESCE($1,name), notes = COALESCE($2,notes),
             value = COALESCE($3::float8,value), currency = COALESCE($4,currency),
             contact_id = COALESCE($5,contact_id), company_id = COALESCE($6,company_id),
@@ -270,9 +285,10 @@ pub async fn update(
             metadata = COALESCE($9,metadata), is_won = COALESCE($10,is_won),
             is_lost = COALESCE($11,is_lost), lost_reason = COALESCE($12,lost_reason),
             updated_at = NOW()
-           WHERE id = $13 AND pipeline_id = $14 AND tenant_id = $15 RETURNING {OPP_COLS}"#
+           WHERE id = $13 AND pipeline_id = $14 AND tenant_id = $15 RETURNING "#,
+        opp_cols!()
     );
-    let opp = sqlx::query_as::<_, OpportunityFull>(&sql)
+    let opp = sqlx::query_as::<_, OpportunityFull>(sql)
         .bind(&req.name)
         .bind(&req.notes)
         .bind(req.value)
