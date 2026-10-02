@@ -369,7 +369,7 @@ tier (the most expensive active row) grants every one of them.
 |---|---|---|---|
 | `limit_max_widgets` | limits | support widgets per account | `POST /api/widgets` |
 | `limit_max_industries` | limits | industry dashboards | `POST /api/industries` |
-| `limit_max_contacts` | limits | contacts | `POST /api/contacts`, `POST /api/csv/import/contacts`, `POST /api/external/*/contacts` — the paths where the **tenant itself** adds a contact. A lead **another app** captured is never refused (see *Capture over the ceiling* below) |
+| `limit_max_contacts` | limits | contacts | `POST /api/contacts`, `POST /api/csv/import/contacts` — the paths where the **workspace's own user** adds a contact. A lead **another app** captured is never refused, on any arm including the external api-key surface (see *Capture over the ceiling* below) |
 | `limit_max_users` | limits | active users (`users.is_active`) | `POST /api/auth/register` (accepting an invite) |
 | `limit_pipelines` | limits | pipelines | `POST /api/pipelines` |
 | `limit_integrations` | limits | connected integrations | `POST /api/integrations` |
@@ -398,11 +398,12 @@ against. A refused call is not counted, and a workspace with no active plan row 
 ### Capture over the ceiling — why a lead from another app is never refused
 
 `limit_max_contacts` is a hard stop **only** where the workspace's own user adds a contact: *Add
-Contact* in the console, the CSV import, and the external API-key surface. The six **ingest** arms
-that accept a lead **another app has already captured** are deliberately **not** gated:
+Contact* in the console and the CSV import. The seven **ingest** arms that accept a lead **another
+app has already captured** are deliberately **not** gated:
 
 | Ingest arm | Who feeds it |
 |---|---|
+| `POST /api/external/contacts` | the **spoke ingest** — the endpoint the Integration Centre hands a sibling app. FunnelSwift (`spawn_lead_push`), ADASwift, WorkflowSwift, IncentiveSwift, MissedCall Respondr and Multi-Directory push the leads they captured here (personal API key) |
 | `POST /api/internal/contacts` | Multi-Directory / ZaarHub lead sync (internal key) |
 | `POST /api/v1/webhooks/cross-app/tag-sync` | FunnelSwift lead + tag sync (internal key) |
 | `POST /api/v1/internal/tag-provision` | FunnelSwift tag provisioning (internal key) — it mints its own workspace per call, so it can never be over a ceiling |
@@ -415,6 +416,14 @@ push into the hub is a `tokio::spawn` whose only failure handling is a `warn!` l
 (`src/coreswift.rs`, `spawn_lead_push`) — there is no retry and no queue — so a **402** there does not
 upsell. It **silently drops a lead the sibling already captured**, and because the caller never reads
 the response, nobody ever sees the refusal.
+
+The external api-key surface (`POST /api/external/contacts`) was listed here as a tenant-facing add
+until 2026-10-02 (kanban `t_e2364c41`). Measuring its callers — the six sibling spokes above, with
+the fire-and-forget push — and reading this guide's own description of it as *the endpoint the
+Integration Centre hands to a spoke app* showed that classification was wrong: a key-holding
+workspace could lose every satellite lead it captured, silently, the moment it reached its ceiling.
+Its **new-row** arm now behaves like every other ingest arm. A re-delivered lead already resolved to
+its row and still does, at any count.
 
 What happens instead: the lead lands, the workspace's count goes **past** its ceiling, and the console
 says so. The workspace dropdown prints `Usage: 101/100 contacts ⚠ over plan limit` and the Dashboard

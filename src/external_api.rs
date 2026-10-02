@@ -333,20 +333,25 @@ async fn upsert_contact(
         }
     }
 
-    // New contact (the existing-row UPDATE arm above already returned) — the usage ceiling
-    // `limit_max_contacts` applies here and only here: a re-delivered contact that already exists
-    // must keep resolving to its row rather than start 402ing (kanban t_f49e4299).
-    let contact_usage = crate::features::count_contacts(&s.db, tenant_id).await;
-    crate::features::enforce_usage_limit(
-        &s.db,
-        tenant_id,
-        "limit_max_contacts",
-        "Contact",
-        "contacts",
-        contact_usage,
-    )
-    .await?;
-
+    // New contact (the existing-row UPDATE arm above already returned).
+    //
+    // NO `limit_max_contacts` guard here, deliberately (kanban t_e2364c41). This route is NOT a
+    // tenant-facing add: it is the hub's SPOKE INGEST. Its own module doc (top of this file) calls it
+    // the hub contract for the lead-capture spokes, and six sibling apps push the leads they already
+    // captured into it — FunnelSwift (`src/coreswift.rs::push_lead_to_coreswift`, via `spawn_lead_push`),
+    // ADASwift, WorkflowSwift, IncentiveSwift, MissedCall Respondr and Multi-Directory. Those pushes are
+    // fire-and-forget: FunnelSwift's is a `tokio::spawn` whose only failure handling is a
+    // `tracing::warn!` — no retry, no queue — so a 402 here does not upsell, it silently DROPS a lead
+    // the sibling already captured and nobody is told. A captured lead is therefore never refused
+    // (kanban t_3e3965fc, "capture over the ceiling"): the row lands, the workspace's count may pass
+    // its ceiling, and `GET /api/auth/me/usage` (`contacts_limit` / `contacts_over_limit`) plus the
+    // console readout tell the workspace it is over. The hard ceiling stays on the paths where the
+    // workspace's OWN user adds a contact — `POST /api/contacts` and the CSV import. This arm was
+    // wired as a hard stop by t_f49e4299 as "a tenant (or its own API key) ADDS a contact"; measuring
+    // the callers (and the app's own admin guide) showed that classification was wrong.
+    //
+    // The UPDATE arm above stays ungated too: a re-delivered lead must keep resolving to its row
+    // rather than start 402ing (t_f49e4299).
     let id = Uuid::new_v4();
     let attribution = json!({
         "source_app": source_app,
