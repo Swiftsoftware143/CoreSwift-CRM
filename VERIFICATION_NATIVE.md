@@ -96,13 +96,15 @@ All 6 connector files use identical function signatures:
 | `pull_entity` | `pub async fn pull_entity(creds: &serde_json::Value, entity_type: &str, filters: &HashMap<String, String>) -> Result<serde_json::Value, String>` | ✅ All 6 |
 | `get_meta` | `pub fn get_meta() -> serde_json::Value` | ✅ All 6 |
 
-Connectors verified:
+Connectors verified (vocabulary re-measured against each LIVE target 2026-10-02, kanban
+t_b43e4604 — every declared name below is a route a live request reached; see the module
+header of each file for the measurement table):
 1. ✅ **adaswift** — Admin, AdaSwift admin bearer token + base_url, entities: push(client), pull(reports). The five names originally declared here (push contact/client/trigger_campaign, pull campaigns/reports) all targeted `/api/*` paths AdaSwift does not serve (404 live); re-pointed at `POST /api/v1/clients` + `GET /api/v1/scan-reports`, and `contact`/`trigger_campaign`/`campaigns` retired because AdaSwift has no such entity (kanban t_8b81b1dd).
-2. ✅ **cheatlayer** — Admin, API key + base_url, entities: push(workflow/job/template), pull(workflows/jobs/templates/logs)
-3. ✅ **funnelswift** — Admin+Tenant, API key + webhook_secret, entities: push(lead/contact/funnel), pull(leads/contacts/funnels)
-4. ✅ **workflowswift** — Admin+Tenant, API key + base_url, entities: push(workflow/trigger), pull(workflows/runs/credits)
-5. ✅ **missedcall_responder** — Admin+Tenant, API key + base_url, entities: push(lead/contact/tenant_config/sms_reply), pull(leads/conversations/call_logs/tenant_settings)
-6. ✅ **multi_directory** — Admin+Tenant, API key + base_url, entities: push(business/listing/review_response/followup_rule), pull(businesses/listings/reviews/analytics/followup_status)
+2. ⚠️ **cheatlayer** — Admin, API key + base_url, entities: push(workflow/job/template), pull(workflows/jobs/templates/logs). NOT MEASURED: CheatLayer is a third-party hosted RPA tool with no local deployment, so no live target exists here; its `test()` (`/api/health`) and every entity path may or may not resolve — carded as a follow-up (needs a CheatLayer account). Note its `pull_entity` builds `{base}/{entity}` while `push_entity` builds `{base}/api/{entity}` and `test()` uses an `X-API-Key` header — internally inconsistent, unverified either way.
+3. ✅ **funnelswift** — Admin+Tenant, API key + base_url, entities: push(lead/funnel/tag), pull(leads/funnels/tags). `contact`/`contacts` retired (no such route or table). The prefix was also wrong: it built `{base}/v1/…` and probed `{base}/v1/health`, which nginx's SPA fallback answers 200 text/html to for ANY credential (a vacuous test); re-pointed at `{base}/api/v1/…` (kanban t_e8a7f651 / t_7225a94d / t_b43e4604).
+4. ✅ **workflowswift** — Admin+Tenant, API key + base_url, entities: push(workflow/trigger), pull(workflows/instances/credits). Every old path (`/health`, `/api/workflow`, `/api/trigger`, `/api/workflows`, `/api/runs`, `/api/credits`) answered 404; re-pointed at `/api/v1/workflows`, `/api/v1/workflows/trigger`, `/api/v1/instances` and `/api/v1/credits/balance`, and `runs` is declared as `instances` — WorkflowSwift's own name for a run.
+5. ✅ **missedcall_responder** — Admin+Tenant, API key (bearer token) + base_url, entities: push(lead/contact), pull(leads/contacts/messages/call_logs). Every old path answered 404 (bare `/api/*` never reaches its router); `tenant_config`/`sms_reply` (push) and `tenant_settings` (pull) retired — no such entity on the far side; `conversations` is declared as `messages`, the far side's name.
+6. ✅ **multi_directory** — Admin, API key (bearer token) + base_url, entities: push(none), pull(listings/reviews/analytics). Every old path answered 404; the push list is EMPTY because the only business create route (`POST /api/v1/directories/{slug}/businesses`) needs a directory slug the collected credentials do not carry, and `businesses`/`followup_status` (pull) have no route at all — the far side's business collection is `/api/v1/listings`.
 
 ---
 

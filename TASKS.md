@@ -146,11 +146,18 @@ _Last updated: 2026-10-02_
 - ✅ AdaSwift (admin-only) - client portal; push clients, pull scan reports (AdaSwift serves
   no campaign entity, so the old "push contacts, trigger campaigns" promise was retired —
   kanban t_8b81b1dd)
-- ✅ CheatLayer (admin-only) - RPA engine, trigger workflows
-- ✅ FunnelSwift (admin+tenant) - push/pull leads, funnels
-- ✅ WorkflowSwift (admin+tenant) - trigger/pull n8n workflows
-- ✅ MissedCall Responder (admin+tenant) - push leads, pull conversations, trigger SMS replies
-- ✅ Multi-Directory App (admin+tenant) - sync business listings, pull reviews/analytics
+- ⚠️ CheatLayer (admin-only) - RPA engine. NOT MEASURED: third-party hosted tool, no local
+  deployment to probe; its paths are unverified (follow-up card)
+- ✅ FunnelSwift (admin+tenant) - push leads/funnels/tags, pull the same; paths re-pointed at
+  `/api/v1/*` (the old `/v1/*` was answered by nginx's SPA shell, 200 to any credential)
+- ✅ WorkflowSwift (admin+tenant) - push workflow/trigger, pull workflows/instances/credits
+  (`/api/v1/*`; every old path 404'd — kanban t_b43e4604)
+- ✅ MissedCall Responder (admin+tenant) - push lead/contact, pull leads/contacts/messages/
+  call_logs; the old tenant_config/sms_reply/tenant_settings/conversations names were retired
+  (no such far-side entity — kanban t_b43e4604)
+- ✅ Multi-Directory App (admin-only) - PULL ONLY: listings/reviews/analytics. The old push
+  vocabulary and `businesses`/`followup_status` were retired — no caller-reachable route for
+  the credentials the Integration Center collects (kanban t_b43e4604)
 - ❌ ~~Ada Campaign Triggers~~ [RETIRED 2026-10-02 — kanban t_434b240b] - the table held 0 rows and
   no code path ever read `trigger_on`, so a trigger could never fire a campaign. Live probe: creating a
   `contact_created` trigger and then driving that event produced no outbound call at all. Routes,
