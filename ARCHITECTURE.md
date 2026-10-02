@@ -85,14 +85,18 @@ All apps share one Postgres instance (Docker: swift-postgres-1).
 - Onboarding survey system for city/preference config
 
 ### 3. CoreSwift CRM — CRM Platform
-- **Connector to FunnelSwift** via `src/native_apps/connectors/funnelswift.rs` — pushes leads,
-  contacts, funnels, tags and product selections (NOT plans)
+- **Connector to FunnelSwift** via `src/native_apps/connectors/funnelswift.rs` — pushes lead,
+  funnel and tag, and pulls leads, funnels and tags, against FunnelSwift's own routes (NOT plans);
+  the contact/contacts and product-selection entities were retired (kanban t_e8a7f651) because
+  FunnelSwift serves no such path
 - **Commission trigger**: `src/billing/handlers.rs` posts `POST /api/v1/internal/affiliate/upgrade-event`
   (`x-internal-key`) when a tenant moves onto a paid plan — CoreSwift's only affiliate write
 - **Webhook system** for cross-app events
 - **Branch**: `main`
-- **Affiliates module** (`/api/affiliates/*`): a tenant-LOCAL programme in this app's own database
-  (profile, products, referrals, payouts); it does not sync to FunnelSwift
+- **No affiliates module here**: the tenant-LOCAL programme that once lived in this app's own
+  database (profile, product-board and payout tables, plus its local affiliate routes) was
+  retired (kanban t_3d81b041) and its orphaned tables were dropped by migration 108 on
+  2026-10-02; the fleet's affiliate programme is FunnelSwift's
 
 ### 4. IncentiveSwift — Loyalty/Zaarcash Engine
 - **OWNS Zaarcash**: points per check-in, credit rate, offers, vouchers, rewards

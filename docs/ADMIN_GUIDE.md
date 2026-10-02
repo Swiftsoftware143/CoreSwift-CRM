@@ -117,7 +117,7 @@ FunnelSwift matches that email back to the affiliate lead, credits the commissio
 
 **Environment variables:** `FUNNELSWIFT_URL` (default `http://localhost:8080`) and `INTERNAL_SYNC_KEY` — the shared `x-internal-key` value the receiver checks. If `FUNNELSWIFT_URL` is empty, or the tenant has no owner email, the call is skipped and the rest of the app is unaffected.
 
-CoreSwift carries **no** affiliate system of its own (kanban t_3d81b041): the duplicate `/api/affiliates/*` routes, the CRM-side profile / payout / product-board code, the plan flag that gated them and the hub actions that exposed them to integrator webhook tokens were all retired, so the FunnelSwift programme above is the only affiliate system in the fleet. The now-empty schema (`affiliates`, `referrals`, `commission_payouts`, `affiliate_products`, `affiliate_product_selections`) is deliberately left in place — nothing in the app reads or writes it.
+CoreSwift carries **no** affiliate system of its own (kanban t_3d81b041): the duplicate local affiliate routes, the CRM-side profile / payout / product-board code, the plan flag that gated them and the hub actions that exposed them to integrator webhook tokens were all retired, so the FunnelSwift programme above is the only affiliate system in the fleet. The duplicate, orphaned schema went with them: migration `108_retire_dead_affiliate_schema.sql` (applied 2026-10-02) **dropped those tables from this app's database** — none of them exists here any more, verified live with `to_regclass()`, and nothing in the app reads or writes them. The commissionable catalogue the paragraph above describes is FunnelSwift's, in FunnelSwift's database, and is untouched by this app.
 
 ## Private Email — Admin Controls
 
