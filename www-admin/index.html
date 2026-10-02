@@ -1360,6 +1360,7 @@ function renderSiteConfigForm() {
 
   html += '<br><button class="btn btn-primary" onclick="saveSiteConfig()">💾 Save Site Configuration</button> ';
   html += '<button class="btn btn-secondary" onclick="loadSiteConfig()">🔄 Reload</button>';
+  html += '<p style="color:var(--text-secondary,#9ca3af);font-size:.82rem;margin-top:12px">Saving stores the settings row. The public marketing page and the legal pages are static files served by nginx; they are materialized on the host by the site applier within 5 minutes — this request does not rewrite them.</p>';
 
   document.getElementById('siteConfigForm').innerHTML = html;
 }
@@ -1401,7 +1402,14 @@ async function saveSiteConfig() {
 
   try {
     const res = await API.put('/admin/site', payload);
-    toast('Site configuration saved. Marketing HTML + legal pages regenerated.', 'success');
+    // The save is the DB row. The static marketing/legal pages are materialized on the HOST by
+    // /opt/swift/bin/cs-site-apply.sh (this service runs in a container with no mount for them), so
+    // the honest copy names that hop + its window instead of claiming this request rewrote them
+    // (kanban t_95402255; the ADASwift convention from t_1f427190).
+    const sp = (res && res.static_pages) || null;
+    toast(sp
+      ? 'Site settings saved. The static pages are materialized on the host by ' + sp.writer + ' - allow up to ' + (sp.within_minutes || 5) + ' minutes.'
+      : 'Site configuration saved.', 'success');
     SITE_CONFIG = { ...SITE_CONFIG, ...payload };
   } catch(e) {
     toast('Save failed: ' + e.message, 'error');
