@@ -94,16 +94,16 @@ pub(crate) async fn load_settings(
     })
 }
 
-/// Materialize `settings` into the static marketing page + the three legal pages.
+/// The files the applier OWNS, as pure render functions of the settings row — so a caller can
+/// compare the rendered bytes with what is served WITHOUT writing anything (`--check`).
 ///
-/// Returns `(written, skipped)`; each skipped entry is `(path, reason)`. Nothing here is fatal —
-/// the targets only exist where the files do, and the caller prints or returns the outcome so no
-/// surface can claim a regeneration that did not happen.
+/// Returns `(targets, skipped)`; each skipped entry is `(path, reason)`. `targets` is
+/// `(path, rendered_bytes)`.
 ///
 /// A legal field that is absent or blank is left ALONE (the code defaults carry `""`), so running
 /// the applier can never blank out a live policy page.
-pub(crate) fn apply_to_disk(settings: &serde_json::Value) -> (Vec<String>, Vec<(String, String)>) {
-    let mut written: Vec<String> = Vec::new();
+pub(crate) fn plan(settings: &serde_json::Value) -> (Vec<(String, String)>, Vec<(String, String)>) {
+    let mut targets: Vec<(String, String)> = Vec::new();
     let mut skipped: Vec<(String, String)> = Vec::new();
 
     if !std::path::Path::new(SITE_ROOT).is_dir() {
@@ -111,22 +111,12 @@ pub(crate) fn apply_to_disk(settings: &serde_json::Value) -> (Vec<String>, Vec<(
             SITE_ROOT.to_string(),
             "directory is not present in this runtime (host-only path)".to_string(),
         ));
-        return (written, skipped);
+        return (targets, skipped);
     }
 
     match fs::read_to_string(SITE_INDEX) {
-        Ok(before) => {
-            let after = inject_settings(&before, settings);
-            if after == before {
-                skipped.push((SITE_INDEX.to_string(), "unchanged".to_string()));
-            } else {
-                match fs::write(SITE_INDEX, &after) {
-                    Ok(_) => written.push(SITE_INDEX.to_string()),
-                    Err(e) => skipped.push((SITE_INDEX.to_string(), e.to_string())),
-                }
-            }
-        }
-        Err(e) => skipped.push((SITE_INDEX.to_string(), e.to_string())),
+        Ok(before) => targets.push((SITE_INDEX.to_string(), inject_settings(&before, settings))),
+        Err(e) => skipped.push((SITE_INDEX.to_string(), format!("unreadable: {}", e))),
     }
 
     for (slug, title, key) in [
@@ -134,18 +124,39 @@ pub(crate) fn apply_to_disk(settings: &serde_json::Value) -> (Vec<String>, Vec<(
         ("privacy", "Privacy Policy", "legal_privacy"),
         ("refunds", "Refund & Cancellation Policy", "legal_refunds"),
     ] {
-        // Blank or absent means "no policy text configured" -> leave the file that is there.
-        let text = match settings.get(key).and_then(|v| v.as_str()) {
-            Some(t) if !t.trim().is_empty() => t,
-            _ => continue,
-        };
         let path = format!("{}{}.html", SITE_ROOT, slug);
-        let page = legal_page(title, text);
+        match settings.get(key).and_then(|v| v.as_str()) {
+            // Blank or absent means "no policy text configured" -> leave the file that is there.
+            Some(t) if !t.trim().is_empty() => targets.push((path, legal_page(title, t))),
+            _ => skipped.push((
+                path,
+                format!(
+                    "{} is blank or absent - the published page is left alone",
+                    key
+                ),
+            )),
+        }
+    }
+
+    (targets, skipped)
+}
+
+/// Materialize `settings` into the static marketing page + the three legal pages.
+///
+/// Idempotent: a file is rewritten only when its bytes would change. Returns `(written, skipped)`;
+/// each skipped entry is `(path, reason)`. Nothing here is fatal — the targets only exist where the
+/// files do, and the caller prints the outcome so no surface can claim a regeneration that did not
+/// happen.
+pub(crate) fn apply_to_disk(settings: &serde_json::Value) -> (Vec<String>, Vec<(String, String)>) {
+    let (targets, mut skipped) = plan(settings);
+    let mut written: Vec<String> = Vec::new();
+
+    for (path, rendered) in targets {
         match fs::read_to_string(&path) {
-            Ok(before) if before == page => {
+            Ok(before) if before == rendered => {
                 skipped.push((path, "unchanged".to_string()));
             }
-            _ => match fs::write(&path, &page) {
+            _ => match fs::write(&path, rendered.as_bytes()) {
                 Ok(_) => written.push(path),
                 Err(e) => skipped.push((path, e.to_string())),
             },

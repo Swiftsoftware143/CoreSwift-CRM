@@ -120,24 +120,13 @@ async fn main() -> anyhow::Result<()> {
     //
     // Checked BEFORE the config/Redis/listener come up: it needs DATABASE_URL and nothing else, and
     // it must never start a second API against the live port.
+    //
+    //   crm-swift apply-site-settings            write only the files whose bytes would change
+    //   crm-swift apply-site-settings --check    render and report, write NOTHING
+    //   crm-swift apply-site-settings --emit DIR also write the rendered bytes under DIR (a
+    //                                            read-only-in-SITE_ROOT comparison artifact)
     if std::env::args().nth(1).as_deref() == Some("apply-site-settings") {
-        let url = std::env::var("DATABASE_URL")
-            .map_err(|_| anyhow::anyhow!("DATABASE_URL is not set"))?;
-        let db = db::connect(&url, 1, 4).await?;
-        let settings = crate::admin_actions::site_handler::load_settings(&db).await?;
-        let (written, skipped) = crate::admin_actions::site_handler::apply_to_disk(&settings);
-        for path in &written {
-            tracing::info!(path = %path, "site artifact written");
-        }
-        for (path, reason) in &skipped {
-            tracing::info!(path = %path, reason = %reason, "site artifact skipped");
-        }
-        // Exactly one machine-readable line for the cron log.
-        println!(
-            "site artifacts: written={} skipped={}",
-            written.len(),
-            skipped.len()
-        );
+        apply_site_settings_mode().await;
         return Ok(());
     }
 
@@ -651,6 +640,129 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     Ok(())
+}
+
+/// The host-side applier (`crm-swift apply-site-settings`, driven by /opt/swift/bin/cs-site-apply.sh
+/// from cron */5). It is the ONLY writer of /opt/swift/nginx/www/coreswift/*.
+///
+/// It prints one machine-readable summary line — `site artifacts: written=N skipped=M` — and one
+/// line per file it touched or deliberately left alone, so the cron log and the card's proof can
+/// both read what happened without a second probe.
+///
+/// `--check` renders and reports `state=unchanged|would-write` with both sha256s but writes
+/// NOTHING, which is the instrument a reconciliation uses BEFORE the first real apply: the appliers
+/// are idempotent only once the DB and the served bytes agree, so a row holding code defaults where
+/// the page holds authored copy would rewrite the live homepage on the first run (the near-miss
+/// caught on ADASwift, card t_1f427190). `--emit DIR` drops the rendered bytes elsewhere for a
+/// byte-for-byte diff.
+async fn apply_site_settings_mode() {
+    use sha2::{Digest, Sha256};
+
+    let args: Vec<String> = std::env::args().collect();
+    let check = args.iter().any(|a| a == "--check");
+    let emit_dir = args
+        .iter()
+        .position(|a| a == "--emit")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+
+    let url = match std::env::var("DATABASE_URL") {
+        Ok(u) => u,
+        Err(_) => {
+            eprintln!("apply-site-settings: DATABASE_URL is not set");
+            std::process::exit(2);
+        }
+    };
+
+    let db = match db::connect(&url, 1, 4).await {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("apply-site-settings: cannot connect to the database: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let settings = match crate::admin_actions::site_handler::load_settings(&db).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "apply-site-settings: cannot read the site settings row: {:?}",
+                e
+            );
+            std::process::exit(1);
+        }
+    };
+
+    let (targets, skipped) = crate::admin_actions::site_handler::plan(&settings);
+
+    // --emit: drop the rendered bytes somewhere else so they can be compared byte-for-byte with the
+    // served file WITHOUT this process writing anything under SITE_ROOT.
+    if let Some(dir) = emit_dir {
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            eprintln!(
+                "apply-site-settings: cannot create --emit dir {}: {}",
+                dir, e
+            );
+            std::process::exit(1);
+        }
+        for (path, rendered) in &targets {
+            let name = std::path::Path::new(path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "rendered".to_string());
+            let dest = std::path::Path::new(&dir).join(name);
+            if let Err(e) = std::fs::write(&dest, rendered.as_bytes()) {
+                eprintln!(
+                    "apply-site-settings: cannot write {}: {}",
+                    dest.display(),
+                    e
+                );
+                std::process::exit(1);
+            }
+            println!("emit {} -> {}", path, dest.display());
+        }
+    }
+
+    if check {
+        for (path, reason) in &skipped {
+            println!("skip {} {}", path, reason);
+        }
+        for (path, rendered) in &targets {
+            let now = std::fs::read_to_string(path).unwrap_or_default();
+            let state = if now == *rendered {
+                "unchanged"
+            } else {
+                "would-write"
+            };
+            println!(
+                "check {} state={} sha256={} served_sha256={}",
+                path,
+                state,
+                hex::encode(Sha256::digest(rendered.as_bytes())),
+                hex::encode(Sha256::digest(now.as_bytes())),
+            );
+        }
+        println!(
+            "site artifacts (check, nothing written): targets={} skipped={}",
+            targets.len(),
+            skipped.len()
+        );
+        return;
+    }
+
+    let (written, skipped) = crate::admin_actions::site_handler::apply_to_disk(&settings);
+    for path in &written {
+        println!("write {} (the rendered bytes differ from the file)", path);
+    }
+    for (path, reason) in &skipped {
+        println!("skip {} {}", path, reason);
+    }
+    // Exactly one machine-readable line for the cron log.
+    println!(
+        "site artifacts: written={} skipped={}",
+        written.len(),
+        skipped.len()
+    );
 }
 
 /// Set when the boot migration run failed and `MIGRATIONS_FATAL=0` let this process boot anyway.
