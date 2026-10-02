@@ -6,6 +6,11 @@ use std::fs;
 
 const SITE_KEY: &str = "coreswift_site";
 
+/// The legal keys `preserve_nonempty_legal` protects at the STORE. The code defaults carry `""`
+/// for all three, so a GET-then-PUT round trip and an untouched panel textarea look identical on
+/// the wire — the guard is what tells them apart from "the operator cleared the field".
+const LEGAL_KEYS: [&str; 3] = ["legal_tos", "legal_privacy", "legal_refunds"];
+
 /// Where the static marketing page and the three legal pages live. These are HOST paths: the app
 /// runs in a container with ZERO mounts, so the only process that can write them is the same
 /// binary executed on the host (`crm-swift apply-site-settings`, driven by
@@ -51,13 +56,19 @@ pub async fn update_site(
         .bind(SITE_KEY)
         .fetch_optional(&state.db)
         .await?;
-    let merged = match existing {
-        Some(r) => {
-            let v: serde_json::Value = r.try_get("value")?;
-            merge_json(v, req)
-        }
+    let existing_value: Option<serde_json::Value> = match existing {
+        Some(r) => Some(r.try_get("value")?),
+        None => None,
+    };
+    let merged = match &existing_value {
+        Some(v) => merge_json(v.clone(), req),
         None => req,
     };
+    // The STORE-side value guard: a blank/absent incoming `legal_*` keeps the stored text. Without
+    // it a save from the Site Configuration panel — or any client replaying a GET body, since GET
+    // merges the code defaults and those carry `""` — silently wipes the operator's policy text out
+    // of the row (kanban t_c44c6649). Same arm as ADASwift (t_1f427190) and missedcallrespondr.
+    let (merged, preserved) = preserve_nonempty_legal(existing_value.as_ref(), merged);
     sqlx::query("INSERT INTO admin_settings (key, value, description, updated_at) VALUES ($1, $2::jsonb, 'CoreSwift CRM site settings', NOW()) ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()")
         .bind(SITE_KEY).bind(merged.to_string()).execute(&state.db).await?;
     // Deliberately NO file writes on this path. The static pages are HOST paths and this service
@@ -68,11 +79,55 @@ pub async fn update_site(
     Ok(Json(json!({
         "message": "Site settings saved",
         "settings": merged,
+        // The keys whose stored text a blank incoming value was refused for — the caller can see
+        // exactly what was kept instead of having to diff the row (kanban t_c44c6649).
+        "preserved": preserved,
         "static_pages": {
             "writer": "/opt/swift/bin/cs-site-apply.sh (crm-swift apply-site-settings)",
             "within_minutes": 5
         }
     })))
+}
+
+/// A blank string (or null, or a missing key) is how "the operator cleared this field" and "this
+/// form was rendered from a GET that merged the code defaults" look identical on the wire — and the
+/// defaults carry `""` for all three legal keys. Refuse the blank at the STORE when the row already
+/// holds text, so a GET-then-PUT round trip can never blank a live policy's source text.
+///
+/// Ported from ADASwift (`preserve_nonblank`, kanban t_1f427190) and missedcallrespondr
+/// (`preserve_nonempty_legal`, kanban t_2f99528b), which share this applier pattern. Returns the
+/// merged value plus the keys whose stored text was kept, so the 2xx body can report what it kept.
+fn preserve_nonempty_legal(
+    existing: Option<&serde_json::Value>,
+    mut merged: serde_json::Value,
+) -> (serde_json::Value, Vec<String>) {
+    let mut preserved = Vec::new();
+    for key in LEGAL_KEYS {
+        let stored_has_text = existing
+            .and_then(|e| e.get(key))
+            .map(|v| !is_blank(Some(v)))
+            .unwrap_or(false);
+        if stored_has_text && is_blank(merged.get(key)) {
+            if let (Some(dst), Some(src)) = (merged.get_mut(key), existing.and_then(|e| e.get(key)))
+            {
+                *dst = src.clone();
+                preserved.push(key.to_string());
+                tracing::warn!(
+                    key,
+                    "blank legal value refused: the stored legal text was preserved"
+                );
+            }
+        }
+    }
+    (merged, preserved)
+}
+
+fn is_blank(v: Option<&serde_json::Value>) -> bool {
+    match v {
+        None | Some(serde_json::Value::Null) => true,
+        Some(serde_json::Value::String(s)) => s.trim().is_empty(),
+        Some(_) => false,
+    }
 }
 
 /// The stored settings merged over the code defaults — the same value `get_site` serves, and the
@@ -508,5 +563,40 @@ mod tests {
         assert!(targets.iter().all(|(p, _)| !p.ends_with("terms.html")));
         assert!(skipped.iter().any(|(p, _)| p.ends_with("refunds.html")));
         assert!(skipped.iter().any(|(p, _)| p.ends_with("terms.html")));
+    }
+
+    // The STORE guard (ported from ADASwift t_1f427190 / missedcallrespondr t_2f99528b): `get_site`
+    // merges the code defaults, and those carry `""` for all three legal keys, so a GET-then-PUT
+    // round trip used to blank a live policy's source text inside the row.
+    #[test]
+    fn a_blank_legal_value_never_replaces_stored_text_at_the_store() {
+        let existing = json!({
+            "legal_tos": "stored terms",
+            "legal_privacy": "",
+            "legal_refunds": serde_json::Value::Null
+        });
+        // blank / whitespace / already-blank stored: only the stored non-blank text is kept.
+        let (merged, preserved) = preserve_nonempty_legal(
+            Some(&existing),
+            json!({"legal_tos": "", "legal_privacy": "   ", "legal_refunds": "kept"}),
+        );
+        assert_eq!(merged["legal_tos"], "stored terms");
+        assert_eq!(merged["legal_privacy"], "   ");
+        assert_eq!(merged["legal_refunds"], "kept");
+        assert_eq!(preserved, vec!["legal_tos".to_string()]);
+        assert!(is_blank(Some(&serde_json::Value::Null))); // null counts as blank
+        assert!(!is_blank(Some(&json!("x"))));
+        assert!(is_blank(None)); // absent counts as blank
+
+        // Positive control: real new text DOES overwrite the stored text.
+        let (moved, kept) =
+            preserve_nonempty_legal(Some(&existing), json!({"legal_tos": "new terms"}));
+        assert_eq!(moved["legal_tos"], "new terms");
+        assert!(kept.is_empty());
+
+        // Nothing stored: a blank passes through and nothing is reported as preserved.
+        let (fresh, none_kept) = preserve_nonempty_legal(None, json!({"legal_tos": ""}));
+        assert_eq!(fresh["legal_tos"], "");
+        assert!(none_kept.is_empty());
     }
 }
