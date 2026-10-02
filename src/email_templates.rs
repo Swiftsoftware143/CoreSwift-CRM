@@ -39,8 +39,18 @@ use crate::AppState;
 
 /// Every column of the live table, listed explicitly so a future column cannot change what this
 /// module decodes.
-const TEMPLATE_COLS: &str = "id, aid, tenant_id, name, subject, body, html_body, body_text, \
-                             is_default, template_type, created_at, updated_at";
+///
+/// A LITERAL macro, not a `const` interpolated into a `format!` (kanban t_a4cb4ba7): every statement
+/// that projects this list is assembled by the COMPILER through `concat!`, so the SQL text a request
+/// runs is a compile-time constant a reader of this file can see — gate rule 5d / class 14, a query
+/// must not be BUILT at run time. The bytes are identical to what the `const` held before
+/// (`concat!` collapses the same `\`-continuations `format!` did).
+macro_rules! template_cols {
+    () => {
+        "id, aid, tenant_id, name, subject, body, html_body, body_text, \
+         is_default, template_type, created_at, updated_at"
+    };
+}
 
 /// Full email template row, exactly as tolerant as the table: `aid`, `tenant_id`, the bodies and
 /// the timestamps are all NULLABLE there (the seeded platform row has `aid`/`tenant_id` NULL), and
@@ -138,8 +148,10 @@ pub async fn list(
     let offset = (page - 1) * limit;
 
     let items = if let Some(tt) = &query.template_type {
-        sqlx::query_as::<_, EmailTemplate>(&format!(
-            "SELECT {TEMPLATE_COLS} FROM email_templates WHERE template_type = $1 \
+        sqlx::query_as::<_, EmailTemplate>(&concat!(
+            "SELECT ",
+            template_cols!(),
+            " FROM email_templates WHERE template_type = $1 \
              ORDER BY name LIMIT $2 OFFSET $3"
         ))
         .bind(tt)
@@ -148,8 +160,10 @@ pub async fn list(
         .fetch_all(&state.db)
         .await?
     } else {
-        sqlx::query_as::<_, EmailTemplate>(&format!(
-            "SELECT {TEMPLATE_COLS} FROM email_templates ORDER BY name LIMIT $1 OFFSET $2"
+        sqlx::query_as::<_, EmailTemplate>(&concat!(
+            "SELECT ",
+            template_cols!(),
+            " FROM email_templates ORDER BY name LIMIT $1 OFFSET $2"
         ))
         .bind(limit)
         .bind(offset)
@@ -175,8 +189,10 @@ pub async fn get_handler(
 ) -> ApiResult<Json<Value>> {
     require_platform_admin(&state.db, &claims.sub).await?;
 
-    let item = sqlx::query_as::<_, EmailTemplate>(&format!(
-        "SELECT {TEMPLATE_COLS} FROM email_templates WHERE id = $1"
+    let item = sqlx::query_as::<_, EmailTemplate>(&concat!(
+        "SELECT ",
+        template_cols!(),
+        " FROM email_templates WHERE id = $1"
     ))
     .bind(id)
     .fetch_optional(&state.db)
@@ -230,8 +246,10 @@ pub async fn create(
     .await
     .map_err(map_write_error)?;
 
-    let item = sqlx::query_as::<_, EmailTemplate>(&format!(
-        "SELECT {TEMPLATE_COLS} FROM email_templates WHERE id = $1"
+    let item = sqlx::query_as::<_, EmailTemplate>(&concat!(
+        "SELECT ",
+        template_cols!(),
+        " FROM email_templates WHERE id = $1"
     ))
     .bind(id)
     .fetch_one(&state.db)
@@ -278,8 +296,10 @@ pub async fn update(
         return Err(AppError::NotFound("Email template not found".to_string()));
     }
 
-    let item = sqlx::query_as::<_, EmailTemplate>(&format!(
-        "SELECT {TEMPLATE_COLS} FROM email_templates WHERE id = $1"
+    let item = sqlx::query_as::<_, EmailTemplate>(&concat!(
+        "SELECT ",
+        template_cols!(),
+        " FROM email_templates WHERE id = $1"
     ))
     .bind(id)
     .fetch_one(&state.db)

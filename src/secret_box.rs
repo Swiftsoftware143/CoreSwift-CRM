@@ -531,32 +531,51 @@ pub async fn validate_integration_target_guard(db: &PgPool) -> Result<bool, AppE
 // one manual `UPDATE` can reintroduce that silently. This audit is the assertion — it runs on every
 // boot and, with `CORESWIFT_SECRET_AUDIT=1`, as a one-shot check that exits non-zero.
 
-/// `(table, secret column)` for tables that carry a `tenant_id`. A value here is acceptable when it
-/// is `enc:v1:`-sealed or a ciphertext this tenant's key can actually open.
-const TENANT_SECRET_COLUMNS: &[(&str, &str)] = &[
-    ("provider_keys", "api_key"),
-    ("private_email_api_keys", "api_key_encrypted"),
-    ("private_email_domains", "mailgun_api_key"),
-    ("private_email_domains", "smtp_password_encrypted"),
-    ("private_email_domains", "webhook_signing_key_encrypted"),
-    // t_477d46c2: the portfolio integration target's outbound webhook credential. Sealed on
-    // create since this run; the row here makes a regression fail loudly at every boot.
-    ("integration_targets", "api_key"),
-    // t_6718dc86: the outbound webhook signing secret. Sealed on create/update since this run;
-    // the API now returns a mask instead of the raw value.
-    ("webhook_endpoints", "secret"),
-    // t_706da9df: the Google OAuth refresh token on a booking calendar — a standing grant on the
-    // tenant's Google account. Sealed on write, opened at the one read-for-use site.
-    ("booking_calendars", "google_refresh_token"),
-];
+/// The tenant-scoped secret columns, one macro call per entry.
+///
+/// This is a macro rather than a runtime `&[(table, column)]` table BECAUSE the statement that reads
+/// each column must be a compile-time literal (gate rule 5d / class 14, kanban t_a4cb4ba7): `$mac!`
+/// receives each name pair as a LITERAL and builds its SELECT with `concat!` instead of `format!`, so
+/// the SQL a boot run executes is fixed at compile time — and the names stay in ONE place, so a table
+/// or column rename cannot silently drift out of a hand-written statement.
+macro_rules! tenant_secret_columns {
+    ($mac:ident, $db:ident, $out:ident) => {
+        $mac!($db, $out, "provider_keys", "api_key");
+        $mac!($db, $out, "private_email_api_keys", "api_key_encrypted");
+        $mac!($db, $out, "private_email_domains", "mailgun_api_key");
+        $mac!(
+            $db,
+            $out,
+            "private_email_domains",
+            "smtp_password_encrypted"
+        );
+        $mac!(
+            $db,
+            $out,
+            "private_email_domains",
+            "webhook_signing_key_encrypted"
+        );
+        // t_477d46c2: the portfolio integration target's outbound webhook credential. Sealed on
+        // create since this run; the row here makes a regression fail loudly at every boot.
+        $mac!($db, $out, "integration_targets", "api_key");
+        // t_6718dc86: the outbound webhook signing secret. Sealed on create/update since this run;
+        // the API now returns a mask instead of the raw value.
+        $mac!($db, $out, "webhook_endpoints", "secret");
+        // t_706da9df: the Google OAuth refresh token on a booking calendar — a standing grant on the
+        // tenant's Google account. Sealed on write, opened at the one read-for-use site.
+        $mac!($db, $out, "booking_calendars", "google_refresh_token");
+    };
+}
 
 /// `(table, secret column)` for GLOBAL config rows. There is no tenant id to derive a key from, so a
 /// non-empty value here can never be sealed — the only safe state is empty, and a populated value is
 /// reported as a finding so whoever fills it in knows to move it to a tenant slot.
-const GLOBAL_SECRET_COLUMNS: &[(&str, &str)] = &[
-    ("telnyx_config", "api_key"),
-    ("telnyx_config", "webhook_secret"),
-];
+macro_rules! global_secret_columns {
+    ($mac:ident, $db:ident, $out:ident) => {
+        $mac!($db, $out, "telnyx_config", "api_key");
+        $mac!($db, $out, "telnyx_config", "webhook_secret");
+    };
+}
 
 /// One stored value that must not be there.
 #[derive(Debug, serde::Serialize)]
@@ -594,103 +613,169 @@ fn ciphertext_shaped(stored: &str) -> bool {
     }
 }
 
-/// Every stored secret that is in the clear or that the app cannot open. A healthy database has
-/// `plaintext == []`; `unreadable` should be empty too, and is worth investigating when it is not.
-pub async fn audit_plaintext_secrets(db: &PgPool) -> Result<SecretAudit, AppError> {
-    let mut out = SecretAudit::default();
+/// Emit one audit pass over a single tenant-scoped secret column: the SELECT is a `concat!` of two
+/// LITERALS handed in by `tenant_secret_columns!` — never `format!`, never a run-time build
+/// (gate rule 5d / class 14, kanban t_a4cb4ba7).
+macro_rules! audit_tenant_secret_column {
+    ($db:ident, $out:ident, $table:literal, $column:literal) => {{
+        audit_one_tenant_secret_column(
+            $db,
+            &mut $out,
+            $table,
+            $column,
+            concat!(
+                "SELECT id, tenant_id, ",
+                $column,
+                " AS v FROM ",
+                $table,
+                " WHERE ",
+                $column,
+                " IS NOT NULL AND ",
+                $column,
+                " <> ''"
+            ),
+        )
+        .await?;
+    }};
+}
 
-    for (table, column) in TENANT_SECRET_COLUMNS {
-        let sql = format!(
-            "SELECT id, tenant_id, {column} AS v FROM {table} \
-             WHERE {column} IS NOT NULL AND {column} <> ''"
-        );
-        let rows: Vec<(Uuid, Uuid, String)> = sqlx::query_as(&sql).fetch_all(db).await?;
-        let mut sealed = 0usize;
-        let mut opened = 0usize;
-        // Counts are per-table deltas, not the running totals: logging `out.plaintext.len()` here
-        // printed the CUMULATIVE number on every table's line, so a single bad row in one table made
-        // eight tables each report `unreadable=2` (t_45772522).
-        let plaintext_before = out.plaintext.len();
-        let unreadable_before = out.unreadable.len();
-        for (row_id, tenant_id, stored) in rows {
-            if is_sealed(&stored) {
-                // A PREFIX IS NOT PROOF. `sealed += 1` used to be decided by the string alone, so a
-                // row wearing `enc:v1:` that this deployment cannot open was reported as healthy
-                // forever — the same blindness that hid two dead rows in private_email_api_keys
-                // (t_45772522). A sealed row counts only once the key actually opens it; otherwise
-                // it is a finding, exactly like an unopenable unprefixed value.
-                if opens_with_configured(tenant_id, &stored)
-                    || open_legacy(tenant_id, &stored).is_some()
-                {
-                    sealed += 1;
-                    continue;
-                }
-                out.unreadable.push(SecretFinding {
-                    table,
-                    column,
-                    row_id,
-                    tenant_id: Some(tenant_id),
-                    reason:
-                        "enc:v1:-sealed but neither the configured nor the built-in key opens it \
-                             (rotated or lost master key, or written by another deployment)",
-                });
-                continue;
-            }
-            // Not prefixed: it must still be ciphertext from the older `encryption::encrypt_api_key`
-            // shape (that is what the private-email tables store). AES-GCM authenticates, so a
-            // plaintext value cannot pass this by accident. Both the configured and the legacy key
-            // are tried, so this reports "the app can read it" exactly as `open` does.
-            if open_configured(tenant_id, &stored).is_some()
+/// One tenant-scoped secret column: read every non-empty value and classify it. `sql` is always a
+/// compile-time literal built by `audit_tenant_secret_column!` through `concat!`.
+async fn audit_one_tenant_secret_column(
+    db: &PgPool,
+    out: &mut SecretAudit,
+    table: &'static str,
+    column: &'static str,
+    sql: &'static str,
+) -> Result<(), AppError> {
+    let rows: Vec<(Uuid, Uuid, String)> = sqlx::query_as(sql).fetch_all(db).await?;
+    let mut sealed = 0usize;
+    let mut opened = 0usize;
+    // Counts are per-table deltas, not the running totals: logging `out.plaintext.len()` here
+    // printed the CUMULATIVE number on every table's line, so a single bad row in one table made
+    // eight tables each report `unreadable=2` (t_45772522).
+    let plaintext_before = out.plaintext.len();
+    let unreadable_before = out.unreadable.len();
+    for (row_id, tenant_id, stored) in rows {
+        if is_sealed(&stored) {
+            // A PREFIX IS NOT PROOF. `sealed += 1` used to be decided by the string alone, so a
+            // row wearing `enc:v1:` that this deployment cannot open was reported as healthy
+            // forever — the same blindness that hid two dead rows in private_email_api_keys
+            // (t_45772522). A sealed row counts only once the key actually opens it; otherwise
+            // it is a finding, exactly like an unopenable unprefixed value.
+            if opens_with_configured(tenant_id, &stored)
                 || open_legacy(tenant_id, &stored).is_some()
             {
-                opened += 1;
+                sealed += 1;
                 continue;
             }
-            let shaped = ciphertext_shaped(&stored);
-            let finding = SecretFinding {
+            out.unreadable.push(SecretFinding {
                 table,
                 column,
                 row_id,
                 tenant_id: Some(tenant_id),
-                reason: if shaped {
-                    "ciphertext this tenant's key cannot open (rotated secret, or written by another deployment)"
-                } else {
-                    "not enc:v1:-sealed and not decryptable ciphertext — this looks like a plaintext credential"
-                },
-            };
-            if shaped {
-                out.unreadable.push(finding);
-            } else {
-                out.plaintext.push(finding);
-            }
+                reason: "enc:v1:-sealed but neither the configured nor the built-in key opens it \
+                             (rotated or lost master key, or written by another deployment)",
+            });
+            continue;
         }
-        tracing::info!(
+        // Not prefixed: it must still be ciphertext from the older `encryption::encrypt_api_key`
+        // shape (that is what the private-email tables store). AES-GCM authenticates, so a
+        // plaintext value cannot pass this by accident. Both the configured and the legacy key
+        // are tried, so this reports "the app can read it" exactly as `open` does.
+        if open_configured(tenant_id, &stored).is_some()
+            || open_legacy(tenant_id, &stored).is_some()
+        {
+            opened += 1;
+            continue;
+        }
+        let shaped = ciphertext_shaped(&stored);
+        let finding = SecretFinding {
             table,
             column,
-            sealed,
-            opened,
-            plaintext = out.plaintext.len() - plaintext_before,
-            unreadable = out.unreadable.len() - unreadable_before,
-            "secret column audit"
-        );
-    }
-
-    for (table, column) in GLOBAL_SECRET_COLUMNS {
-        let sql = format!(
-            "SELECT id, {column} AS v FROM {table} WHERE {column} IS NOT NULL AND {column} <> ''"
-        );
-        let rows: Vec<(Uuid, String)> = sqlx::query_as(&sql).fetch_all(db).await?;
-        for (row_id, _stored) in rows {
-            out.plaintext.push(SecretFinding {
-                table,
-                column,
-                row_id,
-                tenant_id: None,
-                reason:
-                    "global config row: no tenant key to seal with, so the value must stay empty",
-            });
+            row_id,
+            tenant_id: Some(tenant_id),
+            reason: if shaped {
+                "ciphertext this tenant's key cannot open (rotated secret, or written by another deployment)"
+            } else {
+                "not enc:v1:-sealed and not decryptable ciphertext — this looks like a plaintext credential"
+            },
+        };
+        if shaped {
+            out.unreadable.push(finding);
+        } else {
+            out.plaintext.push(finding);
         }
     }
+    tracing::info!(
+        table,
+        column,
+        sealed,
+        opened,
+        plaintext = out.plaintext.len() - plaintext_before,
+        unreadable = out.unreadable.len() - unreadable_before,
+        "secret column audit"
+    );
+    Ok(())
+}
+
+/// Emit one audit pass over a single GLOBAL secret column (see `audit_tenant_secret_column!`).
+macro_rules! audit_global_secret_column {
+    ($db:ident, $out:ident, $table:literal, $column:literal) => {{
+        audit_one_global_secret_column(
+            $db,
+            &mut $out,
+            $table,
+            $column,
+            concat!(
+                "SELECT id, ",
+                $column,
+                " AS v FROM ",
+                $table,
+                " WHERE ",
+                $column,
+                " IS NOT NULL AND ",
+                $column,
+                " <> ''"
+            ),
+        )
+        .await?;
+    }};
+}
+
+/// One GLOBAL config secret column: a non-empty value has no tenant key to seal with, so it is always
+/// a finding. `sql` is a compile-time literal built by `audit_global_secret_column!`.
+async fn audit_one_global_secret_column(
+    db: &PgPool,
+    out: &mut SecretAudit,
+    table: &'static str,
+    column: &'static str,
+    sql: &'static str,
+) -> Result<(), AppError> {
+    let rows: Vec<(Uuid, String)> = sqlx::query_as(sql).fetch_all(db).await?;
+    for (row_id, _stored) in rows {
+        out.plaintext.push(SecretFinding {
+            table,
+            column,
+            row_id,
+            tenant_id: None,
+            reason: "global config row: no tenant key to seal with, so the value must stay empty",
+        });
+    }
+    Ok(())
+}
+
+/// Every stored secret that is in the clear or that the app cannot open. A healthy database has
+/// `plaintext == []`; `unreadable` should be empty too, and is worth investigating when it is not.
+///
+/// Every statement this runs is a compile-time `concat!` literal (see the entry macros above):
+/// no query is assembled at run time, and the audited (table, column) pairs live in one place —
+/// `tenant_secret_columns!` / `global_secret_columns!` (gate rule 5d / class 14, kanban t_a4cb4ba7).
+pub async fn audit_plaintext_secrets(db: &PgPool) -> Result<SecretAudit, AppError> {
+    let mut out = SecretAudit::default();
+
+    tenant_secret_columns!(audit_tenant_secret_column, db, out);
+    global_secret_columns!(audit_global_secret_column, db, out);
 
     Ok(out)
 }

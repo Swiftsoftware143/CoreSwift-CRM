@@ -64,7 +64,7 @@ pub async fn route_action(
                 .and_then(|p| p.get("id").and_then(|v| v.as_str()))
                 .ok_or("contact id required")?;
             let uid = Uuid::parse_str(id).map_err(|_| "invalid uuid".to_string())?;
-            let contact = sqlx::query_scalar::<_, serde_json::Value>(&row_json(
+            let contact = sqlx::query_scalar::<_, serde_json::Value>(&row_json!(
                 "SELECT * FROM contacts WHERE id = $1 AND tenant_id = $2",
             ))
             .bind(uid)
@@ -145,7 +145,7 @@ pub async fn route_action(
                 ));
             }
 
-            let contact = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml(
+            let contact = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml!(
                 r#"UPDATE contacts SET
                     email = CASE WHEN $1 IS NULL THEN email ELSE NULLIF(btrim($1), '') END,
                     phone = CASE WHEN $2 IS NULL THEN phone ELSE NULLIF(btrim($2), '') END,
@@ -197,7 +197,7 @@ pub async fn route_action(
 
         // ── Tags ──
         "tags.list" => {
-            let tags = sqlx::query_scalar::<_, serde_json::Value>(&row_json(
+            let tags = sqlx::query_scalar::<_, serde_json::Value>(&row_json!(
                 "SELECT id, name, color, category_id FROM tags WHERE tenant_id = $1 ORDER BY name",
             ))
             .bind(tenant_id)
@@ -282,7 +282,7 @@ pub async fn route_action(
         // ── Lists ──
         "lists.list" => {
             let lists = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT id, name, list_type, created_at FROM lists WHERE tenant_id = $1 ORDER BY name")
+                &row_json!("SELECT id, name, list_type, created_at FROM lists WHERE tenant_id = $1 ORDER BY name")
             )
             .bind(tenant_id)
             .fetch_all(db).await
@@ -295,7 +295,7 @@ pub async fn route_action(
                 .ok_or("list id required")?;
             let lid = Uuid::parse_str(list_id).map_err(|_| "invalid uuid".to_string())?;
             let members = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT c.id, c.first_name, c.last_name, c.email FROM list_members lm JOIN contacts c ON c.id = lm.contact_id WHERE lm.list_id = $1 AND lm.tenant_id = $2")
+                &row_json!("SELECT c.id, c.first_name, c.last_name, c.email FROM list_members lm JOIN contacts c ON c.id = lm.contact_id WHERE lm.list_id = $1 AND lm.tenant_id = $2")
             )
             .bind(lid).bind(tenant_id)
             .fetch_all(db).await
@@ -306,7 +306,7 @@ pub async fn route_action(
         // ── Pipelines & Opportunities ──
         "pipelines.list" => {
             let pipelines = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT p.id, p.name, COALESCE((SELECT json_agg(json_build_object('id', ps.id, 'name', ps.name, 'color', ps.color, 'position', ps.position, 'probability', ps.probability) ORDER BY ps.position) FROM pipeline_stages ps WHERE ps.pipeline_id = p.id), '[]'::json) AS stages FROM pipelines p WHERE p.tenant_id = $1 ORDER BY p.name")
+                &row_json!("SELECT p.id, p.name, COALESCE((SELECT json_agg(json_build_object('id', ps.id, 'name', ps.name, 'color', ps.color, 'position', ps.position, 'probability', ps.probability) ORDER BY ps.position) FROM pipeline_stages ps WHERE ps.pipeline_id = p.id), '[]'::json) AS stages FROM pipelines p WHERE p.tenant_id = $1 ORDER BY p.name")
             )
             .bind(tenant_id)
             .fetch_all(db).await
@@ -319,7 +319,7 @@ pub async fn route_action(
                 .ok_or("pipeline_id required")?;
             let pid = Uuid::parse_str(pipeline_id).map_err(|_| "invalid uuid".to_string())?;
             let opportunities = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT o.id, o.name, o.value, o.stage_id, ps.name as stage_name, o.contact_id, o.created_at FROM opportunities o JOIN pipeline_stages ps ON ps.id = o.stage_id WHERE o.pipeline_id = $1 AND o.tenant_id = $2 ORDER BY o.created_at DESC")
+                &row_json!("SELECT o.id, o.name, o.value, o.stage_id, ps.name as stage_name, o.contact_id, o.created_at FROM opportunities o JOIN pipeline_stages ps ON ps.id = o.stage_id WHERE o.pipeline_id = $1 AND o.tenant_id = $2 ORDER BY o.created_at DESC")
             )
             .bind(pid).bind(tenant_id)
             .fetch_all(db).await
@@ -363,7 +363,7 @@ pub async fn route_action(
             let offset = params
                 .and_then(|p| p.get("offset").and_then(|v| v.as_i64()))
                 .unwrap_or(0);
-            let templates = sqlx::query_scalar::<_, serde_json::Value>(&row_json(
+            let templates = sqlx::query_scalar::<_, serde_json::Value>(&row_json!(
                 "SELECT id, name, channel, subject, body, variables, created_at FROM message_templates WHERE tenant_id = $1 ORDER BY name LIMIT $2 OFFSET $3"
             ))
             .bind(tenant_id).bind(limit as i32).bind(offset as i32)
@@ -412,7 +412,7 @@ pub async fn route_action(
                 .ok_or("contact_id required")?;
             let cid = Uuid::parse_str(contact_id).map_err(|_| "invalid uuid".to_string())?;
             // Return basic score info from DB (full AI assessment requires LLM call)
-            let score = sqlx::query_scalar::<_, serde_json::Value>(&row_json(
+            let score = sqlx::query_scalar::<_, serde_json::Value>(&row_json!(
                 "SELECT * FROM scores WHERE contact_id = $1 AND tenant_id = $2",
             ))
             .bind(cid)
@@ -528,7 +528,7 @@ pub async fn route_action(
         // ── Billing ──
         "billing.plans" => {
             let plans = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT id, name, slug, description, price_monthly, price_yearly, features, sort_order FROM plans WHERE is_active = true ORDER BY sort_order")
+                &row_json!("SELECT id, name, slug, description, price_monthly, price_yearly, features, sort_order FROM plans WHERE is_active = true ORDER BY sort_order")
             )
             .fetch_all(db).await
             .map_err(|e| format!("DB error: {}", e))?;
@@ -536,7 +536,7 @@ pub async fn route_action(
         }
         "billing.credits" => {
             let credits = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT COALESCE(tp.credit_balance, 0) AS credits_remaining, GREATEST(COALESCE(tp.lifetime_credits, 0) - COALESCE(tp.credit_balance, 0), 0) AS credits_used, COALESCE(p.name, 'free') AS plan_name FROM tenant_plans tp LEFT JOIN plans p ON p.id = tp.plan_id WHERE tp.tenant_id = $1")
+                &row_json!("SELECT COALESCE(tp.credit_balance, 0) AS credits_remaining, GREATEST(COALESCE(tp.lifetime_credits, 0) - COALESCE(tp.credit_balance, 0), 0) AS credits_used, COALESCE(p.name, 'free') AS plan_name FROM tenant_plans tp LEFT JOIN plans p ON p.id = tp.plan_id WHERE tp.tenant_id = $1")
             )
             .bind(tenant_id)
             .fetch_optional(db).await
@@ -547,7 +547,7 @@ pub async fn route_action(
         // ── Automation ──
         "automation.list" => {
             let rules = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT id, name, trigger_type, action_type, is_active, created_at FROM automation_rules WHERE tenant_id = $1 ORDER BY name")
+                &row_json!("SELECT id, name, trigger_type, action_type, is_active, created_at FROM automation_rules WHERE tenant_id = $1 ORDER BY name")
             )
             .bind(tenant_id)
             .fetch_all(db).await
@@ -570,38 +570,77 @@ pub async fn route_action(
             let unit = params.and_then(|p| p.get("unit").and_then(|v| v.as_str()));
             let state_filter = params.and_then(|p| p.get("state").and_then(|v| v.as_str()));
 
-            let mut sql = String::from(
-                "SELECT bp.id, bp.business_name, bp.unit, bp.current_state, bp.subscription_active, "
-            );
-            sql.push_str("bp.last_activity_at, bp.created_at, u.email, u.phone, u.first_name, u.last_name FROM business_profiles bp JOIN users u ON u.id = bp.user_id WHERE u.tenant_id = $1");
+            // The statement is ONE of FOUR compile-time literals, chosen by which optional filters
+            // are present — never assembled from request data (gate rule 5d / class 14, kanban
+            // t_a4cb4ba7; ADASwift's features.rs fix, t_472d6089 §2, is the worked example). The
+            // text of each arm is byte-identical to what the old `push_str` builder produced for
+            // that combination, so the placeholder numbering and the bind list are unchanged.
+            //
+            // `listing_base!` / `listing_count_base!` carry the shared prefix ONCE, as literals, so
+            // the four arms cannot drift apart.
+            macro_rules! listing_base {
+                () => {
+                    "SELECT bp.id, bp.business_name, bp.unit, bp.current_state, bp.subscription_active, \
+                     bp.last_activity_at, bp.created_at, u.email, u.phone, u.first_name, u.last_name FROM business_profiles bp JOIN users u ON u.id = bp.user_id WHERE u.tenant_id = $1"
+                };
+            }
+            macro_rules! listing_count_base {
+                () => {
+                    "SELECT COUNT(*) as cnt FROM business_profiles bp JOIN users u ON u.id = bp.user_id WHERE u.tenant_id = $1"
+                };
+            }
+
+            let (sql, count_sql): (&'static str, &'static str) = match (unit, state_filter) {
+                (None, None) => (
+                    row_json!(concat!(
+                        listing_base!(),
+                        " ORDER BY bp.last_activity_at DESC NULLS LAST LIMIT $2 OFFSET $3"
+                    )),
+                    listing_count_base!(),
+                ),
+                (Some(_), None) => (
+                    row_json!(concat!(
+                        listing_base!(),
+                        " AND bp.unit = $2::business_unit",
+                        " ORDER BY bp.last_activity_at DESC NULLS LAST LIMIT $3 OFFSET $4"
+                    )),
+                    concat!(listing_count_base!(), " AND bp.unit = $2::business_unit"),
+                ),
+                (None, Some(_)) => (
+                    row_json!(concat!(
+                        listing_base!(),
+                        " AND bp.current_state = $2::user_state",
+                        " ORDER BY bp.last_activity_at DESC NULLS LAST LIMIT $3 OFFSET $4"
+                    )),
+                    concat!(
+                        listing_count_base!(),
+                        " AND bp.current_state = $2::user_state"
+                    ),
+                ),
+                (Some(_), Some(_)) => (
+                    row_json!(concat!(
+                        listing_base!(),
+                        " AND bp.unit = $2::business_unit",
+                        " AND bp.current_state = $3::user_state",
+                        " ORDER BY bp.last_activity_at DESC NULLS LAST LIMIT $4 OFFSET $5"
+                    )),
+                    concat!(
+                        listing_count_base!(),
+                        " AND bp.unit = $2::business_unit",
+                        " AND bp.current_state = $3::user_state"
+                    ),
+                ),
+            };
 
             let mut binds: Vec<String> = vec![];
-            let mut param_idx = 2;
             if let Some(u) = unit {
-                sql.push_str(&format!(" AND bp.unit = ${}::business_unit", param_idx));
                 binds.push(u.to_string());
-                param_idx += 1;
             }
             if let Some(s) = state_filter {
-                sql.push_str(&format!(
-                    " AND bp.current_state = ${}::user_state",
-                    param_idx
-                ));
                 binds.push(s.to_string());
-                param_idx += 1;
             }
-            sql.push_str(&format!(
-                " ORDER BY bp.last_activity_at DESC NULLS LAST LIMIT ${} OFFSET ${}",
-                param_idx,
-                param_idx + 1
-            ));
 
-            // We need a dynamic query builder — use sqlx::query_as with the raw SQL and bind each param
-            // For simplicity with variable bind counts, we fetch raw rows
-            // The SQL is built above with a dynamic number of binds, so it has to
-            // own its row_json() wrapper for the lifetime of the builder.
-            let wrapped = row_json(&sql);
-            let mut query = sqlx::query_scalar::<_, serde_json::Value>(&wrapped).bind(tenant_id);
+            let mut query = sqlx::query_scalar::<_, serde_json::Value>(sql).bind(tenant_id);
             for b in &binds {
                 query = query.bind(b);
             }
@@ -612,26 +651,9 @@ pub async fn route_action(
                 .await
                 .map_err(|e| format!("DB error: {}", e))?;
 
-            // Also return total count
-            let mut count_sql = String::from(
-                "SELECT COUNT(*) as cnt FROM business_profiles bp JOIN users u ON u.id = bp.user_id WHERE u.tenant_id = $1"
-            );
-            let mut count_binds: Vec<String> = vec![];
-            let mut count_idx = 2;
-            if let Some(u) = unit {
-                count_sql.push_str(&format!(" AND bp.unit = ${}::business_unit", count_idx));
-                count_binds.push(u.to_string());
-                count_idx += 1;
-            }
-            if let Some(s) = state_filter {
-                count_sql.push_str(&format!(
-                    " AND bp.current_state = ${}::user_state",
-                    count_idx
-                ));
-                count_binds.push(s.to_string());
-            }
-            let mut total_q = sqlx::query_as::<_, (i64,)>(&count_sql).bind(tenant_id);
-            for b in &count_binds {
+            // Also return total count — the same filter binds feed it.
+            let mut total_q = sqlx::query_as::<_, (i64,)>(count_sql).bind(tenant_id);
+            for b in &binds {
                 total_q = total_q.bind(b.clone());
             }
             let total = total_q
@@ -713,7 +735,7 @@ pub async fn route_action(
             let profile_id = Uuid::parse_str(id).map_err(|_| "invalid uuid".to_string())?;
 
             let listing = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT bp.*, u.email, u.phone, u.first_name, u.last_name, u.name as user_name FROM business_profiles bp JOIN users u ON u.id = bp.user_id WHERE bp.id = $1 AND u.tenant_id = $2")
+                &row_json!("SELECT bp.*, u.email, u.phone, u.first_name, u.last_name, u.name as user_name FROM business_profiles bp JOIN users u ON u.id = bp.user_id WHERE bp.id = $1 AND u.tenant_id = $2")
             )
             .bind(profile_id).bind(tenant_id)
             .fetch_optional(db).await
@@ -722,7 +744,7 @@ pub async fn route_action(
 
             // Also grab recent event logs
             let events = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT id, event_name, metadata, created_at FROM event_logs WHERE business_profile_id = $1 ORDER BY created_at DESC LIMIT 20")
+                &row_json!("SELECT id, event_name, metadata, created_at FROM event_logs WHERE business_profile_id = $1 ORDER BY created_at DESC LIMIT 20")
             )
             .bind(profile_id)
             .fetch_all(db).await
@@ -746,70 +768,83 @@ pub async fn route_action(
                 .ok_or("listing id required")?;
             let profile_id = Uuid::parse_str(id).map_err(|_| "invalid uuid".to_string())?;
 
-            // Build dynamic UPDATE for provided fields
-            let mut sets: Vec<String> = vec![];
-            let mut param_idx = 1;
+            // The statement is a COMPILE-TIME literal. Each updatable column is bound at a fixed
+            // slot and wrapped in `COALESCE($n, col)`, so a NULL bind means "leave this column
+            // alone" — the meaning a partial body already had. Binds are always supplied, in a fixed
+            // order (`COALESCE` does not care how many fields the request carries). That replaces a
+            // SET list assembled from the request: a query must not be BUILT at run time (gate
+            // rule 5d / class 14, kanban t_a4cb4ba7). `current_state` is the `user_state` ENUM and
+            // needs its cast (measured live 2026-09-25, t_2cc3384f).
+            let name = body.get("business_name").and_then(|v| v.as_str());
+            let state = body.get("current_state").and_then(|v| v.as_str());
+            let sub = body.get("subscription_active").and_then(|v| v.as_bool());
+            let stripe = body.get("stripe_customer_id").and_then(|v| v.as_str());
 
-            if let Some(_name) = body.get("business_name").and_then(|v| v.as_str()) {
-                sets.push(format!("business_name = ${}", param_idx));
-                param_idx += 1;
-            }
-            if let Some(_state) = body.get("current_state").and_then(|v| v.as_str()) {
-                // `current_state` is the `user_state` ENUM: a bare text bind answers
-                // `column "current_state" is of type user_state but expression is of type text`,
-                // so this action 400'd for every caller (measured live 2026-09-25, t_2cc3384f).
-                sets.push(format!("current_state = ${}::user_state", param_idx));
-                param_idx += 1;
-            }
-            if let Some(_sub) = body.get("subscription_active").and_then(|v| v.as_bool()) {
-                sets.push(format!("subscription_active = ${}", param_idx));
-                param_idx += 1;
-            }
-            if let Some(_stripe) = body.get("stripe_customer_id").and_then(|v| v.as_str()) {
-                sets.push(format!("stripe_customer_id = ${}", param_idx));
-                param_idx += 1;
-            }
-
-            if sets.is_empty() {
+            // Nothing to do — the same refusal the old builder answered with an empty SET list.
+            if name.is_none() && state.is_none() && sub.is_none() && stripe.is_none() {
                 return Err("no fields to update".to_string());
             }
 
-            sets.push("updated_at = NOW()".to_string());
+            // `stripe_customer_id` is NOT a column of the LIVE `business_profiles` table — measured in
+            // information_schema (0 matches) and with EXPLAIN against the live database; the
+            // from-zero baseline `migrations/000_baseline_live_schema.sql` creates the table without
+            // it while `migrations/023` declares one (its `CREATE TABLE IF NOT EXISTS` is a no-op
+            // behind the baseline), so the declaration and the schema disagree. Passing this field
+            // therefore FAILED for every caller BEFORE this change too (SQLSTATE 42703
+            // `column "stripe_customer_id" ... does not exist`). The second arm keeps that outcome
+            // instead of silently dropping the field, so this refactor changes no reachable
+            // behaviour; the declaration/schema drift is carded separately.
+            const UPDATE_LISTING: &str = "UPDATE business_profiles SET \
+                 business_name = COALESCE($1::text, business_name), \
+                 current_state = COALESCE($2::user_state, current_state), \
+                 subscription_active = COALESCE($3::boolean, subscription_active), \
+                 updated_at = NOW() \
+                 WHERE id = $4";
+            const UPDATE_LISTING_STRIPE: &str = "UPDATE business_profiles SET \
+                 business_name = COALESCE($1::text, business_name), \
+                 current_state = COALESCE($2::user_state, current_state), \
+                 subscription_active = COALESCE($3::boolean, subscription_active), \
+                 stripe_customer_id = $4::text, \
+                 updated_at = NOW() \
+                 WHERE id = $5";
+            let (sql, with_stripe): (&'static str, bool) = if stripe.is_some() {
+                (UPDATE_LISTING_STRIPE, true)
+            } else {
+                (UPDATE_LISTING, false)
+            };
 
-            let sql = format!(
-                "UPDATE business_profiles SET {} WHERE id = ${}",
-                sets.join(", "),
-                param_idx
-            );
-
-            let mut query = sqlx::query(&sql);
-            if let Some(name) = body.get("business_name").and_then(|v| v.as_str()) {
-                query = query.bind(name);
-            }
-            if let Some(state) = body.get("current_state").and_then(|v| v.as_str()) {
-                query = query.bind(state);
-            }
-            if let Some(sub) = body.get("subscription_active").and_then(|v| v.as_bool()) {
-                query = query.bind(sub);
-            }
-            if let Some(stripe) = body.get("stripe_customer_id").and_then(|v| v.as_str()) {
+            let mut query = sqlx::query(sql).bind(name).bind(state).bind(sub);
+            if with_stripe {
                 query = query.bind(stripe);
             }
-            query = query.bind(profile_id);
-
             query
+                .bind(profile_id)
                 .execute(db)
                 .await
                 .map_err(|e| format!("DB error: {}", e))?;
 
-            // Log the update event
+            // Log the update event. The payload names the columns the caller supplied, in the order
+            // the old builder listed them.
+            let mut updated_fields: Vec<&str> = vec![];
+            if name.is_some() {
+                updated_fields.push("business_name");
+            }
+            if state.is_some() {
+                updated_fields.push("current_state");
+            }
+            if sub.is_some() {
+                updated_fields.push("subscription_active");
+            }
+            if stripe.is_some() {
+                updated_fields.push("stripe_customer_id");
+            }
             let _ = sqlx::query(
                 "INSERT INTO event_logs (id, business_profile_id, event_name, metadata) VALUES ($1, $2, $3, $4)"
             )
             .bind(Uuid::new_v4())
             .bind(profile_id)
             .bind("directory.listing.updated")
-            .bind(json!({"updated_fields": sets}))
+            .bind(json!({"updated_fields": updated_fields}))
             .execute(db).await;
 
             Ok((200, json!({"id": profile_id, "updated": true})))
@@ -824,7 +859,7 @@ pub async fn route_action(
 
             // Reviews are stored as event_logs with event_name = 'review.*'
             let reviews = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT id, event_name, metadata, created_at FROM event_logs WHERE business_profile_id = $1 AND event_name LIKE 'review.%' ORDER BY created_at DESC LIMIT 50")
+                &row_json!("SELECT id, event_name, metadata, created_at FROM event_logs WHERE business_profile_id = $1 AND event_name LIKE 'review.%' ORDER BY created_at DESC LIMIT 50")
             )
             .bind(profile_id)
             .fetch_all(db).await
@@ -832,7 +867,7 @@ pub async fn route_action(
 
             // Also look for any review-like metadata in the listing's prepopulated_data
             let prepopulated = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT data, preview_link, source_url FROM prepopulated_data  WHERE entity_id = $1 AND entity_type = 'business_profile' AND data ->> 'review' IS NOT NULL  ORDER BY created_at DESC LIMIT 10")
+                &row_json!("SELECT data, preview_link, source_url FROM prepopulated_data  WHERE entity_id = $1 AND entity_type = 'business_profile' AND data ->> 'review' IS NOT NULL  ORDER BY created_at DESC LIMIT 10")
             )
             .bind(profile_id)
             .fetch_all(db).await
@@ -856,14 +891,14 @@ pub async fn route_action(
             let profile_id = Uuid::parse_str(id).map_err(|_| "invalid uuid".to_string())?;
 
             let pending = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT id, scheduled_for, channel, template_slug, created_at FROM followup_queue  WHERE business_profile_id = $1 AND is_executed = false AND is_cancelled = false  ORDER BY scheduled_for ASC")
+                &row_json!("SELECT id, scheduled_for, channel, template_slug, created_at FROM followup_queue  WHERE business_profile_id = $1 AND is_executed = false AND is_cancelled = false  ORDER BY scheduled_for ASC")
             )
             .bind(profile_id)
             .fetch_all(db).await
             .map_err(|e| format!("DB error: {}", e))?;
 
             let executed = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT id, scheduled_for, channel, template_slug, executed_at, created_at FROM followup_queue  WHERE business_profile_id = $1 AND is_executed = true  ORDER BY executed_at DESC NULLS LAST LIMIT 50")
+                &row_json!("SELECT id, scheduled_for, channel, template_slug, executed_at, created_at FROM followup_queue  WHERE business_profile_id = $1 AND is_executed = true  ORDER BY executed_at DESC NULLS LAST LIMIT 50")
             )
             .bind(profile_id)
             .fetch_all(db).await
@@ -871,7 +906,7 @@ pub async fn route_action(
 
             // Also pull checklist progress if any
             let checklist = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT ci.id, ct.name as template_name, ci.current_stage, ci.completed, ci.started_at, ci.completed_at  FROM checklist_instances ci  JOIN checklist_templates ct ON ct.id = ci.template_id  WHERE ci.tenant_id = $1 AND ci.entity_id = $2  ORDER BY ci.created_at DESC LIMIT 5")
+                &row_json!("SELECT ci.id, ct.name as template_name, ci.current_stage, ci.completed, ci.started_at, ci.completed_at  FROM checklist_instances ci  JOIN checklist_templates ct ON ct.id = ci.template_id  WHERE ci.tenant_id = $1 AND ci.entity_id = $2  ORDER BY ci.created_at DESC LIMIT 5")
             )
             .bind(tenant_id).bind(profile_id)
             .fetch_all(db).await
@@ -897,13 +932,13 @@ pub async fn route_action(
                 // `operator does not exist: business_unit = text`, so this action 400'd for every
                 // caller that passed a unit (measured live 2026-09-25, t_2cc3384f).
                 sqlx::query_scalar::<_, serde_json::Value>(
-                    &row_json("SELECT current_state, COUNT(*) as count FROM business_profiles bp  JOIN users u2 ON u2.id = bp.user_id  WHERE u2.tenant_id = $1 AND bp.unit = $2::business_unit  GROUP BY current_state ORDER BY count DESC")
+                    &row_json!("SELECT current_state, COUNT(*) as count FROM business_profiles bp  JOIN users u2 ON u2.id = bp.user_id  WHERE u2.tenant_id = $1 AND bp.unit = $2::business_unit  GROUP BY current_state ORDER BY count DESC")
                 )
                 .bind(tenant_id).bind(u)
                 .fetch_all(db).await
             } else {
                 sqlx::query_scalar::<_, serde_json::Value>(
-                    &row_json("SELECT bp.current_state, COUNT(*) as count FROM business_profiles bp  JOIN users u2 ON u2.id = bp.user_id  WHERE u2.tenant_id = $1  GROUP BY bp.current_state ORDER BY count DESC")
+                    &row_json!("SELECT bp.current_state, COUNT(*) as count FROM business_profiles bp  JOIN users u2 ON u2.id = bp.user_id  WHERE u2.tenant_id = $1  GROUP BY bp.current_state ORDER BY count DESC")
                 )
                 .bind(tenant_id)
                 .fetch_all(db).await
@@ -911,7 +946,7 @@ pub async fn route_action(
 
             // Listings by unit
             let unit_breakdown = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT bp.unit, COUNT(*) as count FROM business_profiles bp  JOIN users u2 ON u2.id = bp.user_id  WHERE u2.tenant_id = $1  GROUP BY bp.unit ORDER BY count DESC")
+                &row_json!("SELECT bp.unit, COUNT(*) as count FROM business_profiles bp  JOIN users u2 ON u2.id = bp.user_id  WHERE u2.tenant_id = $1  GROUP BY bp.unit ORDER BY count DESC")
             )
             .bind(tenant_id)
             .fetch_all(db).await
@@ -919,7 +954,7 @@ pub async fn route_action(
 
             // Recent event volume (last 30 days)
             let event_volume = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT el.event_name, DATE(el.created_at) as day, COUNT(*) as count  FROM event_logs el  JOIN business_profiles bp ON bp.id = el.business_profile_id  JOIN users u2 ON u2.id = bp.user_id  WHERE u2.tenant_id = $1 AND el.created_at > NOW() - INTERVAL '30 days'  GROUP BY el.event_name, DATE(el.created_at)  ORDER BY day DESC, count DESC LIMIT 100")
+                &row_json!("SELECT el.event_name, DATE(el.created_at) as day, COUNT(*) as count  FROM event_logs el  JOIN business_profiles bp ON bp.id = el.business_profile_id  JOIN users u2 ON u2.id = bp.user_id  WHERE u2.tenant_id = $1 AND el.created_at > NOW() - INTERVAL '30 days'  GROUP BY el.event_name, DATE(el.created_at)  ORDER BY day DESC, count DESC LIMIT 100")
             )
             .bind(tenant_id)
             .fetch_all(db).await
@@ -927,7 +962,7 @@ pub async fn route_action(
 
             // Followup queue stats
             let followup_stats = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT  COUNT(*) FILTER (WHERE is_executed = false AND is_cancelled = false) as pending,  COUNT(*) FILTER (WHERE is_executed = true) as executed,  COUNT(*) FILTER (WHERE is_cancelled = true) as cancelled  FROM followup_queue fq  JOIN business_profiles bp ON bp.id = fq.business_profile_id  JOIN users u2 ON u2.id = bp.user_id  WHERE u2.tenant_id = $1")
+                &row_json!("SELECT  COUNT(*) FILTER (WHERE is_executed = false AND is_cancelled = false) as pending,  COUNT(*) FILTER (WHERE is_executed = true) as executed,  COUNT(*) FILTER (WHERE is_cancelled = true) as cancelled  FROM followup_queue fq  JOIN business_profiles bp ON bp.id = fq.business_profile_id  JOIN users u2 ON u2.id = bp.user_id  WHERE u2.tenant_id = $1")
             )
             .bind(tenant_id)
             .fetch_one(db).await
@@ -935,7 +970,7 @@ pub async fn route_action(
 
             // Subscription stats
             let subscription_stats = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT subscription_active, COUNT(*) as count FROM business_profiles bp  JOIN users u2 ON u2.id = bp.user_id  WHERE u2.tenant_id = $1  GROUP BY subscription_active")
+                &row_json!("SELECT subscription_active, COUNT(*) as count FROM business_profiles bp  JOIN users u2 ON u2.id = bp.user_id  WHERE u2.tenant_id = $1  GROUP BY subscription_active")
             )
             .bind(tenant_id)
             .fetch_all(db).await
@@ -989,7 +1024,7 @@ pub async fn route_action(
 
             // 5. Recent errors logged as events
             let recent_errors = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT el.id, el.event_name, el.metadata, el.created_at FROM event_logs el  JOIN business_profiles bp ON bp.id = el.business_profile_id  JOIN users u2 ON u2.id = bp.user_id  WHERE u2.tenant_id = $1 AND el.event_name LIKE 'error.%'  ORDER BY el.created_at DESC LIMIT 20")
+                &row_json!("SELECT el.id, el.event_name, el.metadata, el.created_at FROM event_logs el  JOIN business_profiles bp ON bp.id = el.business_profile_id  JOIN users u2 ON u2.id = bp.user_id  WHERE u2.tenant_id = $1 AND el.event_name LIKE 'error.%'  ORDER BY el.created_at DESC LIMIT 20")
             )
             .bind(tenant_id)
             .fetch_all(db).await
@@ -1122,7 +1157,7 @@ pub async fn route_action(
         }
         "webhooks.list" => {
             let webhooks = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT id, name,\n  CONCAT(LEFT(webhook_token, 4), REPEAT('*', GREATEST(0, LENGTH(webhook_token) - 8)), RIGHT(webhook_token, 4)) as masked_token,\n  allowed_actions, created_at, last_used_at, is_active\n FROM automation_webhooks WHERE tenant_id = $1 ORDER BY created_at DESC")
+                &row_json!("SELECT id, name,\n  CONCAT(LEFT(webhook_token, 4), REPEAT('*', GREATEST(0, LENGTH(webhook_token) - 8)), RIGHT(webhook_token, 4)) as masked_token,\n  allowed_actions, created_at, last_used_at, is_active\n FROM automation_webhooks WHERE tenant_id = $1 ORDER BY created_at DESC")
             )
             .bind(tenant_id)
             .fetch_all(db).await
@@ -1137,7 +1172,7 @@ pub async fn route_action(
                 .ok_or("pipeline_id required")?;
             let pid = Uuid::parse_str(pipeline_id).map_err(|_| "invalid uuid".to_string())?;
             let stages = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT id, pipeline_id, name, position, color, created_at FROM pipeline_stages WHERE pipeline_id = $1 ORDER BY position")
+                &row_json!("SELECT id, pipeline_id, name, position, color, created_at FROM pipeline_stages WHERE pipeline_id = $1 ORDER BY position")
             )
             .bind(pid)
             .fetch_all(db).await
@@ -1205,7 +1240,7 @@ pub async fn route_action(
         }
         "users.list" => {
             let users = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT id, email, name, role, is_active, created_at FROM users WHERE tenant_id = $1 ORDER BY created_at")
+                &row_json!("SELECT id, email, name, role, is_active, created_at FROM users WHERE tenant_id = $1 ORDER BY created_at")
             )
             .bind(tenant_id)
             .fetch_all(db).await
@@ -1216,7 +1251,7 @@ pub async fn route_action(
         // ── Tenants ──
         "tenants.settings" => {
             let tenant = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT id, name, slug, NULL::text AS plan, NULL::uuid AS plan_id FROM tenants WHERE id = $1")
+                &row_json!("SELECT id, name, slug, NULL::text AS plan, NULL::uuid AS plan_id FROM tenants WHERE id = $1")
             )
             .bind(tenant_id)
             .fetch_optional(db).await
@@ -1229,7 +1264,7 @@ pub async fn route_action(
                     .await
                     .map_err(|e| format!("DB error: {}", e))?;
             let plan_info = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT p.id as plan_id, p.name, p.slug, p.price_monthly, p.price_yearly, tp.status, tp.billing_cycle\n FROM tenant_plans tp JOIN plans p ON p.id = tp.plan_id WHERE tp.tenant_id = $1")
+                &row_json!("SELECT p.id as plan_id, p.name, p.slug, p.price_monthly, p.price_yearly, tp.status, tp.billing_cycle\n FROM tenant_plans tp JOIN plans p ON p.id = tp.plan_id WHERE tp.tenant_id = $1")
             )
             .bind(tenant_id)
             .fetch_optional(db).await
@@ -1254,7 +1289,7 @@ pub async fn route_action(
             let cid = Uuid::parse_str(contact_id).map_err(|_| "invalid contact_id".to_string())?;
             // Read contact fields for scoring
             let contact = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT id, first_name, last_name, email, phone, company_id, score FROM contacts WHERE id = $1 AND tenant_id = $2")
+                &row_json!("SELECT id, first_name, last_name, email, phone, company_id, score FROM contacts WHERE id = $1 AND tenant_id = $2")
             )
             .bind(cid).bind(tenant_id)
             .fetch_optional(db).await
@@ -1312,14 +1347,14 @@ pub async fn route_action(
                     .map_err(|e| format!("DB error: {}", e))?;
             // Contacts by tag
             let by_tag = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT t.id, t.name, COUNT(ta.entity_id) as count\n FROM tags t\n LEFT JOIN tag_assignments ta ON ta.tag_id = t.id AND ta.entity_type = 'contact'\n WHERE t.tenant_id = $1\n GROUP BY t.id, t.name ORDER BY count DESC")
+                &row_json!("SELECT t.id, t.name, COUNT(ta.entity_id) as count\n FROM tags t\n LEFT JOIN tag_assignments ta ON ta.tag_id = t.id AND ta.entity_type = 'contact'\n WHERE t.tenant_id = $1\n GROUP BY t.id, t.name ORDER BY count DESC")
             )
             .bind(tenant_id)
             .fetch_all(db).await
             .map_err(|e| format!("DB error: {}", e))?;
             // Contacts created over the last 30 days, grouped by day
             let by_day = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json("SELECT DATE(created_at) as day, COUNT(*) as count\n FROM contacts\n WHERE tenant_id = $1 AND created_at > NOW() - INTERVAL '30 days'\n GROUP BY DATE(created_at) ORDER BY day")
+                &row_json!("SELECT DATE(created_at) as day, COUNT(*) as count\n FROM contacts\n WHERE tenant_id = $1 AND created_at > NOW() - INTERVAL '30 days'\n GROUP BY DATE(created_at) ORDER BY day")
             )
             .bind(tenant_id)
             .fetch_all(db).await
@@ -1342,13 +1377,13 @@ pub async fn route_action(
             let entity_filter = params.and_then(|p| p.get("entity_type").and_then(|v| v.as_str()));
             let entries = if let Some(entity_type) = entity_filter {
                 sqlx::query_scalar::<_, serde_json::Value>(
-                    &row_json("SELECT id, entity_type, entity_id, action, user_id, changes, created_at\n FROM audit_logs\n WHERE tenant_id = $1 AND entity_type = $2\n ORDER BY created_at DESC LIMIT $3")
+                    &row_json!("SELECT id, entity_type, entity_id, action, user_id, changes, created_at\n FROM audit_logs\n WHERE tenant_id = $1 AND entity_type = $2\n ORDER BY created_at DESC LIMIT $3")
                 )
                 .bind(tenant_id).bind(entity_type).bind(limit as i32)
                 .fetch_all(db).await
             } else {
                 sqlx::query_scalar::<_, serde_json::Value>(
-                    &row_json("SELECT id, entity_type, entity_id, action, user_id, changes, created_at\n FROM audit_logs\n WHERE tenant_id = $1\n ORDER BY created_at DESC LIMIT $2")
+                    &row_json!("SELECT id, entity_type, entity_id, action, user_id, changes, created_at\n FROM audit_logs\n WHERE tenant_id = $1\n ORDER BY created_at DESC LIMIT $2")
                 )
                 .bind(tenant_id).bind(limit as i32)
                 .fetch_all(db).await
@@ -1375,7 +1410,7 @@ pub async fn route_action(
             let mut results = serde_json::Map::new();
             if entities.contains(&"contacts") {
                 let contacts = sqlx::query_scalar::<_, serde_json::Value>(
-                    &row_json("SELECT id, first_name, last_name, email, phone, score FROM contacts\n WHERE tenant_id = $1 AND (email ILIKE $2 OR first_name ILIKE $2 OR last_name ILIKE $2 OR CONCAT(first_name, ' ', last_name) ILIKE $2)\n LIMIT 20")
+                    &row_json!("SELECT id, first_name, last_name, email, phone, score FROM contacts\n WHERE tenant_id = $1 AND (email ILIKE $2 OR first_name ILIKE $2 OR last_name ILIKE $2 OR CONCAT(first_name, ' ', last_name) ILIKE $2)\n LIMIT 20")
                 )
                 .bind(tenant_id).bind(&pattern)
                 .fetch_all(db).await
@@ -1384,7 +1419,7 @@ pub async fn route_action(
             }
             if entities.contains(&"tags") {
                 let tags = sqlx::query_scalar::<_, serde_json::Value>(
-                    &row_json("SELECT id, name, color FROM tags WHERE tenant_id = $1 AND name ILIKE $2 LIMIT 20")
+                    &row_json!("SELECT id, name, color FROM tags WHERE tenant_id = $1 AND name ILIKE $2 LIMIT 20")
                 )
                 .bind(tenant_id).bind(&pattern)
                 .fetch_all(db).await
@@ -1393,7 +1428,7 @@ pub async fn route_action(
             }
             if entities.contains(&"lists") {
                 let lists = sqlx::query_scalar::<_, serde_json::Value>(
-                    &row_json("SELECT id, name, list_type FROM lists WHERE tenant_id = $1 AND name ILIKE $2 LIMIT 20")
+                    &row_json!("SELECT id, name, list_type FROM lists WHERE tenant_id = $1 AND name ILIKE $2 LIMIT 20")
                 )
                 .bind(tenant_id).bind(&pattern)
                 .fetch_all(db).await

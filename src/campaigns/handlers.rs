@@ -112,7 +112,7 @@ pub async fn create(
 
     if let Some(ref tag_name) = r.funnelswift_tag {
         // Create tag in CRM Swift
-        let tag = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml(
+        let tag = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml!(
             r#"INSERT INTO tags (id, tenant_id, name, color, is_active)
                VALUES ($1, $2, $3, '#3B82F6', true)
                ON CONFLICT (tenant_id, name) DO UPDATE SET is_active = true
@@ -652,7 +652,7 @@ pub async fn build_campaign(
 
     if let Some(ref tag_name) = r.funnelswift_tag {
         // Create or find the tag in CRM Swift
-        let tag = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml(
+        let tag = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml!(
             r#"INSERT INTO tags (id, tenant_id, name, color, is_active)
                VALUES ($1, $2, $3, '#3B82F6', true)
                ON CONFLICT (tenant_id, name) DO UPDATE SET is_active = true

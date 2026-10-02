@@ -56,9 +56,18 @@ const TOKEN_HEADER: &str = "x-support-token";
 /// Every customer-visible statement is filtered by this predicate, with `$1` = the tenant and `$2`
 /// = the authenticated address. It selects a ticket when it was raised with this address as the
 /// contact address, or when it is linked to a contact of this tenant with that address.
-const OWNER_PREDICATE: &str = "(lower(coalesce(t.contact_email, '')) = $2 \
-     OR t.contact_id IN (SELECT c.id FROM contacts c \
-                         WHERE c.tenant_id = t.tenant_id AND lower(c.email) = $2))";
+///
+/// A LITERAL macro, not a `const` interpolated into a `format!` (kanban t_a4cb4ba7): the four
+/// statements that carry it are assembled by the COMPILER through `concat!`, so the predicate text a
+/// request runs is a compile-time constant a reader of this file can see — gate rule 5d / class 14,
+/// a query must not be BUILT at run time. The bytes are identical to what the `const` held before.
+macro_rules! owner_predicate {
+    () => {
+        "(lower(coalesce(t.contact_email, '')) = $2 \
+         OR t.contact_id IN (SELECT c.id FROM contacts c \
+                             WHERE c.tenant_id = t.tenant_id AND lower(c.email) = $2))"
+    };
+}
 
 // ── Credential ───────────────────────────────────────────────────────────
 
@@ -166,10 +175,11 @@ pub async fn login(
         ));
     }
 
-    let owns: Option<(Uuid,)> = sqlx::query_as(&format!(
+    let owns: Option<(Uuid,)> = sqlx::query_as(&concat!(
         "SELECT t.id FROM tickets t \
-         WHERE t.tenant_id = $1 AND t.id::text LIKE $3 || '%' AND {OWNER_PREDICATE} \
-         LIMIT 1"
+         WHERE t.tenant_id = $1 AND t.id::text LIKE $3 || '%' AND ",
+        owner_predicate!(),
+        " LIMIT 1"
     ))
     .bind(tenant_id)
     .bind(&email)
@@ -215,11 +225,12 @@ pub async fn list(
 ) -> ApiResult<impl IntoResponse> {
     let email = authenticated(&s, &headers, tenant_id)?;
 
-    let tickets = sqlx::query_as::<_, PortalTicket>(&format!(
+    let tickets = sqlx::query_as::<_, PortalTicket>(&concat!(
         "SELECT t.id, t.subject, t.status, t.priority, t.source, t.created_at, t.updated_at, \
                 (SELECT count(*) FROM ticket_messages m WHERE m.ticket_id = t.id) AS message_count \
-         FROM tickets t WHERE t.tenant_id = $1 AND {OWNER_PREDICATE} \
-         ORDER BY t.created_at DESC LIMIT 100"
+         FROM tickets t WHERE t.tenant_id = $1 AND ",
+        owner_predicate!(),
+        " ORDER BY t.created_at DESC LIMIT 100"
     ))
     .bind(tenant_id)
     .bind(&email)
@@ -240,9 +251,10 @@ pub async fn detail(
 ) -> ApiResult<impl IntoResponse> {
     let email = authenticated(&s, &headers, tenant_id)?;
 
-    let ticket = sqlx::query_as::<_, Ticket>(&format!(
+    let ticket = sqlx::query_as::<_, Ticket>(&concat!(
         "SELECT t.* FROM tickets t \
-         WHERE t.id = $1 AND t.tenant_id = $3 AND {OWNER_PREDICATE}"
+         WHERE t.id = $1 AND t.tenant_id = $3 AND ",
+        owner_predicate!()
     ))
     .bind(ticket_id)
     .bind(&email)
@@ -338,8 +350,9 @@ pub async fn reply(
     }
 
     // Ownership first: 404 (not 403) for a ticket that is not this customer's.
-    let owned: Option<(Uuid,)> = sqlx::query_as(&format!(
-        "SELECT t.id FROM tickets t WHERE t.id = $1 AND t.tenant_id = $3 AND {OWNER_PREDICATE}"
+    let owned: Option<(Uuid,)> = sqlx::query_as(&concat!(
+        "SELECT t.id FROM tickets t WHERE t.id = $1 AND t.tenant_id = $3 AND ",
+        owner_predicate!()
     ))
     .bind(ticket_id)
     .bind(&email)

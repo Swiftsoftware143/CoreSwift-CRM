@@ -347,7 +347,7 @@ async fn handle_build_campaign(
     }
 
     // 1. Create campaign
-    let campaign = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml(
+    let campaign = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml!(
         r#"INSERT INTO email_campaigns (id, tenant_id, name, description, status, created_by)
            VALUES ($1, $2, $3, $4, 'draft', NULL) RETURNING *"#,
     ))
@@ -378,7 +378,7 @@ async fn handle_build_campaign(
         let delay = step.get("delay_days").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
 
         let s = sqlx::query_scalar::<_, serde_json::Value>(
-            &row_json_dml(r#"INSERT INTO email_campaign_steps (id, campaign_id, step_order, template_name, subject, body, delay_days)
+            &row_json_dml!(r#"INSERT INTO email_campaign_steps (id, campaign_id, step_order, template_name, subject, body, delay_days)
                VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *"#)
         )
         .bind(Uuid::new_v4()).bind(campaign_id).bind(i as i32 + 1)
@@ -392,7 +392,7 @@ async fn handle_build_campaign(
     let mut funnelswift_result: Option<String> = None;
 
     if let Some(tag_name) = funnelswift_tag {
-        let tag = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml(
+        let tag = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml!(
             r#"INSERT INTO tags (id, tenant_id, name, color, is_active)
                VALUES ($1, $2, $3, '#3B82F6', true)
                ON CONFLICT (tenant_id, name) DO UPDATE SET is_active = true
