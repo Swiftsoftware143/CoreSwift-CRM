@@ -5935,23 +5935,42 @@ function peOpenSupportBox() {
 // ── Native connector SYNC — the unfinished half of the connectors contract ─────
 // connect/disconnect/test were wired; pull/push/history and the Ada campaign triggers
 // were registered with no caller. Both directions post what the Rust struct requires.
-const IC_SYNC_ENTITIES = ['contacts', 'lists', 'tags'];
+// The Entity choices are the SELECTED connector's OWN declared vocabulary - meta.entities from
+// GET /native/apps, the pull list for Pull and the push list for Push. A connector declares
+// exactly the names its pull_entity()/push_entity() accept, so this modal can never offer a name
+// the connector refuses. It used to offer one hard-coded list to EVERY connector: measured live
+// 2026-10-02, every name in that list was refused by all six registered connectors (funnelswift
+// alone accepted one of them, on pull). There is no invented fallback - a connector that declares
+// nothing renders no options and that direction's button is disabled.
+function icSyncEntities(slug, direction) {
+  const app = (IC.apps || []).find(x => x.slug === slug);
+  const list = (((app || {}).meta || {}).entities || {})[direction];
+  return Array.isArray(list) ? list : [];
+}
+
+function icSyncOptions(list) {
+  return list.map(e => '<option value="' + escapeHtmlAttr(e) + '">' + escapeHtml(e) + '</option>').join('');
+}
 
 function icSyncOpen(slug) {
-  const opts = IC_SYNC_ENTITIES.map(e => '<option value="' + e + '">' + e + '</option>').join('');
+  const pullList = icSyncEntities(slug, 'pull');
+  const pushList = icSyncEntities(slug, 'push');
   showModal('Sync ' + slug,
     ((IC.status[slug] || {}).connected ? '' :
       '<p style="color:var(--warning,#f0ad4e);margin-bottom:10px"><strong>This connector has no credentials stored</strong> — ' +
       'the API will refuse a pull or push for it, and the refusal is shown here verbatim rather than hidden.</p>') +
     '<p style="color:var(--text-secondary);margin-bottom:14px">Pull asks ' + escapeHtml(slug) +
       ' for its records; push sends the payload below to it. Both are logged to this account\'s sync history either way.</p>' +
-    '<div class="form-group"><label>Entity</label><select id="icSyncEntity">' + opts + '</select></div>' +
+    '<div class="form-group"><label>Entity to pull</label><select id="icSyncEntityPull"' + (pullList.length ? '' : ' disabled') + '>' +
+      (pullList.length ? icSyncOptions(pullList) : '<option value="">' + escapeHtml(slug) + ' declares no pullable entity</option>') + '</select></div>' +
+    '<div class="form-group"><label>Entity to push</label><select id="icSyncEntityPush"' + (pushList.length ? '' : ' disabled') + '>' +
+      (pushList.length ? icSyncOptions(pushList) : '<option value="">' + escapeHtml(slug) + ' declares no pushable entity</option>') + '</select></div>' +
     '<div class="form-group"><label>Push payload (JSON)</label>' +
-    '<input type="text" id="icSyncData" value="[]" autocomplete="off">' +
+    '<input type="text" id="icSyncData" value="[]" autocomplete="off"' + (pushList.length ? '' : ' disabled') + '>' +
     '<span class="form-hint">Only used by Push — it is sent verbatim to the partner app.</span></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
-    '<button class="btn btn-secondary" id="icPullBtn">Pull from ' + escapeHtml(slug) + '</button>' +
-    '<button class="btn btn-primary" id="icPushBtn">Push to ' + escapeHtml(slug) + '</button>');
+    '<button class="btn btn-secondary" id="icPullBtn"' + (pullList.length ? '' : ' disabled') + '>Pull from ' + escapeHtml(slug) + '</button>' +
+    '<button class="btn btn-primary" id="icPushBtn"' + (pushList.length ? '' : ' disabled') + '>Push to ' + escapeHtml(slug) + '</button>');
   const pb = document.getElementById('icPullBtn');
   const ub = document.getElementById('icPushBtn');
   if (pb) pb.addEventListener('click', () => icSyncRun(slug, 'pull', pb));
@@ -5959,7 +5978,9 @@ function icSyncOpen(slug) {
 }
 
 async function icSyncRun(slug, direction, btn) {
-  const entity = document.getElementById('icSyncEntity').value;
+  const sel = document.getElementById('icSyncEntity' + (direction === 'pull' ? 'Pull' : 'Push'));
+  if (!sel || !sel.value) { toast('This connector declares no ' + direction + ' entity', 'error'); return; }
+  const entity = sel.value;
   let payload = { entity_type: entity };
   if (direction === 'push') {
     const raw = document.getElementById('icSyncData').value.trim() || '[]';
