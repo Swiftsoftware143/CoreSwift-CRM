@@ -3403,19 +3403,26 @@ async function markAllNotificationsRead() {
 // Fields shown are the ones the API actually returns (captured live 2026-09-22): id, tenant_id,
 // plan_id, status, billing_cycle, current_period_*, canceled_at, trial_ends_at. There is no
 // plan_name/plan_slug in this response, so no plan name is invented here.
+//
+// kanban t_8d91f70c — "Billing cycle" is DELIBERATELY not shown any more. The panel printed it
+// while NO served surface could set it: both writers of tenant_plans.billing_cycle
+// (POST/PATCH /api/billing/subscription) gate on the tenant's plan/billing record, which is an
+// OPERATOR write (plan_id + feature_overrides are entitlement writes and there is no payment path
+// in this app — checkout was retired 2026-09-25), and the tenants' own tokens answered 403.
+// For every live row the stat could only ever print the free seat's literal default ('monthly'),
+// i.e. it advertised a billing arrangement the workspace does not have. Cancel stays: cancelling
+// to Free is a tenant-scoped action (is_tenant_billing_owner) and still works.
 async function loadSubscriptionState() {
   const el = document.getElementById('subscriptionCard');
   if (!el) return;
   try {
     const s = await API.get('/billing/subscription');
     const status = (s && s.status) || 'none';
-    const cycle = (s && s.billing_cycle) || '—';
     const ends = s && (s.current_period_ends_at || s.canceled_at);
     const active = status === 'active' || status === 'trialing';
     el.innerHTML = card('Subscription',
       '<div class="stats-grid">' +
         '<div class="stat-card accent"><div class="stat-value">' + escapeHtml(String(status)) + '</div><div class="stat-label">Status</div></div>' +
-        '<div class="stat-card"><div class="stat-value">' + escapeHtml(String(cycle)) + '</div><div class="stat-label">Billing cycle</div></div>' +
       '</div>' +
       '<p class="config-desc" style="margin-top:10px">' +
         (active

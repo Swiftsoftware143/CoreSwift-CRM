@@ -306,6 +306,54 @@ pub(crate) async fn attribute_plan_upgrade(state: &AppState, tenant_id: Uuid, pl
     .await;
 }
 
+/// May this caller write the tenant's plan / billing record?
+///
+/// DECISION (kanban t_8d91f70c, measured 2026-10-02). Both writers of `tenant_plans` in this
+/// module used to open with `role != "client_admin" && role != "agency_admin"`. **No user in the
+/// live database holds `client_admin`** (`select role, count(*) from users group by 1` on
+/// `coreswift_crm`: agency_admin 1, owner 5, admin 1, client_admin 0), so the predicate was
+/// unsatisfiable and the only arm that binds a caller-chosen `billing_cycle` was unreachable for
+/// every real customer — while the served workspace panel PRINTS the cycle as a stat
+/// (`www-app/coreswift/index.html`, "Billing cycle" next to the Cancel button). Measured with a
+/// token minted from this container's `JWT_SECRET`: `POST`/`PATCH /api/billing/subscription` -> 403
+/// for the tenant's own `owner`, 200/422 for `agency_admin`, so the route itself is alive and only
+/// the role gate refuses.
+///
+/// The intent question the card raised was "may the tenant's own owner/admin change its own
+/// plan/cycle (the cancel arm's `is_tenant_billing_owner`), or is this operator-only?". Measured
+/// against the app's own contracts, it is OPERATOR-only:
+///
+/// * these arms are not cycle-only. `PATCH` binds `plan_id` and `feature_overrides` as well, i.e.
+///   a whole-column write of WHAT THE TENANT CAN ACCESS. The platform-gated overlay for exactly
+///   that is `POST /api/admin/tenants/:id/overrides` (`module_registry::handlers::set_override`,
+///   behind `require_platform_admin_middleware`), and the admin guide documents per-tenant
+///   overrides as the ADMIN's instrument ("an explicit per-tenant entry in
+///   `tenant_plans.feature_overrides` wins"). Handing `PATCH` to tenant `owner` would therefore
+///   let any owner assign itself the most expensive plan and self-grant every feature;
+/// * there is no payment or settlement path in this app to compensate: the checkout arm and its
+///   provider webhooks were RETIRED 2026-09-25 (kanban t_0fe500d4), no payment provider exists in
+///   the four `available_providers` integrations, and the retirement note states payment
+///   collection "is a deliberate build rather than a wire-up". So "the tenant picks a paid plan"
+///   would be a free elevation;
+/// * that is the same shape — and the same answer — as David's own queue item WS-15 on
+///   WorkflowSwift ("billing.enabled=false and no self-serve checkout ... restore a WORKING admin
+///   plan-assignment path ... admin-only via the real platform-admin gate", proved with a
+///   non-admin 403 and no plan row changed).
+///
+/// The authority is resolved the way this crate already resolves platform authority
+/// (`auth::platform_admin`'s module doc: no role string can express it; it is the
+/// `users.is_platform_admin` column resolved from the database by `claims.sub`, and it fails
+/// closed for a missing row, a non-UUID subject or a NULL flag). `cancel_subscription` deliberately
+/// keeps `is_tenant_billing_owner`: cancelling to Free is a tenant-scoped downshift and is a
+/// different contract from assigning entitlements.
+///
+/// NOTE (out of scope here, carded): with this gate the operator can only write its OWN tenant
+/// (`tid` comes from `Claims.aid`), and this app has no route that moves ANOTHER tenant onto a
+/// plan — the WS-15 analogue for CoreSwift.
+async fn require_subscription_operator(s: &AppState, c: &Claims) -> Result<(), AppError> {
+    crate::auth::platform_admin::require_platform_admin(&s.db, &c.sub).await
+}
+
 /// POST /api/billing/subscription — Create subscription
 pub async fn create_subscription(
     State(s): State<AppState>,
@@ -315,9 +363,7 @@ pub async fn create_subscription(
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
-    if c.role != "client_admin" && c.role != "agency_admin" {
-        return Err(AppError::Forbidden);
-    }
+    require_subscription_operator(&s, &c).await?;
 
     sqlx::query_scalar::<_, Option<Uuid>>(
         "SELECT id FROM plans WHERE id = $1 AND is_active = true",
@@ -379,9 +425,7 @@ pub async fn update_subscription(
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
-    if c.role != "client_admin" && c.role != "agency_admin" {
-        return Err(AppError::Forbidden);
-    }
+    require_subscription_operator(&s, &c).await?;
 
     // This arm binds the caller's value straight into the column, so it must validate it the
     // same way the create arm does; without this the DB CHECK answered a generic 500.
