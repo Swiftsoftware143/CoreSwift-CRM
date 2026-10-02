@@ -222,6 +222,11 @@ pub async fn set_override(
 /// the module arm first). `denied` is the human-facing SUMMARY of that set, so it names each denied
 /// key once — measured on `free` before this change it printed
 /// `ai_enabled, ai_enabled, private_email, private_email, tickets, tickets` (kanban t_7b7becec).
+///
+/// `no_plan` is the one state a bare `plan: null` cannot express: an account with no active
+/// `tenant_plans` row resolves through `module_registry::resolve`'s `no_plan` arm, which GRANTS
+/// every registered key (`enforce_feature_flag` returns `Ok` for it, and `usage_ceiling` reports no
+/// ceiling). The console renders the label the gate's own answer implies (kanban t_e6141896).
 pub async fn tenant_entitlements(
     State(s): State<AppState>,
     Path(tenant_id): Path<Uuid>,
@@ -236,6 +241,9 @@ pub async fn tenant_entitlements(
     .await?;
 
     let resolved = module_registry::resolve_all(&s.db, tenant_id).await?;
+    // Read the state off the RESOLUTION, not off `plan.is_none()`: a row in another status
+    // (`canceled`, `past_due`) also leaves `plan` null, and that account is NOT on the no_plan arm.
+    let no_plan = resolved.iter().any(|e| e.source == "no_plan");
     // First occurrence wins, so the summary keeps the array's own `ORDER BY key` ordering.
     let mut seen = std::collections::HashSet::new();
     let mut denied: Vec<&str> = Vec::new();
@@ -250,6 +258,7 @@ pub async fn tenant_entitlements(
         "plan": plan.map(|(slug, name, cycle, status)| json!({
             "slug": slug, "name": name, "billing_cycle": cycle, "status": status
         })),
+        "no_plan": no_plan,
         "entitlements": resolved,
         "denied": denied,
     })))

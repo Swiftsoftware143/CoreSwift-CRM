@@ -280,8 +280,12 @@ pub async fn enforce_feature_flag(
         return Ok(());
     }
     match ent.source {
-        // No active plan row at all: legacy tolerance, kept so the 81 tenants without one do not
-        // lose every module in a single deploy. Reported, not hidden.
+        // No active plan row at all: GRANTS everything. Kept open by decision (kanban t_e6141896,
+        // ARM (a)) and made VISIBLE instead of closed — the measured blast radius of closing it is
+        // 14 live workspaces (122/81/78-contact accounts among them) whose replacement tier is a
+        // pricing call, so the console and the admin guide now say out loud what this arm does and
+        // the operator seats a plan with one press. See `module_registry`'s module docs for the
+        // numbers, the rejected alternative and the ordered way to reverse it.
         "no_plan" => Ok(()),
         _ => Err(AppError::UpgradeRequired(format!(
             "{} is not available on your current plan. Upgrade to access it.",

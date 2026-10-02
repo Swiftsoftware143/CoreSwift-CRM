@@ -550,10 +550,18 @@ async function loadTenantEntitlements() {
   try {
     const d = await API.get('/admin/tenants/' + encodeURIComponent(id) + '/entitlements');
     const ents = d.entitlements || [];
-    let t = '<div style="color:var(--text-secondary);margin-bottom:8px">Plan: <strong>' +
-      escapeHtml((d.plan && (d.plan.name || d.plan.slug)) || 'none assigned') + '</strong>' +
+    // The gate's own absence rule, said out loud: no active tenant_plans row means every registered
+    // module is GRANTED (`source: no_plan`), so a bare "none assigned" would read as "unconfigured"
+    // when the truth is "unlimited" (kanban t_e6141896). Rendered in the warning colour.
+    const noPlan = d.no_plan === true;
+    const planLabel = (d.plan && (d.plan.name || d.plan.slug)) ||
+      (noPlan ? 'no plan row — all modules allowed' : 'none assigned');
+    let t = '<div style="color:var(--text-secondary);margin-bottom:8px">Plan: <strong' +
+      (noPlan ? ' style="color:var(--warning,#fa0)"' : '') + '>' +
+      escapeHtml(planLabel) + '</strong>' +
       (d.plan ? ' &middot; ' + escapeHtml(d.plan.billing_cycle || '—') +
         ' &middot; ' + escapeHtml(d.plan.status || '—') : '') +
+      (noPlan ? ' &middot; no plan row: every registered module is granted (nothing is denied) until a plan is assigned' : '') +
       ' &middot; denied: ' +
       escapeHtml((d.denied || []).join(', ') || 'none') + '</div>' +
       '<div style="overflow:auto;max-height:420px"><table style="width:100%;border-collapse:collapse">' +

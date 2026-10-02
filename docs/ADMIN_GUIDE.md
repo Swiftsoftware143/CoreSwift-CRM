@@ -311,8 +311,15 @@ Behaviour: an explicit per-tenant entry in `tenant_plans.feature_overrides` wins
 tenant's **active plan's** assigned modules (`plan_modules` / `plan_module_features`). A flag
 that resolves to nothing is **denied** — the module returns **402 Payment Required** — so a
 module can no longer ship ungated and a renamed key can no longer silently stop enforcing.
-Toggle them per plan in the admin console. The one tolerance left: a tenant with no active
-plan row at all keeps its modules.
+Toggle them per plan in the admin console. The one tolerance left — and the console now says it out
+loud instead of leaving it to be inferred: **a workspace with no plan row at all is granted EVERY
+module** (the resolver answers `source = no_plan` and the gate lets it through), and none of its
+numeric ceilings apply. It is not on the free tier; it is on the unlimited one. The account card in
+**Modules & Plans → Per-tenant plan & overrides** prints `no plan row — all modules allowed` with the
+denied list empty, and **Assign plan** on that same card (or `PUT /api/admin/tenants/:id/plan`) ends
+the state — one press, and that press is the only way it ends. Measured 2026-10-02: 14 of the 17
+workspaces on this deployment were in it, and all of them are operator-owned or minted by an ingest
+arm, never a signup (a signup always writes a `free` row).
 
 ### Putting an account on a plan (operator action)
 

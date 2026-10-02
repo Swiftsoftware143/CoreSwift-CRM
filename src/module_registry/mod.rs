@@ -17,12 +17,25 @@
 //! Step 3 is the whole point: the previous implementation fail-OPENed on an unknown key, so a new
 //! module could ship ungated and a renamed key silently stopped enforcing. Unknown now denies.
 //!
-//! ONE residual exception, deliberate and measured: a tenant with **no active `tenant_plans` row**
-//! resolves as ALLOWED (`source = "no_plan"`). Today that path allows everything, and 81 tenants (10
-//! of them with users) have no plan row — turning it into a deny would strip every module from them
-//! in a single deploy. New signups DO get a free-plan row (`auth::handlers`), so this is legacy
-//! tolerance, not a design choice; it is reported so the admin can assign those tenants a plan and
-//! shrink it to zero.
+//! ONE residual exception, decided and measured (kanban t_e6141896, **ARM (a): keep it open, make it
+//! visible**): a tenant with **no active `tenant_plans` row** resolves as ALLOWED
+//! (`source = "no_plan"`) — every registered module granted, and `usage_ceiling` reports no ceiling
+//! for any limit. Measured live 2026-10-02 on `coreswift_crm`: 14 of 17 tenants hold no plan row.
+//! The alternative (fail closed) was rejected on MEASUREMENT, not taste: seating those accounts on
+//! the platform default (`free`) would not preserve their behaviour — the three that hold contacts
+//! carry 122/81/78 rows against free's ceiling of 100, `SwiftSoftware` runs 7 AI score rules,
+//! 3 pipelines and 11 automations that `free` denies or caps, `ZaarHub` runs 3 score rules, and
+//! `TestPortfolio` holds 3 tickets — and choosing a PAID tier for them is a pricing decision, which
+//! is deliberately out of this module's scope. EVERY row-less tenant is operator-owned or
+//! auto-minted by a sibling ingest arm (no customer, no invoice), and new signups DO get a free-plan
+//! row (`auth::handlers`), so this is an internal-configuration state, not a customer-facing leak.
+//! What was wrong was that it was INVISIBLE. It is now named: `GET /api/admin/tenants/:id/entitlements`
+//! returns `no_plan: true` and the admin console prints `no plan row — all modules allowed`, with the
+//! one-press remedy (`PUT /api/admin/tenants/:id/plan`) on the same card.
+//!
+//! To reverse this decision: seat a plan on every row-less tenant FIRST, then turn
+//! `features::enforce_feature_flag`'s `"no_plan" => Ok(())` arm into the same 402 as every other
+//! source — in that order, or 14 live workspaces lose every gated module in one deploy.
 
 use crate::errors::AppError;
 use serde_json::Value as Json;
