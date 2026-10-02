@@ -94,6 +94,7 @@ CoreSwift powers the **Booking CTA slot** on MultiDirectory business listing pag
 | Email Templates | `/api/email-templates` | GET, POST |
 | Message Templates | `/api/comms/templates` | GET, POST |
 | Plans | `/api/billing/plans` | GET, POST |
+| Account plan (operator) | `/api/admin/tenants/:id/plan` | PUT |
 | Audit | `/api/audit` | GET |
 
 ## Monitoring & Logs
@@ -312,6 +313,49 @@ that resolves to nothing is **denied** — the module returns **402 Payment Requ
 module can no longer ship ungated and a renamed key can no longer silently stop enforcing.
 Toggle them per plan in the admin console. The one tolerance left: a tenant with no active
 plan row at all keeps its modules.
+
+### Putting an account on a plan (operator action)
+
+Assigning a plan is an **operator** action, not a tenant self-service one. `POST` / `PATCH
+/api/billing/subscription` are both platform-gated **and both take the tenant from the caller's own
+token**, so they can only ever write the operator's own workspace — and `POST` additionally answers
+**409** for any account that already holds a row, which every signup writes. The instrument that
+acts on a **target** account is:
+
+| Route | Method | Who | What it does |
+|---|---|---|---|
+| `/api/admin/tenants/:id/plan` | `PUT` | platform admin only | Puts the account in the path on a plan, optionally with a billing cycle |
+
+Body — `plan_slug` (preferred: it is unique in `plans`) or `plan_id`, plus an optional
+`billing_cycle` of `monthly` or `yearly`. Omitting the cycle keeps the account's current one, and a
+first-time assignment defaults to `monthly`.
+
+```json
+{ "plan_slug": "starter", "billing_cycle": "monthly" }
+```
+
+It works whether or not the account already has a `tenant_plans` row: an existing row is updated,
+and an account with **no** row gets one created — `created_row` in the answer says which happened.
+Most accounts have no row, because only a signup seat writes one. The answer echoes the plan and the
+cycle the server actually wrote, and every call is recorded in the audit log as
+`subscription.plan_assigned`, naming the operator.
+
+In the admin console: **Modules & Plans → Per-tenant plan & overrides** — pick the account, pick the
+plan and the cycle, press **Assign plan**. The line under the button prints what the server wrote and
+whether the row was created or updated, and the entitlements underneath are re-read.
+
+| Answer | When |
+|---|---|
+| **200** | written; `created_row` is `true` when the account had no plan row before |
+| **403** | the caller is not a platform admin — a tenant `owner`, or a role string such as `agency_admin` whose `users.is_platform_admin` is false |
+| **404** | no account with that id |
+| **422** | no such active plan, or a `billing_cycle` outside the schema's vocabulary |
+
+What it deliberately does **not** do: it decides no pricing and no plan contents (no `plans`,
+`plan_modules` or `plan_module_features` row is touched), it never writes
+`tenant_plans.feature_overrides` — the per-account entitlement instrument stays the platform-gated
+`POST /api/admin/tenants/:id/overrides` — and it never writes credits. A paid assignment posts the
+same affiliate attribution as the subscription writers (see *Affiliate Products & Commissions*).
 
 ### Numeric limits (the `limits` module, plus the two on `private_email`)
 

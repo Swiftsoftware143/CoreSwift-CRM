@@ -475,6 +475,178 @@ pub async fn update_subscription(
     Ok(Json(json!(sub)))
 }
 
+/// PUT /api/admin/tenants/:id/plan — put ANOTHER tenant on a plan (platform admin only).
+///
+/// WHY THIS EXISTS (kanban t_f1ffb865 — the WS-15 analogue). Before it, NO surface in this app
+/// could move a tenant onto a plan. Both writers above take the tenant id from `Claims.aid`, so
+/// the operator could only ever write its own workspace (`Swift Admin's Workspace`), and
+/// `POST /api/billing/subscription` additionally 409s for any tenant that already holds a row —
+/// which every signup seat writes. `admin_actions::router` carried /tenants, /users, /site,
+/// /email-config, /modules, /plans/:slug/{modules,features} and /tenants/:id/{overrides,
+/// entitlements} and no plan write at all. Measured 2026-10-02: 3 of 14 tenants had a
+/// `tenant_plans` row (all `free|active|monthly`, the signup seat's own INSERT) and the rest had
+/// no row at all, so every tenant was stuck on its signup plan with no way off it but hand SQL.
+///
+/// AUTHORITY. The route is mounted on `admin_actions::router`, which layers
+/// `require_platform_admin_middleware` over every protected route, and the call below is defence
+/// in depth (the same predicate, the same `users.is_platform_admin` column resolved from the DB
+/// by `claims.sub`, failing closed). No role string is consulted — `agency_admin` is a role a
+/// minted user can carry (measured on t_8d91f70c), which is exactly why the app resolves
+/// platform authority from the column instead.
+///
+/// WHAT IT DELIBERATELY DOES NOT DO.
+/// * It never decides pricing or entitlements: no `plans` row, no `plan_modules` /
+///   `plan_module_features` assignment and no `tenant_plans.feature_overrides` is written. The
+///   per-tenant entitlement instrument stays the platform-gated
+///   `POST /api/admin/tenants/:id/overrides`.
+/// * It never writes `credit_balance` / `lifetime_credits` — credits are their own contract.
+/// * A tenant holding no row is NOT invented: the INSERT arm seats the plan and nothing else, so
+///   the resolver sees a real plan instead of the `no_plan` legacy tolerance (which allows every
+///   gated module).
+///
+/// Two arms, one statement. `tenant_plans` carries a real UNIQUE CONSTRAINT on `tenant_id`
+/// (`tenant_plans_tenant_id_key`), so `ON CONFLICT (tenant_id)` is a genuine arbiter here — unlike
+/// the phantom `ON CONFLICT (aid)` that got WS-15's predecessor deleted. The same shape is what
+/// `cancel_subscription` already writes. The UPDATE arm clears `trial_ends_at`: it is read
+/// (`monitoring::account_health_handler` queues a "trial expiring" reminder, `ai::engine` reports
+/// it), and an `active` row left carrying one would keep advertising a trial that no longer runs.
+pub async fn assign_tenant_plan(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path(tenant_id): Path<Uuid>,
+    Json(r): Json<AssignPlanRequest>,
+) -> ApiResult<impl IntoResponse> {
+    crate::auth::platform_admin::require_platform_admin(&s.db, &c.sub).await?;
+
+    // The target tenant must exist. Checked before the plan so a typo'd id is a 404 and not a
+    // confusing 422 about a slug that was fine.
+    let tenant: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT name FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .fetch_optional(&s.db)
+            .await?;
+    let Some((tenant_name,)) = tenant else {
+        return Err(AppError::NotFound(format!("Tenant {tenant_id} not found")));
+    };
+
+    // Resolve the requested plan through the app's own plan vocabulary. A slug is unique in
+    // `plans`; both handles are validated against `is_active` so an assignment can never seat a
+    // tenant on a retired tier.
+    let slug = r
+        .plan_slug
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let (plan_id, plan_slug, plan_name): (Uuid, String, String) = match (slug, r.plan_id) {
+        (Some(slug), _) => {
+            sqlx::query_as("SELECT id, slug, name FROM plans WHERE slug = $1 AND is_active = true")
+                .bind(&slug)
+                .fetch_optional(&s.db)
+                .await?
+                .ok_or_else(|| AppError::Validation(format!("No active plan with slug '{slug}'")))?
+        }
+        (None, Some(pid)) => {
+            sqlx::query_as("SELECT id, slug, name FROM plans WHERE id = $1 AND is_active = true")
+                .bind(pid)
+                .fetch_optional(&s.db)
+                .await?
+                .ok_or_else(|| AppError::Validation(format!("No active plan with id '{pid}'")))?
+        }
+        (None, None) => {
+            return Err(AppError::Validation(
+                "plan_slug or plan_id is required".to_string(),
+            ))
+        }
+    };
+
+    // Cycle: an explicit value must be in the schema's vocabulary, otherwise an existing row
+    // keeps its own cycle and a first-time assignment gets the first of the declared pair.
+    let existing: Option<TenantPlan> =
+        sqlx::query_as::<_, TenantPlan>("SELECT * FROM tenant_plans WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_optional(&s.db)
+            .await?;
+    let cycle: String = match r.billing_cycle.as_deref() {
+        Some(cycle) => {
+            validate_billing_cycle(cycle)?;
+            cycle.to_string()
+        }
+        None => existing
+            .as_ref()
+            .map(|t| t.billing_cycle.clone())
+            .unwrap_or_else(|| BILLING_CYCLES[0].to_string()),
+    };
+
+    let created_row = existing.is_none();
+
+    let sub = sqlx::query_as::<_, TenantPlan>(
+        r#"-- One statement, two arms. The conflict arbiter is the real unique constraint
+           -- `tenant_plans_tenant_id_key` on (tenant_id); see the handler doc.
+           INSERT INTO tenant_plans
+               (id, tenant_id, plan_id, status, billing_cycle,
+                current_period_starts_at, current_period_ends_at)
+           VALUES ($1, $2, $3, 'active', $4, NOW(),
+                   NOW() + CASE WHEN $4 = 'yearly' THEN INTERVAL '1 year' ELSE INTERVAL '1 month' END)
+           ON CONFLICT (tenant_id) DO UPDATE SET
+               plan_id = EXCLUDED.plan_id,
+               status = 'active',
+               billing_cycle = EXCLUDED.billing_cycle,
+               canceled_at = NULL,
+               trial_ends_at = NULL,
+               current_period_starts_at = EXCLUDED.current_period_starts_at,
+               current_period_ends_at = EXCLUDED.current_period_ends_at,
+               updated_at = NOW()
+           RETURNING *"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(tenant_id)
+    .bind(plan_id)
+    .bind(&cycle)
+    .fetch_one(&s.db)
+    .await?;
+
+    crate::audit::logger::log_event(
+        &s.db,
+        tenant_id,
+        Uuid::parse_str(&c.sub).ok(),
+        "subscription.plan_assigned",
+        "subscription",
+        Some(sub.id),
+        Some(json!({
+            "plan_id_old": existing.as_ref().map(|t| t.plan_id),
+            "plan_id_new": plan_id,
+            "plan_slug": plan_slug,
+            "billing_cycle": cycle,
+            "created_row": created_row,
+            "assigned_by": c.sub,
+        })),
+        None,
+    )
+    .await;
+
+    // Same contract as the two writers above: a PAID assignment tells the referring affiliate.
+    attribute_plan_upgrade(&s, tenant_id, plan_id).await;
+
+    tracing::info!(
+        tenant = %tenant_id,
+        plan = %plan_slug,
+        cycle = %cycle,
+        created_row,
+        "Platform operator moved a tenant onto a plan (t_f1ffb865)"
+    );
+
+    Ok(Json(json!({
+        "message": "Plan assigned",
+        "tenant_id": tenant_id,
+        "tenant_name": tenant_name,
+        "plan": { "id": plan_id, "slug": plan_slug, "name": plan_name },
+        "billing_cycle": cycle,
+        "created_row": created_row,
+        "subscription": sub,
+    })))
+}
+
 /// May this caller cancel the tenant's own subscription?
 ///
 /// The gate previously tested `role != "client_admin" && role != "agency_admin"`, but NO

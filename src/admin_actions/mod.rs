@@ -15,6 +15,7 @@
 //! PUT  /api/admin/email-config — save the platform provider + credential (admin)
 //! DELETE /api/admin/email-config — drop the stored override, use the environment (admin)
 //! POST /api/admin/email-config/test — send a real message through the platform transport (admin)
+//! PUT  /api/admin/tenants/:id/plan — put a TARGET tenant on a plan (admin; kanban t_f1ffb865)
 
 pub mod email_config;
 pub mod handlers;
@@ -94,6 +95,16 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route(
             "/tenants/:id/entitlements",
             axum::routing::get(crate::module_registry::handlers::tenant_entitlements),
+        )
+        // The operator's PLAN-ASSIGNMENT instrument (kanban t_f1ffb865, the WS-15 analogue).
+        // Without it no surface could put ANOTHER tenant on a plan: both writers of
+        // /api/billing/subscription take the tenant from `Claims.aid`, so the platform could only
+        // ever write its own workspace and every other tenant stayed on its signup plan.
+        // The tenant is the PATH parameter here — that is the difference that makes this route
+        // able to act on a target account at all.
+        .route(
+            "/tenants/:id/plan",
+            axum::routing::put(crate::billing::handlers::assign_tenant_plan),
         )
         // TWO layers. `Router::layer` wraps outermost-last, so listing the platform-admin gate
         // FIRST makes `auth_middleware` run first and inject `Claims`; the gate then reads them.

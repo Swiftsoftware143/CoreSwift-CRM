@@ -211,13 +211,19 @@ pub async fn set_override(
 }
 
 /// GET /api/admin/tenants/:id/entitlements — the effective set the tenant actually gets.
+///
+/// The `plan` object names the tier AND the row it was read from (`billing_cycle`, `status`), so
+/// the admin console's per-tenant card can show the state it is about to change instead of only a
+/// tier name (kanban t_f1ffb865). `trialing` counts as "on a plan" for the same reason the
+/// tenant-facing reader treats it that way (`billing::handlers::get_features`).
 pub async fn tenant_entitlements(
     State(s): State<AppState>,
     Path(tenant_id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let plan: Option<(String, String)> = sqlx::query_as(
-        "SELECT p.slug, p.name FROM tenant_plans tp JOIN plans p ON p.id = tp.plan_id
-          WHERE tp.tenant_id = $1 AND tp.status = 'active' LIMIT 1",
+    let plan: Option<(String, String, String, String)> = sqlx::query_as(
+        "SELECT p.slug, p.name, tp.billing_cycle, tp.status FROM tenant_plans tp
+          JOIN plans p ON p.id = tp.plan_id
+          WHERE tp.tenant_id = $1 AND tp.status IN ('active', 'trialing') LIMIT 1",
     )
     .bind(tenant_id)
     .fetch_optional(&s.db)
@@ -232,7 +238,9 @@ pub async fn tenant_entitlements(
 
     Ok(Json(json!({
         "tenant_id": tenant_id,
-        "plan": plan.map(|(slug, name)| json!({ "slug": slug, "name": name })),
+        "plan": plan.map(|(slug, name, cycle, status)| json!({
+            "slug": slug, "name": name, "billing_cycle": cycle, "status": status
+        })),
         "entitlements": resolved,
         "denied": denied,
     })))

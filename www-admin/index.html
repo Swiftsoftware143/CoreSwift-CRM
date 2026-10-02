@@ -450,28 +450,111 @@ function renderModuleMatrix() {
     'Changes save immediately and are enforced on the next request; a key no plan has been assigned denies by default.</p>' +
     tenantOverrideCard();
   wrap.innerHTML = h;
+  // The card's pickers (accounts + plans) are populated AFTER the card is in the document — the
+  // same ordering rule this panel already follows (its own loader lives in TAB_LOADERS).
+  loadTenantPlanPickers();
 }
 
+// Per-tenant plan + overrides. The account/plan pickers are the OPERATOR's plan-assignment
+// instrument (PUT /api/admin/tenants/:id/plan, kanban t_f1ffb865). Before it existed there was NO
+// surface anywhere that could put an account other than the operator's own workspace on a plan —
+// both /api/billing/subscription writers take the tenant from the caller's own claim — so every
+// account sat on its signup plan until someone ran hand-written SQL. The account is chosen from
+// the real tenant list, because an id typed by hand is not "one action".
 function tenantOverrideCard() {
-  return '<div class="card" style="margin-top:22px"><div class="card-header">Per-tenant overrides</div>' +
+  return '<div class="card" style="margin-top:22px"><div class="card-header">Per-tenant plan &amp; overrides</div>' +
     '<div class="card-body"><p style="color:var(--text-secondary);margin-bottom:10px">' +
-    'An override beats the plan for that one account — use it to grant or deny a module or feature to a single tenant.</p>' +
-    '<input id="toTenant" placeholder="tenant id (uuid)" style="width:360px;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"> ' +
+    'Assign the account&rsquo;s plan and billing cycle here, then fine-tune a single module or feature below — ' +
+    'an override beats the plan for that one account.</p>' +
+    '<div class="form-group"><label for="toTenant">Account</label>' +
+    '<select id="toTenant" data-ops="to-tenant" onchange="loadTenantEntitlements()"><option value="">Loading accounts…</option></select></div>' +
+    '<div class="form-group"><label for="toPlan">Plan</label>' +
+    '<select id="toPlan" data-ops="to-plan"><option value="">Loading plans…</option></select></div>' +
+    '<div class="form-group"><label for="toCycle">Billing cycle</label>' +
+    '<select id="toCycle" data-ops="to-cycle"><option value="monthly">monthly</option><option value="yearly">yearly</option></select></div>' +
+    '<button class="btn btn-primary btn-sm" data-ops="to-assign" onclick="assignPlanToTenant()">Assign plan</button> ' +
     '<button class="btn btn-secondary btn-sm" onclick="loadTenantEntitlements()">Load entitlements</button>' +
+    '<div id="toAssignStatus" style="margin-top:8px;color:var(--text-secondary)"></div>' +
     '<div id="toResult" style="margin-top:12px"></div></div></div>';
+}
+
+// The two pickers read the app's OWN lists — GET /api/admin/tenants (names, platform-gated) and
+// GET /api/billing/plans (active tiers) — both already used by other panels of this console.
+let TP_TENANTS = [], TP_PLANS = [];
+async function loadTenantPlanPickers() {
+  const tSel = document.getElementById('toTenant');
+  if (!tSel) return;
+  try {
+    if (!TP_TENANTS.length) {
+      const td = await API.get('/admin/tenants');
+      TP_TENANTS = (td && td.tenants) || [];
+    }
+    tSel.innerHTML = TP_TENANTS.length
+      ? '<option value="">— select account —</option>' + TP_TENANTS.map(t =>
+          '<option value="' + escapeHtmlAttr(t.id) + '">' +
+          escapeHtml(t.name || t.slug || t.id) + '</option>').join('')
+      : '<option value="">(no accounts returned)</option>';
+  } catch (e) {
+    tSel.innerHTML = '<option value="">(accounts: ' + escapeHtml(e.message) + ')</option>';
+  }
+  const pSel = document.getElementById('toPlan');
+  if (!pSel) return;
+  try {
+    if (!TP_PLANS.length) TP_PLANS = famList(await API.get('/billing/plans'), 'plans');
+    pSel.innerHTML = TP_PLANS.length
+      ? '<option value="">— select plan —</option>' + TP_PLANS.map(p =>
+          '<option value="' + escapeHtmlAttr(p.slug) + '">' + escapeHtml(p.name) +
+          ' (' + escapeHtml(p.slug) + ')</option>').join('')
+      : '<option value="">(no plans returned)</option>';
+  } catch (e) {
+    pSel.innerHTML = '<option value="">(plans: ' + escapeHtml(e.message) + ')</option>';
+  }
+}
+
+// One action: pick the account, pick the plan (and cycle), press Assign. The answer that matters
+// is the one the server sent back — the status line prints the plan and cycle it actually wrote
+// and whether it created the row or updated it, and the entitlements below are re-read.
+async function assignPlanToTenant() {
+  const tSel = document.getElementById('toTenant'), pSel = document.getElementById('toPlan'),
+    cSel = document.getElementById('toCycle'), st = document.getElementById('toAssignStatus');
+  if (!tSel || !pSel) return;
+  const tenant = (tSel.value || '').trim();
+  const slug = (pSel.value || '').trim();
+  const cycle = (cSel && cSel.value) || 'monthly';
+  if (!tenant) { if (st) st.textContent = 'Pick an account first.'; return; }
+  if (!slug) { if (st) st.textContent = 'Pick a plan first.'; return; }
+  const acct = (tSel.options[tSel.selectedIndex] || {}).text || tenant;
+  if (!window.confirm('Move "' + acct + '" to the "' + slug + '" plan (' + cycle + ')?')) return;
+  if (st) st.textContent = 'Assigning…';
+  try {
+    const r = await API.put('/admin/tenants/' + encodeURIComponent(tenant) + '/plan',
+      { plan_slug: slug, billing_cycle: cycle });
+    const p = (r && r.plan) || {};
+    const name = p.name || p.slug || slug;
+    if (st) st.textContent = 'Applied: ' + name + ' · ' + ((r && r.billing_cycle) || cycle) +
+      (r && r.created_row ? ' · plan row created' : ' · existing row updated');
+    toast('Account moved to ' + name, 'success');
+    loadTenantEntitlements();
+  } catch (e) {
+    if (st) st.textContent = 'Failed: ' + e.message;
+    toast('Assign failed: ' + e.message, 'error');
+  }
 }
 
 async function loadTenantEntitlements() {
   const el = document.getElementById('toTenant'), out = document.getElementById('toResult');
   if (!el || !out) return;
   const id = (el.value || '').trim();
-  if (!id) { out.innerHTML = '<p style="color:var(--warning,#fa0)">Enter a tenant id first.</p>'; return; }
+  if (!id) { out.innerHTML = '<p style="color:var(--warning,#fa0)">Pick an account first.</p>'; return; }
   out.innerHTML = '<div style="color:var(--text-muted)">Loading…</div>';
   try {
     const d = await API.get('/admin/tenants/' + encodeURIComponent(id) + '/entitlements');
     const ents = d.entitlements || [];
     let t = '<div style="color:var(--text-secondary);margin-bottom:8px">Plan: <strong>' +
-      escapeHtml((d.plan && (d.plan.name || d.plan.slug)) || 'none assigned') + '</strong> &middot; denied: ' +
+      escapeHtml((d.plan && (d.plan.name || d.plan.slug)) || 'none assigned') + '</strong>' +
+      (d.plan ? ' &middot; ' + escapeHtml(d.plan.billing_cycle || '—') +
+        ' &middot; ' + escapeHtml(d.plan.status || '—') : '') +
+      ' &middot; denied: ' +
       escapeHtml((d.denied || []).join(', ') || 'none') + '</div>' +
       '<div style="overflow:auto;max-height:420px"><table style="width:100%;border-collapse:collapse">' +
       '<thead><tr><th style="text-align:left;padding:6px 10px;border-bottom:1px solid var(--border,#333)">Key</th>' +

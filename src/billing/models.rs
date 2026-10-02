@@ -76,6 +76,30 @@ pub struct UpdateSubscriptionRequest {
     pub feature_overrides: Option<serde_json::Value>,
 }
 
+/// Body of `PUT /api/admin/tenants/:id/plan` — the operator's plan-assignment instrument
+/// (kanban t_f1ffb865).
+///
+/// The tenant is the PATH parameter, never a claim: that is the whole point of the route — the
+/// two `/api/billing/subscription` writers take the tenant from `Claims.aid`, so the platform
+/// could only ever write its OWN workspace and no caller could move ANOTHER tenant onto a plan.
+///
+/// `plan_slug` is the preferred handle (it is unique in `plans`, and it is what the admin
+/// console's own plan list carries); `plan_id` is accepted too so a caller already holding the
+/// uuid does not have to look the slug up. At least one of them is required.
+///
+/// `billing_cycle` is genuinely optional: omitted, an existing row KEEPS its cycle and a tenant
+/// with no row yet gets `BILLING_CYCLES[0]` (monthly). The schema's CHECK constraint is the only
+/// vocabulary (`monthly` | `yearly`) and it is enforced on both paths.
+#[derive(Debug, Deserialize)]
+pub struct AssignPlanRequest {
+    #[serde(default)]
+    pub plan_slug: Option<String>,
+    #[serde(default)]
+    pub plan_id: Option<Uuid>,
+    #[serde(default)]
+    pub billing_cycle: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct FeaturesResponse {
     pub plan: PlanSummary,
