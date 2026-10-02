@@ -1,0 +1,27 @@
+-- 102_retire_deal_reminders.sql
+-- CoreSwift-CRM: drop `deal_reminders`, the table migration 059 created for the deal-reminders
+-- module that was never compiled.
+--
+-- Card t_574f4260 retired three dead modules as source files — nothing declared them, so no
+-- compiler ever saw them and nothing was reachable:
+--   * src/activities/{mod.rs,handlers.rs}  (GET  /api/activities)
+--   * src/deal_timeline.rs                 (GET  /api/v1/deals/{deal_id}/timeline)
+--   * src/deal_reminders.rs                (GET/POST /api/deal-reminders, GET /{id}, PUT /{id}/dismiss)
+-- `deal_reminders` was the reminders module's ONLY relation: `grep -rn 'deal_reminders' src/`
+-- matched nothing outside the file itself, no other app in the fleet names it, and it has never
+-- held a row (0 live, and 059 is the only thing that could write it). The served user guide already
+-- states there is no reminder control, no panel, no Overdue count and no reminder route, so the
+-- relation is dead schema the docs deny — retired here rather than left as an orphan the next
+-- reader has to re-measure. Precedent: migration 097 retired the checkout surface's table the same
+-- way after t_0fe500d4 deleted its code.
+--
+-- `deal_reminders` is a pure child (tenants/opportunities/users ON DELETE CASCADE) and no table
+-- carries an FK to it (`select count(*) from pg_constraint where confrelid='deal_reminders'::regclass`
+-- = 0), so the drop needs no dependant handling. migration 059 and the 000 baseline still CREATE
+-- it and are deliberately NOT edited (a filename-tracked runner has already recorded them); this
+-- file runs after both, so a fresh install converges on the same schema as live.
+--
+-- Idempotent, so this converges on a fresh, restored or already-fixed database.
+-- No BEGIN/COMMIT (the runner wraps each migration). No semicolon inside these comments.
+
+DROP TABLE IF EXISTS deal_reminders;
