@@ -44,6 +44,9 @@ pub struct SendRequest {
     pub to: String,
     pub subject: Option<String>,
     pub body: String,
+    /// Who this message is with. Optional: when it is omitted the recipient ADDRESS is matched against
+    /// this tenant's contacts, so an existing caller gets a timeline without changing anything.
+    pub contact_id: Option<Uuid>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -126,12 +129,43 @@ pub async fn send(
         return Err(AppError::Validation("to and body are required".to_string()));
     }
 
+    // ── WHO THIS MESSAGE IS WITH ──────────────────────────────────────────────────────────────
+    // Measured 2026-10-02: `outbound_messages.contact_id` existed and NOTHING ever wrote it, so 0 of 24
+    // rows carried one and a contact could never have a message timeline. The link is recorded here, and
+    // derived from the recipient address when the caller does not name a contact — a message sent to a
+    // known contact's address belongs on that contact's timeline whether or not the caller remembered.
+    let contact_id =
+        match r.contact_id {
+            Some(id) => {
+                // Same ownership rule as everywhere else: an id that is not this tenant's must not attach.
+                let ok = sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS(SELECT 1 FROM contacts WHERE id = $1 AND tenant_id = $2)",
+                )
+                .bind(id)
+                .bind(tid)
+                .fetch_one(&s.db)
+                .await?;
+                if !ok {
+                    return Err(AppError::NotFound(format!("Contact {} not found", id)));
+                }
+                Some(id)
+            }
+            None => sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM contacts WHERE tenant_id = $1 AND lower(email) = lower($2) LIMIT 1",
+            )
+            .bind(tid)
+            .bind(&r.to)
+            .fetch_optional(&s.db)
+            .await?,
+        };
+
     let msg = sqlx::query_as::<_, OutboundMessage>(
-        r#"INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status)
-           VALUES ($1, $2, $3, $4, $5, $6, 'queued') RETURNING *"#,
+        r#"INSERT INTO outbound_messages (id, tenant_id, contact_id, channel, to_address, subject, body, status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued') RETURNING *"#,
     )
     .bind(Uuid::new_v4())
     .bind(tid)
+    .bind(contact_id)
     .bind(&r.channel)
     .bind(&r.to)
     .bind(&r.subject)
@@ -498,4 +532,72 @@ async fn deliver_message(
             tracing::error!(msg = %msg_id, error = %e, "Failed to record the delivery attempt")
         }
     }
+}
+
+/// GET /api/contacts/:id/timeline — every message this contact is part of, newest first.
+///
+/// David's Fluid CRM parity item was "Deal details (calls/emails/notes)". The messages existed and the
+/// link column existed; neither was readable against a contact, so there was no timeline to open.
+///
+/// Matches on `contact_id` OR the recipient address, because rows written before the link was recorded
+/// (all of them, as of 2026-10-02) still belong to this contact if the address is the contact's. Without
+/// that second arm the timeline would open empty for every message already sent.
+pub async fn contact_timeline(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path(contact_id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+
+    let email = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT email FROM contacts WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(contact_id)
+    .bind(tid)
+    .fetch_optional(&s.db)
+    .await?
+    .ok_or(AppError::NotFound(format!(
+        "Contact {} not found",
+        contact_id
+    )))?;
+
+    let rows = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+            Option<String>,
+            chrono::DateTime<chrono::Utc>,
+        ),
+    >(
+        r#"SELECT id, channel, to_address, subject, status, sent_at::text, created_at
+             FROM outbound_messages
+            WHERE tenant_id = $1
+              AND (contact_id = $2 OR ($3::text IS NOT NULL AND lower(to_address) = lower($3)))
+            ORDER BY created_at DESC
+            LIMIT 200"#,
+    )
+    .bind(tid)
+    .bind(contact_id)
+    .bind(&email)
+    .fetch_all(&s.db)
+    .await?;
+
+    let items: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|(id, channel, to, subject, status, sent_at, created_at)| {
+            json!({
+                "id": id, "kind": "message", "channel": channel,
+                "to": to, "subject": subject, "status": status,
+                "sent_at": sent_at, "created_at": created_at,
+            })
+        })
+        .collect();
+
+    Ok(Json(
+        json!({ "contact_id": contact_id, "count": items.len(), "items": items }),
+    ))
 }

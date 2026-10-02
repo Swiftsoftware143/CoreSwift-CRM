@@ -47,6 +47,12 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/", axum::routing::post(handlers::create))
         .route("/search", axum::routing::get(handlers::search))
         .route("/:id", axum::routing::get(handlers::get))
+        // The contact's message timeline. Lives under the contacts path because that is the address a
+        // reader expects, but the reader itself belongs to communications (it owns the messages table).
+        .route(
+            "/:id/timeline",
+            axum::routing::get(crate::communications::handlers::contact_timeline),
+        )
         .route("/:id", axum::routing::patch(handlers::update))
         .route("/:id", axum::routing::delete(handlers::delete))
         .layer(axum::middleware::from_fn_with_state(
