@@ -48,13 +48,10 @@ pub fn router(state: AppState) -> Router<AppState> {
 
     // The public group reads bodies too (/register, /login, /refresh, /forgot-password,
     // /reset-password all take a `Json` payload), and a stranger can reach every one of them.
-    let public = Router::new()
-        .route("/register", axum::routing::post(handlers::register))
-        .route("/login", axum::routing::post(handlers::login))
-        .route("/refresh", axum::routing::post(handlers::refresh))
-        .route("/me", axum::routing::get(handlers::me))
-        .route("/logout", axum::routing::post(handlers::logout))
-        .route("/invites", axum::routing::get(handlers::list_invites))
+    // PASSWORD RECOVERY — its own group with the STRICTEST limit. David, 2026-10-02: *"if you mean
+    // forgot password then yeah 3 attempts"*. Split out of `public` because these two routes SEND AN
+    // EMAIL: the abuse is mail-bombing a real person and probing reset tokens, not general traffic.
+    let password = Router::new()
         .route(
             "/forgot-password",
             axum::routing::post(handlers::forgot_password),
@@ -64,9 +61,32 @@ pub fn router(state: AppState) -> Router<AppState> {
             axum::routing::post(handlers::reset_password),
         )
         .layer(axum::middleware::from_fn_with_state(
+            state.rate_limiter.clone(),
+            crate::rate_limiter::password_rate_limit_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
             body_deadline,
             crate::body_deadline::body_read_deadline_middleware,
         ));
 
-    Router::new().merge(public).merge(protected)
+    let public = Router::new()
+        .route("/register", axum::routing::post(handlers::register))
+        .route("/login", axum::routing::post(handlers::login))
+        .route("/refresh", axum::routing::post(handlers::refresh))
+        .route("/me", axum::routing::get(handlers::me))
+        .route("/logout", axum::routing::post(handlers::logout))
+        .route("/invites", axum::routing::get(handlers::list_invites))
+        // The credential-guessing surface: login/register/refresh. This is the limiter that stops
+        // password guessing, and it is a SEPARATE bucket from password recovery on purpose — one reset
+        // request must not eat a caller's login allowance.
+        .layer(axum::middleware::from_fn_with_state(
+            state.rate_limiter.clone(),
+            crate::rate_limiter::auth_rate_limit_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            body_deadline,
+            crate::body_deadline::body_read_deadline_middleware,
+        ));
+
+    Router::new().merge(public).merge(password).merge(protected)
 }

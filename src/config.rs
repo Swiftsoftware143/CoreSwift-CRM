@@ -17,6 +17,11 @@ pub struct AppConfig {
     pub jwt_refresh_expiry: i64,
     pub auth_rate_limit_per_minute: u32,
     pub api_rate_limit_per_minute: u32,
+    /// Password recovery (forgot/reset). David, 2026-10-02: *"if you mean forgot password then yeah 3
+    /// attempts"* — its own window, because a reset request SENDS AN EMAIL: the abuse is mail-bombing a
+    /// person and probing reset tokens, not general request volume.
+    pub password_rate_limit_max: u32,
+    pub password_rate_limit_window_minutes: u32,
     pub score_cache_ttl: u64,
     pub list_cache_ttl: u64,
     pub session_cache_ttl: u64,
@@ -81,6 +86,18 @@ impl AppConfig {
             .map_err(|e| anyhow::anyhow!("Invalid API_RATE_LIMIT_PER_MINUTE: {}", e))?;
 
         #[allow(clippy::unwrap_used)]
+        let password_rate_limit_max = env::var("PASSWORD_RATE_LIMIT_MAX")
+            .unwrap_or_else(|_| "3".to_string())
+            .parse::<u32>()
+            .map_err(|e| anyhow::anyhow!("Invalid PASSWORD_RATE_LIMIT_MAX: {}", e))?;
+
+        #[allow(clippy::unwrap_used)]
+        let password_rate_limit_window_minutes = env::var("PASSWORD_RATE_LIMIT_WINDOW_MINUTES")
+            .unwrap_or_else(|_| "15".to_string())
+            .parse::<u32>()
+            .map_err(|e| anyhow::anyhow!("Invalid PASSWORD_RATE_LIMIT_WINDOW_MINUTES: {}", e))?;
+
+        #[allow(clippy::unwrap_used)]
         let score_cache_ttl = env::var("SCORE_CACHE_TTL")
             .unwrap_or_else(|_| "300".to_string())
             .parse::<u64>()
@@ -136,6 +153,8 @@ impl AppConfig {
             jwt_refresh_expiry,
             auth_rate_limit_per_minute,
             api_rate_limit_per_minute,
+            password_rate_limit_max,
+            password_rate_limit_window_minutes,
             score_cache_ttl,
             list_cache_ttl,
             session_cache_ttl,

@@ -87,6 +87,11 @@ pub struct AppState {
     pub db: sqlx::PgPool,
     pub redis: redis::aio::ConnectionManager,
     pub config: config::AppConfig,
+    /// Built ONCE at startup and shared. Measured 2026-10-02: `RateLimiterState` was defined and its
+    /// middlewares written, but NOTHING ever constructed it and it was not on the state — so the
+    /// middlewares could not have been mounted even if someone had tried. That is why the rate limiter
+    /// was decorative.
+    pub rate_limiter: crate::rate_limiter::RateLimiterState,
 }
 
 impl std::fmt::Debug for AppState {
@@ -324,6 +329,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         db,
         redis,
+        rate_limiter: crate::rate_limiter::RateLimiterState::from_config(&config),
         config: config.clone(),
     };
 
