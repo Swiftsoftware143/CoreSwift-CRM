@@ -29,16 +29,17 @@ There is ONE affiliate system and it lives in FunnelSwift.
 FunnelSwift owns `affiliate_products` — one row per commissionable product, tagged with `source_app`
 (the app that sells it) — and that table is the source of truth for what an affiliate can promote.
 Apps do NOT push their plans into it:
-- The receiver for that idea exists — `POST /api/v1/internal/sync-affiliate-plan`
-  (`src/api_router.rs`, guarded by the `x-internal-key` header) — but it performs an unconditional
-  INSERT and ignores the payload's `action`, so it cannot update or deactivate a product.
-- No app has a working caller today (measured 2026-09-26 on the live deployment): CoreSwift does not
-  call it at all, and the three senders that do post to it (ADASwift, IncentiveSwift, WorkflowSwift)
-  carry the shared key in the payload body (`api_key`) while the route reads the `x-internal-key`
-  header, so every such call is refused **401 Invalid internal key** and writes nothing.
-- The rows are therefore created inside FunnelSwift: a plan-derived row per FunnelSwift plan, plus one
-  active platform-wide row per sibling service seeded by FunnelSwift's own migrations (`source_app` =
-  `coreswift`, `adaswift`, `workflowswift`, `incentiveswift`, `missedcallrespondr`).
+- The receiver for that idea, `POST /api/v1/internal/sync-affiliate-plan`, was **RETIRED and deleted**
+  (kanban t_141162e7, 2026-10-01) together with its three senders (ADASwift, IncentiveSwift,
+  WorkflowSwift). It could never have worked: the ONE WRITER contract (kanban t_6d326447) made it
+  require the plan to exist in FunnelSwift's own `plans` table, and a sibling's `plan_id` is a uuid
+  from another database — measured live, a perfectly-keyed sibling call answers
+  `400 plan <uuid> not found` and writes nothing. Migration 070 allows an affiliate product for a free
+  plan only, so the only thing a sibling could legitimately push is its own free row — which
+  FunnelSwift already owns.
+- The rows are created inside FunnelSwift: a plan-derived row per FunnelSwift plan, plus one active
+  platform-wide row per sibling service (`source_app` = `coreswift`, `adaswift`, `workflowswift`,
+  `incentiveswift`, `missedcallrespondr`), each linked by tag. 7 rows measured 2026-10-01.
 
 What apps DO send is the commission trigger: `POST /api/v1/internal/affiliate/upgrade-event`
 (`x-internal-key` header) from the app's own plan-change path when a tenant moves onto a paid plan.
