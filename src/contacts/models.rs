@@ -14,6 +14,11 @@ pub struct Contact {
     pub first_name: String,
     pub last_name: String,
     pub title: Option<String>,
+    /// Where this contact came from — `deal` when a deal auto-created it (2026-10-02), `csv` for an
+    /// import, NULL for a contact a person typed in. Same trap as `company` directly below: the column
+    /// exists and is written, but a field missing from this struct means the `SELECT *` drops it before
+    /// serialization, so the provenance was invisible even though every auto-created row carries it.
+    pub source: Option<String>,
     /// Free-text employer name — the column the product actually fills (CSV import, inbound
     /// capture, cross-app tag sync) and the one the Contacts tab renders. It was missing from
     /// this struct, so the `SELECT *` on every contact query silently dropped the column

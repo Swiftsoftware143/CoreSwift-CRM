@@ -72,6 +72,11 @@ pub struct CreateOpportunityRequest {
     /// A stage that belongs to ANOTHER pipeline is refused rather than silently ignored.
     pub stage_id: Option<Uuid>,
     pub contact_id: Option<Uuid>,
+    /// Fluid CRM parity: a deal may NAME the person it is about. If `contact_id` is not given and an
+    /// email is, the contact is FOUND-OR-CREATED and linked — so a deal never has nobody attached.
+    pub contact_name: Option<String>,
+    pub contact_email: Option<String>,
+    pub contact_phone: Option<String>,
     pub company_id: Option<Uuid>,
     pub notes: Option<String>,
     pub value: Option<f64>,
@@ -218,12 +223,92 @@ pub async fn create(
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::float8,$10,$11,$12,$13,$14) RETURNING ",
         opp_cols!()
     );
+    // ── WHO THIS DEAL IS ABOUT ────────────────────────────────────────────────────────────────
+    // Fluid CRM creates the contact from the deal. Doing it safely means the create has to be
+    // IDEMPOTENT, and the only field on `contacts` with a uniqueness guard is email
+    // (`idx_contacts_tenant_email`, unique on (tenant_id, email) where email is not null). So an
+    // auto-created contact requires an EMAIL: find-or-create on anything else would mint a fresh
+    // duplicate contact for every deal that names the same person, which is worse than leaving the
+    // deal unlinked. A deal with no email and no contact_id stays unlinked, deliberately.
+    let contact_id = match (req.contact_id, req.contact_email.as_deref()) {
+        (Some(id), _) => {
+            // An explicit id must belong to THIS tenant, for the same reason the pipeline above must:
+            // otherwise one tenant could attach another tenant's contact to their deal.
+            let ok = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM contacts WHERE id = $1 AND tenant_id = $2)",
+            )
+            .bind(id)
+            .bind(tenant_id)
+            .fetch_one(&state.db)
+            .await?;
+            if !ok {
+                return Err(AppError::NotFound(format!("Contact {} not found", id)));
+            }
+            Some(id)
+        }
+        (None, Some(email)) => {
+            let email = email.trim();
+            if email.is_empty() {
+                None
+            } else {
+                let existing = sqlx::query_scalar::<_, Uuid>(
+                    "SELECT id FROM contacts WHERE tenant_id = $1 AND lower(email) = lower($2) LIMIT 1",
+                )
+                .bind(tenant_id)
+                .bind(email)
+                .fetch_optional(&state.db)
+                .await?;
+
+                Some(match existing {
+                    Some(id) => id,
+                    None => {
+                        // first_name/last_name are NOT NULL: split what the deal gave us, and never
+                        // store an empty first name (the contact would be unnameable in the console).
+                        let (first, last) = match req.contact_name.as_deref().map(str::trim) {
+                            Some(n) if !n.is_empty() => match n.split_once(' ') {
+                                Some((f, l)) => (f.to_string(), l.to_string()),
+                                None => (n.to_string(), String::new()),
+                            },
+                            _ => (email.to_string(), String::new()),
+                        };
+                        let id = Uuid::new_v4();
+                        // ON CONFLICT DO NOTHING against the partial unique index: if a concurrent
+                        // request created the same contact, this is a no-op and the re-SELECT wins.
+                        sqlx::query(
+                            r#"INSERT INTO contacts (id, tenant_id, first_name, last_name, email, phone, source,
+                                                     created_at, updated_at)
+                               VALUES ($1,$2,$3,$4,$5,$6,'deal',NOW(),NOW())
+                               ON CONFLICT (tenant_id, email) WHERE email IS NOT NULL DO NOTHING"#,
+                        )
+                        .bind(id)
+                        .bind(tenant_id)
+                        .bind(&first)
+                        .bind(&last)
+                        .bind(email)
+                        .bind(&req.contact_phone)
+                        .execute(&state.db)
+                        .await?;
+
+                        sqlx::query_scalar::<_, Uuid>(
+                            "SELECT id FROM contacts WHERE tenant_id = $1 AND lower(email) = lower($2) LIMIT 1",
+                        )
+                        .bind(tenant_id)
+                        .bind(email)
+                        .fetch_one(&state.db)
+                        .await?
+                    }
+                })
+            }
+        }
+        (None, None) => None,
+    };
+
     let opp = sqlx::query_as::<_, OpportunityFull>(sql)
         .bind(Uuid::new_v4())
         .bind(tenant_id)
         .bind(pipeline_id)
         .bind(start_stage_id)
-        .bind(req.contact_id)
+        .bind(contact_id)
         .bind(req.company_id)
         .bind(&req.name)
         .bind(&req.notes)
