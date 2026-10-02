@@ -286,11 +286,14 @@ async fn exec_send_email(
 
     // Get contact email
     let contact_email: Option<String> = if entity_type == "contact" {
-        sqlx::query_scalar("SELECT email FROM contacts WHERE id=$1 AND tenant_id=$2")
-            .bind(entity_id)
-            .bind(tenant_id)
-            .fetch_optional(db)
-            .await?
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT email FROM contacts WHERE id=$1 AND tenant_id=$2",
+        )
+        .bind(entity_id)
+        .bind(tenant_id)
+        .fetch_optional(db)
+        .await?
+        .flatten()
     } else {
         None
     };
@@ -384,11 +387,14 @@ async fn exec_send_sms(
 
     // Get contact phone
     let contact_phone: Option<String> = if entity_type == "contact" {
-        sqlx::query_scalar("SELECT phone FROM contacts WHERE id=$1 AND tenant_id=$2")
-            .bind(entity_id)
-            .bind(tenant_id)
-            .fetch_optional(db)
-            .await?
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT phone FROM contacts WHERE id=$1 AND tenant_id=$2",
+        )
+        .bind(entity_id)
+        .bind(tenant_id)
+        .fetch_optional(db)
+        .await?
+        .flatten()
     } else {
         None
     };
