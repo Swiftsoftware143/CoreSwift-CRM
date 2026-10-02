@@ -182,6 +182,23 @@ pub async fn create(
     }
 
     // No existing contact found — INSERT as normal.
+    //
+    // Usage ceiling (`limit_max_contacts`, the admin-assignable limit feature of the `limits`
+    // module). The guard sits HERE, on the arm that ADDS a row, and nowhere else: the merge/update
+    // arm above is deliberately not gated, or a workspace already at its ceiling could not edit a
+    // contact it owns (kanban t_f49e4299; the wedge this caused on FunnelSwift is t_8ccc8e6a). The
+    // number checked is the same `COUNT(*)` `GET /api/auth/me/usage` reports.
+    let contact_usage = crate::features::count_contacts(&state.db, account_id).await;
+    crate::features::enforce_usage_limit(
+        &state.db,
+        account_id,
+        "limit_max_contacts",
+        "Contact",
+        "contacts",
+        contact_usage,
+    )
+    .await?;
+
     // `company` is the free-text employer the product displays (decision on t_fbb30c16); blank
     // values for company/email/phone are stored as NULL, not '', so "absent" has one
     // representation — idx_contacts_tenant_email is UNIQUE WHERE email IS NOT NULL, so a second

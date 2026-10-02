@@ -325,16 +325,31 @@ tier (the most expensive active row) grants every one of them.
 |---|---|---|---|
 | `limit_max_widgets` | limits | support widgets per account | `POST /api/widgets` |
 | `limit_max_industries` | limits | industry dashboards | `POST /api/industries` |
+| `limit_max_contacts` | limits | contacts | `POST /api/contacts`, `POST /api/csv/import/contacts`, `POST /api/external/*/contacts` |
+| `limit_max_users` | limits | active users (`users.is_active`) | `POST /api/auth/register` (accepting an invite) |
+| `limit_pipelines` | limits | pipelines | `POST /api/pipelines` |
+| `limit_integrations` | limits | connected integrations | `POST /api/integrations` |
 | `email_domains` | private_email | own sending domains | adding a Private Email domain |
 | `email_mailboxes` | private_email | mailboxes | provisioning a mailbox |
-| `limit_api_calls_per_day` | limits | API calls per day | **recorded only — no code reads it yet** |
-| `limit_integrations` | limits | connected integrations | **recorded only — no code reads it yet** |
-| `limit_max_contacts` | limits | contacts | **recorded only — no code reads it yet** |
-| `limit_max_users` | limits | active users | **recorded only — no code reads it yet** |
-| `limit_pipelines` | limits | pipelines | **recorded only — no code reads it yet** |
-| `limit_storage_gb` | limits | storage (GB) | **recorded only — no code reads it yet** |
-| `limit_monthly_credits` | limits | monthly credits | **recorded only — no code reads it yet** |
 
-The "recorded only" rows are visible and editable in the panel but are **not enforced anywhere**: the
-number is stored, and changing it does not change what a customer can do. They are listed here so
-nobody reads a number in the matrix as a working cap.
+A ceiling is checked **only on the route that adds the counted row** — listing, editing and deleting
+keep working at the ceiling, so a workspace can always free a slot. The number a customer sees in
+`GET /api/auth/me/usage` is the same `COUNT(*)` the gate compares. Note two consequences of the
+authored numbers: on **free** a workspace sells **0 connected integrations** (`limit_integrations`)
+and **1 active user**, so connecting an integration — or inviting a second member — answers
+**402** until the plan changes. Raise those numbers here if that is not the intent.
+
+### Limits that are NOT in the matrix any more
+
+Three of the eleven limit rows were retired in kanban `t_f49e4299` because nothing could enforce
+them; they are gone from the matrix rather than left as a number that does nothing:
+
+| Retired key | Why |
+|---|---|
+| `limit_storage_gb` | no size source exists in the app (`account_health.storage_mb` is never written) |
+| `limit_api_calls_per_day` | no request counter exists; building one is a feature of its own |
+| `limit_monthly_credits` | duplicate of `plans.monthly_credits`, which the credit engine reads |
+
+The authored numbers survive in plan data (`plans.features` still carries `storage_gb` /
+`api_calls_per_day`; `plans.monthly_credits` is untouched), so re-registering a row is all it takes
+to bring one back once the quantity it counts is measurable.

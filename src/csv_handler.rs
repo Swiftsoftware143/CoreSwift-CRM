@@ -220,6 +220,21 @@ pub async fn import_contacts(
         .map(|(i, h)| (h.clone(), i))
         .collect();
 
+    // Usage ceiling (`limit_max_contacts`): a bulk import is still an ADD, so it is gated the same
+    // way as POST /api/contacts — refuse to START when the workspace is already at its ceiling
+    // (402 with the same body), and stop ADDING rows once the ceiling is reached mid-file, so an
+    // import can never overshoot a count-based limit (kanban t_f49e4299).
+    let mut contact_usage = crate::features::count_contacts(&app_state.db, account_id).await;
+    let contact_ceiling = crate::features::enforce_usage_limit(
+        &app_state.db,
+        account_id,
+        "limit_max_contacts",
+        "Contact",
+        "contacts",
+        contact_usage,
+    )
+    .await?;
+
     let mut imported = 0usize;
     let mut skipped = 0usize;
     let mut errors: Vec<String> = vec![];
@@ -228,6 +243,17 @@ pub async fn import_contacts(
 
     for result in reader.records() {
         row_num += 1;
+
+        if let Some(max) = contact_ceiling {
+            if contact_usage >= max {
+                errors.push(format!(
+                    "Row {}: contact limit reached ({}/{}) — not imported. Upgrade your plan for more contacts.",
+                    row_num, contact_usage, max
+                ));
+                skipped += 1;
+                continue;
+            }
+        }
 
         if row_num > MAX_ROWS {
             errors.push(format!("Row {}: exceeded max rows ({})", row_num, MAX_ROWS));
@@ -340,7 +366,11 @@ pub async fn import_contacts(
         .await;
 
         match result {
-            Ok(_) => imported += 1,
+            Ok(_) => {
+                imported += 1;
+                // one more row now exists, so the ceiling is re-checked against the real count
+                contact_usage += 1;
+            }
             Err(e) => {
                 errors.push(format!("Row {}: DB error: {}", row_num, e));
                 skipped += 1;

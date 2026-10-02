@@ -321,6 +321,20 @@ async fn upsert_contact(
         }
     }
 
+    // New contact (the existing-row UPDATE arm above already returned) — the usage ceiling
+    // `limit_max_contacts` applies here and only here: a re-delivered contact that already exists
+    // must keep resolving to its row rather than start 402ing (kanban t_f49e4299).
+    let contact_usage = crate::features::count_contacts(&s.db, tenant_id).await;
+    crate::features::enforce_usage_limit(
+        &s.db,
+        tenant_id,
+        "limit_max_contacts",
+        "Contact",
+        "contacts",
+        contact_usage,
+    )
+    .await?;
+
     let id = Uuid::new_v4();
     let attribution = json!({
         "source_app": source_app,

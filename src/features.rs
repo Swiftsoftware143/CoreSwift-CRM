@@ -28,36 +28,128 @@ use uuid::Uuid;
 // `get_usage_json` below is still the live reader of the legacy numeric keys; its `industries` number
 // now comes from `industries::handlers::active_count` — the SAME expression the industry gate checks.
 
-pub async fn get_usage_json(db: &PgPool, tenant_id: Uuid) -> serde_json::Value {
-    let contacts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE tenant_id = $1")
+// The usage numbers below are the SHARED expressions: `get_usage_json` renders them and every
+// numeric gate (`enforce_usage_limit`) checks them, so the number a customer sees and the number
+// the gate enforces cannot drift (same discipline as `industries::handlers::active_count`).
+//
+// `#[allow(dead_code)]` is not used: each one has a live caller (the guard or the usage JSON).
+pub async fn count_contacts(db: &PgPool, tenant_id: Uuid) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE tenant_id = $1")
         .bind(tenant_id)
         .fetch_one(db)
         .await
-        .unwrap_or(0);
+        .unwrap_or(0)
+}
+
+pub async fn count_pipelines(db: &PgPool, tenant_id: Uuid) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM pipelines WHERE tenant_id = $1")
+        .bind(tenant_id)
+        .fetch_one(db)
+        .await
+        .unwrap_or(0)
+}
+
+pub async fn count_integrations(db: &PgPool, tenant_id: Uuid) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM integrations WHERE tenant_id = $1")
+        .bind(tenant_id)
+        .fetch_one(db)
+        .await
+        .unwrap_or(0)
+}
+
+/// Active users of the workspace — `users.is_active`, the same expression the plan's
+/// `limit_max_users` ceiling is written against (an inactive member does not consume a seat).
+pub async fn count_active_users(db: &PgPool, tenant_id: Uuid) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE tenant_id = $1 AND is_active = true")
+        .bind(tenant_id)
+        .fetch_one(db)
+        .await
+        .unwrap_or(0)
+}
+
+pub async fn get_usage_json(db: &PgPool, tenant_id: Uuid) -> serde_json::Value {
+    let contacts = count_contacts(db, tenant_id).await;
     // The SAME expression the industry gate checks (`industries::handlers::active_count`): the
     // tenant's ACTIVE industry tabs, read through the `industries` view. Counting every row — the
     // shape this had while the module was unmounted — would count deactivated tabs too, so the number
     // would not move when a user deactivated one (kanban t_0986ba98).
-    let industries: i64 = crate::industries::handlers::active_count(db, tenant_id)
+    let industries = crate::industries::handlers::active_count(db, tenant_id)
         .await
         .unwrap_or(0);
-    let pipelines: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pipelines WHERE tenant_id = $1")
-        .bind(tenant_id)
-        .fetch_one(db)
-        .await
-        .unwrap_or(0);
-    let users: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE tenant_id = $1 AND is_active = true")
-            .bind(tenant_id)
-            .fetch_one(db)
-            .await
-            .unwrap_or(0);
+    let pipelines = count_pipelines(db, tenant_id).await;
+    let users = count_active_users(db, tenant_id).await;
     serde_json::json!({
         "contacts": contacts,
         "industries": industries,
         "pipelines": pipelines,
         "users": users
     })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NUMERIC CEILINGS (the `limits` module).
+//
+// A boolean flag is enforced by reading the plan key; a numeric limit is enforced by comparing
+// USAGE against it — so each wired key needs both halves in ONE place: the ceiling resolved from
+// the registry row the admin's Features & Plans panel edits, and the usage count above. The guard
+// is called ONLY on the route that ADDS the counted row: a usage ceiling copied onto a
+// GET/PATCH/DELETE wedges the tenant at its limit (on FunnelSwift every list/edit/delete 402d), and
+// a usage limit can never be checked on a read.
+//
+// House semantics — identical to `support_widgets::create_widget` and
+// `private_email::feature_gate::limit_for`:
+//   * the plan assignment says `enabled = false` -> ceiling 0 -> "not available on your plan";
+//   * a NEGATIVE assignment is the documented unlimited sentinel -> no ceiling;
+//   * an enabled limit with no number has no ceiling;
+//   * a tenant with NO active plan row keeps its modules (`no_plan`) -> no ceiling, rather than
+//     this module inventing one the admin never assigned.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The effective integer ceiling of a `kind = 'limit'` registry feature, or `None` for "no ceiling".
+pub async fn usage_ceiling(
+    db: &PgPool,
+    tenant_id: Uuid,
+    key: &str,
+) -> Result<Option<i64>, AppError> {
+    let ent = module_registry::resolve(db, tenant_id, key).await?;
+    if !ent.enabled {
+        return Ok(Some(0));
+    }
+    Ok(match ent.limit_value {
+        None => None,
+        Some(v) if v < 0.0 => None,
+        Some(v) => Some(v.floor() as i64),
+    })
+}
+
+/// The 402 body for a reached ceiling — one wording for every limit so the panel guide and the
+/// API agree, and an upsell (402), not a malformed-request (400).
+pub fn limit_reached_error(label: &str, plural: &str, usage: i64, limit: i64) -> AppError {
+    AppError::UpgradeRequired(format!(
+        "{} limit reached ({}/{}). Upgrade your plan for more {}.",
+        label, usage, limit, plural
+    ))
+}
+
+/// Deny with **402** when `usage` has reached the tenant's ceiling for `key`.
+///
+/// Returns the effective ceiling (`None` = no ceiling) so a BULK path (CSV import) can keep
+/// enforcing the same number row by row instead of asking for it a second time.
+pub async fn enforce_usage_limit(
+    db: &PgPool,
+    tenant_id: Uuid,
+    key: &str,
+    label: &str,
+    plural: &str,
+    usage: i64,
+) -> Result<Option<i64>, AppError> {
+    let Some(limit) = usage_ceiling(db, tenant_id, key).await? else {
+        return Ok(None);
+    };
+    if usage >= limit {
+        return Err(limit_reached_error(label, plural, usage, limit));
+    }
+    Ok(Some(limit))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

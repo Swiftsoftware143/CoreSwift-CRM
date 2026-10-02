@@ -28,7 +28,33 @@ pub async fn create(
     if r.name.is_empty() || r.provider.is_empty() {
         return Err(AppError::Validation("Name and provider required".into()));
     }
-    Ok((StatusCode::CREATED, Json(json!(sqlx::query_as::<_,Integration>("INSERT INTO integrations(id,tenant_id,name,provider,config) VALUES($1,$2,$3,$4::integration_provider,$5) RETURNING *")
+
+    // Usage ceiling (`limit_integrations`): the ADD route only. `enabled = false` on the plan
+    // resolves to ceiling 0, i.e. "connecting an integration is not available on your plan" — 402,
+    // the same upsell as every other ceiling (kanban t_f49e4299).
+    let integration_usage = crate::features::count_integrations(&s.db, t).await;
+    crate::features::enforce_usage_limit(
+        &s.db,
+        t,
+        "limit_integrations",
+        "Integration",
+        "integrations",
+        integration_usage,
+    )
+    .await?;
+
+    // `$4::integration_provider` cast a varchar column to a TYPE THAT DOES NOT EXIST (no migration
+    // ever created it, and `pg_type` has no such row), so EVERY call to this route answered 500
+    // "type integration_provider does not exist" — the integrations module could not add a row at
+    // all, which is also why `limit_integrations` had nothing to count (kanban t_f49e4299). The
+    // column is `varchar` and the Rust model is `String`, so the cast is simply removed.
+    //
+    // Second trap in the same statement: `config` is `jsonb NOT NULL DEFAULT '{}'`, and binding the
+    // request's `Option<Value>` binds an explicit NULL — which OVERRIDES the column default and
+    // raised `null value in column "config" … violates not-null constraint` (the 500 that survived
+    // the cast fix, read from the container log during t_f49e4299's live proof). COALESCE lets an
+    // omitted config take the column's own default, exactly as `update` already does.
+    Ok((StatusCode::CREATED, Json(json!(sqlx::query_as::<_,Integration>("INSERT INTO integrations(id,tenant_id,name,provider,config) VALUES($1,$2,$3,$4,COALESCE($5,'{}'::jsonb)) RETURNING *")
         .bind(Uuid::new_v4()).bind(t).bind(&r.name).bind(&r.provider).bind(&r.config).fetch_one(&s.db).await?))))
 }
 pub async fn get(

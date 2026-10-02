@@ -126,6 +126,23 @@ pub async fn register(
         )));
     }
 
+    // Usage ceiling (`limit_max_users`, the active-user seat limit of the `limits` module). This is
+    // the ONE live path that ADDS a user: a fresh signup mints the tenant (0 active users, and its
+    // plan row is still uncommitted, so the resolver's `no_plan` tolerance keeps the first user
+    // working) and an invite acceptance joins an existing workspace — where the active-user count
+    // against the owner's plan is the real check. The rejection happens inside the transaction, so
+    // a 402 rolls back the tenant, the plan row and the burnt invite (kanban t_f49e4299).
+    let user_usage = crate::features::count_active_users(&state.db, tenant_id).await;
+    crate::features::enforce_usage_limit(
+        &state.db,
+        tenant_id,
+        "limit_max_users",
+        "User",
+        "users",
+        user_usage,
+    )
+    .await?;
+
     // Hash password
     let password_hash = hash_password(&req.password)?;
 

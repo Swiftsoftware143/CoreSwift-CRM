@@ -49,6 +49,21 @@ pub async fn create_pipeline(
             "Pipeline name is required".to_string(),
         ));
     }
+
+    // Usage ceiling (`limit_pipelines`): checked on the route that ADDS a pipeline and nowhere else
+    // — its GET/PATCH/DELETE siblings must keep working at the ceiling, or the tenant cannot even
+    // free a slot (kanban t_f49e4299).
+    let pipeline_usage = crate::features::count_pipelines(&state.db, tenant_id).await;
+    crate::features::enforce_usage_limit(
+        &state.db,
+        tenant_id,
+        "limit_pipelines",
+        "Pipeline",
+        "pipelines",
+        pipeline_usage,
+    )
+    .await?;
+
     let pipeline = sqlx::query_as::<_, Pipeline>(
         r#"INSERT INTO pipelines (id, tenant_id, name, description, is_default) VALUES ($1,$2,$3,$4,$5) RETURNING *"#
     ).bind(Uuid::new_v4()).bind(tenant_id).bind(&req.name).bind(&req.description)
