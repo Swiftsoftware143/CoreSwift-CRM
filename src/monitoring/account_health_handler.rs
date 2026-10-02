@@ -214,14 +214,42 @@ pub async fn run_health_check(
         // Flag as churn-risky
         stats.churn_flagged += 1;
 
-        // Schedule trial-ending followup.
-        // Counted only when written, the same one meaning `stats.re_engagement_sent` has in scan 1
-        // (t_c8c1eded).
-        match sqlx::query(
+        // ONE trial-ending nudge per CONTACT per WINDOW, claimed by the row itself (t_9fa7ec7b).
+        // The decisions, stated so they cannot drift:
+        //   * per CONTACT, not per tenant: this loop walks one row per contact and each contact is
+        //     a distinct recipient, so a tenant-wide key would silently drop every other contact's
+        //     nudge (the key arm of the t_9fa7ec7b harness deletes ONE contact's row and requires
+        //     exactly that contact to re-claim while its sibling stays blocked).
+        //   * the window is this scan's OWN horizon, 3 days — not the 24 h scans 1/3 use. Every row
+        //     this leg queues carries `execute_at = tp.trial_ends_at`, i.e. it is delivered at the
+        //     end of the trial, so a second row queued on a LATER day is not a later nudge, it is a
+        //     SECOND EMAIL AT THE SAME INSTANT: the pre-fix measurement (02-before.txt) is 3 calls
+        //     -> 6 rows, every one of them carrying the one execute_at of the trial. A 24 h window
+        //     would still admit one row per day of the horizon, up to 3 simultaneous "your trial
+        //     ends in N days" emails for one contact; only a window at least as long as the horizon
+        //     (trial_ends_at > NOW() AND <= NOW() + 3 days above) reduces that to one. By
+        //     construction the window is exact: a row can only exist while
+        //     trial_ends_at - created_at <= 3 days, so once it is older than the window the trial
+        //     has ended and this scan can no longer select that contact at all.
+        //   * bounded, not "first row wins forever": a contact can enter a LATER trial, so the
+        //     guard must expire and let the new trial's nudge through (window arm step 6).
+        //   * scoped to this tenant + this slug + this contact, so the other delayed_actions
+        //     producers ('ai_recommended' here, worker.rs escalations, checklists) neither block it
+        //     nor are blocked by it; and a CANCELLED or already-EXECUTED row still counts as the
+        //     claim (same as scan 3): re-sending the instant an operator cancels one is the
+        //     unguarded behaviour being fixed.
+        //   * a failed claim counts NOTHING (logged): `rows_affected() == 1` is the only thing that
+        //     owns the window, so one statement decides both the queued row and the counter.
+        let claimed = sqlx::query(
             r#"INSERT INTO delayed_actions (id, tenant_id, condition_type, condition_config, action_type, action_config, execute_at)
-               VALUES ($1, $2, 'timeout', '{}'::jsonb, 'send_email',
-                       $3::jsonb,
-                       $4)"#
+               SELECT $1, $2, 'timeout', '{}'::jsonb, 'send_email', $3::jsonb, $4
+               WHERE NOT EXISTS (
+                 SELECT 1 FROM delayed_actions da
+                 WHERE da.tenant_id = $2
+                   AND da.action_config->>'template_type' = 'trial_ending'
+                   AND da.action_config->>'entity_id' = $5
+                   AND da.created_at > NOW() - INTERVAL '3 days'
+               )"#
         )
         .bind(Uuid::new_v4())
         .bind(tenant_id)
@@ -233,10 +261,15 @@ pub async fn run_health_check(
             "stage_title": format!("Your trial ends in {} days — convert now", days_left)
         }))
         .bind(trial_ends_at.unwrap_or_else(Utc::now))
+        .bind(contact_id.to_string())
         .execute(&s.db)
-        .await
-        {
-            Ok(_) => stats.re_engagement_sent += 1,
+        .await;
+
+        match claimed {
+            Ok(r) if r.rows_affected() == 1 => stats.re_engagement_sent += 1,
+            Ok(_) => {
+                tracing::info!(tenant = %tenant_id, contact = %contact_id, "Trial-ending followup already queued inside the 3d window; nothing written this call");
+            }
             Err(e) => {
                 tracing::error!(tenant = %tenant_id, contact = %contact_id, error = %e, "Trial-ending followup action not written");
             }
