@@ -3333,8 +3333,40 @@ async function loadUsage() {
     const u = await API.get('/auth/me/usage');
     // `industries` is the count the Industries tab's own gate enforces (same expression,
     // server-side), so this line and that panel can never disagree.
-    el.textContent = 'Usage: ' + (u.contacts || 0) + ' contacts · ' + (u.users || 0) + ' users · ' + (u.pipelines || 0) + ' pipelines · ' + (u.industries || 0) + ' industries';
+    //
+    // Contacts carry the plan's CEILING (kanban t_3e3965fc). The ceiling is a hard stop only where
+    // the TENANT adds a contact (this console, CSV import) — a lead another app captured keeps
+    // landing either way — so a workspace over its ceiling is a normal state, and this readout is
+    // where its owner is told. `contacts_limit` is absent from a server that predates the field, so
+    // fall back to the bare count rather than printing `undefined`.
+    const contacts = (u.contacts || 0);
+    const hasCeiling = (typeof u.contacts_limit === 'number');
+    const over = (u.contacts_over_limit === true);
+    const contactsTxt = hasCeiling
+      ? (contacts + '/' + u.contacts_limit + ' contacts')
+      : (contacts + ' contacts');
+    el.textContent = 'Usage: ' + contactsTxt + (over ? ' ⚠ over plan limit' : '') + ' · ' + (u.users || 0) + ' users · ' + (u.pipelines || 0) + ' pipelines · ' + (u.industries || 0) + ' industries';
+    el.style.color = over ? 'var(--warning,#f59e0b)' : '';
+    renderContactLimitNotice(u, over);
   } catch (_) { el.textContent = 'Usage: unavailable'; }
+}
+
+// Over-limit banner on the Dashboard. The ceiling refuses a contact the TENANT adds, while a lead a
+// sibling app already captured is still accepted (capture-over-ceiling, kanban t_3e3965fc), so a
+// workspace can sit above its ceiling and has to be told. Driven by the SAME readout the dropdown
+// uses, so the two cannot disagree; it clears itself once the workspace is back under the limit.
+function renderContactLimitNotice(u, over) {
+  const el = document.getElementById('dashboardExtra');
+  if (!el) return;
+  if (!over) {
+    if (el.getAttribute('data-contact-limit') === '1') el.innerHTML = '';
+    el.removeAttribute('data-contact-limit');
+    return;
+  }
+  el.setAttribute('data-contact-limit', '1');
+  el.innerHTML = card('⚠ Over your plan\u2019s contact limit',
+    '<p style="color:var(--text-secondary);margin-bottom:10px">This workspace holds <strong>' + (u.contacts || 0) + ' of ' + u.contacts_limit + '</strong> contacts. Leads captured by your connected apps keep arriving, so the count can pass the limit — but a new contact you add here, or by CSV import, is refused until the workspace is under the limit or on a bigger plan.</p>',
+    '<button class="btn btn-primary btn-sm" onclick="switchTab(&#39;billing&#39;)">💳 See plans</button>');
 }
 
 // ===== NOTIFICATIONS =====

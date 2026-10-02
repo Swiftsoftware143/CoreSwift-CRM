@@ -325,7 +325,7 @@ tier (the most expensive active row) grants every one of them.
 |---|---|---|---|
 | `limit_max_widgets` | limits | support widgets per account | `POST /api/widgets` |
 | `limit_max_industries` | limits | industry dashboards | `POST /api/industries` |
-| `limit_max_contacts` | limits | contacts | `POST /api/contacts`, `POST /api/csv/import/contacts`, `POST /api/external/*/contacts` |
+| `limit_max_contacts` | limits | contacts | `POST /api/contacts`, `POST /api/csv/import/contacts`, `POST /api/external/*/contacts` — the paths where the **tenant itself** adds a contact. A lead **another app** captured is never refused (see *Capture over the ceiling* below) |
 | `limit_max_users` | limits | active users (`users.is_active`) | `POST /api/auth/register` (accepting an invite) |
 | `limit_pipelines` | limits | pipelines | `POST /api/pipelines` |
 | `limit_integrations` | limits | connected integrations | `POST /api/integrations` |
@@ -350,6 +350,45 @@ app and only its API answers **402** until the next UTC day. Both endpoints are 
 client that re-pushes the same lead (which costs no contact) still consumes calls. The number
 `GET /api/auth/me/usage` renders as `api_calls_today` is the same row the ceiling is compared
 against. A refused call is not counted, and a workspace with no active plan row is not capped.
+
+### Capture over the ceiling — why a lead from another app is never refused
+
+`limit_max_contacts` is a hard stop **only** where the workspace's own user adds a contact: *Add
+Contact* in the console, the CSV import, and the external API-key surface. The six **ingest** arms
+that accept a lead **another app has already captured** are deliberately **not** gated:
+
+| Ingest arm | Who feeds it |
+|---|---|
+| `POST /api/internal/contacts` | Multi-Directory / ZaarHub lead sync (internal key) |
+| `POST /api/v1/webhooks/cross-app/tag-sync` | FunnelSwift lead + tag sync (internal key) |
+| `POST /api/v1/internal/tag-provision` | FunnelSwift tag provisioning (internal key) — it mints its own workspace per call, so it can never be over a ceiling |
+| `POST /inbound/v3/{key_prefix}/contact-sync` | satellite apps pushing surveyed contacts (satellite key) |
+| `POST /api/v1/webhooks/mailgun/inbound` | an inbound email to a Private Email mailbox |
+| `POST /api/webhook/{token}/contacts.create` | a workspace's own configured webhook (Zapier / n8n) |
+
+The reason is a measurement, not a preference: those callers are **fire-and-forget**. FunnelSwift's
+push into the hub is a `tokio::spawn` whose only failure handling is a `warn!` log line
+(`src/coreswift.rs`, `spawn_lead_push`) — there is no retry and no queue — so a **402** there does not
+upsell. It **silently drops a lead the sibling already captured**, and because the caller never reads
+the response, nobody ever sees the refusal.
+
+What happens instead: the lead lands, the workspace's count goes **past** its ceiling, and the console
+says so. The workspace dropdown prints `Usage: 101/100 contacts ⚠ over plan limit` and the Dashboard
+shows an **Over your plan's contact limit** card naming the real numbers. `GET /api/auth/me/usage`
+carries the two fields the notice is built from (`contacts_limit` and `contacts_over_limit`), so the
+readout a tenant sees and the number the gate enforces can never disagree.
+
+The ceiling still enforces: while the workspace is over, a contact the tenant adds in the console or
+by CSV import is refused with **402** `Contact limit reached (n/m). Upgrade your plan for more
+contacts.` Reading, editing and deleting contacts keeps working at every count, so a workspace can
+always get back under the limit. (Measured on this deployment 2026-10-02: the three workspaces that
+hold contacts — 122 / 81 / 78 rows — have no active plan row, so they are uncapped; the only
+plan-attached workspaces are Free-plan probes. The ceiling is a live upsell signal on the add paths
+and a visible advisory on captures.)
+
+If you would rather the ingest arms refuse as well, that is a product change with a prerequisite:
+every sibling app needs a retry queue **before** the refusal can be safe, or captured leads are lost
+at the boundary with no error surfaced to anyone.
 
 ### Limits that are NOT in the matrix any more
 

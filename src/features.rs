@@ -81,8 +81,31 @@ pub async fn get_usage_json(db: &PgPool, tenant_id: Uuid) -> serde_json::Value {
     // The api-key surface's daily counter — the SAME `api_call_usage` row `meter_api_call`
     // increments and the same number its ceiling is compared against (t_4ca3ecd7).
     let api_calls_today = count_api_calls_today(db, tenant_id).await.unwrap_or(0);
+    // ── CAPTURE-OVER-CEILING (kanban t_3e3965fc) ────────────────────────────────────────────────
+    // The contacts ceiling is a HARD stop only on the paths where the tenant itself adds a contact
+    // (`POST /api/contacts`, the CSV import, the external API's new-row arm). The six INGEST arms
+    // that accept a lead ANOTHER app has already captured — `/api/v1/internal/tag-provision`,
+    // `/api/v1/webhooks/cross-app/tag-sync`, `/inbound/v3/*`, the private-email inbound webhook,
+    // the admin webhook hub (`/api/webhook`) and `/api/internal/contacts` — are deliberately NOT
+    // gated: their callers are fire-and-forget (FunnelSwift's push is a `tokio::spawn` whose only
+    // failure handling is a `tracing::warn`), so a 402 there does not upsell, it drops a lead the
+    // sibling already captured. A workspace past its ceiling on captured leads is therefore a
+    // NORMAL state, and that is exactly why this readout has to say so: without it the ceiling can
+    // be exceeded with the tenant never knowing.
+    //
+    // The ceiling is the SAME value `enforce_usage_limit` compares on the add paths, resolved
+    // through the plan-assignment row the admin's Features & Plans panel edits, so the number the
+    // tenant is shown and the number that refuses an add cannot drift (t_f49e4299).
+    let contacts_limit = usage_ceiling(db, tenant_id, "limit_max_contacts")
+        .await
+        .unwrap_or(None);
+    // Strictly ABOVE, not "at": `limit == 0` means "not included on this plan" and a workspace with
+    // 0 contacts has not exceeded anything yet.
+    let contacts_over_limit = matches!(contacts_limit, Some(limit) if contacts > limit);
     serde_json::json!({
         "contacts": contacts,
+        "contacts_limit": contacts_limit,
+        "contacts_over_limit": contacts_over_limit,
         "industries": industries,
         "pipelines": pipelines,
         "users": users,
