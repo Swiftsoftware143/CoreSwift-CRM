@@ -149,9 +149,10 @@ _Last updated: 2026-10-02_
 - ✅ WorkflowSwift (admin+tenant) - trigger/pull n8n workflows
 - ✅ MissedCall Responder (admin+tenant) - push leads, pull conversations, trigger SMS replies
 - ✅ Multi-Directory App (admin+tenant) - sync business listings, pull reviews/analytics
-- ✅ Ada Campaign Triggers - replaces Mailgun for welcome emails + scan reports
-  - Triggers: user_created, contact_created, account_activated, scan_complete
-  - CRM Swift automation rules now fire Ada campaigns instead of raw email
+- ❌ ~~Ada Campaign Triggers~~ [RETIRED 2026-10-02 — kanban t_434b240b] - the table held 0 rows and
+  no code path ever read `trigger_on`, so a trigger could never fire a campaign. Live probe: creating a
+  `contact_created` trigger and then driving that event produced no outbound call at all. Routes,
+  models, the served console card and the table (migration 109) are gone.
 - ✅ Each app gets its own connection login - separate API keys per app per tenant, isolated sync audit trails
 - ❌ **Affiliate product board** [RETIRED 2026-10-02 — kanban t_3d81b041; tables dropped by migration 108] - was products/services with tags, commissions, checkout links
 - ✅ **Public webhook** (`POST /api/webhook/{token}/{action}`) - single endpoint for WorkflowSwift to orchestrate all automation

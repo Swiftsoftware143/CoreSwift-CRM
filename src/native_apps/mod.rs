@@ -10,9 +10,8 @@
 //! - Admin-only: AdaSwift (client viewing portal), CheatLayer
 //! - Admin + Tenant: FunnelSwift, Palm Bay Pulse, ZaarHub, WorkflowSwift
 //!
-//! Instead of sending through Mailgun/SMTP.com/Telnyx, automation rules
-//! now trigger an Ada campaign for welcome emails + scan reports on
-//! new client/account creation.
+//! Ada campaign triggers (a CRM automation rule mapped to an AdaSwift campaign) were RETIRED
+//! 2026-10-02 (kanban t_434b240b): nothing read the mapping, so it could never fire.
 
 pub mod connectors;
 pub mod handlers;
@@ -68,19 +67,8 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/apps/admin/configs",
             axum::routing::get(handlers::list_admin_configs),
         )
-        // Map a CRM Swift automation rule to trigger an Ada campaign
-        .route(
-            "/apps/ada-campaigns",
-            axum::routing::post(handlers::create_ada_campaign_trigger),
-        )
-        .route(
-            "/apps/ada-campaigns",
-            axum::routing::get(handlers::list_ada_campaign_triggers),
-        )
-        .route(
-            "/apps/ada-campaigns/:id",
-            axum::routing::delete(handlers::delete_ada_campaign_trigger),
-        )
+        // Ada campaign triggers (`/apps/ada-campaigns`) were RETIRED 2026-10-02 (kanban t_434b240b):
+        // nothing ever read a trigger's `trigger_on`, so it could not fire a campaign.
         // Plan gating — the admin controls this module per plan
         // (the module & feature registry is the source of truth for the admin UI — see src/module_registry).
         .layer(axum::middleware::from_fn_with_state(

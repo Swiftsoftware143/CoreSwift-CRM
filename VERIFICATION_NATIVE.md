@@ -64,7 +64,7 @@ The migration `025_create_native_app_connections.sql` creates 4 tables + 1 seed 
 | `app_connections` | Per-tenant credential storage | ✅ |
 | `app_sync_logs` | Sync history log | ✅ |
 | `app_admin_configs` | Admin-level global configs | ✅ |
-| `ada_campaign_triggers` | Ada campaign trigger rules | ✅ |
+| `ada_campaign_triggers` | RETIRED — dropped by migration 109 (kanban t_434b240b): nothing read it | ❌ |
 
 **Checks performed:**
 - All `CREATE TABLE IF NOT EXISTS` syntax is valid ✅
@@ -75,13 +75,12 @@ The migration `025_create_native_app_connections.sql` creates 4 tables + 1 seed 
 - JSONB casts (`'{}'::jsonb`) are valid ✅
 - Seed data has 6 apps matching the 6 connectors ✅
 
-**⚠️ Note:** The `ada_campaign_triggers.trigger_on` CHECK constraint allows 8 values:
-`('user_created', 'contact_created', 'account_activated', 'scan_complete', 'referral_confirmed', 'commission_earned', 'payout_processed', 'affiliate_activated')`
-
-But the Rust handler validation only allows 4:
-`["user_created", "contact_created", "account_activated", "scan_complete"]`
-
-The SQL is more permissive — future proofing. The Rust side will reject the extra 4 values. This is a **minor inconsistency** — either add the extra values to the Rust validation array, or remove them from the SQL CHECK.
+**⚠️ Note:** The `ada_campaign_triggers.trigger_on` CHECK constraint allowed 8 values (the four core
+ones plus `referral_confirmed`, `commission_earned`, `payout_processed`, `affiliate_activated`), and
+this note used to claim the Rust handler only accepted 4 — it actually accepted all 8, so an operator
+could map a trigger to an event no emitter could ever produce. RETIRED 2026-10-02 (kanban t_434b240b):
+the table, the handler and its CHECK constraint are gone (migration 109) because nothing ever read
+`trigger_on` to fire a campaign.
 
 ---
 

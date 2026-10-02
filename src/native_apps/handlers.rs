@@ -7,7 +7,6 @@ use crate::errors::{ApiResult, AppError};
 use crate::AppState;
 use axum::{
     extract::{Extension, Json, Path, State},
-    http::StatusCode,
     response::IntoResponse,
 };
 use serde_json::json;
@@ -456,116 +455,12 @@ pub async fn list_admin_configs(
     Ok(Json(json!({"admin_configs": configs})))
 }
 
-// ── Ada Campaign Triggers (replaces Mailgun for welcome emails) ──
-
-pub async fn create_ada_campaign_trigger(
-    State(s): State<AppState>,
-    Extension(c): Extension<Claims>,
-    Json(r): Json<AdaCampaignRequest>,
-) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-
-    if r.name.is_empty() || r.ada_campaign_id.is_empty() {
-        return Err(AppError::Validation(
-            "Name and ada_campaign_id are required".into(),
-        ));
-    }
-
-    let valid_triggers = [
-        "user_created",
-        "contact_created",
-        "account_activated",
-        "scan_complete",
-        "referral_confirmed",
-        "commission_earned",
-        "payout_processed",
-        "affiliate_activated",
-    ];
-    if !valid_triggers.contains(&r.trigger_on.as_str()) {
-        return Err(AppError::Validation(format!(
-            "Invalid trigger. Must be one of: {:?}",
-            valid_triggers
-        )));
-    }
-
-    let row = sqlx::query(
-        r#"INSERT INTO ada_campaign_triggers (id, tenant_id, name, trigger_on, ada_campaign_id, schedule_delay_minutes, active)
-           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *"#
-    )
-    .bind(Uuid::new_v4())
-    .bind(account_id)
-    .bind(&r.name)
-    .bind(&r.trigger_on)
-    .bind(&r.ada_campaign_id)
-    .bind(r.schedule_delay_minutes.unwrap_or(0))
-    .bind(r.active.unwrap_or(true))
-    .fetch_one(&s.db)
-    .await?;
-
-    let trigger = json!({
-        "id": row.get::<Uuid, _>("id"),
-        "tenant_id": row.get::<Uuid, _>("tenant_id"),
-        "name": row.get::<String, _>("name"),
-        "trigger_on": row.get::<String, _>("trigger_on"),
-        "ada_campaign_id": row.get::<String, _>("ada_campaign_id"),
-        "schedule_delay_minutes": row.get::<i32, _>("schedule_delay_minutes"),
-        "active": row.get::<bool, _>("active"),
-        "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
-        "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
-    });
-
-    Ok((StatusCode::CREATED, Json(json!({"trigger": trigger}))))
-}
-
-pub async fn list_ada_campaign_triggers(
-    State(s): State<AppState>,
-    Extension(c): Extension<Claims>,
-) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-
-    let rows = sqlx::query(
-        "SELECT * FROM ada_campaign_triggers WHERE tenant_id = $1 ORDER BY created_at DESC",
-    )
-    .bind(account_id)
-    .fetch_all(&s.db)
-    .await?;
-
-    let triggers: Vec<serde_json::Value> = rows
-        .iter()
-        .map(|r| {
-            json!({
-                "id": r.get::<Uuid, _>("id"),
-                "tenant_id": r.get::<Uuid, _>("tenant_id"),
-                "name": r.get::<String, _>("name"),
-                "trigger_on": r.get::<String, _>("trigger_on"),
-                "ada_campaign_id": r.get::<String, _>("ada_campaign_id"),
-                "schedule_delay_minutes": r.get::<i32, _>("schedule_delay_minutes"),
-                "active": r.get::<bool, _>("active"),
-                "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
-                "updated_at": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
-            })
-        })
-        .collect();
-
-    Ok(Json(json!({"triggers": triggers})))
-}
-
-pub async fn delete_ada_campaign_trigger(
-    State(s): State<AppState>,
-    Extension(c): Extension<Claims>,
-    Path(id): Path<Uuid>,
-) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-
-    let r = sqlx::query("DELETE FROM ada_campaign_triggers WHERE id = $1 AND tenant_id = $2")
-        .bind(id)
-        .bind(account_id)
-        .execute(&s.db)
-        .await?;
-
-    if r.rows_affected() == 0 {
-        return Err(AppError::NotFound("Trigger not found".into()));
-    }
-
-    Ok(Json(json!({"message": "Trigger deleted"})))
-}
+// ── Ada campaign triggers ── RETIRED 2026-10-02 (kanban t_434b240b)
+//
+// `ada_campaign_triggers`, its three routes (`/apps/ada-campaigns`) and the
+// `AdaCampaignTrigger` / `AdaCampaignRequest` types were removed. Measured live: the table held
+// 0 rows, no code path read `trigger_on`, and driving `contact_created` plus a tag assign produced
+// no outbound call — a trigger could never fire a campaign. The four affiliate event names it still
+// accepted had no emitter at all (the affiliate module was deleted by t_3d81b041 / migration 108).
+// `migrations/109_retire_ada_campaign_triggers.sql` drops the table. The manual Integration Center
+// push (`entity_type = "trigger_campaign"`) is the only remaining path that talks to AdaSwift.

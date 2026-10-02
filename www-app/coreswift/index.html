@@ -1042,8 +1042,6 @@ const TAB_RENDERERS = {
     '<div id="icNativeWrap" data-ops="ic-native"><div class="loading-wrap"><div class="spinner"></div> Loading native connectors...</div></div>' +
     '<div id="icSyncWrap" data-ops="ic-sync"></div>' +
     '<br>' +
-    '<div id="icAdaWrap" data-ops="ic-ada-triggers"><div class="loading-wrap"><div class="spinner"></div> Loading Ada campaign triggers...</div></div>' +
-    '<br>' +
     '<div id="icProviderWrap" data-ops="ic-providers"><div class="loading-wrap"><div class="spinner"></div> Loading provider keys...</div></div>' +
     '<br>' +
     '<div id="icMappingsWrap" data-ops="ic-tag-mappings"><div class="loading-wrap"><div class="spinner"></div> Loading tag mappings...</div></div>' +
@@ -1966,7 +1964,6 @@ function icBind(el) {
       else if (act === 'provider-del') icDeleteProvider(provider);
       else if (act === 'sync') icSyncOpen(slug);
       else if (act === 'history') icSyncHistory(slug);
-      else if (act === 'ada-del') icDeleteAdaTrigger(id);
     });
   });
   el.querySelectorAll('[data-ic-toggle]').forEach(c => {
@@ -1976,7 +1973,7 @@ function icBind(el) {
 
 async function loadIntegrationCenter() {
   IC.isAdmin = icIsAdmin();
-  await Promise.all([icLoadApps(), icLoadProviders(), icLoadOverview(), icLoadAdaTriggers()]);
+  await Promise.all([icLoadApps(), icLoadProviders(), icLoadOverview()]);
   icRenderUpgradePaths();
   IC.loaded = true;
 }
@@ -5933,8 +5930,9 @@ function peOpenSupportBox() {
 }
 
 // ── Native connector SYNC — the unfinished half of the connectors contract ─────
-// connect/disconnect/test were wired; pull/push/history and the Ada campaign triggers
-// were registered with no caller. Both directions post what the Rust struct requires.
+// connect/disconnect/test were wired; pull/push/history were registered with no caller. Both
+// directions post what the Rust struct requires. (The Ada campaign trigger card was RETIRED
+// 2026-10-02, kanban t_434b240b.)
 // The Entity choices are the SELECTED connector's OWN declared vocabulary - meta.entities from
 // GET /native/apps, the pull list for Pull and the push list for Push. A connector declares
 // exactly the names its pull_entity()/push_entity() accept, so this modal can never offer a name
@@ -6027,75 +6025,10 @@ async function icSyncHistory(slug) {
   }
 }
 
-// ── Ada campaign triggers (automation rule → AdaSwift campaign) ────────────────
-const IC_ADA_TRIGGERS = [
-  'user_created', 'contact_created', 'account_activated', 'scan_complete',
-  'referral_confirmed', 'commission_earned', 'payout_processed', 'affiliate_activated'
-];
-
-async function icLoadAdaTriggers() {
-  const wrap = document.getElementById('icAdaWrap');
-  if (!wrap) return;
-  let triggers = [], err = null;
-  try {
-    const d = await API.get('/native/apps/ada-campaigns');
-    triggers = (d && d.triggers) || [];
-  } catch (e) { err = e.message; }
-  if (err) { wrap.innerHTML = icErr('Could not read Ada campaign triggers', err); return; }
-  const rows = triggers.map(t => [
-    escapeHtml(t.name || ''),
-    '<code>' + escapeHtml(t.trigger_on || '') + '</code>',
-    '<code>' + escapeHtml(t.ada_campaign_id || '') + '</code>',
-    escapeHtml(String(t.schedule_delay_minutes == null ? 0 : t.schedule_delay_minutes)) + ' min',
-    t.active ? '<span class="badge badge-success">on</span>' : '<span class="badge badge-muted">off</span>',
-    '<button class="btn btn-ghost btn-xs" data-ic="ada-del" data-id="' + escapeHtmlAttr(t.id) + '">Delete</button>'
-  ]);
-  wrap.innerHTML = card('🧨 Ada campaign triggers',
-    '<p style="color:var(--text-secondary);margin:0">Maps a CoreSwift event to a campaign in AdaSwift, so welcome and report mail is sent by Ada instead of a local mail provider.</p>',
-    '<button class="btn btn-primary btn-sm" onclick="icOpenAdaTrigger()">+ New trigger</button>') +
-    dataTable(['Name', 'Fires on', 'Ada campaign', 'Delay', 'Active', ''], rows,
-      'No Ada campaign triggers mapped yet.');
-  icBind(wrap);
-}
-
-function icOpenAdaTrigger() {
-  const opts = IC_ADA_TRIGGERS.map(t => '<option value="' + t + '">' + t + '</option>').join('');
-  showModal('New Ada campaign trigger',
-    '<div class="form-group"><label>Name</label><input type="text" id="icAdaName" placeholder="Welcome email" autocomplete="off"></div>' +
-    '<div class="form-group"><label>Fires on</label><select id="icAdaOn">' + opts + '</select></div>' +
-    '<div class="form-group"><label>Ada campaign ID</label><input type="text" id="icAdaCampaign" autocomplete="off">' +
-    '<span class="form-hint">The campaign\'s id in AdaSwift (copy it from AdaSwift).</span></div>' +
-    '<div class="form-group"><label>Delay (minutes)</label><input type="text" id="icAdaDelay" value="0" autocomplete="off"></div>',
-    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
-    '<button class="btn btn-primary" id="icAdaSave">Create trigger</button>');
-  const b = document.getElementById('icAdaSave');
-  if (b) b.addEventListener('click', async () => {
-    const name = document.getElementById('icAdaName').value.trim();
-    const campaign = document.getElementById('icAdaCampaign').value.trim();
-    if (!name || !campaign) { toast('Name and Ada campaign ID are required', 'error'); return; }
-    b.disabled = true;
-    const delay = parseInt(document.getElementById('icAdaDelay').value, 10);
-    try {
-      await API.post('/native/apps/ada-campaigns', {
-        name: name,
-        trigger_on: document.getElementById('icAdaOn').value,
-        ada_campaign_id: campaign,
-        schedule_delay_minutes: isNaN(delay) ? 0 : delay,
-        active: true
-      });
-      closeModal(); toast('Trigger created', 'success'); await icLoadAdaTriggers();
-    } catch (e) { toast('Could not create: ' + e.message, 'error'); b.disabled = false; }
-  });
-}
-
-async function icDeleteAdaTrigger(id) {
-  if (!confirm('Delete this Ada campaign trigger?')) return;
-  try {
-    await API.del('/native/apps/ada-campaigns/' + encodeURIComponent(id));
-    toast('Trigger deleted', 'success'); await icLoadAdaTriggers();
-  } catch (e) { toast('Could not delete: ' + e.message, 'error'); }
-}
-
+// ── Ada campaign triggers ── RETIRED 2026-10-02 (kanban t_434b240b) ────────────
+// This card mapped a CoreSwift event to an AdaSwift campaign. Live measurement: nothing ever read a
+// trigger's `trigger_on`, so a mapping could never fire a campaign, and its routes
+// (`/native/apps/ada-campaigns`) are gone. The manual connector push is the only path to AdaSwift.
 TAB_RENDERERS['telnyx'] = telnyxShell;
 TAB_RENDERERS['inbox'] = inboxShell;
 TAB_RENDERERS['calendar'] = calendarShell;

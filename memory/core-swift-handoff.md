@@ -52,9 +52,9 @@ BUT these need to be verified working — they exist in the commit as file stubs
 - POST /api/webhook/{token}/{action} — single endpoint for WorkflowSwift
 - Actions: contacts.*, tags.*, lists.*, pipelines.*, affiliates.*, comms.*, ai.*, events.*, billing.*, webhooks.*, users.*, tenants.settings, scoring.calculate, analytics.contacts, audit.log, search.query
 
-### 5. Ada Campaign Triggers
-- Replace Mailgun for welcome emails, scan reports
-- Triggers: user_created, contact_created, account_activated, scan_complete, referral_confirmed, commission_earned, payout_processed, affiliate_activated
+### 5. Ada Campaign Triggers — RETIRED 2026-10-02 (kanban t_434b240b)
+- Was planned to replace Mailgun for welcome emails / scan reports. Shipped as a CRUD-only table that
+  nothing read, so it could never fire a campaign; removed with the table (migration 109).
 
 ### 6. Affiliate Self-Serve Product Selection (Migration 028)
 - GET /api/affiliates/my-products

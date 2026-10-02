@@ -56,23 +56,6 @@ pub struct AppSyncLog {
     pub status: String, // "running" | "completed" | "failed"
 }
 
-// ── Ada campaign trigger (replaces Mailgun for welcome emails) ──
-
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct AdaCampaignTrigger {
-    pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub name: String,
-    pub trigger_on: String, // event that fires this trigger
-    // Core: user_created, contact_created, account_activated, scan_complete
-    // Affiliate: referral_confirmed, commission_earned, payout_processed, affiliate_activated
-    pub ada_campaign_id: String,     // ID of the campaign in AdaSwift
-    pub schedule_delay_minutes: i32, // 0 = immediate
-    pub active: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
 // ── API request/response types ──
 
 #[derive(Debug, Deserialize)]
@@ -92,15 +75,6 @@ pub struct PullRequest {
 pub struct PushRequest {
     pub entity_type: String,
     pub data: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AdaCampaignRequest {
-    pub name: String,
-    pub trigger_on: String,
-    pub ada_campaign_id: String,
-    pub schedule_delay_minutes: Option<i32>,
-    pub active: Option<bool>,
 }
 
 // ── Connection test result ──
