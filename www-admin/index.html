@@ -392,6 +392,15 @@ async function loadFeatureMatrix() {
   }
 }
 
+// `indeterminate` cannot be expressed in HTML markup — it is a DOM property. This runs right after the
+// matrix is written and applies it, so a parent checkbox shows "some of this module is on" instead of
+// claiming either full or none.
+function markPartialModules() {
+  document.querySelectorAll('#fpWrap input[data-partial="1"]').forEach(el => {
+    el.indeterminate = true;
+  });
+}
+
 function renderModuleMatrix() {
   const wrap = document.getElementById('fpWrap');
   if (!wrap || !MR_DATA) return;
@@ -416,8 +425,22 @@ function renderModuleMatrix() {
       '<br><span style="color:var(--text-muted);font-size:11px">module &middot; ' + escapeHtml(m.key) + '</span></td>';
     plans.forEach(p => {
       const on = !!(ma[p.slug] && ma[p.slug].enabled);
+      // The module is a PARENT, so its checkbox must show the state of its CHILDREN, not the module's
+      // own row. A plan can legitimately have some of a module's features on and some off (that is the
+      // whole point of "fine-tune underneath"), and a parent ticked while half its children are off is
+      // the one way this screen can lie. `indeterminate` is a PROPERTY, not an attribute, so it cannot
+      // be written in the markup — it is tagged here and set by markPartialModules() after the render.
+      const feats = m.features || [];
+      const onCount = feats.filter(f => {
+        const a = (f.assignments || {})[p.slug] || {};
+        return f.kind === 'limit'
+          ? (a.limit_value !== null && a.limit_value !== undefined && a.enabled !== false)
+          : !!a.enabled;
+      }).length;
+      const partial = onCount > 0 && onCount < feats.length;
       h += '<td style="' + MR_CELL + 'background:rgba(255,255,255,0.035)">' +
         '<input type="checkbox" style="width:18px;height:18px;cursor:pointer"' + (on ? ' checked' : '') +
+        (partial ? ' data-partial="1" title="' + onCount + ' of ' + feats.length + ' features enabled — tick to grant all"' : '') +
         ' onchange="saveModule(this)" data-slug="' + escapeHtml(p.slug) + '" data-key="' + escapeHtml(m.key) + '"></td>';
     });
     h += '</tr>';
@@ -450,6 +473,7 @@ function renderModuleMatrix() {
     'Changes save immediately and are enforced on the next request; a key no plan has been assigned denies by default.</p>' +
     tenantOverrideCard();
   wrap.innerHTML = h;
+  markPartialModules();
   // The card's pickers (accounts + plans) are populated AFTER the card is in the document — the
   // same ordering rule this panel already follows (its own loader lives in TAB_LOADERS).
   loadTenantPlanPickers();
