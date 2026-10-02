@@ -17,6 +17,30 @@ fn count_or_zero(v: Option<i64>) -> i64 {
     v.unwrap_or(0)
 }
 
+/// The billing-cycle vocabulary the schema CHECK enforces, declared ONCE so the create and
+/// update arms cannot drift into accepting different values (kanban t_0c1c58d0).
+const BILLING_CYCLES: [&str; 2] = ["monthly", "yearly"];
+
+/// The cycle a tenant holds on the Free plan. Every free-plan writer in this crate writes this
+/// same value (signup seat, admin tenant create, webhook `tenant.create`, and the cancellation
+/// upsert's own INSERT arm); the cancel upsert's UPDATE arm now converges to it instead of
+/// keeping the cancelled plan's cycle (kanban t_0c1c58d0).
+const FREE_PLAN_BILLING_CYCLE: &str = "monthly";
+
+/// The one validator for the billing-cycle vocabulary, shared by POST (create) and PATCH
+/// (update) so a bad value is refused the same way on both arms. Measured live before this:
+/// POST answered 422 while PATCH bound the value unvalidated and the DB CHECK surfaced as a
+/// generic 500 "Database error" (kanban t_0c1c58d0).
+fn validate_billing_cycle(cycle: &str) -> Result<(), AppError> {
+    if BILLING_CYCLES.contains(&cycle) {
+        Ok(())
+    } else {
+        Err(AppError::Validation(
+            "billing_cycle must be 'monthly' or 'yearly'".to_string(),
+        ))
+    }
+}
+
 /// GET /api/billing/plans — List all active plans
 pub async fn list_plans(
     State(s): State<AppState>,
@@ -303,11 +327,7 @@ pub async fn create_subscription(
     .await?
     .ok_or(AppError::NotFound("Plan not found or inactive".to_string()))?;
 
-    if !["monthly", "yearly"].contains(&r.billing_cycle.as_str()) {
-        return Err(AppError::Validation(
-            "billing_cycle must be 'monthly' or 'yearly'".to_string(),
-        ));
-    }
+    validate_billing_cycle(&r.billing_cycle)?;
 
     let count = count_or_zero(
         sqlx::query_scalar::<_, Option<i64>>(
@@ -361,6 +381,12 @@ pub async fn update_subscription(
 
     if c.role != "client_admin" && c.role != "agency_admin" {
         return Err(AppError::Forbidden);
+    }
+
+    // This arm binds the caller's value straight into the column, so it must validate it the
+    // same way the create arm does; without this the DB CHECK answered a generic 500.
+    if let Some(cycle) = r.billing_cycle.as_deref() {
+        validate_billing_cycle(cycle)?;
     }
 
     let existing =
@@ -453,10 +479,11 @@ pub async fn cancel_subscription(
     {
         let _ = sqlx::query(
             r#"INSERT INTO tenant_plans (id, tenant_id, plan_id, status, billing_cycle, current_period_starts_at, current_period_ends_at)
-               VALUES ($1, $2, $3, 'active', 'monthly', NOW(), NOW() + INTERVAL '100 years')
-               ON CONFLICT (tenant_id) DO UPDATE SET plan_id = $3, status = 'active', canceled_at = NULL, updated_at = NOW()"#
+               VALUES ($1, $2, $3, 'active', $4, NOW(), NOW() + INTERVAL '100 years')
+               ON CONFLICT (tenant_id) DO UPDATE SET plan_id = $3, status = 'active', billing_cycle = $4,
+                                                     canceled_at = NULL, updated_at = NOW()"#
         )
-        .bind(Uuid::new_v4()).bind(tid).bind(fp)
+        .bind(Uuid::new_v4()).bind(tid).bind(fp).bind(FREE_PLAN_BILLING_CYCLE)
         .execute(&s.db).await;
     }
 
