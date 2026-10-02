@@ -143,7 +143,9 @@ _Last updated: 2026-10-02_
 
 ### ✅ Native App Integration System (Done - Migration 025 + 6 connector files)
 - ✅ 6 native app connectors with per-tenant credential storage
-- ✅ AdaSwift (admin-only) - client portal, push contacts, trigger campaigns
+- ✅ AdaSwift (admin-only) - client portal; push clients, pull scan reports (AdaSwift serves
+  no campaign entity, so the old "push contacts, trigger campaigns" promise was retired —
+  kanban t_8b81b1dd)
 - ✅ CheatLayer (admin-only) - RPA engine, trigger workflows
 - ✅ FunnelSwift (admin+tenant) - push/pull leads, funnels
 - ✅ WorkflowSwift (admin+tenant) - trigger/pull n8n workflows

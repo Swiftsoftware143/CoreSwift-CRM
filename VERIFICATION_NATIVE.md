@@ -97,7 +97,7 @@ All 6 connector files use identical function signatures:
 | `get_meta` | `pub fn get_meta() -> serde_json::Value` | ✅ All 6 |
 
 Connectors verified:
-1. ✅ **adaswift** — Admin, API key + base_url, entities: push(contact/client/trigger_campaign), pull(campaigns/reports)
+1. ✅ **adaswift** — Admin, AdaSwift admin bearer token + base_url, entities: push(client), pull(reports). The five names originally declared here (push contact/client/trigger_campaign, pull campaigns/reports) all targeted `/api/*` paths AdaSwift does not serve (404 live); re-pointed at `POST /api/v1/clients` + `GET /api/v1/scan-reports`, and `contact`/`trigger_campaign`/`campaigns` retired because AdaSwift has no such entity (kanban t_8b81b1dd).
 2. ✅ **cheatlayer** — Admin, API key + base_url, entities: push(workflow/job/template), pull(workflows/jobs/templates/logs)
 3. ✅ **funnelswift** — Admin+Tenant, API key + webhook_secret, entities: push(lead/contact/funnel), pull(leads/contacts/funnels)
 4. ✅ **workflowswift** — Admin+Tenant, API key + base_url, entities: push(workflow/trigger), pull(workflows/runs/credits)

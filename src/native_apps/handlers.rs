@@ -225,6 +225,7 @@ pub async fn pull_from_app(
     Json(r): Json<PullRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    ensure_declared(&app_slug, "pull", &r.entity_type)?;
 
     // Fetch the connection credentials
     let row = sqlx::query_as::<_, (serde_json::Value,)>(
@@ -286,6 +287,45 @@ pub async fn pull_from_app(
 
 // ── Push data to an app ──
 
+/// Refuse an entity the connector does not declare, as caller input (422).
+///
+/// The connector's OWN declaration (`get_meta().entities`) is the contract: the shipped sync
+/// modal builds its dropdown from exactly this list. A name outside it can only arrive from a
+/// hand-written API call, and `push_data`/`pull_data` answer such a name with an honest
+/// `<App> does not support entity type: <x>` — which the two callers below wrapped in
+/// `AppError::Internal`, so the caller saw a bare `500 Internal server error` instead
+/// (measured live 2026-10-02, kanban t_8b81b1dd). Undeclared is now the same 422 refusal that
+/// the connector's own message describes, and the declaration is load-bearing on the write path.
+///
+/// Every connector's `push_entity`/`pull_entity` match arms are exactly its declared lists
+/// (checked across all six when this was added: adaswift/cheatlayer/workflowswift/funnelswift/
+/// missedcall_responder/multi_directory), so this refuses nothing that used to work.
+fn ensure_declared(app_slug: &str, direction: &str, entity_type: &str) -> ApiResult<()> {
+    let declared: Vec<String> = connectors::get_app_meta(app_slug)
+        .and_then(|m| m.get("entities").cloned())
+        .and_then(|e| e.get(direction).cloned())
+        .and_then(|l| l.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect();
+
+    if declared.iter().any(|d| d.as_str() == entity_type) {
+        return Ok(());
+    }
+    Err(AppError::Validation(format!(
+        "'{}' does not support {} entity type '{}' (declared: {})",
+        app_slug,
+        direction,
+        entity_type,
+        if declared.is_empty() {
+            "none".to_string()
+        } else {
+            declared.join(", ")
+        }
+    )))
+}
+
 pub async fn push_to_app(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
@@ -293,6 +333,7 @@ pub async fn push_to_app(
     Json(r): Json<PushRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    ensure_declared(&app_slug, "push", &r.entity_type)?;
 
     let row = sqlx::query_as::<_, (serde_json::Value,)>(
         "SELECT credentials FROM app_connections WHERE tenant_id = $1 AND app_slug = $2 AND status = 'connected'"
@@ -463,4 +504,5 @@ pub async fn list_admin_configs(
 // no outbound call — a trigger could never fire a campaign. The four affiliate event names it still
 // accepted had no emitter at all (the affiliate module was deleted by t_3d81b041 / migration 108).
 // `migrations/109_retire_ada_campaign_triggers.sql` drops the table. The manual Integration Center
-// push (`entity_type = "trigger_campaign"`) is the only remaining path that talks to AdaSwift.
+// push is the only remaining path that talks to AdaSwift — and its push entity is now `client`
+// (`trigger_campaign` went with the canonical paths, kanban t_8b81b1dd).

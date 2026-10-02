@@ -58,9 +58,18 @@ pub struct AppSyncLog {
 
 // ── API request/response types ──
 
+/// The body both shipped Integration-Center callers send (`www-app/coreswift/index.html`
+/// and `www-admin/index.html` post `{ credentials }`).
+///
+/// `app_slug` used to be a REQUIRED field here while the app slug is already in the request
+/// PATH (`/api/native/apps/:app_slug/connect|test`) and no handler ever read it — grep for
+/// `.app_slug` in `src/native_apps/` found 0 reads. So every connect and every test answered
+/// `422 missing field app_slug` before any credential was examined, for all six connectors
+/// (measured live 2026-10-02, kanban t_8b81b1dd): the Integration Center could not connect
+/// ANY app. The field is gone; serde ignores extra keys, so a caller that still sends it is
+/// unaffected.
 #[derive(Debug, Deserialize)]
 pub struct ConnectAppRequest {
-    pub app_slug: String,
     pub credentials: serde_json::Value,
     pub config: Option<serde_json::Value>,
 }

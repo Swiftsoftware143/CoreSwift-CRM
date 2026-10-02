@@ -27,7 +27,7 @@ pub static NATIVE_APPS: &[AppConnector] = &[
     AppConnector {
         slug: "adaswift",
         name: "AdaSwift Console",
-        description: "Client viewing portal — clients see their reports, proposals, and account status. Admin-only connection since AdaSwift is a read-only portal for clients.",
+        description: "Client viewing portal — clients see their scan reports and account status. Admin-only: connect with an AdaSwift admin bearer token to push clients and pull scan reports.",
         auth_type: "api_key",
         auth_fields: &["api_key", "base_url"],
         access_level: "admin",
