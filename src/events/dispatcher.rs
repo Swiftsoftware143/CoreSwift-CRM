@@ -245,12 +245,16 @@ pub async fn evaluate_delayed_action(db: &PgPool, action_id: Uuid) {
     };
 
     // Check condition: did the expected event happen?
-    let should_execute = match action.condition_type.as_str() {
-        "timeout" => {
+    // `condition_type` is Option: src/private_email/auto_reply_handler.rs:250 queues its delayed
+    // action without one (migration 073 made the column nullable for that writer), so a NULL is
+    // real data — "no condition recorded" — and never fires. Before this it was a decode error,
+    // which returned early and left the row pending forever (re-fetched every tick).
+    let should_execute = match action.condition_type.as_deref() {
+        Some("timeout") => {
             // Timeout always fires after the wait period
             true
         }
-        "no_event" => {
+        Some("no_event") => {
             // Check if the expected event occurred between trigger and now
             if let Some(expected_event) = action
                 .condition_config
@@ -270,7 +274,7 @@ pub async fn evaluate_delayed_action(db: &PgPool, action_id: Uuid) {
                 true
             }
         }
-        "no_action" => match action.trigger_event_id {
+        Some("no_action") => match action.trigger_event_id {
             // trigger_event_id is nullable by design (067: REFERENCES events(id) ON DELETE SET
             // NULL — and ScheduleDelayedRequest accepts an omitted id). A NULL can never equal a
             // row's value, so no follow-up can be counted and the action fires, which is the
