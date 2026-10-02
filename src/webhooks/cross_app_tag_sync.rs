@@ -107,12 +107,18 @@ pub async fn handle_tag_sync(
             )
         };
 
+        // Harness provenance (kanban t_3492e3d9): this auto-create mints a tenant out of the
+        // caller's lead text, so a harness-driven sync would leave a root indistinguishable
+        // from a customer's on every sweep arm. Same helper as the public signup path; NULL
+        // when the header is absent or invalid (= the previous behaviour).
+        let probe_harness = crate::auth::handlers::harness_marker(&headers);
         let _ = sqlx::query(
-            "INSERT INTO tenants (id, name, slug, created_at, updated_at) VALUES ($1, $2, $3, NOW(), NOW())"
+            "INSERT INTO tenants (id, name, slug, probe_harness, created_at, updated_at) VALUES ($1, $2, $3, $4, NOW(), NOW())"
         )
         .bind(tenant_id)
         .bind(&tenant_name)
         .bind(tenant_id.to_string())
+        .bind(&probe_harness)
         .execute(&s.db)
         .await;
 

@@ -159,14 +159,21 @@ pub async fn handle_tag_provision(
         )
     };
 
+    // Harness provenance (kanban t_3492e3d9). This route MINTS a tenant out of arbitrary caller
+    // text, so a call made by a verification harness would otherwise leave a root that is
+    // indistinguishable from a customer's on every sweep arm. Same helper as the public signup
+    // path (one validator, no second copy of the rule); NULL when the header is absent or invalid,
+    // which is exactly the pre-existing behaviour, and the column is read by nothing.
+    let probe_harness = crate::auth::handlers::harness_marker(&headers);
     let _ = sqlx::query(
-        r#"INSERT INTO tenants (id, name, slug, created_at, updated_at)
-           VALUES ($1, $2, $3, NOW(), NOW())
+        r#"INSERT INTO tenants (id, name, slug, probe_harness, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, NOW(), NOW())
            ON CONFLICT (id) DO NOTHING"#,
     )
     .bind(tenant_id)
     .bind(&tenant_name)
     .bind(tenant_id.to_string())
+    .bind(&probe_harness)
     .execute(&s.db)
     .await;
 
