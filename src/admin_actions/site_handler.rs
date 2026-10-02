@@ -358,7 +358,87 @@ fn inject_settings(html: &str, s: &serde_json::Value) -> String {
     if let Some(bs) = s.get("body_scripts").and_then(|v| v.as_str()) {
         inject_marked_block(&mut r, bs, "</body>", BODY_MARK_START, BODY_MARK_END);
     }
+    // The four Site Configuration editors no reader honoured (kanban t_9dede800): `canonical_url`,
+    // `favicon_url` and the two `homepage` fields were written to the row by the panel and read by
+    // NOTHING, so an operator's input landed in `admin_settings.coreswift_site` and appeared nowhere.
+    // Each is now IN-PLACE surgery on an element the served page already carries, and each is a
+    // no-op when the value equals the shipped one — the reconciled row is the shipped row, so the
+    // applier's `--check` stays `unchanged` and the first apply cannot rewrite the live homepage.
+    // A blank value leaves the shipped element alone: clearing a field can never blank a live page.
+    if let Some(c) = s.get("canonical_url").and_then(|v| v.as_str()) {
+        if !c.trim().is_empty() {
+            upsert_link_href(&mut r, "canonical", c);
+        }
+    }
+    if let Some(f) = s.get("favicon_url").and_then(|v| v.as_str()) {
+        if !f.trim().is_empty() {
+            // Only the `rel="icon"` tag is the operator's; the `alternate icon` / `apple-touch-icon`
+            // hrefs are content-hashed deploy assets and stay as shipped.
+            upsert_link_href(&mut r, "icon", f);
+        }
+    }
+    if let Some(hp) = s.get("homepage") {
+        if let Some(h) = hp.get("headline").and_then(|v| v.as_str()) {
+            if !h.trim().is_empty() {
+                replace_inner(&mut r, "<h1>", "</h1>", h);
+            }
+        }
+        if let Some(sh) = hp.get("subheadline").and_then(|v| v.as_str()) {
+            if !sh.trim().is_empty() {
+                replace_inner(&mut r, "<p class=\"subtitle\">", "</p>", sh);
+            }
+        }
+    }
     r
+}
+
+/// Point the `href` of the FIRST `<link rel="{rel}"` tag at `href`, inserting the attribute into a
+/// tag that has none, or injecting a whole `<link>` into `<head>` when the page carries no such tag.
+///
+/// The version an operator edits is the SERVED one: the shipped page already carries
+/// `<link rel="canonical" href="https://coreswiftcrm.com/">` and one `rel="icon"` tag, and the row is
+/// reconciled to exactly those values, so this function is a byte-level no-op on a reconciled row
+/// (checked by `an_operator_value_changes_the_link_and_the_shipped_value_does_not` below). The tag
+/// prefix carries the closing quote so `rel="icon"` can never match `rel="alternate icon"`.
+fn upsert_link_href(r: &mut String, rel: &str, href: &str) {
+    let pat = format!("<link rel=\"{}\"", rel);
+    match r.find(&pat) {
+        None => inject_head(r, &format!("<link rel=\"{}\" href=\"{}\">", rel, href)),
+        Some(p) => {
+            // Bound the search to this one tag: a following tag's href must never be rewritten.
+            let tag_end = match r[p..].find('>') {
+                Some(e) => p + e,
+                None => return,
+            };
+            match r[p..tag_end].find("href=\"") {
+                Some(h) => {
+                    let a = p + h + "href=\"".len();
+                    match r[a..tag_end].find('"') {
+                        Some(e) => r.replace_range(a..a + e, href),
+                        None => r.insert_str(tag_end, &format!(" href=\"{}\"", href)),
+                    }
+                }
+                None => r.insert_str(tag_end, &format!(" href=\"{}\"", href)),
+            }
+        }
+    }
+}
+
+/// Replace the inner HTML of the FIRST `open`…`close` element with `value`, verbatim.
+///
+/// Verbatim is required for the hero: the shipped headline is
+/// `One CRM That Replaces <span class="hero-gradient">6+ Separate Tools</span>` — escaping it would
+/// publish the markup as text and drop the gradient. The served page carries exactly one `<h1>` and
+/// one `<p class="subtitle">` (measured), so "first" is unambiguous, and a page that carries neither
+/// is returned unchanged.
+fn replace_inner(r: &mut String, open: &str, close: &str, value: &str) {
+    let start = match r.find(open) {
+        Some(p) => p + open.len(),
+        None => return,
+    };
+    if let Some(e) = r[start..].find(close) {
+        r.replace_range(start..start + e, value);
+    }
 }
 
 /// Drop the previously injected block (if any) and re-insert `content` before `at`.
@@ -493,11 +573,16 @@ fn default_site_settings() -> serde_json::Value {
         "keywords": "CRM, customer relationship management, sales pipeline, email automation, lead management, deal tracking",
         "og_title": "CoreSwift CRM — All-in-One Customer Relationship Platform",
         "og_description": "Automated follow-ups, smart pipelines, and integrated workflows for growing businesses.",
-        "og_image_url": "", "favicon_url": "", "canonical_url": "https://coreswiftcrm.com",
+        "og_image_url": "", "favicon_url": "", "canonical_url": "https://coreswiftcrm.com/",
         "ga_id": "", "gtm_id": "", "head_scripts": "", "body_scripts": "",
         "schema_json": "{\"@context\":\"https://schema.org\",\"@type\":\"SoftwareApplication\",\"name\":\"CoreSwift CRM\",\"applicationCategory\":\"BusinessApplication\",\"description\":\"All-in-one CRM platform with automated follow-ups, smart pipelines, and built-in calendar.\"}",
         "legal_tos": "", "legal_privacy": "", "legal_refunds": "",
-        "homepage": { "headline": "The CRM That Works While You Sleep", "subheadline": "Automated follow-ups, smart pipelines, and built-in calendar." }
+        // The hero copy is the SERVED page's own bytes, entity and markup included: the shipped
+        // headline carries the gradient `<span>` and the shipped sub-headline carries `&amp;`. The
+        // applier writes both VERBATIM (they are hero HTML, not prose), so a row whose hero equals
+        // the shipped one renders the page byte-for-byte and `--check` reads `unchanged`
+        // (kanban t_9dede800).
+        "homepage": { "headline": "One CRM That Replaces <span class=\"hero-gradient\">6+ Separate Tools</span>", "subheadline": "Automated follow-up sequences. Built-in calendar &amp; bookings. SMS &amp; email campaigns. Deal pipelines. Event management. All included in the free tier — not scattered across six different subscriptions." }
     })
 }
 
@@ -598,5 +683,102 @@ mod tests {
         let (fresh, none_kept) = preserve_nonempty_legal(None, json!({"legal_tos": ""}));
         assert_eq!(fresh["legal_tos"], "");
         assert!(none_kept.is_empty());
+    }
+
+    // The four Site Configuration editors that no reader honoured (kanban t_9dede800). The row is
+    // reconciled to the SHIPPED page, so the new render paths have to be byte-level no-ops on it —
+    // otherwise the first scheduled apply would rewrite the live homepage.
+    fn shipped_only_settings() -> serde_json::Value {
+        let d = default_site_settings();
+        json!({
+            "canonical_url": d["canonical_url"],
+            "favicon_url": d["favicon_url"],
+            "homepage": d["homepage"],
+        })
+    }
+
+    #[test]
+    fn a_reconciled_row_leaves_the_live_homepage_byte_for_byte() {
+        // The real served page, when this runs on the host that owns it. This is the guard that
+        // makes the deploy safe: if it ever fails, the applier would rewrite the live homepage.
+        let served = match fs::read_to_string("/opt/swift/nginx/www/coreswift/index.html") {
+            Ok(s) => s,
+            Err(_) => return, // host-only path: nothing to guard in another runtime
+        };
+        assert_eq!(inject_settings(&served, &shipped_only_settings()), served);
+    }
+
+    #[test]
+    fn the_shipped_defaults_are_the_served_pages_own_hero_and_canonical() {
+        let d = default_site_settings();
+        assert_eq!(d["canonical_url"], "https://coreswiftcrm.com/");
+        let h = d["homepage"]["headline"].as_str().unwrap();
+        assert!(h.starts_with("One CRM That Replaces <span class=\"hero-gradient\">"));
+        assert!(d["homepage"]["subheadline"]
+            .as_str()
+            .unwrap()
+            .contains("&amp;"));
+    }
+
+    #[test]
+    fn an_operator_value_reaches_the_served_bytes_and_the_shipped_value_does_not() {
+        // The fixture mirrors the served page: same canonical tag, same rel="icon" (with the
+        // alternate/apple-touch siblings), same h1 + <p class="subtitle"> shapes.
+        let d = default_site_settings();
+        let page = format!(
+            concat!(
+                "<head>\n<link rel=\"canonical\" href=\"{}\">\n",
+                "<link rel=\"icon\" type=\"image/svg+xml\" href=\"/favicon-d6446083.svg\">",
+                "<link rel=\"alternate icon\" href=\"/favicon-d6446083.ico\"></head>\n<body>\n",
+                "<h1>{}</h1>\n",
+                "<p class=\"subtitle\">{}</p>\n",
+                "</body>"
+            ),
+            d["canonical_url"].as_str().unwrap(),
+            d["homepage"]["headline"].as_str().unwrap(),
+            d["homepage"]["subheadline"].as_str().unwrap()
+        );
+        // the shipped row is a no-op...
+        assert_eq!(inject_settings(&page, &shipped_only_settings()), page);
+
+        // ...and an operator's canonical_url reaches the served link
+        let c = inject_settings(
+            &page,
+            &json!({"canonical_url": "https://crm.example.com/home"}),
+        );
+        assert!(c.contains("<link rel=\"canonical\" href=\"https://crm.example.com/home\">"));
+        assert!(!c.contains("href=\"https://coreswiftcrm.com/\""));
+
+        // favicon_url reaches rel="icon" (in place: the tag's other attributes stay) and NEVER the
+        // alternate/apple-touch tags
+        let f = inject_settings(&page, &json!({"favicon_url": "/favicon.ico"}));
+        assert!(f.contains("<link rel=\"icon\" type=\"image/svg+xml\" href=\"/favicon.ico\">"));
+        assert!(f.contains("<link rel=\"alternate icon\" href=\"/favicon-d6446083.ico\">"));
+        assert!(!f.contains("/favicon-d6446083.svg"));
+
+        // the hero copy reaches the h1 + the sub-headline, markup intact
+        let h = inject_settings(
+            &page,
+            &json!({"homepage": {"headline": "Stop Losing Leads", "subheadline": "One inbox for every lead."}}),
+        );
+        assert!(h.contains("<h1>Stop Losing Leads</h1>"));
+        assert!(h.contains("<p class=\"subtitle\">One inbox for every lead.</p>"));
+        assert!(!h.contains("hero-gradient"));
+
+        // a blank value leaves the shipped element alone: clearing a field cannot blank a live page
+        let b = inject_settings(
+            &page,
+            &json!({"canonical_url": "  ", "favicon_url": "", "homepage": {"headline": "", "subheadline": "   "}}),
+        );
+        assert_eq!(b, page);
+
+        // a link tag with no href gains one; a page with no such tag gains the tag in <head>
+        let no_href = "<head></head><body></body>";
+        let added = inject_settings(
+            no_href,
+            &json!({"canonical_url": "https://crm.example.com", "favicon_url": "/favicon.ico"}),
+        );
+        assert!(added.contains("<link rel=\"canonical\" href=\"https://crm.example.com\">"));
+        assert!(added.contains("<link rel=\"icon\" href=\"/favicon.ico\">"));
     }
 }
