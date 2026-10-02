@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::auth::Claims;
 use crate::errors::{validate_pagination, ApiResult, AppError};
+use crate::security::email_addr;
 use crate::sql_json::row_json_dml;
 use crate::AppState;
 
@@ -175,7 +176,12 @@ async fn handle_create_tenant_account(
     }
 
     let name = name.ok_or_else(|| AppError::BadRequest("missing field: name".into()))?;
+    // ── Address boundary (kanban t_9252c512) ────────────────────────────────────────────────
+    // Normalise + validate BEFORE this email reaches a SELECT or the users INSERT below. This
+    // admin chat action mints a tenant owner: whatever is stored becomes that owner's login
+    // identity and the only address their credentials mail can ever reach.
     let email = email.ok_or_else(|| AppError::BadRequest("missing field: email".into()))?;
+    let email = email_addr::normalize(email).map_err(AppError::Validation)?;
 
     // Create tenant
     let slug = format!(
@@ -207,7 +213,7 @@ async fn handle_create_tenant_account(
     )
     .bind(user_id)
     .bind(tenant_id)
-    .bind(email)
+    .bind(&email)
     .bind(&password_hash)
     .bind(name)
     .execute(&s.db)
@@ -869,20 +875,17 @@ pub async fn cross_app_sync(
         .and_then(|v| v.as_str())
         .unwrap_or("Company")
         .to_string();
-    let email = req
-        .get("email")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    // ── Address boundary (kanban t_9252c512) ────────────────────────────────────────────────
+    // Normalise + validate BEFORE the dup SELECT and the users INSERT below. This is the cross-app
+    // sync that mints a tenant owner; a value that is not an address must never become a login
+    // identity, whatever the caller sends.
+    let email = email_addr::normalize(req.get("email").and_then(|v| v.as_str()).unwrap_or(""))
+        .map_err(AppError::Validation)?;
     let description = req
         .get("description")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-
-    if email.is_empty() {
-        return Err(AppError::BadRequest("email is required".into()));
-    }
 
     let existing = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE email = $1")
         .bind(&email)

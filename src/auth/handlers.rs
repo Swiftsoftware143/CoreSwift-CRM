@@ -19,6 +19,7 @@ use password_hash::SaltString;
 use super::middleware;
 use super::models::*;
 use crate::errors::{ApiResult, AppError};
+use crate::security::email_addr;
 use crate::sql_json::row_json;
 use crate::AppState;
 
@@ -62,10 +63,19 @@ pub(crate) fn harness_marker(headers: &HeaderMap) -> Option<String> {
 pub async fn register(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(req): Json<RegisterRequest>,
+    Json(mut req): Json<RegisterRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    // ── Address boundary (kanban t_9252c512) ────────────────────────────────────────────────
+    // FIRST, before any SELECT and long before any INSERT. `users.email` is both the login identity
+    // and the only address the welcome/credentials mail can ever reach; this handler used to check
+    // only `contains('@')` and bind `req.email` verbatim, so `a@b`, `bad@`, `@x.com` and `" a@b "`
+    // all became real accounts no mail could ever be delivered to. normalize() trims + lowercases
+    // as well as validates, and the normalised value is what the dup check reads, the INSERT
+    // stores, the tokens carry and the welcome mail is sent to.
+    req.email = email_addr::normalize(&req.email).map_err(AppError::Validation)?;
+
     // Validate input
-    if req.email.is_empty() || req.password.is_empty() || req.name.is_empty() {
+    if req.password.is_empty() || req.name.is_empty() {
         return Err(AppError::Validation(
             "Name, email, and password are required".to_string(),
         ));
@@ -74,9 +84,6 @@ pub async fn register(
         return Err(AppError::Validation(
             "Password must be at least 8 characters".to_string(),
         ));
-    }
-    if !req.email.contains('@') {
-        return Err(AppError::Validation("Invalid email format".to_string()));
     }
 
     // `users.email` carries a GLOBAL unique constraint (`users_email_key`, migration 002) and
@@ -265,10 +272,16 @@ pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    // The same normalisation `register` stores by, matched case-insensitively so an account stored
+    // with capitals (or created before normalisation existed — live has
+    // `Swiftimpactsolutions@gmail.com`) still resolves when the customer retypes their address in
+    // different casing. A malformed value is NOT refused here: login answers its own 401 for every
+    // wrong credential, so it must not become an account-existence oracle — it simply matches
+    // nothing.
     let user = sqlx::query_as::<_, TeamMember>(
-        "SELECT * FROM users WHERE email = $1 AND is_active = true",
+        "SELECT * FROM users WHERE lower(email) = $1 AND is_active = true",
     )
-    .bind(&req.email)
+    .bind(email_addr::lookup_key(&req.email))
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::InvalidCredentials)?;
@@ -670,13 +683,16 @@ pub async fn forgot_password(
     State(state): State<AppState>,
     Json(req): Json<ForgotPasswordRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    if req.email.is_empty() || !req.email.contains('@') {
-        return Err(AppError::Validation("Valid email is required".to_string()));
-    }
+    // The SAME boundary rule as `register`, from the same function: an address that could never
+    // receive the reset mail is refused with the same 422/field shape instead of silently
+    // reporting "if the email exists…" for an address that cannot exist as a mailbox. The reply
+    // stays unconditional for every well-formed address, so it still leaks nothing about accounts;
+    // the lookup matches `lower(email)` so a row stored before normalisation still resolves.
+    let email = email_addr::normalize(&req.email).map_err(AppError::Validation)?;
 
     // Look up user
-    let user = sqlx::query_as::<_, UserRow>("SELECT id, name FROM users WHERE email = $1")
-        .bind(&req.email)
+    let user = sqlx::query_as::<_, UserRow>("SELECT id, name FROM users WHERE lower(email) = $1")
+        .bind(&email)
         .fetch_optional(&state.db)
         .await?;
 
@@ -711,19 +727,14 @@ pub async fn forgot_password(
         "app_url": "https://app.coreswiftcrm.com",
     });
 
-    let _ = crate::email::send_template_email(
-        &state.db,
-        Uuid::nil(),
-        &req.email,
-        "password_reset",
-        &vars,
-    )
-    .await
-    .map_err(|e| {
-        tracing::warn!(error = %e, "Failed to send password reset email via template");
-        e
-    })
-    .ok();
+    let _ =
+        crate::email::send_template_email(&state.db, Uuid::nil(), &email, "password_reset", &vars)
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, "Failed to send password reset email via template");
+                e
+            })
+            .ok();
 
     Ok(Json(
         json!({"message": "If that email is registered, a reset link has been sent."}),

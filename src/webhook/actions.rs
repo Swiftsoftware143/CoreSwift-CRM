@@ -1051,10 +1051,17 @@ pub async fn route_action(
                 .get("name")
                 .and_then(|v| v.as_str())
                 .ok_or("name required")?;
+            // ── Address boundary (kanban t_9252c512) ────────────────────────────────────────
+            // Normalise + validate BEFORE the tenants/users INSERTs below. Both arms that reach
+            // this line mint a login identity for someone else (a provisioned owner, an invited
+            // teammate); the Err arm of this route already answers 400 with the same text, so a
+            // caller that sends something that is not an address gets an `email: …` 4xx instead
+            // of an account no mail can ever reach.
             let email = body
                 .get("email")
                 .and_then(|v| v.as_str())
                 .ok_or("email required")?;
+            let email = crate::security::email_addr::normalize(email)?;
 
             // Create tenant
             let slug = format!(
@@ -1084,7 +1091,7 @@ pub async fn route_action(
             sqlx::query(
                 "INSERT INTO users (id, tenant_id, email, password_hash, name, role) VALUES ($1, $2, $3, $4, $5, 'account_owner')"
             )
-            .bind(uid).bind(new_tid).bind(email).bind(&pw_hash).bind(name)
+            .bind(uid).bind(new_tid).bind(&email).bind(&pw_hash).bind(name)
             .execute(db).await
             .map_err(|e| format!("Failed to create user: {}", e))?;
 
@@ -1209,10 +1216,17 @@ pub async fn route_action(
         // ── Users ──
         "users.invite" => {
             let body = data.ok_or("data required")?;
+            // ── Address boundary (kanban t_9252c512) ────────────────────────────────────────
+            // Normalise + validate BEFORE the tenants/users INSERTs below. Both arms that reach
+            // this line mint a login identity for someone else (a provisioned owner, an invited
+            // teammate); the Err arm of this route already answers 400 with the same text, so a
+            // caller that sends something that is not an address gets an `email: …` 4xx instead
+            // of an account no mail can ever reach.
             let email = body
                 .get("email")
                 .and_then(|v| v.as_str())
                 .ok_or("email required")?;
+            let email = crate::security::email_addr::normalize(email)?;
             let name = body
                 .get("name")
                 .and_then(|v| v.as_str())
@@ -1230,7 +1244,7 @@ pub async fn route_action(
             sqlx::query(
                 "INSERT INTO users (id, tenant_id, email, password_hash, name, role, is_active) VALUES ($1, $2, $3, $4, $5, $6, true)"
             )
-            .bind(uid).bind(tenant_id).bind(email).bind("PLACEHOLDER_HASH").bind(name).bind(role)
+            .bind(uid).bind(tenant_id).bind(&email).bind("PLACEHOLDER_HASH").bind(name).bind(role)
             .execute(db).await
             .map_err(|e| format!("DB error: {}", e))?;
             Ok((
