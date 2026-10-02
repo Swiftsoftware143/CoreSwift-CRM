@@ -3458,6 +3458,14 @@ async function markAllNotificationsRead() {
 // For every live row the stat could only ever print the free seat's literal default ('monthly'),
 // i.e. it advertised a billing arrangement the workspace does not have. Cancel stays: cancelling
 // to Free is a tenant-scoped action (is_tenant_billing_owner) and still works.
+// kanban t_36824987 — a Free seat's OWN tenant_plans row is status='active' (all three live
+// tenant_plans rows are free|active|monthly), so `status` alone CANNOT tell a paid subscription from
+// the Free plan: the card used to offer an already-Free workspace a Cancel button whose confirm()
+// read "This account drops to the Free plan immediately." — a paid subscription that does not exist.
+// Which plan is Free is resolved HERE, from the plan list itself (`slug` is its only stable handle)
+// and never from STATE.planId/planName: checkPlan() is async and runs beside this loader, and the
+// shell re-renders on every keystroke, so a STATE read would make the card depend on a race. Compare
+// the plan ID, never the name. A paid seat still gets the Cancel button and the real sentence.
 async function loadSubscriptionState() {
   const el = document.getElementById('subscriptionCard');
   if (!el) return;
@@ -3465,15 +3473,27 @@ async function loadSubscriptionState() {
     const s = await API.get('/billing/subscription');
     const status = (s && s.status) || 'none';
     const ends = s && (s.current_period_ends_at || s.canceled_at);
-    const active = status === 'active' || status === 'trialing';
+    const planId = (s && s.plan_id) ? String(s.plan_id) : null;
+    let freePlanId = null;
+    try {
+      const plans = famList(await API.get('/billing/plans'), 'plans');
+      const free = (plans || []).find(function (p) {
+        return String((p && p.slug) || '').toLowerCase() === 'free';
+      });
+      if (free && free.id) freePlanId = String(free.id);
+    } catch (e) { /* no plan list, no determination: fall through to the status-only reading */ }
+    const onFree = planId !== null && freePlanId !== null && planId === freePlanId;
+    const active = !onFree && (status === 'active' || status === 'trialing');
     el.innerHTML = card('Subscription',
       '<div class="stats-grid">' +
         '<div class="stat-card accent"><div class="stat-value">' + escapeHtml(String(status)) + '</div><div class="stat-label">Status</div></div>' +
       '</div>' +
       '<p class="config-desc" style="margin-top:10px">' +
-        (active
-          ? 'Cancelling drops this account to the Free plan immediately. ' + (ends ? 'Current period ends ' + new Date(ends).toLocaleDateString() + '.' : '')
-          : 'No paid subscription is active.') +
+        (onFree
+          ? 'You are on the Free plan \u2014 there is no paid subscription to cancel.'
+          : active
+            ? 'Cancelling drops this account to the Free plan immediately. ' + (ends ? 'Current period ends ' + new Date(ends).toLocaleDateString() + '.' : '')
+            : 'No paid subscription is active.') +
       '</p>');
     const btn = document.getElementById('cancelSubBtn');
     if (btn) btn.style.display = active ? '' : 'none';
