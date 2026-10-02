@@ -973,7 +973,7 @@ function dismissBanner() {
 
 async function openUpgradeModal() {
   let plansHtml = '<div class="loading-wrap"><div class="spinner"></div> Loading plans...</div>';
-  showModal('Upgrade Your Plan', plansHtml, '', true);
+  showModal('Compare Plans', plansHtml, '', true);
   try {
     // same envelope: without the unwrap `plans.forEach` did not exist and the modal could not list a
     // single plan (it painted an error instead of "No plans available")
@@ -996,12 +996,15 @@ async function openUpgradeModal() {
         <ul class="plan-features">
           ${features.map(f => `<li class="check">✓ ${escapeHtml(f)}</li>`).join('')}
         </ul>
-        <button class="btn ${isCurrent ? 'btn-secondary' : 'btn-primary'} btn-block" ${isCurrent?'disabled':''}>
-          ${isCurrent ? 'Current Plan' : 'Upgrade'}
-        </button>
       </div>`;
     });
     plansHtml += '</div>';
+    // No press on a non-current card: checkout and both provider webhooks are retired (t_0fe500d4)
+    // and the plan writers are operator-only -- POST/PATCH /api/billing/subscription answers 403 for
+    // every tenant token (t_8d91f70c) -- so a per-plan press could never complete a change. It used
+    // to render with no handler at all (kanban t_fa43f3e8). The comparison is informational and
+    // CoreSwift assigns the plan to the workspace (PUT /api/admin/tenants/:id/plan).
+    plansHtml += '<p style="color:var(--text-secondary);font-size:13px;margin-top:14px;text-align:center">Plan changes are made by CoreSwift for your workspace \u2014 this comparison is informational.</p>';
     document.querySelector('#modalContainer .modal-body').innerHTML = plansHtml;
   } catch(e) {
     document.querySelector('#modalContainer .modal-body').innerHTML = `<p style="color:var(--error)">Failed to load plans: ${escapeHtml(e.message)}</p>`;
