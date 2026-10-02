@@ -313,3 +313,29 @@ that resolves to nothing is **denied** — the module returns **402 Payment Requ
 module can no longer ship ungated and a renamed key can no longer silently stop enforcing.
 Toggle them per plan in the admin console. The one tolerance left: a tenant with no active
 plan row at all keeps its modules.
+
+### Numeric limits (the `limits` module, plus the two on `private_email`)
+
+The same matrix carries the numeric ceilings: one `module_features` row of kind `limit` per quota,
+rendered as a **number box** instead of a tick. Clearing the box switches that limit OFF for the plan
+— the gate reads that as **0**, i.e. "not available on your plan", and denies with **402**. A
+negative number is the unlimited sentinel. An enabled limit with no number has no ceiling. The top
+tier (the most expensive active row) grants every one of them.
+
+| Feature key | Module | Ceiling | Read by |
+|---|---|---|---|
+| `limit_max_widgets` | limits | support widgets per account | `POST /api/widgets` |
+| `limit_max_industries` | limits | industry dashboards | `POST /api/industries` |
+| `email_domains` | private_email | own sending domains | adding a Private Email domain |
+| `email_mailboxes` | private_email | mailboxes | provisioning a mailbox |
+| `limit_api_calls_per_day` | limits | API calls per day | **recorded only — no code reads it yet** |
+| `limit_integrations` | limits | connected integrations | **recorded only — no code reads it yet** |
+| `limit_max_contacts` | limits | contacts | **recorded only — no code reads it yet** |
+| `limit_max_users` | limits | active users | **recorded only — no code reads it yet** |
+| `limit_pipelines` | limits | pipelines | **recorded only — no code reads it yet** |
+| `limit_storage_gb` | limits | storage (GB) | **recorded only — no code reads it yet** |
+| `limit_monthly_credits` | limits | monthly credits | **recorded only — no code reads it yet** |
+
+The "recorded only" rows are visible and editable in the panel but are **not enforced anywhere**: the
+number is stored, and changing it does not change what a customer can do. They are listed here so
+nobody reads a number in the matrix as a working cap.

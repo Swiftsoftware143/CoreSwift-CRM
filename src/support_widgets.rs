@@ -1,7 +1,9 @@
 //! Support Widgets — multi-widget embeddable support forms.
 //!
 //! Each widget is named (e.g. "CoreSwift CRM", "FunnelSwift") and routes
-//! submissions to a named inbox. Gated by plan feature "max_widgets".
+//! submissions to a named inbox. Plan-gated twice, both from the module registry:
+//! the `support_widgets` module gates the routes, and the `limit_max_widgets`
+//! module feature is the ceiling on how many widgets an account may create.
 //!
 //! Public routes (no auth):
 //! - GET  /api/widgets/:tenant_slug/:widget_slug/embed.js — embeddable JS widget
@@ -126,25 +128,38 @@ pub async fn create_widget(
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
-    // Plan gate: check max_widgets
-    let plan_limit: Option<i64> = sqlx::query_scalar(
-        "SELECT (p.features->>'max_widgets')::bigint FROM tenant_plans tp JOIN plans p ON p.id = tp.plan_id WHERE tp.tenant_id = $1 AND tp.status = 'active'",
-    )
-    .bind(tid)
-    .fetch_optional(&s.db)
-    .await?
-    .flatten();
+    // Plan gate: the widget CEILING comes from the module registry — the very row the admin's
+    // Features & Plans panel edits (`limit_max_widgets`, module `limits`). It used to read the
+    // legacy `plans.features->>'max_widgets'` JSONB column directly, the last hardcoded entitlement
+    // read left in this app, which meant the panel could change that number and this gate would not
+    // move — and a plan with no `max_widgets` key read as UNLIMITED rather than as unset
+    // (kanban t_6d09f02c). Semantics are the house ones (src/module_registry::resolve +
+    // industries::handlers::industry_limit): `enabled = false` -> 0 = "not available on your plan",
+    // a negative assignment is the documented unlimited sentinel, and an enabled feature with no
+    // number has no ceiling. A tenant with no active plan keeps its modules (source = "no_plan").
+    let ent = crate::module_registry::resolve(&s.db, tid, "limit_max_widgets").await?;
+    let ceiling: Option<i64> = if !ent.enabled {
+        Some(0)
+    } else {
+        match ent.limit_value {
+            None => None,
+            Some(v) if v < 0.0 => None,
+            Some(v) => Some(v.floor() as i64),
+        }
+    };
 
-    if let Some(limit) = plan_limit {
+    if let Some(limit) = ceiling {
         let current: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM support_widgets WHERE tenant_id = $1")
                 .bind(tid)
                 .fetch_one(&s.db)
                 .await?;
         if current >= limit {
-            return Err(AppError::BadRequest(format!(
-                "Widget limit reached ({}). Upgrade your plan for more widgets.",
-                limit
+            // 402, like every other plan denial in this app: a ceiling is an upsell, not a
+            // malformed request.
+            return Err(AppError::UpgradeRequired(format!(
+                "Widget limit reached ({}/{}). Upgrade your plan for more widgets.",
+                current, limit
             )));
         }
     }
