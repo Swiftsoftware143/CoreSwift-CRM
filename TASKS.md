@@ -1,8 +1,17 @@
 # CoreSwift CRM - Task Board
-_Last updated: 2026-06-25_
+_Last updated: 2026-10-02_
 
 > ℹ️ **Renamed from CRM Swift → CoreSwift CRM** (June 25, 2026)
 > Future: Drop "CRM" when established, just **CoreSwift**
+
+> ⚠️ **HISTORICAL BOARD — not a statement of what is live today.** The phases below record what was
+> built at the time. The **CRM-Swift affiliate surface is RETIRED**: the `src/affiliates/` module was
+> deleted by kanban **t_3d81b041** (2026-10-02), its `/api/affiliates/*` routes and affiliate webhook
+> actions were removed from `src/`, and migration **108** (`retire dead affiliate schema`, verified
+> applied live 2026-10-02) dropped the five tables `affiliates`, `affiliate_products`,
+> `affiliate_product_selections`, `referrals`, `commission_payouts`. The fleet's affiliate programme
+> lives in **FunnelSwift** (see ARCHITECTURE.md). Retired entries below are marked ❌ with the date
+> and the card that retired them.
 
 ## Legend
 - ✅ Done
@@ -144,41 +153,40 @@ _Last updated: 2026-06-25_
   - Triggers: user_created, contact_created, account_activated, scan_complete
   - CRM Swift automation rules now fire Ada campaigns instead of raw email
 - ✅ Each app gets its own connection login - separate API keys per app per tenant, isolated sync audit trails
-- ✅ **Affiliate product board** - products/services with tags, commissions, checkout links
+- ❌ **Affiliate product board** [RETIRED 2026-10-02 — kanban t_3d81b041; tables dropped by migration 108] - was products/services with tags, commissions, checkout links
 - ✅ **Public webhook** (`POST /api/webhook/{token}/{action}`) - single endpoint for WorkflowSwift to orchestrate all automation
   - Every tenant gets an auto-generated webhook token on signup
-  - Supports 28+ actions across all features (contacts, tags, lists, pipelines, affiliates, comms, AI, events, billing)
+  - Supports 38 actions across these groups: ai, analytics, audit, automation, billing, comms, contacts, directory, events, lists, native, pipelines, scoring, search, tags, tenants, users, webhooks — the former `affiliates` group was removed with the retired affiliate surface (kanban t_3d81b041, 2026-10-02)
   - Full audit log of every webhook call
   - Admins/tenants don't need direct OpenClaw/n8n/CheatLayer access - they connect once to WorkflowSwift
   - WorkflowSwift uses this webhook internally to talk to CRM Swift
 
-### 🏛 Affiliate Email Delivery (via Ada campaigns)
-- CRM Swift also powers the in-house affiliate system's email delivery
-- Instead of sending commission notifications / payout alerts / referral confirmations through raw SMTP:
-  - Affiliate gets a new referral → CRM Swift triggers Ada campaign → Ada sends referral confirmation
-  - Commission earned → CRM Swift triggers Ada campaign → Ada sends commission notification
-  - Payout processed → CRM Swift triggers Ada campaign → Ada sends payout alert
-- Uses the same Ada campaign trigger system already built
-- Triggers supported: `referral_confirmed`, `commission_earned`, `payout_processed`, `affiliate_activated`
+### ❌ Affiliate Email Delivery (via Ada campaigns) — RETIRED 2026-10-02
+- ❌ **RETIRED** by kanban t_3d81b041 + migration 108. CRM Swift no longer powers any affiliate
+  system's email delivery: the affiliate module and its events are gone from `src/`, so nothing emits
+  `referral_confirmed` / `commission_earned` / `payout_processed` / `affiliate_activated`.
+- What it used to be: CRM Swift triggered Ada campaigns for referral confirmations, commission
+  notifications and payout alerts instead of raw SMTP.
+- The fleet's affiliate programme lives in **FunnelSwift** (see ARCHITECTURE.md).
 
 ### ✅ Admin Chat Actions (Done - full business from Telegram)
 - ✅ `POST /api/admin/chat-action` - single endpoint to drive the entire business
 - ✅ `GET /api/admin/chat-action/intents` - discover all available actions
-- ✅ **create_affiliate** - creates CRM Swift account + affiliate profile + code + login
-- ✅ **create_affiliate_in_funnelswift** - creates FunnelSwift product + CRM Swift account + tag + Ada welcome campaign
+- ❌ **create_affiliate** [RETIRED 2026-10-02 — kanban t_3d81b041] - was: creates CRM Swift account + affiliate profile + code + login (`create_affiliate` has 0 hits in `src/`; the intent no longer exists)
+- ❌ **create_affiliate_in_funnelswift** [RETIRED 2026-10-02 — kanban t_3d81b041] - was: creates FunnelSwift product + CRM Swift account + tag + Ada welcome campaign
 - ✅ **create_tenant_account** - creates tenant + admin user + free plan + auto webhook token
 - ✅ Missing field prompts - returns specific fields it needs so I can ask you in chat
 - ✅ Multi-step flow - one intent auto-triggers across CRM Swift + FunnelSwift + AdaSwift
-- ✅ Example: "create affiliate John Doe" → I prompt for email/rate → you reply → full setup done
-- ✅ **Affiliate self-serve product selection** (Migration 028)
-  - `GET /api/affiliates/my-products` - affiliates see what they're promoting + what's available
-  - `POST /api/affiliates/my-products/select` - start promoting a product
-  - `POST /api/affiliates/my-products/unselect` - stop promoting
-  - Affiliates log into FunnelSwift back-end to pick which products to promote
-  - Available via webhook: `affiliate_products.my`, `affiliate_products.select`, `affiliate_products.unselect`
-- ✅ **tenants.create webhook action** - FunnelSwift calls `POST /api/webhook/{token}/tenants.create` with affiliate's name/email → CRM Swift auto-creates tenant + owner user + free plan + affiliate profile + code
-  - This is how FunnelSwift triggers the account creation when someone signs up as an affiliate
-  - No need for CRM Swift front-end signup - all automation originates from FunnelSwift level
+- ❌ Example: "create affiliate John Doe" → prompts for email/rate → full setup [RETIRED 2026-10-02 — the `create_affiliate` intent no longer exists]
+- ❌ **Affiliate self-serve product selection** (Migration 028) [RETIRED 2026-10-02 — kanban t_3d81b041; tables dropped by migration 108]
+  - ❌ `GET /api/affiliates/my-products` - removed from `src/` (route no longer registered)
+  - ❌ `POST /api/affiliates/my-products/select` - removed from `src/` (route no longer registered)
+  - ❌ `POST /api/affiliates/my-products/unselect` - removed from `src/` (route no longer registered)
+  - Was: affiliates logged into the FunnelSwift back-end to pick which products to promote
+  - Was: available via webhook `affiliate_products.my` / `affiliate_products.select` / `affiliate_products.unselect` — those actions are gone from `src/webhook/actions.rs`
+- ✅ **tenants.create webhook action** — STILL LIVE (verified 2026-10-02: `tenants.create` is present in `src/webhook/actions.rs`) - FunnelSwift calls `POST /api/webhook/{token}/tenants.create` → CRM Swift auto-creates tenant + owner user + free plan
+  - The affiliate-specific half is gone: it no longer creates an "affiliate profile + code" (retired with the affiliate surface by kanban t_3d81b041)
+  - No need for CRM Swift front-end signup - automation can originate from FunnelSwift level
 - ✅ **12 new webhook actions filling remaining gaps** - complete automation coverage
   - `webhooks.generate` - Create a new webhook token (no chicken-and-egg problem; admin token exists)
   - `webhooks.revoke` - Deactivate a token
@@ -195,8 +203,8 @@ _Last updated: 2026-06-25_
   - All 12 added to auto-generated webhook token allowed_actions in migration 027
 
 ### ⏳ Next Up
-- ✅ Ada campaign triggers extended for affiliate events (done in migration 025)
-  - `referral_confirmed`, `commission_earned`, `payout_processed`, `affiliate_activated`
+- ❌ ~~Ada campaign triggers extended for affiliate events~~ [RETIRED 2026-10-02 — kanban t_3d81b041; no affiliate event emitter remains]
+  - ❌ `referral_confirmed`, `commission_earned`, `payout_processed`, `affiliate_activated` — no emitter in `src/`
 - ✅ **Webhook action gaps filled** (12 new actions added to `actions.rs`)
   - `webhooks.generate`, `webhooks.revoke`, `webhooks.list`
   - `pipelines.stages`, `pipelines.create_stage`
