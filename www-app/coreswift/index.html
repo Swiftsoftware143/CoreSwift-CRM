@@ -1160,7 +1160,9 @@ async function loadSiteConfig() {
     SITE_CONFIG = await API.get('/admin/site');
     renderSiteConfigForm();
   } catch(e) {
-    document.getElementById('siteConfigForm').innerHTML =
+    var siteConfigEl = document.getElementById('siteConfigForm');
+    if (!siteConfigEl) return;   // a tab switch replaced the pane; the null write threw here
+    siteConfigEl.innerHTML =
       '<div class="card" style="text-align:center;padding:40px"><p style="color:var(--error)">Failed to load site config: '+escapeHtml(e.message)+'</p>'+
       '<button class="btn btn-secondary btn-sm" onclick="loadSiteConfig()">Retry</button></div>';
   }
@@ -1234,7 +1236,9 @@ function renderSiteConfigForm() {
   html += '<br><button class="btn btn-primary" onclick="saveSiteConfig()">💾 Save Site Configuration</button> ';
   html += '<button class="btn btn-secondary" onclick="loadSiteConfig()">🔄 Reload</button>';
 
-  document.getElementById('siteConfigForm').innerHTML = html;
+  var siteConfigEl = document.getElementById('siteConfigForm');
+  if (!siteConfigEl) return;   // the pane may be gone (kanban t_518c3f39)
+  siteConfigEl.innerHTML = html;
 }
 
 async function saveSiteConfig() {
@@ -1300,6 +1304,8 @@ const TAB_LOADERS = {
   'industries': async () => { await loadIndustriesPanel(); },
   'team': async () => { await loadInvites(); },
   'dashboard': async () => {
+    const statsGridEl = document.getElementById('statsGrid');
+    if (!statsGridEl) return;
     // EVERY tile names its SOURCE OF TRUTH and only ever renders a number that came back from it.
     // This loader used to render eight tiles, six of them from keys GET /api/dashboard/stats has
     // never answered (`stats.active_deals || stats.deals || 0`), so every tenant was shown a hard 0
@@ -1341,13 +1347,15 @@ const TAB_LOADERS = {
           </div>`;
         });
       }
-      document.getElementById('statsGrid').innerHTML = html || '<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats unavailable — no source answered.</p></div></div>';
+      statsGridEl.innerHTML = html || '<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats unavailable — no source answered.</p></div></div>';
     } catch(e) {
-      document.getElementById('statsGrid').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats unavailable: ${escapeHtml(String(e.message || e))}</p></div></div>`;
+      statsGridEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats unavailable: ${escapeHtml(String(e.message || e))}</p></div></div>`;
     }
   },
 
   'contacts': async () => {
+    const contactsTableEl = document.getElementById('contactsTable');
+    if (!contactsTableEl) return;
     try {
       // GET /api/contacts answers {"contacts":[...]}. This reader tested Array.isArray() on the
       // ENVELOPE, so `rows` stayed empty and the table rendered "No contacts yet" for every
@@ -1370,16 +1378,18 @@ const TAB_LOADERS = {
           `<button class="btn btn-ghost btn-xs" onclick="editContact('${c.id}')">Edit</button> <button class="btn btn-ghost btn-xs" onclick="ctOpenTags('${c.id}')">Tags</button>`
         ]);
       }
-      document.getElementById('contactsTable').innerHTML = dataTable(
+      contactsTableEl.innerHTML = dataTable(
         ['Name','Email','Phone','Company','Actions'], rows,
         'No contacts yet. Add your first contact to get started.'
       );
     } catch(e) {
-      document.getElementById('contactsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Contacts endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      contactsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Contacts endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
 
   'companies': async () => {
+    const companiesTableEl = document.getElementById('companiesTable');
+    if (!companiesTableEl) return;
     try {
       const companies = famList(await API.get('/companies'), 'companies');
       let rows = [];
@@ -1400,12 +1410,12 @@ const TAB_LOADERS = {
           `<button class="btn btn-ghost btn-xs" onclick="editCompany('${c.id}')">Edit</button>`
         ]);
       }
-      document.getElementById('companiesTable').innerHTML = dataTable(
+      companiesTableEl.innerHTML = dataTable(
         ['Name','Industry','Email','Website','Contacts',''], rows,
         'No companies yet. Add your first company.'
       );
     } catch(e) {
-      document.getElementById('companiesTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Companies endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      companiesTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Companies endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
 
@@ -1437,6 +1447,8 @@ const TAB_LOADERS = {
   },
 
   'tickets': async () => {
+    const ticketsTableEl = document.getElementById('ticketsTable');
+    if (!ticketsTableEl) return;
     try {
       // CS-22: the API answers {tickets, count} — `Array.isArray` on that is false, which is why
       // this tab always said "No support tickets" no matter what the customer had raised.
@@ -1454,12 +1466,12 @@ const TAB_LOADERS = {
           `<button class="btn btn-ghost btn-xs" onclick="openTicket('${t.id}')">View</button>`
         ]);
       }
-      document.getElementById('ticketsTable').innerHTML = dataTable(
+      ticketsTableEl.innerHTML = dataTable(
         ['Subject','Status','Priority','Contact','Created',''], rows,
         'No support tickets. Great job keeping customers happy!'
       );
     } catch(e) {
-      document.getElementById('ticketsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tickets endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      ticketsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tickets endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
 
@@ -1475,6 +1487,8 @@ const TAB_LOADERS = {
   },
 
   'billing': async () => {
+    const plansContentEl = document.getElementById('plansContent');
+    if (!plansContentEl) return;
     await loadCredits();
     await loadSubscriptionState();
     try {
@@ -1502,9 +1516,9 @@ const TAB_LOADERS = {
       } else {
         html = '<div class="card"><div class="card-body"><div class="empty-state"><div class="empty-icon">💳</div><h3>No plans defined</h3><p>Create subscription plans for your platform.</p></div></div></div>';
       }
-      document.getElementById('plansContent').innerHTML = html;
+      plansContentEl.innerHTML = html;
     } catch(e) {
-      document.getElementById('plansContent').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Plans endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      plansContentEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Plans endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
 
@@ -5407,6 +5421,10 @@ function peTransportCard(t) {
 async function loadInboxTab() {
   const el = document.getElementById('peDomains');
   if (!el) return;
+  const peSupportEl = document.getElementById('peSupport');
+  const peBoxesEl = document.getElementById('peBoxes');
+  const peAutoEl = document.getElementById('peAuto');
+  const peSendEl = document.getElementById('peSend');
   let domains = [], boxes = [], auto = [], support = null, errs = {};
   try { const d = await API.get('/private-email/domains'); domains = Array.isArray(d) ? d : ((d && (d.items || d.domains)) || []); }
   catch (e) { errs.domains = e.message; }
@@ -5436,10 +5454,10 @@ async function loadInboxTab() {
       : peTransportCard(PE.transport);
   }
 
-  if (errs.support) document.getElementById('peSupport').innerHTML = icErr('Could not read the support box', errs.support);
+  if (errs.support) peSupportEl.innerHTML = icErr('Could not read the support box', errs.support);
   else {
     const on = !!(support && support.configured);
-    document.getElementById('peSupport').innerHTML = card('🎫 Support box &rarr; tickets',
+    peSupportEl.innerHTML = card('🎫 Support box &rarr; tickets',
       '<p style="color:var(--text-secondary);margin:0">' + (on
         ? 'Mail forwarded to <code>' + escapeHtml(support.email_address || '') + '</code> becomes a support ticket automatically.' +
           (support.forwarding_instructions ? '<br>' + escapeHtml(support.forwarding_instructions) : '')
@@ -5464,7 +5482,7 @@ async function loadInboxTab() {
         'No domains on this account yet.') + peKeysCard();
   }
 
-  document.getElementById('peBoxes').innerHTML = card('📬 Mailboxes',
+  peBoxesEl.innerHTML = card('📬 Mailboxes',
     '<p style="color:var(--text-secondary);margin:0">A mailbox is an address on one of your domains. Outbound mail can only be sent FROM a mailbox.</p>') +
     dataTable(['Address', 'Local part', 'Status', 'Forwarding', 'Actions'],
       PE.boxes.map(b => [
@@ -5479,9 +5497,9 @@ async function loadInboxTab() {
       ]),
       'No mailboxes yet — add a domain first.');
 
-  if (errs.autoReplies) document.getElementById('peAuto').innerHTML = icErr('Could not read auto-replies', errs.autoReplies);
+  if (errs.autoReplies) peAutoEl.innerHTML = icErr('Could not read auto-replies', errs.autoReplies);
   else {
-    document.getElementById('peAuto').innerHTML = card('↩️ Auto-replies',
+    peAutoEl.innerHTML = card('↩️ Auto-replies',
       '<p style="color:var(--text-secondary);margin:0">Automatic answers for inbound mail on one of your domains.</p>',
       '<button class="btn btn-primary btn-sm" onclick="peOpenAutoReply()">+ New auto-reply</button>') +
       dataTable(['Name', 'Trigger', 'Subject', 'Delay', 'Active', 'Actions'],
@@ -5499,7 +5517,7 @@ async function loadInboxTab() {
 
   const activeBoxes = PE.boxes.filter(b => b.status === 'active')
     .map(b => '<option value="' + escapeHtmlAttr(b.email_address) + '">' + escapeHtml(b.email_address) + '</option>').join('');
-  document.getElementById('peSend').innerHTML = card('✉️ Send from your domain',
+  peSendEl.innerHTML = card('✉️ Send from your domain',
     (activeBoxes ? '' : '<p style="color:var(--text-secondary)">No active mailbox on this account yet, and outbound mail must be sent FROM one.</p>') +
     '<div class="form-group"><label>From</label><select id="peFrom">' + (activeBoxes || '<option value="">no mailboxes</option>') + '</select></div>' +
     '<div class="form-group"><label>To</label><input type="text" id="peTo" placeholder="lead@example.com" autocomplete="off"></div>' +

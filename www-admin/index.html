@@ -1288,7 +1288,9 @@ async function loadSiteConfig() {
     SITE_CONFIG = await API.get('/admin/site');
     renderSiteConfigForm();
   } catch(e) {
-    document.getElementById('siteConfigForm').innerHTML =
+    var siteConfigEl = document.getElementById('siteConfigForm');
+    if (!siteConfigEl) return;   // a tab switch replaced the pane; the null write threw here
+    siteConfigEl.innerHTML =
       '<div class="card" style="text-align:center;padding:40px"><p style="color:var(--error)">Failed to load site config: '+escapeHtml(e.message)+'</p>'+
       '<button class="btn btn-secondary btn-sm" onclick="loadSiteConfig()">Retry</button></div>';
   }
@@ -1362,7 +1364,9 @@ function renderSiteConfigForm() {
   html += '<button class="btn btn-secondary" onclick="loadSiteConfig()">🔄 Reload</button>';
   html += '<p style="color:var(--text-secondary,#9ca3af);font-size:.82rem;margin-top:12px">Saving stores the settings row. The public marketing page and the legal pages are static files served by nginx; they are materialized on the host by the site applier within 5 minutes — this request does not rewrite them.</p>';
 
-  document.getElementById('siteConfigForm').innerHTML = html;
+  var siteConfigEl = document.getElementById('siteConfigForm');
+  if (!siteConfigEl) return;   // the pane may be gone (kanban t_518c3f39)
+  siteConfigEl.innerHTML = html;
 }
 
 async function saveSiteConfig() {
@@ -1550,6 +1554,8 @@ const TAB_LOADERS = {
   // server-backed panel here registers a loader for the same reason.
   'features-plans': async () => { await loadFeatureMatrix(); },
   'dashboard': async () => {
+    const statsGridEl = document.getElementById('statsGrid');
+    if (!statsGridEl) return;
     // EVERY tile names its SOURCE OF TRUTH and only ever renders a number that came back from it.
     // This loader used to render eight tiles, six of them from keys GET /api/dashboard/stats has
     // never answered (`stats.active_deals || stats.deals || 0`), so every tenant was shown a hard 0
@@ -1591,13 +1597,15 @@ const TAB_LOADERS = {
           </div>`;
         });
       }
-      document.getElementById('statsGrid').innerHTML = html || '<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats unavailable — no source answered.</p></div></div>';
+      statsGridEl.innerHTML = html || '<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats unavailable — no source answered.</p></div></div>';
     } catch(e) {
-      document.getElementById('statsGrid').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats unavailable: ${escapeHtml(String(e.message || e))}</p></div></div>`;
+      statsGridEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats unavailable: ${escapeHtml(String(e.message || e))}</p></div></div>`;
     }
   },
 
   'contacts': async () => {
+    const contactsTableEl = document.getElementById('contactsTable');
+    if (!contactsTableEl) return;
     try {
       // GET /api/contacts answers {"contacts":[...]}. This reader tested Array.isArray() on the
       // ENVELOPE, so `rows` stayed empty and the table rendered "No contacts yet" for every
@@ -1620,16 +1628,18 @@ const TAB_LOADERS = {
           `<button class="btn btn-ghost btn-xs" onclick="editContact('${c.id}')">Edit</button> <button class="btn btn-ghost btn-xs" onclick="ctOpenTags('${c.id}')">Tags</button>`
         ]);
       }
-      document.getElementById('contactsTable').innerHTML = dataTable(
+      contactsTableEl.innerHTML = dataTable(
         ['Name','Email','Phone','Company','Actions'], rows,
         'No contacts yet. Add your first contact to get started.'
       );
     } catch(e) {
-      document.getElementById('contactsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Contacts endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      contactsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Contacts endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
 
   'companies': async () => {
+    const companiesTableEl = document.getElementById('companiesTable');
+    if (!companiesTableEl) return;
     try {
       const companies = famList(await API.get('/companies'), 'companies');
       let rows = [];
@@ -1650,16 +1660,18 @@ const TAB_LOADERS = {
           `<button class="btn btn-ghost btn-xs" onclick="editCompany('${c.id}')">Edit</button>`
         ]);
       }
-      document.getElementById('companiesTable').innerHTML = dataTable(
+      companiesTableEl.innerHTML = dataTable(
         ['Name','Industry','Email','Website','Contacts',''], rows,
         'No companies yet. Add your first company.'
       );
     } catch(e) {
-      document.getElementById('companiesTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Companies endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      companiesTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Companies endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
 
   'pipelines': async () => {
+    const pipelinesContentEl = document.getElementById('pipelinesContent');
+    if (!pipelinesContentEl) return;
     try {
       // GET /api/pipelines answers an ENVELOPE of WRAPPERS — {pipelines:[{pipeline:{…},stages:[…]}]} —
       // and each pipeline's deals live behind their own route. This reader tested Array.isArray() on the
@@ -1706,13 +1718,15 @@ const TAB_LOADERS = {
       } else {
         html = '<div class="card"><div class="card-body"><div class="empty-state"><div class="empty-icon">📈</div><h3>No pipelines yet</h3><p>Create your first sales pipeline to start tracking deals.</p></div></div></div>';
       }
-      document.getElementById('pipelinesContent').innerHTML = html;
+      pipelinesContentEl.innerHTML = html;
     } catch(e) {
-      document.getElementById('pipelinesContent').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Pipelines endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      pipelinesContentEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Pipelines endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
 
   'campaigns': async () => {
+    const campaignsTableEl = document.getElementById('campaignsTable');
+    if (!campaignsTableEl) return;
     try {
       // GET /api/campaigns answers {campaigns:[…]} and a campaign row carries name/status/description/
       // created_at ONLY — no `type`, no `sent_count`/`sent`, no `open_rate`. The old reader tested
@@ -1729,16 +1743,18 @@ const TAB_LOADERS = {
           c.created_at ? new Date(c.created_at).toLocaleDateString() : '—',
         ];
       });
-      document.getElementById('campaignsTable').innerHTML = dataTable(
+      campaignsTableEl.innerHTML = dataTable(
         ['Name','Status','Description','Created'], rows,
         'No campaigns yet. Launch your first marketing campaign.'
       );
     } catch(e) {
-      document.getElementById('campaignsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Campaigns endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      campaignsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Campaigns endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
 
   'lists': async () => {
+    const listsTableEl = document.getElementById('listsTable');
+    if (!listsTableEl) return;
     try {
       // GET /api/lists answers {lists:[…]} and a list row carries name/member_count/list_type/
       // created_at ONLY — no `contact_count`, no `count`, no `type`. The old reader tested
@@ -1756,16 +1772,18 @@ const TAB_LOADERS = {
           l.created_at ? new Date(l.created_at).toLocaleDateString() : '—',
         ];
       });
-      document.getElementById('listsTable').innerHTML = dataTable(
+      listsTableEl.innerHTML = dataTable(
         ['Name','Members','Type','Created'], rows,
         'No lists yet. Create a list to segment your contacts.'
       );
     } catch(e) {
-      document.getElementById('listsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Lists endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      listsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Lists endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
 
   'tags': async () => {
+    const tagsTableEl = document.getElementById('tagsTable');
+    if (!tagsTableEl) return;
     try {
       const tags = await API.get('/tags');
       let html = '<div style="display:flex;gap:8px;flex-wrap:wrap">';
@@ -1777,13 +1795,15 @@ const TAB_LOADERS = {
         html = '<div class="card" style="width:100%"><div class="card-body"><div class="empty-state"><div class="empty-icon">🏷️</div><h3>No tags yet</h3><p>Create tags to organize your contacts.</p></div></div></div>';
       }
       html += '</div>';
-      document.getElementById('tagsTable').innerHTML = html;
+      tagsTableEl.innerHTML = html;
     } catch(e) {
-      document.getElementById('tagsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tags endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      tagsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tags endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
 
   'email-templates': async () => {
+    const templatesTableEl = document.getElementById('templatesTable');
+    if (!templatesTableEl) return;
     try {
       // GET /api/templates was never registered on this binary (404), so this panel could only
       // ever render its own error text. The template store is /api/email-templates
@@ -1801,16 +1821,18 @@ const TAB_LOADERS = {
           `<button class="btn btn-ghost btn-xs">Edit</button>`
         ]);
       }
-      document.getElementById('templatesTable').innerHTML = dataTable(
+      templatesTableEl.innerHTML = dataTable(
         ['Name','Subject','Type','Updated',''], rows,
         'No templates yet. Create reusable email templates.'
       );
     } catch(e) {
-      document.getElementById('templatesTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Templates endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      templatesTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Templates endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
 
   'tickets': async () => {
+    const ticketsTableEl = document.getElementById('ticketsTable');
+    if (!ticketsTableEl) return;
     try {
       // CS-22: the API answers {tickets, count} — `Array.isArray` on that is false, which is why
       // this tab always said "No support tickets" no matter what the customer had raised.
@@ -1828,16 +1850,18 @@ const TAB_LOADERS = {
           `<button class="btn btn-ghost btn-xs" onclick="openTicket('${t.id}')">View</button>`
         ]);
       }
-      document.getElementById('ticketsTable').innerHTML = dataTable(
+      ticketsTableEl.innerHTML = dataTable(
         ['Subject','Status','Priority','Contact','Created',''], rows,
         'No support tickets. Great job keeping customers happy!'
       );
     } catch(e) {
-      document.getElementById('ticketsTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tickets endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      ticketsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tickets endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
 
   'calendar': async () => {
+    const calendarContentEl = document.getElementById('calendarContent');
+    if (!calendarContentEl) return;
     try {
       // GET /api/calendar/events was never registered (404) — the calendar panel errors out.
       // The event store is /api/events (src/events/mod.rs), which answers {events, page, total}.
@@ -1854,12 +1878,12 @@ const TAB_LOADERS = {
           `<button class="btn btn-ghost btn-xs">Edit</button>`
         ]);
       }
-      document.getElementById('calendarContent').innerHTML = dataTable(
+      calendarContentEl.innerHTML = dataTable(
         ['Event','Date','Time','Type','Location',''], rows,
         'No events scheduled. Add your first calendar event.'
       );
     } catch(e) {
-      document.getElementById('calendarContent').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Calendar endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      calendarContentEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Calendar endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
 
@@ -1868,6 +1892,8 @@ const TAB_LOADERS = {
   },
 
   'billing': async () => {
+    const plansContentEl = document.getElementById('plansContent');
+    if (!plansContentEl) return;
     try {
       // GET /api/billing/plans answers {page,per_page,plans,total} with 6 real plans; the reader tested
       // Array.isArray() on that envelope, so the tab painted "No plans defined" for every tenant. Behind
@@ -1897,13 +1923,15 @@ const TAB_LOADERS = {
       } else {
         html = '<div class="card"><div class="card-body"><div class="empty-state"><div class="empty-icon">💳</div><h3>No plans defined</h3><p>Create subscription plans for your platform.</p></div></div></div>';
       }
-      document.getElementById('plansContent').innerHTML = html;
+      plansContentEl.innerHTML = html;
     } catch(e) {
-      document.getElementById('plansContent').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Plans endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      plansContentEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Plans endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
 
   'users': async () => {
+    const usersTableEl = document.getElementById('usersTable');
+    if (!usersTableEl) return;
     try {
       // GET /api/users was never registered (404). People across ALL tenants live next to the
       // tenant list under the platform-admin gate: GET /api/admin/users -> {users, count}.
@@ -1920,12 +1948,12 @@ const TAB_LOADERS = {
           `<button class="btn btn-ghost btn-xs">Edit</button>`
         ]);
       }
-      document.getElementById('usersTable').innerHTML = dataTable(
+      usersTableEl.innerHTML = dataTable(
         ['Name','Email','Role','Created',''], rows,
         'No users yet.'
       );
     } catch(e) {
-      document.getElementById('usersTable').innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Users endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      usersTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Users endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
 
