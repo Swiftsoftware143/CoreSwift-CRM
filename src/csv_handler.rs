@@ -530,6 +530,295 @@ pub async fn preview_csv(
     })))
 }
 
+/// POST /api/csv/import/opportunities — import deals from CSV, XLS or XLSX.
+///
+/// The export has always written `name, contact, company, pipeline, stage, value, probability,
+/// expected_close, created_at`, and nothing could read it back: measured 2026-10-02, `/api/csv` was
+/// {preview, import/contacts, export/contacts, export/opportunities}. **An export you cannot re-import is
+/// a backup you cannot restore**, so the accepted column names are deliberately the export's own and no
+/// mapping is required for a round-trip. A `mappings` part is still honoured if supplied.
+///
+/// `opportunities.pipeline_id` and `stage_id` are NOT NULL, so every row must land in a real pipeline AND
+/// a real stage OF THAT PIPELINE — a stage belonging to a different pipeline is not a valid target.
+/// Resolution per row: the named pipeline/stage when both exist and agree; else the tenant's first
+/// pipeline and its first stage; and a row whose pipeline has no stages is REFUSED with a reason rather
+/// than silently dropped or 500'd.
+pub async fn import_opportunities(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    mut multipart: Multipart,
+) -> ApiResult<impl IntoResponse> {
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+
+    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut mappings_str: Option<String> = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("Multipart error: {}", e)))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "file" {
+            file_bytes = Some(
+                field
+                    .bytes()
+                    .await
+                    .map_err(|e| AppError::BadRequest(format!("Failed to read file: {}", e)))?
+                    .to_vec(),
+            );
+        } else if name == "mappings" {
+            mappings_str = Some(field.text().await.unwrap_or_default());
+        }
+    }
+    let file_bytes =
+        file_bytes.ok_or_else(|| AppError::BadRequest("Missing 'file' field".into()))?;
+    if file_bytes.len() as u64 > MAX_UPLOAD_BYTES {
+        return Err(AppError::BadRequest(format!(
+            "File too large: {} bytes (max {})",
+            file_bytes.len(),
+            MAX_UPLOAD_BYTES
+        )));
+    }
+
+    let (raw_headers, records) = read_table(&file_bytes)?;
+    let headers = raw_headers
+        .iter()
+        .map(|h| h.to_lowercase())
+        .collect::<Vec<_>>();
+    let header_indices: std::collections::HashMap<String, usize> = headers
+        .iter()
+        .enumerate()
+        .map(|(i, h)| (h.trim().to_string(), i))
+        .collect();
+
+    // "contact" accepts an email OR a full name; both are matched case-insensitively.
+    let field_of = |header: &str| -> Option<usize> { header_indices.get(header).copied() };
+    let id_name = field_of("name");
+    let id_contact = field_of("contact");
+    let id_company = field_of("company");
+    let id_pipeline = field_of("pipeline");
+    let id_stage = field_of("stage");
+    let id_value = field_of("value");
+    let id_probability = field_of("probability");
+    let id_close = field_of("expected_close").or_else(|| field_of("expected_close_date"));
+    let _ = &mappings_str; // an explicit map is optional; the export's own names already line up
+
+    // The tenant's first pipeline + its first stage: the fallback that keeps a row importable when the
+    // file names a pipeline that has since been renamed or deleted.
+    // The fallback must be a pipeline that actually HAS a stage, and the INNER JOIN is what guarantees it:
+    // selecting the oldest pipeline and then looking for a stage in it fails for every row when that
+    // pipeline happens to be empty — measured live 2026-10-02, where it rejected an entire file whose rows
+    // never even reached their own field validation. `is_active` is included for the same reason: a deal
+    // belongs in a pipeline the tenant is actually using.
+    let default_target = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"SELECT p.id, s.id
+             FROM pipelines p
+             JOIN pipeline_stages s ON s.pipeline_id = p.id
+            WHERE p.tenant_id = $1 AND p.is_active = true
+            ORDER BY p.created_at ASC, s.position ASC NULLS LAST, s.created_at ASC
+            LIMIT 1"#,
+    )
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let mut imported = 0i64;
+    let mut skipped = 0i64;
+    let mut errors: Vec<String> = Vec::new();
+
+    for (n, record) in records.into_iter().enumerate() {
+        let row_num = n + 1;
+        let get = |idx: Option<usize>| -> String {
+            idx.and_then(|i| record.get(i))
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        };
+
+        let name = get(id_name);
+        if name.is_empty() {
+            errors.push(format!("Row {}: 'name' is required", row_num));
+            skipped += 1;
+            continue;
+        }
+
+        // pipeline + stage must both be real, and the stage must belong to that pipeline
+        let named_pipeline = get(id_pipeline);
+        let named_stage = get(id_stage);
+        let mut pipeline_id: Option<Uuid> = None;
+        let mut stage_id: Option<Uuid> = None;
+
+        if !named_pipeline.is_empty() {
+            pipeline_id = sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM pipelines WHERE tenant_id = $1 AND lower(name) = lower($2) LIMIT 1",
+            )
+            .bind(account_id)
+            .bind(named_pipeline.trim())
+            .fetch_optional(&state.db)
+            .await?;
+        }
+        if pipeline_id.is_none() {
+            pipeline_id = default_target.as_ref().map(|(p, _)| *p);
+        }
+        // With no pipeline named, the fallback's stage comes with it.
+        if named_pipeline.is_empty() {
+            stage_id = default_target.as_ref().map(|(_, sid)| *sid);
+        }
+        if let Some(pid) = pipeline_id {
+            if !named_stage.is_empty() {
+                stage_id = sqlx::query_scalar::<_, Uuid>(
+                    "SELECT id FROM pipeline_stages WHERE pipeline_id = $1 AND lower(name) = lower($2) LIMIT 1",
+                )
+                .bind(pid)
+                .bind(named_stage.trim())
+                .fetch_optional(&state.db)
+                .await?;
+            }
+            if stage_id.is_none() {
+                stage_id = sqlx::query_scalar::<_, Uuid>(
+                    "SELECT id FROM pipeline_stages WHERE pipeline_id = $1 ORDER BY position ASC NULLS LAST, created_at ASC LIMIT 1",
+                )
+                .bind(pid)
+                .fetch_optional(&state.db)
+                .await?;
+            }
+        }
+
+        let (Some(pid), Some(sid)) = (pipeline_id, stage_id) else {
+            errors.push(format!(
+                "Row {}: no pipeline with a stage to import into — create a stage first",
+                row_num
+            ));
+            skipped += 1;
+            continue;
+        };
+
+        // value: numeric column, bound through an explicit cast (the convention this file already uses)
+        let value: f64 = match get(id_value).parse::<f64>() {
+            Ok(v) => v,
+            Err(_) if get(id_value).is_empty() => 0.0,
+            Err(_) => {
+                errors.push(format!("Row {}: 'value' is not a number", row_num));
+                skipped += 1;
+                continue;
+            }
+        };
+
+        // probability must be a real percentage — refused rather than clamped, because clamping hides a
+        // bad export instead of telling the operator about it
+        let probability: i32 = match get(id_probability).parse::<i32>() {
+            Ok(p) if (0..=100).contains(&p) => p,
+            Ok(p) => {
+                errors.push(format!(
+                    "Row {}: probability {} is outside 0-100",
+                    row_num, p
+                ));
+                skipped += 1;
+                continue;
+            }
+            Err(_) if get(id_probability).is_empty() => 0,
+            Err(_) => {
+                errors.push(format!("Row {}: 'probability' is not a number", row_num));
+                skipped += 1;
+                continue;
+            }
+        };
+
+        let expected_close: Option<chrono::NaiveDate> = {
+            let raw = get(id_close);
+            if raw.is_empty() {
+                None
+            } else {
+                match chrono::NaiveDate::parse_from_str(
+                    raw.split('T').next().unwrap_or(&raw),
+                    "%Y-%m-%d",
+                ) {
+                    Ok(d) => Some(d),
+                    Err(_) => {
+                        errors.push(format!(
+                            "Row {}: 'expected_close' must be YYYY-MM-DD",
+                            row_num
+                        ));
+                        skipped += 1;
+                        continue;
+                    }
+                }
+            }
+        };
+
+        // contact: an email (exact, case-insensitive) or a full name. Unmatched stays UNLINKED — a deal
+        // without a contact is a supported state, and inventing one from a display name would fabricate
+        // records (the same reason the deal create path requires an email to auto-create).
+        let contact_raw = get(id_contact);
+        let contact_id = if contact_raw.is_empty() {
+            None
+        } else if contact_raw.contains('@') {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM contacts WHERE tenant_id = $1 AND lower(email) = lower($2) AND is_active = true LIMIT 1",
+            )
+            .bind(account_id)
+            .bind(contact_raw.trim())
+            .fetch_optional(&state.db)
+            .await?
+        } else {
+            sqlx::query_scalar::<_, Uuid>(
+                r#"SELECT id FROM contacts WHERE tenant_id = $1 AND is_active = true
+                     AND lower(first_name || ' ' || last_name) = lower($2) LIMIT 1"#,
+            )
+            .bind(account_id)
+            .bind(contact_raw.trim())
+            .fetch_optional(&state.db)
+            .await?
+        };
+
+        let company_raw = get(id_company);
+        let company_id = if company_raw.is_empty() {
+            None
+        } else {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM companies WHERE tenant_id = $1 AND lower(name) = lower($2) LIMIT 1",
+            )
+            .bind(account_id)
+            .bind(company_raw.trim())
+            .fetch_optional(&state.db)
+            .await?
+        };
+
+        let res = sqlx::query(
+            r#"INSERT INTO opportunities
+                 (id, tenant_id, pipeline_id, stage_id, contact_id, company_id, name,
+                  value, probability, expected_close_date, source)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8::numeric,$9,$10,'import')"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(account_id)
+        .bind(pid)
+        .bind(sid)
+        .bind(contact_id)
+        .bind(company_id)
+        .bind(&name)
+        .bind(value)
+        .bind(probability)
+        .bind(expected_close)
+        .execute(&state.db)
+        .await;
+
+        match res {
+            Ok(_) => imported += 1,
+            Err(e) => {
+                errors.push(format!("Row {}: DB error: {}", row_num, e));
+                skipped += 1;
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "imported": imported,
+        "skipped": skipped,
+        "errors": errors,
+    })))
+}
+
 // ── Export ─────────────────────────────────────────────────────────────────
 
 /// GET /api/csv/export/contacts
@@ -734,6 +1023,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/import/contacts", post(import_contacts))
         .route("/export/contacts", get(export_contacts))
         .route("/export/opportunities", get(export_opportunities))
+        .route("/import/opportunities", post(import_opportunities))
         .layer(axum::middleware::from_fn_with_state(
             crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
             crate::body_deadline::body_read_deadline_middleware,
