@@ -67,7 +67,20 @@ pub async fn create_pipeline(
     let pipeline = sqlx::query_as::<_, Pipeline>(
         r#"INSERT INTO pipelines (id, tenant_id, name, description, is_default) VALUES ($1,$2,$3,$4,$5) RETURNING *"#
     ).bind(Uuid::new_v4()).bind(tenant_id).bind(&req.name).bind(&req.description)
-    .bind(req.is_default.unwrap_or(false)).fetch_one(&state.db).await?;
+    .bind(req.is_default.unwrap_or(false)).fetch_one(&state.db).await
+    .map_err(|e| match e {
+        // `idx_pipelines_tenant_name_unique` (migration 110). The guard is what stops a re-seed creating a
+        // duplicate "Sales Pipeline" (measured live: one tenant had two, 3 days apart), but a unique
+        // violation on its own surfaces as a raw 500 for a name the operator can plainly see is taken.
+        // The constraint is right; the answer has to say WHY — the same rule the other write paths follow.
+        sqlx::Error::Database(db) if db.code().as_deref() == Some("23505") => {
+            AppError::Validation(format!(
+                "A pipeline named '{}' already exists on this account",
+                req.name.trim()
+            ))
+        }
+        other => other.into(),
+    })?;
     Ok((StatusCode::CREATED, Json(json!(pipeline))))
 }
 
