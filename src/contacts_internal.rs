@@ -76,11 +76,22 @@ pub async fn internal_create(
         }
     }
 
-    let id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO contacts (id, tenant_id, first_name, last_name, email, phone, company_id, notes, title) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+    // Get-or-create, so a repeat or a concurrent duplicate is not a 500. idx_contacts_tenant_email
+    // (partial, WHERE email IS NOT NULL) makes (tenant_id, email) unique, and this route's caller
+    // (multi-directory) re-sends the same claimed-business contact; a bare INSERT raised 23505, the
+    // `?` mapped AppError::Database to a 500, and the caller — which requires 2xx before it adds the
+    // list membership — dropped the rest of its push. DO NOTHING absorbs the duplicate and the
+    // re-select returns the row that already owns the key (kanban t_2dfaffa4's rule, applied to the
+    // one contacts get-or-create that fix did not cover). A NULL email is outside the partial index,
+    // so this conflict target is still inferable and an all-NULL insert always lands.
+    let candidate = Uuid::new_v4();
+    let created: Option<(Uuid,)> = sqlx::query_as(
+        r#"INSERT INTO contacts (id, tenant_id, first_name, last_name, email, phone, company_id, notes, title)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (tenant_id, email) WHERE email IS NOT NULL DO NOTHING
+           RETURNING id"#,
     )
-    .bind(id)
+    .bind(candidate)
     .bind(tenant_id)
     .bind(&first_name)
     .bind(&last_name)
@@ -89,8 +100,24 @@ pub async fn internal_create(
     .bind(company_id)
     .bind(&notes)
     .bind(&title)
-    .execute(&s.db)
+    .fetch_optional(&s.db)
     .await?;
+
+    let id = match created {
+        Some((id,)) => id,
+        None => {
+            // Already owned by an existing row (or lost the race): hand back the winner's id so
+            // the caller's follow-up (list membership + tag) works exactly as on the create path.
+            let existing: (Uuid,) = sqlx::query_as(
+                "SELECT id FROM contacts WHERE tenant_id = $1 AND email = $2 LIMIT 1",
+            )
+            .bind(tenant_id)
+            .bind(&email)
+            .fetch_one(&s.db)
+            .await?;
+            existing.0
+        }
+    };
 
     Ok(Json(
         serde_json::json!({"id": id.to_string(), "first_name": first_name, "last_name": last_name}),
