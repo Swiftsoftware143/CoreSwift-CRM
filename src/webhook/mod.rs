@@ -1,4 +1,4 @@
-//! Public Automation Webhook — single endpoint for OpenClaw, n8n, CheatLayer
+//! Public Automation Webhook — single endpoint for n8n and Hermes
 //!
 //! Every tenant gets an auto-generated webhook token on signup.
 //! External automation tools call this endpoint with the token in the URL
@@ -7,7 +7,7 @@
 //! POST /api/webhook/:token/:action
 //! Body: { ...action-specific params... }
 //!
-//! This is the universal entry point so OpenClaw, n8n, and CheatLayer
+//! This is the universal entry point so n8n and Hermes
 //! only need to know one URL + one token to access the entire CRM Swift API.
 
 pub mod actions;

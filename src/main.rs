@@ -448,9 +448,9 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/events", events::router(state.clone()))
         // Communications (Twilio/SendGrid orchestration)
         .nest("/api/comms", communications::router(state.clone()))
-        // Native app connectors (AdaSwift, FunnelSwift, CheatLayer, etc.)
+        // Native app connectors (AdaSwift, FunnelSwift, WorkflowSwift, etc.)
         .nest("/api/native", native_apps::router(state.clone()))
-        // Public webhook — single endpoint for OpenClaw, n8n, CheatLayer
+        // Public webhook — single endpoint for n8n and Hermes
         .nest(
             "/api/webhook",
             webhook::router().layer(axum::middleware::from_fn_with_state(

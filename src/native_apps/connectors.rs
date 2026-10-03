@@ -6,7 +6,6 @@
 use std::collections::HashMap;
 
 pub mod adaswift;
-pub mod cheatlayer;
 pub mod funnelswift;
 pub mod missedcall_responder;
 pub mod multi_directory;
@@ -28,14 +27,6 @@ pub static NATIVE_APPS: &[AppConnector] = &[
         slug: "adaswift",
         name: "AdaSwift Console",
         description: "Client viewing portal — clients see their scan reports and account status. Admin-only: connect with an AdaSwift admin bearer token to push clients and pull scan reports.",
-        auth_type: "api_key",
-        auth_fields: &["api_key", "base_url"],
-        access_level: "admin",
-    },
-    AppConnector {
-        slug: "cheatlayer",
-        name: "CheatLayer",
-        description: "RPA automation engine — browser automation, scraping, form filling. Admin-only connection.",
         auth_type: "api_key",
         auth_fields: &["api_key", "base_url"],
         access_level: "admin",
@@ -89,7 +80,6 @@ pub async fn test_connection(
 
     let result = match slug {
         "adaswift" => adaswift::test(credentials).await,
-        "cheatlayer" => cheatlayer::test(credentials).await,
         "funnelswift" => funnelswift::test(credentials).await,
         "workflowswift" => workflowswift::test(credentials).await,
         "missedcall-responder" => missedcall_responder::test(credentials).await,
@@ -110,7 +100,6 @@ pub async fn push_data(
 ) -> Result<serde_json::Value, String> {
     match slug {
         "adaswift" => adaswift::push_entity(credentials, entity_type, data).await,
-        "cheatlayer" => cheatlayer::push_entity(credentials, entity_type, data).await,
         "funnelswift" => funnelswift::push_entity(credentials, entity_type, data).await,
         "workflowswift" => workflowswift::push_entity(credentials, entity_type, data).await,
         "missedcall-responder" => {
@@ -130,7 +119,6 @@ pub async fn pull_data(
 ) -> Result<serde_json::Value, String> {
     match slug {
         "adaswift" => adaswift::pull_entity(credentials, entity_type, filters).await,
-        "cheatlayer" => cheatlayer::pull_entity(credentials, entity_type, filters).await,
         "funnelswift" => funnelswift::pull_entity(credentials, entity_type, filters).await,
         "workflowswift" => workflowswift::pull_entity(credentials, entity_type, filters).await,
         "missedcall-responder" => {
@@ -145,7 +133,6 @@ pub async fn pull_data(
 pub fn get_app_meta(slug: &str) -> Option<serde_json::Value> {
     match slug {
         "adaswift" => Some(adaswift::get_meta()),
-        "cheatlayer" => Some(cheatlayer::get_meta()),
         "funnelswift" => Some(funnelswift::get_meta()),
         "workflowswift" => Some(workflowswift::get_meta()),
         "missedcall-responder" => Some(missedcall_responder::get_meta()),

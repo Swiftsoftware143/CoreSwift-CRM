@@ -7,7 +7,7 @@
 //! - Trigger automations from app events
 //!
 //! Access model:
-//! - Admin-only: AdaSwift (client viewing portal), CheatLayer
+//! - Admin-only: AdaSwift (client viewing portal)
 //! - Admin + Tenant: FunnelSwift, Palm Bay Pulse, ZaarHub, WorkflowSwift
 //!
 //! Ada campaign triggers (a CRM automation rule mapped to an AdaSwift campaign) were RETIRED

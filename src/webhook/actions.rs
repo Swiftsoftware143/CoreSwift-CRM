@@ -1,7 +1,7 @@
 //! Webhook action router — maps action strings to actual database queries
 //!
 //! Each action corresponds to one or more CRM Swift features.
-//! This is the glue that lets OpenClaw, n8n, and CheatLayer call any
+//! This is the glue that lets n8n and Hermes call any
 //! endpoint through a single webhook.
 
 use serde_json::json;

@@ -298,7 +298,7 @@ pub async fn pull_from_app(
 /// the connector's own message describes, and the declaration is load-bearing on the write path.
 ///
 /// Every connector's `push_entity`/`pull_entity` match arms are exactly its declared lists
-/// (checked across all six when this was added: adaswift/cheatlayer/workflowswift/funnelswift/
+/// (checked across all five native connectors that remain: adaswift/workflowswift/funnelswift/
 /// missedcall_responder/multi_directory), so this refuses nothing that used to work.
 fn ensure_declared(app_slug: &str, direction: &str, entity_type: &str) -> ApiResult<()> {
     let declared: Vec<String> = connectors::get_app_meta(app_slug)

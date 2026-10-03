@@ -10,7 +10,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct NativeApp {
     pub id: Uuid,
-    pub slug: String, // e.g. "adaswift", "funnelswift", "cheatlayer"
+    pub slug: String, // e.g. "adaswift", "funnelswift", "workflowswift"
     pub name: String, // e.g. "AdaSwift Console"
     pub description: String,
     pub auth_type: String,              // "api_key" | "oauth2" | "basic"

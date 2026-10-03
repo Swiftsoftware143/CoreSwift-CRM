@@ -1,4 +1,4 @@
-//! Public webhook handler — OpenClaw, n8n, and CheatLayer all hit this endpoint
+//! Public webhook handler — n8n and Hermes hit this endpoint
 //!
 //! POST /api/webhook/{token}/{action}
 //! No auth header needed — the token identifies the tenant.

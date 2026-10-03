@@ -291,7 +291,7 @@ Every feature the admin can switch on/off per plan (source of truth: the module 
 | `checklists` | Checklists | checklists | Onboarding/process checklists |
 | `ai_enabled` | AI scoring & helpers | ai_enabled | Lead scoring and AI helpers |
 | `tickets` | Support tickets | tickets | In-house ticketing + email-to-ticket |
-| `native_apps` | Native app connectors | native_apps | FunnelSwift, ADASwift, MissedCall, WorkflowSwift, CheatLayer, Multi-Directory |
+| `native_apps` | Native app connectors | native_apps | FunnelSwift, ADASwift, MissedCall, WorkflowSwift, Multi-Directory |
 | `telnyx` | SMS & voice (Telnyx) | telnyx | SMS, number management, call tracking |
 | `round_robin` | Round-robin routing | round_robin | Fair lead distribution across a team |
 | `events` | Event system | events | Internal event bus |
