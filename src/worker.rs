@@ -29,6 +29,18 @@ pub async fn start_worker(db: PgPool) -> Result<(), Box<dyn std::error::Error + 
     })?;
     sched.add(job1).await?;
 
+    // Job 1b: Every 60 seconds — drain the follow-up queue into the outbound pipeline.
+    // Measured 2026-10-02: this queue had writers and dashboards and NO consumer, so follow-ups were
+    // queued and never delivered. Same cadence as the delayed-action pass, which is the sibling queue.
+    let dbf = db.clone();
+    let job_f = Job::new_async("15/60 * * * * *", move |_uuid, _lock| {
+        let db = dbf.clone();
+        Box::pin(async move {
+            process_followup_queue(&db).await;
+        })
+    })?;
+    sched.add(job_f).await?;
+
     // Job 2: Every 5 minutes — check for inactive trials and mark health
     let db2 = db.clone();
     let job2 = Job::new_async("0 */5 * * * *", move |_uuid, _lock| {
@@ -764,4 +776,129 @@ async fn deliver_queued_messages(db: &PgPool) {
             }
         }
     }
+}
+
+/// Drain `followup_queue` — the step that was missing.
+///
+/// Measured 2026-10-02: the table had two WRITERS (stale-trial reactivation in
+/// `monitoring/account_health_handler.rs`, inactive-trial escalation here) and READERS in the AI action
+/// surface reporting pending / executed / OVERDUE — but **nothing ever set `is_executed`**, so a follow-up
+/// could be queued and then sit pending for ever. The queue had producers and a dashboard and no
+/// consumer, and its "overdue" figure reported a backlog nothing was able to clear.
+///
+/// It hands delivery to `outbound_messages` rather than sending directly: that pipeline already claims
+/// rows (`status='sending' WHERE status='queued'`) and owns provider knowledge. One delivery path, not two.
+///
+/// Two ordering decisions, stated so they cannot drift:
+///   * the CLAIM comes first (UPDATE ... RETURNING), so a tick and a concurrent caller cannot both deliver
+///     the same follow-up — the same reason the writers claim instead of check-then-insert;
+///   * `FOR UPDATE SKIP LOCKED` so a second worker does not block on the rows this one has taken.
+async fn process_followup_queue(db: &PgPool) {
+    let claimed = sqlx::query_as::<_, (Uuid, Uuid, String, String)>(
+        r#"UPDATE followup_queue SET is_executed = true, executed_at = NOW()
+            WHERE id IN (
+              SELECT id FROM followup_queue
+               WHERE is_executed = false AND is_cancelled = false AND scheduled_for <= NOW()
+               ORDER BY scheduled_for ASC
+               LIMIT 25
+               FOR UPDATE SKIP LOCKED
+            )
+        RETURNING id, business_profile_id, channel::text, template_slug"#,
+    )
+    .fetch_all(db)
+    .await;
+
+    let rows = match claimed {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "followup_queue: claim failed; nothing drained this tick");
+            return;
+        }
+    };
+    if rows.is_empty() {
+        return;
+    }
+
+    let mut queued = 0usize;
+    let mut skipped = 0usize;
+
+    for (id, profile_id, channel, template_slug) in rows {
+        // Who the follow-up is for: the business profile's owning user.
+        let recipient = sqlx::query_as::<_, (Option<String>, Option<Uuid>)>(
+            "SELECT u.email, u.tenant_id FROM business_profiles bp JOIN users u ON u.id = bp.user_id WHERE bp.id = $1",
+        )
+        .bind(profile_id)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten();
+
+        let (email, tenant_id) = match recipient {
+            Some((Some(email), Some(tenant))) => (email, tenant),
+            _ => {
+                // A queued follow-up with nobody to send it to cannot be delivered. Cancel it WITH a log
+                // rather than leaving it pending for ever to inflate the overdue counter.
+                let _ = sqlx::query("UPDATE followup_queue SET is_cancelled = true WHERE id = $1")
+                    .bind(id)
+                    .execute(db)
+                    .await;
+                skipped += 1;
+                tracing::warn!(followup = %id, profile = %profile_id,
+                    "followup_queue: no reachable email for this profile; row cancelled, not delivered");
+                continue;
+            }
+        };
+
+        // The tenant's own template wins; a same-named template from another tenant is the fallback, so a
+        // tenant that never customised a seeded template still gets a real body instead of silence.
+        let tmpl = sqlx::query_as::<_, (Option<String>, String)>(
+            r#"SELECT subject, body FROM message_templates
+                WHERE name = $1
+                ORDER BY (tenant_id = $2) DESC, created_at DESC
+                LIMIT 1"#,
+        )
+        .bind(&template_slug)
+        .bind(tenant_id)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten();
+
+        let (subject, body) = tmpl.unwrap_or_else(|| {
+            (
+                Some(format!("Following up ({})", template_slug)),
+                format!(
+                    "This is a scheduled follow-up ({}) for your account.",
+                    template_slug
+                ),
+            )
+        });
+
+        // Hand it to the pipeline that already knows how to deliver.
+        let inserted = sqlx::query(
+            r#"INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status)
+               VALUES ($1, $2, $3, $4, $5, $6, 'queued')"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(tenant_id)
+        .bind(&channel)
+        .bind(&email)
+        .bind(&subject)
+        .bind(&body)
+        .execute(db)
+        .await;
+
+        if inserted.is_ok() {
+            queued += 1;
+        } else {
+            skipped += 1;
+            tracing::warn!(followup = %id, "followup_queue: could not hand off to outbound_messages");
+        }
+    }
+
+    tracing::info!(
+        queued,
+        skipped,
+        "followup_queue drained (claimed rows are marked executed)"
+    );
 }
