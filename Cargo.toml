@@ -73,6 +73,7 @@ hex = "0.4"
 lettre = { version = "0.11", default-features = false, features = ["tokio1-native-tls", "builder", "smtp-transport"] }
 serde_urlencoded = "0.7"
 url = "2"
+calamine = "0.36.1"
 
 [dev-dependencies]
 # Tests only: `ServiceExt::oneshot` drives a real Router through the middleware stack so the

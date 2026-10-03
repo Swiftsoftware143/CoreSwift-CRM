@@ -88,6 +88,106 @@ fn validate_row(mapped: &std::collections::HashMap<String, String>) -> Result<()
 
 // ── Import ─────────────────────────────────────────────────────────────────
 
+// ── One reader for every table format ─────────────────────────────────────────────────────────────────
+// David's feature table lists "Import/Export (CSV, XLS, XLSX)" and only CSV was ever handled: measured
+// 2026-10-02 there was no spreadsheet crate in the manifest and no xlsx/excel handling anywhere, so the
+// claim was false. This is the single place the container format is decided.
+//
+// The format is sniffed by SIGNATURE, never by filename: an upload's extension is caller-supplied and
+// routinely wrong — a spreadsheet exported from Excel as ".csv" still arrives as PK\x03\x04 — and a
+// browser may send no filename at all. XLSX (any OOXML container) is a ZIP: PK\x03\x04. Legacy XLS is an
+// OLE compound file: D0 CF 11 E0 A1 B1 1A E1.
+//
+// Spreadsheets are converted to `csv::StringRecord`, the type the mapping code already consumes, so the
+// column mapping, validation and INSERT below stay ONE code path for all three formats. A second path
+// would drift from the first, and the CSV path is the one with the bug history.
+fn read_table(bytes: &[u8]) -> Result<(Vec<String>, Vec<csv::StringRecord>), AppError> {
+    const OLE: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+    if bytes.starts_with(b"PK\x03\x04") || (bytes.len() >= 8 && bytes[..8] == OLE) {
+        return read_spreadsheet(bytes);
+    }
+
+    let mut reader = ReaderBuilder::new()
+        .has_headers(true)
+        .flexible(true)
+        .from_reader(bytes);
+
+    // Headers are returned AS AUTHORED. The two callers deliberately differ: the import keys its mapping
+    // on lowercase names, while the preview must show the user the column names their file actually has.
+    let headers = reader
+        .headers()
+        .map_err(|e| AppError::BadRequest(format!("Failed to read CSV headers: {}", e)))?
+        .iter()
+        .map(|h| h.to_string())
+        .collect::<Vec<_>>();
+
+    let mut records = Vec::new();
+    for r in reader.records() {
+        records.push(r.map_err(|e| AppError::BadRequest(format!("CSV parse error: {}", e)))?);
+    }
+    Ok((headers, records))
+}
+
+fn read_spreadsheet(bytes: &[u8]) -> Result<(Vec<String>, Vec<csv::StringRecord>), AppError> {
+    // The trait must be in scope or `sheet_names` / `worksheet_range` are not found on Sheets<RS>.
+    use calamine::Reader;
+    let cursor = std::io::Cursor::new(bytes);
+    let mut wb = calamine::open_workbook_auto_from_rs(cursor)
+        .map_err(|e| AppError::BadRequest(format!("Unreadable spreadsheet: {}", e)))?;
+
+    let sheet = wb
+        .sheet_names()
+        .first()
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("The spreadsheet has no sheets".into()))?;
+
+    let range = wb
+        .worksheet_range(&sheet)
+        .map_err(|e| AppError::BadRequest(format!("Unreadable sheet '{}': {}", sheet, e)))?;
+
+    let mut rows: Vec<Vec<String>> = range
+        .rows()
+        .map(|row| row.iter().map(cell_text).collect())
+        .collect();
+
+    if rows.is_empty() {
+        return Err(AppError::BadRequest("The spreadsheet is empty".into()));
+    }
+    let headers = rows
+        .remove(0)
+        .iter()
+        .map(|h| h.trim().to_string())
+        .collect::<Vec<_>>();
+
+    Ok((
+        headers,
+        rows.into_iter().map(csv::StringRecord::from).collect(),
+    ))
+}
+
+/// One cell as text. `42.0` must arrive as `42`, or a phone or ID column imports as `5551234567.0` —
+/// the failure a reader like this is most likely to cause silently.
+fn cell_text(c: &calamine::Data) -> String {
+    use calamine::Data;
+    match c {
+        Data::Empty => String::new(),
+        Data::String(s) => s.clone(),
+        Data::Float(f) => {
+            if f.fract() == 0.0 && f.abs() < 1e15 {
+                format!("{}", *f as i64)
+            } else {
+                format!("{}", f)
+            }
+        }
+        Data::Int(i) => format!("{}", i),
+        Data::Bool(b) => format!("{}", b),
+        Data::DateTime(dt) => format!("{}", dt),
+        Data::DateTimeIso(s) => s.clone(),
+        Data::DurationIso(s) => s.clone(),
+        Data::Error(e) => format!("{:?}", e),
+    }
+}
+
 /// POST /api/csv/import/contacts
 ///
 /// Accepts a multipart form with:
@@ -158,15 +258,10 @@ pub async fn import_contacts(
         .map(|m| (m.csv_header.to_lowercase(), m.contact_field.to_lowercase()))
         .collect();
 
-    // Parse CSV
-    let mut reader = ReaderBuilder::new()
-        .has_headers(true)
-        .flexible(true)
-        .from_reader(file_bytes.as_slice());
-
-    let headers = reader
-        .headers()
-        .map_err(|e| AppError::BadRequest(format!("Failed to read CSV headers: {}", e)))?
+    // CSV, XLS or XLSX — the format is sniffed, the mapping below is shared.
+    let (raw_headers, records) = read_table(&file_bytes)?;
+    // The mapping is keyed on lowercase names, which is what this path has always done.
+    let headers = raw_headers
         .iter()
         .map(|h| h.to_lowercase())
         .collect::<Vec<_>>();
@@ -241,7 +336,7 @@ pub async fn import_contacts(
 
     let mut row_num = 0usize;
 
-    for result in reader.records() {
+    for record in records {
         row_num += 1;
 
         if let Some(max) = contact_ceiling {
@@ -260,10 +355,6 @@ pub async fn import_contacts(
             skipped += 1;
             continue;
         }
-
-        let record = result.map_err(|e| {
-            AppError::BadRequest(format!("CSV parse error at row {}: {}", row_num, e))
-        })?;
 
         // Map CSV columns to contact fields
         let mut mapped: std::collections::HashMap<String, String> =
@@ -424,21 +515,12 @@ pub async fn preview_csv(
         )));
     }
 
-    let mut reader = ReaderBuilder::new()
-        .has_headers(true)
-        .flexible(true)
-        .from_reader(file_bytes.as_slice());
-
-    let headers = reader
-        .headers()
-        .map_err(|e| AppError::BadRequest(format!("Failed to read CSV headers: {}", e)))?
-        .iter()
-        .map(|h| h.to_string())
-        .collect::<Vec<_>>();
+    // Same reader as the import path, so a preview of an .xlsx shows what the import would actually take.
+    // Headers stay AS AUTHORED here: this is the mapping UI and it must show the file's real column names.
+    let (headers, records) = read_table(&file_bytes)?;
 
     let mut sample_rows: Vec<Vec<String>> = Vec::with_capacity(PREVIEW_ROWS);
-    for result in reader.records().take(PREVIEW_ROWS) {
-        let record = result.map_err(|e| AppError::BadRequest(format!("CSV parse error: {}", e)))?;
+    for record in records.into_iter().take(PREVIEW_ROWS) {
         sample_rows.push(record.iter().map(|f| f.to_string()).collect());
     }
 
