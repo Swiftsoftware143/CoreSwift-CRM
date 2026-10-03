@@ -15,6 +15,8 @@ target/
 # IDE
 .vscode/
 .idea/
+# Hermes local agent recipe (machine-generated, not a project artifact)
+.hermes/
 *.swp
 *.swo
 *~
