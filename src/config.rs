@@ -17,6 +17,10 @@ pub struct AppConfig {
     pub jwt_refresh_expiry: i64,
     pub auth_rate_limit_per_minute: u32,
     pub api_rate_limit_per_minute: u32,
+    /// The general API limit's SECOND tier (kanban t_3130f105): the per-IP ceiling for requests that
+    /// present a credential. A signed-in console session must not be throttled at the anonymous rate,
+    /// so the console tier is the more generous of the two. `CONSOLE_RATE_LIMIT_PER_MINUTE`.
+    pub console_rate_limit_per_minute: u32,
     /// Password recovery (forgot/reset). David, 2026-10-02: *"if you mean forgot password then yeah 3
     /// attempts"* — its own window, because a reset request SENDS AN EMAIL: the abuse is mail-bombing a
     /// person and probing reset tokens, not general request volume.
@@ -81,9 +85,15 @@ impl AppConfig {
 
         #[allow(clippy::unwrap_used)]
         let api_rate_limit_per_minute = env::var("API_RATE_LIMIT_PER_MINUTE")
-            .unwrap_or_else(|_| "20".to_string())
+            .unwrap_or_else(|_| "120".to_string())
             .parse::<u32>()
             .map_err(|e| anyhow::anyhow!("Invalid API_RATE_LIMIT_PER_MINUTE: {}", e))?;
+
+        #[allow(clippy::unwrap_used)]
+        let console_rate_limit_per_minute = env::var("CONSOLE_RATE_LIMIT_PER_MINUTE")
+            .unwrap_or_else(|_| "600".to_string())
+            .parse::<u32>()
+            .map_err(|e| anyhow::anyhow!("Invalid CONSOLE_RATE_LIMIT_PER_MINUTE: {}", e))?;
 
         #[allow(clippy::unwrap_used)]
         let password_rate_limit_max = env::var("PASSWORD_RATE_LIMIT_MAX")
@@ -153,6 +163,7 @@ impl AppConfig {
             jwt_refresh_expiry,
             auth_rate_limit_per_minute,
             api_rate_limit_per_minute,
+            console_rate_limit_per_minute,
             password_rate_limit_max,
             password_rate_limit_window_minutes,
             score_cache_ttl,

@@ -347,6 +347,17 @@ async fn main() -> anyhow::Result<()> {
     let body_read_deadline =
         body_deadline::BodyReadDeadline::from_secs(config.body_read_deadline_secs);
 
+    // Rate-limit posture in the boot log for the same reason the body deadline is above: the
+    // bounds an operator relies on have to be readable without opening the source (t_3130f105).
+    tracing::info!(
+        "API rate limits (per IP): {} /min anonymous, {} /min with a bearer credential, {} /min on auth routes, {} per {} min on password recovery",
+        config.api_rate_limit_per_minute,
+        config.console_rate_limit_per_minute,
+        config.auth_rate_limit_per_minute,
+        config.password_rate_limit_max,
+        config.password_rate_limit_window_minutes
+    );
+
     // Build the complete router
     let app = Router::new()
         // Health check (no auth required)
@@ -625,6 +636,14 @@ async fn main() -> anyhow::Result<()> {
         .layer(axum::middleware::from_fn(security_headers_middleware))
         .layer(request_id_middleware)
         .layer(TraceLayer::new_for_http())
+        // General API rate limit (kanban t_3130f105). INSIDE Cors so a 429 still carries the CORS
+        // headers a browser needs in order to read it, and outside the routing/nest layers so it
+        // covers every API route. The middleware itself skips static paths, the health probes and
+        // the machine-to-machine receivers.
+        .layer(axum::middleware::from_fn_with_state(
+            state.rate_limiter.clone(),
+            crate::rate_limiter::api_rate_limit_middleware,
+        ))
         .layer(CorsLayer::permissive())
         .with_state(state.clone());
 
