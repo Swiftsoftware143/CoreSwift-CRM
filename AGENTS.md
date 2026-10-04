@@ -44,13 +44,8 @@ src/account/handlers.rs
 src/account/mod.rs
 src/account/models.rs
 src/account/settings.rs
-src/activities/handlers.rs
-src/activities/mod.rs
 src/admin_actions/handlers.rs
 src/admin_actions/mod.rs
-src/affiliates/handlers.rs
-src/affiliates/mod.rs
-src/affiliates/models.rs
 src/ai/engine.rs
 src/ai/handlers.rs
 src/ai/mod.rs
