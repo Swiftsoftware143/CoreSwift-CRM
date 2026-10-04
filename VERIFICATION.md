@@ -126,7 +126,7 @@ Rust (rustc/cargo) is not available in this environment. However, the project st
 | `pub mod analytics` | `src/analytics/` (2 files) | ✅ |
 | `pub mod ai` | `src/ai/` (5 files) | ✅ |
 | `pub mod billing` | `src/billing/` (4 files) | ✅ |
-| `pub mod affiliates` | `src/affiliates/` (3 files) | ✅ |
+| ~~`pub mod affiliates`~~ | ❌ RETIRED 2026-10-02 — kanban t_3d81b041 (module deleted; tables dropped by migration 108) | ❌ |
 | `pub mod audit` | `src/audit/` (3 files) | ✅ |
 | `pub mod events` | `src/events/` (5 files) | ✅ |
 | `pub mod communications` | `src/communications/` (3 files) | ✅ |

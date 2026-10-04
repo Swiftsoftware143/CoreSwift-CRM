@@ -19,7 +19,7 @@ Single commit `bb04b47` — "Initial commit - CRMSwift full Rust API backend wit
 - Multi-tenant architecture
 - JWT auth + Argon2 password hashing
 - Docker + docker-compose (Postgres 16, Redis 7, Mailpit)
-- Modules present: auth, tenants, contacts, companies, pipelines, tags, scoring, lists, automation, integrations, analytics, ai, billing, affiliates, audit, events, communications, checklists, monitoring, notifications, native_apps, admin_actions, campaigns, webhook, worker
+- Modules present: auth, tenants, contacts, companies, pipelines, tags, scoring, lists, automation, integrations, analytics, ai, billing, audit, events, communications, checklists, monitoring, notifications, native_apps, admin_actions, campaigns, webhook, worker (the `affiliates` module was deleted 2026-10-02 — kanban t_3d81b041)
 
 ## Features That Need TO BE WRITTEN (NOT in the repo — only spec'd in TASKS.md)
 
@@ -44,22 +44,24 @@ BUT these need to be verified working — they exist in the commit as file stubs
 ### 3. Admin Chat Actions (single endpoint to run business from Telegram)
 - POST /api/admin/chat-action
 - GET /api/admin/chat-action/intents
-- create_affiliate, create_affiliate_in_funnelswift, create_tenant_account
+- create_tenant_account (the `create_affiliate` / `create_affiliate_in_funnelswift` intents were RETIRED 2026-10-02 — kanban t_3d81b041 — do NOT build them)
 - Missing field prompting, multi-step flows
 
 ### 4. Webhook System (28+ actions)
 - Every tenant gets auto-generated webhook token on signup
 - POST /api/webhook/{token}/{action} — single endpoint for WorkflowSwift
-- Actions: contacts.*, tags.*, lists.*, pipelines.*, affiliates.*, comms.*, ai.*, events.*, billing.*, webhooks.*, users.*, tenants.settings, scoring.calculate, analytics.contacts, audit.log, search.query
+- Actions: contacts.*, tags.*, lists.*, pipelines.*, comms.*, ai.*, events.*, billing.*, webhooks.*, users.*, tenants.settings, scoring.calculate, analytics.contacts, audit.log, search.query (the `affiliates.*` group was removed with the retired affiliate surface — kanban t_3d81b041)
 
 ### 5. Ada Campaign Triggers — RETIRED 2026-10-02 (kanban t_434b240b)
 - Was planned to replace Mailgun for welcome emails / scan reports. Shipped as a CRUD-only table that
   nothing read, so it could never fire a campaign; removed with the table (migration 109).
 
-### 6. Affiliate Self-Serve Product Selection (Migration 028)
-- GET /api/affiliates/my-products
-- POST /api/affiliates/my-products/select
-- POST /api/affiliates/my-products/unselect
+### 6. Affiliate Self-Serve Product Selection (Migration 028) — RETIRED 2026-10-02 (kanban t_3d81b041)
+- ❌ The local affiliate module and these routes were removed from `src/`; the five affiliate tables were
+  dropped by migration 108. The fleet's affiliate programme lives in **FunnelSwift** (see ARCHITECTURE.md).
+- ❌ ~~`GET /api/affiliates/my-products`~~ — route no longer registered
+- ❌ ~~`POST /api/affiliates/my-products/select`~~ — route no longer registered
+- ❌ ~~`POST /api/affiliates/my-products/unselect`~~ — route no longer registered
 - tenants.create webhook action (FunnelSwift triggers account creation)
 
 ### 7. Rename Everything
