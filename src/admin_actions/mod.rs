@@ -76,7 +76,7 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/email-config/test",
             axum::routing::post(email_config::test_config),
         )
-        // The operator's half of the tag → free account contract: the master switch (ships OFF)
+        // The operator's half of the tag → free account contract: the master switch (ships ON)
         // and the entry-plan picker, read by `POST /api/v1/internal/provision-free-account`
         // (kanban t_e968e9ad). On this router, so it is covered by the platform-admin gate below —
         // a tenant `owner` is refused.
