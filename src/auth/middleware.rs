@@ -84,7 +84,8 @@ pub async fn auth_middleware(
     // Reads and writes disagreed, and the answer depended on which table a route happened to
     // touch. The claim is what is wrong, so the answer belongs here: 401 for a workspace that no
     // longer exists, on every route, exactly like an expired token — and the SPA already turns a
-    // 401 into "session expired, sign in again" (`www-app/index.html:149`).
+    // 401 into "Session expired" + sign-out (`www-app/coreswift/index.html`, the 401 arm of its
+    // `api()` wrapper — the tenant shell the vhost actually serves).
     //
     // Cost: one primary-key lookup on `tenants` per authenticated request (p50 4ms / p95 5ms for
     // POST /api/portfolio before and after, measured). If the database is unreachable the check
