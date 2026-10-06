@@ -848,6 +848,12 @@ const ADMIN_MENU = [
   { type:'group', icon:'📤', label:'Platform Email', children:[
     { id:'system-email', icon:'📤', label:'System Email' }
   ]},
+  // Tag → free account (kanban t_e968e9ad): the switch that lets FunnelSwift mint a free account
+  // in THIS app when a lead is tagged with it, and the plan those accounts are seated on. OFF
+  // until an operator turns it on here.
+  { type:'group', icon:'🔑', label:'Provisioning', children:[
+    { id:'provisioning', icon:'🔑', label:'Tag Provisioning' }
+  ]},
   { id:'features-plans', icon:'🧩', label:'Modules & Plans' },
   { type:'group', icon:'⚙️', label:'Admin Settings', children:[
     { id:'configuration', icon:'⚙️', label:'Configuration' }
@@ -1387,6 +1393,13 @@ const TAB_RENDERERS = {
     return pageHeader('Modules & Plans', 'Every module and every feature, assigned per plan — read from the registry, enforced on every request') +
       '<div id="fpWrap"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading the module registry…</div></div>';
   },
+  // The form is rendered by loadProvisioning() from GET /api/admin/provisioning-config, so what is
+  // on screen is what the account door reads; the renderer below only lays out the shell.
+  'provisioning': () => {
+    return pageHeader('Tag Provisioning',
+      'When a lead is tagged with this app in FunnelSwift, mint their free account here — workspace, entry plan, owner user and emailed password') +
+      '<div id="provWrap"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading the provisioning settings…</div></div>';
+  },
   'configuration': () => {
     let html = pageHeader('Site Configuration', 'SEO, analytics, legal pages, and homepage settings') +
     '<div id="siteConfigForm" style="max-width:900px"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading site settings...</div></div>';
@@ -1666,6 +1679,9 @@ const TAB_LOADERS = {
   // Same reason as the two above: the renderer runs before its HTML exists, so the load registers
   // here and runs against a #sysEmailWrap that is already in the document.
   'system-email': async () => { await loadSystemEmail(); },
+  // Same reason as the two above: the renderer runs before its HTML exists, so the load registers
+  // here and runs against a #provWrap that is already in the document.
+  'provisioning': async () => { await loadProvisioning(); },
   // The Modules & Plans panel must load from TAB_LOADERS, not from inside its renderer: the
   // renderer runs BEFORE its HTML is in the document, so an in-renderer load saw no `#fpWrap`,
   // bailed out, and the panel sat on "Loading feature registry..." for ever. Every other
@@ -3692,6 +3708,76 @@ document.addEventListener('click', e => {
   });
 })();
 // ===== END KEYBOARD SHORTCUTS =====
+
+// ========== TAG PROVISIONING (kanban t_e968e9ad) ==========
+// The operator's half of "a FunnelSwift tag mints a free account in this app".
+// POST /api/v1/internal/provision-free-account SHIPS REFUSING (403) until the switch below is ON,
+// and seats every account it mints on the plan picked below. GET/PUT
+// /api/admin/provisioning-config is the only writer of those two settings; the panel renders what
+// that route answers, never a local guess.
+let PROV_STATE = null;
+
+async function loadProvisioning() {
+  const wrap = document.getElementById('provWrap');
+  if (!wrap) return;
+  try {
+    PROV_STATE = await API.get('/admin/provisioning-config');
+    renderProvisioning();
+  } catch (e) {
+    wrap.innerHTML = card('Tag Provisioning',
+      '<p style="color:var(--error)">Could not load the provisioning settings: ' + escapeHtml(e.message) + '</p>',
+      '<button class="btn btn-secondary btn-sm" onclick="loadProvisioning()">Retry</button>');
+  }
+}
+
+function renderProvisioning() {
+  const w = document.getElementById('provWrap');
+  if (!w || !PROV_STATE) return;
+  const s = PROV_STATE;
+  const keys = s.setting_keys || {};
+  const plans = Array.isArray(s.free_plans) ? s.free_plans : [];
+  const opts = plans.map(p => '<option value="' + escapeHtml(p.slug) + '"' +
+    (p.slug === s.entry_plan_slug ? ' selected' : '') + '>' +
+    escapeHtml(p.name) + ' (' + escapeHtml(p.slug) + ')</option>').join('');
+  const badge = s.enabled
+    ? '<span class="badge badge-success">&#9679; ON &mdash; tagged leads get an account</span>'
+    : '<span class="badge badge-warning">&#9679; OFF &mdash; the account door refuses with 403</span>';
+  const unresolved = s.entry_plan_resolves ? '' :
+    '<p class="form-hint" style="color:var(--error)">The saved entry plan no longer resolves to a free, active plan in this app &mdash; pick one below and save.</p>';
+  w.innerHTML =
+    pageHeader('Tag Provisioning',
+      'When a lead is tagged with this app in FunnelSwift, mint their free account here &mdash; workspace, entry plan, owner user and emailed password') +
+    card('Free accounts from tags',
+      '<div class="config-item"><div class="config-info"><div class="config-label">Status</div></div>' + badge + '</div>' +
+      '<div class="form-group"><label>Mint free accounts from tags</label>' +
+      '<select id="provEnabled">' +
+        '<option value="false"' + (s.enabled ? '' : ' selected') + '>Off &mdash; refuse (403) and create nothing</option>' +
+        '<option value="true"' + (s.enabled ? ' selected' : '') + '>On &mdash; mint the workspace, the owner user and email the password</option>' +
+      '</select></div>' +
+      '<div class="form-group"><label>Entry plan for a minted account</label>' +
+      '<select id="provPlan">' + (opts || '<option value="">No free plan is configured in this app</option>') + '</select>' +
+      '<p class="form-hint">Only this app&#39;s own free, active plans are listed. A plan that carries a price can never be seated on a tag-provisioned account.</p>' +
+      unresolved + '</div>' +
+      '<p class="form-hint">Stored in <code>admin_settings</code> as <code>' + escapeHtml(keys.enabled || 'provision_from_tags_enabled') +
+        '</code> and <code>' + escapeHtml(keys.entry_plan_slug || 'provision_entry_plan_slug') + '</code>. FunnelSwift calls <code>' +
+        escapeHtml(s.endpoint || '/api/v1/internal/provision-free-account') + '</code>.</p>',
+      '<button class="btn btn-primary" onclick="saveProvisioning()">Save</button>');
+}
+
+async function saveProvisioning() {
+  const enabledEl = document.getElementById('provEnabled');
+  const planEl = document.getElementById('provPlan');
+  const body = {};
+  if (enabledEl) body.enabled = enabledEl.value === 'true';
+  if (planEl && planEl.value) body.entry_plan_slug = planEl.value;
+  try {
+    PROV_STATE = await API.put('/admin/provisioning-config', body);
+    renderProvisioning();
+    toast('Provisioning settings saved', 'success');
+  } catch (e) {
+    toast('Could not save: ' + e.message, 'error');
+  }
+}
 
 </script>
 </body>

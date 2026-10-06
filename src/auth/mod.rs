@@ -9,6 +9,9 @@ pub mod middleware;
 pub mod models;
 pub mod platform_admin;
 pub mod route_policy;
+/// The ONE account-minting writer both the signup door and the machine (tag) door call
+/// (kanban t_e968e9ad).
+pub mod signup;
 
 // Re-export Claims for convenience (used by all modules)
 pub use models::Claims;

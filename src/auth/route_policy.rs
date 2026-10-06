@@ -24,7 +24,7 @@
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts answered 401 (or 405) — the per-module gate was doing its job
 //!    26 deliberate anonymous entries  -> PUBLIC_ROUTES  (23 /api + 3 /inbound)
-//!    14 service-to-service entries    -> INTERNAL_ROUTES (all /api, reached with the shared key)
+//!    15 service-to-service entries    -> INTERNAL_ROUTES (all /api, reached with the shared key)
 //!     2 issued-API-key entries        -> API_KEY_ROUTES  (/api/external/**)
 //!     9 served surfaces outside the boundary: the SPA mount, /track/:slug and the eight
 //!        /s/:tenant_id/** support-portal mounts
@@ -43,6 +43,10 @@
 //!    first and answer 422 — i.e. an anonymous caller provably reaches the handler code). The 14
 //!    routes are now NAMED in [`INTERNAL_ROUTES`] and the shared key is demanded at the boundary,
 //!    so the fifteenth route under that prefix is private by default.
+//!    The census above was taken over the 14 routes that existed then; the account door
+//!    `POST /api/v1/internal/provision-free-account` joined the list after it (kanban t_e968e9ad)
+//!    and verifies the same shared key in its own handler, so the count below is 15 and a route
+//!    added under this prefix without an entry here stays private by default.
 //! 2. `/inbound/**` was outside any boundary at all (a root-level `nest`, no middleware, the key in
 //!    the path). It is now inside [`is_guarded_path`] with its three mounted shapes named in
 //!    [`PUBLIC_ROUTES`], so a future sibling route there is private by default instead of anonymous.
@@ -183,6 +187,9 @@ pub const INTERNAL_ROUTES: &[&str] = &[
     // FunnelSwift's tag-provisioning webhook and the cross-app tag-sync receiver.
     "/api/v1/internal/tag-provision",
     "/api/v1/webhooks/cross-app/tag-sync",
+    // The ACCOUNT door beside them (kanban t_e968e9ad): FunnelSwift asks this app to mint the
+    // free account for a tagged lead. Same shared key; the handler verifies it itself as well.
+    "/api/v1/internal/provision-free-account",
 ];
 
 /// Routes authenticated by an ISSUED PERSONAL API KEY (`Authorization: Bearer <key>`), not a JWT.

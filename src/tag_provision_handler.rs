@@ -5,12 +5,19 @@
 //! Protected by X-Internal-Key header matching INTERNAL_SYNC_KEY env var.
 
 use axum::response::IntoResponse;
-use axum::{extract::State, http::HeaderMap, Json};
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::Response,
+    Json,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::auth::signup::{self, MintRequest};
 use crate::errors::{ApiResult, AppError};
+use crate::security::email_addr;
 use crate::AppState;
 
 /// Payload received from FunnelSwift tag webhook
@@ -391,4 +398,378 @@ async fn create_or_get_list(
         .await?;
         Ok(id)
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// POST /api/v1/internal/provision-free-account — the ACCOUNT door (kanban t_e968e9ad)
+//
+// The sibling door above captures a LEAD (tenant + contact). This one mints the account the lead
+// holder can actually log into and upgrade in place: the SAME unit the self-serve signup mints —
+// workspace + entry-plan row + owner user — through the ONE shared writer
+// (`auth::signup::create_account`). Contract frozen in
+// /opt/swift/docs/tag-to-free-account-design-2026-10-06.md §3.1.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+/// `admin_settings` key: the per-app master switch. Ships ABSENT, which reads as `false`.
+pub const PROVISION_ENABLED_KEY: &str = "provision_from_tags_enabled";
+/// `admin_settings` key: which of THIS app's plans a tag-provisioned account is seated on.
+pub const PROVISION_ENTRY_PLAN_KEY: &str = "provision_entry_plan_slug";
+/// The entry-plan slug used when the setting is absent (the platform's own default plan).
+pub const DEFAULT_ENTRY_PLAN_SLUG: &str = "free";
+
+/// The provisioning knobs, as the app reads them.
+#[derive(Debug, Clone)]
+pub struct ProvisioningSettings {
+    /// Master switch. `false` (the shipped state) makes the account door answer 403.
+    pub enabled: bool,
+    /// The plan slug a minted account is seated on. Resolved IN THIS APP — a sibling's plan name
+    /// can never resolve here (spec §3.1 rule 1).
+    pub entry_plan_slug: String,
+}
+
+/// Read both knobs. Absent keys, and values of an unexpected shape, fall back to the shipped
+/// defaults — the door is OFF until an operator turns it on.
+pub async fn read_provisioning_settings(
+    db: &sqlx::PgPool,
+) -> Result<ProvisioningSettings, AppError> {
+    let enabled = read_setting(db, PROVISION_ENABLED_KEY).await?;
+    let slug = read_setting(db, PROVISION_ENTRY_PLAN_KEY).await?;
+    Ok(ProvisioningSettings {
+        enabled: bool_setting(enabled.as_ref()).unwrap_or(false),
+        entry_plan_slug: string_setting(slug.as_ref(), &["plan_slug", "slug", "value"])
+            .unwrap_or_else(|| DEFAULT_ENTRY_PLAN_SLUG.to_string()),
+    })
+}
+
+/// Persist both knobs (the admin console's only writer). `None` leaves a knob untouched, so the
+/// toggle and the picker can be saved independently.
+pub async fn save_provisioning_settings(
+    db: &sqlx::PgPool,
+    enabled: Option<bool>,
+    entry_plan_slug: Option<&str>,
+) -> Result<(), AppError> {
+    if let Some(enabled) = enabled {
+        write_setting(db, PROVISION_ENABLED_KEY, &Value::Bool(enabled)).await?;
+    }
+    if let Some(slug) = entry_plan_slug {
+        write_setting(
+            db,
+            PROVISION_ENTRY_PLAN_KEY,
+            &Value::String(slug.trim().to_string()),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn read_setting(db: &sqlx::PgPool, key: &str) -> Result<Option<Value>, AppError> {
+    let row: Option<(Value,)> = sqlx::query_as("SELECT value FROM admin_settings WHERE key = $1")
+        .bind(key)
+        .fetch_optional(db)
+        .await?;
+    Ok(row.map(|r| r.0))
+}
+
+async fn write_setting(db: &sqlx::PgPool, key: &str, value: &Value) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO admin_settings (key, value, description, updated_at)
+         VALUES ($1, $2::jsonb, $3, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()",
+    )
+    .bind(key)
+    .bind(value.to_string())
+    .bind("Tag-provisioned free accounts (FunnelSwift)")
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// A boolean setting stored as a scalar, or inside an object (`{"enabled": true}`), or as the
+/// string an HTML form would send.
+fn bool_setting(value: Option<&Value>) -> Option<bool> {
+    match value? {
+        Value::Bool(b) => Some(*b),
+        Value::Number(n) => n.as_i64().map(|i| i != 0),
+        Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "on" | "yes" => Some(true),
+            "false" | "0" | "off" | "no" | "" => Some(false),
+            _ => None,
+        },
+        Value::Object(o) => o.get("enabled").and_then(|v| v.as_bool()),
+        _ => None,
+    }
+}
+
+/// A string setting stored as a scalar, or inside an object under one of `keys`.
+fn string_setting(value: Option<&Value>, keys: &[&str]) -> Option<String> {
+    let clean = |s: &str| {
+        let t = s.trim();
+        (!t.is_empty()).then(|| t.to_string())
+    };
+    match value? {
+        Value::String(s) => clean(s),
+        Value::Object(o) => keys
+            .iter()
+            .find_map(|k| o.get(*k).and_then(|v| v.as_str()).and_then(clean)),
+        _ => None,
+    }
+}
+
+/// Every plan of THIS app that may be used as an entry plan: active, and free.
+pub async fn free_plans(db: &sqlx::PgPool) -> Result<Vec<(String, String)>, AppError> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT slug, name FROM plans WHERE is_active = true AND price_monthly = 0 ORDER BY sort_order, name",
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+/// Payload of the account door (spec §3.1).
+#[derive(Debug, Deserialize)]
+pub struct ProvisionFreeAccountRequest {
+    pub source: String,
+    #[serde(default)]
+    pub source_tenant_id: Option<String>,
+    pub tag: ProvisionFreeAccountTag,
+    pub contact: ProvisionFreeAccountContact,
+    /// `<funnelswift lead uuid>:<app slug>`. Recorded in the log line; the idempotency itself is
+    /// the app's own (`users_email_key` is global — one address, one login, forever).
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProvisionFreeAccountTag {
+    pub name: String,
+    /// The caller's SUGGESTION. Deliberately not used to resolve the plan: the entry plan is read
+    /// from THIS app's `provision_entry_plan_slug` (spec §3.1 rule 1).
+    #[serde(default)]
+    pub plan_slug: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProvisionFreeAccountContact {
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub first_name: Option<String>,
+    #[serde(default)]
+    pub last_name: Option<String>,
+    #[serde(default)]
+    pub company: Option<String>,
+    #[serde(default)]
+    pub phone: Option<String>,
+}
+
+/// POST /api/v1/internal/provision-free-account
+///
+/// 201 `provisioned` · 200 `already_exists` · 403 `refused` · 422 unusable address / no free plan.
+pub async fn handle_provision_free_account(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ProvisionFreeAccountRequest>,
+) -> ApiResult<Response> {
+    // 1. The shared service credential, fail closed exactly as the sibling door above: an app with
+    //    no configured key must never authenticate an empty header. The credential is never logged.
+    let key = headers
+        .get("x-internal-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let expected = s.config.internal_sync_key.as_str();
+    if expected.is_empty() || key != expected {
+        tracing::warn!(
+            "provision_free_account: invalid internal key (presented_len={}, configured_len={})",
+            key.len(),
+            expected.len()
+        );
+        return Err(AppError::Unauthorized);
+    }
+
+    // 2. The master switch. Ships OFF; while it is off this app refuses and mints NOTHING, so a
+    //    caller cannot create an account in an app whose operator has not enabled the door.
+    let settings = read_provisioning_settings(&s.db).await?;
+    if !settings.enabled {
+        tracing::info!(
+            "provision_free_account: refused (provisioning disabled) tag={} source={}",
+            req.tag.name,
+            req.source
+        );
+        return Ok((
+            StatusCode::FORBIDDEN,
+            Json(json!({ "status": "refused", "reason": "provisioning_disabled" })),
+        )
+            .into_response());
+    }
+
+    // 3. The address. `users.email` is the login identity AND the only address credentials can
+    //    reach, so an empty, malformed or placeholder address is refused (422) rather than minted.
+    let email = email_addr::normalize(req.contact.email.as_deref().unwrap_or(""))
+        .map_err(AppError::Validation)?;
+    if is_placeholder_address(&email) {
+        return Err(AppError::Validation(format!(
+            "contact.email '{email}' is a placeholder address — refusing to mint an account"
+        )));
+    }
+
+    // 4. The entry plan, resolved IN THIS APP and required to be a free, active plan.
+    let entry_plan_slug = settings.entry_plan_slug.clone();
+    if signup::entry_plan_id(&s.db, &entry_plan_slug)
+        .await?
+        .is_none()
+    {
+        return Err(AppError::Validation(format!(
+            "no free plan '{entry_plan_slug}' is configured in this app \
+             (a plan with that slug, is_active = true and price_monthly = 0 is required)"
+        )));
+    }
+
+    // 5. Idempotency: one address, one login, forever (`users_email_key` is a GLOBAL unique
+    //    constraint and `auth::handlers::login` resolves a user by address alone).
+    if let Some((_, tenant_id)) = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT id, tenant_id FROM users WHERE lower(email) = $1 LIMIT 1",
+    )
+    .bind(&email)
+    .fetch_optional(&s.db)
+    .await?
+    {
+        tracing::info!(
+            "provision_free_account: already_exists email={} tenant={}",
+            email,
+            tenant_id
+        );
+        return Ok((
+            StatusCode::OK,
+            Json(json!({
+                "status": "already_exists",
+                "account_id": tenant_id.to_string(),
+                "login_email": email,
+            })),
+        )
+            .into_response());
+    }
+
+    // 5b. Adoption. The sibling door above already minted a workspace for this address (tenant +
+    //     its free `tenant_plans` row + a contact) with NO user — so the account HOLDER exists and
+    //     nobody can log in. When such a workspace is found, the owner is minted INTO it instead of
+    //     a second workspace being created for the same person. The `NOT EXISTS (users)` guard is
+    //     what keeps this narrow: a real customer's workspace always has a user, so only the
+    //     machine-minted, user-less shape can ever be adopted.
+    let adopted: Option<(Uuid,)> = sqlx::query_as(
+        r#"SELECT c.tenant_id
+             FROM contacts c
+            WHERE lower(c.email) = $1
+              AND c.is_active = true
+              AND NOT EXISTS (SELECT 1 FROM users u WHERE u.tenant_id = c.tenant_id)
+            ORDER BY c.created_at DESC
+            LIMIT 1"#,
+    )
+    .bind(&email)
+    .fetch_optional(&s.db)
+    .await?;
+
+    // 6. Mint: the SAME unit the self-serve signup mints, through the SAME writer.
+    let first = req.contact.first_name.as_deref().unwrap_or("").trim();
+    let last = req.contact.last_name.as_deref().unwrap_or("").trim();
+    let company = req.contact.company.as_deref().unwrap_or("").trim();
+    let mut full_name = format!("{first} {last}").trim().to_string();
+    if full_name.is_empty() {
+        full_name = if company.is_empty() {
+            email
+                .split('@')
+                .next()
+                .unwrap_or("Account Holder")
+                .to_string()
+        } else {
+            company.to_string()
+        };
+    }
+
+    let harness = crate::auth::handlers::harness_marker(&headers);
+    let password = generate_password();
+
+    let mut tx = s.db.begin().await?;
+    let account = signup::create_account(
+        &s.db,
+        &mut tx,
+        MintRequest {
+            email: &email,
+            name: &full_name,
+            password: &password,
+            // Auto-named "<name>'s Workspace", exactly as a self-serve signup for this person
+            // would be named.
+            account_name: None,
+            account_slug: None,
+            invite_token: None,
+            into_tenant: adopted.map(|(tenant_id,)| tenant_id),
+            entry_plan_slug: &entry_plan_slug,
+            harness: harness.as_deref(),
+        },
+    )
+    .await?;
+    tx.commit().await?;
+
+    tracing::info!(
+        "provision_free_account: provisioned tenant={} user={} email={} plan={} adopted={} source={} idem={}",
+        account.tenant_id,
+        account.user.id,
+        email,
+        entry_plan_slug,
+        adopted.is_some(),
+        req.source,
+        req.idempotency_key.as_deref().unwrap_or("-")
+    );
+
+    // 7. The credentials mail — the app's existing template, the same one the signup door sends.
+    //    The business never types a password on this path; it arrives in this message.
+    {
+        let db = s.db.clone();
+        let tenant_id = account.tenant_id;
+        let tenant_name = account.tenant_name.clone();
+        let email = email.clone();
+        let name = full_name.clone();
+        tokio::spawn(async move {
+            signup::send_credentials_email(&db, tenant_id, &tenant_name, &email, &name, &password)
+                .await;
+        });
+    }
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "status": "provisioned",
+            "account_id": account.tenant_id.to_string(),
+            "plan_slug": entry_plan_slug,
+            "login_email": email,
+        })),
+    )
+        .into_response())
+}
+
+/// An address a human could never receive credentials at — the shape the retired tag-path
+/// fallback used (`fs-provision-<uuid>@placeholder.swift.local`). Spec §3.1 rule 5: never mint on
+/// a placeholder address. `email_addr::normalize` has already rejected the empty/malformed cases.
+fn is_placeholder_address(email: &str) -> bool {
+    let Some((local, domain)) = email.rsplit_once('@') else {
+        return true;
+    };
+    let local = local.to_ascii_lowercase();
+    let domain = domain.to_ascii_lowercase();
+    local.starts_with("fs-provision-")
+        || local.starts_with("provision-")
+        || domain.contains("placeholder")
+        || domain.ends_with(".local")
+        || domain == "localhost"
+}
+
+/// A server-generated password for a machine-minted account. 20 characters from an unambiguous
+/// alphabet; `argon2`-hashed by the shared mint and mailed to the address above.
+fn generate_password() -> String {
+    use rand::Rng;
+    const ALPHABET: &[u8] =
+        b"abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%^&*-_=+";
+    let mut rng = rand::thread_rng();
+    (0..20)
+        .map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char)
+        .collect()
 }

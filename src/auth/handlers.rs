@@ -88,7 +88,8 @@ pub async fn register(
 
     // `users.email` carries a GLOBAL unique constraint (`users_email_key`, migration 002) and
     // `login` resolves a user by email alone — one address, one workspace, forever. This handler
-    // used to test only `(tenant_id, email)`, while `resolve_account` mints a FRESH tenant for a
+    // used to test only `(tenant_id, email)`, while a signup that carries no invite mints a FRESH
+    // tenant for a
     // signup that carries no invite: the scoped check passed, the INSERT hit the global index, and
     // AppError mapped the sqlx error to a 500 "Database error". A returning user learned nothing,
     // and the request had already created a workspace row (an orphan tenant).
@@ -103,98 +104,43 @@ pub async fn register(
         return Err(email_taken_error(&req.email));
     }
 
-    // Everything that creates rows — the workspace, the free-plan assignment, the accepted invite
-    // and the user — happens in ONE transaction, so a rejection at any point (including the
-    // duplicate check below, which is the only rejection left) leaves no orphan tenant and no
-    // burned invite behind.
+    // Everything that creates rows — the workspace, the entry-plan row, the accepted invite and
+    // the owner user — is ONE unit minted by ONE writer (`auth::signup::create_account`, kanban
+    // t_e968e9ad). The machine door `POST /api/v1/internal/provision-free-account` calls the same
+    // function, so the two doors can never drift into two account shapes. It runs on a
+    // transaction, so a rejection at any point (the duplicate check, the seat ceiling, a missing
+    // free plan) leaves no orphan tenant and no burned invite.
     let mut tx = state.db.begin().await.map_err(AppError::Database)?;
 
-    // Determine tenant — and, when the signup came through an invite, the role it grants.
     // The harness marker is read from the header ONCE, before the tenant exists, and only ever
-    // reaches the two INSERT arms that mint a tenant; the invite arm joins an existing tenant and
-    // has nothing to mark.
+    // reaches the INSERT arm that mints a tenant; the invite arm joins an existing tenant and has
+    // nothing to mark.
     let harness = harness_marker(&headers);
-    let (tenant_id, invite_role) = resolve_account(&mut tx, &req, harness.as_deref()).await?;
-
-    // The (tenant_id, email) unique index is the table's other constraint; this is the message
-    // that tells a team member they already belong to THIS workspace.
-    let existing = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM users WHERE tenant_id = $1 AND email = $2",
-    )
-    .bind(tenant_id)
-    .bind(&req.email)
-    .fetch_one(&mut *tx)
-    .await?;
-
-    if existing > 0 {
-        return Err(AppError::Duplicate(format!(
-            "User with email '{}' already exists in this tenant",
-            req.email
-        )));
-    }
-
-    // Usage ceiling (`limit_max_users`, the active-user seat limit of the `limits` module). This is
-    // the ONE live path that ADDS a user: a fresh signup mints the tenant (0 active users, and its
-    // plan row is still uncommitted, so the resolver's `no_plan` tolerance keeps the first user
-    // working) and an invite acceptance joins an existing workspace — where the active-user count
-    // against the owner's plan is the real check. The rejection happens inside the transaction, so
-    // a 402 rolls back the tenant, the plan row and the burnt invite (kanban t_f49e4299).
-    let user_usage = crate::features::count_active_users(&state.db, tenant_id).await;
-    crate::features::enforce_usage_limit(
+    let account = crate::auth::signup::create_account(
         &state.db,
-        tenant_id,
-        "limit_max_users",
-        "User",
-        "users",
-        user_usage,
+        &mut tx,
+        crate::auth::signup::MintRequest {
+            email: &req.email,
+            name: &req.name,
+            password: &req.password,
+            account_name: req.account_name.as_deref(),
+            account_slug: req.account_slug.as_deref(),
+            invite_token: req.invite_token.as_deref(),
+            into_tenant: None,
+            // The self-serve signup keeps the platform default; the tag door is the one with the
+            // operator-configurable entry plan (`provision_entry_plan_slug`).
+            entry_plan_slug: crate::billing::DEFAULT_PLAN_SLUG,
+            harness: harness.as_deref(),
+        },
     )
     .await?;
 
-    // Hash password
-    let password_hash = hash_password(&req.password)?;
-
-    // Create user as admin (first user in tenant gets owner role)
-    let is_first_user =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE tenant_id = $1")
-            .bind(tenant_id)
-            .fetch_one(&mut *tx)
-            .await?
-            == 0;
-
-    // A first user owns the tenant. Everyone else gets the role the inviter chose: the invite
-    // role used to be stored and then ignored, so an 'admin' invite silently produced a member.
-    let role = if is_first_user {
-        "owner"
-    } else {
-        invite_role.as_deref().unwrap_or("member")
-    };
-
-    let user = sqlx::query_as::<_, TeamMember>(
-        r#"INSERT INTO users (id, tenant_id, email, password_hash, name, role)
-           VALUES ($1, $2, $3, $4, $5, $6)
-           RETURNING *"#,
-    )
-    .bind(Uuid::new_v4())
-    .bind(tenant_id)
-    .bind(&req.email)
-    .bind(&password_hash)
-    .bind(&req.name)
-    .bind(role)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| {
-        // Two signups racing on the same address cannot both pass the pre-check: whichever loses
-        // hit the global index, and that violation has to read as the same 409 instead of a 500.
-        if let sqlx::Error::Database(ref dbe) = e {
-            if matches!(
-                dbe.constraint(),
-                Some("users_email_key") | Some("idx_users_tenant_email")
-            ) {
-                return email_taken_error(&req.email);
-            }
-        }
-        AppError::Database(e)
-    })?;
+    let user = account.user;
+    let tenant_id = account.tenant_id;
+    let tenant_name = account.tenant_name;
+    let tenant_slug = account.tenant_slug;
+    let tenant_is_active = account.tenant_is_active;
+    let is_first_user = account.is_first_user;
 
     // Platform authority is resolved from the DATABASE by the token subject, never from
     // `user.role`: a fresh signup is `owner` of its own tenant, which grants nothing
@@ -202,36 +148,25 @@ pub async fn register(
     let platform_admin =
         crate::auth::platform_admin::is_platform_admin(&state.db, &user.id.to_string()).await?;
 
-    // Fetch tenant info
-    let tenant = sqlx::query_as::<_, crate::account::models::Account>(
-        "SELECT id, name, slug, logo_url, primary_color, accent_color, custom_domain, settings, is_active, created_at, updated_at FROM tenants WHERE id = $1"
-    )
-    .bind(tenant_id)
-    .fetch_one(&mut *tx)
-    .await?;
-
-    // The workspace, its free plan and the user are one unit: nothing above this line survives a
-    // failure here.
+    // The workspace, its entry plan and the owner user are one unit: nothing above this line
+    // survives a failure here.
     tx.commit().await.map_err(AppError::Database)?;
 
     // Generate tokens
     let (access_token, refresh_token, expires_in) = generate_tokens(&user, &state)?;
 
-    // Send welcome email via template system
-    let vars = json!({
-        "name": &req.name,
-        "email": &req.email,
-        "password": &req.password,
-        "account_name": &tenant.name,
-        "app_url": "https://app.coreswiftcrm.com",
-    });
-    let _ = crate::email::send_template_email(&state.db, tenant_id, &req.email, "welcome", &vars)
-        .await
-        .map_err(|e| {
-            tracing::warn!(error = %e, "Welcome email via template failed");
-            e
-        })
-        .ok();
+    // The credentials mail is the SAME template the machine door sends
+    // (`auth::signup::send_credentials_email`) — one implementation, so a change to the
+    // credentials shape cannot land on only one door.
+    crate::auth::signup::send_credentials_email(
+        &state.db,
+        tenant_id,
+        &tenant_name,
+        &req.email,
+        &req.name,
+        &req.password,
+    )
+    .await;
     let mut next_steps = vec![
         "Connect your apps — POST /api/native/apps/{slug}/connect".to_string(),
         "Create contacts — POST /api/contacts".to_string(),
@@ -242,7 +177,7 @@ pub async fn register(
             0,
             format!(
                 "Invite team members — use your tenant slug: '{}'",
-                tenant.slug
+                tenant_slug
             ),
         );
     }
@@ -257,10 +192,10 @@ pub async fn register(
             team_member: team_member_payload(user, platform_admin),
             platform_admin,
             account: AccountResponse {
-                id: tenant.id,
-                name: tenant.name,
-                slug: tenant.slug,
-                is_active: tenant.is_active,
+                id: tenant_id,
+                name: tenant_name,
+                slug: tenant_slug,
+                is_active: tenant_is_active,
             },
             next_steps,
         })),
@@ -475,122 +410,11 @@ pub async fn logout(
 /// a 500 "Database error". `users.email` is globally unique (`users_email_key`) and `login` resolves
 /// a user by email alone, so an address belongs to exactly one workspace: say that, and say what to
 /// do instead.
-fn email_taken_error(email: &str) -> AppError {
+pub(crate) fn email_taken_error(email: &str) -> AppError {
     AppError::Duplicate(format!(
         "Email '{}' is already registered — sign in instead",
         email
     ))
-}
-
-/// Resolve the tenant for registration — create new account or join via invite.
-/// Every person gets their own isolated tenant (account).
-/// If no account_name/slug provided, auto-generates one from email.
-/// Runs on the caller's transaction: the workspace this mints (and the invite it consumes) is only
-/// real if the whole registration commits.
-async fn resolve_account(
-    tx: &mut sqlx::PgConnection,
-    req: &RegisterRequest,
-    harness: Option<&str>,
-) -> Result<(Uuid, Option<String>), AppError> {
-    // If invite token provided, look up the invite, join that tenant, and carry the role the
-    // inviter picked (the CHECK on tenant_invites allows only 'admin' and 'member').
-    if let Some(token) = &req.invite_token {
-        let invite = sqlx::query_as::<_, (Uuid, String)>(
-            "SELECT tenant_id, role FROM tenant_invites WHERE token = $1 AND accepted = false AND expires_at > NOW()"
-        )
-        .bind(token)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Invalid or expired invite token".into()))?;
-
-        // Mark invite as accepted
-        sqlx::query(
-            "UPDATE tenant_invites SET accepted = true, accepted_at = NOW() WHERE token = $1",
-        )
-        .bind(token)
-        .execute(&mut *tx)
-        .await?;
-
-        return Ok((invite.0, Some(invite.1)));
-    }
-
-    if let (Some(name), Some(slug)) = (&req.account_name, &req.account_slug) {
-        let tenant = sqlx::query_as::<_, crate::account::models::Account>(
-            r#"INSERT INTO tenants (id, name, slug, probe_harness) VALUES ($1, $2, $3, $4) RETURNING *"#,
-        )
-        .bind(Uuid::new_v4())
-        .bind(name)
-        .bind(slug)
-        .bind(harness)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| {
-            if let sqlx::Error::Database(ref dbe) = e {
-                if dbe.constraint() == Some("tenants_slug_key") {
-                    return AppError::Duplicate(format!("Tenant slug '{}' already exists", slug));
-                }
-            }
-            AppError::Database(e)
-        })?;
-        // Auto-assign Free Plan to new tenant
-        {
-            let free_plan_id: uuid::Uuid = sqlx::query_scalar(
-                "SELECT id FROM plans WHERE slug = 'free' AND is_active = true LIMIT 1",
-            )
-            .fetch_optional(&mut *tx)
-            .await
-            .ok()
-            .flatten()
-            .ok_or_else(|| AppError::BadRequest("Free plan not configured".into()))?;
-            let _ = sqlx::query(
-                r#"INSERT INTO tenant_plans (tenant_id, plan_id, status, billing_cycle)
-                   VALUES ($1, $2, 'active', 'monthly')
-                   ON CONFLICT (tenant_id) DO NOTHING"#,
-            )
-            .bind(tenant.id)
-            .bind(free_plan_id)
-            .execute(&mut *tx)
-            .await;
-        }
-        Ok((tenant.id, None))
-    } else {
-        // Auto-generate tenant from email — each admin gets their own tenant
-        let local_part = req.email.split('@').next().unwrap_or("user");
-        let slug = format!("{}-{}", local_part, &uuid::Uuid::new_v4().to_string()[..8]);
-        let name = format!("{}'s Workspace", req.name);
-
-        let tenant = sqlx::query_as::<_, crate::account::models::Account>(
-            r#"INSERT INTO tenants (id, name, slug, probe_harness) VALUES ($1, $2, $3, $4) RETURNING *"#,
-        )
-        .bind(Uuid::new_v4())
-        .bind(&name)
-        .bind(&slug)
-        .bind(harness)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(AppError::Database)?;
-        // Auto-assign Free Plan to new tenant
-        {
-            let free_plan_id: uuid::Uuid = sqlx::query_scalar(
-                "SELECT id FROM plans WHERE slug = 'free' AND is_active = true LIMIT 1",
-            )
-            .fetch_optional(&mut *tx)
-            .await
-            .ok()
-            .flatten()
-            .ok_or_else(|| AppError::BadRequest("Free plan not configured".into()))?;
-            let _ = sqlx::query(
-                r#"INSERT INTO tenant_plans (tenant_id, plan_id, status, billing_cycle)
-                   VALUES ($1, $2, 'active', 'monthly')
-                   ON CONFLICT (tenant_id) DO NOTHING"#,
-            )
-            .bind(tenant.id)
-            .bind(free_plan_id)
-            .execute(&mut *tx)
-            .await;
-        }
-        Ok((tenant.id, None))
-    }
 }
 
 /// Extract JWT claims from an Authorization header.

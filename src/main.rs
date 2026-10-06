@@ -392,6 +392,20 @@ async fn main() -> anyhow::Result<()> {
                 ),
             ),
         )
+        // The ACCOUNT door beside it (kanban t_e968e9ad): the same caller asks this app to mint
+        // the free account — workspace + entry plan + owner user + credentials mail — for a lead
+        // tagged with `CoreSwift — Free`. Mounted here (outside every module's own auth layer) for
+        // the same reason as its sibling; the shared key is demanded by the credential boundary
+        // (it is named in `auth::route_policy::INTERNAL_ROUTES`) and again inside the handler.
+        .route(
+            "/api/v1/internal/provision-free-account",
+            axum::routing::post(tag_provision_handler::handle_provision_free_account).layer(
+                axum::middleware::from_fn_with_state(
+                    body_read_deadline,
+                    body_deadline::body_read_deadline_middleware,
+                ),
+            ),
+        )
         // Unified Inbox — messages webhook from MD/IS (no auth, fire-and-forget)
         .route(
             "/api/messages/webhook",

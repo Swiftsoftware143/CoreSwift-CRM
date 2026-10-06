@@ -16,9 +16,12 @@
 //! DELETE /api/admin/email-config — drop the stored override, use the environment (admin)
 //! POST /api/admin/email-config/test — send a real message through the platform transport (admin)
 //! PUT  /api/admin/tenants/:id/plan — put a TARGET tenant on a plan (admin; kanban t_f1ffb865)
+//! GET  /api/admin/provisioning-config — the tag → free account knobs (admin; kanban t_e968e9ad)
+//! PUT  /api/admin/provisioning-config — save them (admin; kanban t_e968e9ad)
 
 pub mod email_config;
 pub mod handlers;
+pub mod provisioning_config;
 pub mod site_handler;
 
 use crate::AppState;
@@ -72,6 +75,15 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route(
             "/email-config/test",
             axum::routing::post(email_config::test_config),
+        )
+        // The operator's half of the tag → free account contract: the master switch (ships OFF)
+        // and the entry-plan picker, read by `POST /api/v1/internal/provision-free-account`
+        // (kanban t_e968e9ad). On this router, so it is covered by the platform-admin gate below —
+        // a tenant `owner` is refused.
+        .route(
+            "/provisioning-config",
+            axum::routing::get(provisioning_config::get_config)
+                .put(provisioning_config::update_config),
         )
         // Data-driven module & feature registry (CS-25..CS-27). The admin assigns MODULES and
         // individual FEATURES of each module to plans here; the catalogue itself lives in the
