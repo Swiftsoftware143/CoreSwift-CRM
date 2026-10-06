@@ -1014,24 +1014,51 @@ X-Satellite-Key: &lt;full-api-key&gt;</pre>
 
   <div class="card">
     <h3>Outgoing Webhook Endpoints (Sending Data)</h3>
-    <p>You can register endpoints that CoreSwift will POST events to (create, list, update and delete below).
+    <p>You can register endpoints that CoreSwift will POST events to. CoreSwift delivers events to each
+       endpoint that is <strong>active</strong> and subscribes to that event type.
        There is no configuration form in the console &mdash; the platform console's <strong>Webhooks</strong>
        screen is a placeholder today &mdash; so these calls go straight to the API:</p>
     <pre>POST /api/integrations/webhooks
-Authorization: Bearer &lt;token&gt;
+Authorization: Bearer ***
 
 {
   "name": "Slack Notifier",
   "url": "https://hooks.slack.com/services/xxx",
+  "secret": "your-signing-secret",
   "events": ["contact.created", "opportunity.won"],
   "retry_count": 3,
   "timeout_ms": 5000
 }</pre>
     <p>List configured webhooks:</p>
     <pre>GET /api/integrations/webhooks
-Authorization: Bearer &lt;token&gt;
+Authorization: Bearer ***
 
 Response: { "webhooks": [...] }</pre>
+    <p><strong>What arrives.</strong> Each delivery is a JSON POST:</p>
+    <pre>POST &lt;your url&gt;
+X-CoreSwift-Event: contact.created
+X-CoreSwift-Delivery: &lt;endpoint id&gt;
+X-CoreSwift-Delivery-Attempt: 1
+X-CoreSwift-Signature: t=1759512345,v1=&lt;hex&gt;
+
+{
+  "event": "contact.created",
+  "tenant_id": "...",
+  "webhook_id": "...",
+  "delivered_at": "2026-10-06T16:45:00+00:00",
+  "data": { ...the event payload... }
+}</pre>
+    <p><strong>Verifying the signature.</strong> When the endpoint has a signing secret the
+       <code>X-CoreSwift-Signature</code> header is <code>t=&lt;unix seconds&gt;,v1=&lt;hex&gt;</code>, where
+       <code>v1</code> is <code>HMAC-SHA256(secret, "&lt;t&gt;.&lt;raw request body&gt;")</code> &mdash; compute the
+       same value and reject a mismatch. An endpoint saved without a secret is sent unsigned.</p>
+    <p><strong>Which events, and retries.</strong> An endpoint whose <code>events</code> list is empty
+       receives <em>every</em> event; a non-empty list receives only those event types. An endpoint with
+       <code>is_active: false</code> receives nothing. A failed delivery (anything other than a 2xx) is
+       retried <code>retry_count</code> times with a growing backoff, each attempt bounded by
+       <code>timeout_ms</code>; redirects are never followed. The endpoint's
+       <code>last_triggered_at</code> shows its last successful delivery and <code>failure_count</code>
+       how many deliveries have failed since the last success.</p>
   </div>
 
   <div class="card">
