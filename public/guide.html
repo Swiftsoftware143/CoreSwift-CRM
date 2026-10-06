@@ -833,7 +833,10 @@ DELETE /api/comms/templates/:id</pre>
     <ul>
       <li><strong>Users</strong> &mdash; Every user on the platform with the workspace they belong to (read-only list).</li>
       <li><strong>Revenue &gt; Billing &amp; Plans</strong> &mdash; Subscription plans, pricing and limits.</li>
-      <li><strong>Platform &gt; Webhooks</strong> (a placeholder screen today), <strong>Widgets</strong>, <strong>Native Apps</strong>, <strong>Audit Log</strong>, <strong>Monitoring</strong>.</li>
+      <li><strong>Platform &gt; Webhooks</strong> &mdash; a pointer to where outbound webhook endpoints are
+          configured: each workspace registers its own in the workspace console under
+          <strong>Settings &gt; Webhooks</strong> (Enterprise plans). The routes are workspace-scoped, so this
+          console has no editor for another workspace's endpoints. Also <strong>Widgets</strong>, <strong>Native Apps</strong>, <strong>Audit Log</strong>, <strong>Monitoring</strong>.</li>
       <li><strong>Communication Admin &gt; Telnyx Admin</strong> and <strong>Private Email Admin</strong>.</li>
       <li><strong>Modules &amp; Plans</strong> &mdash; the module registry: switch modules and individual features on or off per plan, and override a single workspace.</li>
       <li><strong>Admin Settings &gt; Configuration</strong> &mdash; site configuration (SEO, legal pages, homepage).</li>
@@ -1016,8 +1019,14 @@ X-Satellite-Key: &lt;full-api-key&gt;</pre>
     <h3>Outgoing Webhook Endpoints (Sending Data)</h3>
     <p>You can register endpoints that CoreSwift will POST events to. CoreSwift delivers events to each
        endpoint that is <strong>active</strong> and subscribes to that event type.
-       There is no configuration form in the console &mdash; the platform console's <strong>Webhooks</strong>
-       screen is a placeholder today &mdash; so these calls go straight to the API:</p>
+       A workspace configures its own endpoints, signing secret and event subscriptions in the console
+       under <strong>Settings &rarr; Webhooks</strong>: that screen lists each endpoint's name, URL, events,
+       active state, last successful delivery and failure count, and can add, edit, pause, activate and
+       delete them. Outbound webhooks are sold on Enterprise/Agency &mdash; a workspace whose plan lacks the
+       <code>webhooks</code> module has its requests to the whole surface refused with
+       <strong>HTTP 402</strong> and the reason in the response body. The platform console
+       (admin.coreswiftcrm.com) has no editor: the endpoints are workspace-scoped, so it only points here.
+       These same calls remain available directly on the API:</p>
     <pre>POST /api/integrations/webhooks
 Authorization: Bearer ***
 

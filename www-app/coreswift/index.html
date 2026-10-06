@@ -639,7 +639,14 @@ const SETTINGS_MENU = [
   { id:'integrations', icon:'🔌', label:'Integration Center' },
   // Tenant-side team management. roles[] hides the nav entry from a 'member': the API
   // answers 403 for any non-owner/admin token, so offering it would only dead-end.
-  { id:'team', icon:'👥', label:'Team & Invites', roles:['owner','admin'] }
+  { id:'team', icon:'👥', label:'Team & Invites', roles:['owner','admin'] },
+  // Webhooks (kanban t_c6049ec8). The nav entry used to sit in ADMIN_MENU's Platform group, but
+  // GET/POST/PATCH/DELETE /api/integrations/webhooks are scoped to the SIGNED-IN workspace's own
+  // claims.aid (src/integrations/handlers.rs) and gated by the Enterprise-only `webhooks` module —
+  // there is no platform-wide webhook list and no route that reads another workspace's endpoints.
+  // A platform-operator-only screen therefore had nothing of its own to show and every press would
+  // have hit the operator's OWN workspace. Tenant scope it is: this is the arm (a) decision.
+  { id:'webhooks', icon:'🔗', label:'Webhooks' }
 ];
 
 const ADMIN_MENU = [
@@ -650,7 +657,6 @@ const ADMIN_MENU = [
   ]},
   { type:'group', icon:'🔧', label:'Platform', children:[
     { id:'widgets', icon:'🧩', label:'Widgets' },
-    { id:'webhooks', icon:'🔗', label:'Webhooks' },
     { id:'native-apps', icon:'📱', label:'Native Apps' },
     { id:'audit-log', icon:'📝', label:'Audit Log' },
     { id:'monitoring', icon:'📡', label:'Monitoring' }
@@ -1074,7 +1080,16 @@ const TAB_RENDERERS = {
     '<div id="creditsCard"><div class="loading-wrap"><div class="spinner"></div> Loading credits...</div></div>' +
     '<div id="plansContent"><div class="loading-wrap"><div class="spinner"></div> Loading plans...</div></div>';
   },
-  'webhooks': () => placeholderPanel('Webhooks', 'Configure outgoing webhooks for real-time event notifications.', '🔗'),
+  // Webhooks: the real screen (kanban t_c6049ec8). It used to be
+  // placeholderPanel('Webhooks', 'Configure outgoing webhooks for real-time event notifications.')
+  // while the API behind it was live, Enterprise-gated and DELIVERING (t_ee3c086f). The rows come
+  // from the loader (TAB_LOADERS['webhooks'] -> loadWebhooksTab) because a renderer runs BEFORE its
+  // own HTML is in the document, so an in-renderer load finds no #whTable and bails out silently.
+  'webhooks': () => {
+    return pageHeader('Webhooks', 'Outbound endpoints this workspace posts its events to',
+      '<button class="btn btn-primary btn-sm" data-ops="wh-new" onclick="whOpenForm()">+ Add Endpoint</button>') +
+    '<div id="whTable"><div class="loading-wrap"><div class="spinner"></div> Loading webhooks...</div></div>';
+  },
   'native-apps': () => {
     return pageHeader('Native App Connectors', 'Global config for the native connector layer (AdaSwift, FunnelSwift, ZaarHub, WorkflowSwift)',
       '<button class="btn btn-primary btn-sm" data-ops="native-app-config-set" onclick="showNativeConfigModal()">+ Set App Config</button>') +
@@ -1302,6 +1317,7 @@ const TAB_LOADERS = {
   // renderer runs BEFORE its HTML is in the document, so an in-renderer load sees no #trackedLinksTable
   // and bails out (the same reason the Features & Plans panel registers one).
   'tracked-links': async () => { await loadTrackedLinksTab(); },
+  'webhooks': async () => { await loadWebhooksTab(); },
   'industries': async () => { await loadIndustriesPanel(); },
   'team': async () => { await loadInvites(); },
   'dashboard': async () => {
@@ -2968,6 +2984,172 @@ function tlDeleteLink(id) {
     loadTrackedLinksTab();
   }).catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
 }
+// ── Webhooks: outbound endpoints, driven by the workspace's own token (kanban t_c6049ec8) ──────
+// The API is REAL and this screen is its only console surface: GET/POST/PATCH/DELETE
+// /api/integrations/webhooks (src/integrations/handlers.rs), Enterprise-only via the plan module
+// `webhooks`. Two behaviours the rest of the shell's API.call cannot give this panel:
+//   * API.call collapses EVERY 402 into the bare string 'Payment required' (it shows the upgrade
+//     banner first and throws). This screen has to render the SERVER's own sentence — the gate
+//     answers "Outbound webhooks is not available on your current plan. Upgrade to access it."
+//   * a 402 on the SAVE arm matters as much as on the read: the panel re-renders the refusal
+//     instead of only toasting it.
+// So it does its own fetch through whCall and marks the refusal `locked`. Every write below still
+// goes to the real route — nothing here fabricates a row.
+let WH_ROWS = [];
+
+async function whCall(method, path, body) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (STATE.token) headers['Authorization'] = 'Bearer ' + STATE.token;
+  const opts = { method: method, headers: headers };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch('/api' + path, opts);
+  let data = null;
+  try { data = await res.json(); } catch (_) {}
+  if (res.status === 401) { logout(true); throw new Error('Session expired'); }
+  const pick = data ? [data.error, data.message, data.detail].find(function (v) {
+    return typeof v === 'string' && v.trim();
+  }) : null;
+  if (res.status === 402) {
+    showUpgradeBanner();
+    const err = new Error(pick || 'Payment required');
+    err.locked = true;          // the plan gate, not a failure to load
+    throw err;
+  }
+  if (!res.ok) throw new Error(pick || ('HTTP ' + res.status));
+  return data;
+}
+
+async function loadWebhooksTab() {
+  const el = document.getElementById('whTable');
+  if (!el) return;
+  try {
+    const rows = famList(await whCall('GET', '/integrations/webhooks'), 'webhooks');
+    WH_ROWS = rows;
+    if (!rows.length) {
+      el.innerHTML = card('Endpoints', '<div class="empty-state"><div class="empty-icon">🔗</div>' +
+        '<h3>No endpoints yet</h3>' +
+        '<p>Add an endpoint and CoreSwift POSTs each event you subscribe it to. Leave the event list ' +
+        'empty to receive every event.</p></div>', '');
+      return;
+    }
+    const trs = rows.map(function (w) {
+      const events = (w.events && w.events.length)
+        ? w.events.map(function (e) { return escapeHtml(String(e)); }).join(', ')
+        : '<em>all events</em>';
+      const active = w.is_active === true;
+      return [
+        '<strong>' + escapeHtml(String(w.name || '')) + '</strong>',
+        '<span style="word-break:break-all">' + escapeHtml(String(w.url || '')) + '</span>',
+        events,
+        active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-muted">Paused</span>',
+        w.last_triggered_at ? new Date(w.last_triggered_at).toLocaleString() : '<em>never</em>',
+        (typeof w.failure_count === 'number') ? String(w.failure_count) : '0',
+        '<button class="btn btn-ghost btn-xs" data-ops="wh-edit" onclick="whOpenForm(\'' + escapeHtmlAttr(String(w.id)) + '\')">Edit</button> ' +
+        '<button class="btn btn-ghost btn-xs" data-ops="wh-toggle" onclick="whToggle(\'' + escapeHtmlAttr(String(w.id)) + '\',' + (active ? 'true' : 'false') + ')">' +
+          (active ? 'Pause' : 'Activate') + '</button> ' +
+        '<button class="btn btn-ghost btn-xs" data-ops="wh-delete" onclick="whDelete(\'' + escapeHtmlAttr(String(w.id)) + '\')">Delete</button>'
+      ];
+    });
+    el.innerHTML = card('Endpoints (' + rows.length + ')',
+      dataTable(['Name', 'URL', 'Events', 'Status', 'Last successful delivery', 'Failures', 'Actions'],
+        trs, ''), '');
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    if (e && e.locked) {
+      // The sentence below is the server's, verbatim: the plan gate refused the read, so NOTHING is
+      // known about this workspace's endpoints and an empty list would be a lie.
+      el.innerHTML = card('Webhooks', '<div class="empty-state"><div class="empty-icon">🔒</div>' +
+        '<h3>Outbound webhooks is not included in this plan</h3>' +
+        '<p>The server refused GET /api/integrations/webhooks with HTTP 402 and answered: ' +
+        '<strong>' + escapeHtml(msg) + '</strong></p>' +
+        '<button class="btn btn-secondary" onclick="openUpgradeModal()">View Plans</button></div>');
+      return;
+    }
+    el.innerHTML = card('Webhooks', '<p style="color:var(--text-secondary)">Could not load webhooks: ' +
+      escapeHtml(msg) + '</p>');
+  }
+}
+
+function whOpenForm(id) {
+  const w = id ? WH_ROWS.filter(function (r) { return String(r.id) === String(id); })[0] : null;
+  const val = function (v) { return escapeHtmlAttr(v === null || v === undefined ? '' : String(v)); };
+  const events = (w && w.events) ? w.events.join(', ') : '';
+  showModal(id ? 'Edit Webhook Endpoint' : 'Add Webhook Endpoint',
+    '<div class="form-group"><label>Name</label>' +
+      '<input id="whName" placeholder="Slack Notifier" value="' + val(w && w.name) + '"></div>' +
+    '<div class="form-group"><label>URL</label>' +
+      '<input id="whUrl" type="url" placeholder="https://example.com/hooks/coreswift" value="' + val(w && w.url) + '"></div>' +
+    '<div class="form-group"><label>Events</label>' +
+      '<input id="whEvents" placeholder="contact.created, opportunity.won" value="' + val(events) + '">' +
+      '<span class="form-hint">Comma-separated event types. Leave empty to receive <em>every</em> event.</span></div>' +
+    '<div class="form-group"><label>Signing secret</label>' +
+      '<input id="whSecret" placeholder="' + (w && w.has_secret ? 'stored — type a new secret to replace it' : 'optional') + '">' +
+      '<span class="form-hint">Sent as X-CoreSwift-Signature (HMAC-SHA256 over &lt;t&gt;.&lt;body&gt;). ' +
+      'Leave blank to keep the stored secret — the API only ever returns it masked.</span></div>' +
+    '<div class="form-group"><label>Retries on failure (0–10)</label>' +
+      '<input id="whRetry" type="number" min="0" max="10" value="' + val(w ? w.retry_count : 3) + '"></div>' +
+    '<div class="form-group"><label>Attempt timeout (ms, 1–120000)</label>' +
+      '<input id="whTimeout" type="number" min="1" max="120000" value="' + val(w ? w.timeout_ms : 30000) + '"></div>' +
+    (id ? '<div class="form-group"><label><input type="checkbox" id="whActive"' + (w && w.is_active ? ' checked' : '') +
+      '> Active — an inactive endpoint receives nothing</label></div>' : ''),
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" data-ops="wh-save" onclick="whSave(' + (id ? '\'' + escapeHtmlAttr(String(id)) + '\'' : '') + ')">' +
+      (id ? 'Save' : 'Create Endpoint') + '</button>');
+}
+
+function whField(id) {
+  const el = document.getElementById(id);
+  return el ? String(el.value).trim() : '';
+}
+
+async function whSave(id) {
+  const name = whField('whName');
+  const url = whField('whUrl');
+  const secret = whField('whSecret');
+  const events = whField('whEvents') ? whField('whEvents').split(',').map(function (s) { return s.trim(); }).filter(Boolean) : [];
+  const retry = whField('whRetry');
+  const timeout = whField('whTimeout');
+  const activeEl = document.getElementById('whActive');
+  if (!name) { toast('Name is required', 'error'); return; }
+  if (!url) { toast('URL is required', 'error'); return; }
+  const body = { name: name, url: url, events: events };
+  if (secret) body.secret = secret;
+  if (retry !== '') body.retry_count = parseInt(retry, 10);
+  if (timeout !== '') body.timeout_ms = parseInt(timeout, 10);
+  if (id && activeEl) body.is_active = activeEl.checked;
+  try {
+    if (id) { await whCall('PATCH', '/integrations/webhooks/' + id, body); toast('Endpoint updated', 'success'); }
+    else { await whCall('POST', '/integrations/webhooks', body); toast('Endpoint created', 'success'); }
+    closeModal();
+    loadWebhooksTab();
+  } catch (e) {
+    toast((id ? 'Update failed: ' : 'Create failed: ') + e.message, 'error');
+    if (e && e.locked) { closeModal(); loadWebhooksTab(); }   // render the plan refusal, not just a toast
+  }
+}
+
+async function whToggle(id, currentlyActive) {
+  try {
+    await whCall('PATCH', '/integrations/webhooks/' + id, { is_active: !currentlyActive });
+    toast(currentlyActive ? 'Endpoint paused' : 'Endpoint activated', 'success');
+    loadWebhooksTab();
+  } catch (e) {
+    if (e && e.locked) { loadWebhooksTab(); return; }
+    toast('Could not change status: ' + e.message, 'error');
+  }
+}
+
+function whDelete(id) {
+  if (!window.confirm('Delete this webhook endpoint? CoreSwift stops delivering events to its URL.')) return;
+  whCall('DELETE', '/integrations/webhooks/' + id).then(function () {
+    toast('Endpoint deleted', 'success');
+    loadWebhooksTab();
+  }).catch(function (e) {
+    if (e && e.locked) { loadWebhooksTab(); return; }
+    toast('Delete failed: ' + e.message, 'error');
+  });
+}
+
 // NOTE: showAddUserModal() was removed here — the Users tab is read-only because no platform
 // route creates a user inside an arbitrary workspace, and the modal only faked one.
 

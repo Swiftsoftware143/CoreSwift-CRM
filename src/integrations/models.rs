@@ -39,6 +39,10 @@ pub struct Webhook {
     pub timeout_ms: i32,
     pub is_active: bool,
     pub last_triggered_at: Option<DateTime<Utc>>,
+    // `webhook_endpoints.failure_count` is nullable (migration 000_baseline, `integer DEFAULT 0`),
+    // so it decodes as Option. The console's Webhooks panel lists it (kanban t_c6049ec8) — it was
+    // the one column the API served that no client could see.
+    pub failure_count: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

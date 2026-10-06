@@ -175,6 +175,9 @@ fn webhook_json(w: &Webhook) -> serde_json::Value {
         "timeout_ms": w.timeout_ms,
         "is_active": w.is_active,
         "last_triggered_at": w.last_triggered_at,
+        // The panel shows how many deliveries have failed since the last success; the column is
+        // nullable so an untouched endpoint reports a real 0 rather than nothing (t_c6049ec8).
+        "failure_count": w.failure_count.unwrap_or(0),
         "created_at": w.created_at,
         "updated_at": w.updated_at,
     })

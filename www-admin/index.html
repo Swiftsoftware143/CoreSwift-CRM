@@ -1333,7 +1333,27 @@ const TAB_RENDERERS = {
     '<div id="plansContent"><div class="loading-wrap"><div class="spinner"></div> Loading plans...</div></div>';
   },
   'widgets': () => placeholderPanel('Widgets', 'Embeddable CRM widgets for your website — contact forms, chat, booking.', '🧩'),
-  'webhooks': () => placeholderPanel('Webhooks', 'Configure outgoing webhooks for real-time event notifications.', '🔗'),
+  // The webhook-ENDPOINTS screen is WORKSPACE-scoped: /api/integrations/webhooks reads and writes
+  // only the signed-in workspace's own rows (claims.aid, src/integrations/handlers.rs) and no route
+  // lists another workspace's endpoints — so a platform console cannot host an editor for them. The
+  // real screen lives in the TENANT console (www-app/coreswift/index.html → Settings → Webhooks);
+  // this console points at it instead of advertising a config form it can never have
+  // (kanban t_c6049ec8, arm (a) of the card's design question).
+  'webhooks': () => {
+    return pageHeader('Webhooks', 'Outbound webhook endpoints are configured per workspace') +
+    card('🔗 Where this is configured',
+      '<p style="color:var(--text-secondary)">Each workspace registers its own outbound endpoints, ' +
+      'signing secret and event subscriptions in the tenant console: <strong>app.coreswiftcrm.com → ' +
+      'Settings → Webhooks</strong>. Delivery is Enterprise-only — the workspace\'s plan must include ' +
+      'the <code>webhooks</code> module or the server answers HTTP 402.</p>' +
+      '<p style="color:var(--text-secondary)">There is no platform-wide list: every route reads and ' +
+      'writes the signed-in workspace\'s own rows, so an operator cannot see or edit another ' +
+      'workspace\'s endpoints from here.</p>' +
+      '<p style="color:var(--text-secondary)">The API itself is documented in the guide: ' +
+      '<code>GET/POST /api/integrations/webhooks</code>, <code>PATCH/DELETE ' +
+      '/api/integrations/webhooks/:id</code>.</p>',
+      '<a class="btn btn-primary" href="https://app.coreswiftcrm.com/" target="_blank" rel="noopener">Open the workspace console</a>');
+  },
   'native-apps': () => {
     return pageHeader('Native App Connectors', 'Global config for the native connector layer (AdaSwift, FunnelSwift, ZaarHub, WorkflowSwift)',
       '<button class="btn btn-primary btn-sm" data-ops="native-app-config-set" onclick="showNativeConfigModal()">+ Set App Config</button>') +
