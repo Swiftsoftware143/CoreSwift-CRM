@@ -3731,8 +3731,9 @@ document.addEventListener('click', e => {
 
 // ========== TAG PROVISIONING (kanban t_e968e9ad) ==========
 // The operator's half of "a FunnelSwift tag mints a free account in this app".
-// POST /api/v1/internal/provision-free-account SHIPS REFUSING (403) until the switch below is ON,
-// and seats every account it mints on the plan picked below. GET/PUT
+// POST /api/v1/internal/provision-free-account SHIPS OPEN (code default ON); turning the switch
+// below OFF makes it refuse with 403. It seats every account it mints on the plan picked below.
+// GET/PUT
 // /api/admin/provisioning-config is the only writer of those two settings; the panel renders what
 // that route answers, never a local guess.
 let PROV_STATE = null;

@@ -428,7 +428,7 @@ pub struct ProvisioningSettings {
 }
 
 /// Read both knobs. Absent keys, and values of an unexpected shape, fall back to the shipped
-/// defaults — the door is OFF until an operator turns it on.
+/// defaults — the door is ON by default; an operator turns it OFF from the console.
 pub async fn read_provisioning_settings(
     db: &sqlx::PgPool,
 ) -> Result<ProvisioningSettings, AppError> {
