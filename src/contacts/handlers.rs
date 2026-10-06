@@ -125,12 +125,9 @@ pub async fn create(
     // If email is provided, check for existing contact with same email for this tenant
     if let Some(ref email) = req.email {
         if !email.is_empty() {
-            let existing = sqlx::query_as::<_, Contact>(
-                "SELECT * FROM contacts WHERE tenant_id = $1 AND email = $2 LIMIT 1",
+            let existing = crate::account_match::engine::find_contact_by_email_exact(
+                &state.db, account_id, email,
             )
-            .bind(account_id)
-            .bind(email)
-            .fetch_optional(&state.db)
             .await?;
 
             if let Some(existing_contact) = existing {

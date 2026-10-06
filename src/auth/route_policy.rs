@@ -21,6 +21,12 @@
 //!        once here; the distinct path count is 272 for the whole tree)
 //!    12 mounts at the root: 9 inbound receivers + /track/:slug + two /s/:tenant_id/** duplicates
 //!
+//!   +2 routes / +2 paths since (2026-10-06, account matching — migration 113): 363 mounted
+//!        `.route(..)` calls / 274 distinct paths over 53 nests, 351 mounts on /api/**. Both new
+//!        mounts (`/api/account-match/resolve`, `/api/account-match/duplicates`) were measured live
+//!        with NO credential and each answered 401, i.e. private by default like the rest — they are
+//!        on no allowlist, which is the whole decision.
+//!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
 //!        the per-module gate was doing its job. The two /api routes added since (kanban
@@ -310,6 +316,11 @@ mod tests {
         Nest {
             prefix: "/api/internal/contacts",
             src: include_str!("../contacts_internal.rs"),
+            func: "router",
+        },
+        Nest {
+            prefix: "/api/account-match",
+            src: include_str!("../account_match/mod.rs"),
             func: "router",
         },
         Nest {
@@ -696,6 +707,11 @@ mod tests {
         for p in [
             "/api/contacts",
             "/api/contacts/0a1b2c3d",
+            // Account matching reads and writes nothing but the caller's OWN tenant, but it is a
+            // tenant data surface all the same: an anonymous caller must be refused at the boundary
+            // (it is on no allowlist) and the module's own plan gate must answer, not this list.
+            "/api/account-match/resolve",
+            "/api/account-match/duplicates",
             "/api/companies",
             "/api/pipelines",
             "/api/deals",
@@ -891,12 +907,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            361,
+            363,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 349,
+            api, 351,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

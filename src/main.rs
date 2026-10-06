@@ -7,6 +7,7 @@
 //! lead scoring, automation, and integration capabilities.
 
 pub mod account;
+pub mod account_match;
 pub mod admin_actions;
 pub mod ai;
 pub mod analytics;
@@ -433,6 +434,10 @@ async fn main() -> anyhow::Result<()> {
                 ),
             ),
         )
+        // Account matching — the 7th back-end specialist: match an inbound identity to the contacts
+        // and companies this workspace already has, and report the rows that look like duplicates of
+        // each other. Gated by its own registry module (`account_match`, migration 113).
+        .nest("/api/account-match", account_match::router(state.clone()))
         .nest("/api/companies", companies::router(state.clone()))
         .nest("/api/pipelines", pipelines::router(state.clone()))
         .nest("/api/tags", tags::router(state.clone()))
