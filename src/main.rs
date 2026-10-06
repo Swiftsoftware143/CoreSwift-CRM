@@ -644,6 +644,15 @@ async fn main() -> anyhow::Result<()> {
             state.rate_limiter.clone(),
             crate::rate_limiter::api_rate_limit_middleware,
         ))
+        // Default-deny credential boundary (kanban t_d8d782f2). Mounted OUTSIDE the routing/nest
+        // layers so it decides before any module's own `auth_middleware` runs, and inside CORS so a
+        // 401 still carries the CORS headers a browser needs to read it. It refuses only a caller
+        // that presents no credential at all (`src/auth/boundary.rs`); the allowlist it reads is the
+        // committed, unit-tested `src/auth/route_policy.rs`.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::boundary::require_credential,
+        ))
         .layer(CorsLayer::permissive())
         .with_state(state.clone());
 

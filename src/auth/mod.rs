@@ -3,10 +3,12 @@
 //! Provides register, login, refresh, logout, invite management, and current-user endpoints.
 //! Users are "team members" belonging to an "account" (tenant in DB).
 
+pub mod boundary;
 pub mod handlers;
 pub mod middleware;
 pub mod models;
 pub mod platform_admin;
+pub mod route_policy;
 
 // Re-export Claims for convenience (used by all modules)
 pub use models::Claims;
