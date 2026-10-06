@@ -37,6 +37,24 @@ pub async fn create_calendar(
     Json(body): Json<CreateCalendarRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    // Calendar ceiling (`limit_bookings`, migration 114). The MODULE stays open on every plan — the
+    // plan table says everyone can book — so the tier difference is the NUMBER of calendars a
+    // workspace may own. Enforced on this ADD path only, never on a read/update/delete: a GET that
+    // 402s would wedge the workspace it is meant to upsell.
+    let calendars: i64 =
+        sqlx::query_scalar("SELECT count(*)::bigint FROM booking_calendars WHERE tenant_id = $1")
+            .bind(tid)
+            .fetch_one(&s.db)
+            .await?;
+    crate::features::enforce_usage_limit(
+        &s.db,
+        tid,
+        crate::features::BOOKINGS_LIMIT_KEY,
+        "Booking calendars",
+        "calendars",
+        calendars,
+    )
+    .await?;
     let cal = sqlx::query_as::<_, BookingCalendar>(
         r#"INSERT INTO booking_calendars (tenant_id, name, slug, description, calendar_type, metadata)
            VALUES ($1, $2, $3, $4, $5, $6)

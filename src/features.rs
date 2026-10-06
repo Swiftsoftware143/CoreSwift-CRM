@@ -197,6 +197,22 @@ pub async fn enforce_usage_limit(
 /// Features & Plans panel writes, like every other limit in this module.
 pub const API_CALLS_PER_DAY_KEY: &str = "limit_api_calls_per_day";
 
+/// The Phase-3 specialist-module keys (migration 114, kanban t_9b2e0c3e). Each is a
+/// `module_features` row of `kind = 'limit'` INSIDE the `limits` module, so it is read through
+/// `usage_ceiling` like every other ceiling and is panel-editable with one press.
+/// `-1` = unlimited, `0` = not included (both handled by `usage_ceiling`).
+pub const BOOKINGS_LIMIT_KEY: &str = "limit_bookings";
+pub const SCORING_RULES_LIMIT_KEY: &str = "limit_scoring_rules";
+
+/// Notification CHANNEL entitlements (migration 114). ONE BOOLEAN PER CHANNEL rather than a single
+/// numeric `notifications_channels` cap: this feature's shape is a NAMED pair (in_app + email on
+/// Pro, + sms + whatsapp on Enterprise), and the refusal has to NAME the channel it is refusing.
+/// A count could do neither, and would register a panel knob no code path compares against.
+pub const NOTIF_IN_APP_KEY: &str = "notifications_in_app";
+pub const NOTIF_EMAIL_KEY: &str = "notifications_email";
+pub const NOTIF_SMS_KEY: &str = "notifications_sms";
+pub const NOTIF_WHATSAPP_KEY: &str = "notifications_whatsapp";
+
 /// TODAY's (UTC) api-call count for one tenant — the row `meter_api_call` increments, so the
 /// number `GET /api/auth/me/usage` renders and the number the gate compares cannot drift.
 pub async fn count_api_calls_today(db: &PgPool, tenant_id: Uuid) -> Result<i64, AppError> {

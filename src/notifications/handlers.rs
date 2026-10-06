@@ -354,6 +354,28 @@ pub async fn enqueue_notification(
         return Err(AppError::Validation("to and body are required".to_string()));
     }
 
+    // PLAN GATE on the CHANNEL (migration 114, kanban t_9b2e0c3e). The plan table sells
+    // "Pro basic (in-app + email) / Enterprise omnichannel (+ SMS + WhatsApp)", and until now this
+    // route queued EVERY channel on every plan — measured live: a free tenant got 201 for email,
+    // sms, whatsapp and in_app. One boolean feature per channel, so the refusal NAMES the channel
+    // that is refused and reads as an upgrade (402), never as a malformed request (400).
+    // Reads (`GET /`, `/unread-count`) are deliberately NOT gated — they are not a sold capability.
+    let (channel_key, channel_label) = match channel {
+        "in_app" => (crate::features::NOTIF_IN_APP_KEY, "In-app notifications"),
+        "email" | "send_email" => (crate::features::NOTIF_EMAIL_KEY, "Email notifications"),
+        "sms" | "send_sms" => (crate::features::NOTIF_SMS_KEY, "SMS notifications"),
+        "whatsapp" | "send_whatsapp" => (
+            crate::features::NOTIF_WHATSAPP_KEY,
+            "WhatsApp notifications",
+        ),
+        other => {
+            return Err(AppError::Validation(format!(
+                "channel must be one of: in_app, email, sms, whatsapp (got '{other}')"
+            )))
+        }
+    };
+    crate::features::enforce_feature_flag(&s.db, tid, channel_key, channel_label).await?;
+
     let item = sqlx::query_scalar::<_, Uuid>(
         r#"INSERT INTO notification_queue (id, tenant_id, channel, to_address, subject, body, status)
            VALUES ($1, $2, $3, $4, $5, $6, 'queued') RETURNING id"#

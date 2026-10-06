@@ -36,6 +36,23 @@ pub async fn create_rule(
             "Direction must be add/subtract".into(),
         ));
     }
+    // Rule ceiling (`limit_scoring_rules`, migration 114): the plan table sells "Pro 3 / Enterprise
+    // unlimited". The `ai_enabled` module gate on the router already refuses free/starter; this is
+    // the number of rules a plan that HAS scoring may define. ADD path only.
+    let existing: i64 =
+        sqlx::query_scalar("SELECT count(*)::bigint FROM score_rules WHERE tenant_id = $1")
+            .bind(t)
+            .fetch_one(&s.db)
+            .await?;
+    crate::features::enforce_usage_limit(
+        &s.db,
+        t,
+        crate::features::SCORING_RULES_LIMIT_KEY,
+        "Scoring rules",
+        "rules",
+        existing,
+    )
+    .await?;
     Ok((StatusCode::CREATED, Json(json!(sqlx::query_as::<_,ScoreRule>("INSERT INTO score_rules(id,tenant_id,name,event_type,points,direction) VALUES($1,$2,$3,$4,$5,$6) RETURNING *")
         .bind(Uuid::new_v4()).bind(t).bind(&r.name).bind(&r.event_type).bind(r.points).bind(&dir).fetch_one(&s.db).await?))))
 }

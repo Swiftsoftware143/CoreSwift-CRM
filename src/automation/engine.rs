@@ -55,6 +55,20 @@ pub async fn evaluate_tag_triggers(
     tag_id: Uuid,
     trigger_type: &str,
 ) -> Result<(), AppError> {
+    // PLAN GATE (migration 114, kanban t_9b2e0c3e) — the "Enterprise automations" half of the Tags
+    // row in the plan table. This evaluator is reached from the TAG paths (src/tags/triggers.rs, the
+    // `tags.assign` webhook actions, the satellite tag sync, the internal tag assign), NOT from the
+    // /api/automation router's `automation` gate — so without this check a workspace whose plan does
+    // not include automations would keep firing every rule it had. Refusing here is a NO-FIRE, not an
+    // error: the callers are fire-and-forget (`fire_tag_trigger`), and a plan without automations
+    // simply runs none. The `no_plan` arm still grants (module_registry, ARM (a)).
+    if !crate::module_registry::resolve(db, tenant_id, "automation")
+        .await?
+        .enabled
+    {
+        return Ok(());
+    }
+
     // Try matching the legacy trigger_type first, then the new style
     let trigger_types = match trigger_type {
         "TagAdded" => vec!["TagAdded", "tag.assigned"],
