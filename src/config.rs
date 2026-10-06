@@ -33,6 +33,16 @@ pub struct AppConfig {
     pub db_max_connections: u32,
     pub internal_sync_key: String,
     pub funnelswift_url: String,
+    /// Telnyx's Ed25519 webhook public key (base64, 32 bytes) — the account key pair's public half
+    /// from Telnyx Mission Control. `TELNYX_PUBLIC_KEY`. Both public Telnyx receivers verify every
+    /// delivery against it and REFUSE when it is unset (kanban t_fd5000e1): an unverifiable delivery
+    /// is never applied, so a deployment that has not set this key receives no inbound SMS or voice.
+    pub telnyx_public_key: Option<String>,
+    /// How far a Telnyx delivery's `telnyx-timestamp` may be from this server's clock, either way;
+    /// inside it a captured delivery can still be replayed, so the replay guard only covers this
+    /// window. `TELNYX_SIGNATURE_TOLERANCE_SECS`, clamped to `30..=86400`; Telnyx's own default is
+    /// the 300-second `DEFAULT_SIGNATURE_TOLERANCE_SECS`.
+    pub telnyx_signature_tolerance_secs: i64,
     /// How long a request BODY may take to arrive on the routes that read one, measured from the
     /// headers. A body that has not finished arriving within this many seconds is answered `408`
     /// and its task, connection and partially-read body buffer are released (kanban t_59745689);
@@ -142,6 +152,24 @@ impl AppConfig {
         let funnelswift_url =
             env::var("FUNNELSWIFT_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
 
+        // Telnyx webhook signature verification (kanban t_fd5000e1). Unset or blank means "not
+        // configured": the receivers refuse every delivery with a 503 and an ERROR log line rather
+        // than accept one they cannot verify.
+        let telnyx_public_key = env::var("TELNYX_PUBLIC_KEY")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+
+        // Same posture as the body deadline below: a mistyped value falls back to the default and is
+        // clamped, so it cannot become an outage. The floor is 30 s because a tighter window than
+        // the sender's own clock skew would refuse genuine deliveries; the ceiling is 24 h because
+        // beyond it the accepted-replay window is wider than a delivery's retry schedule.
+        let telnyx_signature_tolerance_secs = env::var("TELNYX_SIGNATURE_TOLERANCE_SECS")
+            .ok()
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .unwrap_or(crate::telnyx::verify::DEFAULT_SIGNATURE_TOLERANCE_SECS)
+            .clamp(30, 86_400);
+
         // Body-read deadline (kanban t_59745689). Same posture as the rest of this file's non-secret
         // knobs: unset or unparseable falls back to the default rather than refusing to boot, and the
         // value is clamped so a mistyped one cannot become an outage — 0 would answer 408 to every
@@ -173,6 +201,8 @@ impl AppConfig {
             db_max_connections,
             internal_sync_key,
             funnelswift_url,
+            telnyx_public_key,
+            telnyx_signature_tolerance_secs,
             body_read_deadline_secs,
         })
     }

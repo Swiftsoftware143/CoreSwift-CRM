@@ -14,15 +14,19 @@
 //! # The census (measured 2026-10-06, from source, then verified live with an anonymous probe)
 //!
 //! ```text
-//!   359 mounted `.route(..)` calls / 270 distinct paths  (the 52 `nest(..)` targets resolved
-//!        recursively, plus the 14 mounts main.rs makes itself), and one `nest_service("/")`
+//!   361 mounted `.route(..)` calls / 272 distinct paths  (the 52 `nest(..)` targets resolved
+//!        recursively, plus the 15 mounts main.rs makes itself), and one `nest_service("/")`
 //!        for the SPA
-//!   347 mounts on /api/** (a path mounted once per method or per verb pair appears more than
-//!        once here; the distinct path count is 270 for the whole tree)
+//!   349 mounts on /api/** (a path mounted once per method or per verb pair appears more than
+//!        once here; the distinct path count is 272 for the whole tree)
 //!    12 mounts at the root: 9 inbound receivers + /track/:slug + two /s/:tenant_id/** duplicates
 //!
 //!   live, with NO credential, against 127.0.0.1:8084:
-//!   324 of the 347 /api mounts answered 401 (or 405) — the per-module gate was doing its job
+//!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
+//!        the per-module gate was doing its job. The two /api routes added since (kanban
+//!        t_e968e9ad: `/api/admin/provisioning-config` and
+//!        `/api/v1/internal/provision-free-account`) were measured the same way and each answered
+//!        401 anonymous; both are named in the lists below
 //!    26 deliberate anonymous entries  -> PUBLIC_ROUTES  (23 /api + 3 /inbound)
 //!    15 service-to-service entries    -> INTERNAL_ROUTES (all /api, reached with the shared key)
 //!     2 issued-API-key entries        -> API_KEY_ROUTES  (/api/external/**)
@@ -54,11 +58,14 @@
 //!    route that merely shares a prefix with an allowlisted one (`/api/widgets/...` vs
 //!    `/api/widgets/widgets/...`) is private until it is written down here.
 //!
-//! One NAMED GAP was found and is recorded rather than hidden: `/api/telnyx/{webhook,sms-webhook}`
-//! verify neither a signature nor a shared key (an anonymous POST is answered `{"status":"ack"}`).
-//! They cannot present a JWT, so refusing them at the boundary would break inbound SMS/voice; the
-//! missing verification is carded separately (see the completion handoff) and the comment on the
-//! entries says so.
+//! The one NAMED GAP this census found — `/api/telnyx/{webhook,sms-webhook}` verified neither a
+//! signature nor a shared key, so an anonymous POST was answered `{"status":"ack"}` — is now CLOSED
+//! (kanban t_fd5000e1). Both receivers verify Telnyx's Ed25519 `telnyx-signature-ed25519` over
+//! `<telnyx-timestamp>|<raw body>` against the deployment's `TELNYX_PUBLIC_KEY`, enforce a freshness
+//! window, and refuse a replay: 401 for a delivery that fails the check, 503 when this deployment has
+//! no key configured at all. They remain on [`PUBLIC_ROUTES`] because a webhook receiver cannot
+//! present a JWT — the signature is the credential, checked in the handler before anything is read
+//! or written, which is what closes the gap without breaking inbound SMS/voice.
 //!
 //! # Credentials accepted
 //!
@@ -138,11 +145,14 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/google-calendar/webhook",
     // The OAuth redirect target Google sends the browser back to — there is no session yet.
     "/api/google-calendar/oauth-callback",
-    // Telnyx call/SMS event receivers. NAMED GAP, not a passed check: these verify NEITHER a
-    // signature NOR a shared key (measured live 2026-10-06 — an anonymous POST is answered
-    // `{"status":"ack"}`). They cannot present a JWT, so refusing them here would break inbound
-    // SMS/voice; the missing verification is carded separately rather than hidden behind the
-    // allowlist. See the completion handoff.
+    // Telnyx call/SMS event receivers. Their credential is the delivery's own Ed25519 signature,
+    // verified in the handler (`telnyx::verify`) before the event is read: `telnyx-signature-ed25519`
+    // over `<telnyx-timestamp>|<raw body>` against the deployment's `TELNYX_PUBLIC_KEY`, plus a
+    // freshness window and a replay guard — a delivery that fails is answered 401 (503 when no key is
+    // configured here), so nothing unsigned is applied (kanban t_fd5000e1). Measured live 2026-10-06:
+    // before, an anonymous `POST {}` reached the handler and was answered `{"status":"ack"}`; after,
+    // the same POST is refused before any read. They cannot present a JWT, which is exactly why the
+    // check lives in the handler and the entries stay here.
     "/api/telnyx/webhook",
     "/api/telnyx/sms-webhook",
     // --- public widget surfaces ------------------------------------------------------------------
@@ -878,12 +888,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            359,
+            361,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 347,
+            api, 349,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

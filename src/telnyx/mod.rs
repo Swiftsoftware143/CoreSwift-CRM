@@ -7,13 +7,19 @@
 //! - Telnyx config management (API key, messaging profile)
 
 pub mod handlers;
+pub mod verify;
 
 use crate::AppState;
 use axum::{middleware, Router};
 
 /// Build the Telnyx route tree.
-/// Public routes (no auth):
-///   POST /api/telnyx/webhook — Telnyx webhook receiver (unauthenticated)
+/// Public routes — CREDENTIAL = the Telnyx Ed25519 signature on the delivery, verified by
+/// `verify::verify()` before the handler reads the event (kanban t_fd5000e1):
+///   POST /api/telnyx/webhook — Telnyx voice/call webhook receiver (unauthenticated; signature-verified)
+///   POST /api/telnyx/sms-webhook — Telnyx SMS webhook receiver (unauthenticated; signature-verified)
+/// Both stay on `auth::route_policy::PUBLIC_ROUTES` because Telnyx cannot present a JWT; the
+/// signature is the credential, and a delivery that fails it is answered 401 (503 when this
+/// deployment has no `TELNYX_PUBLIC_KEY` set at all).
 /// Protected routes:
 ///   POST /api/telnyx/send-sms  — Send SMS
 ///   GET  /api/telnyx/numbers    — List purchased numbers
@@ -25,9 +31,11 @@ use axum::{middleware, Router};
 ///   PUT  /api/telnyx/config      — Save/update Telnyx config
 pub fn router(state: AppState) -> Router<AppState> {
     // Public routes — Telnyx sends webhook callbacks here
-    // Public webhook receivers — Telnyx calls these with no credential, and both read a JSON body,
-    // so the body-read deadline goes on them (kanban t_59745689). Nothing is behind auth here, so
-    // there is no ordering question: the deadline is simply the innermost layer of this chain.
+    // Public webhook receivers — Telnyx calls these with no credential, so the credential is the
+    // Ed25519 signature on the delivery itself (`src/telnyx/verify.rs`, kanban t_fd5000e1), checked
+    // before either handler reads the event. Both read a JSON body, so the body-read deadline goes
+    // on them (kanban t_59745689). Nothing is behind auth here, so there is no ordering question:
+    // the deadline is simply the innermost layer of this chain.
     let public = Router::new()
         .route("/webhook", axum::routing::post(handlers::webhook))
         .route("/sms-webhook", axum::routing::post(handlers::sms_webhook))

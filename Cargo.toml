@@ -74,6 +74,11 @@ lettre = { version = "0.11", default-features = false, features = ["tokio1-nativ
 serde_urlencoded = "0.7"
 url = "2"
 calamine = "0.36.1"
+# Ed25519 verification of Telnyx webhook deliveries (src/telnyx/verify.rs, kanban t_fd5000e1). ring is
+# already in this crate's graph through sqlx/rustls, so the fleet's Alpine image needs no new package
+# and no OpenSSL binding: `Ed25519KeyPair` also lets the module's tests sign, so the verifier is
+# proven against real signatures rather than a fixture.
+ring = "0.17"
 
 [dev-dependencies]
 # Tests only: `ServiceExt::oneshot` drives a real Router through the middleware stack so the

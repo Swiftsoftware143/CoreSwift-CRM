@@ -347,6 +347,19 @@ async fn main() -> anyhow::Result<()> {
     let body_read_deadline =
         body_deadline::BodyReadDeadline::from_secs(config.body_read_deadline_secs);
 
+    // Telnyx webhook verification posture (kanban t_fd5000e1), in the boot log for the same reason
+    // the body deadline is above: whether the two public Telnyx receivers can accept ANYTHING has to
+    // be readable without opening the source. Unset key = every delivery refused, which an operator
+    // needs to see before wondering why inbound SMS stopped.
+    tracing::info!(
+        "Telnyx webhook verification: {} (telnyx-signature-ed25519 over `<telnyx-timestamp>|<body>`, {}s tolerance, TELNYX_PUBLIC_KEY)",
+        match config.telnyx_public_key.as_deref() {
+            Some(_) => "ENABLED on /api/telnyx/webhook and /api/telnyx/sms-webhook".to_string(),
+            None => "NOT CONFIGURED — both receivers refuse every delivery with 503 until TELNYX_PUBLIC_KEY is set".to_string(),
+        },
+        config.telnyx_signature_tolerance_secs
+    );
+
     // Rate-limit posture in the boot log for the same reason the body deadline is above: the
     // bounds an operator relies on have to be readable without opening the source (t_3130f105).
     tracing::info!(

@@ -8,18 +8,41 @@
 //! - Existing billing system for credit management
 
 use axum::{
+    body::Bytes,
     extract::{Extension, Path, Query, State},
-    http::StatusCode,
-    response::IntoResponse,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use super::verify;
 use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
+
+/// One log line per refused Telnyx delivery, at ERROR when the refusal is this deployment's own
+/// (a missing/unreadable `TELNYX_PUBLIC_KEY` means inbound SMS and voice cannot work at all, and a
+/// silent receiver is the failure mode that started this card).
+fn log_telnyx_refusal(receiver: &str, rejection: &verify::TelnyxRejection) {
+    if rejection.is_configuration() {
+        tracing::error!(
+            "Telnyx {} webhook REFUSED nothing applied: {} — {}",
+            receiver,
+            rejection.reason,
+            rejection.detail
+        );
+    } else {
+        tracing::warn!(
+            "Telnyx {} webhook refused: {} — {}",
+            receiver,
+            rejection.reason,
+            rejection.detail
+        );
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -420,12 +443,54 @@ pub async fn send_sms(
 }
 
 // ---------------------------------------------------------------------------
-// 2. POST /api/telnyx/webhook — Inbound call webhook receiver (public)
+// 2. POST /api/telnyx/webhook — inbound call receiver (public; credential = Telnyx Ed25519 signature)
 // ---------------------------------------------------------------------------
+/// Telnyx voice/call event receiver.
+///
+/// The credential is the delivery's own Ed25519 signature (kanban t_fd5000e1): nothing here reads or
+/// applies an event until [`verify::verify`] has authenticated the raw bytes against this
+/// deployment's `TELNYX_PUBLIC_KEY`, judged the `telnyx-timestamp` freshness window, and confirmed
+/// the delivery is not a replay of one already processed. The extractor is `Bytes` — never `Json` —
+/// because the signature covers the exact bytes Telnyx sent and re-serialising a parsed `Value` would
+/// change them. A delivery that fails verification is answered `401` (`503` when this deployment has
+/// no key configured at all) and nothing from it is applied.
 pub async fn webhook(
     State(state): State<AppState>,
-    Json(body): Json<Value>,
-) -> ApiResult<impl IntoResponse> {
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<Response> {
+    let now = verify::now_unix();
+    let tolerance = state.config.telnyx_signature_tolerance_secs;
+    let delivery = match verify::verify(
+        state.config.telnyx_public_key.as_deref(),
+        &headers,
+        &body,
+        now,
+        tolerance,
+    ) {
+        Ok(delivery) => delivery,
+        Err(rejection) => {
+            log_telnyx_refusal("voice", &rejection);
+            return Ok(rejection.into_response());
+        }
+    };
+    if verify::replay_guard().is_replayed(&delivery.signature, now, tolerance) {
+        let rejection = verify::replayed_rejection();
+        log_telnyx_refusal("voice", &rejection);
+        return Ok(rejection.into_response());
+    }
+
+    let payload: Value = serde_json::from_slice(&body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {e}")))?;
+    let response = process_voice_event(&state, &payload).await?;
+    // Only now — with the effect landed, because any `?` above returned early — is the delivery
+    // remembered, so a delivery whose first attempt failed on the database stays retryable.
+    verify::replay_guard().ack(&delivery.signature, now, tolerance);
+    Ok(Json(response).into_response())
+}
+
+/// The voice arm's own work.
+async fn process_voice_event(state: &AppState, body: &Value) -> ApiResult<Value> {
     let event_type = body
         .pointer("/data/event_type")
         .and_then(|v| v.as_str())
@@ -457,7 +522,7 @@ pub async fn webhook(
 
     // Only process inbound calls
     if event_type != "call_received" && event_type != "call_initiated" {
-        return Ok(Json(json!({ "commands": [] })));
+        return Ok(json!({ "commands": [] }));
     }
 
     let called = to_number.clone().unwrap_or_default();
@@ -471,7 +536,7 @@ pub async fn webhook(
         Ok(id) => id,
         Err(_) => {
             tracing::warn!("Telnyx webhook: no tenant for number {}", normalized_called);
-            return Ok(Json(json!({"commands": [{"type": "hangup"}]})));
+            return Ok(json!({"commands": [{"type": "hangup"}]}));
         }
     };
 
@@ -481,7 +546,7 @@ pub async fn webhook(
         let has_credits = deduct_credit(&state.db, tenant_id).await?;
         if !has_credits {
             tracing::warn!("Tenant {} insufficient credits for inbound call", tenant_id);
-            return Ok(Json(json!({"commands": [{"type": "hangup"}]})));
+            return Ok(json!({"commands": [{"type": "hangup"}]}));
         }
     }
 
@@ -528,7 +593,7 @@ pub async fn webhook(
     );
 
     // Return answer + gather commands (same as MissedCall Respondr)
-    Ok(Json(json!({
+    Ok(json!({
         "commands": [
             {"type": "answer"},
             {
@@ -545,16 +610,51 @@ pub async fn webhook(
                 }
             }
         ]
-    })))
+    }))
 }
 
 // ---------------------------------------------------------------------------
-// 3. POST /api/telnyx/sms-webhook — Inbound SMS webhook receiver (public)
+// 3. POST /api/telnyx/sms-webhook — inbound SMS receiver (public; credential = Telnyx Ed25519 signature)
 // ---------------------------------------------------------------------------
+/// Telnyx inbound-SMS event receiver. Same credential and same order as the voice arm above: verify
+/// the Ed25519 signature over `telnyx-timestamp|body`, judge freshness, refuse a replay, and only
+/// then parse and apply the event. This is the receiver whose tenant lookup made the gap matter: the
+/// `to` number picks the workspace the event is written into.
 pub async fn sms_webhook(
     State(state): State<AppState>,
-    Json(body): Json<Value>,
-) -> ApiResult<impl IntoResponse> {
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<Response> {
+    let now = verify::now_unix();
+    let tolerance = state.config.telnyx_signature_tolerance_secs;
+    let delivery = match verify::verify(
+        state.config.telnyx_public_key.as_deref(),
+        &headers,
+        &body,
+        now,
+        tolerance,
+    ) {
+        Ok(delivery) => delivery,
+        Err(rejection) => {
+            log_telnyx_refusal("sms", &rejection);
+            return Ok(rejection.into_response());
+        }
+    };
+    if verify::replay_guard().is_replayed(&delivery.signature, now, tolerance) {
+        let rejection = verify::replayed_rejection();
+        log_telnyx_refusal("sms", &rejection);
+        return Ok(rejection.into_response());
+    }
+
+    let payload: Value = serde_json::from_slice(&body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON body: {e}")))?;
+    let response = process_inbound_sms(&state, &payload).await?;
+    verify::replay_guard().ack(&delivery.signature, now, tolerance);
+    Ok(Json(response).into_response())
+}
+
+/// The SMS arm's own work.
+async fn process_inbound_sms(state: &AppState, body: &Value) -> ApiResult<Value> {
     let event_type = body
         .pointer("/data/event_type")
         .and_then(|v| v.as_str())
@@ -565,7 +665,7 @@ pub async fn sms_webhook(
 
     // Only process inbound SMS messages
     if event_type != "message.received" {
-        return Ok(Json(json!({"status": "ack"})));
+        return Ok(json!({"status": "ack"}));
     }
 
     let from_number = body
@@ -654,7 +754,7 @@ pub async fn sms_webhook(
         }
     }
 
-    Ok(Json(json!({"status": "received"})))
+    Ok(json!({"status": "received"}))
 }
 
 // ---------------------------------------------------------------------------
