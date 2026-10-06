@@ -4,6 +4,32 @@ use std::collections::HashMap;
 use std::time::Duration;
 use uuid::Uuid;
 
+/// Resolve a contact inside the caller's tenant, or `NotFound`.
+///
+/// Every score write is preceded by this: the `scores` INSERT carries
+/// `contact_scores_contact_id_fkey -> contacts(id)`, so a `contact_id` that is not a contact of
+/// this tenant raised a raw Postgres 23503 and surfaced as `500 Database error` instead of a
+/// 404 (kanban t_fbc80132). Scoping by `tenant_id` also stops a crafted id from creating a score
+/// row that references another tenant's contact.
+async fn require_tenant_contact(
+    db: &PgPool,
+    tenant_id: Uuid,
+    contact_id: Uuid,
+) -> Result<(), crate::errors::AppError> {
+    let found: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM contacts WHERE id=$1 AND tenant_id=$2")
+            .bind(contact_id)
+            .bind(tenant_id)
+            .fetch_optional(db)
+            .await?;
+    if found.is_none() {
+        return Err(crate::errors::AppError::NotFound(format!(
+            "Contact {contact_id} not found"
+        )));
+    }
+    Ok(())
+}
+
 /// Calculate score for a contact based on an event type.
 /// Applies all matching active rules and records history.
 pub async fn calculate_score(
@@ -12,6 +38,8 @@ pub async fn calculate_score(
     contact_id: Uuid,
     event_type: &str,
 ) -> Result<Score, crate::errors::AppError> {
+    require_tenant_contact(db, tenant_id, contact_id).await?;
+
     let rules = sqlx::query_as::<_, ScoreRule>(
         "SELECT * FROM score_rules WHERE tenant_id=$1 AND event_type=$2 AND is_active=true",
     )
@@ -263,6 +291,8 @@ pub async fn ensure_score_record(
     tenant_id: Uuid,
     contact_id: Uuid,
 ) -> Result<Score, crate::errors::AppError> {
+    require_tenant_contact(db, tenant_id, contact_id).await?;
+
     Ok(match sqlx::query_as::<_, Score>("SELECT * FROM scores WHERE tenant_id=$1 AND contact_id=$2")
         .bind(tenant_id)
         .bind(contact_id)
