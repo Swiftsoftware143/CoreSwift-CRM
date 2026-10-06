@@ -419,7 +419,11 @@ async fn main() -> anyhow::Result<()> {
                 ),
             ),
         )
-        // Unified Inbox — messages webhook from MD/IS (no auth, fire-and-forget)
+        // Unified Inbox — messages webhook from MD/IS. Fire-and-forget on the SENDER's side, but not
+        // anonymous here: it WRITES a `cs_messages` row, so it demands the shared `x-internal-key`
+        // at the credential boundary (named in `auth::route_policy::INTERNAL_ROUTES`) and again in
+        // the handler. Mounted outside every module's own auth layer for the same reason as the two
+        // internal doors above (kanban t_36cf12d0).
         .route(
             "/api/messages/webhook",
             axum::routing::post(messages::handlers::webhook_receive).layer(

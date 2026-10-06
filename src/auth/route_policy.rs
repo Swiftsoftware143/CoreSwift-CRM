@@ -132,10 +132,8 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // automation webhook up by `webhook_token` and answers 401 for an unknown one ("No auth header
     // needed — the token identifies the tenant"). n8n and Hermes post here.
     "/api/webhook/:token/:action",
-    // Unified Inbox receiver for the MD/IS fleet apps: fire-and-forget, no credential by design
-    // (the sender is a sibling app that has no CoreSwift session); the handler resolves the tenant
-    // from the payload it receives.
-    "/api/messages/webhook",
+    // (The Unified Inbox receiver that used to sit here is now in INTERNAL_ROUTES below — it WRITES
+    // a `cs_messages` row, so it is not an anonymous surface; kanban t_36cf12d0.)
     // Mailgun's inbound-parse receiver. Mailgun cannot present a JWT; the handler resolves the
     // destination mailbox from the recipient it is given and answers `received: false` otherwise.
     "/api/v1/webhooks/mailgun/inbound",
@@ -200,6 +198,11 @@ pub const INTERNAL_ROUTES: &[&str] = &[
     // The ACCOUNT door beside them (kanban t_e968e9ad): FunnelSwift asks this app to mint the
     // free account for a tagged lead. Same shared key; the handler verifies it itself as well.
     "/api/v1/internal/provision-free-account",
+    // The Unified Inbox receiver (kanban t_36cf12d0). It was anonymous in PUBLIC_ROUTES and WRITES a
+    // `cs_messages` row for the tenant it resolves from the payload — an anonymous caller could
+    // inject messages into any tenant's inbox. The sender is a sibling fleet app (multi-directory),
+    // so the shared key is its credential; the handler verifies it too.
+    "/api/messages/webhook",
 ];
 
 /// Routes authenticated by an ISSUED PERSONAL API KEY (`Authorization: Bearer <key>`), not a JWT.
@@ -763,7 +766,6 @@ mod tests {
             "/api/public/bookings/public/slots/questions",
             "/api/public/contact",
             "/api/webhook/abc123/create",
-            "/api/messages/webhook",
             "/api/v1/webhooks/mailgun/inbound",
             "/api/google-calendar/webhook",
             "/api/google-calendar/oauth-callback",
@@ -794,6 +796,7 @@ mod tests {
             "/api/portfolio/internal",
             "/api/v1/internal/tag-provision",
             "/api/v1/webhooks/cross-app/tag-sync",
+            "/api/messages/webhook",
         ] {
             assert!(is_internal_route(p), "{p} must be an internal route");
             assert!(!is_public_route(p), "{p} must not be anonymous");

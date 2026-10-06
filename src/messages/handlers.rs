@@ -215,11 +215,30 @@ pub async fn delete(
     Ok(Json(json!({ "deleted": true })))
 }
 
-/// POST /api/internal/messages/webhook — receive messages from MD/IS (no auth).
+/// POST /api/messages/webhook — receive messages from the MD/IS fleet apps.
+///
+/// Credential: `x-internal-key` == `INTERNAL_SYNC_KEY`, verified here AND at the boundary
+/// (`auth::route_policy::INTERNAL_ROUTES`). Fail closed when this deployment has no key configured,
+/// so an unset key can never authenticate an empty header. Before kanban t_36cf12d0 this route took
+/// no credential at all and an anonymous caller could write a `cs_messages` row into any tenant.
 pub async fn webhook_receive(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<WebhookMessagePayload>,
 ) -> impl IntoResponse {
+    let presented = headers
+        .get("x-internal-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let expected = state.config.internal_sync_key.as_str();
+    if expected.is_empty() || presented != expected {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "ok": false, "error": "unauthorized" })),
+        )
+            .into_response();
+    }
+
     let source = payload
         .source
         .clone()
