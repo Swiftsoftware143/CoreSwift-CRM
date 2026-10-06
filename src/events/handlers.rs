@@ -85,6 +85,18 @@ pub async fn ingest(
         .await;
     });
 
+    // Deliver the same event to the tenant's registered OUTGOING webhook endpoints
+    // (`webhook_endpoints` — src/integrations/webhook.rs). Same fire-and-forget shape as the
+    // automation dispatch above; this was the missing caller that left the whole surface dead
+    // (kanban t_ee3c086f).
+    let wh_db = s.db.clone();
+    let wh_event = event.event_type.clone();
+    let wh_payload = event.payload.clone();
+    tokio::spawn(async move {
+        crate::integrations::webhook::dispatch_webhook(&wh_db, tid_clone, &wh_event, &wh_payload)
+            .await;
+    });
+
     // Log audit
     crate::audit::logger::log_event(
         &s.db,
