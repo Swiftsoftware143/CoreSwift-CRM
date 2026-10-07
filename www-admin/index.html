@@ -3478,9 +3478,52 @@ async function saveCompanyEdit() {
   }
 }
 function showAddDealModal(){ showModal('Add Deal', '<div class="form-group"><label>Deal Name</label><input type="text"></div><div class="form-group"><label>Value</label><input type="number"></div><div class="form-group"><label>Pipeline</label><select><option>Select...</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Deal added&#39;,&#39;success&#39;)">Save</button>'); }
-function showAddCampaignModal(){ showModal('New Campaign', '<div class="form-group"><label>Campaign Name</label><input type="text"></div><div class="form-group"><label>Type</label><select><option>Email</option><option>SMS</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Campaign created&#39;,&#39;success&#39;)">Create</button>'); }
+function showAddCampaignModal(){ showModal('New Campaign', '<div class="form-group"><label>Campaign Name</label><input type="text" id="newCampaignName"></div><div class="form-group"><label>Description</label><textarea id="newCampaignDesc" rows="3"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="newCampaignCreate" onclick="createCampaign()">Create</button>'); }
+// Wired to the real backend (POST /api/campaigns -> src/campaigns/handlers.rs::create).
+// This control used to close the modal and toast "Campaign created" without issuing ANY request,
+// so the operator was told a campaign existed while email_campaigns held nothing. Body:
+// {name (required), description}; the response is {campaign:{...}} (new status 'draft') and the tab
+// refreshes from TAB_LOADERS['campaigns'] -> GET /api/campaigns. The old modal's Type (Email/SMS)
+// select was cosmetic — the backend creates EMAIL campaigns only — so it is replaced by Description,
+// which is a real column the Campaigns table already renders.
+async function createCampaign(){
+  const name=((document.getElementById('newCampaignName')||{}).value||'').trim();
+  const description=((document.getElementById('newCampaignDesc')||{}).value||'').trim();
+  if(!name){ toast('Campaign name is required','error'); return; }
+  const btn=document.getElementById('newCampaignCreate');
+  if(btn){ btn.disabled=true; btn.textContent='Creating...'; }
+  try {
+    await API.post('/campaigns', { name: name, description: description || null });
+    closeModal();
+    toast('Campaign created','success');
+    if (TAB_LOADERS['campaigns']) TAB_LOADERS['campaigns']();
+  } catch(e){
+    toast('Could not create campaign: '+((e&&e.message)||e),'error');
+    if(btn){ btn.disabled=false; btn.textContent='Create'; }
+  }
+}
 function showAddListModal(){ showModal('New List', '<div class="form-group"><label>List Name</label><input type="text"></div><div class="form-group"><label>Description</label><textarea></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;List created&#39;,&#39;success&#39;)">Create</button>'); }
-function showAddTagModal(){ showModal('New Tag', '<div class="form-group"><label>Tag Name</label><input type="text"></div><div class="form-group"><label>Color</label><input type="color" value="#6366f1"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Tag created&#39;,&#39;success&#39;)">Create</button>'); }
+function showAddTagModal(){ showModal('New Tag', '<div class="form-group"><label>Tag Name</label><input type="text" id="newTagName"></div><div class="form-group"><label>Color</label><input type="color" id="newTagColor" value="#6366f1"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="newTagCreate" onclick="createTag()">Create</button>'); }
+// Wired to the real backend (POST /api/tags — src/tags create_tag). This control used to close the
+// modal and toast "Tag created" without issuing ANY request, so the operator was told a tag existed
+// while the store held nothing (same false-success class as the Round Robin stub fixed in t_...).
+// Body: {name (required), color}. The tab refreshes from TAB_LOADERS['tags'] -> GET /api/tags.
+async function createTag(){
+  const name=((document.getElementById('newTagName')||{}).value||'').trim();
+  const color=((document.getElementById('newTagColor')||{}).value||'#6366f1');
+  if(!name){ toast('Tag name is required','error'); return; }
+  const btn=document.getElementById('newTagCreate');
+  if(btn){ btn.disabled=true; btn.textContent='Creating...'; }
+  try {
+    await API.post('/tags', { name: name, color: color });
+    closeModal();
+    toast('Tag created','success');
+    if (TAB_LOADERS['tags']) TAB_LOADERS['tags']();
+  } catch(e){
+    toast('Could not create tag: '+((e&&e.message)||e),'error');
+    if(btn){ btn.disabled=false; btn.textContent='Create'; }
+  }
+}
 function showAddRuleModal(){ showModal('New Rule', '<div class="form-group"><label>Rule Name</label><input type="text"></div><div class="form-group"><label>Trigger</label><select><option>Contact created</option><option>Deal stage changed</option><option>Form submitted</option><option>Tag added</option></select></div><div class="form-group"><label>Action</label><select><option>Send email</option><option>Add to list</option><option>Update deal</option><option>Create task</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Rule created&#39;,&#39;success&#39;)">Create Rule</button>'); }
 function showAddScoreRuleModal(){ showModal('Add Scoring Criterion', '<div class="form-group"><label>Criterion Name</label><input type="text"></div><div class="form-group"><label>Points</label><input type="number" value="5"></div><div class="form-group"><label>Trigger</label><select><option>Email opened</option><option>Link clicked</option><option>Form submitted</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Criterion added&#39;,&#39;success&#39;)">Add</button>'); }
 function showAddTemplateModal(){ showModal('New Template', '<div class="form-group"><label>Template Name</label><input type="text"></div><div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Body</label><textarea rows="6"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Template saved&#39;,&#39;success&#39;)">Save</button>'); }
