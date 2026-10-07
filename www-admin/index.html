@@ -1175,11 +1175,17 @@ const TAB_RENDERERS = {
       // button that carried NO onclick at all (a dead control). Both are gone (kanban t_cron_20261007c).
       card('Score Criteria', '<div id="scoringRules"><div class="loading-wrap"><div class="spinner"></div> Loading criteria...</div></div>', '') +
       '<br>' +
+      // The bands below are the scoring engine's OWN category boundaries
+      // (src/scoring/models.rs::score_category: <=39 interested, <=69 qualified, <=89 hot, else
+      // 'sold'). The card used to show invented bands (Cold 0-20 / Warm 21-50 / Hot 51+) that
+      // matched neither the engine's cut-offs nor its vocabulary, so it told every operator a
+      // false scale (kanban t_cron_20261007c).
       card('Score Thresholds', '' +
         '<div class="config-list">' +
-          '<div class="config-item"><div class="config-info"><div class="config-label">🔴 Cold</div><div class="config-desc">0-20 points</div></div><span class="badge badge-muted">Cold</span></div>' +
-          '<div class="config-item"><div class="config-info"><div class="config-label">🟡 Warm</div><div class="config-desc">21-50 points</div></div><span class="badge badge-warning">Warm</span></div>' +
-          '<div class="config-item"><div class="config-info"><div class="config-label">🟢 Hot</div><div class="config-desc">51+ points</div></div><span class="badge badge-success">Hot</span></div>' +
+          '<div class="config-item"><div class="config-info"><div class="config-label">Interested</div><div class="config-desc">0–39 points</div></div><span class="badge badge-muted">interested</span></div>' +
+          '<div class="config-item"><div class="config-info"><div class="config-label">Qualified</div><div class="config-desc">40–69 points</div></div><span class="badge badge-warning">qualified</span></div>' +
+          '<div class="config-item"><div class="config-info"><div class="config-label">Hot</div><div class="config-desc">70–89 points</div></div><span class="badge badge-success">hot</span></div>' +
+          '<div class="config-item"><div class="config-info"><div class="config-label">Sold</div><div class="config-desc">90+ points</div></div><span class="badge badge-primary">sold</span></div>' +
         '</div>', '') +
     '</div>';
   },
