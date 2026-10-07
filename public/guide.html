@@ -11,6 +11,7 @@
     --g500: #6b7280; --g600: #4b5563; --g700: #374151; --g800: #1f2937; --g900: #111827;
     --green: #059669; --green-bg: #ecfdf5; --amber: #d97706; --amber-bg: #fffbeb;
     --red: #dc2626; --red-bg: #fef2f2; --purple: #7c3aed; --purple-bg: #f5f3ff;
+    --border: var(--g200);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -149,6 +150,19 @@
     padding: 2rem; font-size: 0.85rem; margin-top: 3rem;
   }
   .foot a { color: var(--primary-light); text-decoration: none; }
+  /* legacy affiliate-block vocabulary (the same box/list/muted classes the guide body
+     and cs-guides-build.py emit) — previously undefined, so those blocks rendered bare */
+  .alert {
+    padding: 1rem 1.25rem; border-radius: 10px; margin: 1rem 0; border-left: 4px solid;
+    background: var(--primary-bg); border-color: var(--primary-light);
+  }
+  .alert-success { background: var(--green-bg); border-color: var(--green); }
+  .alert-success strong { color: var(--green); }
+  .muted { color: var(--g500); font-size: 0.9rem; }
+  .step-list { padding-left: 1.5rem; margin: 0.75rem 0; }
+  .step-list li { margin-bottom: 0.6rem; }
+  .step-list li p { margin-top: 0.25rem; color: var(--g600); }
+  .tbl { overflow-x: auto; margin: 0.75rem 0; }
   @media (max-width: 768px) {
     .header-inner { padding: 0.75rem 1rem; flex-wrap: wrap; }
     .header-title h1 { font-size: 1.1rem; }
