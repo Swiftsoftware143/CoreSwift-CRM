@@ -3548,9 +3548,55 @@ async function createTag(){
 }
 function showAddRuleModal(){ showModal('New Rule', '<div class="form-group"><label>Rule Name</label><input type="text"></div><div class="form-group"><label>Trigger</label><select><option>Contact created</option><option>Deal stage changed</option><option>Form submitted</option><option>Tag added</option></select></div><div class="form-group"><label>Action</label><select><option>Send email</option><option>Add to list</option><option>Update deal</option><option>Create task</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Rule created&#39;,&#39;success&#39;)">Create Rule</button>'); }
 function showAddScoreRuleModal(){ showModal('Add Scoring Criterion', '<div class="form-group"><label>Criterion Name</label><input type="text"></div><div class="form-group"><label>Points</label><input type="number" value="5"></div><div class="form-group"><label>Trigger</label><select><option>Email opened</option><option>Link clicked</option><option>Form submitted</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Criterion added&#39;,&#39;success&#39;)">Add</button>'); }
-function showAddTemplateModal(){ showModal('New Template', '<div class="form-group"><label>Template Name</label><input type="text"></div><div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Body</label><textarea rows="6"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Template saved&#39;,&#39;success&#39;)">Save</button>'); }
+function showAddTemplateModal(){ showModal('New Template', '<div class="form-group"><label>Template Name</label><input type="text" id="newTemplateName"></div><div class="form-group"><label>Subject</label><input type="text" id="newTemplateSubject"></div><div class="form-group"><label>Body</label><textarea rows="6" id="newTemplateBody"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="newTemplateCreate" onclick="createTemplate()">Save</button>'); }
+// Wired to POST /api/email-templates (src/email_templates.rs::create). This control used to close
+// the modal and toast "Template saved" issuing NO request, so the operator was told a template
+// existed while email_templates held nothing. name/subject/template_type are NOT NULL in the live
+// table; template_type 'email' is what email.rs resolves. The tab refreshes from
+// TAB_LOADERS['email-templates'] -> GET /api/email-templates.
+async function createTemplate(){
+  const name=((document.getElementById('newTemplateName')||{}).value||'').trim();
+  const subject=((document.getElementById('newTemplateSubject')||{}).value||'').trim();
+  const body=((document.getElementById('newTemplateBody')||{}).value||'');
+  if(!name){ toast('Template name is required','error'); return; }
+  if(!subject){ toast('Subject is required','error'); return; }
+  const btn=document.getElementById('newTemplateCreate');
+  if(btn){ btn.disabled=true; btn.textContent='Saving...'; }
+  try {
+    await API.post('/email-templates', { name: name, subject: subject, body: body, template_type: 'email' });
+    closeModal();
+    toast('Template saved','success');
+    if (TAB_LOADERS['email-templates']) TAB_LOADERS['email-templates']();
+  } catch(e){
+    toast('Could not save template: '+((e&&e.message)||e),'error');
+    if(btn){ btn.disabled=false; btn.textContent='Save'; }
+  }
+}
 function showComposeModal(){ showModal('Compose Message', '<div class="form-group"><label>To</label><input type="text"></div><div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Message</label><textarea rows="5"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Message sent&#39;,&#39;success&#39;)">Send</button>'); }
-function showAddTicketModal(){ showModal('New Ticket', '<div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Description</label><textarea rows="4"></textarea></div><div class="form-group"><label>Priority</label><select><option>Normal</option><option>High</option><option>Urgent</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Ticket created&#39;,&#39;success&#39;)">Create</button>'); }
+function showAddTicketModal(){ showModal('New Ticket', '<div class="form-group"><label>Subject</label><input type="text" id="newTicketSubject"></div><div class="form-group"><label>Description</label><textarea rows="4" id="newTicketDesc"></textarea></div><div class="form-group"><label>Priority</label><select id="newTicketPriority"><option value="low">Low</option><option value="medium" selected>Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="newTicketCreate" onclick="createTicket()">Create</button>'); }
+// Wired to POST /api/tickets (src/tickets/handlers.rs::create_ticket). This control used to close
+// the modal and toast "Ticket created" issuing NO request, so the operator was told a ticket
+// existed while `tickets` held nothing. Body {subject(required), description, priority}; the app's
+// own priority CHECK is low|medium|high|urgent (default 'medium'), so the old "Normal" label is
+// stored as 'medium' and the others map to the real column values. Refresh:
+// TAB_LOADERS['tickets'] -> GET /api/tickets.
+async function createTicket(){
+  const subject=((document.getElementById('newTicketSubject')||{}).value||'').trim();
+  const description=((document.getElementById('newTicketDesc')||{}).value||'').trim();
+  const priority=((document.getElementById('newTicketPriority')||{}).value||'medium');
+  if(!subject){ toast('Ticket subject is required','error'); return; }
+  const btn=document.getElementById('newTicketCreate');
+  if(btn){ btn.disabled=true; btn.textContent='Creating...'; }
+  try {
+    await API.post('/tickets', { subject: subject, description: description || null, priority: priority });
+    closeModal();
+    toast('Ticket created','success');
+    if (TAB_LOADERS['tickets']) TAB_LOADERS['tickets']();
+  } catch(e){
+    toast('Could not create ticket: '+((e&&e.message)||e),'error');
+    if(btn){ btn.disabled=false; btn.textContent='Create'; }
+  }
+}
 function showAddEventModal(){ showModal('New Event', '<div class="form-group"><label>Title</label><input type="text"></div><div class="form-group"><label>Date</label><input type="date"></div><div class="form-group"><label>Time</label><input type="time"></div><div class="form-group"><label>Location</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Event created&#39;,&#39;success&#39;)">Save</button>'); }
 // -- Tracked Links (kanban t_bd9470b6; copy-ready URL added by t_8feaf6e0) -------------------
 // SOURCE OF TRUTH: GET /api/tracked-links answers {"links":[{id,tenant_id,tag_id,slug,target_url,
