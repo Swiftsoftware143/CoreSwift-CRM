@@ -3502,7 +3502,29 @@ async function createCampaign(){
     if(btn){ btn.disabled=false; btn.textContent='Create'; }
   }
 }
-function showAddListModal(){ showModal('New List', '<div class="form-group"><label>List Name</label><input type="text"></div><div class="form-group"><label>Description</label><textarea></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;List created&#39;,&#39;success&#39;)">Create</button>'); }
+function showAddListModal(){ showModal('New List', '<div class="form-group"><label>List Name</label><input type="text" id="newListName"></div><div class="form-group"><label>Description</label><textarea id="newListDesc" rows="3"></textarea></div><div class="form-group"><label>Type</label><select id="newListType"><option value="static">Static</option><option value="dynamic">Dynamic</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="newListCreate" onclick="createList()">Create</button>'); }
+// Wired to the real backend (POST /api/lists -> src/lists/handlers.rs::create). This control used
+// to close the modal and toast "List created" with NO request, so the operator was told a list
+// existed while `lists` held nothing. Body: {name (required), description, list_type}; list_type
+// must be 'static'|'dynamic' (lists_list_type_check) and defaults to 'static'. The tab refreshes
+// from TAB_LOADERS['lists'] -> GET /api/lists.
+async function createList(){
+  const name=((document.getElementById('newListName')||{}).value||'').trim();
+  const description=((document.getElementById('newListDesc')||{}).value||'').trim();
+  const list_type=((document.getElementById('newListType')||{}).value||'static');
+  if(!name){ toast('List name is required','error'); return; }
+  const btn=document.getElementById('newListCreate');
+  if(btn){ btn.disabled=true; btn.textContent='Creating...'; }
+  try {
+    await API.post('/lists', { name: name, description: description || null, list_type: list_type });
+    closeModal();
+    toast('List created','success');
+    if (TAB_LOADERS['lists']) TAB_LOADERS['lists']();
+  } catch(e){
+    toast('Could not create list: '+((e&&e.message)||e),'error');
+    if(btn){ btn.disabled=false; btn.textContent='Create'; }
+  }
+}
 function showAddTagModal(){ showModal('New Tag', '<div class="form-group"><label>Tag Name</label><input type="text" id="newTagName"></div><div class="form-group"><label>Color</label><input type="color" id="newTagColor" value="#6366f1"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="newTagCreate" onclick="createTag()">Create</button>'); }
 // Wired to the real backend (POST /api/tags — src/tags create_tag). This control used to close the
 // modal and toast "Tag created" without issuing ANY request, so the operator was told a tag existed
