@@ -1170,13 +1170,10 @@ const TAB_RENDERERS = {
       '<button class="btn btn-primary btn-sm" onclick="showAddScoreRuleModal()">+ Add Criterion</button>') +
     '<p style="color:var(--text-secondary);margin-bottom:16px">Define scoring criteria. Leads accumulate points based on their actions and profile attributes.</p>' +
     '<div id="scoringContent">' +
-      card('Score Criteria', '' +
-        '<div class="config-list">' +
-          '<div class="config-item"><div class="config-info"><div class="config-label">Email Opened</div><div class="config-desc">+5 points when a lead opens an email</div></div><span class="badge badge-primary">+5 pts</span></div>' +
-          '<div class="config-item"><div class="config-info"><div class="config-label">Link Clicked</div><div class="config-desc">+10 points when a lead clicks a tracked link</div></div><span class="badge badge-primary">+10 pts</span></div>' +
-          '<div class="config-item"><div class="config-info"><div class="config-label">Form Submitted</div><div class="config-desc">+20 points when a lead submits a form</div></div><span class="badge badge-primary">+20 pts</span></div>' +
-          '<div class="config-item"><div class="config-info"><div class="config-label">Deal Created</div><div class="config-desc">+30 points when a lead enters a pipeline</div></div><span class="badge badge-primary">+30 pts</span></div>' +
-        '</div>', '<button class="btn btn-primary btn-sm">Save Criteria</button>') +
+      // The list is LIVE from TAB_LOADERS['lead-scoring'] -> GET /api/scoring/rules. It used to be
+      // four hardcoded rows that described criteria the tenant may not own, with a "Save Criteria"
+      // button that carried NO onclick at all (a dead control). Both are gone (kanban t_cron_20261007c).
+      card('Score Criteria', '<div id="scoringRules"><div class="loading-wrap"><div class="spinner"></div> Loading criteria...</div></div>', '') +
       '<br>' +
       card('Score Thresholds', '' +
         '<div class="config-list">' +
@@ -1833,6 +1830,9 @@ const TAB_LOADERS = {
   // Same reason as the loaders above: the renderer runs before its HTML is in the document, so the
   // round-robin load registers here and runs against a #rrContent that already exists.
   'round-robin': async () => { await loadRoundRobinTab(); },
+  // Lead Scoring panel: registers a loader for the same reason as the loaders above (its renderer
+  // runs before its HTML is in the document, so an in-renderer load sees no #scoringRules).
+  'lead-scoring': async () => { await loadScoringTab(); },
   'dashboard': async () => {
     const statsGridEl = document.getElementById('statsGrid');
     if (!statsGridEl) return;
@@ -3547,7 +3547,53 @@ async function createTag(){
   }
 }
 function showAddRuleModal(){ showModal('New Rule', '<div class="form-group"><label>Rule Name</label><input type="text"></div><div class="form-group"><label>Trigger</label><select><option>Contact created</option><option>Deal stage changed</option><option>Form submitted</option><option>Tag added</option></select></div><div class="form-group"><label>Action</label><select><option>Send email</option><option>Add to list</option><option>Update deal</option><option>Create task</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Rule created&#39;,&#39;success&#39;)">Create Rule</button>'); }
-function showAddScoreRuleModal(){ showModal('Add Scoring Criterion', '<div class="form-group"><label>Criterion Name</label><input type="text"></div><div class="form-group"><label>Points</label><input type="number" value="5"></div><div class="form-group"><label>Trigger</label><select><option>Email opened</option><option>Link clicked</option><option>Form submitted</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Criterion added&#39;,&#39;success&#39;)">Add</button>'); }
+function showAddScoreRuleModal(){ showModal('Add Scoring Criterion', '<div class="form-group"><label>Criterion Name</label><input type="text" id="newScoreName"></div><div class="form-group"><label>Points</label><input type="number" id="newScorePoints" value="5"></div><div class="form-group"><label>Trigger</label><select id="newScoreTrigger"><option value="email.opened">Email Opened</option><option value="email.clicked">Link Clicked</option><option value="form_submit">Form Submitted</option><option value="web_visit">Website Visit</option><option value="deal_closed">Deal Closed</option><option value="call.booked">Booked Call</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="newScoreCreate" onclick="createScoreRule()">Add</button>'); }
+// Wired to POST /api/scoring/rules (src/scoring/handlers.rs::create_rule). This control used to close
+// the modal and toast "Criterion added" with NO request, so the operator was told a scoring rule
+// existed while score_rules held nothing. Body: {name (required), event_type (required), points (i32),
+// direction ('add'|'subtract', defaults 'add')}; POST answers 201 with the created rule. The Trigger
+// select now carries the event_type VALUES this app's own score_rules already use (email.opened,
+// email.clicked, form_submit, web_visit, deal_closed, call.booked) instead of human labels that matched
+// no emitted event, so a criterion created here is consistent with the ones the engine evaluates. The
+// list refreshes from TAB_LOADERS['lead-scoring'] -> GET /api/scoring/rules.
+async function createScoreRule(){
+  const name=((document.getElementById('newScoreName')||{}).value||'').trim();
+  const points=parseInt(((document.getElementById('newScorePoints')||{}).value||'5'),10);
+  const eventType=((document.getElementById('newScoreTrigger')||{}).value||'').trim();
+  if(!name){ toast('Criterion name is required','error'); return; }
+  if(!eventType){ toast('A trigger is required','error'); return; }
+  if(!isFinite(points)){ toast('Points must be a number','error'); return; }
+  const btn=document.getElementById('newScoreCreate');
+  if(btn){ btn.disabled=true; btn.textContent='Adding...'; }
+  try {
+    await API.post('/scoring/rules', { name: name, event_type: eventType, points: points, direction: 'add' });
+    closeModal();
+    toast('Criterion added','success');
+    if (TAB_LOADERS['lead-scoring']) TAB_LOADERS['lead-scoring']();
+  } catch(e){
+    toast('Could not add criterion: '+((e&&e.message)||e),'error');
+    if(btn){ btn.disabled=false; btn.textContent='Add'; }
+  }
+}
+// Live list for the Lead Scoring panel. GET /api/scoring/rules answers {"rules":[{name,event_type,
+// points,direction,is_active,...}]} (src/scoring/handlers.rs::list_rules).
+async function loadScoringTab(){
+  const el=document.getElementById('scoringRules');
+  if(!el) return;
+  try {
+    const rules=famList(await API.get('/scoring/rules'), 'rules');
+    let rows=[];
+    if(Array.isArray(rules)) rows=rules.map(r=>{
+      const pts=Number(r.points)||0;
+      const sign=pts>=0?'+':'';
+      const badge=pts>=0?'badge-primary':'badge-muted';
+      return '<div class="config-item"><div class="config-info"><div class="config-label">'+escapeHtml(r.name||'—')+'</div><div class="config-desc">'+escapeHtml(String(r.event_type||''))+(r.is_active===false?' · inactive':'')+'</div></div><span class="badge '+badge+'">'+sign+pts+' pts</span></div>';
+    });
+    el.innerHTML=rows.length?('<div class="config-list">'+rows.join('')+'</div>'):'<p style="color:var(--text-secondary)">No criteria yet. Use &ldquo;+ Add Criterion&rdquo;.</p>';
+  } catch(e){
+    el.innerHTML='<p style="color:var(--text-secondary)">Scoring rules unavailable: '+escapeHtml(String(e.message||e))+'</p>';
+  }
+}
 function showAddTemplateModal(){ showModal('New Template', '<div class="form-group"><label>Template Name</label><input type="text" id="newTemplateName"></div><div class="form-group"><label>Subject</label><input type="text" id="newTemplateSubject"></div><div class="form-group"><label>Body</label><textarea rows="6" id="newTemplateBody"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="newTemplateCreate" onclick="createTemplate()">Save</button>'); }
 // Wired to POST /api/email-templates (src/email_templates.rs::create). This control used to close
 // the modal and toast "Template saved" issuing NO request, so the operator was told a template
