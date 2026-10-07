@@ -283,6 +283,13 @@ tr:hover td{background:var(--bg-hover)}
     <nav class="sidebar-nav" id="sidebarNav">
     </nav>
     <div class="sidebar-footer">
+      <!-- The admin guide, on THIS origin (fleet guide-path standard, kanban t_d767f3f8):
+           the admin surface serves /admin-guide.html; the console nav links it same-origin
+           instead of a bare prose mention or a cross-origin hop to the marketing root. -->
+      <a class="nav-item" id="admin-guide-link" href="/admin-guide.html" style="text-decoration:none">
+        <span class="nav-icon">📖</span>
+        <span class="nav-text">Admin Guide</span>
+      </a>
       <button class="collapse-btn" onclick="toggleSidebar()">
         <span id="collapseIcon">◀</span>
         <span class="nav-text">Collapse</span>

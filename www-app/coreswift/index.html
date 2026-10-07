@@ -283,6 +283,12 @@ tr:hover td{background:var(--bg-hover)}
     <nav class="sidebar-nav" id="sidebarNav">
     </nav>
     <div class="sidebar-footer">
+      <!-- The user guide, on THIS origin (fleet guide-path standard, kanban t_d767f3f8): the app
+           surface serves /guide.html; the shell links it in the sidebar footer beside Collapse. -->
+      <a class="nav-item" id="user-guide-link" href="/guide.html" style="text-decoration:none">
+        <span class="nav-icon">📖</span>
+        <span class="nav-text">User Guide</span>
+      </a>
       <button class="collapse-btn" onclick="toggleSidebar()">
         <span id="collapseIcon">◀</span>
         <span class="nav-text">Collapse</span>
