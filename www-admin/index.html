@@ -1267,21 +1267,15 @@ const TAB_RENDERERS = {
 
   'checklists': () => placeholderPanel('Checklists', 'Create and manage task checklists for deals, onboarding, and workflows.', '✅'),
 
+  // Wired to the real backend (src/round_robin, mounted at /api/round-robin). This panel used to be
+  // a hard-coded stub: "+ Add Member" toasted "coming soon", "Start Rotation"/"Save Rules" carried
+  // NO handler at all, and the member list was a fixed empty row — so the tab advertised a feature
+  // the API already served. The load runs from TAB_LOADERS['round-robin'].
   'round-robin': () => {
-    return pageHeader('Round Robin', 'Distribute leads evenly across your team',
-      '<button class="btn btn-primary btn-sm" onclick="showAddMemberModal()">+ Add Member</button>') +
-    '<p style="color:var(--text-secondary);margin-bottom:16px">Configure round robin assignment rules to automatically distribute new contacts to team members.</p>' +
-    card('Team Members', '' +
-      '<div class="config-list" id="roundRobinMembers">' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">No team members added</div><div class="config-desc">Add team members to the rotation</div></div><span class="badge badge-muted">0 leads</span></div>' +
-      '</div>',
-      '<button class="btn btn-primary btn-sm">Start Rotation</button>') +
-    '<br>' +
-    card('Assignment Rules', '' +
-      '<div class="config-list">' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">Assignment Mode</div><div class="config-desc">How leads are distributed</div></div><select style="padding:6px 10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary)"><option>Round Robin (Sequential)</option><option>Weighted (by capacity)</option><option>Random</option></select></div>' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">Max Leads Per Member</div><div class="config-desc">Cap before skipping to next member</div></div><input type="number" value="10" style="width:80px;padding:6px 10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary)"></div>' +
-      '</div>', '<button class="btn btn-primary btn-sm">Save Rules</button>');
+    return pageHeader('Round Robin', 'Teams, members and assignment history',
+      '<button class="btn btn-primary btn-sm" onclick="rrNewTeam()">+ New Team</button>') +
+    '<p style="color:var(--text-secondary);margin-bottom:16px">Create a team, add members, then new contacts are distributed automatically across the team. Teams and members are stored per workspace.</p>' +
+    '<div id="rrContent"><div class="loading-wrap"><div class="spinner"></div> Loading teams...</div></div>';
   },
 
   // === SETTINGS ===
@@ -1691,6 +1685,135 @@ async function clearSystemEmail() {
 }
 
 // ========== ASYNC TAB LOADERS (fetch real data) ==========
+// ========== ROUND ROBIN (drives /api/round-robin — src/round_robin) ==========
+// The admin console shipped a hard-coded stub for this whole feature while the API served it (the
+// tenant shell, www-app/coreswift, already drove the same routes). Wire the tab to the real
+// teams / members / assignments surface. Every value rendered comes from the API, never a local guess.
+let RR_TEAMS = [];
+function rrErr(what, e, retry) {
+  const m = (e && e.message) ? e.message : String(e);
+  const hint = m === 'Payment required'
+    ? 'The round-robin module is not part of this workspace&rsquo;s plan. A platform admin turns it on per plan in Modules &amp; Plans.'
+    : escapeHtml(m);
+  return '<div class="card"><div class="card-body"><h3>' + what + ' could not load</h3><p>' + hint + '</p>' +
+    (retry ? '<button class="btn btn-secondary btn-sm" onclick="' + retry + '">Retry</button>' : '') +
+    '</div></div>';
+}
+async function loadRoundRobinTab() {
+  const el = document.getElementById('rrContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Loading teams...</div>';
+  try {
+    RR_TEAMS = famList(await API.get('/round-robin/teams'), 'teams');
+    if (!RR_TEAMS.length) {
+      el.innerHTML = card('Teams', '<div class="empty-state"><div class="empty-icon">🔄</div><h3>No round-robin teams yet</h3>' +
+        '<p>Create a team, add members, then assignments distribute automatically.</p></div>', '');
+      return;
+    }
+    let h = '';
+    RR_TEAMS.forEach(function (t) {
+      h += card('🔄 ' + fh(t.name) + ' <span class="badge badge-muted">' + fh(t.strategy) + '</span>' +
+        ' <span class="badge badge-' + (t.is_active ? 'success' : 'muted') + '">' + (t.is_active ? 'active' : 'off') + '</span>',
+        '<div id="rrMembers-' + t.id + '"><div class="loading-wrap"><div class="spinner"></div> Loading members...</div></div>' +
+        '<div style="margin-top:12px"><button class="btn btn-secondary btn-xs" onclick="rrAddMember(\'' + t.id + '\')">+ Add member</button> ' +
+        '<button class="btn btn-ghost btn-xs" onclick="rrAssignments(\'' + t.id + '\')">Assignments</button> ' +
+        '<button class="btn btn-ghost btn-xs" onclick="rrToggleTeam(\'' + t.id + '\',' + (t.is_active ? 'false' : 'true') + ')">' + (t.is_active ? 'Turn off' : 'Turn on') + '</button> ' +
+        '<button class="btn btn-ghost btn-xs" onclick="rrDeleteTeam(\'' + t.id + '\')">Delete</button></div>' +
+        '<div id="rrAssign-' + t.id + '" style="margin-top:12px"></div>', '');
+      rrLoadMembers(t.id);
+    });
+    el.innerHTML = h;
+  } catch (e) { el.innerHTML = rrErr('Round Robin', e, 'loadRoundRobinTab()'); }
+}
+async function rrLoadMembers(teamId) {
+  const el = document.getElementById('rrMembers-' + teamId);
+  if (!el) return;
+  try {
+    const members = famList(await API.get('/round-robin/teams/' + teamId + '/members'), 'members');
+    el.innerHTML = dataTable(['Member (user id)', 'Weight', 'Max concurrent', 'Active', 'Actions'],
+      members.map(function (m) {
+        return [fh(m.user_id), m.weight, m.max_concurrent_bookings,
+          m.is_active ? '<span class="badge badge-success">yes</span>' : '<span class="badge badge-muted">no</span>',
+          '<button class="btn btn-ghost btn-xs" onclick="rrRemoveMember(\'' + teamId + '\',\'' + m.id + '\')">Remove</button>'];
+      }), 'No members on this team yet.');
+  } catch (e) { el.innerHTML = rrErr('Team members', e, "rrLoadMembers('" + teamId + "')"); }
+}
+function rrNewTeam() {
+  showModal('New Round-Robin Team',
+    '<div class="form-group"><label>Name</label><input type="text" id="rrName"></div>' +
+    '<div class="form-group"><label>Description</label><input type="text" id="rrDesc"></div>' +
+    '<div class="form-group"><label>Strategy</label><select id="rrStrategy">' +
+      '<option value="round_robin">Round robin (sequential)</option><option value="weighted">Weighted (by capacity)</option>' +
+      '<option value="random">Random</option></select></div>' +
+    '<div class="form-group"><label>Scope</label><select id="rrScope">' +
+      '<option value="global">Whole workspace</option><option value="pipeline">One pipeline</option></select></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="rrCreateTeam()">Create</button>');
+}
+async function rrCreateTeam() {
+  const name = ((document.getElementById('rrName') || {}).value || '').trim();
+  if (!name) { toast('Team name is required', 'error'); return; }
+  try {
+    await API.post('/round-robin/teams', {
+      name: name,
+      description: ((document.getElementById('rrDesc') || {}).value || '').trim() || null,
+      strategy: document.getElementById('rrStrategy').value,
+      scope_type: document.getElementById('rrScope').value
+    });
+    closeModal(); toast('Team created', 'success'); loadRoundRobinTab();
+  } catch (e) { toast('Create failed: ' + e.message, 'error'); }
+}
+async function rrToggleTeam(id, active) {
+  try {
+    await API.patch('/round-robin/teams/' + id, { is_active: active });
+    toast(active ? 'Team turned on' : 'Team turned off', 'success'); loadRoundRobinTab();
+  } catch (e) { toast('Update failed: ' + e.message, 'error'); }
+}
+function rrDeleteTeam(id) {
+  if (!confirm('Delete this team? Its members and assignment history go with it.')) return;
+  API.del('/round-robin/teams/' + id)
+    .then(function () { toast('Team deleted', 'success'); loadRoundRobinTab(); })
+    .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+}
+function rrAddMember(teamId) {
+  showModal('Add Team Member',
+    '<div class="form-group"><label>User ID</label><input type="text" id="rrUserId" placeholder="uuid of a user in this workspace"></div>' +
+    '<p class="form-hint">There is no endpoint that lists a workspace&rsquo;s users from here, so this takes the user id (found in Users) rather than faking a picker.</p>' +
+    '<div class="form-group"><label>Weight</label><input type="number" id="rrWeight" value="1" min="1"></div>' +
+    '<div class="form-group"><label>Max concurrent bookings</label><input type="number" id="rrMax" value="10" min="1"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="rrCreateMember(\'' + teamId + '\')">Add</button>');
+}
+async function rrCreateMember(teamId) {
+  const uid = ((document.getElementById('rrUserId') || {}).value || '').trim();
+  if (!uid) { toast('User id is required', 'error'); return; }
+  try {
+    await API.post('/round-robin/teams/' + teamId + '/members', {
+      user_id: uid,
+      weight: parseInt(document.getElementById('rrWeight').value, 10) || 1,
+      max_concurrent_bookings: parseInt(document.getElementById('rrMax').value, 10) || 10
+    });
+    closeModal(); toast('Member added', 'success'); rrLoadMembers(teamId);
+  } catch (e) { toast('Add failed: ' + e.message, 'error'); }
+}
+function rrRemoveMember(teamId, memberId) {
+  API.del('/round-robin/teams/' + teamId + '/members/' + memberId)
+    .then(function () { toast('Member removed', 'success'); rrLoadMembers(teamId); })
+    .catch(function (e) { toast('Remove failed: ' + e.message, 'error'); });
+}
+async function rrAssignments(teamId) {
+  const el = document.getElementById('rrAssign-' + teamId);
+  if (!el) return;
+  try {
+    const a = famList(await API.get('/round-robin/teams/' + teamId + '/assignments'), 'assignments');
+    el.innerHTML = dataTable(['Assigned', 'Member', 'Contact', 'Status'],
+      a.map(function (x) {
+        return [x.assigned_at ? new Date(x.assigned_at).toLocaleString() : '—',
+          fh(x.member_id), fh(x.contact_id), fh(x.status)];
+      }), 'No assignments yet on this team.');
+  } catch (e) { el.innerHTML = rrErr('Assignments', e, "rrAssignments('" + teamId + "')"); }
+}
+
 const TAB_LOADERS = {
   // The Tracked Links panel registers a loader instead of loading from inside its renderer: the
   // renderer runs BEFORE its HTML is in the document, so an in-renderer load sees no #trackedLinksTable
@@ -1707,6 +1830,9 @@ const TAB_LOADERS = {
   // bailed out, and the panel sat on "Loading feature registry..." for ever. Every other
   // server-backed panel here registers a loader for the same reason.
   'features-plans': async () => { await loadFeatureMatrix(); },
+  // Same reason as the loaders above: the renderer runs before its HTML is in the document, so the
+  // round-robin load registers here and runs against a #rrContent that already exists.
+  'round-robin': async () => { await loadRoundRobinTab(); },
   'dashboard': async () => {
     const statsGridEl = document.getElementById('statsGrid');
     if (!statsGridEl) return;
@@ -3527,7 +3653,6 @@ function tlDeleteLink(id) {
     loadTrackedLinksTab();
   }).catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
 }
-function showAddMemberModal(){ toast('Add team member form coming soon', 'info'); }
 function showAddUserModal(){ showModal('Add User', '<div class="form-group"><label>Name</label><input type="text"></div><div class="form-group"><label>Email</label><input type="email"></div><div class="form-group"><label>Role</label><select><option>user</option><option>agency_admin</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;User added&#39;,&#39;success&#39;)">Create</button>'); }
 
 // Chat
