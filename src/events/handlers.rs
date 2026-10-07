@@ -8,6 +8,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use chrono::{NaiveDate, NaiveTime};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -203,6 +204,77 @@ pub async fn get_event(
         .await?
         .ok_or(AppError::NotFound("Event not found".to_string()))?;
     Ok(Json(json!(event)))
+}
+
+/// POST /api/events — create a calendar event by hand (admin console "+ New Event").
+///
+/// The `events` table began as the calendar table and keeps its columns (title NOT NULL,
+/// event_date, start_time/end_time, location, status). Only the webhook ingest path existed, so
+/// there was no write side for the console to call and the "+ New Event" control could only toast
+/// a lie. This fills the calendar columns; `source='manual'` distinguishes hand-made rows.
+pub async fn create_event(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(body): Json<CreateEventRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    let title = body.title.trim();
+    if title.is_empty() {
+        return Err(AppError::Validation("title is required".to_string()));
+    }
+    let event_date = parse_cal_date(body.event_date.as_deref())?;
+    let start_time = parse_cal_time(body.start_time.as_deref(), "start_time")?;
+    let end_time = parse_cal_time(body.end_time.as_deref(), "end_time")?;
+    let event_type = body
+        .event_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("meeting")
+        .to_string();
+    // Resolve through `users` so a subject that is not a user id becomes NULL instead of an FK
+    // violation (the same shape the private-email sender resolution uses).
+    let created_by: Option<Uuid> = Uuid::parse_str(&c.sub).ok();
+    let event = sqlx::query_as::<_, Event>(
+        r#"INSERT INTO events
+             (id, tenant_id, title, description, event_date, start_time, end_time, location,
+              event_type, status, created_by, source, payload)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'scheduled',
+                   (SELECT id FROM users WHERE id = $10::uuid), 'manual', '{}'::jsonb)
+           RETURNING *"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(tid)
+    .bind(title)
+    .bind(&body.description)
+    .bind(event_date)
+    .bind(start_time)
+    .bind(end_time)
+    .bind(&body.location)
+    .bind(&event_type)
+    .bind(created_by)
+    .fetch_one(&s.db)
+    .await?;
+    Ok((StatusCode::CREATED, Json(json!(event))))
+}
+
+fn parse_cal_date(v: Option<&str>) -> Result<Option<NaiveDate>, AppError> {
+    match v.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(s) => NaiveDate::parse_from_str(s, "%Y-%m-%d")
+            .map(Some)
+            .map_err(|_| AppError::Validation("event_date must be YYYY-MM-DD".to_string())),
+    }
+}
+
+fn parse_cal_time(v: Option<&str>, field: &str) -> Result<Option<NaiveTime>, AppError> {
+    match v.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(s) => NaiveTime::parse_from_str(s, "%H:%M")
+            .or_else(|_| NaiveTime::parse_from_str(s, "%H:%M:%S"))
+            .map(Some)
+            .map_err(|_| AppError::Validation(format!("{field} must be HH:MM"))),
+    }
 }
 
 // ====== Delayed Action Engine (If-Not-Then) ======

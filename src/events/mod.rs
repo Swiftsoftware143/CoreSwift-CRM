@@ -20,7 +20,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/ingest/:source", axum::routing::post(handlers::ingest))
         .route("/ingest/:source", axum::routing::get(handlers::ingest_get))
         // Event querying
-        .route("/", axum::routing::get(handlers::list_events))
+        .route(
+            "/",
+            axum::routing::get(handlers::list_events).post(handlers::create_event),
+        )
         .route("/:id", axum::routing::get(handlers::get_event))
         // Delayed action management (If-Not-Then)
         .route("/delayed", axum::routing::get(handlers::list_delayed))

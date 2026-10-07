@@ -2162,11 +2162,15 @@ const TAB_LOADERS = {
       const events = Array.isArray(eRes) ? eRes : (eRes.events || []);
       let rows = [];
       if (Array.isArray(events)) {
+        // The API now carries the calendar columns (title/event_date/start_time/location/
+        // event_type) because src/events/models.rs::Event maps them; the names the tab used to
+        // read (date/start_date/time/type) never existed in the payload, so every cell rendered
+        // as a dash for every row.
         rows = events.slice(0, 50).map(e => [
           escapeHtml(e.title || e.name || '—'),
-          escapeHtml(e.date || e.start_date || '—'),
-          escapeHtml(e.time || e.start_time || '—'),
-          `<span class="badge badge-muted">${escapeHtml(e.type || 'meeting')}</span>`,
+          escapeHtml(e.event_date || e.date || e.start_date || '—'),
+          escapeHtml(e.start_time || e.time || '—'),
+          `<span class="badge badge-muted">${escapeHtml(e.event_type || e.type || 'meeting')}</span>`,
           escapeHtml(e.location || '—'),
           `<button class="btn btn-ghost btn-xs">Edit</button>`
         ]);
@@ -3656,7 +3660,33 @@ async function createTicket(){
     if(btn){ btn.disabled=false; btn.textContent='Create'; }
   }
 }
-function showAddEventModal(){ showModal('New Event', '<div class="form-group"><label>Title</label><input type="text"></div><div class="form-group"><label>Date</label><input type="date"></div><div class="form-group"><label>Time</label><input type="time"></div><div class="form-group"><label>Location</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Event created&#39;,&#39;success&#39;)">Save</button>'); }
+function showAddEventModal(){ showModal('New Event', '<div class="form-group"><label>Title</label><input type="text" id="newEventTitle"></div><div class="form-group"><label>Description</label><textarea id="newEventDesc" rows="3"></textarea></div><div class="form-group"><label>Date</label><input type="date" id="newEventDate"></div><div class="form-group"><label>Start time</label><input type="time" id="newEventStart"></div><div class="form-group"><label>End time</label><input type="time" id="newEventEnd"></div><div class="form-group"><label>Location</label><input type="text" id="newEventLocation"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="newEventCreate" onclick="submitNewEvent()">Create</button>'); }
+// Wired to the real backend (POST /api/events -> src/events/handlers.rs::create_event). This control
+// used to close the modal and toast "Event created" with NO request, so the operator was told an
+// event existed while the calendar table held nothing. Body: {title (required), description,
+// event_date (YYYY-MM-DD), start_time/end_time (HH:MM), location}. `title` is NOT NULL on the
+// calendar table, and start must not be after end. The tab refreshes from TAB_LOADERS['calendar'].
+async function submitNewEvent(){
+  const title=((document.getElementById('newEventTitle')||{}).value||'').trim();
+  const description=((document.getElementById('newEventDesc')||{}).value||'').trim();
+  const event_date=((document.getElementById('newEventDate')||{}).value||'').trim();
+  const start_time=((document.getElementById('newEventStart')||{}).value||'').trim();
+  const end_time=((document.getElementById('newEventEnd')||{}).value||'').trim();
+  const location=((document.getElementById('newEventLocation')||{}).value||'').trim();
+  if(!title){ toast('Event title is required','error'); return; }
+  if(start_time && end_time && end_time < start_time){ toast('End time is before start time','error'); return; }
+  const btn=document.getElementById('newEventCreate');
+  if(btn){ btn.disabled=true; btn.textContent='Creating...'; }
+  try {
+    await API.post('/events', { title: title, description: description || null, event_date: event_date || null, start_time: start_time || null, end_time: end_time || null, location: location || null });
+    closeModal();
+    toast('Event created','success');
+    if (TAB_LOADERS['calendar']) TAB_LOADERS['calendar']();
+  } catch(e){
+    toast('Could not create event: '+((e&&e.message)||e),'error');
+    if(btn){ btn.disabled=false; btn.textContent='Create'; }
+  }
+}
 // -- Tracked Links (kanban t_bd9470b6; copy-ready URL added by t_8feaf6e0) -------------------
 // SOURCE OF TRUTH: GET /api/tracked-links answers {"links":[{id,tenant_id,tag_id,slug,target_url,
 // created_at,click_count,tag_name,tag_color}]} (TrackedLinkWithClicks, src/tracked_links/handlers.rs).
