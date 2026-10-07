@@ -943,9 +943,11 @@ const TAB_RENDERERS = {
     '<div id="rulesContent">' +
       card('How It Works', '<p style="color:var(--text-secondary);margin-bottom:12px">Create powerful automations with a simple trigger → action model.</p>' +
         '<div class="grid-2" style="margin-top:12px">' +
-          '<div style="background:var(--bg-secondary);padding:14px;border-radius:var(--radius);border:1px solid var(--border)"><strong>📥 Triggers</strong><br><small style="color:var(--text-secondary)">Contact created, deal stage changed, form submitted, tag added, email opened, link clicked...</small></div>' +
-          '<div style="background:var(--bg-secondary);padding:14px;border-radius:var(--radius);border:1px solid var(--border)"><strong>📤 Actions</strong><br><small style="color:var(--text-secondary)">Send email, add to list, update deal, create task, notify, webhook...</small></div>' +
+          '<div style="background:var(--bg-secondary);padding:14px;border-radius:var(--radius);border:1px solid var(--border)"><strong>📥 Triggers</strong><br><small style="color:var(--text-secondary)">Tag added, tag removed, deal stage changed, lead score changed, added to a list, removed from a list</small></div>' +
+          '<div style="background:var(--bg-secondary);padding:14px;border-radius:var(--radius);border:1px solid var(--border)"><strong>📤 Actions</strong><br><small style="color:var(--text-secondary)">Send email, send SMS, add to list, move in pipeline, notify a user, call a webhook</small></div>' +
         '</div>', '') +
+      '<br>' +
+      card('Rules', '<div id="rulesList"><div class="loading-wrap"><div class="spinner"></div> Loading rules...</div></div>', '') +
     '</div>';
   },
 
@@ -959,7 +961,7 @@ const TAB_RENDERERS = {
     return pageHeader('Messages', 'Send and manage communications',
       '<button class="btn btn-primary btn-sm" onclick="showComposeModal()">✏️ Compose</button>') +
     '<div id="messagesContent">' +
-      card('Recent Messages', '<div class="empty-state"><div class="empty-icon">💬</div><h3>No messages yet</h3><p>Connect a messaging provider in the Integration Center.</p></div>',
+      card('Recent Messages', '<div id="messagesList"><div class="loading-wrap"><div class="spinner"></div> Loading messages...</div></div>',
         '<button class="btn btn-secondary btn-sm" onclick="switchTab(&#39;integrations&#39;)">🔌 Integration Center</button>') +
     '</div>';
   },
@@ -1326,6 +1328,8 @@ const TAB_LOADERS = {
   'webhooks': async () => { await loadWebhooksTab(); },
   'industries': async () => { await loadIndustriesPanel(); },
   'team': async () => { await loadInvites(); },
+  'rules': async () => { await loadRulesTab(); },
+  'messages': async () => { await loadMessagesTab(); },
   'dashboard': async () => {
     const statsGridEl = document.getElementById('statsGrid');
     if (!statsGridEl) return;
@@ -2689,7 +2693,50 @@ async function saveCompanyEdit() {
     toast('Update failed: ' + e.message, 'error');
   }
 }
-function showAddRuleModal(){ showModal('New Rule', '<div class="form-group"><label>Rule Name</label><input type="text"></div><div class="form-group"><label>Trigger</label><select><option>Contact created</option><option>Deal stage changed</option><option>Form submitted</option><option>Tag added</option></select></div><div class="form-group"><label>Action</label><select><option>Send email</option><option>Add to list</option><option>Update deal</option><option>Create task</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Rule created&#39;,&#39;success&#39;)">Create Rule</button>'); }
+function showAddRuleModal(){ showModal('New Rule', '<div class="form-group"><label>Rule Name</label><input type="text" id="newRuleName"></div><div class="form-group"><label>Trigger</label><select id="newRuleTrigger"><option value="TagAdded">Tag added</option><option value="TagRemoved">Tag removed</option><option value="StageChanged">Deal stage changed</option><option value="ScoreChanged">Lead score changed</option><option value="ListAdded">Added to a list</option><option value="ListRemoved">Removed from a list</option></select></div><div class="form-group"><label>Action</label><select id="newRuleAction"><option value="send_email">Send email</option><option value="send_sms">Send SMS</option><option value="AddToList">Add to list</option><option value="MovePipeline">Move in pipeline</option><option value="NotifyUser">Notify a user</option><option value="Webhook">Call a webhook</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="newRuleCreate" onclick="createAutomationRule()">Create Rule</button>'); }
+// Wired to the real backend (POST /api/automation/rules -> src/automation/handlers.rs::create_rule).
+// This control used to close the modal and toast "Rule created" with NO request, so the operator was
+// told an automation existed while automation_rules held nothing. The Trigger/Action selects carry the
+// engine's OWN vocabulary given in src/automation/handlers.rs::create_rule (trigger_type is validated
+// against TagAdded/TagRemoved/StageChanged/ScoreChanged/ListAdded/ListRemoved; action_type against
+// AddTag/RemoveTag/MovePipeline/AddToList/RemoveFromList/Webhook/NotifyUser/send_email/send_sms), so the
+// old human labels ("Contact created" / "Create task") matched no accepted value and were refused.
+// Body: {name (required), trigger_type, trigger_config:{}, action_type, action_config:{}}; POST answers
+// 201 with the created rule. The panel refreshes from TAB_LOADERS['rules'].
+async function createAutomationRule(){
+  const name=((document.getElementById('newRuleName')||{}).value||'').trim();
+  const trigger_type=((document.getElementById('newRuleTrigger')||{}).value||'').trim();
+  const action_type=((document.getElementById('newRuleAction')||{}).value||'').trim();
+  if(!name){ toast('Rule name is required','error'); return; }
+  if(!trigger_type||!action_type){ toast('A trigger and an action are required','error'); return; }
+  const btn=document.getElementById('newRuleCreate');
+  if(btn){ btn.disabled=true; btn.textContent='Creating...'; }
+  try {
+    await API.post('/automation/rules', { name: name, trigger_type: trigger_type, trigger_config: {}, action_type: action_type, action_config: {} });
+    closeModal();
+    toast('Rule created','success');
+    if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['rules']) TAB_LOADERS['rules']();
+  } catch(e){
+    toast('Could not create rule: '+((e&&e.message)||e),'error');
+    if(btn){ btn.disabled=false; btn.textContent='Create Rule'; }
+  }
+}
+// Live list for the Automation Rules panel. GET /api/automation/rules answers
+// {"rules":[{name,trigger_type,action_type,is_active,...}]} (src/automation/handlers.rs::list_rules).
+async function loadRulesTab(){
+  const el=document.getElementById('rulesList');
+  if(!el) return;
+  try {
+    const rules=famList(await API.get('/automation/rules'), 'rules');
+    let rows=[];
+    if(Array.isArray(rules)) rows=rules.map(r=>{
+      return '<div class="config-item"><div class="config-info"><div class="config-label">'+escapeHtml(r.name||'\u2014')+'</div><div class="config-desc">'+escapeHtml(String(r.trigger_type||''))+' \u2192 '+escapeHtml(String(r.action_type||''))+(r.is_active===false?' \u00b7 inactive':'')+'</div></div></div>';
+    });
+    el.innerHTML=rows.length?('<div class="config-list">'+rows.join('')+'</div>'):'<p style="color:var(--text-secondary)">No rules yet. Use &ldquo;+ New Rule&rdquo;.</p>';
+  } catch(e){
+    el.innerHTML='<p style="color:var(--text-secondary)">Rules unavailable: '+escapeHtml(String(e.message||e))+'</p>';
+  }
+}
 // Email Templates tab — create + edit both go to /api/comms/templates (message_templates).
 // The modal used to be a stub: it toasted "Template saved" and issued no request at all.
 let TPL_CACHE = [];
@@ -2743,7 +2790,67 @@ function editTemplate(id) {
     await TAB_LOADERS['email-templates']();
   });
 }
-function showComposeModal(){ showModal('Compose Message', '<div class="form-group"><label>To</label><input type="text"></div><div class="form-group"><label>Subject</label><input type="text"></div><div class="form-group"><label>Message</label><textarea rows="5"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Message sent&#39;,&#39;success&#39;)">Send</button>'); }
+function showComposeModal(){ showModal('Compose Message', '<div class="form-group"><label>To (contact)</label><select id="composeContact"><option value="">Select a contact&#8230;</option></select></div><div class="form-group"><label>Subject</label><input type="text" id="composeSubject"></div><div class="form-group"><label>Message</label><textarea rows="5" id="composeBody"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="composeSend" onclick="submitCompose()">Send</button>'); loadComposeContacts(); }
+// Populate the recipient select from the tenant's own contacts (GET /api/contacts -> {contacts:[...]}).
+async function loadComposeContacts(){
+  const sel=document.getElementById('composeContact');
+  if(!sel) return;
+  try {
+    const contacts=famList(await API.get('/contacts'), 'contacts');
+    if (Array.isArray(contacts)) contacts.slice(0,200).forEach(c=>{
+      const o=document.createElement('option');
+      o.value=c.id||'';
+      o.textContent=(c.name||c.full_name||c.email||'contact')+(c.email?' <'+c.email+'>':'');
+      sel.appendChild(o);
+    });
+  } catch(e){ /* leave the placeholder option; the send path still records the message */ }
+}
+// Wired to the real backend (POST /api/messages -> src/messages/handlers.rs::create). This control used
+// to close the modal and toast "Message sent" with NO request, so the operator was told a message went
+// out while cs_messages held nothing. The route records an OUTBOUND message in the unified inbox with
+// channel 'manual' / status 'new' — it does not deliver anything — so the toast now says "saved to the
+// inbox" instead of "sent". Body: {contact_id (optional), sender_name (required, the logged-in user),
+// sender_email, subject, body (required)}; POST answers 201 with {message:{...}}. The list refreshes
+// from TAB_LOADERS['messages'].
+async function submitCompose(){
+  const contact_id=((document.getElementById('composeContact')||{}).value||'');
+  const subject=((document.getElementById('composeSubject')||{}).value||'').trim();
+  const body=((document.getElementById('composeBody')||{}).value||'').trim();
+  const user=(typeof STATE!=='undefined'&&STATE&&STATE.user)?STATE.user:null;
+  const sender_name=(user&&(user.name||user.email))||'operator';
+  const sender_email=(user&&user.email)||null;
+  if(!body){ toast('A message body is required','error'); return; }
+  const btn=document.getElementById('composeSend');
+  if(btn){ btn.disabled=true; btn.textContent='Sending...'; }
+  try {
+    await API.post('/messages', { contact_id: contact_id||null, sender_name: sender_name, sender_email: sender_email, subject: subject||null, body: body });
+    closeModal();
+    toast('Message saved to the inbox','success');
+    if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['messages']) TAB_LOADERS['messages']();
+  } catch(e){
+    toast('Could not save message: '+((e&&e.message)||e),'error');
+    if(btn){ btn.disabled=false; btn.textContent='Send'; }
+  }
+}
+// Live inbox list. GET /api/messages answers {"messages":[...],"page":..,"per_page":..,"total":..}
+// (src/messages/handlers.rs::list).
+async function loadMessagesTab(){
+  const el=document.getElementById('messagesList');
+  if(!el) return;
+  try {
+    const r=await API.get('/messages');
+    const arr=(r&&Array.isArray(r.messages))?r.messages:[];
+    let rows=arr.map(m=>{
+      const sub=escapeHtml(String(m.subject||'(no subject)'));
+      const st=escapeHtml(String(m.status||''));
+      const d=escapeHtml(String(m.created_at||'').replace('T',' ').slice(0,16));
+      return '<div class="config-item"><div class="config-info"><div class="config-label">'+sub+'</div><div class="config-desc">'+(d||'')+(st?' \u00b7 '+st:'')+'</div></div></div>';
+    });
+    el.innerHTML=rows.length?('<div class="config-list">'+rows.join('')+'</div>'):'<p style="color:var(--text-secondary)">No messages yet. Use &ldquo;Compose&rdquo;.</p>';
+  } catch(e){
+    el.innerHTML='<p style="color:var(--text-secondary)">Messages unavailable: '+escapeHtml(String(e.message||e))+'</p>';
+  }
+}
 // CS-22: the old modal only toasted "Ticket created" and posted nothing.
 function showAddTicketModal(){
   showModal('New Ticket',
@@ -2823,7 +2930,11 @@ function openMySupportPortal() {
     open(STATE.portalUrl);
   }).catch(e => toast('Could not open the customer portal: ' + e.message, 'error'));
 }
-function showAddEventModal(){ showModal('New Event', '<div class="form-group"><label>Title</label><input type="text"></div><div class="form-group"><label>Date</label><input type="date"></div><div class="form-group"><label>Time</label><input type="time"></div><div class="form-group"><label>Location</label><input type="text"></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="closeModal();toast(&#39;Event created&#39;,&#39;success&#39;)">Save</button>'); }
+// (removed) showAddEventModal was a false-success stub with ZERO callers in this console: the
+// tenant Calendar tab is the Google-Calendar integration (calendarShell -> gcOpenNewCalendar),
+// never a /api/events list, so a click on it could not be reached. Deleted after a caller census
+// (grep -o showAddEventModal -> 1 occurrence = the definition only).
+// The admin console's own '+ New Event' is wired to POST /api/events (createEvent above).
 // -- Tracked Links (kanban t_bd9470b6; copy-ready URL added by t_8feaf6e0) -------------------
 // SOURCE OF TRUTH: GET /api/tracked-links answers {"links":[{id,tenant_id,tag_id,slug,target_url,
 // created_at,click_count,tag_name,tag_color}]} (TrackedLinkWithClicks, src/tracked_links/handlers.rs).
