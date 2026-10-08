@@ -36,6 +36,11 @@ pub enum AppError {
     #[error("Resource already exists: {0}")]
     Duplicate(String),
 
+    /// 409 — Request conflicts with the current state of the resource
+    /// (e.g. deleting a checklist template that still has instances).
+    #[error("{0}")]
+    Conflict(String),
+
     /// 422 — Input validation failed
     #[error("Validation error: {0}")]
     Validation(String),
@@ -82,6 +87,7 @@ impl IntoResponse for AppError {
             AppError::UpgradeRequired(msg) => (StatusCode::PAYMENT_REQUIRED, msg.clone()),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             AppError::Duplicate(msg) => (StatusCode::CONFLICT, msg.clone()),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::Validation(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg.clone()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::Hash(msg) => {

@@ -184,7 +184,21 @@ pub async fn delete_template(
         .bind(id)
         .bind(account_id)
         .execute(&state.db)
-        .await?;
+        .await
+        .map_err(|e| {
+            // FK 23503 = checklist_instances.template_id is ON DELETE NO ACTION: a template that
+            // still has instances cannot be deleted. Present that as a 409, never a raw 500.
+            if let sqlx::Error::Database(ref d) = e {
+                if d.code().as_deref() == Some("23503") {
+                    return AppError::Conflict(
+                        "This template is in use by one or more checklist instances; remove those \
+                         instances before deleting it."
+                            .to_string(),
+                    );
+                }
+            }
+            AppError::Database(e)
+        })?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound(format!("Template {} not found", id)));
