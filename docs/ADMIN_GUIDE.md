@@ -475,3 +475,51 @@ matrix rather than left as a number that does nothing:
 its counter existed (see the table above). The authored numbers survive in plan data
 (`plans.features` carries `storage_gb` / `api_calls_per_day`; `plans.monthly_credits` is untouched),
 so a retired key comes back the same way once the quantity it counts is measurable.
+
+
+## Email branding (per workspace)
+
+A workspace sets its own brand display name, colour and logo, and every transactional mail it
+sends carries them. Keyed by the tenant id (`email_templates.aid`), so it is per WORKSPACE,
+not per app.
+<table>
+<thead><tr><th>Piece</th><th>Where</th></tr></thead>
+<tbody>
+<tr><td>`brand_name`, `brand_color`, `logo_url`</td>
+<td>the workspace's OWN `tenants.settings` row, key `email_branding` — the store
+`GET|PATCH /api/account/:id/settings` already reads and writes. No new column.</td></tr>
+<tr><td>the logo BYTES</td><td>`tenant_logos` (migration 116), one row per tenant,
+`tenant_id` PK -> `tenants` ON DELETE CASCADE. The container binds only its
+binary and `migrations/`, so a run-time file would die on the next restart.</td></tr>
+<tr><td>`POST|DELETE /api/account/branding/logo`</td>
+<td>authenticated; the workspace id is the JWT `aid`, never the path. The ONLY writers of
+`logo_url` (version-stamped `?v=<epoch>`).</td></tr>
+<tr><td>`GET /api/branding/logo/:tenant_id`</td>
+<td>**PUBLIC** (in `auth::route_policy::PUBLIC_ROUTES`): a mail client fetches
+the `<img src>` with no credential. 404 when the workspace has no logo.</td></tr>
+<tr><td>the render hook</td><td>`src/email.rs::queue_outbound_message` — the ONE funnel both
+the `email_templates` row and the inline fallback pass through. Binds
+`{{brand_name}}`/`{{logo_url}}` per account, prepends the header block to the
+HTML part and the brand name to the text part. Additive: no name and no logo renders nothing.</td></tr>
+</tbody></table>
+<h3>Rules and limits</h3>
+<ul>
+<li>**One writer per field.** `logo_url` is written only by the logo endpoints;
+a settings write that OMITS it inherits the stored value, so a stale panel echo cannot un-reference a
+logo that is still stored. An explicit `""` clears it.</li>
+<li>**Upload cap:** `image_store::MAX_IMAGE_BYTES` = **2,031,616**
+bytes (2 MB minus the multipart envelope). The per-route `DefaultBodyLimit` is inert here —
+`body_deadline::body_read_deadline_middleware` reads the body OUTSIDE every route layer, with
+axum's own 2 MB default — so the envelope (image + framing) is what has to fit. The picker checks the
+same number the server does.</li>
+<li>**Magic bytes, never the label.** The stored bytes are sniffed (PNG/JPEG/GIF/WebP;
+SVG is refused), and served back with that type pinned and `nosniff`.</li>
+<li>**Outbound mail (migration 117):** `outbound_messages.is_html` is set by the
+queue, and the Mailgun arm sends an `html` part as well as `text` when it is true.
+Measured 2026-10-08: before this, every HTML transactional mail this app sent went out in the
+**text** part, which is why the branding header (HTML) could not render in a client.</li>
+<li>**Not branded on purpose:** the operator's *Send test email* diagnostic renders
+no template and resolves the GLOBAL transport, not a workspace's.</li>
+<li>**Deploy:** `bin/deploy-coreswift.sh` (backend) then
+`bin/deploy-coreswift-app.sh` (the app and admin consoles).</li>
+</ul>

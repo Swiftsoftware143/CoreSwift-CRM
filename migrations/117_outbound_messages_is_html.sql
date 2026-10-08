@@ -1,0 +1,12 @@
+-- 117_outbound_messages_is_html.sql
+-- kanban t_feab8aff (email branding port). MEASURED 2026-10-08: every HTML transactional mail this
+-- app sends goes out as the PLAIN-TEXT part. `deliver_via_mailgun` posts `from/to/subject/text` and
+-- nothing else, so the stored body of a template with an `html_body` (e.g. `<h2>Welcome to CoreSwift
+-- CRM…`) is handed to Mailgun as `text=` and a client renders it as markup. That was pre-existing and
+-- app-wide; the per-tenant email-branding header (which is HTML) cannot render until the transport
+-- has an HTML part to put it in.
+--
+-- The flag is set by the ONE queue point (`email::queue_outbound_message`), which already computes
+-- whether the body it is queueing is HTML. NOT NULL DEFAULT false means every existing row and every
+-- writer that does not set it keeps exactly today's behaviour (`text=` only), so this is additive.
+ALTER TABLE outbound_messages ADD COLUMN IF NOT EXISTS is_html boolean NOT NULL DEFAULT false;

@@ -299,14 +299,16 @@ async fn queue_outbound_message(
     };
 
     sqlx::query(
-        r#"INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status)
-           VALUES ($1, $2, 'email', $3, $4, $5, 'queued')"#,
+        r#"INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, is_html, status)
+           VALUES ($1, $2, 'email', $3, $4, $5, $6, 'queued')"#,
     )
     .bind(Uuid::new_v4())
     .bind(tenant_id)
     .bind(to)
     .bind(subject)
     .bind(&body)
+    // Whether THIS body is HTML, so the delivery path can send an `html` part (migration 117).
+    .bind(is_html)
     .execute(db)
     .await
     .map_err(|e| format!("Failed to queue email: {}", e))?;
@@ -579,16 +581,33 @@ async fn apply_branding(
 
     if is_html && !html_body.is_empty() {
         (text_body, format!("{header}{html_body}"), true)
-    } else if header.is_empty() {
-        (text_body, html_body, is_html)
     } else {
-        let escaped = crate::branding::escape_html(&text_body);
-        (
-            text_body,
-            format!(
-                "{header}<div style=\"white-space:pre-wrap;font:15px/1.5 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827\">{escaped}</div>"
-            ),
-            true,
-        )
+        // A text-only message stays a text-only message: only the brand NAME is prepended. This app
+        // queues ONE body and the transport sends it as the text part, so wrapping the text in HTML
+        // here would deliver markup as the plain-text part — a regression, not branding.
+        (text_body, html_body, is_html)
+    }
+}
+
+#[cfg(test)]
+mod branding_fields_tests {
+    use super::get_merge_fields;
+
+    /// The admin `/types` list (and `GET /api/email-templates/merge-fields`) serves exactly these
+    /// names, so an admin-authored `{{brand_name}}`/`{{logo_url}}` is advertised for EVERY type —
+    /// and `apply_branding` binds both on every send, so neither can reach a recipient literally.
+    #[test]
+    fn every_template_type_advertises_the_branding_fields() {
+        for t in [
+            "welcome",
+            "purchase_confirmed",
+            "password_reset",
+            "default",
+            "some-future-type",
+        ] {
+            let f = get_merge_fields(t);
+            assert!(f.contains(&"brand_name"), "{t} is missing brand_name");
+            assert!(f.contains(&"logo_url"), "{t} is missing logo_url");
+        }
     }
 }

@@ -147,13 +147,16 @@ impl Branding {
 /// A read failure is NOT fatal to a send: an email that cannot read its branding still goes out with
 /// the app's own identity, exactly as every mail did before this module existed.
 pub async fn load(pool: &PgPool, tenant_id: Uuid) -> Option<Branding> {
-    let row: Result<Option<Value>, sqlx::Error> =
+    // `fetch_optional` wraps the scalar in an Option, so the SCALAR type has to be `Option<Value>`
+    // too: a tenant with no `email_branding` key answers NULL, and decoding that into a bare `Value`
+    // fails (measured live 2026-10-08 — the warning below fired on every send until this was fixed).
+    let row: Result<Option<Option<Value>>, sqlx::Error> =
         sqlx::query_scalar("SELECT settings -> 'email_branding' FROM tenants WHERE id = $1")
             .bind(tenant_id)
             .fetch_optional(pool)
             .await;
     let stored: Option<Value> = match row {
-        Ok(v) => v,
+        Ok(v) => v.flatten(),
         Err(e) => {
             tracing::warn!(
                 tenant = %tenant_id,

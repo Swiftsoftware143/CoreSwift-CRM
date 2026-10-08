@@ -356,6 +356,8 @@ pub fn platform_test_config(
         to: to.to_string(),
         subject: Some(subject.to_string()),
         body: body.to_string(),
+        // The operator's own diagnostic test body is plain text; it renders no template.
+        is_html: false,
         // The platform transport this app carries is the Mailgun arm; the provider field on the
         // admin row is informational (see `platform_mail_config::resolved`).
         email_provider: "mailgun".to_string(),
@@ -411,6 +413,11 @@ pub struct DeliveryConfig {
     pub to: String,
     pub subject: Option<String>,
     pub body: String,
+    /// True when `body` is HTML (`outbound_messages.is_html`). This app posted only `text=` to
+    /// Mailgun, so an HTML body was delivered as the PLAIN-TEXT part — measured live 2026-10-08
+    /// (kanban t_feab8aff): a row holding `<h2>Welcome to CoreSwift CRM…` was sent and carried in
+    /// the text field. The flag lets the Mailgun arm attach the same bytes as the `html` part too.
+    pub is_html: bool,
     pub email_provider: String,
     pub sms_provider: String,
     /// The transport this attempt will use (tenant BYOK / platform / none).
@@ -553,7 +560,13 @@ async fn deliver_via_mailgun(cfg: &DeliveryConfig) -> DeliveryOutcome {
     params.insert("from", from);
     params.insert("to", cfg.to.as_str());
     params.insert("subject", cfg.subject.as_deref().unwrap_or("No subject"));
+    // `text` carries the body exactly as it always has. When the queued body is HTML the SAME bytes
+    // also go as the `html` part, so a client that renders HTML sees the markup as markup (and the
+    // tenant's branded header block can render) — while a text-only client sees what it saw before.
     params.insert("text", cfg.body.as_str());
+    if cfg.is_html {
+        params.insert("html", cfg.body.as_str());
+    }
     if let Some(reply_to) = cfg.reply_to.as_deref() {
         params.insert("h:Reply-To", reply_to);
     }
@@ -895,6 +908,16 @@ pub async fn load_delivery_config(
     subject: Option<String>,
     body: &str,
 ) -> DeliveryConfig {
+    // The queue decides this (`email::queue_outbound_message` writes it with the body); a row that
+    // predates migration 117 reads `false`, i.e. exactly the `text=`-only behaviour it had.
+    let is_html: bool = sqlx::query_scalar("SELECT is_html FROM outbound_messages WHERE id = $1")
+        .bind(msg_id)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(false);
+
     let comms = tenant_comms(db, tenant_id).await;
 
     let field = |k: &str| -> Option<String> {
@@ -970,6 +993,7 @@ pub async fn load_delivery_config(
         to: to.to_string(),
         subject,
         body: body.to_string(),
+        is_html,
         email_provider: field("email_provider").unwrap_or_else(|| "mailgun".to_string()),
         sms_provider: field("sms_provider").unwrap_or_else(|| "telnyx".to_string()),
         transport: resolved.transport,

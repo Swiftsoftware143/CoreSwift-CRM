@@ -35,7 +35,7 @@ const UPSERT_LOGO: &str = "INSERT INTO tenant_logos (tenant_id, content_type, by
 const SET_LOGO_URL: &str = "UPDATE tenants \
       SET settings = CASE \
             WHEN settings IS NULL OR jsonb_typeof(settings) = 'object' \
-            THEN jsonb_set(COALESCE(settings, '{}'::jsonb), $1, to_jsonb($2::text), true) \
+            THEN jsonb_set(COALESCE(settings, '{}'::jsonb), $1::text[], to_jsonb($2::text), true) \
             ELSE settings \
           END, \
           updated_at = NOW() \
@@ -44,7 +44,7 @@ const SET_LOGO_URL: &str = "UPDATE tenants \
 const CLEAR_LOGO_URL: &str = "UPDATE tenants \
       SET settings = CASE \
             WHEN settings IS NULL OR jsonb_typeof(settings) = 'object' \
-            THEN jsonb_set(COALESCE(settings, '{}'::jsonb), $1, to_jsonb(''::text), true) \
+            THEN jsonb_set(COALESCE(settings, '{}'::jsonb), $1::text[], to_jsonb(''::text), true) \
             ELSE settings \
           END, \
           updated_at = NOW() \
