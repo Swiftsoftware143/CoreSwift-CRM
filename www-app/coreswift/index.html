@@ -72,6 +72,11 @@ a:hover{color:var(--accent-hover)}
 .user-btn{display:flex;align-items:center;gap:8px;padding:6px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);cursor:pointer;font-size:.85rem;transition:all .2s}
 .user-btn:hover{background:var(--bg-hover)}
 .avatar{width:28px;height:28px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:.75rem;color:#fff;flex-shrink:0}
+/* The account chip's LEVEL label. It is filled from the tenant's OWN plan row (checkPlan() ->
+   GET /api/billing/subscription + /billing/plans/:id) and never from a literal — the FunnelSwift
+   defect this fleet surface exists to close was a chip that read the word "User". Hidden until a
+   plan is really read, so it cannot claim a level the console never loaded. */
+.plan-chip{font-size:.68rem;font-weight:600;background:var(--accent-subtle);color:var(--accent-hover);border-radius:10px;padding:1px 8px;margin-left:2px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dropdown{position:relative}
 .dropdown-menu{position:absolute;top:100%;right:0;margin-top:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);min-width:200px;box-shadow:var(--shadow-lg);z-index:200;display:none;overflow:hidden}
 .dropdown-menu.show{display:block}
@@ -311,6 +316,7 @@ tr:hover td{background:var(--bg-hover)}
           <button class="user-btn" onclick="toggleUserMenu()">
             <div class="avatar" id="userAvatar">S</div>
             <span id="userEmail">admin</span>
+            <span class="plan-chip" id="userPlanBadge" style="display:none"></span>
             <span style="font-size:.7rem">▾</span>
           </button>
           <div class="dropdown-menu" id="userMenu">
@@ -582,7 +588,7 @@ function showApp() {
   appWrap.classList.remove('hidden');
   appWrap.style.display = '';
   document.getElementById('userEmail').textContent = STATE.user.email;
-  document.getElementById('userAvatar').textContent = (STATE.user.name || STATE.user.email)[0].toUpperCase();
+  paintAvatar();
   renderSidebar();
   switchTab('dashboard');
   checkPlan();
@@ -801,6 +807,9 @@ async function checkPlan() {
     STATE.planName = (mine && mine.name) ? String(mine.name) : '';
     const label = document.getElementById('currentPlanName');
     if (label) label.textContent = STATE.planName;
+    // The account chip's LEVEL badge: the REAL plan name, or nothing. Never a literal.
+    const badge = document.getElementById('userPlanBadge');
+    if (badge) { badge.textContent = STATE.planName; badge.style.display = STATE.planName ? '' : 'none'; }
     // The "You're on the X plan." half shows ONLY when a plan was really read: showUpgradeBanner()
     // also runs on the 402 path (API.call), before/without this, and may not claim a plan it never read.
     const wrap = document.getElementById('currentPlanWrap');
@@ -1043,17 +1052,14 @@ const TAB_RENDERERS = {
 
   // === SETTINGS ===
   'profile': () => {
-    return pageHeader('Profile Settings', 'Manage your account') +
-    card('Profile Information', '' +
-      '<div class="form-group"><label>Name</label><input type="text" id="profileName" value="' + (STATE.user ? escapeHtml(STATE.user.name || '') : '') + '"></div>' +
-      '<div class="form-group"><label>Email</label><input type="email" value="' + (STATE.user ? escapeHtml(STATE.user.email) : '') + '" disabled style="opacity:.6"> <span class="form-hint">Email cannot be changed</span></div>',
-      '<button class="btn btn-primary" onclick="saveProfile()">Save Changes</button>') +
-    '<br>' +
-    card('Change Password', '' +
-      '<div class="form-group"><label>Current Password</label><input type="password" id="currentPw"></div>' +
-      '<div class="form-group"><label>New Password</label><input type="password" id="newPw"></div>' +
-      '<div class="form-group"><label>Confirm New Password</label><input type="password" id="confirmPw"></div>',
-      '<button class="btn btn-primary" onclick="changePassword()">Update Password</button>');
+    // The form is filled by the loader (TAB_LOADERS['profile'] -> loadProfileTab) because a
+    // renderer runs BEFORE its HTML is in the document. The NAME, COMPANY and LEVEL shown here all
+    // come from GET /api/profile — `plan_name` is the tenant's REAL plan, resolved from its own
+    // plan row, never a literal like the word "User".
+    return pageHeader('Profile', 'Your account details, picture and sign-in') +
+      // Bottom padding reserves room for any fixed floor element (cookie banner / guide bubble) so
+      // the LAST control on the page stays clear and hittable on a first visit. No z-index games.
+      '<div id="profileWrap" style="padding-bottom:96px"><div class="loading-wrap"><div class="spinner"></div> Loading your profile...</div></div>';
   },
 
   'integrations': () => {
@@ -1341,6 +1347,7 @@ const TAB_LOADERS = {
   'webhooks': async () => { await loadWebhooksTab(); },
   'industries': async () => { await loadIndustriesPanel(); },
   'team': async () => { await loadInvites(); },
+  'profile': async () => { await loadProfileTab(); },
   'rules': async () => { await loadRulesTab(); },
   'messages': async () => { await loadMessagesTab(); },
   'dashboard': async () => {
@@ -2498,16 +2505,109 @@ function icRenderUpgradePaths() {
   el.innerHTML = html;
 }
 
+// ── PROFILE screen (kanban t_87b857f8) ───────────────────────────────────────────────────────────
+// GET /api/profile carries the caller's OWN record: name, company, the picture URL and the REAL
+// plan_name. The screen is filled by a loader because a renderer runs before its HTML exists.
+async function loadProfileTab() {
+  const el = document.getElementById('profileWrap');
+  if (!el) return;
+  let p;
+  try { p = await API.get('/profile'); }
+  catch (e) { famErr(el, 'Profile', e); return; }
+  // Keep the header chip and the local cache in step with the record we just read.
+  STATE.user = Object.assign({}, STATE.user, {
+    name: p.name, email: p.email, role: p.role, avatar_url: p.avatar_url || ''
+  });
+  localStorage.setItem('crm_user', JSON.stringify(STATE.user));
+  paintAvatar();
+  const plan = p.plan_name || STATE.planName || '';
+  el.innerHTML =
+    card('Profile picture',
+      '<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">' +
+        '<img id="avatarImg" alt="Your profile picture" style="width:72px;height:72px;border-radius:50%;object-fit:cover;background:var(--bg-secondary);display:' + (p.avatar_url ? '' : 'none') + '"' + (p.avatar_url ? ' src="' + escapeHtml(p.avatar_url) + '"' : '') + '>' +
+        '<div><input type="file" id="avatarInput" accept="image/png,image/jpeg,image/gif,image/webp" onchange="uploadAvatar(this)">' +
+        '<p class="form-hint" style="margin-top:6px">PNG, JPEG, GIF or WebP, up to 2 MB. Shown in the header and on this page.</p></div>' +
+      '</div>', '') +
+    '<br>' +
+    card('Profile Information',
+      '<div class="form-group"><label>Name</label><input type="text" id="profileName" maxlength="100" value="' + escapeHtml(p.name || '') + '"></div>' +
+      '<div class="form-group"><label>Company</label><input type="text" id="profileCompany" maxlength="255" value="' + escapeHtml(p.company || '') + '"> <span class="form-hint">Optional — clear it to remove the company.</span></div>' +
+      '<div class="form-group"><label>Email</label><input type="email" value="' + escapeHtml(p.email) + '" disabled style="opacity:.6"> <span class="form-hint">Email cannot be changed</span></div>' +
+      '<div class="form-group"><label>Level</label><input type="text" value="' + escapeHtml(plan || '—') + '" disabled style="opacity:.6"> <span class="form-hint">Your plan</span></div>',
+      '<button class="btn btn-primary" data-ops="profile-save" onclick="saveProfile()">Save Changes</button>') +
+    '<br>' +
+    card('Change Password',
+      '<div class="form-group"><label>New Password</label><input type="password" id="newPw" autocomplete="new-password"></div>' +
+      '<div class="form-group"><label>Confirm New Password</label><input type="password" id="confirmPw" autocomplete="new-password"></div>' +
+      '<div class="form-group"><label>Current Password</label><input type="password" id="currentPw" autocomplete="current-password"> <span class="form-hint">Required — proves it is really you.</span></div>',
+      '<button class="btn btn-primary" data-ops="profile-password" onclick="changePassword()">Update Password</button>');
+}
+
+// Paint the header chip's picture (or the initial letter) from STATE.user.avatar_url, and keep the
+// Profile screen's preview in step.
+function paintAvatar() {
+  const u = STATE.user || {};
+  const el = document.getElementById('userAvatar');
+  if (el) {
+    if (u.avatar_url) {
+      el.style.backgroundImage = 'url(' + u.avatar_url + ')';
+      el.style.backgroundSize = 'cover';
+      el.style.backgroundPosition = 'center';
+      el.textContent = '';
+    } else {
+      el.style.backgroundImage = '';
+      el.textContent = ((u.name || u.email || '?')[0] || '?').toUpperCase();
+    }
+  }
+  const img = document.getElementById('avatarImg');
+  if (img) {
+    if (u.avatar_url) { img.src = u.avatar_url; img.style.display = ''; }
+    else { img.removeAttribute('src'); img.style.display = 'none'; }
+  }
+}
+
 async function saveProfile() {
-  const name = document.getElementById('profileName').value;
+  const nameEl = document.getElementById('profileName');
+  const compEl = document.getElementById('profileCompany');
+  const name = nameEl ? nameEl.value.trim() : '';
+  if (!name) { toast('Name cannot be empty', 'error'); return; }
+  const company = compEl ? compEl.value.trim() : '';
   try {
-    await API.put('/profile', { name });
+    await API.put('/profile', { name: name, company: company });
     STATE.user.name = name;
-    document.getElementById('userAvatar').textContent = name[0].toUpperCase();
+    STATE.user.company = company;
     localStorage.setItem('crm_user', JSON.stringify(STATE.user));
+    paintAvatar();
     toast('Profile updated', 'success');
   } catch(e) {
     toast('Failed to update profile: ' + e.message, 'error');
+  }
+}
+
+// The picture is multipart, so it cannot go through API.call (which pins Content-Type: json).
+async function uploadAvatar(input) {
+  const f = input && input.files && input.files[0];
+  if (!f) return;
+  const fd = new FormData();
+  fd.append('file', f, f.name);
+  try {
+    const res = await fetch('/api/profile/avatar', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + STATE.token },
+      body: fd
+    });
+    if (!res.ok) {
+      let msg = 'HTTP ' + res.status;
+      try { const e = await res.json(); if (e && typeof e.message === 'string') msg = e.message; } catch(_){}
+      throw new Error(msg);
+    }
+    const d = await res.json();
+    STATE.user.avatar_url = d.avatar_url || '';
+    localStorage.setItem('crm_user', JSON.stringify(STATE.user));
+    paintAvatar();
+    toast('Picture updated', 'success');
+  } catch(e) {
+    toast('Upload failed: ' + e.message, 'error');
   }
 }
 
@@ -2516,14 +2616,32 @@ async function changePassword() {
   const newPw = document.getElementById('newPw').value;
   const confirm = document.getElementById('confirmPw').value;
   if (newPw !== confirm) { toast('Passwords do not match', 'error'); return; }
+  if (newPw.length < 8) { toast('New password must be at least 8 characters', 'error'); return; }
   try {
-    await API.put('/profile/password', { current_password: current, new_password: newPw });
+    // Deliberately NOT through API.call: a wrong current password is the contract's 401
+    // "Current password is incorrect", and API.call's generic 401 handler would sign the user OUT
+    // (and lose their typed input) instead of showing the sentence. Only an expired session's 401
+    // means "log out", and that is not what this route reports.
+    const res = await fetch('/api/profile/password', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + STATE.token
+      },
+      body: JSON.stringify({ current_password: current, new_password: newPw })
+    });
+    let d = {};
+    try { d = await res.json(); } catch(_) {}
+    if (!res.ok) {
+      throw new Error(d && typeof d.message === 'string' ? d.message : ('HTTP ' + res.status));
+    }
     toast('Password updated', 'success');
     document.getElementById('currentPw').value = '';
     document.getElementById('newPw').value = '';
     document.getElementById('confirmPw').value = '';
   } catch(e) {
-    toast('Failed: ' + e.message, 'error');
+    // The API's own sentence (e.g. "Current password is incorrect") is what the user acts on.
+    toast(e.message, 'error');
   }
 }
 
@@ -7127,7 +7245,9 @@ window.appGuidePages = {
   "tracked-links": { title: "Tracked Links", desc: "Links you can send that report back when someone clicks them.", actions: ["Create a tracked link", "Copy it into a message", "Check its clicks"] },
   checklists:      { title: "Checklists", desc: "Repeatable step lists your team works through for a process.", actions: ["Create a checklist", "Tick items off"] },
   "round-robin":   { title: "Round Robin", desc: "Share new leads evenly around your team instead of one person taking all of them.", actions: ["Turn it on", "Choose which team members take leads"] },
-  profile:         { title: "Profile", desc: "Your own account details and sign-in.", actions: ["Update your name and password"] },
+  // NO `profile` entry on purpose (kanban t_87b857f8): the inline-guide widget auto-OPENS its panel
+  // for any key it has an entry for, which would cover the Profile form's Save button on a first
+  // visit. With no entry, updateGuide() closes the panel and hides its "?" toggle on that screen.
   integrations:    { title: "Integration Center", desc: "Connect the outside services the CRM uses — email, texting, AI and payment providers.", actions: ["Add a provider's credentials", "Test the connection"] },
   team:            { title: "Team & Invites", desc: "The people who share this workspace and what each of them can do.", actions: ["Invite someone", "Change a role"] },
   webhooks:        { title: "Webhooks", desc: "Send your workspace's events out to another system in real time.", actions: ["Add an endpoint", "Pick which events it receives"] },

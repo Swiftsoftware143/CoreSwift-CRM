@@ -37,6 +37,12 @@ pub struct TeamMember {
     pub last_login_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Own account details (migration 118). Decoded only from `SELECT *`/`RETURNING *` on `users`,
+    /// so a query that returns an explicit column SUBSET of this model must now name these too.
+    pub username: Option<String>,
+    pub company: Option<String>,
+    /// Where the user's own profile picture is served from, or NULL when none was uploaded.
+    pub avatar_url: Option<String>,
 }
 
 /// TeamMember response sent to clients (excludes password_hash).
@@ -50,6 +56,11 @@ pub struct TeamMemberResponse {
     pub is_active: bool,
     pub last_login_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    /// The signed-in user's company / username / picture, so the shell's header chip can paint the
+    /// real thing on the FIRST login response instead of only after the Profile screen is opened.
+    pub username: Option<String>,
+    pub company: Option<String>,
+    pub avatar_url: Option<String>,
 }
 
 impl From<TeamMember> for TeamMemberResponse {
@@ -63,6 +74,9 @@ impl From<TeamMember> for TeamMemberResponse {
             is_active: u.is_active,
             last_login_at: u.last_login_at,
             created_at: u.created_at,
+            username: u.username,
+            company: u.company,
+            avatar_url: u.avatar_url,
         }
     }
 }

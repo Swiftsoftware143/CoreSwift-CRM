@@ -27,13 +27,21 @@
 //!        with NO credential and each answered 401, i.e. private by default like the rest — they are
 //!        on no allowlist, which is the whole decision.
 //!
+//!   +2 mounts / +2 paths since (2026-10-08, kanban t_87b857f8), the profile surface: the
+//!        anonymous profile-picture read `GET /api/avatars/:user_id` — an `<img src>` carries no
+//!        token, so it joins the branding logo on PUBLIC_ROUTES and returns only the bytes that user
+//!        uploaded, keyed by an unguessable uuid — plus its authenticated twin `POST
+//!        /api/profile/avatar` inside the profile router, which stays private. Now 367 mounted
+//!        `.route(..)` calls, 355 mounts on /api/** (the doc's older 363/351 numbers predate the
+//!        routes added before this one).
+//!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
 //!        the per-module gate was doing its job. The two /api routes added since (kanban
 //!        t_e968e9ad: `/api/admin/provisioning-config` and
 //!        `/api/v1/internal/provision-free-account`) were measured the same way and each answered
 //!        401 anonymous; both are named in the lists below
-//!    27 deliberate anonymous entries  -> PUBLIC_ROUTES  (24 /api + 3 /inbound)
+//!    28 deliberate anonymous entries  -> PUBLIC_ROUTES  (25 /api + 3 /inbound)
 //!    15 service-to-service entries    -> INTERNAL_ROUTES (all /api, reached with the shared key)
 //!     2 issued-API-key entries        -> API_KEY_ROUTES  (/api/external/**)
 //!     9 served surfaces outside the boundary: the SPA mount, /track/:slug and the eight
@@ -138,6 +146,11 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // thing: the image that tenant uploaded, keyed by an unguessable uuid; 404 when there is none.
     // The authenticated twin (`POST|DELETE /api/account/branding/logo`) stays private.
     "/api/branding/logo/:tenant_id",
+    // The signed-in user's own profile PICTURE (kanban t_87b857f8). Same shape and same reason as
+    // the branding logo directly above: an `<img src>` fetches this with no credential, and it
+    // returns one thing — the picture that user uploaded, keyed by the unguessable user uuid; 404
+    // when there is none. The authenticated twin (`POST /api/profile/avatar`) stays private.
+    "/api/avatars/:user_id",
     // --- receivers whose own credential travels in the path -------------------------------------
     // `/api/webhook/{token}/{action}`: the token IS the credential — `webhook::handlers` looks the
     // automation webhook up by `webhook_token` and answers 401 for an unknown one ("No auth header
@@ -732,6 +745,14 @@ mod tests {
             "/api/provider-keys",
             "/api/personal-api-keys",
             "/api/account/settings",
+            // The profile surface is tenant data: the READ (GET /api/profile) and the writes must
+            // stay private. The picture's anonymous READ is the deliberate exception above, and a
+            // bodiless sibling of it (`/api/avatars`) or a deeper path is NOT swept in with it.
+            "/api/profile",
+            "/api/profile/password",
+            "/api/profile/avatar",
+            "/api/avatars",
+            "/api/avatars/canary-user/extra",
             "/api/auth/me",
             "/api/auth/invites",
             "/api/auth/me/usage",
@@ -786,6 +807,8 @@ mod tests {
             "/api/public/bookings/public/slots/available/canary-tenant",
             "/api/public/bookings/public/slots/questions",
             "/api/public/contact",
+            "/api/branding/logo/canary-tenant",
+            "/api/avatars/canary-user",
             "/api/webhook/abc123/create",
             "/api/v1/webhooks/mailgun/inbound",
             "/api/google-calendar/webhook",
@@ -912,12 +935,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            365,
+            367,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 353,
+            api, 355,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

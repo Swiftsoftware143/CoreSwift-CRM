@@ -21,6 +21,12 @@ pub enum AppError {
     #[error("Invalid credentials")]
     InvalidCredentials,
 
+    /// 401 — A credential check failed and the caller is owed the REASON (e.g. a wrong current
+    /// password on the change-password route). Distinct from [`Unauthorized`], whose message is
+    /// fixed; this one carries the caller-facing sentence verbatim (kanban t_87b857f8).
+    #[error("{0}")]
+    UnauthorizedReason(String),
+
     /// 403 — User lacks permission
     #[error("Forbidden: insufficient permissions")]
     Forbidden,
@@ -80,6 +86,7 @@ impl IntoResponse for AppError {
             AppError::InvalidCredentials => {
                 (StatusCode::UNAUTHORIZED, "Invalid credentials".to_string())
             }
+            AppError::UnauthorizedReason(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
             AppError::Forbidden => (
                 StatusCode::FORBIDDEN,
                 "Insufficient permissions".to_string(),

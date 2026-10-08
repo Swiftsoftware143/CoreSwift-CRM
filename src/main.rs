@@ -386,6 +386,15 @@ async fn main() -> anyhow::Result<()> {
             "/api/branding/logo/:tenant_id",
             get(crate::account::branding::serve_logo),
         )
+        // A signed-in user's own profile PICTURE. Same reasoning as the branding logo above: an
+        // `<img src>` fetches this with NO credential, so it is deliberately anonymous (see
+        // auth::route_policy [PUBLIC_ROUTES]). It returns only the picture that user uploaded,
+        // keyed by the unguessable user uuid, and 404s when there is none. The authenticated twin
+        // (`POST /api/profile/avatar`) stays behind the profile router's auth middleware.
+        .route(
+            "/api/avatars/:user_id",
+            get(crate::profile::handlers::serve_avatar),
+        )
         // Serve SPA at root
         .nest_service("/", ServeDir::new("public"))
         // Auth routes (public group + auth-middleware-guarded /invite & /me/usage)
