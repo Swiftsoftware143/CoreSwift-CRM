@@ -199,6 +199,7 @@
     <a href="#support-portal">Support</a>
     <a href="#automation-features">Automation</a>
     <a href="#tags-lists">Tags &amp; Lists</a>
+    <a href="#tag-to-free-account">Tag to free account</a>
     <a href="#webhooks">Webhooks</a>
     <a href="#settings">Settings</a>
   </div>
@@ -1410,6 +1411,35 @@ PATCH /api/account/:id — Update name</pre>
     <p class="muted">Not in this app: spreadsheet import/export is <strong>CSV only</strong> (XLS/XLSX are
        not supported), and there is no newsletter/mailing-list sender — campaigns and private email cover
        outbound email.</p>
+  </div>
+</section>
+
+<!-- ======= 23. TAG TO FREE ACCOUNT ======= -->
+<section id="tag-to-free-account">
+  <h2 class="sec-title"><span class="sec-num">23</span> Tag to free account</h2>
+  <div class="card">
+    <p>When a lead is tagged in FunnelSwift with one of this app's tags &mdash; for example
+       <strong>CoreSwift &mdash; Free</strong> &mdash; CoreSwift is told to create a
+       <strong>free account</strong> for that lead, using the same name and email the lead was
+       captured with. CoreSwift emails the new user their login details automatically, so they can
+       sign in and upgrade here whenever they are ready.</p>
+    <h3>What happens when it is ON</h3>
+    <ul>
+      <li>A tagged lead gets a real account here on the free plan &mdash; not just a contact record</li>
+      <li>The new user is emailed their login details by CoreSwift</li>
+      <li>Tagging the same lead twice does <strong>not</strong> create a duplicate account &mdash;
+          the second attempt is recognised by email and ignored</li>
+    </ul>
+    <h3>What happens when it is OFF</h3>
+    <p>The tagged lead is still recorded here as a contact, so nothing is lost, but <strong>no
+       account is created and no login email is sent</strong>. Use this if you want to review leads
+       before accounts exist for them.</p>
+    <h3>Where the switch is</h3>
+    <p>Operators turn this on or off in the admin console, under <strong>Provisioning &rarr; Tag
+       Provisioning</strong>.</p>
+    <p class="muted">FunnelSwift is the hub where affiliates and leads live. Tagging is how a lead is
+       routed to the software they are interested in; the account is created here, in the destination
+       app, so the lead signs in at the app they actually want and upgrades on this app's own plans.</p>
   </div>
 </section>
 
