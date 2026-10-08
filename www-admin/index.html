@@ -367,7 +367,17 @@ const API = {
     if (res.status === 402) { showUpgradeBanner(); throw new Error('Payment required'); }
     if (!res.ok) {
       let msg = `HTTP ${res.status}`;
-      try { const e = await res.json(); msg = e.error || e.message || msg; } catch(_){}
+      // Failures answer {"error": true, "message": "<human text>"} (src/errors.rs) — a BOOLEAN
+      // `error` flag with the text in `message`. Reading `e.error` first therefore threw the flag
+      // and every failed request in this console reported the literal string "true" instead of the
+      // reason (e.g. a refused checklist Start rendered as "Start failed: true"). Only strings are
+      // usable text.
+      try {
+        const e = await res.json();
+        const pick = [e.error, e.message, e.detail, e.error_description]
+          .find(v => typeof v === 'string' && v.trim());
+        msg = pick || msg;
+      } catch(_){}
       throw new Error(msg);
     }
     return res.status === 204 ? null : res.json();
@@ -722,7 +732,14 @@ async function doLogin() {
     });
     if (!res.ok) {
       let msg = 'Invalid credentials';
-      try { const e = await res.json(); msg = e.error || e.message || msg; } catch(_){}
+      // The envelope is {"error": true, "message": "<human text>"} — `error` is a BOOLEAN, so
+      // reading it first rendered every refusal as the literal string "true". Read strings only.
+      try {
+        const e = await res.json();
+        const pick = [e.error, e.message, e.detail, e.error_description]
+          .find(v => typeof v === 'string' && v.trim());
+        msg = pick || msg;
+      } catch(_){}
       throw new Error(msg);
     }
     const data = await res.json();
