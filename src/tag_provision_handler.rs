@@ -410,7 +410,8 @@ async fn create_or_get_list(
 // /opt/swift/docs/tag-to-free-account-design-2026-10-06.md §3.1.
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 
-/// `admin_settings` key: the per-app master switch. Ships ABSENT, which reads as `false`.
+/// `admin_settings` key: the per-app master switch. Ships ABSENT, which reads as `true`
+/// (code default — a fresh install has the door open; design §3.1 rule 2).
 pub const PROVISION_ENABLED_KEY: &str = "provision_from_tags_enabled";
 /// `admin_settings` key: which of THIS app's plans a tag-provisioned account is seated on.
 pub const PROVISION_ENTRY_PLAN_KEY: &str = "provision_entry_plan_slug";
@@ -420,7 +421,8 @@ pub const DEFAULT_ENTRY_PLAN_SLUG: &str = "free";
 /// The provisioning knobs, as the app reads them.
 #[derive(Debug, Clone)]
 pub struct ProvisioningSettings {
-    /// Master switch. `false` (the shipped state) makes the account door answer 403.
+    /// Master switch. `true` is the shipped state (code default) — the door is open until an
+    /// operator closes it; `false` makes the account door answer 403.
     pub enabled: bool,
     /// The plan slug a minted account is seated on. Resolved IN THIS APP — a sibling's plan name
     /// can never resolve here (spec §3.1 rule 1).
