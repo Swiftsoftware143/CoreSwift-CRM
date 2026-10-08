@@ -752,6 +752,9 @@ function switchTab(tabId) {
     el.classList.toggle('active', el.dataset.tab === tabId);
   });
   renderTab(tabId);
+  // Tell the inline guide which console screen is now open. The tab switch changes no path and no
+  // hash, so the widget cannot follow it on its own — it needs this forced key (fleet standard).
+  if (window.inlineGuidePage) window.inlineGuidePage(tabId);
   // Close user menu
   document.getElementById('userMenu').classList.remove('show');
 }
@@ -6966,6 +6969,52 @@ TAB_LOADERS['bookings'] = loadBookingsTab;
 })();
 
 </script>
+<script>
+/* Inline guide content (fleet standard; the in-app counterpart of the guide page). One entry per
+   console screen. This is a tabbed console that switches views in JS without moving the path or the
+   hash, so switchTab() tells the widget which screen is open via window.inlineGuidePage(tabId). */
+window.appGuidePages = {
+  dashboard:       { title: "Dashboard", desc: "Your workspace at a glance — contacts, deals, activity and what needs attention today.", actions: ["Scan the counters and recent activity", "Jump to anything that needs a follow-up"] },
+  contacts:        { title: "Contacts", desc: "The people and companies you do business with. Each contact carries its history, tags and deals.", actions: ["Add a contact", "Open one to see its full record", "Search by name or email"] },
+  industries:      { title: "Industries", desc: "Group your contacts by the industry they belong to, so you can target and report on segments.", actions: ["Review the industries in use", "Assign a contact to one"] },
+  pipelines:       { title: "Pipelines & Deals", desc: "Your sales stages and the deals moving through them, from first contact to closed.", actions: ["Create a pipeline", "Add a deal", "Move a deal to its next stage"] },
+  campaigns:       { title: "Campaigns", desc: "Outbound email campaigns — who is being contacted, with what, and how it is performing.", actions: ["Start a campaign", "Pick the list it sends to", "Check its results"] },
+  lists:           { title: "Lists", desc: "Saved groups of contacts you can use as the audience for a campaign.", actions: ["Create a list", "Add contacts to it"] },
+  analytics:       { title: "Analytics", desc: "The numbers behind your sales and marketing — pipeline value, campaign performance and trends.", actions: ["Choose the period you want to see", "Read a chart's detail"] },
+  rules:           { title: "Rules", desc: "Automations that run by themselves: when something happens, do this. Includes the scheduled if-not-then queue.", actions: ["Add a rule", "Set its trigger and its action", "Pause one"] },
+  tags:            { title: "Tags", desc: "Labels that classify contacts. Tagging is also how a lead can be handed to another SwiftSoftware app to create a free account there.", actions: ["Create a tag", "Apply a tag to contacts", "See which tags trigger account provisioning"] },
+  "lead-scoring":  { title: "Lead Scoring", desc: "Points that rank your contacts by how likely they are to buy, so you know who to call first.", actions: ["Set the scoring rules", "Sort contacts by score"] },
+  "email-templates": { title: "Email Templates", desc: "Reusable message bodies with placeholders that fill in per recipient, used by campaigns and automations.", actions: ["Create a template", "Preview it with sample data"] },
+  messages:        { title: "Messages", desc: "Individual emails or texts you send to one contact from inside the CRM.", actions: ["Compose a message", "Pick a contact", "See the delivery result"] },
+  notifications:   { title: "Notifications", desc: "Alerts about activity in your workspace that needs your attention.", actions: ["Read an alert", "Clear one you have handled"] },
+  telnyx:          { title: "Telnyx SMS/Voice", desc: "Send texts and place calls through your connected Telnyx number.", actions: ["Connect your Telnyx account", "Send a text", "Check the message log"] },
+  "comm-log":      { title: "Communications Log", desc: "Every message in and out — email, text and calls — in one chronological history.", actions: ["Filter by contact or channel", "Open an entry to see its content"] },
+  tickets:         { title: "Support Tickets", desc: "Support requests raised in your workspace and their status.", actions: ["Open a ticket", "Reply and change its status"] },
+  inbox:           { title: "Private Email", desc: "A mailbox for your own domain, so email to your business lands inside the CRM.", actions: ["Connect your domain", "Read and reply to a message"] },
+  calendar:        { title: "Calendar", desc: "Events and appointments for you and your team.", actions: ["Create an event", "Open one to see its details"] },
+  bookings:        { title: "Bookings", desc: "Appointment slots people can book with you, and the bookings they made.", actions: ["Set your availability", "Review upcoming bookings"] },
+  "ai-assistant":  { title: "AI Assistant", desc: "Ask questions about your data, or have it draft content for you.", actions: ["Connect an AI provider in the Integration Center", "Ask it something"] },
+  "tracked-links": { title: "Tracked Links", desc: "Links you can send that report back when someone clicks them.", actions: ["Create a tracked link", "Copy it into a message", "Check its clicks"] },
+  checklists:      { title: "Checklists", desc: "Repeatable step lists your team works through for a process.", actions: ["Create a checklist", "Tick items off"] },
+  "round-robin":   { title: "Round Robin", desc: "Share new leads evenly around your team instead of one person taking all of them.", actions: ["Turn it on", "Choose which team members take leads"] },
+  profile:         { title: "Profile", desc: "Your own account details and sign-in.", actions: ["Update your name and password"] },
+  integrations:    { title: "Integration Center", desc: "Connect the outside services the CRM uses — email, texting, AI and payment providers.", actions: ["Add a provider's credentials", "Test the connection"] },
+  team:            { title: "Team & Invites", desc: "The people who share this workspace and what each of them can do.", actions: ["Invite someone", "Change a role"] },
+  webhooks:        { title: "Webhooks", desc: "Send your workspace's events out to another system in real time.", actions: ["Add an endpoint", "Pick which events it receives"] },
+  portfolio:       { title: "Portfolio Companies", desc: "Platform operator view: the businesses managed on this platform.", actions: ["Open a company", "Change its plan"] },
+  users:           { title: "Users", desc: "Platform operator view: every user account across the platform.", actions: ["Search for a user", "Open one to see their account"] },
+  billing:         { title: "Billing & Plans", desc: "Your subscription — the plan you are on and the plans you can move to.", actions: ["Compare plans", "Upgrade or change your plan"] },
+  widgets:         { title: "Widgets", desc: "Platform operator view: embeddable pieces you can add to a customer's site.", actions: ["Create a widget"] },
+  "native-apps":   { title: "Native Apps", desc: "Platform operator view: the mobile and desktop apps offered to customers.", actions: ["Review the apps"] },
+  "audit-log":     { title: "Audit Log", desc: "Platform operator view: a record of who changed what, for accountability.", actions: ["Filter by user or action"] },
+  monitoring:      { title: "Monitoring", desc: "Platform operator view: health and activity of the platform.", actions: ["Check the current status"] },
+  "telnyx-admin":  { title: "Telnyx Admin", desc: "Platform operator view: the Telnyx calling and texting setup shared across accounts.", actions: ["Review the configuration"] },
+  "email-admin":   { title: "Private Email Admin", desc: "Platform operator view: domains and mailboxes across the platform.", actions: ["Review domains", "Open a mailbox"] },
+  "features-plans":{ title: "Features & Plans", desc: "Platform operator view: which features each plan includes and unlocks.", actions: ["Review a plan's features", "Change what a plan includes"] },
+  configuration:   { title: "Configuration", desc: "Platform operator view: platform-wide settings.", actions: ["Update a setting"] }
+};
+</script>
+<script src="/inline-guide-widget.js"></script>
 </body>
 </html>
 
