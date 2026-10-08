@@ -522,11 +522,16 @@ pub async fn forgot_password(
     // the lookup matches `lower(email)` so a row stored before normalisation still resolves.
     let email = email_addr::normalize(&req.email).map_err(AppError::Validation)?;
 
-    // Look up user
-    let user = sqlx::query_as::<_, UserRow>("SELECT id, name FROM users WHERE lower(email) = $1")
-        .bind(&email)
-        .fetch_optional(&state.db)
-        .await?;
+    // Look up user. `tenant_id` comes along because the mail path needs it: `outbound_messages.tenant_id`
+    // is a NOT NULL FK to `tenants`, so queueing the reset with `Uuid::nil()` violated the constraint
+    // and the send was swallowed by the `let _ =` below — the reset mail never left the box at all,
+    // silently (measured 2026-10-08, kanban t_71cc3ad8). The row's own workspace is the correct tenant.
+    let user = sqlx::query_as::<_, UserRow>(
+        "SELECT id, name, tenant_id FROM users WHERE lower(email) = $1",
+    )
+    .bind(&email)
+    .fetch_optional(&state.db)
+    .await?;
 
     let user = match user {
         Some(u) => u,
@@ -559,14 +564,19 @@ pub async fn forgot_password(
         "app_url": "https://app.coreswiftcrm.com",
     });
 
-    let _ =
-        crate::email::send_template_email(&state.db, Uuid::nil(), &email, "password_reset", &vars)
-            .await
-            .map_err(|e| {
-                tracing::warn!(error = %e, "Failed to send password reset email via template");
-                e
-            })
-            .ok();
+    let _ = crate::email::send_template_email(
+        &state.db,
+        user.tenant_id,
+        &email,
+        "password_reset",
+        &vars,
+    )
+    .await
+    .map_err(|e| {
+        tracing::warn!(error = %e, "Failed to send password reset email via template");
+        e
+    })
+    .ok();
 
     Ok(Json(
         json!({"message": "If that email is registered, a reset link has been sent."}),
@@ -640,6 +650,7 @@ pub async fn reset_password(
 struct UserRow {
     id: Uuid,
     name: String,
+    tenant_id: Uuid,
 }
 
 #[derive(Debug, sqlx::FromRow)]

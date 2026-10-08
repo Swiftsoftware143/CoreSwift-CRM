@@ -24,6 +24,42 @@ use uuid::Uuid;
 pub const APP_NAME: &str = "CoreSwift CRM";
 pub const APP_URL: &str = "https://app.coreswiftcrm.com";
 
+/// The app's own support address — the one a customer writes to.
+///
+/// CoreSwift's transactional mail carried NO support address at all (measured 2026-10-08,
+/// kanban t_f1931c05 -> t_71cc3ad8), so [`with_support_footer`] adds this to every message that
+/// leaves this module. Fleet rule established with the sibling apps: `support@<the app's own main
+/// domain>` — never another company's domain, never the platform's.
+pub const SUPPORT_EMAIL: &str = "support@coreswiftcrm.com";
+
+/// Append the support line to a rendered transactional body.
+///
+/// Applied in [`queue_outbound_message`] rather than to one body literal, so a body that comes from
+/// the AUTHORITATIVE `email_templates` row carries the address exactly like the inline fallback
+/// does, and a template added later inherits it. An EMPTY body stays empty (an empty `html_body`
+/// means "no HTML part" and must not become a footer-only part), and a body that already carries the
+/// address is returned untouched, so this is idempotent.
+///
+/// `pub(crate)` so the admin test-send route (`src/admin_actions/email_config.rs`) — which builds its
+/// body inline and never touches [`queue_outbound_message`] — can put the SAME footer on the message
+/// an operator inspects, instead of a second, quietly drifting copy of the wording.
+pub(crate) fn with_support_footer(text: &str, html: &str) -> (String, String) {
+    let text = if text.is_empty() || text.contains(SUPPORT_EMAIL) {
+        text.to_string()
+    } else {
+        format!("{}\n\nNeed help? Contact {}\n", text, SUPPORT_EMAIL)
+    };
+    let html = if html.is_empty() || html.contains(SUPPORT_EMAIL) {
+        html.to_string()
+    } else {
+        format!(
+            "{}\n<p style=\"font-size:13px;color:#6b7280;text-align:center;\">Need help? Contact <a href=\"mailto:{}\">{}</a></p>",
+            html, SUPPORT_EMAIL, SUPPORT_EMAIL
+        )
+    };
+    (text, html)
+}
+
 /// Get available merge fields for a given template type.
 /// Returns a list of field names that can be used in templates.
 /// `app_name` and `app_url` are always supplied by this module; the rest come from the caller.
@@ -232,11 +268,16 @@ async fn queue_outbound_message(
     html_body: &str,
     is_html: bool,
 ) -> Result<(), String> {
+    // Every transactional body leaves with the app's own support address on it. Applied HERE, at
+    // the single queue point that BOTH the `email_templates` row and the inline fallback pass
+    // through, so the address reaches the real message whichever body was chosen.
+    let (text_body, html_body) = with_support_footer(text_body, html_body);
+
     // Build the body: use html if available and is_html, otherwise text
     let body = if is_html && !html_body.is_empty() {
-        html_body.to_string()
+        html_body
     } else {
-        text_body.to_string()
+        text_body
     };
 
     sqlx::query(
@@ -450,5 +491,39 @@ mod tests {
                 "migrations/084_email_templates.sql does not carry this text verbatim: {literal}"
             );
         }
+    }
+
+    #[test]
+    fn the_seeded_welcome_template_body_gains_the_support_address() {
+        // Regression guard for the whole card (t_71cc3ad8): the transactional body that reaches the
+        // message must name the app's OWN support address, whichever body was chosen.
+        let (text, html) = with_support_footer(SEEDED_BODY, SEEDED_HTML);
+        assert!(
+            text.contains(SUPPORT_EMAIL),
+            "text body lacks the support address"
+        );
+        assert!(
+            html.contains(SUPPORT_EMAIL),
+            "html body lacks the support address"
+        );
+    }
+
+    #[test]
+    fn support_footer_is_idempotent_and_never_added_to_an_empty_body() {
+        let (t, h) = with_support_footer("Body", "<p>Body</p>");
+        assert!(t.ends_with(&format!("Need help? Contact {}\n", SUPPORT_EMAIL)));
+        assert!(h.contains(&format!("mailto:{}", SUPPORT_EMAIL)));
+        // a body that already carries the address is returned untouched
+        assert_eq!(with_support_footer(&t, &h), (t.clone(), h.clone()));
+        // "" means "no body part", not "footer only"
+        assert_eq!(with_support_footer("", ""), (String::new(), String::new()));
+    }
+
+    #[test]
+    fn support_address_is_on_this_apps_own_domain() {
+        // Exactly the defect this card closes: a support address pointed at the platform/vendor
+        // domain instead of the app's own.
+        assert!(SUPPORT_EMAIL.ends_with("@coreswiftcrm.com"));
+        assert!(!SUPPORT_EMAIL.contains("swiftsoftware.net"));
     }
 }

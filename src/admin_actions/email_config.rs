@@ -294,6 +294,11 @@ pub async fn test_config(
         transport.from,
         transport.url
     );
+    // The test message is built inline here (it never touches `email::queue_outbound_message`), so
+    // the app's own support address is put on it with the SAME helper the transactional path uses
+    // (kanban t_71cc3ad8) — one wording, no drifting copy. The operator's test mail is the one
+    // message they read after entering credentials, so it must carry what a real send carries.
+    let text = crate::email::with_support_footer(&text, "").0;
 
     let msg_id = Uuid::new_v4();
     sqlx::query(
