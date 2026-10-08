@@ -1,14 +1,20 @@
 # ============================================================
 # CoreSwift CRM — PRODUCTION docker-compose (canonical)
 # ============================================================
-# NOTE: the authoritative compose lives at /opt/swift/docker/crm-swift/docker-compose.yml
-# on the VPS. It runs the crm-swift image built from the HOST-BUILT binary
+# NOTE: the authoritative compose lives at /opt/swift/docker/coreswiftcrm/docker-compose.yml
+# on the VPS. It runs the coreswiftcrm image built from the HOST-BUILT binary
 # (see Dockerfile above). This repo copy is the source of truth for that file.
+#
+# RENAMED 2026-10-08 (kanban t_0034a77b): the container/image/compose project/context were
+# `crm-swift`, which no longer matched the fleet's convention (funnelswift, workflowswift,
+# adaswift, missedcallrespondr, incentiveswift). Only the NAMES changed — the RELEASE BINARY is
+# still `crm-swift` (Cargo.toml package/bin), so the Dockerfile's `COPY crm-swift` and the
+# /app/crm-swift run path are unchanged, as is the /api/health payload's "service" field.
 # ============================================================
 services:
-  crm-swift:
-    image: crm-swift:latest
-    container_name: crm-swift
+  coreswiftcrm:
+    image: coreswiftcrm:latest
+    container_name: coreswiftcrm
     restart: always
     network_mode: host
     env_file:
