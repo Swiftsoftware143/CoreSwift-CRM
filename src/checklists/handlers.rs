@@ -209,6 +209,34 @@ pub async fn delete_template(
 
 // ====== Instances ======
 
+/// Refuse to start a checklist on an entity that does not exist in the caller's tenant.
+///
+/// `POST /checklists/instances/start/:entity_type/:entity_id` used to accept ANY uuid and ANY
+/// string and write a permanent `checklist_instances` row; the checklists router has no
+/// delete-instance route, so that orphan could not be removed by the app (measured 2026-10-08:
+/// start on a nonexistent contact answered 201 with a real instance id).
+///
+/// A missing entity — including one that belongs to another tenant — answers 404, never 403
+/// (a 403 confirms the row exists elsewhere). An `entity_type` this app does not store answers
+/// 400. SQL is literal per arm: an identifier cannot be a bind parameter, and building a
+/// statement with `format!` is refused by the pre-build gate (rule 5d).
+async fn ensure_entity_exists(
+    db: &sqlx::PgPool,
+    tenant_id: Uuid,
+    entity_type: &str,
+    entity_id: Uuid,
+) -> Result<(), AppError> {
+    match super::lookup_entity(db, tenant_id, entity_type, entity_id).await? {
+        super::EntityLookup::Found => Ok(()),
+        super::EntityLookup::Missing => Err(AppError::NotFound(format!(
+            "{entity_type} {entity_id} not found"
+        ))),
+        super::EntityLookup::Unknown => Err(AppError::BadRequest(format!(
+            "Unsupported entity type '{entity_type}'"
+        ))),
+    }
+}
+
 /// POST /api/checklists/instances/start/{entity_type}/{entity_id} — Start a checklist instance.
 pub async fn start_checklist(
     State(state): State<AppState>,
@@ -216,6 +244,10 @@ pub async fn start_checklist(
     Path((entity_type, entity_id)): Path<(String, Uuid)>,
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+
+    // Refuse a target that is not a real row in this tenant BEFORE anything is written: an
+    // orphan instance cannot be removed by the app (there is no delete-instance route).
+    ensure_entity_exists(&state.db, account_id, &entity_type, entity_id).await?;
 
     // Find matching active template
     let template = sqlx::query_as::<_, (Uuid, i32, i32)>(

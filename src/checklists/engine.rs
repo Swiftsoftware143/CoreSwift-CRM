@@ -22,6 +22,37 @@ pub async fn trigger_checklist(
     };
 
     for (template_id, _stage_count, _days) in templates {
+        // The same rule the HTTP start route applies (`checklists::lookup_entity`): an instance
+        // must point at a row that exists in THIS tenant. This door is the event bus
+        // (`/api/events/ingest/:source`), whose entity_type/entity_id come from the caller, so
+        // without this guard a bogus pair wrote an orphan instance the app cannot delete
+        // (t_e73ea76a). This function is fire-and-forget, so a refusal is a WARNING and no row is
+        // written — it never changes the caller's status code.
+        match super::lookup_entity(db, tenant_id, entity_type, entity_id).await {
+            Ok(super::EntityLookup::Found) => {}
+            Ok(super::EntityLookup::Missing) => {
+                tracing::warn!(
+                    tenant = %tenant_id, entity_type, entity_id = %entity_id,
+                    "checklist trigger skipped: target does not exist in this tenant"
+                );
+                continue;
+            }
+            Ok(super::EntityLookup::Unknown) => {
+                tracing::warn!(
+                    tenant = %tenant_id, entity_type,
+                    "checklist trigger skipped: entity_type is not stored by this app"
+                );
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e, tenant = %tenant_id, entity_type,
+                    "checklist trigger skipped: target lookup failed"
+                );
+                continue;
+            }
+        }
+
         let instance = sqlx::query_as::<_, (Uuid,)>(
             r#"INSERT INTO checklist_instances (id, tenant_id, template_id, entity_type, entity_id)
                VALUES ($1, $2, $3, $4, $5) RETURNING id"#,
