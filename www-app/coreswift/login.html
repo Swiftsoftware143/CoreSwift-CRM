@@ -38,18 +38,18 @@ button:disabled{opacity:.6;cursor:not-allowed}
   </div>
 
   <form class="pane on" id="paneLogin">
-    <label>Email</label><input id="liEmail" type="email" autocomplete="email" required>
-    <label>Password</label><input id="liPass" type="password" autocomplete="current-password" required>
+    <label for="liEmail">Email</label><input id="liEmail" type="email" autocomplete="email" required>
+    <label for="liPass">Password</label><input id="liPass" type="password" autocomplete="current-password" required>
     <button type="submit" id="liBtn">Sign in</button>
   </form>
 
   <form class="pane" id="paneRegister">
     <div class="msg ok" id="inviteNote" style="display:none;margin:0 0 14px"></div>
-    <label>Full name</label><input id="rgName" autocomplete="name" required>
-    <label>Work email</label><input id="rgEmail" type="email" autocomplete="email" required>
-    <label>Password <span style="color:#8b8fa3">(min 8 characters)</span></label><input id="rgPass" type="password" minlength="8" autocomplete="new-password" required>
+    <label for="rgName">Full name</label><input id="rgName" autocomplete="name" required>
+    <label for="rgEmail">Work email</label><input id="rgEmail" type="email" autocomplete="email" required>
+    <label for="rgPass">Password <span style="color:#8b8fa3">(min 8 characters)</span></label><input id="rgPass" type="password" minlength="8" autocomplete="new-password" required>
     <div id="acctField">
-      <label>Workspace name</label><input id="rgAccount" placeholder="e.g. Acme Roofing" required>
+      <label for="rgAccount">Workspace name</label><input id="rgAccount" placeholder="e.g. Acme Roofing" required>
     </div>
     <button type="submit" id="rgBtn">Create free account</button>
     <p class="foot" style="margin-top:12px" id="rgFoot">Starts on the Free plan — no credit card required.</p>
