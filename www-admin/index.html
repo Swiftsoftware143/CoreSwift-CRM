@@ -1277,7 +1277,15 @@ const TAB_RENDERERS = {
     '<div id="trackedLinksTable"><div class="loading-wrap"><div class="spinner"></div> Loading tracked links...</div></div>';
   },
 
-  'checklists': () => placeholderPanel('Checklists', 'Create and manage task checklists for deals, onboarding, and workflows.', '✅'),
+  // Wired to the real backend (src/checklists, mounted at /api/checklists). This panel used to be a
+  // hard-coded placeholder while the API served templates + instances live (the tenant shell,
+  // www-app/coreswift, already drove the same routes). The load runs from TAB_LOADERS['checklists'].
+  'checklists': () => {
+    return pageHeader('Checklists', 'Templates and running checklist instances',
+      '<button class="btn btn-primary btn-sm" onclick="ckNewTemplate()">+ New Template</button> ' +
+      '<button class="btn btn-secondary btn-sm" onclick="ckStartInstance()">▶ Start on a contact</button>') +
+    '<div id="ckContent"><div class="loading-wrap"><div class="spinner"></div> Loading checklists...</div></div>';
+  },
 
   // Wired to the real backend (src/round_robin, mounted at /api/round-robin). This panel used to be
   // a hard-coded stub: "+ Add Member" toasted "coming soon", "Start Rotation"/"Save Rules" carried
@@ -1825,6 +1833,107 @@ async function rrAssignments(teamId) {
   } catch (e) { el.innerHTML = rrErr('Assignments', e, "rrAssignments('" + teamId + "')"); }
 }
 
+// ========== CHECKLISTS (drives /api/checklists — src/checklists) ==========
+// The admin console shipped a placeholder for this whole feature while the API served it (the tenant
+// shell, www-app/coreswift, already drove the same routes). Wire the tab to the real templates /
+// instances surface. Every value rendered comes from the API, never a local guess.
+let CK_CONTACTS = [];
+function ckErr(what, e, retry) {
+  const m = (e && e.message) ? e.message : String(e);
+  const hint = m === 'Payment required'
+    ? 'The checklists module is not part of this workspace&rsquo;s plan. A platform admin turns it on per plan in Modules &amp; Plans.'
+    : escapeHtml(m);
+  return '<div class="card"><div class="card-body"><h3>' + what + ' could not load</h3><p>' + hint + '</p>' +
+    (retry ? '<button class="btn btn-secondary btn-sm" onclick="' + retry + '">Retry</button>' : '') +
+    '</div></div>';
+}
+async function loadChecklistsTab() {
+  const el = document.getElementById('ckContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Loading checklists...</div>';
+  try {
+    const tpls = famList(await API.get('/checklists/templates'), 'templates');
+    const insts = famList(await API.get('/checklists/instances'), 'instances');
+    try { CK_CONTACTS = famList(await API.get('/contacts'), 'contacts'); } catch (_) {}
+    let h = card('Templates',
+      dataTable(['Name', 'Trigger', 'Stages', 'Days/stage', 'Active', 'Actions'],
+        tpls.map(function (t) {
+          return [fh(t.name), fh(t.trigger_type), t.stage_count, t.days_per_stage,
+            t.is_active === false ? '<span class="badge badge-muted">off</span>' : '<span class="badge badge-success">active</span>',
+            '<button class="btn btn-ghost btn-xs" onclick="ckDeleteTemplate(\'' + t.id + '\')">Delete</button>'];
+        }), 'No checklist templates yet.'), '');
+    h += '<br>' + card('Instances',
+      dataTable(['Entity', 'Stage', 'Completed', 'Started', 'Actions'],
+        insts.map(function (i) {
+          return [fh(i.entity_type) + ' ' + String(i.entity_id || '').slice(0, 8),
+            i.current_stage, i.completed ? 'yes' : 'no',
+            i.started_at ? new Date(i.started_at).toLocaleDateString() : '\u2014',
+            '<button class="btn btn-secondary btn-xs" onclick="ckAdvance(\'' + i.id + '\',' + (i.current_stage || 0) + ')">Advance</button>'];
+        }), 'No checklist instances are running.'), '');
+    el.innerHTML = h;
+  } catch (e) { el.innerHTML = ckErr('Checklists', e, 'loadChecklistsTab()'); }
+}
+function ckNewTemplate() {
+  showModal('New Checklist Template',
+    '<div class="form-group"><label>Name</label><input type="text" id="ckName" placeholder="Client onboarding"></div>' +
+    '<div class="form-group"><label>Description</label><input type="text" id="ckDesc"></div>' +
+    '<div class="form-group"><label>Trigger type</label><select id="ckTrigger">' +
+      '<option value="manual">manual</option><option value="deal_created">deal_created</option>' +
+      '<option value="contact_created">contact_created</option></select></div>' +
+    '<div class="form-group"><label>Stages</label><input type="number" id="ckStages" value="3" min="1"></div>' +
+    '<div class="form-group"><label>Days per stage</label><input type="number" id="ckDays" value="2" min="1"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="ckCreateTemplate()">Create</button>');
+}
+async function ckCreateTemplate() {
+  const name = (document.getElementById('ckName').value || '').trim();
+  if (!name) { toast('Template name is required', 'error'); return; }
+  try {
+    await API.post('/checklists/templates', {
+      name: name,
+      description: (document.getElementById('ckDesc').value || '').trim() || null,
+      trigger_type: document.getElementById('ckTrigger').value,
+      stage_count: parseInt(document.getElementById('ckStages').value, 10) || 1,
+      days_per_stage: parseInt(document.getElementById('ckDays').value, 10) || 1
+    });
+    closeModal(); toast('Template created', 'success'); loadChecklistsTab();
+  } catch (e) { toast('Create failed: ' + e.message, 'error'); }
+}
+function ckDeleteTemplate(id) {
+  if (!confirm('Delete this template?')) return;
+  API.del('/checklists/templates/' + id)
+    .then(function () { toast('Template deleted', 'success'); loadChecklistsTab(); })
+    .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+}
+function ckStartInstance() {
+  const opts = CK_CONTACTS.length ? CK_CONTACTS.slice(0, 300).map(function (c) {
+    const nm = c.name || ((c.first_name || '') + ' ' + (c.last_name || '')).trim() || c.email || c.id;
+    return '<option value="' + c.id + '">' + escapeHtml(nm) + '</option>';
+  }).join('') : '<option value="">No contacts available</option>';
+  showModal('Start a Checklist',
+    '<p class="config-desc">Starts the newest active template of this account on the chosen contact ' +
+    '(POST /api/checklists/instances/start/contact/:id).</p>' +
+    '<div class="form-group"><label>Contact</label><select id="ckContact">' + opts + '</select></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="ckStartSubmit()">Start</button>');
+}
+async function ckStartSubmit() {
+  const cid = document.getElementById('ckContact').value;
+  if (!cid) { toast('No contact selected', 'error'); return; }
+  try {
+    await API.post('/checklists/instances/start/contact/' + cid, {});
+    closeModal(); toast('Checklist started', 'success'); loadChecklistsTab();
+  } catch (e) { toast('Start failed: ' + e.message, 'error'); }
+}
+async function ckAdvance(instanceId, currentStage) {
+  try {
+    await API.patch('/checklists/instances/' + instanceId + '/progress', {
+      stage_order: (currentStage || 0) + 1, completed: true
+    });
+    toast('Checklist advanced', 'success'); loadChecklistsTab();
+  } catch (e) { toast('Advance failed: ' + e.message, 'error'); }
+}
+
 const TAB_LOADERS = {
   // The Tracked Links panel registers a loader instead of loading from inside its renderer: the
   // renderer runs BEFORE its HTML is in the document, so an in-renderer load sees no #trackedLinksTable
@@ -1844,6 +1953,9 @@ const TAB_LOADERS = {
   // Same reason as the loaders above: the renderer runs before its HTML is in the document, so the
   // round-robin load registers here and runs against a #rrContent that already exists.
   'round-robin': async () => { await loadRoundRobinTab(); },
+  // Same reason as the loaders above: the renderer runs before its HTML is in the document, so the
+  // checklists load registers here and runs against a #ckContent that already exists.
+  'checklists': async () => { await loadChecklistsTab(); },
   // Lead Scoring panel: registers a loader for the same reason as the loaders above (its renderer
   // runs before its HTML is in the document, so an in-renderer load sees no #scoringRules).
   'lead-scoring': async () => { await loadScoringTab(); },
