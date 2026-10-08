@@ -5440,7 +5440,9 @@ async function saveBranding() {
     const settings = Object.assign({}, (cur && cur.settings) || {});
     const prev = settings.email_branding || {};
     settings.email_branding = { brand_name: name, brand_color: color, logo_url: prev.logo_url || '' };
-    await API.put('/account/' + currentAid() + '/settings', settings);
+    // The workspace settings route is PATCH /api/account/:id/settings — a PUT answers 405 (measured
+    // in a real browser on the live console, kanban t_feab8aff).
+    await API.patch('/account/' + currentAid() + '/settings', settings);
     if (status) status.textContent = 'Branding saved.';
   } catch (e) {
     if (status) status.textContent = 'Could not save: ' + e.message;
