@@ -763,6 +763,12 @@ fn is_placeholder_address(email: &str) -> bool {
         || domain.contains("placeholder")
         || domain.ends_with(".local")
         || domain == "localhost"
+        // Delegate to the app's ONE reserved-destination predicate (the same one the send path
+        // enforces through `refuse_reserved_destination`): example.com/.net/.org, .invalid, .test,
+        // .example, .local, localhost. Without this the door mints an account whose credentials
+        // email can never be delivered — orphaning a junk tenant and bouncing against the shared
+        // sending domain (kanban t_a8bd2860).
+        || crate::communications::providers::reserved_domain(email).is_some()
 }
 
 /// A server-generated password for a machine-minted account. 20 characters from an unambiguous
@@ -775,4 +781,38 @@ fn generate_password() -> String {
     (0..20)
         .map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_placeholder_address;
+
+    /// t_a8bd2860: the door must refuse an RFC 2606 / RFC 6761 reserved address BEFORE minting —
+    /// these can never receive the credentials email, so a mint orphans a tenant and bounces.
+    #[test]
+    fn reserved_addresses_are_refused_and_real_ones_allowed() {
+        for bad in [
+            "someone@example.com",
+            "someone@example.net",
+            "someone@example.org",
+            "a@sub.example.com",
+            "x@foo.invalid",
+            "x@foo.test",
+            "x@foo.example",
+            "x@host.local",
+            "x@localhost",
+            "fs-provision-abc@real.example.org",
+            "provision-abc@acme.com",
+            "a@placeholder.swift",
+        ] {
+            assert!(is_placeholder_address(bad), "{bad} must be refused");
+        }
+        for good in [
+            "owner@acme.com",
+            "jane.doe@company.io",
+            "billing@swiftsoftware.net",
+        ] {
+            assert!(!is_placeholder_address(good), "{good} must be allowed");
+        }
+    }
 }
