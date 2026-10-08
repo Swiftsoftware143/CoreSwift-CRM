@@ -64,7 +64,7 @@ pub(crate) fn with_support_footer(text: &str, html: &str) -> (String, String) {
 /// Returns a list of field names that can be used in templates.
 /// `app_name` and `app_url` are always supplied by this module; the rest come from the caller.
 pub fn get_merge_fields(template_type: &str) -> Vec<&'static str> {
-    match template_type {
+    let mut fields = match template_type {
         "welcome" => vec!["name", "email", "password", "app_url", "app_name"],
         "purchase_confirmed" => vec!["name", "plan_name", "app_url", "app_name"],
         "password_reset" => vec!["name", "token", "app_url", "app_name"],
@@ -78,7 +78,12 @@ pub fn get_merge_fields(template_type: &str) -> Vec<&'static str> {
             "token",
             "account_name",
         ],
-    }
+    };
+    // Per-TENANT email branding (migration 116): bound on EVERY send by `apply_branding`, so an
+    // admin-authored {{brand_name}}/{{logo_url}} can never reach a recipient as literal text.
+    fields.push("brand_name");
+    fields.push("logo_url");
+    fields
 }
 
 /// Render a template string by replacing {{key}} placeholders with values from `vars`.
@@ -106,6 +111,12 @@ fn render_vars(vars: &serde_json::Value, app_name: &str, app_url: &str) -> serde
         .or_insert_with(|| json!(app_name));
     map.entry("app_url".to_string())
         .or_insert_with(|| json!(app_url));
+    // Advertised for every type (see `get_merge_fields`) and bound per-account in `apply_branding`;
+    // defaulted here so a template using them never renders with an empty map entry missing.
+    map.entry("brand_name".to_string())
+        .or_insert_with(|| json!(""));
+    map.entry("logo_url".to_string())
+        .or_insert_with(|| json!(""));
     serde_json::Value::Object(map)
 }
 
@@ -268,10 +279,17 @@ async fn queue_outbound_message(
     html_body: &str,
     is_html: bool,
 ) -> Result<(), String> {
+    // Per-TENANT email branding (kanban t_feab8aff): applied at the ONE queue point BOTH the
+    // `email_templates` row and the inline fallback pass through, so a template added later inherits
+    // the header for free. An account with no branding renders byte-identical mail (the change is
+    // additive — `Branding::from_value` returns None), and the header is prepended BEFORE the
+    // support footer so the footer stays last.
+    let (text_body, html_body, is_html) =
+        apply_branding(db, tenant_id, text_body, html_body, is_html).await;
     // Every transactional body leaves with the app's own support address on it. Applied HERE, at
     // the single queue point that BOTH the `email_templates` row and the inline fallback pass
     // through, so the address reaches the real message whichever body was chosen.
-    let (text_body, html_body) = with_support_footer(text_body, html_body);
+    let (text_body, html_body) = with_support_footer(&text_body, &html_body);
 
     // Build the body: use html if available and is_html, otherwise text
     let body = if is_html && !html_body.is_empty() {
@@ -525,5 +543,52 @@ mod tests {
         // domain instead of the app's own.
         assert!(SUPPORT_EMAIL.ends_with("@coreswiftcrm.com"));
         assert!(!SUPPORT_EMAIL.contains("swiftsoftware.net"));
+    }
+}
+
+/// Prepend the tenant's email-branding header to a body about to be queued (kanban t_feab8aff).
+///
+/// Returns `(text_body, html_body, is_html)`. Additive by construction: with no branding configured
+/// the inputs come back untouched, so every existing workspace's mail is byte-identical to before
+/// this feature. `{{brand_name}}`/`{{logo_url}}` are bound HERE because they are per-account and
+/// cannot live in a `&'static str` default map. If the message has no HTML part at all, one is built
+/// from the ESCAPED text so the logo has somewhere to render — a text part cannot carry an image,
+/// and `outbound_messages` carries a single body column.
+async fn apply_branding(
+    db: &PgPool,
+    tenant_id: Uuid,
+    text_body: &str,
+    html_body: &str,
+    is_html: bool,
+) -> (String, String, bool) {
+    let Some(brand) = crate::branding::load(db, tenant_id).await else {
+        return (text_body.to_string(), html_body.to_string(), is_html);
+    };
+    let logo_absolute = brand.resolve_logo_url(APP_URL);
+    let header = brand.header_html(logo_absolute.as_deref());
+    let vars = json!({
+        "brand_name": brand.brand_name.clone(),
+        "logo_url": logo_absolute.clone().unwrap_or_default(),
+    });
+    let text_body = format!(
+        "{}{}",
+        brand.text_header(),
+        render_template(text_body, &vars)
+    );
+    let html_body = render_template(html_body, &vars);
+
+    if is_html && !html_body.is_empty() {
+        (text_body, format!("{header}{html_body}"), true)
+    } else if header.is_empty() {
+        (text_body, html_body, is_html)
+    } else {
+        let escaped = crate::branding::escape_html(&text_body);
+        (
+            text_body,
+            format!(
+                "{header}<div style=\"white-space:pre-wrap;font:15px/1.5 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827\">{escaped}</div>"
+            ),
+            true,
+        )
     }
 }

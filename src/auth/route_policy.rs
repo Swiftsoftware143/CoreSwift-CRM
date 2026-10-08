@@ -33,7 +33,7 @@
 //!        t_e968e9ad: `/api/admin/provisioning-config` and
 //!        `/api/v1/internal/provision-free-account`) were measured the same way and each answered
 //!        401 anonymous; both are named in the lists below
-//!    26 deliberate anonymous entries  -> PUBLIC_ROUTES  (23 /api + 3 /inbound)
+//!    27 deliberate anonymous entries  -> PUBLIC_ROUTES  (24 /api + 3 /inbound)
 //!    15 service-to-service entries    -> INTERNAL_ROUTES (all /api, reached with the shared key)
 //!     2 issued-API-key entries        -> API_KEY_ROUTES  (/api/external/**)
 //!     9 served surfaces outside the boundary: the SPA mount, /track/:slug and the eight
@@ -133,6 +133,11 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/public/bookings/public/slots/questions",
     // Public contact form on the marketing site.
     "/api/public/contact",
+    // The per-tenant email-branding logo (kanban t_feab8aff). A MAIL CLIENT fetches this <img src>
+    // with NO credential at all — a token-gated logo would simply never render. It returns one
+    // thing: the image that tenant uploaded, keyed by an unguessable uuid; 404 when there is none.
+    // The authenticated twin (`POST|DELETE /api/account/branding/logo`) stays private.
+    "/api/branding/logo/:tenant_id",
     // --- receivers whose own credential travels in the path -------------------------------------
     // `/api/webhook/{token}/{action}`: the token IS the credential — `webhook::handlers` looks the
     // automation webhook up by `webhook_token` and answers 401 for an unknown one ("No auth header
@@ -907,12 +912,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            363,
+            365,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 351,
+            api, 353,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

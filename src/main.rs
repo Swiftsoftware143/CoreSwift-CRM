@@ -17,6 +17,7 @@ pub mod automation;
 pub mod billing;
 mod body_deadline;
 pub mod bookings;
+pub mod branding;
 pub mod campaigns;
 pub mod checklists;
 pub mod communications;
@@ -34,6 +35,7 @@ pub mod events;
 pub mod external_api;
 mod features;
 pub mod google_calendar;
+pub mod image_store;
 pub mod inbound;
 pub mod industries;
 pub mod integration_center;
@@ -377,6 +379,13 @@ async fn main() -> anyhow::Result<()> {
         // Health check (no auth required)
         .route("/api/health", get(health_check))
         .route("/api/ready", get(ready_check))
+        // Per-tenant email-branding logo. A MAIL CLIENT fetches this <img src> with NO credential,
+        // so it is deliberately anonymous (see auth::route_policy [PUBLIC_ROUTES]); it returns only
+        // the image a tenant uploaded, keyed by an unguessable uuid, and 404s when there is none.
+        .route(
+            "/api/branding/logo/:tenant_id",
+            get(crate::account::branding::serve_logo),
+        )
         // Serve SPA at root
         .nest_service("/", ServeDir::new("public"))
         // Auth routes (public group + auth-middleware-guarded /invite & /me/usage)

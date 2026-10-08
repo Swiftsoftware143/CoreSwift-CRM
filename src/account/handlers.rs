@@ -129,11 +129,39 @@ pub async fn update_settings(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
     Path(id): Path<Uuid>,
-    Json(settings): Json<serde_json::Value>,
+    Json(mut settings): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     if c.role != "agency_admin" && aid != id {
         return Err(AppError::Forbidden);
+    }
+    // Per-tenant email branding (kanban t_feab8aff): validate the document here, and let an OMITTED
+    // `logo_url` inherit the stored value. The logo endpoints are the only writers of that field, and
+    // the panel echoes back the document it was given, so a stale echo must not un-reference a logo
+    // that is still stored (one writer per field).
+    if let Some(doc) = settings
+        .get(crate::branding::SETTINGS_KEY)
+        .filter(|v| !v.is_null())
+    {
+        crate::branding::validate_value(doc).map_err(AppError::BadRequest)?;
+        if let Some(obj) = settings
+            .get_mut(crate::branding::SETTINGS_KEY)
+            .and_then(|v| v.as_object_mut())
+        {
+            if !obj.contains_key("logo_url") {
+                let stored: Option<String> = sqlx::query_scalar(
+                    "SELECT settings -> 'email_branding' ->> 'logo_url' FROM tenants WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_optional(&s.db)
+                .await?
+                .flatten();
+                obj.insert(
+                    "logo_url".to_string(),
+                    serde_json::Value::String(stored.unwrap_or_default()),
+                );
+            }
+        }
     }
     let r = sqlx::query("UPDATE tenants SET settings=$1, updated_at=NOW() WHERE id=$2")
         .bind(&settings)

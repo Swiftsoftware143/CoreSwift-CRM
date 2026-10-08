@@ -659,7 +659,10 @@ const SETTINGS_MENU = [
   // there is no platform-wide webhook list and no route that reads another workspace's endpoints.
   // A platform-operator-only screen therefore had nothing of its own to show and every press would
   // have hit the operator's OWN workspace. Tenant scope it is: this is the arm (a) decision.
-  { id:'webhooks', icon:'🔗', label:'Webhooks' }
+  { id:'webhooks', icon:'🔗', label:'Webhooks' },
+  // Per-TENANT email branding (kanban t_feab8aff, ported from t_c06a32eb). Lives in the
+  // workspace's OWN settings menu: the logo and name are the ACCOUNT's, set by the account.
+  { id:'branding', icon:'🎨', label:'Email Branding' }
 ];
 
 const ADMIN_MENU = [
@@ -5361,6 +5364,124 @@ TAB_RENDERERS['lists'] = listsShell;
 TAB_RENDERERS['lead-scoring'] = scoringShell;
 TAB_RENDERERS['analytics'] = analyticsShell;
 TAB_RENDERERS['tags'] = tagsShell;
+
+// ── Email branding (kanban t_feab8aff, ported from t_c06a32eb) ────────────────────────────────
+// Per-TENANT logo + display name on every transactional mail this workspace sends. The text half
+// is the workspace's OWN settings document (key `email_branding` inside `tenants.settings`, read
+// and written by /api/account/:id/settings); the logo BYTES live in `tenant_logos` and are served
+// by the PUBLIC GET /api/branding/logo/:id — a mail client fetches that <img> with no credential.
+// An account with neither a name nor a logo gets byte-identical mail to before this feature.
+const BRANDING_MAX_BYTES = 2031616; // 2 MB minus the multipart envelope — the SAME cap the server checks
+
+// The caller's OWN workspace id, read from the signed token's `aid` claim: it is what the server
+// authors the write against, so it can never be another workspace's id and cannot be typed in.
+function currentAid() {
+  try { return JSON.parse(atob((STATE.token || '').split('.')[1])).aid || ''; } catch (_) { return ''; }
+}
+
+TAB_RENDERERS['branding'] = () => {
+  return pageHeader('Email Branding', 'Your logo and display name on every transactional email this workspace sends') +
+  card('Brand identity', '' +
+    '<div class="form-group"><label>Brand display name</label>' +
+      '<input type="text" id="brandName" maxlength="60" placeholder="e.g. Giraudy Capital">' +
+      '<span class="form-hint">Up to 60 characters. Printed above the message, and used as the logo\u2019s alt text so a blocked image still says whose mail it is.</span></div>' +
+    '<div class="form-group"><label>Brand colour</label> ' +
+      '<input type="color" id="brandColor" value="#4f46e5" style="width:64px;height:34px;padding:2px;vertical-align:middle">' +
+      '<span class="form-hint">The rule painted under the logo. Default #4f46e5.</span></div>',
+    '<button class="btn btn-primary" data-ops="branding-save" onclick="saveBranding()">Save branding</button>') +
+  '<br>' +
+  card('Logo', '' +
+    '<div class="form-group"><label>Logo image</label>' +
+      '<input type="file" id="brandLogoFile" accept="image/png,image/jpeg,image/gif,image/webp">' +
+      '<span class="form-hint">PNG, JPEG, GIF or WebP, up to 2 MB.</span></div>' +
+    '<div id="brandLogoPreviewWrap" style="margin-top:12px"></div>',
+    '<button class="btn btn-secondary" data-ops="branding-upload" onclick="uploadBrandingLogo()">Upload logo</button> ' +
+    '<button class="btn btn-ghost" data-ops="branding-remove" onclick="removeBrandingLogo()">Remove logo</button>') +
+  '<div id="brandingStatus" style="margin-top:10px;color:var(--text-muted)"></div>';
+};
+
+TAB_LOADERS['branding'] = loadBrandingTab;
+
+async function loadBrandingTab() {
+  const status = document.getElementById('brandingStatus');
+  try {
+    const d = await API.get('/account/' + currentAid() + '/settings');
+    const b = (d && d.settings && d.settings.email_branding) || {};
+    const nameEl = document.getElementById('brandName');
+    const colorEl = document.getElementById('brandColor');
+    // The SERVER's stored values, not the last thing typed: the panel renders what is in the row.
+    if (nameEl) nameEl.value = b.brand_name || '';
+    if (colorEl && /^#[0-9a-fA-F]{6}$/.test(b.brand_color || '')) colorEl.value = b.brand_color;
+    renderBrandLogoPreview(b.logo_url || '');
+    if (status) status.textContent = '';
+  } catch (e) {
+    if (status) status.textContent = 'Could not load branding: ' + e.message;
+  }
+}
+
+function renderBrandLogoPreview(logoPath) {
+  const wrap = document.getElementById('brandLogoPreviewWrap');
+  if (!wrap) return;
+  wrap.innerHTML = logoPath
+    ? '<div style="color:var(--text-muted);font-size:12px;margin-bottom:6px">Current logo</div>' +
+      '<img src="' + escapeHtml(logoPath) + '" alt="Logo preview" style="max-height:56px;max-width:240px;border:1px solid var(--border,#333);padding:6px;border-radius:6px;background:#fff">'
+    : '<div style="color:var(--text-muted);font-size:12px">No logo uploaded.</div>';
+}
+
+async function saveBranding() {
+  const status = document.getElementById('brandingStatus');
+  const name = (document.getElementById('brandName') || {}).value || '';
+  const color = (document.getElementById('brandColor') || {}).value || '';
+  try {
+    // Full-document read-modify-write so no other setting of this workspace is lost. `logo_url` is
+    // ECHOED from the stored document — the logo endpoints are its only writer, and the server
+    // inherits the stored value anyway when the key is omitted (one writer per field).
+    const cur = await API.get('/account/' + currentAid() + '/settings');
+    const settings = Object.assign({}, (cur && cur.settings) || {});
+    const prev = settings.email_branding || {};
+    settings.email_branding = { brand_name: name, brand_color: color, logo_url: prev.logo_url || '' };
+    await API.put('/account/' + currentAid() + '/settings', settings);
+    if (status) status.textContent = 'Branding saved.';
+  } catch (e) {
+    if (status) status.textContent = 'Could not save: ' + e.message;
+  }
+}
+
+async function uploadBrandingLogo() {
+  const status = document.getElementById('brandingStatus');
+  const input = document.getElementById('brandLogoFile');
+  if (!input || !input.files || !input.files[0]) { if (status) status.textContent = 'Choose an image first.'; return; }
+  const file = input.files[0];
+  // The picker checks the SAME ceiling the server does, so the two refuse the same set of files.
+  if (file.size > BRANDING_MAX_BYTES) {
+    if (status) status.textContent = 'That image is ' + file.size + ' bytes; the limit is ' + BRANDING_MAX_BYTES + '.';
+    return;
+  }
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  try {
+    const res = await fetch('/api/account/branding/logo', {
+      method: 'POST', headers: { 'Authorization': 'Bearer ' + STATE.token }, body: fd,
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const d = await res.json();
+    renderBrandLogoPreview(d.logo_url);
+    if (status) status.textContent = 'Logo uploaded.';
+  } catch (e) { if (status) status.textContent = 'Upload failed: ' + e.message; }
+}
+
+async function removeBrandingLogo() {
+  const status = document.getElementById('brandingStatus');
+  try {
+    const res = await fetch('/api/account/branding/logo', {
+      method: 'DELETE', headers: { 'Authorization': 'Bearer ' + STATE.token },
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    renderBrandLogoPreview('');
+    if (status) status.textContent = 'Logo removed. Your name and colour were kept.';
+  } catch (e) { if (status) status.textContent = 'Remove failed: ' + e.message; }
+}
+
 TAB_RENDERERS['checklists'] = checklistsShell;
 TAB_RENDERERS['round-robin'] = roundRobinShell;
 TAB_RENDERERS['monitoring'] = monitoringShell;

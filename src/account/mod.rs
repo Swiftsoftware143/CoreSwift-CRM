@@ -1,3 +1,4 @@
+pub mod branding;
 pub mod handlers;
 pub mod models;
 pub mod settings;
@@ -16,6 +17,12 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route(
             "/:id/settings",
             axum::routing::patch(handlers::update_settings),
+        )
+        // Per-tenant email branding (kanban t_feab8aff). The id comes from the JWT claim, NOT the
+        // path, so there is nothing to spoof; these are the only writers of `logo_url`.
+        .route(
+            "/branding/logo",
+            axum::routing::post(branding::upload_logo).delete(branding::delete_logo),
         )
         .layer(axum::middleware::from_fn_with_state(
             crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
