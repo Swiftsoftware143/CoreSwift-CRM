@@ -306,6 +306,12 @@ Every feature the admin can switch on/off per plan (source of truth: the module 
 | `tracked_links` | Tracked links | tracked_links | Click tracking links |
 | `private_email` | Private mailbox | private_email | Own domain + mailboxes (also has its own limits) |
 | `portfolio` | Portfolio sync | portfolio | Cross-tenant portfolio management |
+| `account_match` | Account matching | account_match |  |
+| `notifications` | Notifications | notifications |  |
+| `notifications_in_app` | In-app notifications | notifications |  |
+| `notifications_email` | Email notifications | notifications |  |
+| `notifications_sms` | SMS notifications | notifications |  |
+| `notifications_whatsapp` | WhatsApp notifications | notifications |  |
 
 Behaviour: an explicit per-tenant entry in `tenant_plans.feature_overrides` wins, then the
 tenant's **active plan's** assigned modules (`plan_modules` / `plan_module_features`). A flag
