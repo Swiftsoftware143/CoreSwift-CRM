@@ -47,10 +47,6 @@ button:disabled{opacity:.6;cursor:not-allowed}
     <div class="msg ok" id="inviteNote" style="display:none;margin:0 0 14px"></div>
     <label for="rgName">Full name</label><input id="rgName" autocomplete="name" required>
     <label for="rgEmail">Work email</label><input id="rgEmail" type="email" autocomplete="email" required>
-    <label for="rgPass">Password <span style="color:#8b8fa3">(min 8 characters)</span></label><input id="rgPass" type="password" minlength="8" autocomplete="new-password" required>
-    <div id="acctField">
-      <label for="rgAccount">Workspace name</label><input id="rgAccount" placeholder="e.g. Acme Roofing" required>
-    </div>
     <button type="submit" id="rgBtn">Create free account</button>
     <p class="foot" style="margin-top:12px" id="rgFoot">Starts on the Free plan — no credit card required.</p>
   </form>
@@ -94,18 +90,12 @@ button:disabled{opacity:.6;cursor:not-allowed}
   if (INVITE) {
     // Joining an existing workspace: no workspace to name, the token decides the tenant.
     swap(false);
-    document.getElementById('acctField').style.display = 'none';
-    document.getElementById('rgAccount').removeAttribute('required');
     document.getElementById('rgBtn').textContent = 'Join workspace';
     document.getElementById('rgFoot').textContent = 'You will be added to the workspace as soon as you sign up.';
     var note = document.getElementById('inviteNote');
     note.textContent = 'You have been invited to join a CoreSwift CRM workspace. Create your login below — you will join the existing workspace, not a new one.';
     note.style.display = 'block';
     document.title = 'Join your workspace — CoreSwift CRM';
-  }
-
-  function slugify(v) {
-    return String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
   }
 
   function submit(url, body, btn, label, okText) {
@@ -151,26 +141,47 @@ button:disabled{opacity:.6;cursor:not-allowed}
 
   document.getElementById('paneRegister').addEventListener('submit', function (e) {
     e.preventDefault();
-    var name = document.getElementById('rgName').value.trim();
+    hide();
+    var btn = document.getElementById('rgBtn');
     var body = {
-      name: name,
-      email: document.getElementById('rgEmail').value.trim(),
-      password: document.getElementById('rgPass').value
+      name: document.getElementById('rgName').value.trim(),
+      email: document.getElementById('rgEmail').value.trim()
+      // NO password: the server mints the login credentials and emails them (David's signup
+      // model). Nothing is stored here and there is no auto-login — the user confirms their
+      // address by signing in with the password we sent.
     };
     if (INVITE) {
       // resolve_account() joins the inviter's tenant when this field is present and ignores
       // account_name/account_slug, so they are deliberately omitted on the invite path.
       body.invite_token = INVITE;
-    } else {
-      var acct = document.getElementById('rgAccount').value.trim();
-      var slug = slugify(acct) || slugify(name) || 'workspace';
-      if (slug.length < 3) { show('Workspace name must be at least 3 characters.', false); return; }
-      body.account_name = acct;
-      body.account_slug = slug;
     }
-    submit('/api/auth/register', body, document.getElementById('rgBtn'),
-      INVITE ? 'Join workspace' : 'Create free account',
-      INVITE ? 'You have joined the workspace — opening it…' : 'Account created — opening your workspace…');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin"></span>' + (INVITE ? 'Joining…' : 'Creating account…');
+    fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      return res.text().then(function (text) {
+        var data = null;
+        try { data = text ? JSON.parse(text) : null; } catch (err) { data = null; }
+        if (!res.ok) {
+          throw new Error((data && (data.message || data.error)) || ('Request failed (HTTP ' + res.status + ')'));
+        }
+        // The account exists and the credentials were emailed. Show the two-step confirmation and
+        // stop — no session is stored, so the user must sign in with the password we sent.
+        show(INVITE
+          ? 'You have joined the workspace. Check your email — we sent your login details to ' + body.email + '.'
+          : 'Account created! Check your email — we sent your login details to ' + body.email +
+            '. You can change your password any time in your profile settings.', true);
+        btn.disabled = false;
+        btn.textContent = INVITE ? 'Join workspace' : 'Check your email';
+      });
+    }).catch(function (err) {
+      btn.disabled = false;
+      btn.textContent = INVITE ? 'Join workspace' : 'Create free account';
+      show(err.message, false);
+    });
   });
 })();
 </script>

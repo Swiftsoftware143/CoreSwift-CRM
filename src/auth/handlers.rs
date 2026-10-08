@@ -74,17 +74,25 @@ pub async fn register(
     // stores, the tokens carry and the welcome mail is sent to.
     req.email = email_addr::normalize(&req.email).map_err(AppError::Validation)?;
 
-    // Validate input
-    if req.password.is_empty() || req.name.is_empty() {
+    // David's signup model (2026-09-29): the page collects NAME + EMAIL only, so `password` may
+    // arrive empty. The server then mints one and emails it; the user confirms their address by
+    // signing in with it (the real two-step check) and changes it later in profile settings. A
+    // caller that still supplies a password is honoured and validated exactly as before.
+    if req.name.is_empty() {
         return Err(AppError::Validation(
-            "Name, email, and password are required".to_string(),
+            "Name and email are required".to_string(),
         ));
     }
-    if req.password.len() < 8 {
+    if !req.password.is_empty() && req.password.len() < 8 {
         return Err(AppError::Validation(
             "Password must be at least 8 characters".to_string(),
         ));
     }
+    let password = if req.password.is_empty() {
+        crate::auth::signup::generate_temp_password()
+    } else {
+        req.password.clone()
+    };
 
     // `users.email` carries a GLOBAL unique constraint (`users_email_key`, migration 002) and
     // `login` resolves a user by email alone — one address, one workspace, forever. This handler
@@ -122,7 +130,7 @@ pub async fn register(
         crate::auth::signup::MintRequest {
             email: &req.email,
             name: &req.name,
-            password: &req.password,
+            password: &password,
             account_name: req.account_name.as_deref(),
             account_slug: req.account_slug.as_deref(),
             invite_token: req.invite_token.as_deref(),
@@ -164,7 +172,7 @@ pub async fn register(
         &tenant_name,
         &req.email,
         &req.name,
-        &req.password,
+        &password,
     )
     .await;
     let mut next_steps = vec![

@@ -42,6 +42,21 @@ use crate::errors::AppError;
 
 use super::models::TeamMember;
 
+/// The first password the server mints when a signup supplies none (David's NAME + EMAIL model).
+/// 16 chars of entropy from the same `rand` thread RNG the Argon2 salt uses; the glyph set drops
+/// look-alikes (`0O1lI`) so the emailed value is easy to retype on a phone. Never logged.
+pub fn generate_temp_password() -> String {
+    use rand::Rng;
+    const CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#";
+    let mut rng = rand::thread_rng();
+    (0..16)
+        .map(|_| {
+            let idx = rng.gen_range(0..CHARSET.len());
+            CHARSET[idx] as char
+        })
+        .collect()
+}
+
 /// What one mint produced — the owner, the workspace it owns, and whether this call created it.
 pub struct CreatedAccount {
     pub user: TeamMember,
