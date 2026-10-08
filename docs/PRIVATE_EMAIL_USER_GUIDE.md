@@ -2,12 +2,14 @@
 
 ## Overview
 
-Private Email lets you send and receive email from professional addresses on your own domain — like `support@yourcompany.com` or `sales@yourcompany.com` — directly inside CoreSwift CRM. No need to switch between your email app and your CRM. Every email is tracked against your contacts and deals automatically.
+Private Email lets you send email from professional addresses on your own domain — like `support@yourcompany.com` or `sales@yourcompany.com` — through your own provider, from inside CoreSwift CRM. Replies come back into the CRM: inbound mail your provider forwards to us is matched to a contact, logged on their timeline, and can open a support ticket. CoreSwift is not a mail host — your provider keeps the mailbox; this app is where the CRM activity lives.
+
+**Scope:** what private email does and does *not* include is declared in `docs/PRIVATE_EMAIL_SCOPE.md`.
 
 **What you get:**
-- Send and receive email from addresses on your domain
+- Send email from addresses on your domain, with inbound replies routed into the CRM
 - Auto-reply sequences triggered by CRM events
-- Email tracking against contacts and deals
+- Inbound replies matched to contacts and logged on the contact timeline
 - Multiple provider options to fit your setup
 
 ---

@@ -8,7 +8,7 @@ This document contains the in-app wizard text and contextual help messages that 
 
 ### Welcome (Empty State)
 
-> Connect your email domain to send and receive emails from CoreSwift CRM. You'll be able to create professional addresses like `you@yourcompany.com` — and every email is automatically tracked against your contacts and deals.
+> Connect your email domain to send from your own addresses inside CoreSwift CRM. Create professional addresses like `you@yourcompany.com`; replies your provider forwards to us land on the matching contact's timeline.
 
 ### Step 1: Choose Your Provider
 
