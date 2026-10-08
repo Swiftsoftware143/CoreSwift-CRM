@@ -4,8 +4,10 @@
 <meta charset="UTF-8">
 <title>CoreSwift CRM — Sign up</title>
 <script>
-// Sign up now lives as a tab on the single canonical login page.
-window.location.replace('/login');
+// Sign up now lives as a tab on the single canonical login page. Carry the sign-up INTENT
+// through the redirect (?register=1) so the create-account pane opens directly — a visitor who
+// asked to sign up must never be handed a sign-in form to toggle out of (kanban t_7c1398c0).
+window.location.replace('/login?register=1');
 </script>
 </head>
 <body>

@@ -87,6 +87,11 @@ button:disabled{opacity:.6;cursor:not-allowed}
     document.getElementById('paneRegister').classList.toggle('on', !isLogin);
   }
 
+  // The marketing site's Sign-up / "Start Free" links 301 here with ?register=1 (coreswift.conf),
+  // so open the create-account pane directly: the visitor who asked to sign UP must not be shown a
+  // sign-in form with a "Create account" toggle they have to find. Mirrors WorkflowSwift's login.
+  try { if (new URLSearchParams(window.location.search).get('register')) swap(false); } catch (e) {}
+
   if (INVITE) {
     // Joining an existing workspace: no workspace to name, the token decides the tenant.
     swap(false);

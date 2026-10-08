@@ -14,9 +14,9 @@ The vhost's document root IS the `coreswift/` sub-directory, so the tenant shell
 | Source                          | Served as        | Note |
 |---------------------------------|------------------|------|
 | `coreswift/index.html`          | `/`              | the dashboard SPA (`#/overview`, `#/contacts`, `#/pipelines`, `#/tickets`, `#/integrations`, `#/plan`) |
-| `coreswift/login.html`          | `/login`         | sign-in + register tabs; the single entry point for tenants |
+| `coreswift/login.html`          | `/login`         | sign-in + register tabs; the single entry point for tenants. `?register=1` opens the create-account pane directly (the Sign-up redirect target) |
 | `coreswift/favicon.ico`, `.svg` | `/favicon.*`     | |
-| `register/index.html`           | `/register/`     | redirect stub to `/login` (the vhost also 301s it) |
+| `register/index.html`           | `/register/`     | redirect stub to `/login?register=1` (the vhost also 301s it there, carrying the sign-up intent) |
 | `dashboard/index.html`          | `/dashboard/`    | redirect stub to `/` |
 | `README.md`                     | —                | not published |
 
