@@ -887,6 +887,55 @@ pub async fn cross_app_sync(
         .unwrap_or("")
         .to_string();
 
+    // ── Idempotency on the sync `id` (kanban t_c25dd7b5) ─────────────────────────────────────
+    // This door PROVISIONS ACCOUNTS: it mints a `tenants` row plus its plan row and an
+    // argon2-hashed `users` row BEFORE the `portfolio_companies` upsert, and that upsert used to
+    // be keyed on a RANDOM uuid rather than the caller's sync id — so a REPEAT push of one id
+    // re-ran the whole mint. Measured live pre-fix: push1 of a new id -> 200 synced; push2 of the
+    // SAME id with a different contact email -> 500 `Database error` (`tenants_slug_key`, the
+    // derived slug already exists) with nothing refreshed; a third push with the original email
+    // -> 409. The sync could not be re-run. The account is keyed on the COMPANY, so look the
+    // company up FIRST: an id we already hold is a REFRESH, never a re-provision. Only the
+    // descriptive columns move (name, email, description) — NOT `tenant_id` (the scoping key) and
+    // NOT `slug` (bound at mint; re-deriving it would manufacture drift). Same contract the fleet
+    // settled on for the twin door (missedcallrespondr, t_ff373bd1) and FunnelSwift (t_149639f7).
+    let sync_id = req
+        .get("id")
+        .and_then(|v| v.as_str())
+        .and_then(|v| Uuid::parse_str(v).ok())
+        .unwrap_or_else(Uuid::new_v4);
+
+    let owner_tenant_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT tenant_id FROM portfolio_companies WHERE id = $1")
+            .bind(sync_id)
+            .fetch_optional(&s.db)
+            .await?;
+
+    if let Some(account_id) = owner_tenant_id {
+        sqlx::query(
+            "UPDATE portfolio_companies SET name = $2, email = $3, description = $4, updated_at = NOW() WHERE id = $1",
+        )
+        .bind(sync_id)
+        .bind(&name)
+        .bind(&email)
+        .bind(&description)
+        .execute(&s.db)
+        .await?;
+
+        // 200 `already_exists` (the fleet twin's idempotent answer): the account that already owns
+        // the company, and NO `user_id`/`password` — nothing was minted this time, so there is no
+        // credential to share and no credential mail is sent.
+        return Ok(Json(json!({
+            "status": "already_exists",
+            "id": sync_id.to_string(),
+            "name": name,
+            "email": email,
+            "account_id": account_id.to_string(),
+            "tenant_id": account_id.to_string(),
+            "note": "This company already has an account; its contact details were refreshed and no new credentials were created."
+        })));
+    }
+
     let existing = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE email = $1")
         .bind(&email)
         .fetch_one(&s.db)
@@ -901,19 +950,55 @@ pub async fn cross_app_sync(
     }
 
     let tenant_id = Uuid::new_v4();
-    let tenant_slug = name.to_lowercase().replace(' ', "-");
-
     // The mint and its plan row commit TOGETHER (kanban t_6f225dd4): a tenant with no
     // `tenant_plans` row resolves through `module_registry::resolve`'s `no_plan` arm — every
     // registered module granted and NO numeric ceiling. This cross-app sync used to mint such a
     // workspace; it now seats the platform default (`free`) a signup gets.
+    //
+    // Slug: derive from the company name, then take the first FREE one. `tenants.slug` carries
+    // UNIQUE `tenants_slug_key`, and this door used to insert the raw derived slug plainly, so a
+    // company whose name collided answered 500 straight from the index (measured live pre-fix).
+    // `ON CONFLICT (slug) DO NOTHING` + a bounded retry turns that into a real account.
+    let base_slug: String = {
+        let s: String = name
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let s = s.trim_matches('-').to_string();
+        if s.is_empty() {
+            "company".to_string()
+        } else {
+            s.chars().take(48).collect()
+        }
+    };
     let mut tx = s.db.begin().await?;
-    sqlx::query("INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)")
+    let mut tenant_slug: Option<String> = None;
+    for attempt in 0..6 {
+        let candidate = if attempt == 0 {
+            base_slug.clone()
+        } else {
+            format!("{}-{}", base_slug, attempt)
+        };
+        let inserted = sqlx::query(
+            "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3) ON CONFLICT (slug) DO NOTHING",
+        )
         .bind(tenant_id)
         .bind(&name)
-        .bind(&tenant_slug)
+        .bind(&candidate)
         .execute(&mut *tx)
         .await?;
+        if inserted.rows_affected() == 1 {
+            tenant_slug = Some(candidate);
+            break;
+        }
+    }
+    let tenant_slug = tenant_slug.ok_or_else(|| {
+        AppError::Internal(format!(
+            "portfolio_sync: no free tenants.slug for company '{}'",
+            name
+        ))
+    })?;
     crate::billing::seat_default_plan(&mut tx, tenant_id).await?;
     tx.commit().await?;
 
@@ -951,7 +1036,7 @@ pub async fn cross_app_sync(
     sqlx::query(
         "INSERT INTO portfolio_companies (id, tenant_id, name, slug, email, description, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW()) ON CONFLICT (id) DO UPDATE SET name = $3, email = $5, description = $6, updated_at = NOW()"
     )
-    .bind(Uuid::new_v4())
+    .bind(sync_id)
     .bind(tenant_id)
     .bind(&name)
     .bind(&tenant_slug)
@@ -962,6 +1047,7 @@ pub async fn cross_app_sync(
 
     Ok(Json(json!({
         "status": "synced",
+        "id": sync_id.to_string(),
         "name": name,
         "email": email,
         "tenant_id": tenant_id.to_string(),
