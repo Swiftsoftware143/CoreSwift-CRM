@@ -1449,6 +1449,21 @@ PATCH /api/account/:id — Update name</pre>
   </div>
 </section>
 
+
+<h2>Email branding</h2>
+<p><strong>Settings &rarr; Email Branding</strong> puts this workspace's own logo, display name and
+colour on every transactional email it sends — the welcome/credentials mail, password resets and
+purchase confirmations. The branding is this account's; nothing is shared with another workspace.</p>
+<ul>
+<li><strong>Brand display name</strong> — up to 60 characters. Printed above the message, and used as
+the logo's <code>alt</code> text so a blocked image still says whose mail it is.</li>
+<li><strong>Brand colour</strong> — a hex colour, painted as the rule under the logo. Default
+<code>#4f46e5</code>.</li>
+<li><strong>Logo</strong> — PNG, JPEG, GIF or WebP, up to 2 MB, with a live preview, <em>Upload logo</em>
+and <em>Remove logo</em>. Uploads are checked against the same size limit the server enforces.</li>
+</ul>
+<p>An account with neither a name nor a logo gets exactly the mail it got before this feature
+existed. Removing the logo keeps the name and the colour.</p>
 </body>
 </html>
 
