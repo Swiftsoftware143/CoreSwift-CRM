@@ -35,6 +35,13 @@
 //!        `.route(..)` calls, 355 mounts on /api/** (the doc's older 363/351 numbers predate the
 //!        routes added before this one).
 //!
+//!   +1 mount / +1 path since (2026-10-10, kanban t_ac2fe688), the panel mass-delete:
+//!        `POST /api/admin/tenants/bulk-delete` on the platform-admin router, the console's
+//!        "Delete selected" control. Private by default — it is on no allowlist, and every arm was
+//!        measured live: anonymous 401, a signed-in tenant `owner` 403, and the caller's own
+//!        workspace / a portfolio row each answered 200 carrying a per-id refusal reason. Now 368
+//!        mounted `.route(..)` calls, 356 mounts on /api/**.
+//!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
 //!        the per-module gate was doing its job. The two /api routes added since (kanban
@@ -935,12 +942,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            367,
+            368,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 355,
+            api, 356,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.
