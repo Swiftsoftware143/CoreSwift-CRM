@@ -846,6 +846,11 @@ const MENU = [
 
 const SETTINGS_MENU = [
   { id:'profile', icon:'👤', label:'Profile' },
+  // Per-tenant email branding (kanban t_feab8aff): the backend shipped with NO console screen —
+  // brand_name / brand_color live in this account's `settings.email_branding`, and the logo bytes in
+  // `tenant_logos`. It is the workspace's OWN identity on the mail it sends, so it belongs with the
+  // tenant Settings menu rather than the platform Admin menu.
+  { id:'email-branding', icon:'🎨', label:'Email Branding' },
   { id:'integrations', icon:'🔌', label:'Integration Center' }
 ];
 
@@ -1328,6 +1333,18 @@ const TAB_RENDERERS = {
       '<div class="form-group"><label>New Password</label><input type="password" id="newPw"></div>' +
       '<div class="form-group"><label>Confirm New Password</label><input type="password" id="confirmPw"></div>',
       '<button class="btn btn-primary" onclick="changePassword()">Update Password</button>');
+  },
+
+  // ── EMAIL BRANDING (per-account identity on transactional email) ──────────────────────────
+  // Backend (kanban t_feab8aff) shipped with NO screen: brand_name / brand_color live in this
+  // account's `tenants.settings -> email_branding` (GET|PATCH /api/account/:id/settings) and the
+  // logo BYTES live in `tenant_logos` (POST|DELETE /api/account/branding/logo, served back by the
+  // public GET /api/branding/logo/:tenant_id). Every rendered mail opens with the header block, so
+  // an account that sets nothing here simply sends with the app's own identity. The panel registers
+  // a TAB_LOADER (below) because the renderer runs before its HTML is in the document.
+  'email-branding': () => {
+    return pageHeader('Email Branding', 'Your logo and name on the transactional email sent for your account') +
+    '<div id="brandPane" data-ops="email-branding-pane"><div class="loading-wrap"><div class="spinner"></div> Loading branding...</div></div>';
   },
 
   'integrations': () => {
@@ -1978,6 +1995,9 @@ const TAB_LOADERS = {
   'lead-scoring': async () => { await loadScoringTab(); },
   'rules': async () => { await loadRulesTab(); },
   'messages': async () => { await loadMessagesTab(); },
+  // Email Branding panel: registers a loader for the same reason as the loaders above — the renderer
+  // runs before its HTML is in the document, so an in-renderer load would see no #brandPane.
+  'email-branding': async () => { await loadBrandingTab(); },
   'dashboard': async () => {
     const statsGridEl = document.getElementById('statsGrid');
     if (!statsGridEl) return;
@@ -3292,6 +3312,124 @@ async function changePassword() {
   } catch(e) {
     toast('Failed: ' + e.message, 'error');
   }
+}
+
+// ── EMAIL BRANDING (per-account identity on transactional email) ──────────────────────────────
+// Reads/writes this account's own settings document and logo:
+//   brand_name / brand_color -> PATCH /api/account/:id/settings  (settings.email_branding)
+//   logo BYTES               -> POST|DELETE /api/account/branding/logo
+// The settings write REPLACES the whole document (`UPDATE tenants SET settings=$1`), so the save
+// reads the current one and MERGES — other keys (communications, ai, support_email_box_id) must
+// survive. `logo_url` is deliberately omitted: the logo endpoints own it and the server preserves
+// the stored value when the key is absent.
+function _acctId() { return STATE.user && STATE.user.account_id; }
+
+async function loadBrandingTab() {
+  const wrap = document.getElementById('brandPane');
+  if (!wrap) return;
+  const acct = _acctId();
+  let brand = {};
+  if (acct) {
+    try {
+      const res = await API.get('/account/' + encodeURIComponent(acct) + '/settings');
+      const doc = (res && res.settings) || {};
+      if (doc && typeof doc.email_branding === 'object' && doc.email_branding) brand = doc.email_branding;
+    } catch(e) { /* an unreadable settings document still renders an unbranded pane, never an error page */ }
+  }
+  const name = brand.brand_name || '';
+  const color = brand.brand_color || '#4f46e5';
+  const logo = brand.logo_url || '';
+  const branded = !!(name || logo);
+  wrap.innerHTML = card(
+    '<span class="card-title">Your branding on transactional email</span>' +
+      '<span class="badge ' + (branded ? 'badge-success' : 'badge-muted') + '">' + (branded ? 'branded' : 'not branded') + '</span>',
+    '<div class="form-hint" style="margin-bottom:12px">This is what your customers see at the top of the signup, password-reset and purchase emails sent for your account. Leave it empty to send with the app\'s default identity.</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 220px;gap:16px;align-items:start">' +
+      '<div>' +
+        '<div class="form-group"><label>Brand display name</label>' +
+          '<input type="text" id="brandName" maxlength="60" value="' + escapeHtmlAttr(name) + '" placeholder="e.g. Acme Capital"></div>' +
+        '<div class="form-group"><label>Brand colour</label>' +
+          '<div style="display:flex;gap:8px;align-items:center">' +
+            '<input type="color" id="brandColorPicker" value="' + escapeHtmlAttr(color) + '" style="width:44px;height:34px;padding:2px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary)">' +
+            '<input type="text" id="brandColor" value="' + escapeHtmlAttr(color) + '" placeholder="#4f46e5" style="flex:1">' +
+          '</div>' +
+          '<div class="form-hint">A hex colour such as #4f46e5. It draws the rule under your logo.</div>' +
+        '</div>' +
+      '</div>' +
+      '<div>' +
+        '<label>Logo</label>' +
+        '<div style="border:1px dashed var(--border);border-radius:10px;height:110px;display:flex;align-items:center;justify-content:center;background:var(--bg-secondary);overflow:hidden">' +
+          (logo ? '<img id="brandLogoImg" src="' + escapeHtmlAttr(logo) + '" alt="Your logo" style="max-width:100%;max-height:100%">'
+                : '<span style="font-size:12px;color:var(--text-secondary)">No logo yet</span>') +
+        '</div>' +
+        '<input type="file" id="brandLogoFile" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none">' +
+        '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">' +
+          '<button class="btn btn-secondary btn-sm" data-ops="branding-logo-pick" onclick="pickBrandLogo()">' + (logo ? 'Replace logo' : 'Upload logo') + '</button>' +
+          (logo ? '<button class="btn btn-secondary btn-sm" data-ops="branding-logo-remove" onclick="removeBrandingLogo()">Remove</button>' : '') +
+        '</div>' +
+        '<div class="form-hint">PNG, JPEG, WebP or GIF, up to 2 MB.</div>' +
+      '</div>' +
+    '</div>',
+    '<button class="btn btn-primary" data-ops="branding-save" onclick="saveBranding()">Save branding</button>'
+  );
+  const picker = document.getElementById('brandColorPicker');
+  const hex = document.getElementById('brandColor');
+  if (picker && hex) {
+    picker.addEventListener('input', () => { hex.value = picker.value; });
+    hex.addEventListener('input', () => { if (/^#[0-9a-fA-F]{6}$/.test(hex.value.trim())) picker.value = hex.value.trim(); });
+  }
+  const file = document.getElementById('brandLogoFile');
+  if (file) file.addEventListener('change', uploadBrandingLogo);
+}
+
+function pickBrandLogo() {
+  const f = document.getElementById('brandLogoFile');
+  if (f) f.click();
+}
+
+async function saveBranding() {
+  const acct = _acctId();
+  if (!acct) { toast('No account on this session', 'error'); return; }
+  const name = ((document.getElementById('brandName') || {}).value || '').trim();
+  const color = ((document.getElementById('brandColor') || {}).value || '').trim();
+  try {
+    let doc = {};
+    try {
+      const cur = await API.get('/account/' + encodeURIComponent(acct) + '/settings');
+      doc = (cur && cur.settings) || {};
+    } catch(_) {}
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) doc = {};
+    doc.email_branding = { brand_name: name, brand_color: color };
+    await API.patch('/account/' + encodeURIComponent(acct) + '/settings', doc);
+    toast('Email branding saved', 'success');
+    loadBrandingTab();
+  } catch(e) { toast('Save failed: ' + e.message, 'error'); }
+}
+
+async function uploadBrandingLogo() {
+  const file = document.getElementById('brandLogoFile');
+  const f = file && file.files && file.files[0];
+  if (!f) return;
+  if (f.size > 2 * 1024 * 1024) { toast('That image is larger than 2 MB', 'error'); return; }
+  const fd = new FormData();
+  fd.append('logo', f, f.name);
+  try {
+    const headers = STATE.token ? { 'Authorization': 'Bearer ' + STATE.token } : {};
+    const res = await fetch('/api/account/branding/logo', { method: 'POST', headers, body: fd });
+    if (res.status === 401) { logout(true); return; }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.message || body.error || ('Error ' + res.status));
+    toast('Logo uploaded', 'success');
+    loadBrandingTab();
+  } catch(e) { toast('Upload failed: ' + e.message, 'error'); }
+}
+
+async function removeBrandingLogo() {
+  try {
+    await API.del('/account/branding/logo');
+    toast('Logo removed', 'success');
+    loadBrandingTab();
+  } catch(e) { toast('Remove failed: ' + e.message, 'error'); }
 }
 
 // Placeholder modal stubs
