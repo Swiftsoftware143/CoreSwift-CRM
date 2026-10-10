@@ -519,6 +519,34 @@ async fn deliver_email(cfg: &DeliveryConfig) -> DeliveryOutcome {
         );
         return refusal;
     }
+    // ── FLEET HARNESS ADDRESSES NEVER REACH A RELAY EITHER (kanban t_12a8d509) ─────────────────
+    // The arm above covers the names that CANNOT exist (RFC 2606 / 6761). This one covers the names
+    // that DO exist and are the fleet's own: `swiftsoftware.dev` / `.net` are real, routable domains,
+    // so a message addressed there lands in the operator's own mailbox. Measured on this app's own
+    // transport 2026-10-09 20:41 UTC (Mailgun events, mail.coreswiftcrm.com): the credentials mail
+    // `Welcome to CoreSwift CRM!` to `csproof-1791578449@swiftsoftware.dev` was `accepted` and then
+    // hard-bounced `550 5.1.1 mailbox unavailable`. Nothing is dispatched, and the row records the
+    // suppression PERMANENTLY so a retry poll cannot resurrect it — the same treatment, and the same
+    // honesty about the row's state, as the neighbouring reserved arm: a mail that was never sent
+    // must not sit in the database claiming it was. The credentials door
+    // (`auth::signup::send_credentials_email`) suppresses the same class earlier, so an ordinary
+    // signup never even queues one of these; this arm is what catches the other nine insert sites,
+    // the worker's retry poll and the manual send.
+    if let Some(domain) = crate::security::probe_addr::harness_domain(&cfg.to) {
+        tracing::error!(
+            msg = %cfg.msg_id,
+            to = %cfg.to,
+            domain = %domain,
+            "refused to dispatch to a fleet harness address (permanent, nothing sent to the provider)"
+        );
+        return DeliveryOutcome::permanent(format!(
+            "destination '{}' is on the fleet's own harness class ('{}'): the fleet probes mint \
+             accounts at these addresses, so a send can only land in the operator's own mailbox or \
+             bounce, and either one burns a delivery against this account's sending reputation. Not \
+             dispatched — the address is suppressed outbound (kanban t_12a8d509).",
+            cfg.to, domain
+        ));
+    }
     match cfg.email_provider.as_str() {
         "mailgun" => deliver_via_mailgun(cfg).await,
         "smtp" => deliver_via_smtp(cfg).await,
@@ -1143,6 +1171,115 @@ mod tests {
             url: "https://api.mailgun.net/v3/mail.coreswiftcrm.com/messages".to_string(),
             api_key: "key-platform".to_string(),
             from: "CoreSwift CRM <noreply@mail.coreswiftcrm.com>".to_string(),
+        }
+    }
+
+    /// A `DeliveryConfig` for one email destination with **no transport configured**. The only way
+    /// `deliver_email` can answer one of these without attempting a send is by refusing at a guard,
+    /// so this is how a test proves a guard fires BEFORE transport selection (nothing can reach a
+    /// relay) instead of merely producing a "nothing is configured" error afterwards.
+    fn email_cfg(to: &str) -> DeliveryConfig {
+        DeliveryConfig {
+            tenant_id: Uuid::nil(),
+            msg_id: Uuid::new_v4(),
+            channel: "email".to_string(),
+            to: to.to_string(),
+            subject: Some("Welcome to CoreSwift CRM!".to_string()),
+            body: "body".to_string(),
+            is_html: false,
+            email_provider: "mailgun".to_string(),
+            sms_provider: "telnyx".to_string(),
+            transport: TransportSource::Platform,
+            byok_source: None,
+            mailgun_url: None,
+            reply_to: None,
+            mailgun_domain: None,
+            mailgun_api_key: None,
+            telnyx_api_key: None,
+            smtp_host: None,
+            smtp_port: None,
+            smtp_username: None,
+            smtp_password: None,
+            from_email: None,
+            from_name: None,
+            whatsapp_phone_number_id: None,
+            whatsapp_api_token: None,
+        }
+    }
+
+    /// kanban t_12a8d509 — the operational half of the harness suppression. The credentials door
+    /// stops an ordinary signup from QUEUEING one of these; this arm is what stops a row that was
+    /// queued by any other path (nine other insert sites, the worker's retry poll, a manual send).
+    /// It must answer before a transport is chosen, so no provider is ever handed the message.
+    #[tokio::test]
+    async fn a_fleet_harness_destination_never_reaches_a_transport() {
+        // The addresses this app's own probes mint (measured off mail.coreswiftcrm.com) plus the
+        // standing tenancy canary's two probe users, read out of the live tenants table. None of
+        // these is RFC-reserved, so the HARNESS arm is the one that must answer.
+        for addr in [
+            "csproof-1791578449@swiftsoftware.dev",
+            "probe-canary-a@swiftsoftware.dev",
+            "zzprobe-profile-1791480727@swiftsoftware.net",
+            "x@mail.swiftsoftware.dev",
+        ] {
+            let outcome = deliver_email(&email_cfg(addr)).await;
+            assert!(outcome.permanent && !outcome.ok, "{addr}");
+            assert!(
+                outcome.provider.is_none() && outcome.provider_message_id.is_none(),
+                "{addr} must not claim a provider accepted it"
+            );
+            let msg = outcome.error.expect("a refusal always carries its reason");
+            assert!(
+                msg.contains(addr),
+                "the reason must name the address: {msg}"
+            );
+            assert!(msg.contains("harness"), "{msg}");
+            // NOT the "no Mailgun domain/key" answer — that would mean the guard did not fire and
+            // the message simply fell through to an unconfigured transport.
+            assert!(
+                !msg.contains(NOT_CONFIGURED_PREFIX),
+                "{addr} must be refused by the guard, not by transport selection: {msg}"
+            );
+        }
+    }
+
+    /// The fleet's own `swiftsoftware.local` identity is on the harness list, but the NEIGHBOURING
+    /// reserved arm answers it first (the bare `.local` TLD is RFC 6761) and keeps its own wording
+    /// and its own pinned test. This asserts the ordering the two arms actually have — permanent,
+    /// before any transport, either way — and names which arm spoke, so a change that silently
+    /// swapped the order would be visible here.
+    #[tokio::test]
+    async fn a_local_harness_address_is_refused_by_the_neighbouring_arm_first() {
+        let outcome = deliver_email(&email_cfg("x@swiftsoftware.local")).await;
+        assert!(outcome.permanent && !outcome.ok);
+        assert!(outcome.provider.is_none());
+        let msg = outcome.error.expect("a refusal always carries its reason");
+        assert!(
+            msg.contains("RFC 2606"),
+            "the reserved arm answers .local first and must keep its wording: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_real_destination_still_reaches_transport_selection() {
+        // The owner's proof inbox (the address the fleet's mail-delivery watchdog sends to every
+        // run), the app's own support address and the t_193e2259 proof row: none of these is the
+        // harness class, and all of them must still fall through to the transport. Getting
+        // NOT_CONFIGURED here is the proof the guard did NOT fire.
+        for addr in [
+            "swiftsoftware143@yahoo.com",
+            "certifiedtb143@yahoo.com",
+            "hello@coreswiftcrm.com",
+            "support@coreswiftcrm.com",
+            "t193-delivery-proof@mail.coreswiftcrm.com",
+            "a@test.com",
+        ] {
+            let outcome = deliver_email(&email_cfg(addr)).await;
+            let msg = outcome.error.unwrap_or_default();
+            assert!(
+                msg.contains(NOT_CONFIGURED_PREFIX),
+                "{addr} must fall through to transport selection, got: {msg}"
+            );
         }
     }
 

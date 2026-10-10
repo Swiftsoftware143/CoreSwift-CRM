@@ -252,6 +252,27 @@ pub async fn create_account(
 ///
 /// A send failure is logged and swallowed — the account is already real, and a mail outage must
 /// not turn a completed mint into an error response.
+///
+/// ── PROBE / HARNESS ACCOUNTS NEVER SEND (kanban t_12a8d509) ─────────────────────────────────────
+/// This app was the only fleet app that mailed its own harnesses. Measured on the app's own
+/// transport (Mailgun events for `mail.coreswiftcrm.com`, 2026-10-09 20:41 UTC): the credentials
+/// mail `Welcome to CoreSwift CRM!` went to `csproof-1791578449@swiftsoftware.dev` — the address the
+/// profile-UI proof mints through `POST /api/auth/register` — and came back as a real hard bounce
+/// (`550 5.1.1 mailbox unavailable`, migadu). `swiftsoftware.dev` is a routable domain the fleet
+/// owns, so that message landed in the operator's own mailbox on its way to bouncing, and every such
+/// send burns a delivery against this account's sending reputation.
+///
+/// Two independent reasons suppress the queue, so silencing a probe needs no address change anywhere
+/// (the same shape the sibling apps ship):
+///   1. the recipient is on the fleet's own harness class — `security::probe_addr::harness_domain`,
+///      which also catches an ad-hoc probe that never learned to send the header; or
+///   2. the tenant carries a `probe_harness` marker — the value the `X-Swift-Harness` header wrote
+///      at creation (`auth::handlers::harness_marker`, migration 099), which is what silences a
+///      probe that addressed a routable domain this list does not know about.
+///
+/// The account itself is STILL created, with its generated password returned to the caller exactly
+/// as before — only the mail is withheld. A real customer (no header, a domain of their own) reaches
+/// the send below byte-identically to before this change.
 pub async fn send_credentials_email(
     db: &PgPool,
     tenant_id: Uuid,
@@ -260,6 +281,16 @@ pub async fn send_credentials_email(
     name: &str,
     password: &str,
 ) {
+    if let Some(reason) = credentials_send_suppression(db, tenant_id, email).await {
+        tracing::info!(
+            email = %email,
+            tenant = %tenant_id,
+            reason = %reason,
+            "credentials email SUPPRESSED — probe/harness account. The account is real and the \
+             generated password was returned to the caller; no mail was queued."
+        );
+        return;
+    }
     let vars = serde_json::json!({
         "name": name,
         "email": email,
@@ -270,6 +301,38 @@ pub async fn send_credentials_email(
     if let Err(e) = crate::email::send_template_email(db, tenant_id, email, "welcome", &vars).await
     {
         tracing::warn!(error = %e, "Welcome email via template failed");
+    }
+}
+
+/// Why this credentials mail must NOT be queued, or `None` when it must.
+///
+/// Read-only and deliberately fail-OPEN on the marker arm: if `tenants.probe_harness` cannot be
+/// read, the send proceeds. A database hiccup must never be the reason a real customer never
+/// receives their password — the address arm above it needs no query at all, and the transport
+/// chokepoint (`communications::providers::deliver_email`) refuses the class again before any
+/// provider traffic, so a marker read that fails open still cannot mail a harness address.
+async fn credentials_send_suppression(db: &PgPool, tenant_id: Uuid, email: &str) -> Option<String> {
+    if let Some(domain) = crate::security::probe_addr::harness_domain(email) {
+        return Some(format!("fleet harness domain {domain}"));
+    }
+    match sqlx::query_scalar::<_, Option<String>>("SELECT probe_harness FROM tenants WHERE id = $1")
+        .bind(tenant_id)
+        .fetch_optional(db)
+        .await
+    {
+        Ok(Some(Some(marker))) if !marker.trim().is_empty() => {
+            Some(format!("tenants.probe_harness = '{marker}'"))
+        }
+        // An ordinary account: no marker, no row, or a NULL/blank marker.
+        Ok(_) => None,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                tenant = %tenant_id,
+                "could not read tenants.probe_harness; sending credentials normally"
+            );
+            None
+        }
     }
 }
 
