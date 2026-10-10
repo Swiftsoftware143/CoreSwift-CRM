@@ -52,6 +52,13 @@ pub fn router(state: AppState) -> Router<AppState> {
             axum::routing::get(handlers::list_all_portfolio_companies),
         )
         .route("/tenants", axum::routing::get(handlers::list_all_tenants))
+        // Bulk retire (kanban t_ac2fe688) — the panel's "Delete selected" control. Static segment,
+        // and there is no bare `/tenants/:id` route on this router (only `:id/overrides`,
+        // `:id/entitlements`, `:id/plan`), so it can never be read as a tenant id.
+        .route(
+            "/tenants/bulk-delete",
+            axum::routing::post(handlers::bulk_delete_tenants),
+        )
         // People across every tenant — the counterpart of /tenants. The admin shell's Users tab
         // called a bare /api/users that nothing registered; this is the route it now calls.
         .route("/users", axum::routing::get(handlers::list_all_users))

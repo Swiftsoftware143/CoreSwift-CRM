@@ -856,6 +856,11 @@ const SETTINGS_MENU = [
 
 const ADMIN_MENU = [
   { id:'portfolio', icon:'🏢', label:'Portfolio Companies' },
+  // Bulk retire (kanban t_ac2fe688): every workspace on the platform with a per-row checkbox, a
+  // select-all header and ONE "Delete selected" control. Until now this console could LIST tenants
+  // (the plan pickers read GET /api/admin/tenants) and had no way to remove one — clearing a
+  // probe/junk workspace meant a psql session.
+  { id:'tenants', icon:'🗂️', label:'Tenants' },
   { id:'users', icon:'👥', label:'Users' },
   { type:'group', icon:'💰', label:'Revenue', children:[
     { id:'billing', icon:'💳', label:'Billing & Plans' },
@@ -1374,6 +1379,13 @@ const TAB_RENDERERS = {
   'users': () => {
     return pageHeader('Users', 'Manage platform users and permissions') +
     '<div id="usersTable"><div class="loading-wrap"><div class="spinner"></div> Loading users...</div></div>';
+  },
+  // Every workspace, with the bulk retire control (kanban t_ac2fe688). The button is inert until a
+  // row is picked; the loader below arms it with the count and wires the write.
+  'tenants': () => {
+    return pageHeader('Tenants', 'Every workspace on the platform — select rows to retire them',
+      '<button class="btn btn-danger btn-sm" id="tnDel" disabled>Delete selected</button>') +
+    '<div id="tenantsTable"><div class="loading-wrap"><div class="spinner"></div> Loading workspaces...</div></div>';
   },
   'billing': () => {
     return pageHeader('Billing & Plans', 'Manage subscription plans and pricing') +
@@ -1968,6 +1980,77 @@ async function ckAdvance(instanceId, currentStage) {
   } catch (e) { toast('Advance failed: ' + e.message, 'error'); }
 }
 
+// ── Tenants: the platform-wide list + the bulk retire write (kanban t_ac2fe688) ──────────────
+// The list is the same platform-gated read the plan pickers already use (GET /api/admin/tenants).
+// Selection is a per-row checkbox plus a select-all header; the ONE write is
+// POST /api/admin/tenants/bulk-delete, which answers PER ID — a row the backend refuses (the
+// workspace you are signed in as, a portfolio company) keeps its reason on screen instead of
+// vanishing behind a generic failure.
+async function loadTenantsTab() {
+  const el = document.getElementById('tenantsTable');
+  if (!el) return;
+  const btn = document.getElementById('tnDel');
+
+  let items = [];
+  try {
+    const data = await API.get('/admin/tenants');
+    items = Array.isArray(data) ? data : ((data && (data.tenants || data.items)) || []);
+  } catch (e) {
+    el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tenants endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    return;
+  }
+
+  const rows = items.map(t => [
+    `<input type="checkbox" class="tn-chk" value="${escapeHtmlAttr(t.id || '')}">`,
+    escapeHtml(t.name || '—'),
+    `<code>${escapeHtml(t.slug || '—')}</code>`,
+    escapeHtml(t.email || '—'),
+    // `is_active` is NULLABLE server-side and travels as JSON null — "unknown" is reported as
+    // unknown rather than dressed up as active (the same honesty `list_all_tenants` applies).
+    t.is_active === false ? '<span class="badge badge-muted">inactive</span>'
+      : t.is_active === true ? '<span class="badge badge-success">active</span>'
+      : '<span class="badge badge-muted">unknown</span>',
+    escapeHtml(t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'),
+  ]);
+
+  el.innerHTML = dataTable(
+    ['<input type="checkbox" id="tnAll" title="Select all">', 'Name', 'Slug', 'Owner', 'Status', 'Created'],
+    rows, 'No workspaces returned.');
+
+  const boxes = () => Array.from(document.querySelectorAll('.tn-chk'));
+  const all = document.getElementById('tnAll');
+  const sync = () => {
+    const picked = boxes().filter(b => b.checked);
+    if (btn) {
+      btn.disabled = picked.length === 0;
+      btn.textContent = picked.length ? `Delete selected (${picked.length})` : 'Delete selected';
+    }
+    if (all) all.checked = boxes().length > 0 && picked.length === boxes().length;
+  };
+  if (all) all.addEventListener('change', () => { boxes().forEach(b => { b.checked = all.checked; }); sync(); });
+  boxes().forEach(b => b.addEventListener('change', sync));
+
+  if (btn) btn.onclick = async () => {
+    const ids = boxes().filter(b => b.checked).map(b => b.value).filter(Boolean);
+    if (ids.length === 0) return;
+    if (!confirm(`Delete ${ids.length} workspace(s)? This cannot be undone.`)) return;
+    btn.disabled = true;
+    try {
+      const r = await API.post('/admin/tenants/bulk-delete', { ids });
+      const n = (r && typeof r.deleted === 'number') ? r.deleted : 0;
+      const refused = (r && r.failed) || [];
+      toast(`${n} workspace(s) deleted` + (refused.length ? ` — ${refused.length} refused or not found` : ''),
+            refused.length ? 'warning' : 'success');
+      if (refused.length && refused[0].error) toast(refused[0].error, 'error');
+    } catch (e) {
+      toast(e.message || 'Delete failed', 'error');
+    }
+    await loadTenantsTab();
+  };
+
+  sync();
+}
+
 const TAB_LOADERS = {
   // The Tracked Links panel registers a loader instead of loading from inside its renderer: the
   // renderer runs BEFORE its HTML is in the document, so an in-renderer load sees no #trackedLinksTable
@@ -1998,6 +2081,9 @@ const TAB_LOADERS = {
   // Email Branding panel: registers a loader for the same reason as the loaders above — the renderer
   // runs before its HTML is in the document, so an in-renderer load would see no #brandPane.
   'email-branding': async () => { await loadBrandingTab(); },
+  // Same reason as the loaders above: the renderer runs before its HTML is in the document, so the
+  // tenants list registers here and runs against a #tenantsTable that already exists.
+  'tenants': async () => { await loadTenantsTab(); },
   'dashboard': async () => {
     const statsGridEl = document.getElementById('statsGrid');
     if (!statsGridEl) return;

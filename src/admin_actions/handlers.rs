@@ -1055,3 +1055,119 @@ pub async fn cross_app_sync(
         "user_created": true
     })))
 }
+
+/// The portfolio accounts are kept by rule (never deleted from any panel): SwiftImpact, ZaarHub
+/// and Giraudy Capital each hold an account in EVERY app, plus whatever the platform itself flags.
+const PORTFOLIO_TENANT_MARKERS: [&str; 3] = ["swiftimpact", "zaarhub", "giraudy"];
+
+/// POST /api/admin/tenants/bulk-delete — retire several workspaces in one call (kanban t_ac2fe688).
+///
+/// The counterpart of the same control in the IncentiveSwift and FunnelSwift panels, so an operator
+/// no longer has to open a psql session to clear probe/junk workspaces out of the console's own
+/// tenant list. Answers PER ID, so one refused or missing id cannot sink the batch — the panel shows
+/// the reason next to the row that was kept.
+///
+/// Two deletes are refused by rule and cannot be forced from the panel:
+///   * the workspace the caller is SIGNED IN AS — that is a lockout, not a cleanup;
+///   * a portfolio company (`tenants.is_portfolio`, or a name/slug carrying a portfolio marker).
+///
+/// Everything else behaves as a plain `DELETE FROM tenants`: measured on the live DB (2026-10-10),
+/// all 70 foreign keys that reference `tenants` are `ON DELETE CASCADE`, so no hand-rolled child
+/// sweep is needed and a delete cannot strand orphan rows.
+pub async fn bulk_delete_tenants(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<impl IntoResponse> {
+    crate::auth::platform_admin::require_platform_admin(&s.db, &c.sub).await?;
+
+    let raw_ids = req
+        .get("ids")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let caller_tenant = c.aid.trim().to_string();
+    let mut deleted: Vec<String> = Vec::new();
+    let mut failed: Vec<Value> = Vec::new();
+
+    for v in raw_ids {
+        let raw = v.as_str().unwrap_or_default().trim().to_string();
+        let tid = match Uuid::parse_str(&raw) {
+            Ok(t) => t,
+            Err(_) => {
+                failed.push(json!({"id": raw, "error": "not a valid id"}));
+                continue;
+            }
+        };
+
+        if tid.to_string() == caller_tenant {
+            failed.push(json!({
+                "id": raw,
+                "error": "refusing to delete the workspace you are signed in as"
+            }));
+            continue;
+        }
+
+        // Decode honestly: `tenants.is_portfolio` is NULLABLE, so only a real `true` protects a row
+        // — a NULL is unknown and is not promotion-worthy (the convention `list_all_tenants` uses).
+        let row: Option<(String, String, Option<bool>)> = sqlx::query_as(
+            "SELECT COALESCE(name, ''), COALESCE(slug, ''), is_portfolio FROM tenants WHERE id = $1",
+        )
+        .bind(tid)
+        .fetch_optional(&s.db)
+        .await?;
+
+        let (name, slug, is_portfolio) = match row {
+            Some(r) => r,
+            None => {
+                failed.push(json!({"id": raw, "error": "workspace not found"}));
+                continue;
+            }
+        };
+
+        if is_portfolio == Some(true) {
+            failed.push(json!({
+                "id": raw,
+                "error": "refusing to delete a portfolio company (is_portfolio)"
+            }));
+            continue;
+        }
+
+        let hay = format!("{} {}", name, slug).to_lowercase();
+        if let Some(hit) = PORTFOLIO_TENANT_MARKERS.iter().find(|m| hay.contains(*m)) {
+            failed.push(json!({
+                "id": raw,
+                "error": format!("refusing to delete a portfolio company ({})", hit)
+            }));
+            continue;
+        }
+
+        match sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tid)
+            .execute(&s.db)
+            .await
+        {
+            Ok(r) if r.rows_affected() == 0 => {
+                failed.push(json!({"id": raw, "error": "workspace not found"}))
+            }
+            Ok(_) => deleted.push(raw),
+            Err(e) => failed.push(json!({"id": raw, "error": e.to_string()})),
+        }
+    }
+
+    let status = if failed.is_empty() {
+        "deleted"
+    } else if deleted.is_empty() {
+        "failed"
+    } else {
+        "partial"
+    };
+
+    Ok(Json(json!({
+        "status": status,
+        "deleted": deleted.len(),
+        "deleted_ids": deleted,
+        "failed": failed,
+    })))
+}
