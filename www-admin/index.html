@@ -976,6 +976,8 @@ function switchTab(tabId) {
     el.classList.toggle('active', el.dataset.tab === tabId);
   });
   renderTab(tabId);
+  // Fleet inline guide (FS-10 pattern): keep the contextual help on the tab that is open.
+  if (window.inlineGuidePage) window.inlineGuidePage(tabId);
   // Close user menu
   document.getElementById('userMenu').classList.remove('show');
 }
@@ -4628,6 +4630,70 @@ async function saveProvisioning() {
   }
 }
 
+</script>
+
+<!-- Fleet inline guide (FS-10 pattern), the same widget the other operator consoles carry: a round
+     "?" button with short, per-tab help for the screen you are on. CoreSwift switches tabs in JS
+     (switchTab -> renderTab) without touching the path or hash, so switchTab() tells the widget
+     which tab is open (window.inlineGuidePage(tabId)); path/hash matching alone could never follow
+     it. appGuidePages MUST be defined BEFORE the widget script loads. -->
+<script>
+window.appGuidePages = {
+  dashboard: { title: 'Dashboard', desc: 'Your CRM at a glance — contacts, companies, deals and activity for this workspace.', actions: ['Add contacts from the Contacts tab', 'Work deals in Pipelines & Deals', 'Watch new leads arrive in Contacts'] },
+  contacts: { title: 'Contacts', desc: 'Every person in your CRM, with the tags and lists they belong to.', actions: ['+ Add Contact to create one', 'Search to filter the list', 'Open a contact to see its timeline'] },
+  companies: { title: 'Companies', desc: 'The organisations your contacts belong to.', actions: ['Add a company and attach contacts to it'] },
+  pipelines: { title: 'Pipelines & Deals', desc: 'Your sales stages and the deals moving through them.', actions: ['Add a deal to a stage', 'Drag/advance a deal as it progresses'] },
+  campaigns: { title: 'Campaigns', desc: 'Email campaigns sent to your lists, with their send status.', actions: ['Create a campaign and choose a list', 'Send or schedule it'] },
+  lists: { title: 'Lists', desc: 'Static sets of contacts you can send to or segment.', actions: ['Build a list and add contacts'] },
+  analytics: { title: 'Analytics', desc: 'Open and click performance across your campaigns and links.', actions: ['Check a campaign\u2019s opens and clicks'] },
+  rules: { title: 'Rules', desc: 'Automation rules that act when a contact or deal changes.', actions: ['Create a trigger and the action it fires'] },
+  tags: { title: 'Tags', desc: 'The tags you apply to contacts. Some tags drive behaviour in OTHER apps — a tag here can create a free account in a sister app.', actions: ['Create a tag', 'Apply tags from a contact'] },
+  'lead-scoring': { title: 'Lead Scoring', desc: 'Scores that rank contacts by how sales-ready they are.', actions: ['Set the scoring rules per field and action'] },
+  'email-templates': { title: 'Email Templates', desc: 'Reusable email bodies, with merge fields for the contact.', actions: ['Create a template and insert merge fields'] },
+  messages: { title: 'Messages', desc: 'One-to-one messages exchanged with contacts.', actions: ['Start a conversation from a contact'] },
+  notifications: { title: 'Notifications', desc: 'Alerts for activity that needs your attention.', actions: ['Review and clear notifications'] },
+  telnyx: { title: 'Telnyx SMS/Voice', desc: 'Your SMS and voice line for texting and calling contacts.', actions: ['Connect your Telnyx number', 'Text a contact from its record'] },
+  'comm-log': { title: 'Communications Log', desc: 'A record of every email, SMS and call sent or received.', actions: ['Filter by contact or date'] },
+  tickets: { title: 'Support Tickets', desc: 'Inbound support requests and their status.', actions: ['Open a ticket and reply', 'Change its status'] },
+  inbox: { title: 'Private Email', desc: 'Your own mailboxes on the account\u2019s private-email domains, read and sent from here.', actions: ['Connect a domain and mailbox', 'Read and reply in the inbox'] },
+  calendar: { title: 'Calendar', desc: 'Appointments and events for this workspace.', actions: ['Add an event'] },
+  bookings: { title: 'Bookings', desc: 'Appointments booked through your public booking links.', actions: ['Share a booking link', 'Review upcoming bookings'] },
+  'ai-assistant': { title: 'AI Assistant', desc: 'Writes and helps with content using your provider key (BYOK).', actions: ['Paste a provider key under Integrations', 'Ask it to draft copy'] },
+  'tracked-links': { title: 'Tracked Links', desc: 'Links whose clicks are counted, for campaigns and outreach.', actions: ['Create a tracked link and use it in an email'] },
+  checklists: { title: 'Checklists', desc: 'Step lists attached to contacts or deals, so a process is followed.', actions: ['Create a checklist and attach it'] },
+  'round-robin': { title: 'Round Robin', desc: 'Distributes new leads evenly across your team.', actions: ['Choose the team and the rotation'] },
+  profile: { title: 'Profile', desc: 'Your own name, company, password and picture.', actions: ['Update your details and save', 'Change your password', 'Upload or remove your picture'] },
+  'email-branding': { title: 'Email Branding', desc: 'Your logo and display name on every transactional email this account sends. Leave it blank and mail keeps the CoreSwift look.', actions: ['Upload a logo (PNG/JPEG/GIF/WebP, up to 2 MB)', 'Set a brand name and colour, then save'] },
+  integrations: { title: 'Integration Center', desc: 'Connect the services this workspace uses, each with your own provider key (BYOK).', actions: ['Paste a provider key and save', 'Email integrations drive the mail you send'] },
+  portfolio: { title: 'Portfolio Companies', desc: 'Advisory portfolios — one parent whose companies are managed together.', actions: ['Add a portfolio and its companies'] },
+  tenants: { title: 'Tenants', desc: 'Every workspace on the platform, with a per-row checkbox and Delete selected to retire junk workspaces (the server refuses a protected row and shows why).', actions: ['Tick the workspaces to retire', 'Delete selected removes them with their data'] },
+  users: { title: 'Users', desc: 'The people who can sign in to this workspace, and their roles.', actions: ['Invite a user and set its role'] },
+  billing: { title: 'Billing & Plans', desc: 'The workspace\u2019s plan and what each tier includes.', actions: ['Move between tiers', 'See what the current plan allows'] },
+  widgets: { title: 'Widgets', desc: 'Embeddable widgets the platform serves.', actions: ['Configure a widget'] },
+  webhooks: { title: 'Webhooks', desc: 'Outgoing webhooks that fire on events in this workspace.', actions: ['Add a webhook URL and its events'] },
+  'native-apps': { title: 'Native Apps', desc: 'The mobile/native clients connected to this platform.', actions: ['Review the connected apps'] },
+  'audit-log': { title: 'Audit Log', desc: 'A record of who changed what, for compliance.', actions: ['Filter by actor or date'] },
+  monitoring: { title: 'Monitoring', desc: 'Platform health and the checks that watch it.', actions: ['Watch for failing checks'] },
+  'telnyx-admin': { title: 'Telnyx Admin', desc: 'The platform-level Telnyx transport behind SMS and voice.', actions: ['Set the platform Telnyx credential'] },
+  'email-admin': { title: 'Private Email Admin', desc: 'Platform administration of the private-email feature.', actions: ['Manage domains and mailboxes'] },
+  'system-email': { title: 'System Email', desc: 'The platform mail transport — the provider and credential every workspace without its own sending identity falls back to.', actions: ['Set the provider and credential', 'Send a test'] },
+  provisioning: { title: 'Tag Provisioning', desc: 'Lets a tag applied in a sister app mint a free account here, on the plan you choose.', actions: ['Turn the switch on', 'Choose the entry plan'] },
+  'features-plans': { title: 'Modules & Plans', desc: 'Which modules each plan includes, as a matrix.', actions: ['Tick a module for a plan'] },
+  configuration: { title: 'Configuration', desc: 'Platform settings for running the service.', actions: ['Change a setting and save'] }
+};
+</script>
+<script src="/inline-guide-widget.js"></script>
+<script>
+// The console script already ran its first switchTab() before this widget loaded, so on the very
+// first paint there was no window.inlineGuidePage to tell. Point the widget at the active tab as
+// soon as it is ready.
+(function () {
+  var n = 0;
+  (function tick() {
+    if (window.inlineGuidePage && typeof STATE !== 'undefined' && STATE.activeTab) { window.inlineGuidePage(STATE.activeTab); return; }
+    if (n++ < 60) setTimeout(tick, 50);
+  })();
+})();
 </script>
 </body>
 </html>
