@@ -3117,17 +3117,11 @@ async function icLoadProviders() {
   icRenderProviders();
 }
 
-// kanban t_289bc8b0 — a catalogue row that NO code path in this app can spend must not be offered
-// with a key box. The authoritative flag is `coming_soon` on the catalogue row, served by
-// GET /available-providers; it is not served yet, because the backend half of that card (the column
-// plus the 400 refusal in provider_keys/handlers.rs) is handed to the CoreSwift owner — the cron
-// `default` lane does not edit this app's Rust. Until it lands, this BRIDGE list carries the six rows
-// the reader census proved dead (letterman, nexweave, sam_gov, sendgrid, sendiio, usaspending: zero
-// occurrences of the name anywhere in src/, and no dispatch vocabulary resolves them), so the console
-// is honest TODAY rather than after the next deploy. DELETE THIS LIST the moment the API serves
-// coming_soon: `csIsComingSoon` prefers the server flag and the two agree.
-const CS_COMING_SOON_BRIDGE = ['letterman', 'nexweave', 'sam_gov', 'sendgrid', 'sendiio', 'usaspending'];
-const csIsComingSoon = (p) => !!p && (p.coming_soon === true || CS_COMING_SOON_BRIDGE.indexOf(p.key) >= 0);
+// kanban t_046e87b2 closes the loop on t_289bc8b0: the backend now serves the authoritative
+// `coming_soon` flag on every catalogue row (GET /available-providers) and refuses a flagged
+// provider with 400, so the server is the single source of truth and no bridge list is needed.
+// A row with `coming_soon: true` renders as a non-interactive Coming Soon card.
+const csIsComingSoon = (p) => !!p && p.coming_soon === true;
 
 function icRenderProviders() {
   const el = document.getElementById('icProviderWrap');
