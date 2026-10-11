@@ -88,6 +88,19 @@
 //! present a JWT — the signature is the credential, checked in the handler before anything is read
 //! or written, which is what closes the gap without breaking inbound SMS/voice.
 //!
+//! The SECOND anonymous receiver that census named — `POST /api/v1/webhooks/mailgun/inbound` — was
+//! a method-blind [`PUBLIC_ROUTES`] entry whose only gate (a per-domain Mailgun signing key) was
+//! OPTIONAL: a domain with no key configured fell through the handler's reconstruction branch and
+//! the delivery was processed anyway, so an anonymous caller could name a mailbox on it and create
+//! contacts/tickets/events in that tenant (reproduced live 2026-10-11: HTTP 200 with one row in
+//! each of the three tables). It is CLOSED (kanban t_7f134e77) in the same shape as Telnyx above:
+//! the entry stays — Mailgun presents no session and cannot carry the shared key — and the
+//! per-domain signing key is now MANDATORY. A delivery that does not validate, including one for a
+//! domain that has no signing key configured at all, is answered 401 before any read of the body is
+//! turned into a write. The unguessable-address variant was rejected: Mailgun is handed one fixed
+//! route URL for every tenant, so it would mean re-provisioning each domain's route, and the
+//! signing key is the credential Mailgun can actually carry.
+//!
 //! # Credentials accepted
 //!
 //! * **App JWT** — `Authorization: Bearer <jwt>`, HS256 over `JWT_SECRET`, `iss=coreswift`,
@@ -165,8 +178,12 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/webhook/:token/:action",
     // (The Unified Inbox receiver that used to sit here is now in INTERNAL_ROUTES below — it WRITES
     // a `cs_messages` row, so it is not an anonymous surface; kanban t_36cf12d0.)
-    // Mailgun's inbound-parse receiver. Mailgun cannot present a JWT; the handler resolves the
-    // destination mailbox from the recipient it is given and answers `received: false` otherwise.
+    // Mailgun's inbound-parse receiver. Mailgun cannot present a JWT or the shared key, so the
+    // credential lives in the handler: the per-domain Mailgun signing key, HMAC-SHA256-verified
+    // over (timestamp + token) by `providers::mailgun::accept_inbound`. A delivery that does not
+    // validate is REFUSED — including one for a domain with no signing key configured at all, which
+    // used to be processed anyway and made such a domain an anonymous writer of contacts/tickets/
+    // events (kanban t_7f134e77, reproduced live 2026-10-11).
     "/api/v1/webhooks/mailgun/inbound",
     // --- provider push receivers (their own channel/signature is the credential) -----------------
     // Google Calendar push: the channel id and resource id are the credential, checked by the

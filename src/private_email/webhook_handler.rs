@@ -42,14 +42,20 @@ pub struct MailgunInbound {
 
 /// Webhook handler for inbound Mailgun emails.
 /// POST /api/v1/webhooks/mailgun/inbound
-/// This endpoint is unauthenticated (Mailgun calls it).
+///
+/// Mailgun calls this with no session, so the per-domain Mailgun signing key IS the
+/// credential: `providers::mailgun::accept_inbound` verifies HMAC-SHA256(signing_key,
+/// timestamp + token) whenever `private_email_domains.webhook_signing_key_encrypted` is set,
+/// and this handler now REFUSES a delivery whose signature does not validate — including a
+/// domain that has no signing key configured at all (kanban t_7f134e77). It used to process
+/// that case anyway, which made the endpoint an anonymous writer of contacts/tickets/events.
 pub async fn inbound_webhook(
     State(state): State<AppState>,
     body: String,
 ) -> ApiResult<Json<serde_json::Value>> {
     // ── Step 1: Extract sender + recipient (multi-provider) ─────
     // Try Mailgun form-urlencoded first, then JSON (SES SNS, Postmark)
-    let (sender_email, recipient_email, mailgun_payload) = try_parse_inbound(&body);
+    let (sender_email, recipient_email, _mailgun_payload) = try_parse_inbound(&body);
 
     if sender_email.is_empty() || recipient_email.is_empty() {
         return Ok(Json(
@@ -133,67 +139,33 @@ pub async fn inbound_webhook(
     let inbound = match inbound {
         Some(i) => i,
         None => {
-            // A signing key IS configured for this domain, so `None` (the provider's "cannot
-            // validate" answer) means the payload did not authenticate — a missing/mismatched
-            // signature, or a key this deployment cannot open. This endpoint is unauthenticated and
-            // used to PROCESS the email anyway, which made the signature check decorative and let
-            // anyone POST an inbound mail that creates contacts/tickets (t_45772522). No live domain
-            // has a signing key configured (0 rows), so nothing that used to be accepted is refused
-            // by this branch — it is armed for the first tenant that sets one.
+            // `None` is the provider's "cannot validate this delivery" answer, and it has
+            // exactly two causes. BOTH are refusals (kanban t_7f134e77):
+            //   * a signing key IS configured for this domain and the payload did not authenticate
+            //     — a missing or mismatched signature, or a stored key this deployment cannot open;
+            //   * this domain has NO signing key configured at all.
+            //
+            // The signature is the only credential this endpoint has: Mailgun presents no session
+            // and cannot carry an internal key, so a delivery that cannot be authenticated is
+            // refused instead of processed. The branch that used to sit here reconstructed the
+            // message from the raw parse for the second cause, which made an unarmed domain an
+            // anonymous writer of contacts/tickets/events — any caller could name a mailbox on it
+            // and create rows in that tenant (reproduced live 2026-10-11: 200 + one contact, one
+            // ticket, one event). Fail CLOSED.
             if signing_key_configured {
                 tracing::warn!(
                     recipient = %recipient_email,
-                    "inbound webhook rejected: the configured signing key did not validate"
+                    "inbound webhook refused: the configured signing key did not validate"
                 );
-                return Ok(Json(json!({
-                    "received": false,
-                    "error": "invalid signature"
-                })));
+            } else {
+                tracing::warn!(
+                    recipient = %recipient_email,
+                    "inbound webhook refused: no webhook signing key is configured for this domain, so the delivery cannot be authenticated"
+                );
             }
-            // No verification configured for this domain — reconstruct from the raw parse, as before.
-            let (body_text, subject, body_html, msg_id, in_reply_to) =
-                if let Some(ref p) = mailgun_payload {
-                    let text = if !p.stripped_text.is_empty() {
-                        &p.stripped_text
-                    } else if !p.body_plain.is_empty() {
-                        &p.body_plain
-                    } else {
-                        &p.body_html
-                    };
-                    let mid = if p.message_id.is_empty() {
-                        None
-                    } else {
-                        Some(p.message_id.clone())
-                    };
-                    let irt = if p.in_reply_to.is_empty() {
-                        None
-                    } else {
-                        Some(p.in_reply_to.clone())
-                    };
-                    (
-                        text.to_string(),
-                        p.subject.clone(),
-                        if p.body_html.is_empty() {
-                            None
-                        } else {
-                            Some(p.body_html.clone())
-                        },
-                        mid.clone(),
-                        irt,
-                    )
-                } else {
-                    ("".to_string(), "".to_string(), None, None, None)
-                };
-            super::providers::InboundEmail {
-                from: sender_email.clone(),
-                to: recipient_email.clone(),
-                subject,
-                body_plain: body_text,
-                body_html,
-                message_id: msg_id.clone(),
-                in_reply_to,
-                provider_message_id: msg_id,
-            }
+            return Err(AppError::UnauthorizedReason(
+                "inbound webhook refused: the delivery could not be authenticated".into(),
+            ));
         }
     };
 

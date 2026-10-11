@@ -125,33 +125,42 @@ impl EmailProvider for MailgunProvider {
                 .map(|(_, v)| v.clone())
         };
 
-        // Validate the Mailgun signature whenever a signing key is configured. Fail CLOSED: a key
-        // that is configured but cannot be opened by this deployment returns None ("cannot
-        // validate") exactly like a bad signature, and the caller now refuses the request instead
-        // of processing it. The previous `if let Ok(..)` skipped the check entirely, so inbound mail
-        // was accepted unauthenticated the moment the stored key stopped opening (t_45772522).
-        if let Some(ref encrypted_key) = config.encrypted_webhook_key {
-            if !encrypted_key.is_empty() {
-                let signing_key = crate::secret_box::open(config.tenant_id, encrypted_key);
-                if signing_key.trim().is_empty() {
-                    tracing::error!(
-                        tenant = %config.tenant_id,
-                        "inbound webhook signing key cannot be read — the signature cannot be validated"
-                    );
-                    return None;
-                }
-                let token = get("token").unwrap_or_default();
-                let timestamp = get("timestamp").unwrap_or_default();
-                let signature = get("signature").unwrap_or_default();
-
-                // Validate: HMAC-SHA256(signing_key, timestamp + token) == signature
-                let mut mac = HmacSha256::new_from_slice(signing_key.as_bytes()).ok()?;
-                mac.update(format!("{}{}", timestamp, token).as_bytes());
-                let expected = hex::encode(mac.finalize().into_bytes());
-                if !constant_time_eq(expected.as_bytes(), signature.as_bytes()) {
-                    return None; // Signature mismatch
-                }
+        // The signature is this receiver's ONLY credential (kanban t_7f134e77): a domain with no
+        // signing key configured cannot authenticate a delivery, so NOTHING is accepted from it.
+        // The previous `if let Some(..)` read "no key" as "nothing to check" and returned the parsed
+        // message, which made an unarmed domain an anonymous writer of contacts/tickets/events —
+        // reproduced live 2026-10-11 (HTTP 200 with one row in each of the three tables, no
+        // credential presented). Fail CLOSED here for the missing key, exactly as for a bad
+        // signature or a key that is configured but cannot be opened by this deployment
+        // (t_45772522 fixed that second half).
+        let encrypted_key = match config.encrypted_webhook_key.as_deref() {
+            Some(k) if !k.is_empty() => k,
+            _ => {
+                tracing::warn!(
+                    tenant = %config.tenant_id,
+                    "inbound webhook refused: no signing key is configured for this domain"
+                );
+                return None;
             }
+        };
+        let signing_key = crate::secret_box::open(config.tenant_id, encrypted_key);
+        if signing_key.trim().is_empty() {
+            tracing::error!(
+                tenant = %config.tenant_id,
+                "inbound webhook signing key cannot be read — the signature cannot be validated"
+            );
+            return None;
+        }
+        let token = get("token").unwrap_or_default();
+        let timestamp = get("timestamp").unwrap_or_default();
+        let signature = get("signature").unwrap_or_default();
+
+        // Validate: HMAC-SHA256(signing_key, timestamp + token) == signature
+        let mut mac = HmacSha256::new_from_slice(signing_key.as_bytes()).ok()?;
+        mac.update(format!("{}{}", timestamp, token).as_bytes());
+        let expected = hex::encode(mac.finalize().into_bytes());
+        if !constant_time_eq(expected.as_bytes(), signature.as_bytes()) {
+            return None; // Signature mismatch
         }
 
         let sender = get("sender").unwrap_or_default();
