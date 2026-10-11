@@ -377,7 +377,24 @@ const API = {
     if (body) opts.body = JSON.stringify(body);
     const res = await fetch('/api' + path, opts);
     if (res.status === 401) { logout(true); throw new Error('Session expired'); }
-    if (res.status === 402) { showUpgradeBanner(); throw new Error('Payment required'); }
+    if (res.status === 402) {
+      showUpgradeBanner();
+      // Keep the sentinel string (screens test it) but ALSO carry the server's own sentence, so a
+      // panel can name the plan limit instead of printing the internal words "Payment required".
+      // The gate answers a human sentence on every module: "Support tickets is not available on
+      // your current plan. Upgrade to access it." (measured 2026-10-11).
+      const err = new Error('Payment required');
+      err.planGate = true;
+      err.planMessage = 'This feature is not included in your current plan. Upgrade to access it.';
+      try {
+        const d = await res.clone().json();
+        const pick = [d.error, d.message, d.detail].find(function (v) {
+          return typeof v === 'string' && v.trim();
+        });
+        if (pick) err.planMessage = pick;
+      } catch (_) {}
+      throw err;
+    }
     if (!res.ok) {
       let msg = `HTTP ${res.status}`;
       // Failures answer {"error": true, "message": "<human text>"} (src/errors.rs) — a BOOLEAN
@@ -1534,7 +1551,9 @@ const TAB_LOADERS = {
         'No support tickets. Great job keeping customers happy!'
       );
     } catch(e) {
-      ticketsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tickets endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      ticketsTableEl.innerHTML = (e && e.planGate)
+        ? `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">\u{1F512} ${escapeHtml(e.planMessage || 'Support tickets is not available on your current plan. Upgrade to access it.')}</p></div></div>`
+        : `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tickets endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
 
@@ -4076,6 +4095,13 @@ function planFeatureList(raw) {
 }
 function fh(v) { return escapeHtml(String(v === null || v === undefined || v === '' ? '—' : v)); }
 function famErr(el, label, e) {
+  // A 402 is the plan gate, not a failed load: name the limit (the SERVER's own sentence) instead
+  // of printing "… endpoint: Payment required". Same treatment the Webhooks panel gives its 402.
+  if (e && e.planGate) {
+    el.innerHTML = card(label, '<p style="color:var(--text-secondary)">\u{1F512} ' +
+      escapeHtml(e.planMessage || 'This feature is not included in your current plan.') + '</p>');
+    return;
+  }
   el.innerHTML = card(label, '<p style="color:var(--text-secondary)">' + escapeHtml(label) +
     ' endpoint: ' + escapeHtml(e.message) + '</p>');
 }
