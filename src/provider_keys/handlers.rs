@@ -23,7 +23,7 @@ fn mask_key(key: &str) -> String {
 
 pub async fn list_available_providers(State(s): State<AppState>) -> ApiResult<impl IntoResponse> {
     let rows = sqlx::query(
-        "SELECT key, name, description, requires_base_url, requires_metadata, icon FROM available_providers ORDER BY name"
+        "SELECT key, name, description, requires_base_url, requires_metadata, icon, COALESCE(coming_soon, false) AS coming_soon FROM available_providers ORDER BY name"
     ).fetch_all(&s.db).await?;
     let providers: Vec<Value> = rows
         .iter()
@@ -35,6 +35,10 @@ pub async fn list_available_providers(State(s): State<AppState>) -> ApiResult<im
                 "requires_base_url": row.get::<bool,_>("requires_base_url"),
                 "requires_metadata": row.get::<Value,_>("requires_metadata"),
                 "icon": row.get::<Option<String>,_>("icon"),
+                // Authoritative Coming Soon flag (migration 119). The consoles render a row
+                // with `coming_soon: true` as a non-interactive card, so this field replaces
+                // their temporary hardcoded bridge list.
+                "coming_soon": row.get::<bool,_>("coming_soon"),
             })
         })
         .collect();
@@ -117,15 +121,31 @@ pub async fn upsert_provider_key(
     if req.api_key.is_empty() {
         return Err(AppError::Validation("api_key is required".into()));
     }
-    let provider_exists =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM available_providers WHERE key = $1")
-            .bind(&req.provider)
-            .fetch_one(&s.db)
-            .await?;
-    if provider_exists == 0 {
-        return Err(AppError::Validation(format!(
-            "Unknown provider '{}'. Available providers can be listed at /available-providers",
-            req.provider
+    // One read answers both questions the write path has to ask: does the catalogue know
+    // this provider at all, and is it flagged Coming Soon (migration 119) because no code
+    // path in this app can spend a key stored for it?
+    let catalogue: Option<(String, bool)> = sqlx::query_as(
+        "SELECT name, COALESCE(coming_soon, false) FROM available_providers WHERE key = $1",
+    )
+    .bind(&req.provider)
+    .fetch_optional(&s.db)
+    .await?;
+    let (provider_name, coming_soon) = match catalogue {
+        Some(found) => found,
+        None => {
+            return Err(AppError::Validation(format!(
+                "Unknown provider '{}'. Available providers can be listed at /available-providers",
+                req.provider
+            )))
+        }
+    };
+    // A Coming Soon row is refused BEFORE any secret is written or replaced. The consoles
+    // render it non-interactively; a client that calls the API directly must get the same
+    // answer rather than storing a credential nothing can spend.
+    if coming_soon {
+        return Err(AppError::BadRequest(format!(
+            "{} is Coming Soon and cannot be connected yet - nothing in CoreSwift reads its key.",
+            provider_name
         )));
     }
     let metadata = req.metadata.unwrap_or(json!({}));
