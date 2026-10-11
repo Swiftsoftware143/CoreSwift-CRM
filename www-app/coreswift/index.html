@@ -193,6 +193,7 @@ tr:hover td{background:var(--bg-hover)}
 .provider-card .provider-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
 .provider-card .provider-name{font-weight:600;font-size:.95rem}
 .provider-card .provider-status{font-size:.78rem}
+.provider-card .provider-status.coming-soon{background:#e2e8f0;color:#475569;padding:2px 8px;border-radius:999px;font-weight:600}
 .provider-card .provider-desc{font-size:.82rem;color:var(--text-secondary);margin-bottom:14px}
 .status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
 .status-dot.connected{background:var(--success)}
@@ -2227,6 +2228,18 @@ async function icLoadProviders() {
   icRenderProviders();
 }
 
+// kanban t_289bc8b0 — a catalogue row that NO code path in this app can spend must not be offered
+// with a key box. The authoritative flag is `coming_soon` on the catalogue row, served by
+// GET /available-providers; it is not served yet, because the backend half of that card (the column
+// plus the 400 refusal in provider_keys/handlers.rs) is handed to the CoreSwift owner — the cron
+// `default` lane does not edit this app's Rust. Until it lands, this BRIDGE list carries the six rows
+// the reader census proved dead (letterman, nexweave, sam_gov, sendgrid, sendiio, usaspending: zero
+// occurrences of the name anywhere in src/, and no dispatch vocabulary resolves them), so the console
+// is honest TODAY rather than after the next deploy. DELETE THIS LIST the moment the API serves
+// coming_soon: `csIsComingSoon` prefers the server flag and the two agree.
+const CS_COMING_SOON_BRIDGE = ['letterman', 'nexweave', 'sam_gov', 'sendgrid', 'sendiio', 'usaspending'];
+const csIsComingSoon = (p) => !!p && (p.coming_soon === true || CS_COMING_SOON_BRIDGE.indexOf(p.key) >= 0);
+
 function icRenderProviders() {
   const el = document.getElementById('icProviderWrap');
   if (!el) return;
@@ -2245,6 +2258,21 @@ function icRenderProviders() {
     const k = IC.keys[p.key];
     const on = !!(k && k.is_active);
     const icon = IC_PROVIDER_ICON[p.icon] || '🔑';
+    // A row no code path in this app can spend (kanban t_289bc8b0): informational card — badge, no
+    // key input, no Add/Replace/Remove control, nothing that would store a credential nothing reads.
+    if (csIsComingSoon(p)) {
+      html += '<div class="provider-card">' +
+        '<div class="provider-header">' +
+          '<span class="provider-name">' + icon + ' ' + escapeHtml(p.name) + '</span>' +
+          '<span class="provider-status coming-soon">Coming Soon</span>' +
+        '</div>' +
+        '<div class="provider-desc">' + escapeHtml(p.description || '') + '</div>' +
+        '<div style="font-size:.74rem;color:var(--text-muted)">Not connectable yet — CoreSwift has no code that reads a ' +
+          escapeHtml(p.name) + ' key, so there is nothing to paste one into. Listed so you know it is planned, not missing.' +
+        '</div>' +
+      '</div>';
+      return;
+    }
     html += '<div class="provider-card' + (on ? ' connected' : '') + '">' +
       '<div class="provider-header">' +
         '<span class="provider-name">' + icon + ' ' + escapeHtml(p.name) + '</span>' +
