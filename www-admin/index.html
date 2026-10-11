@@ -840,7 +840,6 @@ const MENU = [
     { id:'lead-scoring', icon:'🎯', label:'Lead Scoring' }
   ]},
   { type:'group', icon:'💬', label:'Communication', children:[
-    { id:'email-templates', icon:'✉️', label:'Email Templates' },
     { id:'messages', icon:'💬', label:'Messages' },
     { id:'notifications', icon:'🔔', label:'Notifications' },
     { id:'telnyx', icon:'📱', label:'Telnyx SMS/Voice' },
@@ -889,6 +888,10 @@ const ADMIN_MENU = [
     { id:'monitoring', icon:'📡', label:'Monitoring' }
   ]},
   { type:'group', icon:'📡', label:'Communication Admin', children:[
+    // Platform-only, exactly like the rest of this menu: the template store
+    // (/api/email-templates) is `require_platform_admin` (src/email_templates.rs), so a tenant
+    // could never load the screen it used to be offered (403 "Insufficient permissions").
+    { id:'email-templates', icon:'✉️', label:'Email Templates' },
     { id:'telnyx-admin', icon:'☎️', label:'Telnyx Admin' },
     { id:'email-admin', icon:'📧', label:'Private Email Admin' }
   ]},
@@ -909,6 +912,18 @@ const ADMIN_MENU = [
     { id:'configuration', icon:'⚙️', label:'Configuration' }
   ]}
 ];
+
+// ONE definition of "platform operator" for this console, at module scope so the sidebar and the
+// tab guard read the SAME answer. The flag is `users.is_platform_admin`, resolved server-side
+// (src/auth/platform_admin.rs) and handed to the client in the login payload (top level AND inside
+// `team_member`); an ABSENT field means UNKNOWN (a session stored before this shipped) and only
+// then is the old role list consulted, so an already-signed-in operator keeps their menu.
+function isPlatformUser() {
+  const PLATFORM_ROLES = ['agency_admin', 'platform_admin', 'superadmin'];
+  return !!(STATE.user && (STATE.user.platform_admin === undefined
+    ? PLATFORM_ROLES.indexOf(STATE.user.role) >= 0
+    : STATE.user.platform_admin === true));
+}
 
 function renderSidebar() {
   const nav = document.getElementById('sidebarNav');
@@ -954,10 +969,7 @@ function renderSidebar() {
   // (www-app/coreswift) already resolved this the same way; this console had not.
   // An ABSENT field means UNKNOWN (a session stored before this shipped) and only then is the
   // old role list consulted, so an already-signed-in operator keeps their menu.
-  const PLATFORM_ROLES = ['agency_admin', 'platform_admin', 'superadmin'];
-  const isPlatform = STATE.user && (STATE.user.platform_admin === undefined
-    ? PLATFORM_ROLES.indexOf(STATE.user.role) >= 0
-    : STATE.user.platform_admin === true);
+  const isPlatform = isPlatformUser();
   if (isPlatform) {
     h += '<div class="nav-divider">── ADMIN ──</div>';
     ADMIN_MENU.forEach(it => item(it, false));
@@ -1096,6 +1108,15 @@ async function openUpgradeModal() {
 // ===== TAB RENDERING =====
 function renderTab(tabId) {
   const container = document.getElementById('tabPanels');
+  // Platform-only screens: a tenant that reaches one by the keyboard shortcut, an old hash or a
+  // stale session gets a named refusal instead of a request that can only answer 403. Same idiom
+  // the FunnelSwift console adopted for its own operator-only Email Templates screen.
+  const PLATFORM_ONLY_TABS = ['email-templates'];
+  if (PLATFORM_ONLY_TABS.indexOf(tabId) >= 0 && !isPlatformUser()) {
+    container.innerHTML = placeholderPanel(getTabLabel(tabId),
+      'This screen is for platform administrators. Your workspace administrator keeps the mail templates.', '🔒');
+    return;
+  }
   const fn = TAB_RENDERERS[tabId];
   if (fn) {
     container.innerHTML = fn();
