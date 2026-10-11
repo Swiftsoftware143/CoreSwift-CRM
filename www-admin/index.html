@@ -701,6 +701,21 @@ function escapeHtml(s) {
   return d.innerHTML;
 }
 
+// Human-readable labels for the user_role enum. The admin Users panel used to print the raw DB
+// enum (`agency_admin`, `company_admin`, `team_member`, …) and, when a role was missing, fell
+// back to the bare word "user" — so an operator read database internals instead of a role.
+// Known values get a proper label; an unknown value is shown as-is (honest, no invented role);
+// a MISSING one shows an em-dash, never a made-up "user".
+const ROLE_LABELS = {
+  owner: 'Owner', admin: 'Admin', super_admin: 'Super admin',
+  agency_admin: 'Agency admin', client_admin: 'Client admin', company_admin: 'Company admin',
+  team_member: 'Team member', member: 'Member', user: 'Member'
+};
+function roleLabel(r) {
+  if (!r) return '—';
+  return ROLE_LABELS[r] || r;
+}
+
 // Modal
 function showModal(title, bodyHtml, footerHtml, large) {
   const c = document.getElementById('modalContainer');
@@ -2480,7 +2495,7 @@ const TAB_LOADERS = {
         rows = users.slice(0, 50).map(u => [
           escapeHtml(u.name || '—'),
           escapeHtml(u.email || '—'),
-          `<span class="badge ${u.role==='agency_admin'?'badge-primary':'badge-muted'}">${escapeHtml(u.role||'user')}</span>`,
+          `<span class="badge ${u.role==='agency_admin'?'badge-primary':'badge-muted'}">${escapeHtml(roleLabel(u.role))}</span>`,
           escapeHtml(u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'),
           `<button class="btn btn-ghost btn-xs">Edit</button>`
         ]);

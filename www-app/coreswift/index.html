@@ -493,6 +493,21 @@ function escapeHtml(s) {
   return d.innerHTML;
 }
 
+// Human-readable labels for the user_role enum. The admin Users panel used to print the raw DB
+// enum (`agency_admin`, `company_admin`, `team_member`, …) and, when a role was missing, fell
+// back to the bare word "user" — so an operator read database internals instead of a role.
+// Known values get a proper label; an unknown value is shown as-is (honest, no invented role);
+// a MISSING one shows an em-dash, never a made-up "user".
+const ROLE_LABELS = {
+  owner: 'Owner', admin: 'Admin', super_admin: 'Super admin',
+  agency_admin: 'Agency admin', client_admin: 'Client admin', company_admin: 'Company admin',
+  team_member: 'Team member', member: 'Member', user: 'Member'
+};
+function roleLabel(r) {
+  if (!r) return '—';
+  return ROLE_LABELS[r] || r;
+}
+
 // Modal
 function showModal(title, bodyHtml, footerHtml, large) {
   const c = document.getElementById('modalContainer');
@@ -1167,7 +1182,7 @@ const TAB_RENDERERS = {
       return pageHeader('Team & Invites', 'Bring your teammates into this workspace') +
         card('Owner or admin required',
           '<p style="color:var(--text-secondary);margin:0">You are signed in as <strong>' +
-          escapeHtml((STATE.user && STATE.user.role) || 'member') +
+          escapeHtml(roleLabel((STATE.user && STATE.user.role) || 'member')) +
           '</strong>. Invite links and the invite list belong to the workspace owner or an admin. ' +
           'The API enforces the same rule, so there is nothing to manage here.</p>');
     }
@@ -1580,7 +1595,7 @@ const TAB_LOADERS = {
       const rows = users.slice(0, 50).map(u => [
         escapeHtml(u.name || '—'),
         escapeHtml(u.email || '—'),
-        `<span class="badge ${u.is_platform_admin?'badge-primary':'badge-muted'}">${escapeHtml(u.role||'user')}${u.is_platform_admin?' · platform':''}</span>`,
+        `<span class="badge ${u.is_platform_admin?'badge-primary':'badge-muted'}">${escapeHtml(roleLabel(u.role))}${u.is_platform_admin?' · platform':''}</span>`,
         escapeHtml(u.tenant_name || '—'),
         escapeHtml(u.created_at ? new Date(u.created_at).toLocaleDateString() : '—')
       ]);
@@ -3501,7 +3516,7 @@ function invitesTable(rows) {
       : (exp && exp < now ? '<span style="color:var(--text-muted)">Expired</span>'
                           : '<span style="color:var(--accent,#38bdf8)">Pending</span>');
     return '<tr>' +
-      '<td>' + escapeHtml(r.role || 'member') + '</td>' +
+      '<td>' + escapeHtml(roleLabel(r.role || 'member')) + '</td>' +
       '<td>' + state + '</td>' +
       '<td>' + escapeHtml(fmtTeamDate(r.expires_at)) + '</td>' +
       '<td>' + escapeHtml(fmtTeamDate(r.created_at)) + '</td>' +
