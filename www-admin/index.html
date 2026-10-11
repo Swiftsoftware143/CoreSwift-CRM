@@ -4216,7 +4216,7 @@ async function loadScoringTab(){
     el.innerHTML='<p style="color:var(--text-secondary)">Scoring rules unavailable: '+escapeHtml(String(e.message||e))+'</p>';
   }
 }
-function showAddTemplateModal(){ showModal('New Template', '<div class="form-group"><label>Template Name</label><input type="text" id="newTemplateName"></div><div class="form-group"><label>Subject</label><input type="text" id="newTemplateSubject"></div><div class="form-group"><label>Body</label><textarea rows="6" id="newTemplateBody"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="newTemplateCreate" onclick="createTemplate()">Save</button>'); }
+function showAddTemplateModal(){ if(!isPlatformUser()){ toast('Email templates are managed by the platform administrator.','error'); return; } showModal('New Template', '<div class="form-group"><label>Template Name</label><input type="text" id="newTemplateName"></div><div class="form-group"><label>Subject</label><input type="text" id="newTemplateSubject"></div><div class="form-group"><label>Body</label><textarea rows="6" id="newTemplateBody"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="newTemplateCreate" onclick="createTemplate()">Save</button>'); }
 // Wired to POST /api/email-templates (src/email_templates.rs::create). This control used to close
 // the modal and toast "Template saved" issuing NO request, so the operator was told a template
 // existed while email_templates held nothing. name/subject/template_type are NOT NULL in the live
@@ -4631,7 +4631,7 @@ document.addEventListener('click', e => {
     k: { desc: 'k  → New Ticket', fn: function () { showAddTicketModal(); } },
     m: { desc: 'm  → Compose Message', fn: function () { showComposeModal(); } },
     p: { desc: 'p  → New Campaign', fn: function () { showAddCampaignModal(); } },
-    e: { desc: 'e  → New Email Template', fn: function () { showAddTemplateModal(); } }
+    e: { desc: 'e  → New Email Template', platformOnly: true, fn: function () { showAddTemplateModal(); } }
   };
 
   function isTyping(el) {
@@ -4695,7 +4695,8 @@ document.addEventListener('click', e => {
     if (e.key === '?' || (e.shiftKey && key === '/')) {
       e.preventDefault();
       toastShortcuts(Object.keys(NAV).map(function (k) { return NAV[k]; }).concat(
-        Object.keys(ACTIONS).map(function (k) { return ACTIONS[k]; })));
+        Object.keys(ACTIONS).map(function (k) { return ACTIONS[k]; })
+          .filter(function (it) { return !it.platformOnly || isPlatformUser(); })));
       return;
     }
 
@@ -4717,6 +4718,10 @@ document.addEventListener('click', e => {
     }
 
     if (!ctrl && ACTIONS[key]) {
+      // A platform-only quick action (New Email Template -> POST /api/email-templates, which is
+      // require_platform_admin) is not offered to a tenant: the keystroke used to open a modal whose
+      // Save could only answer 403 "Insufficient permissions".
+      if (ACTIONS[key].platformOnly && !isPlatformUser()) return;
       e.preventDefault();
       ACTIONS[key].fn();
     }
