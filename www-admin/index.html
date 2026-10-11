@@ -798,7 +798,7 @@ function showApp() {
   wrap.classList.remove('hidden');
   wrap.style.display = '';
   document.getElementById('userEmail').textContent = STATE.user.email;
-  document.getElementById('userAvatar').textContent = (STATE.user.name || STATE.user.email)[0].toUpperCase();
+  paintAvatar();
   renderSidebar();
   switchTab('dashboard');
   checkPlan();
@@ -1344,18 +1344,14 @@ const TAB_RENDERERS = {
   },
 
   // === SETTINGS ===
+  // Filled by the loader (TAB_LOADERS['profile'] -> loadProfileTab): a renderer runs BEFORE its
+  // HTML is in the document, and GET /api/profile is what carries the account's real Company, the
+  // REAL plan name (`plan_name`) and the picture URL. This screen used to show Name only, while its
+  // own inline guide promised "name, company, password and picture" -- the company field and the
+  // picture were never reachable from here. Level shows the real plan, never a bare role word.
   'profile': () => {
-    return pageHeader('Profile Settings', 'Manage your account') +
-    card('Profile Information', '' +
-      '<div class="form-group"><label>Name</label><input type="text" id="profileName" value="' + (STATE.user ? escapeHtml(STATE.user.name || '') : '') + '"></div>' +
-      '<div class="form-group"><label>Email</label><input type="email" value="' + (STATE.user ? escapeHtml(STATE.user.email) : '') + '" disabled style="opacity:.6"> <span class="form-hint">Email cannot be changed</span></div>',
-      '<button class="btn btn-primary" onclick="saveProfile()">Save Changes</button>') +
-    '<br>' +
-    card('Change Password', '' +
-      '<div class="form-group"><label>Current Password</label><input type="password" id="currentPw"></div>' +
-      '<div class="form-group"><label>New Password</label><input type="password" id="newPw"></div>' +
-      '<div class="form-group"><label>Confirm New Password</label><input type="password" id="confirmPw"></div>',
-      '<button class="btn btn-primary" onclick="changePassword()">Update Password</button>');
+    return pageHeader('Profile Settings', 'Your name, company, password and picture') +
+    '<div id="profileWrap"><div class="loading-wrap"><div class="spinner"></div> Loading your profile...</div></div>';
   },
 
   // ── EMAIL BRANDING (per-account identity on transactional email) ──────────────────────────
@@ -2077,6 +2073,9 @@ const TAB_LOADERS = {
   // Same reason as the two above: the renderer runs before its HTML exists, so the load registers
   // here and runs against a #sysEmailWrap that is already in the document.
   'system-email': async () => { await loadSystemEmail(); },
+  // Same reason as the three above: the Profile renderer runs before its HTML exists, so the load
+  // registers here and runs against a #profileWrap already in the document.
+  'profile': async () => { await loadProfileTab(); },
   // Same reason as the two above: the renderer runs before its HTML exists, so the load registers
   // here and runs against a #provWrap that is already in the document.
   'provisioning': async () => { await loadProvisioning(); },
@@ -3410,16 +3409,113 @@ function icRenderUpgradePaths() {
   el.innerHTML = html;
 }
 
+// ==== PROFILE (name / company / picture / password) ==========================================
+// GET /api/profile carries the caller's OWN record: name, company, the picture URL and the REAL
+// plan_name. Filled by the loader (TAB_LOADERS['profile']) because the renderer runs before its
+// HTML is in the document.
+async function loadProfileTab() {
+  const el = document.getElementById('profileWrap');
+  if (!el) return;
+  let p;
+  try { p = await API.get('/profile'); }
+  catch (e) {
+    el.innerHTML = '<div class="card"><div class="card-body"><p style="color:var(--error)">Could not load your profile: ' + escapeHtml(e.message) + '</p></div></div>';
+    return;
+  }
+  // Keep the header chip and the local cache in step with the record we just read.
+  STATE.user = Object.assign({}, STATE.user, {
+    name: p.name, email: p.email, role: p.role, company: p.company || '', avatar_url: p.avatar_url || ''
+  });
+  localStorage.setItem('crm_user', JSON.stringify(STATE.user));
+  paintAvatar();
+  const plan = p.plan_name || STATE.planName || '';
+  el.innerHTML =
+    card('Profile picture',
+      '<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">' +
+        '<img id="avatarImg" alt="Your profile picture" style="width:72px;height:72px;border-radius:50%;object-fit:cover;background:var(--bg-secondary);display:' + (p.avatar_url ? '' : 'none') + '"' + (p.avatar_url ? ' src="' + escapeHtmlAttr(p.avatar_url) + '"' : '') + '>' +
+        '<div><input type="file" id="avatarInput" accept="image/png,image/jpeg,image/gif,image/webp" onchange="uploadAvatar(this)">' +
+        '<p class="form-hint" style="margin-top:6px">PNG, JPEG, GIF or WebP, up to 2 MB. Shown in the header and on this page.</p></div>' +
+      '</div>', '') +
+    '<br>' +
+    card('Profile Information',
+      '<div class="form-group"><label>Name</label><input type="text" id="profileName" maxlength="100" value="' + escapeHtmlAttr(p.name || '') + '"></div>' +
+      '<div class="form-group"><label>Company</label><input type="text" id="profileCompany" maxlength="255" value="' + escapeHtmlAttr(p.company || '') + '"> <span class="form-hint">Optional — clear it to remove the company.</span></div>' +
+      '<div class="form-group"><label>Email</label><input type="email" value="' + escapeHtmlAttr(p.email) + '" disabled style="opacity:.6"> <span class="form-hint">Email cannot be changed</span></div>' +
+      '<div class="form-group"><label>Level</label><input type="text" value="' + escapeHtmlAttr(plan || '—') + '" disabled style="opacity:.6"> <span class="form-hint">Your plan</span></div>',
+      '<button class="btn btn-primary" data-ops="profile-save" onclick="saveProfile()">Save Changes</button>') +
+    '<br>' +
+    card('Change Password',
+      '<div class="form-group"><label>Current Password</label><input type="password" id="currentPw" autocomplete="current-password"> <span class="form-hint">Required — proves it is really you.</span></div>' +
+      '<div class="form-group"><label>New Password</label><input type="password" id="newPw" autocomplete="new-password"></div>' +
+      '<div class="form-group"><label>Confirm New Password</label><input type="password" id="confirmPw" autocomplete="new-password"></div>',
+      '<button class="btn btn-primary" data-ops="profile-password" onclick="changePassword()">Update Password</button>');
+}
+
+// Paint the header chip's picture (or the initial letter) from STATE.user.avatar_url, and keep the
+// Profile screen's preview in step.
+function paintAvatar() {
+  const u = STATE.user || {};
+  const el = document.getElementById('userAvatar');
+  if (el) {
+    if (u.avatar_url) {
+      el.style.backgroundImage = 'url(' + u.avatar_url + ')';
+      el.style.backgroundSize = 'cover';
+      el.style.backgroundPosition = 'center';
+      el.textContent = '';
+    } else {
+      el.style.backgroundImage = '';
+      el.textContent = ((u.name || u.email || '?')[0] || '?').toUpperCase();
+    }
+  }
+  const img = document.getElementById('avatarImg');
+  if (img) {
+    if (u.avatar_url) { img.src = u.avatar_url; img.style.display = ''; }
+    else { img.removeAttribute('src'); img.style.display = 'none'; }
+  }
+}
+
 async function saveProfile() {
-  const name = document.getElementById('profileName').value;
+  const nameEl = document.getElementById('profileName');
+  const compEl = document.getElementById('profileCompany');
+  const name = nameEl ? nameEl.value.trim() : '';
+  if (!name) { toast('Name cannot be empty', 'error'); return; }
+  const company = compEl ? compEl.value.trim() : '';
   try {
-    await API.put('/profile', { name });
+    await API.put('/profile', { name: name, company: company });
     STATE.user.name = name;
-    document.getElementById('userAvatar').textContent = name[0].toUpperCase();
+    STATE.user.company = company;
     localStorage.setItem('crm_user', JSON.stringify(STATE.user));
+    paintAvatar();
     toast('Profile updated', 'success');
   } catch(e) {
     toast('Failed to update profile: ' + e.message, 'error');
+  }
+}
+
+// The picture is multipart, so it cannot go through API.call (which pins Content-Type: json).
+async function uploadAvatar(input) {
+  const f = input && input.files && input.files[0];
+  if (!f) return;
+  const fd = new FormData();
+  fd.append('file', f, f.name);
+  try {
+    const res = await fetch('/api/profile/avatar', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + STATE.token },
+      body: fd
+    });
+    if (!res.ok) {
+      let msg = 'HTTP ' + res.status;
+      try { const e = await res.json(); if (e && typeof e.message === 'string') msg = e.message; } catch(_){}
+      throw new Error(msg);
+    }
+    const d = await res.json();
+    STATE.user.avatar_url = d.avatar_url || '';
+    localStorage.setItem('crm_user', JSON.stringify(STATE.user));
+    paintAvatar();
+    toast('Picture updated', 'success');
+  } catch(e) {
+    toast('Upload failed: ' + e.message, 'error');
   }
 }
 
@@ -3428,8 +3524,19 @@ async function changePassword() {
   const newPw = document.getElementById('newPw').value;
   const confirm = document.getElementById('confirmPw').value;
   if (newPw !== confirm) { toast('Passwords do not match', 'error'); return; }
+  if (newPw.length < 8) { toast('New password must be at least 8 characters', 'error'); return; }
   try {
-    await API.put('/profile/password', { current_password: current, new_password: newPw });
+    // Deliberately NOT through API.call: a wrong current password is the contract's 401
+    // "Current password is incorrect", and API.call's generic 401 handler would sign the user OUT
+    // (losing their typed input) instead of showing the sentence.
+    const res = await fetch('/api/profile/password', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + STATE.token },
+      body: JSON.stringify({ current_password: current, new_password: newPw })
+    });
+    let d = {};
+    try { d = await res.json(); } catch(_) {}
+    if (!res.ok) throw new Error(d && typeof d.message === 'string' ? d.message : ('HTTP ' + res.status));
     toast('Password updated', 'success');
     document.getElementById('currentPw').value = '';
     document.getElementById('newPw').value = '';
@@ -4699,7 +4806,7 @@ window.appGuidePages = {
   'tracked-links': { title: 'Tracked Links', desc: 'Links whose clicks are counted, for campaigns and outreach.', actions: ['Create a tracked link and use it in an email'] },
   checklists: { title: 'Checklists', desc: 'Step lists attached to contacts or deals, so a process is followed.', actions: ['Create a checklist and attach it'] },
   'round-robin': { title: 'Round Robin', desc: 'Distributes new leads evenly across your team.', actions: ['Choose the team and the rotation'] },
-  profile: { title: 'Profile', desc: 'Your own name, company, password and picture.', actions: ['Update your details and save', 'Change your password', 'Upload or remove your picture'] },
+  profile: { title: 'Profile', desc: 'Your own name, company, password and picture.', actions: ['Update your name and company and save', 'Upload a picture (PNG/JPEG/GIF/WebP, up to 2 MB)', 'Change your password (your current one is required)'] },
   'email-branding': { title: 'Email Branding', desc: 'Your logo and display name on every transactional email this account sends. Leave it blank and mail keeps the CoreSwift look.', actions: ['Upload a logo (PNG/JPEG/GIF/WebP, up to 2 MB)', 'Set a brand name and colour, then save'] },
   integrations: { title: 'Integration Center', desc: 'Connect the services this workspace uses, each with your own provider key (BYOK).', actions: ['Paste a provider key and save', 'Email integrations drive the mail you send'] },
   portfolio: { title: 'Portfolio Companies', desc: 'Advisory portfolios — one parent whose companies are managed together.', actions: ['Add a portfolio and its companies'] },
