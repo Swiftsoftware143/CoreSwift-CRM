@@ -2914,6 +2914,15 @@ async function createAutomationRule(){
     if(btn){ btn.disabled=false; btn.textContent='Create Rule'; }
   }
 }
+// A 402 from API.call is the PLAN GATE, not a failed load. The client collapses every 402 onto the
+// sentinel message 'Payment required' (it fires the upgrade banner first) and carries the SERVER's
+// own sentence on err.planMessage — so a panel that prints e.message raw shows the customer the
+// internal words instead of naming the limit. This returns the sentence to show. The sentinel itself
+// is deliberately left intact: the AI panel (loadAiTab) and the Tracked Links panel still test it.
+function planGateText(e){
+  if (e && e.planGate) return e.planMessage || 'This feature is not included in your current plan.';
+  return String((e && e.message) || e);
+}
 // Live list for the Automation Rules panel. GET /api/automation/rules answers
 // {"rules":[{name,trigger_type,action_type,is_active,...}]} (src/automation/handlers.rs::list_rules).
 async function loadRulesTab(){
@@ -2927,7 +2936,9 @@ async function loadRulesTab(){
     });
     el.innerHTML=rows.length?('<div class="config-list">'+rows.join('')+'</div>'):'<p style="color:var(--text-secondary)">No rules yet. Use &ldquo;+ New Rule&rdquo;.</p>';
   } catch(e){
-    el.innerHTML='<p style="color:var(--text-secondary)">Rules unavailable: '+escapeHtml(String(e.message||e))+'</p>';
+    el.innerHTML = (e && e.planGate)
+      ? '<p style="color:var(--text-secondary)">🔒 '+escapeHtml(planGateText(e))+'</p>'
+      : '<p style="color:var(--text-secondary)">Rules unavailable: '+escapeHtml(planGateText(e))+'</p>';
   }
 }
 // Email Templates tab — create + edit both go to /api/comms/templates (message_templates).
@@ -3059,7 +3070,7 @@ async function createTicket(){
   try {
     await API.post('/tickets', { subject: subject, description: v('tkBody'), priority: v('tkPriority') || 'medium' });
     closeModal(); toast('Ticket created', 'success'); renderTab('tickets');
-  } catch(e) { toast('Could not create the ticket: ' + e.message, 'error'); }
+  } catch(e) { toast((e && e.planGate) ? planGateText(e) : 'Could not create the ticket: ' + planGateText(e), 'error'); }
 }
 
 // ── CS-22: the customer-facing ticket thread (GET /tickets/:id + POST /tickets/:id/messages) ──
