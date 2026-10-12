@@ -379,20 +379,23 @@ const API = {
     if (res.status === 401) { logout(true); throw new Error('Session expired'); }
     if (res.status === 402) {
       showUpgradeBanner();
-      // Keep the sentinel string (screens test it) but ALSO carry the server's own sentence, so a
-      // panel can name the plan limit instead of printing the internal words "Payment required".
-      // The gate answers a human sentence on every module: "Support tickets is not available on
-      // your current plan. Upgrade to access it." (measured 2026-10-11).
-      const err = new Error('Payment required');
-      err.planGate = true;
-      err.planMessage = 'This feature is not included in your current plan. Upgrade to access it.';
+      // The gate answers a human sentence on every module and every ceiling: "Support tickets is not
+      // available on your current plan. Upgrade to access it." (measured 2026-10-11). That sentence
+      // now goes on BOTH planMessage and message, so a panel or toast that prints e.message names the
+      // limit instead of the old internal words "Payment required" — which a free-tier workspace used
+      // to see on the Rules panel, on ticket creation and on the Industries ceiling toast (all three
+      // measured in Chromium 2026-10-12). `planGate` is the flag to test; do NOT test the old string.
+      let planMessage = 'This feature is not included in your current plan. Upgrade to access it.';
       try {
         const d = await res.clone().json();
         const pick = [d.error, d.message, d.detail].find(function (v) {
           return typeof v === 'string' && v.trim();
         });
-        if (pick) err.planMessage = pick;
+        if (pick) planMessage = pick;
       } catch (_) {}
+      const err = new Error(planMessage);
+      err.planGate = true;
+      err.planMessage = planMessage;
       throw err;
     }
     if (!res.ok) {
@@ -2029,7 +2032,9 @@ function icIsAdmin() {
 }
 
 function icErr(title, msg) {
-  const upgrade = /payment required|forbidden|not entitled/i.test(msg || '')
+  // The gate's own sentence is now "... is not available/included on your current plan. Upgrade to
+  // access it." (API.call carries it verbatim), so match that shape too — not only the old sentinel.
+  const upgrade = /payment required|forbidden|not entitled|not (?:available|included) (?:in|on) your current plan/i.test(msg || '')
     ? ' This module may be switched off on your plan — check <strong>Features &amp; Plans</strong>.'
     : '';
   return '<div class="card"><div class="card-body"><p style="color:var(--error);margin:0">' +
@@ -3243,12 +3248,13 @@ async function loadTrackedLinksTab() {
     const msg = String((e && e.message) || e);
     // A 402 is the module gate (FeatureGate "tracked_links", src/tracked_links/mod.rs): this
     // workspace's plan does not include the module, so NO SOURCE answered. That is not "you have no
-    // links" and it must not be dressed up as an empty list.
-    el.innerHTML = card('Tracked Links', /payment required|402/i.test(msg)
+    // links" and it must not be dressed up as an empty list. Test the gate FLAG, not a string — the
+    // client's message is now the server's own sentence, which does not contain "Payment required".
+    el.innerHTML = card('Tracked Links', (e && e.planGate)
       ? '<div class="empty-state"><div class="empty-icon">🔒</div>' +
         '<h3>Tracked Links is not included in this plan</h3>' +
-        '<p>No source answered: the server refused GET /api/tracked-links with “Payment required” - the ' +
-        'tracked_links module is not enabled for this workspace, so nothing is known about links here.</p>' +
+        '<p>' + escapeHtml(e.planMessage || 'Tracked Links is not available on your current plan. Upgrade to access it.') +
+        ' The tracked_links module is not enabled for this workspace, so nothing is known about links here.</p>' +
         '<button class="btn btn-secondary" onclick="openUpgradeModal()">View Plans</button></div>'
       : '<p style="color:var(--text-secondary)">Tracked Links endpoint: ' + escapeHtml(msg) + '</p>');
   }
@@ -3309,11 +3315,9 @@ function tlDeleteLink(id) {
 // The API is REAL and this screen is its only console surface: GET/POST/PATCH/DELETE
 // /api/integrations/webhooks (src/integrations/handlers.rs), Enterprise-only via the plan module
 // `webhooks`. Two behaviours the rest of the shell's API.call cannot give this panel:
-//   * API.call collapses EVERY 402 into the bare string 'Payment required' (it shows the upgrade
-//     banner first and throws). This screen has to render the SERVER's own sentence — the gate
-//     answers "Outbound webhooks is not available on your current plan. Upgrade to access it."
-//   * a 402 on the SAVE arm matters as much as on the read: the panel re-renders the refusal
-//     instead of only toasting it.
+//   * a 402 on the SAVE arm matters as much as on the read: this screen re-renders the refusal
+//     (marked `locked`) instead of only toasting it, and it reads the refusal's own sentence.
+//   * the gate answers "Outbound webhooks is not available on your current plan. Upgrade to access it."
 // So it does its own fetch through whCall and marks the refusal `locked`. Every write below still
 // goes to the real route — nothing here fabricates a row.
 let WH_ROWS = [];
@@ -3378,11 +3382,11 @@ async function loadWebhooksTab() {
     const msg = String((e && e.message) || e);
     if (e && e.locked) {
       // The sentence below is the server's, verbatim: the plan gate refused the read, so NOTHING is
-      // known about this workspace's endpoints and an empty list would be a lie.
+      // known about this workspace's endpoints and an empty list would be a lie. No route path and no
+      // status code in front of the customer — the server's sentence is already a plain one.
       el.innerHTML = card('Webhooks', '<div class="empty-state"><div class="empty-icon">🔒</div>' +
         '<h3>Outbound webhooks is not included in this plan</h3>' +
-        '<p>The server refused GET /api/integrations/webhooks with HTTP 402 and answered: ' +
-        '<strong>' + escapeHtml(msg) + '</strong></p>' +
+        '<p>' + escapeHtml(msg) + '</p>' +
         '<button class="btn btn-secondary" onclick="openUpgradeModal()">View Plans</button></div>');
       return;
     }
@@ -4134,7 +4138,7 @@ function planFeatureList(raw) {
 function fh(v) { return escapeHtml(String(v === null || v === undefined || v === '' ? '—' : v)); }
 function famErr(el, label, e) {
   // A 402 is the plan gate, not a failed load: name the limit (the SERVER's own sentence) instead
-  // of printing "… endpoint: Payment required". Same treatment the Webhooks panel gives its 402.
+  // of printing the request's own words. Same treatment the Webhooks panel gives its 402.
   if (e && e.planGate) {
     el.innerHTML = card(label, '<p style="color:var(--text-secondary)">\u{1F512} ' +
       escapeHtml(e.planMessage || 'This feature is not included in your current plan.') + '</p>');
@@ -6830,7 +6834,7 @@ async function loadAiTab() {
     d = await API.post('/ai/prioritize', { limit: 25 });
   } catch (e) {
     el.innerHTML = icErr('AI scoring is not switched on for this account',
-      String(e.message) === 'Payment required'
+      (e && e.planGate)
         ? 'The AI scoring module (ai_enabled) is not part of this plan. The platform admin turns it on per plan.'
         : e.message);
     const rec = document.getElementById('aiRecommend');
