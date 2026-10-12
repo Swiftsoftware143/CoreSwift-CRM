@@ -118,7 +118,8 @@ fn domain_credential_status(
 }
 
 /// The domain row as the client sees it, plus the credential verdict (never the credential itself:
-/// `PrivateEmailDomain`'s credential columns are `#[serde(skip_serializing)]`).
+/// `PrivateEmailDomain`'s credential columns are `#[serde(skip_serializing)]`), plus the inbound
+/// webhook key's verdict (kanban t_fbd607a7).
 fn with_credential_status(
     tenant_id: Uuid,
     d: &PrivateEmailDomain,
@@ -135,8 +136,33 @@ fn with_credential_status(
                 json!(super::api_keys_handler::REENTER_HINT),
             );
         }
+        // The inbound webhook signing key, reported the way every other credential in this app is:
+        // by OPENING the stored value, then answering presence + LENGTH. Never the value, never the
+        // ciphertext. A domain with no key is not "broken" — it is a sending-only domain — but its
+        // inbound mail IS refused (t_7f134e77), so the panel has to be able to say which state it is
+        // in. `unreadable` is the one that needs an action: the stored key cannot be opened by this
+        // deployment, so no delivery will ever validate until it is re-entered.
+        let (wh_status, wh_len) = webhook_key_status(tenant_id, d);
+        obj.insert("webhook_signing_key_status".into(), json!(wh_status));
+        obj.insert("webhook_signing_key_length".into(), json!(wh_len));
     }
     v
+}
+
+/// `usable | unreadable | missing` + the length of the DECRYPTED signing key (0 when there is none).
+/// `missing` is the "no key configured" state (NULL or empty), which the receiver treats as "refuse
+/// every delivery"; `unreadable` means a key IS stored but no key on this box can open it.
+fn webhook_key_status(tenant_id: Uuid, d: &PrivateEmailDomain) -> (&'static str, usize) {
+    let stored = d.webhook_signing_key_encrypted.as_deref().unwrap_or("");
+    if stored.trim().is_empty() {
+        return ("missing", 0);
+    }
+    let opened = crate::secret_box::open(tenant_id, stored);
+    if opened.trim().is_empty() {
+        ("unreadable", 0)
+    } else {
+        ("usable", opened.chars().count())
+    }
 }
 
 pub async fn delete_domain(
@@ -193,6 +219,21 @@ pub async fn update_domain(
         _ => None,
     };
 
+    // The inbound webhook signing key (kanban t_fbd607a7). `Some(None)` is an explicit JSON null —
+    // the ONLY way to clear the column, because this request's other fields all use "empty/omitted
+    // means leave the stored value alone" and the panel posts every field on save. `Some(Some(v))`
+    // with a non-empty v rotates the key; an empty string is the same "leave as is" signal the
+    // sibling credential fields use, so submitting the panel's blank input cannot disarm the
+    // receiver by accident. Restated in the request-struct doc comment on
+    // `UpdateDomainRequest::webhook_signing_key`.
+    let (webhook_touch, sealed_webhook): (bool, Option<String>) =
+        match req.webhook_signing_key.as_ref() {
+            None => (false, None),
+            Some(None) => (true, None),
+            Some(Some(k)) if k.trim().is_empty() => (false, None),
+            Some(Some(k)) => (true, Some(crate::secret_box::seal(account_id, k)?)),
+        };
+
     // Re-entering a working key also RE-VERIFIES the domain: Mailgun is asked again, so a row added
     // while its DNS was still propagating does not stay unverified for ever — and therefore does
     // not stay permanently off the delivery path (t_d9d6120a). `None` means "not determined" and the
@@ -241,6 +282,8 @@ pub async fn update_domain(
             smtp_password_encrypted = COALESCE($5, smtp_password_encrypted),
             api_key_id = COALESCE($6, api_key_id),
             verified = COALESCE($7, verified),
+            webhook_signing_key_encrypted = CASE
+                WHEN $8 THEN $9::text ELSE webhook_signing_key_encrypted END,
             updated_at = NOW()
         WHERE id = $1 AND tenant_id = $2
         RETURNING *
@@ -253,6 +296,8 @@ pub async fn update_domain(
     .bind(sealed_smtp)
     .bind(req.api_key_id)
     .bind(reverified)
+    .bind(webhook_touch)
+    .bind(sealed_webhook)
     .fetch_optional(&state.db)
     .await
     .map_err(AppError::Database)?;
@@ -552,10 +597,23 @@ async fn add_mailgun_domain(
     // it simply does not take over delivery yet.
     let verified = domain_state.eq_ignore_ascii_case("active");
 
+    // The inbound webhook signing key (kanban t_fbd607a7). Optional, and sealed here with the SAME
+    // envelope as every other credential column in this app. A domain added without one is a
+    // sending-only domain: the inbound receiver refuses every delivery for it (t_7f134e77), which
+    // is exactly what this field exists to arm. An empty/absent value stores NULL — never a
+    // ciphertext of nothing, so "no key" stays distinguishable from "a key is configured".
+    let sealed_webhook: Option<String> = match req.webhook_signing_key.as_deref() {
+        Some(k) if !k.trim().is_empty() => Some(crate::secret_box::seal(account_id, k)?),
+        _ => None,
+    };
+
     let row = sqlx::query_as::<_, PrivateEmailDomain>(
         r#"
-        INSERT INTO private_email_domains (tenant_id, domain, mailgun_api_key, mailgun_region, label, api_key_id, provider_type, verified)
-        VALUES ($1, $2, $3, $4, $5, $6, 'mailgun', $7)
+        INSERT INTO private_email_domains (
+            tenant_id, domain, mailgun_api_key, mailgun_region, label, api_key_id, provider_type,
+            verified, webhook_signing_key_encrypted
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, 'mailgun', $7, $8)
         RETURNING *
         "#,
     )
@@ -566,11 +624,21 @@ async fn add_mailgun_domain(
     .bind(label)
     .bind(api_key_id)
     .bind(verified)
+    .bind(sealed_webhook)
     .fetch_one(&state.db)
     .await
     .map_err(AppError::Database)?;
 
-    Ok(Json(serde_json::to_value(&row).unwrap()))
+    // Same shape as the list/update responses: the credential columns are `skip_serializing`, and
+    // the webhook key is reported as presence + length (never the value), so the panel can say
+    // whether inbound mail can be authenticated yet.
+    let (keys, provider_keys) = load_credential_maps(&state.db, account_id).await?;
+    Ok(Json(with_credential_status(
+        account_id,
+        &row,
+        &keys,
+        &provider_keys,
+    )))
 }
 
 async fn add_smtp_domain(
@@ -579,6 +647,28 @@ async fn add_smtp_domain(
     req: &AddDomainRequest,
     label: &str,
 ) -> ApiResult<Json<serde_json::Value>> {
+    // An SMTP domain cannot receive a webhook: `providers::smtp::accept_inbound` answers `None` for
+    // every payload (inbound over SMTP would be IMAP polling, which is not implemented). Storing a
+    // signing key on it would be an inert credential that LOOKS armed, so a non-empty one is
+    // refused here instead of saved and silently ignored (kanban t_fbd607a7). The panel never
+    // offers the field on the SMTP branch.
+    if let Some(k) = req
+        .webhook_signing_key
+        .as_deref()
+        .filter(|k| !k.trim().is_empty())
+    {
+        tracing::warn!(
+            tenant = %account_id,
+            key_len = k.len(),
+            "rejected a webhook signing key on an SMTP domain — SMTP domains cannot receive webhooks"
+        );
+        return Err(AppError::BadRequest(
+            "An inbound webhook signing key applies to a Mailgun domain only — this domain sends \
+             over SMTP, which has no webhook receiver, so the key would never be used."
+                .into(),
+        ));
+    }
+
     let smtp_host = req
         .smtp_host
         .as_deref()

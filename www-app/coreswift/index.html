@@ -6136,12 +6136,13 @@ async function loadInboxTab() {
       escapeHtml(d.provider_type || 'mailgun'),
       peVerifyCell(d),
       d.catch_all_enabled ? 'catch-all' : '—',
-      peCredentialCell(d)
+      peCredentialCell(d),
+      peInboundCell(d)
     ]);
     el.innerHTML = card('🌐 Domains you send from',
       '<p style="color:var(--text-secondary);margin:0">Each domain is the provider-level identity CoreSwift sends and receives with. Credentials are per account, never a platform default.</p>',
       '<button class="btn btn-primary btn-sm" onclick="peOpenAddDomain()">+ Add domain</button>') +
-      dataTable(['Domain', 'Label', 'Provider', 'Verification', 'Catch-all', 'Credential'], rows,
+      dataTable(['Domain', 'Label', 'Provider', 'Verification', 'Catch-all', 'Credential', 'Inbound mail'], rows,
         'No domains on this account yet.') + peKeysCard();
   }
 
@@ -6204,6 +6205,93 @@ function peCredentialCell(d) {
   }
   if (s === 'empty') return '<span class="badge badge-warning">empty key</span>';
   return '<span class="badge badge-muted">no key</span>';
+}
+
+// ── Inbound mail: the domain's Mailgun WEBHOOK SIGNING KEY (kanban t_fbd607a7) ─────────────────
+// POST /api/v1/webhooks/mailgun/inbound authenticates a delivery with the domain's Mailgun webhook
+// signing key (HMAC-SHA256(key, timestamp + token), sent as timestamp/token/signature). Mailgun
+// presents no session and cannot carry an internal key, so this signature IS the receiver's only
+// credential — and since t_7f134e77 the receiver REFUSES every delivery it cannot authenticate,
+// including one for a domain with no key configured. Until this cell existed there was no surface
+// anywhere that could write the column, so a workspace that set up private email received nothing
+// and had no way to arm its own receiver.
+// The server reports presence + LENGTH only (it opens the stored ciphertext to decide
+// `usable | unreadable | missing`); the value is sealed at rest and never echoed back here — the
+// same posture as the Mailgun API key field.
+function peInboundCell(d) {
+  const s = d.webhook_signing_key_status;
+  const badge = s === 'usable'
+    ? '<span class="badge badge-success">signing key set</span>'
+    : s === 'unreadable'
+      ? '<span class="badge badge-error">key unreadable</span>'
+      : '<span class="badge badge-warning">no key — inbound refused</span>';
+  const len = s === 'usable'
+    ? ' <span style="color:var(--text-muted)">(' + escapeHtml(String(d.webhook_signing_key_length || 0)) + ' chars)</span>'
+    : '';
+  return badge + len + ' <button class="btn btn-ghost btn-xs" onclick="peWebhookKey(\'' + d.id + '\')">' +
+    (s === 'usable' ? 'Rotate' : 'Set key') + '</button>';
+}
+
+// The modal that arms (or disarms) the receiver. Rotate = paste a new key; "Turn inbound off" =
+// explicit JSON null, which is the ONLY way to clear the column (an empty input means "leave the
+// stored key alone" — see UpdateDomainRequest::webhook_signing_key). Both answers are read back
+// from the server's own verdict (`webhook_signing_key_status`), never assumed.
+function peWebhookKey(domainId) {
+  const d = (PE.domains || []).filter(function (x) { return x.id === domainId; })[0] || {};
+  const set = d.webhook_signing_key_status === 'usable';
+  const dom = d.domain || 'this domain';
+  showModal('Inbound webhook signing key — ' + dom,
+    '<p style="color:var(--text-secondary)">This is the key Mailgun signs the inbound deliveries it forwards to this domain with. Copy it from Mailgun: <b>Send &rarr; Domains &rarr; ' + escapeHtml(dom) +
+    ' &rarr; Webhook signing key</b>. CoreSwift verifies that signature before a delivery becomes a contact or a ticket, so the stored value has to match that domain&rsquo;s key exactly.</p>' +
+    '<p style="color:var(--text-secondary)"><b>Without a key, inbound mail for this domain is refused.</b> A delivery CoreSwift cannot authenticate is answered 401 and creates nothing &mdash; no contact, no ticket, no event. A domain you only send from can stay unset.</p>' +
+    (set
+      ? '<p style="color:var(--text-secondary)">A key is stored (' + escapeHtml(String(d.webhook_signing_key_length || 0)) + ' characters). It is never shown again: paste a new one to rotate it, or turn inbound off to clear it.</p>'
+      : '') +
+    '<div class="form-group"><label>' + (set ? 'New signing key (paste to rotate)' : 'Webhook signing key') + '</label>' +
+    '<input type="password" id="peWhKey" autocomplete="new-password" placeholder="paste the webhook signing key">' +
+    '<span class="form-hint">Stored encrypted on this account, never echoed back. What is stored is what the signature is checked against.</span></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="peWhSave">Save key</button>' +
+    (set ? '<button class="btn btn-secondary" id="peWhClear">Turn inbound off</button>' : ''));
+  const save = document.getElementById('peWhSave');
+  const clear = document.getElementById('peWhClear');
+  if (save) save.addEventListener('click', async function () {
+    const v = String(document.getElementById('peWhKey').value || '').trim();
+    if (!v) { toast('Paste the domain\'s webhook signing key from Mailgun, or press Cancel', 'error'); return; }
+    save.disabled = true;
+    if (clear) clear.disabled = true;
+    await peWebhookPatch(domainId, save, clear, { webhook_signing_key: v },
+      'Signing key saved — inbound mail for this domain can now be authenticated',
+      'Saved, but the server still cannot open the stored key');
+  });
+  if (clear) clear.addEventListener('click', async function () {
+    clear.disabled = true;
+    if (save) save.disabled = true;
+    await peWebhookPatch(domainId, save, clear, { webhook_signing_key: null },
+      'Inbound turned off — deliveries for this domain are refused until a key is set again',
+      'The server did not clear the key');
+  });
+}
+
+async function peWebhookPatch(domainId, save, clear, body, okMsg, badMsg) {
+  try {
+    const r = await API.patch('/private-email/domains/' + encodeURIComponent(domainId), body);
+    closeModal();
+    const want = body.webhook_signing_key === null ? 'missing' : 'usable';
+    const got = r && r.webhook_signing_key_status;
+    if (got === want) {
+      toast(okMsg, 'success');
+    } else if (got === 'unreadable') {
+      toast(badMsg, 'error');
+    } else {
+      toast('Saved — inbound mail for this domain is now ' + (got === 'usable' ? 'authenticated' : 'refused'), got === 'usable' ? 'success' : 'error');
+    }
+    await loadInboxTab();
+  } catch (e) {
+    toast('Could not save the signing key: ' + e.message, 'error');
+    if (save) save.disabled = false;
+    if (clear) clear.disabled = false;
+  }
 }
 
 // ── Verification re-check (t_f02ade57) ────────────────────────────────────────────────────────
@@ -6429,6 +6517,9 @@ function peOpenAddDomain() {
       : '') +
     '<div class="form-group"><label>Region</label>' +
     '<select id="peNewRegion"><option value="us">US (api.mailgun.net)</option><option value="eu">EU (api.eu.mailgun.net)</option></select></div>' +
+    '<div class="form-group"><label>Inbound webhook signing key (optional)</label>' +
+    '<input type="password" id="peNewWebhook" autocomplete="new-password">' +
+    '<span class="form-hint">Only needed to RECEIVE mail on this domain (kanban t_fbd607a7). It is this domain&rsquo;s own <b>webhook signing key</b> from Mailgun &mdash; Send &rarr; Domains &rarr; your domain &rarr; Webhook signing key. Mailgun signs every inbound delivery with it and CoreSwift verifies that signature before a delivery becomes a contact or a ticket; <b>without it, inbound mail for this domain is refused</b> (401, nothing created). Leave empty for a domain you only send from &mdash; you can set or rotate it later from the domain row. Stored encrypted, never echoed back.</span></div>' +
     '</div>' +
     '<div id="peSmtpFields" style="display:none">' +
     '<p style="color:var(--text-secondary);margin:0">Nothing is sent to the mail server before the domain is saved, so a wrong host or password is only reported by the first send.</p>' +
@@ -6470,6 +6561,12 @@ function peOpenAddDomain() {
       if (chosen) payload.api_key_id = chosen;
       else if (key) payload.mailgun_api_key = key;
       else { toast('Paste the Mailgun API key for this domain, or pick a saved key', 'error'); return; }
+      // The inbound webhook signing key (t_fbd607a7) is optional: without it the domain is
+      // send-only and the receiver refuses every delivery for it. Only sent when something was
+      // typed, so an empty box can never clear a key (this is add, not update).
+      const whEl = document.getElementById('peNewWebhook');
+      const wh = whEl ? whEl.value.trim() : '';
+      if (wh) payload.webhook_signing_key = wh;
     }
     b.disabled = true;
     try {
