@@ -1431,6 +1431,12 @@ const TAB_LOADERS = {
     } catch(e) {
       statsGridEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats unavailable: ${escapeHtml(String(e.message || e))}</p></div></div>`;
     }
+    // The plan notices live in #dashboardExtra, which this loader RE-CREATES on every visit to the
+    // tab — so the usage readout has to be re-painted here, or a notice (the contacts ceiling, and
+    // the help desk's unreadable intake, kanban t_969f576a) renders at boot and then disappears the
+    // moment the tenant leaves the Dashboard and comes back. Same GET the boot issues, so the number
+    // is also current each time the tab opens.
+    loadUsage();
   },
 
   'contacts': async () => {
@@ -1552,7 +1558,7 @@ const TAB_LOADERS = {
       );
     } catch(e) {
       ticketsTableEl.innerHTML = (e && e.planGate)
-        ? `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">\u{1F512} ${escapeHtml(e.planMessage || 'Support tickets is not available on your current plan. Upgrade to access it.')}</p></div></div>`
+        ? `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">\u{1F512} ${escapeHtml(e.planMessage || 'Support tickets is not available on your current plan. Upgrade to access it.')}</p><p style="color:var(--text-secondary);margin-top:10px">Requests your customers submit through the 💬 My Support portal or the embed widget are still accepted and stored while you are on this plan — the intake is not plan-gated — and they appear in this list as soon as the plan includes Support tickets.</p></div></div>`
         : `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tickets endpoint: ${escapeHtml(e.message)}</p></div></div>`;
     }
   },
@@ -3829,28 +3835,49 @@ async function loadUsage() {
     const contactsTxt = hasCeiling
       ? (contacts + '/' + u.contacts_limit + ' contacts')
       : (contacts + ' contacts');
-    el.textContent = 'Usage: ' + contactsTxt + (over ? ' ⚠ over plan limit' : '') + ' · ' + (u.users || 0) + ' users · ' + (u.pipelines || 0) + ' pipelines · ' + (u.industries || 0) + ' industries';
-    el.style.color = over ? 'var(--warning,#f59e0b)' : '';
-    renderContactLimitNotice(u, over);
+    // The help desk's readout (kanban t_969f576a, decision (a)). The public intake is NOT plan-gated
+    // while the ticket queue IS, so a workspace without Support tickets can collect real customer
+    // requests its own queue refuses to open. `support_intake_unreadable` is that state, and it is
+    // decided server-side by the SAME resolve the gate enforces. Zero tickets prints nothing.
+    const tk = (u.tickets || 0);
+    const tkUnreadable = (u.support_intake_unreadable === true);
+    const tkTxt = (tk > 0)
+      ? (' · ' + tk + (tk === 1 ? ' ticket' : ' tickets') + (tkUnreadable ? ' ⚠ cannot open' : ''))
+      : '';
+    el.textContent = 'Usage: ' + contactsTxt + (over ? ' ⚠ over plan limit' : '') + ' · ' + (u.users || 0) + ' users · ' + (u.pipelines || 0) + ' pipelines · ' + (u.industries || 0) + ' industries' + tkTxt;
+    el.style.color = (over || tkUnreadable) ? 'var(--warning,#f59e0b)' : '';
+    renderPlanNotices(u, over);
   } catch (_) { el.textContent = 'Usage: unavailable'; }
 }
 
-// Over-limit banner on the Dashboard. The ceiling refuses a contact the TENANT adds, while a lead a
-// sibling app already captured is still accepted (capture-over-ceiling, kanban t_3e3965fc), so a
-// workspace can sit above its ceiling and has to be told. Driven by the SAME readout the dropdown
-// uses, so the two cannot disagree; it clears itself once the workspace is back under the limit.
-function renderContactLimitNotice(u, over) {
+// Plan notices on the Dashboard — ONE composer, because both notices share the same slot.
+//
+// 1. The contact ceiling: it refuses a contact the TENANT adds, while a lead a sibling app already
+//    captured is still accepted (capture-over-ceiling, kanban t_3e3965fc), so a workspace can sit
+//    above its ceiling and has to be told.
+// 2. The help desk's PUBLIC INTAKE (kanban t_969f576a, decision (a)): the intake arms are NOT
+//    plan-gated while the ticket queue IS, so a workspace whose plan excludes Support tickets can
+//    collect customer requests it cannot read. The decision was to keep accepting them — the caller
+//    is the workspace's OWN customer, and refusing would lose the request outright — and to end the
+//    silence instead, which is what this notice does.
+// Both are driven by the SAME GET /api/auth/me/usage readout the dropdown renders, so a notice can
+// never disagree with the number the gate enforces; each clears itself when its state goes away.
+function renderPlanNotices(u, over) {
   const el = document.getElementById('dashboardExtra');
   if (!el) return;
-  if (!over) {
-    if (el.getAttribute('data-contact-limit') === '1') el.innerHTML = '';
-    el.removeAttribute('data-contact-limit');
-    return;
+  let html = '';
+  if (over) {
+    html += card('⚠ Over your plan\u2019s contact limit',
+      '<p style="color:var(--text-secondary);margin-bottom:10px">This workspace holds <strong>' + (u.contacts || 0) + ' of ' + u.contacts_limit + '</strong> contacts. Leads captured by your connected apps keep arriving, so the count can pass the limit — but a new contact you add here, or by CSV import, is refused until the workspace is under the limit or on a bigger plan.</p>',
+      '<button class="btn btn-primary btn-sm" onclick="switchTab(&#39;billing&#39;)">💳 See plans</button>');
   }
-  el.setAttribute('data-contact-limit', '1');
-  el.innerHTML = card('⚠ Over your plan\u2019s contact limit',
-    '<p style="color:var(--text-secondary);margin-bottom:10px">This workspace holds <strong>' + (u.contacts || 0) + ' of ' + u.contacts_limit + '</strong> contacts. Leads captured by your connected apps keep arriving, so the count can pass the limit — but a new contact you add here, or by CSV import, is refused until the workspace is under the limit or on a bigger plan.</p>',
-    '<button class="btn btn-primary btn-sm" onclick="switchTab(&#39;billing&#39;)">💳 See plans</button>');
+  if (u.support_intake_unreadable === true) {
+    const n = (u.tickets || 0);
+    html += card('⚠ Customer requests you cannot open',
+      '<p style="color:var(--text-secondary);margin-bottom:10px">This workspace is holding <strong>' + n + (n === 1 ? ' customer request' : ' customer requests') + '</strong> in a support queue this plan refuses to open. The intake is not plan-gated, so requests keep arriving through the 💬 <strong>My Support</strong> portal and the embed widget — nothing is lost. They appear in <strong>Support Tickets</strong> as soon as the plan includes it.</p>',
+      '<button class="btn btn-primary btn-sm" onclick="switchTab(&#39;billing&#39;)">💳 See plans</button>');
+  }
+  el.innerHTML = html;
 }
 
 // ===== NOTIFICATIONS =====

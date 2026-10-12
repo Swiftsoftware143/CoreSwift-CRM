@@ -57,6 +57,18 @@ pub async fn count_integrations(db: &PgPool, tenant_id: Uuid) -> i64 {
         .unwrap_or(0)
 }
 
+/// Tickets captured for this workspace, from EVERY arm that can create one: the console, the public
+/// form, the customer portal, the embed widget and email-to-ticket. This is the number the help-desk
+/// readout names, and it is the same `COUNT(*)` the queue lists, so a "N requests you cannot open"
+/// notice cannot overstate what is actually stored (kanban t_969f576a).
+pub async fn count_tickets(db: &PgPool, tenant_id: Uuid) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM tickets WHERE tenant_id = $1")
+        .bind(tenant_id)
+        .fetch_one(db)
+        .await
+        .unwrap_or(0)
+}
+
 /// Active users of the workspace — `users.is_active`, the same expression the plan's
 /// `limit_max_users` ceiling is written against (an inactive member does not consume a seat).
 pub async fn count_active_users(db: &PgPool, tenant_id: Uuid) -> i64 {
@@ -103,6 +115,28 @@ pub async fn get_usage_json(db: &PgPool, tenant_id: Uuid) -> serde_json::Value {
     // Strictly ABOVE, not "at": `limit == 0` means "not included on this plan" and a workspace with
     // 0 contacts has not exceeded anything yet.
     let contacts_over_limit = matches!(contacts_limit, Some(limit) if contacts > limit);
+    // ── THE HELP DESK'S PUBLIC INTAKE (kanban t_969f576a — DECISION (a)) ─────────────────────────
+    // The `tickets` module's FeatureGate wraps the TENANT router only (`src/tickets/mod.rs`): the
+    // ticket queue and the admin support panel are plan-gated, while the PUBLIC arms — the embed
+    // widget script, the customer portal page/form and `POST /s/:tenant_id/ticket` — are not
+    // (`src/main.rs` mounts those with only the body-read deadline).
+    //
+    // DECIDED (a): the intake arm stays OPEN. Its caller is the workspace's OWN customer, not the
+    // workspace — refusing their request tells the tenant nothing about the billing question, throws
+    // the request away before the plan can change, and lands on a third party who is not a party to
+    // it. That is the same line the contacts ceiling follows for INGEST arms ("a captured lead is
+    // never refused"). What was wrong was not the open intake, it was the SILENCE: a workspace could
+    // hold requests its own queue refuses to open and never be told, so nobody could act on either
+    // side of the upsell. The three fields below are what tells it, in the shape the contacts ceiling
+    // uses (`contacts_limit` / `contacts_over_limit`) — a readout the console renders and the same
+    // resolution the gate enforces, so the two cannot disagree.
+    let tickets = count_tickets(db, tenant_id).await;
+    // `unwrap_or(true)`: a failed resolve reports the workspace as ABLE to read its queue rather than
+    // inventing a notice from a lookup that did not answer. The queue itself still refuses at the
+    // gate; this readout must not accuse a workspace of a state it cannot confirm.
+    let tickets_readable = feature_gate_open(db, tenant_id, "tickets")
+        .await
+        .unwrap_or(true);
     serde_json::json!({
         "contacts": contacts,
         "contacts_limit": contacts_limit,
@@ -110,7 +144,10 @@ pub async fn get_usage_json(db: &PgPool, tenant_id: Uuid) -> serde_json::Value {
         "industries": industries,
         "pipelines": pipelines,
         "users": users,
-        "api_calls_today": api_calls_today
+        "api_calls_today": api_calls_today,
+        "tickets": tickets,
+        "tickets_readable": tickets_readable,
+        "support_intake_unreadable": tickets > 0 && !tickets_readable
     })
 }
 
@@ -291,23 +328,34 @@ pub async fn enforce_feature_flag(
     feature_key: &str,
     label: &str,
 ) -> Result<(), AppError> {
-    let ent = module_registry::resolve(db, tenant_id, feature_key).await?;
-    if ent.enabled {
+    if feature_gate_open(db, tenant_id, feature_key).await? {
         return Ok(());
     }
-    match ent.source {
-        // No active plan row at all: GRANTS everything. Kept open by decision (kanban t_e6141896,
-        // ARM (a)) and made VISIBLE instead of closed — the measured blast radius of closing it is
-        // 14 live workspaces (122/81/78-contact accounts among them) whose replacement tier is a
-        // pricing call, so the console and the admin guide now say out loud what this arm does and
-        // the operator seats a plan with one press. See `module_registry`'s module docs for the
-        // numbers, the rejected alternative and the ordered way to reverse it.
-        "no_plan" => Ok(()),
-        _ => Err(AppError::UpgradeRequired(format!(
-            "{} is not available on your current plan. Upgrade to access it.",
-            label
-        ))),
-    }
+    Err(AppError::UpgradeRequired(format!(
+        "{} is not available on your current plan. Upgrade to access it.",
+        label
+    )))
+}
+
+/// The gate's OWN answer as a boolean: `true` when a request from this workspace would be admitted.
+///
+/// `enforce_feature_flag` is this function plus the 402 body, so the refusal a route answers and the
+/// state a READOUT reports (`get_usage_json`) are the same resolution and cannot drift — the same
+/// discipline the numeric ceilings use, where the number a tenant is shown is the expression the gate
+/// compares. Added for the help-desk readout (kanban t_969f576a): the workspace has to be told when
+/// its public intake is capturing requests its own queue refuses to open.
+///
+/// The two ways in:
+///   * `ent.enabled` — an explicit per-tenant override, or the workspace's active plan, grants the key;
+///   * `source == "no_plan"` — the workspace holds NO active plan row at all: GRANTS everything. Kept
+///     open by decision (kanban t_e6141896, ARM (a)) and made VISIBLE instead of closed — the measured
+///     blast radius of closing it is 14 live workspaces (122/81/78-contact accounts among them) whose
+///     replacement tier is a pricing call, so the console and the admin guide now say out loud what
+///     this arm does and the operator seats a plan with one press. See `module_registry`'s module docs
+///     for the numbers, the rejected alternative and the ordered way to reverse it.
+pub async fn feature_gate_open(db: &PgPool, tenant_id: Uuid, key: &str) -> Result<bool, AppError> {
+    let ent = module_registry::resolve(db, tenant_id, key).await?;
+    Ok(ent.enabled || ent.source == "no_plan")
 }
 
 /// Middleware state for `gate_mw`: which module protects which router.
