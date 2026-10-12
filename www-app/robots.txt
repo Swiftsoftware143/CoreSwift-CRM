@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /api/google-calendar/webhook
+Allow: /
+Disallow: /api/
+Disallow: /dashboard
+Disallow: /admin
+Disallow: /reset-password
+Disallow: /forgot-password
