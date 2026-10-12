@@ -1,5 +1,17 @@
 # CoreSwift CRM — Admin Guide
 
+> **STATUS — this Markdown file is NOT the source of the served admin guide (kanban t_f5e658bd).**
+> The page readers see is the authored `public/admin-guide.html` (committed, deployed to the
+> marketing root and the admin vhost). This file used to be rendered into that page by
+> `scripts/cs-guides-build.py`, and that render was destructive: it deleted the authored
+> "Email branding" and "Tag → free account" sections, reverted the runtime facts to systemd-era text
+> and republished internal server paths. The publisher no longer reads or writes this file — it
+> refreshes only the plan-gating catalogue table inside the authored page.
+> This is an INTERNAL runbook. It carries internal-only detail and some of its runtime facts
+> (systemd unit, `swift-postgres-1`, `/opt/swift/coreswift`) are OUT OF DATE — do not publish it and
+> do not re-wire it as the page's source. `scripts/cs-guides-drift-guard.py` fails if the served page
+> drifts from the live catalogue or if that internal-path signature comes back.
+
 ## System Overview
 
 CoreSwift CRM is the central CRM and automation platform. It manages contacts, deals, pipelines, campaigns, and email sequences with full template-based email delivery.
