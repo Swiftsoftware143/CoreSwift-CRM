@@ -778,8 +778,9 @@ POST /api/public/contact</pre>
 
   <div class="card callout tip">
     <h3>Pricing</h3>
-    <p><strong>Free tier:</strong> The help desk is not included — the embed widget, the admin support panel and the customer portal all come with the Support tickets module, which needs a paid plan.<br>
+    <p><strong>Free tier:</strong> The help desk is not included — the ticket queue and the admin support panel refuse a Free workspace with <strong>402 Payment Required</strong> (<code>GET /api/tickets</code>: "Support tickets is not available on your current plan"), so <strong>Support Tickets → 💬 My Support</strong> is unavailable too.<br>
     <strong>Paid tier:</strong> Support tickets (embed widget + admin support panel + customer portal) + custom domain (use your own <code>support.yourdomain.com</code>) + email-to-ticket parsing + priority support.</p>
+    <p>The public intake arms are not plan-gated: the embed widget script at <code>/s/&lt;tenant-id&gt;/widget.js</code> and the customer portal page are served on every plan, and a visitor's request is accepted and stored — but a Free workspace cannot read that queue, so those requests stay invisible until the plan is upgraded.</p>
     <p>Chatbot integrations are API-only on all tiers — you connect your own chatbot, we handle the ticket routing.</p>
   </div>
 </section>
