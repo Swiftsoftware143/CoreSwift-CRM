@@ -52,8 +52,18 @@ pub async fn list_plans(
     );
     let offset = (page - 1) * per_page;
 
+    // Rendered to the operator/customer as the plan ladder. `sort_order` is the operator's PIN and
+    // stays first, but it is NOT a price: two CoreSwift rows carry `sort_order = 2` (Pro $29 and
+    // Professional $79), and with no second key the tie was broken by whatever heap order Postgres
+    // happened to return — measured live 2026-10-13 this list read Free 0 / Starter 29 /
+    // **Professional 79 / Pro 29** / Enterprise 79 / Agency 149, i.e. a $79 plan above a $29 one
+    // (kanban t_1fcaacb2, the same class the parent card fixed on missedcallrespondr). It is also
+    // a paged read, so the missing tie-break let a row repeat or vanish across pages. Fleet rule
+    // for a plan catalogue: cheapest-first — `sort_order` (operator pin) → price → name → id.
     let plans = sqlx::query_as::<_, Plan>(
-        "SELECT * FROM plans WHERE is_active = true ORDER BY sort_order ASC LIMIT $1 OFFSET $2",
+        "SELECT * FROM plans WHERE is_active = true \
+         ORDER BY sort_order ASC NULLS LAST, price_monthly ASC NULLS LAST, name ASC, id ASC \
+         LIMIT $1 OFFSET $2",
     )
     .bind(per_page)
     .bind(offset)
