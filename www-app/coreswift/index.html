@@ -3847,9 +3847,12 @@ async function loadUsage() {
     const contacts = (u.contacts || 0);
     const hasCeiling = (typeof u.contacts_limit === 'number');
     const over = (u.contacts_over_limit === true);
+    // Every count on this line agrees with its noun. The tickets arm below has always done this;
+    // the rest of the line printed "1 users" for every workspace — i.e. every workspace at signup.
+    const cnt = (n, one, many) => Number(n || 0) + ' ' + (Number(n || 0) === 1 ? one : many);
     const contactsTxt = hasCeiling
-      ? (contacts + '/' + u.contacts_limit + ' contacts')
-      : (contacts + ' contacts');
+      ? (contacts + '/' + u.contacts_limit + ' ' + (Number(u.contacts_limit) === 1 ? 'contact' : 'contacts'))
+      : cnt(contacts, 'contact', 'contacts');
     // The help desk's readout (kanban t_969f576a, decision (a)). The public intake is NOT plan-gated
     // while the ticket queue IS, so a workspace without Support tickets can collect real customer
     // requests its own queue refuses to open. `support_intake_unreadable` is that state, and it is
@@ -3859,7 +3862,7 @@ async function loadUsage() {
     const tkTxt = (tk > 0)
       ? (' · ' + tk + (tk === 1 ? ' ticket' : ' tickets') + (tkUnreadable ? ' ⚠ cannot open' : ''))
       : '';
-    el.textContent = 'Usage: ' + contactsTxt + (over ? ' ⚠ over plan limit' : '') + ' · ' + (u.users || 0) + ' users · ' + (u.pipelines || 0) + ' pipelines · ' + (u.industries || 0) + ' industries' + tkTxt;
+    el.textContent = 'Usage: ' + contactsTxt + (over ? ' ⚠ over plan limit' : '') + ' · ' + cnt(u.users, 'user', 'users') + ' · ' + cnt(u.pipelines, 'pipeline', 'pipelines') + ' · ' + cnt(u.industries, 'industry', 'industries') + tkTxt;
     el.style.color = (over || tkUnreadable) ? 'var(--warning,#f59e0b)' : '';
     renderPlanNotices(u, over);
   } catch (_) { el.textContent = 'Usage: unavailable'; }
