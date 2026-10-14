@@ -1767,7 +1767,7 @@ async function loadTargets(companyId) {
     }
     html += '<div class="card" style="margin-top:16px"><div class="card-header">Add Target</div><div class="card-body">' +
       '<div class="form-group"><label>Name *</label><input type="text" id="tgName" placeholder="e.g. Slack alerts"></div>' +
-      '<div class="form-group"><label>Provider</label><select id="tgProvider"><option value="webhook">webhook</option><option value="n8n">n8n</option><option value="zapier">zapier</option><option value="slack">slack</option><option value="generic">generic</option></select></div>' +
+      '<div class="form-group"><label>Provider</label><select id="tgProvider"><option value="webhook">Webhook</option><option value="n8n">n8n</option><option value="zapier">Zapier</option><option value="slack">Slack</option><option value="generic">Generic</option></select></div>' +
       '<div class="form-group"><label>Webhook URL *</label><input type="url" id="tgUrl" placeholder="https://..."></div>' +
       '<div class="form-group"><label>API Key (optional)</label><input type="password" id="tgKey"></div>' +
       '<div class="form-group"><label>Events (comma separated)</label><input type="text" id="tgEvents" placeholder="contact.created, deal.won"></div>' +
@@ -4537,7 +4537,7 @@ function cmNewCampaign() {
   showModal('New Campaign',
     '<div class="form-group"><label>Name</label><input type="text" id="cmName"></div>' +
     '<div class="form-group"><label>Description</label><input type="text" id="cmDesc"></div>' +
-    '<p class="form-hint">Steps are added from the campaign’s Details panel, where each step is a real row in email_campaign_steps.</p>',
+    '<p class="form-hint">Steps are added from the campaign’s Details panel, where each step is saved with the campaign.</p>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
     '<button class="btn btn-primary" onclick="cmCreateCampaign()">Create</button>');
 }
@@ -4604,8 +4604,8 @@ async function cmDetails(id) {
         '</select></div>' +
         '<div><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Trigger type</label>' +
         '<select id="cmTrigType" style="padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
-          '<option value="tag_assigned">tag_assigned</option><option value="contact_created">contact_created</option>' +
-          '<option value="manual">manual</option></select></div>' +
+          '<option value="tag_assigned">Tag assigned</option><option value="contact_created">Contact created</option>' +
+          '<option value="manual">Manual</option></select></div>' +
         '<button class="btn btn-primary btn-sm" onclick="cmAddTrigger(\'' + id + '\')">Add trigger</button>' +
       '</div>', '');
     h += '<br>' + card('Enrollments',
@@ -4674,7 +4674,7 @@ function cmSyncTag() {
     '<p class="config-desc">Creates/updates the tag locally from a FunnelSwift tag name (POST /api/campaigns/sync-tag).</p>' +
     '<div class="form-group"><label>Tag name</label><input type="text" id="stTagName" placeholder="sp-biz-zh-interested"></div>' +
     '<div class="form-group"><label>Action</label><select id="stTagAction">' +
-      '<option value="create">create</option><option value="update">update</option><option value="delete">delete</option></select></div>',
+      '<option value="create">Create</option><option value="update">Update</option><option value="delete">Delete</option></select></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
     '<button class="btn btn-primary" onclick="cmSyncTagSubmit()">Sync</button>');
 }
@@ -4831,8 +4831,8 @@ async function loadScoringTab() {
       '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-top:12px">' +
         '<div><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Recalculate on event</label>' +
         '<select id="scEvent" style="padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
-          '<option value="email_opened">email_opened</option><option value="link_clicked">link_clicked</option>' +
-          '<option value="form_submitted">form_submitted</option><option value="deal_closed">deal_closed</option></select></div>' +
+          '<option value="email_opened">Email opened</option><option value="link_clicked">Link clicked</option>' +
+          '<option value="form_submitted">Form submitted</option><option value="deal_closed">Deal closed</option></select></div>' +
         '<button class="btn btn-primary btn-sm" onclick="scRecalc()">Recalculate score</button>' +
       '</div>' +
       '<div id="scContactOut" style="margin-top:12px"></div>', '');
@@ -4844,8 +4844,8 @@ function scNewRule() {
     '<div class="form-group"><label>Name</label><input type="text" id="srName" placeholder="Email opened"></div>' +
     '<div class="form-group"><label>Event type</label><input type="text" id="srEvent" placeholder="email_opened"></div>' +
     '<div class="form-group"><label>Points</label><input type="number" id="srPoints" value="5"></div>' +
-    '<div class="form-group"><label>Direction</label><select id="srDir"><option value="add">add</option>' +
-      '<option value="subtract">subtract</option></select></div>',
+    '<div class="form-group"><label>Direction</label><select id="srDir"><option value="add">Add</option>' +
+      '<option value="subtract">Subtract</option></select></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
     '<button class="btn btn-primary" onclick="scCreateRule()">Add</button>');
 }
@@ -4882,8 +4882,8 @@ function scNewThreshold() {
       '<div class="form-group"><label>Min score</label><input type="number" id="thMin" value="0"></div>' +
       '<div class="form-group"><label>Max score</label><input type="number" id="thMax" value="100"></div>' +
       '<div class="form-group"><label>Action</label><select id="thAction">' +
-        '<option value="move_stage">move_stage</option><option value="notify">notify</option>' +
-        '<option value="assign">assign</option></select></div>' +
+        '<option value="move_stage">Move stage</option><option value="notify">Notify</option>' +
+        '<option value="assign">Assign</option></select></div>' +
       '<p class="form-hint">POST /api/scoring/thresholds — a threshold belongs to a pipeline and a target stage (both are required by the API).</p>',
       '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
       '<button class="btn btn-primary" onclick="scCreateThreshold()">Add</button>');
@@ -5137,8 +5137,8 @@ function ckNewTemplate() {
     '<div class="form-group"><label>Name</label><input type="text" id="ckName" placeholder="Client onboarding"></div>' +
     '<div class="form-group"><label>Description</label><input type="text" id="ckDesc"></div>' +
     '<div class="form-group"><label>Trigger type</label><select id="ckTrigger">' +
-      '<option value="manual">manual</option><option value="deal_created">deal_created</option>' +
-      '<option value="contact_created">contact_created</option></select></div>' +
+      '<option value="manual">Manual</option><option value="deal_created">Deal created</option>' +
+      '<option value="contact_created">Contact created</option></select></div>' +
     '<div class="form-group"><label>Stages</label><input type="number" id="ckStages" value="3" min="1"></div>' +
     '<div class="form-group"><label>Days per stage</label><input type="number" id="ckDays" value="2" min="1"></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
@@ -5201,6 +5201,10 @@ function roundRobinShell() {
     '<button class="btn btn-primary btn-sm" onclick="rrNewTeam()">+ New Team</button>') +
   '<div id="rrContent"><div class="loading-wrap"><div class="spinner"></div> Loading teams...</div></div>';
 }
+// The strategy is an API enum (`round_robin` / `weighted` / `random`); the badge shows the
+// console's own wording for it, never the raw value.
+const RR_STRATEGY_LABELS = { round_robin: 'Round robin', weighted: 'Weighted', random: 'Random' };
+function rrStrategyLabel(s) { return RR_STRATEGY_LABELS[s] || s; }
 async function loadRoundRobinTab() {
   const el = document.getElementById('rrContent');
   if (!el) return;
@@ -5213,7 +5217,7 @@ async function loadRoundRobinTab() {
     }
     let h = '';
     RR_TEAMS.forEach(function (t) {
-      h += card('🔄 ' + fh(t.name) + ' <span class="badge badge-muted">' + fh(t.strategy) + '</span>' +
+      h += card('🔄 ' + fh(t.name) + ' <span class="badge badge-muted">' + fh(rrStrategyLabel(t.strategy)) + '</span>' +
         ' <span class="badge badge-' + (t.is_active ? 'success' : 'muted') + '">' + (t.is_active ? 'active' : 'off') + '</span>',
         '<div id="rrMembers-' + t.id + '"><div class="loading-wrap"><div class="spinner"></div> Loading members...</div></div>' +
         '<div style="margin-top:12px"><button class="btn btn-secondary btn-xs" onclick="rrAddMember(\'' + t.id + '\')">+ Add member</button> ' +
@@ -5243,10 +5247,10 @@ function rrNewTeam() {
     '<div class="form-group"><label>Name</label><input type="text" id="rrName"></div>' +
     '<div class="form-group"><label>Description</label><input type="text" id="rrDesc"></div>' +
     '<div class="form-group"><label>Strategy</label><select id="rrStrategy">' +
-      '<option value="round_robin">round_robin</option><option value="weighted">weighted</option>' +
-      '<option value="random">random</option></select></div>' +
+      '<option value="round_robin">Round robin</option><option value="weighted">Weighted</option>' +
+      '<option value="random">Random</option></select></div>' +
     '<div class="form-group"><label>Scope</label><select id="rrScope">' +
-      '<option value="global">global</option><option value="pipeline">pipeline</option></select></div>',
+      '<option value="global">Global</option><option value="pipeline">Pipeline</option></select></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
     '<button class="btn btn-primary" onclick="rrCreateTeam()">Create</button>');
 }
@@ -5342,8 +5346,8 @@ async function loadMonitoringTab() {
       '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-top:12px">' +
         '<div><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Record milestone</label>' +
         '<select id="monMilestone" style="padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
-          '<option value="first_contact">first_contact</option><option value="first_pipeline">first_pipeline</option>' +
-          '<option value="first_campaign">first_campaign</option><option value="first_automation">first_automation</option></select></div>' +
+          '<option value="first_contact">First contact</option><option value="first_pipeline">First pipeline</option>' +
+          '<option value="first_campaign">First campaign</option><option value="first_automation">First automation</option></select></div>' +
         '<button class="btn btn-primary btn-sm" onclick="monRecordMilestone()">Record</button>' +
       '</div>' +
       '<p class="config-hint">Note: no endpoint lists business profiles, so the profile id is entered by hand. ' +
@@ -5356,15 +5360,15 @@ function monNewThreshold() {
   showModal('New Health Threshold',
     '<div class="form-group"><label>Name</label><input type="text" id="mhName" placeholder="No login in 14 days"></div>' +
     '<div class="form-group"><label>Entity type</label><select id="mhEntity">' +
-      '<option value="contact">contact</option><option value="company">company</option><option value="tenant">tenant</option></select></div>' +
+      '<option value="contact">Contact</option><option value="company">Company</option><option value="tenant">Tenant</option></select></div>' +
     '<div class="form-group"><label>Metric</label><input type="text" id="mhMetric" placeholder="days_inactive"></div>' +
     '<div class="form-group"><label>Operator</label><select id="mhOp">' +
       '<option value="gt">&gt;</option><option value="gte">&gt;=</option><option value="lt">&lt;</option>' +
       '<option value="lte">&lt;=</option><option value="eq">=</option></select></div>' +
     '<div class="form-group"><label>Value</label><input type="number" id="mhValue" value="14"></div>' +
     '<div class="form-group"><label>Risk level</label><select id="mhRisk">' +
-      '<option value="warning">warning</option><option value="critical">critical</option>' +
-      '<option value="info">info</option></select></div>',
+      '<option value="warning">Warning</option><option value="critical">Critical</option>' +
+      '<option value="info">Info</option></select></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
     '<button class="btn btn-primary" onclick="monCreateThreshold()">Create</button>');
 }
@@ -5559,8 +5563,8 @@ function imCreateMapping() {
     '<div class="form-group"><label>External tag id</label><input type="text" id="imExternalId" placeholder="sp-biz-zh-interested"></div>' +
     '<div class="form-group"><label>External name</label><input type="text" id="imExternalName"></div>' +
     '<div class="form-group"><label>Direction</label><select id="imDirection">' +
-      '<option value="bidirectional">bidirectional</option><option value="inbound">inbound</option>' +
-      '<option value="outbound">outbound</option></select></div>',
+      '<option value="bidirectional">Bidirectional</option><option value="inbound">Inbound</option>' +
+      '<option value="outbound">Outbound</option></select></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
     '<button class="btn btn-primary" onclick="imCreateMappingSubmit(\'' + tagId + '\')">Save</button>');
 }
@@ -6010,7 +6014,7 @@ async function txSearchAvailable() {
 
 function txOpenKey() {
   showModal('Telnyx API key',
-    '<p style="color:var(--text-secondary);margin-bottom:14px">Stored on THIS account only (provider_keys, provider <code>telnyx</code>) — the same slot the Integration Center writes. Never a platform-wide default.</p>' +
+    '<p style="color:var(--text-secondary);margin-bottom:14px">Stored on THIS account only, for the <code>telnyx</code> provider — the same slot the Integration Center writes. Never a platform-wide default.</p>' +
     '<div class="form-group"><label>API key</label>' +
     '<input type="password" id="txKey" placeholder="KEY..." autocomplete="off"></div>' +
     '<div class="form-group"><label>Messaging profile ID (optional)</label>' +
@@ -6564,7 +6568,7 @@ function peOpenAddDomain() {
     '<select id="peNewRegion"><option value="us">US (api.mailgun.net)</option><option value="eu">EU (api.eu.mailgun.net)</option></select></div>' +
     '<div class="form-group"><label>Inbound webhook signing key (optional)</label>' +
     '<input type="password" id="peNewWebhook" autocomplete="new-password">' +
-    '<span class="form-hint">Only needed to RECEIVE mail on this domain (kanban t_fbd607a7). It is this domain&rsquo;s own <b>webhook signing key</b> from Mailgun &mdash; Send &rarr; Domains &rarr; your domain &rarr; Webhook signing key. Mailgun signs every inbound delivery with it and CoreSwift verifies that signature before a delivery becomes a contact or a ticket; <b>without it, inbound mail for this domain is refused</b> (401, nothing created). Leave empty for a domain you only send from &mdash; you can set or rotate it later from the domain row. Stored encrypted, never echoed back.</span></div>' +
+    '<span class="form-hint">Only needed to RECEIVE mail on this domain. It is this domain&rsquo;s own <b>webhook signing key</b> from Mailgun &mdash; Send &rarr; Domains &rarr; your domain &rarr; Webhook signing key. Mailgun signs every inbound delivery with it and CoreSwift verifies that signature before a delivery becomes a contact or a ticket; <b>without it, inbound mail for this domain is refused</b> (401, nothing created). Leave empty for a domain you only send from &mdash; you can set or rotate it later from the domain row. Stored encrypted, never echoed back.</span></div>' +
     '</div>' +
     '<div id="peSmtpFields" style="display:none">' +
     '<p style="color:var(--text-secondary);margin:0">Nothing is sent to the mail server before the domain is saved, so a wrong host or password is only reported by the first send.</p>' +
@@ -6632,7 +6636,7 @@ function peOpenAutoReply() {
     '<div class="form-group"><label>Domain</label><select id="peArDomain">' + (opts || '<option value="">no domains</option>') + '</select></div>' +
     '<div class="form-group"><label>Name</label><input type="text" id="peArName" autocomplete="off"></div>' +
     '<div class="form-group"><label>Trigger</label>' +
-    '<select id="peArTrigger"><option value="all">every message</option><option value="keyword">keyword</option><option value="sender">sender</option></select></div>' +
+    '<select id="peArTrigger"><option value="all">every message</option><option value="keyword">Keyword</option><option value="sender">Sender</option></select></div>' +
     '<div class="form-group"><label>Trigger value (for keyword/sender)</label><input type="text" id="peArValue" autocomplete="off"></div>' +
     '<div class="form-group"><label>Subject</label><input type="text" id="peArSubject" autocomplete="off"></div>' +
     '<div class="form-group"><label>Body (HTML)</label><input type="text" id="peArBody" autocomplete="off"></div>',
@@ -7065,8 +7069,8 @@ function peEditBox(id) {
   showModal('Mailbox ' + (b.email_address || ''),
     '<div class="form-group"><label>Signature</label><textarea rows="4" id="peBoxSig">' + escapeHtml(b.signature || '') + '</textarea></div>' +
     '<div class="form-group"><label>Forwarding</label><select id="peBoxFwd">' +
-      '<option value="on"' + (b.forwarding_enabled ? ' selected' : '') + '>on</option>' +
-      '<option value="off"' + (b.forwarding_enabled ? '' : ' selected') + '>off</option></select>' +
+      '<option value="on"' + (b.forwarding_enabled ? ' selected' : '') + '>On</option>' +
+      '<option value="off"' + (b.forwarding_enabled ? '' : ' selected') + '>Off</option></select>' +
     '<span class="form-hint">Signature is appended to outbound mail sent from this mailbox.</span></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
     '<button class="btn btn-primary" id="peBoxSave">Save</button>');
@@ -7102,8 +7106,8 @@ function peEditAutoReply(id) {
     '<div class="form-group"><label>Body (HTML)</label><textarea rows="6" id="peArBody">' + escapeHtml(a.body_html || '') + '</textarea></div>' +
     '<div class="form-group"><label>Delay (minutes)</label><input type="number" id="peArDelay" min="0" value="' + (a.delay_minutes == null ? 0 : a.delay_minutes) + '"></div>' +
     '<div class="form-group"><label>Active</label><select id="peArActive">' +
-      '<option value="on"' + (a.is_active ? ' selected' : '') + '>on</option>' +
-      '<option value="off"' + (a.is_active ? '' : ' selected') + '>off</option></select></div>',
+      '<option value="on"' + (a.is_active ? ' selected' : '') + '>On</option>' +
+      '<option value="off"' + (a.is_active ? '' : ' selected') + '>Off</option></select></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
     '<button class="btn btn-primary" id="peArSave">Save</button>');
   const s = document.getElementById('peArSave');

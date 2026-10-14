@@ -513,7 +513,7 @@ function tenantOverrideCard() {
     '<div class="form-group"><label for="toPlan">Plan</label>' +
     '<select id="toPlan" data-ops="to-plan"><option value="">Loading plans…</option></select></div>' +
     '<div class="form-group"><label for="toCycle">Billing cycle</label>' +
-    '<select id="toCycle" data-ops="to-cycle"><option value="monthly">monthly</option><option value="yearly">yearly</option></select></div>' +
+    '<select id="toCycle" data-ops="to-cycle"><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select></div>' +
     '<button class="btn btn-primary btn-sm" data-ops="to-assign" onclick="assignPlanToTenant()">Assign plan</button> ' +
     '<button class="btn btn-secondary btn-sm" onclick="loadTenantEntitlements()">Load entitlements</button>' +
     '<div id="toAssignStatus" style="margin-top:8px;color:var(--text-secondary)"></div>' +
@@ -1806,6 +1806,10 @@ function rrErr(what, e, retry) {
     (retry ? '<button class="btn btn-secondary btn-sm" onclick="' + retry + '">Retry</button>' : '') +
     '</div></div>';
 }
+// The strategy is an API enum (`round_robin` / `weighted` / `random`); the badge shows the
+// console's own wording for it, never the raw value.
+const RR_STRATEGY_LABELS = { round_robin: 'Round robin', weighted: 'Weighted', random: 'Random' };
+function rrStrategyLabel(s) { return RR_STRATEGY_LABELS[s] || s; }
 async function loadRoundRobinTab() {
   const el = document.getElementById('rrContent');
   if (!el) return;
@@ -1819,7 +1823,7 @@ async function loadRoundRobinTab() {
     }
     let h = '';
     RR_TEAMS.forEach(function (t) {
-      h += card('🔄 ' + fh(t.name) + ' <span class="badge badge-muted">' + fh(t.strategy) + '</span>' +
+      h += card('🔄 ' + fh(t.name) + ' <span class="badge badge-muted">' + fh(rrStrategyLabel(t.strategy)) + '</span>' +
         ' <span class="badge badge-' + (t.is_active ? 'success' : 'muted') + '">' + (t.is_active ? 'active' : 'off') + '</span>',
         '<div id="rrMembers-' + t.id + '"><div class="loading-wrap"><div class="spinner"></div> Loading members...</div></div>' +
         '<div style="margin-top:12px"><button class="btn btn-secondary btn-xs" onclick="rrAddMember(\'' + t.id + '\')">+ Add member</button> ' +
@@ -1966,8 +1970,8 @@ function ckNewTemplate() {
     '<div class="form-group"><label>Name</label><input type="text" id="ckName" placeholder="Client onboarding"></div>' +
     '<div class="form-group"><label>Description</label><input type="text" id="ckDesc"></div>' +
     '<div class="form-group"><label>Trigger type</label><select id="ckTrigger">' +
-      '<option value="manual">manual</option><option value="deal_created">deal_created</option>' +
-      '<option value="contact_created">contact_created</option></select></div>' +
+      '<option value="manual">Manual</option><option value="deal_created">Deal created</option>' +
+      '<option value="contact_created">Contact created</option></select></div>' +
     '<div class="form-group"><label>Stages</label><input type="number" id="ckStages" value="3" min="1"></div>' +
     '<div class="form-group"><label>Days per stage</label><input type="number" id="ckDays" value="2" min="1"></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
@@ -2955,7 +2959,7 @@ async function loadTargets(companyId) {
     }
     html += '<div class="card" style="margin-top:16px"><div class="card-header">Add Target</div><div class="card-body">' +
       '<div class="form-group"><label>Name *</label><input type="text" id="tgName" placeholder="e.g. Slack alerts"></div>' +
-      '<div class="form-group"><label>Provider</label><select id="tgProvider"><option value="webhook">webhook</option><option value="n8n">n8n</option><option value="zapier">zapier</option><option value="slack">slack</option><option value="generic">generic</option></select></div>' +
+      '<div class="form-group"><label>Provider</label><select id="tgProvider"><option value="webhook">Webhook</option><option value="n8n">n8n</option><option value="zapier">Zapier</option><option value="slack">Slack</option><option value="generic">Generic</option></select></div>' +
       '<div class="form-group"><label>Webhook URL *</label><input type="url" id="tgUrl" placeholder="https://..."></div>' +
       '<div class="form-group"><label>API Key (optional)</label><input type="password" id="tgKey"></div>' +
       '<div class="form-group"><label>Events (comma separated)</label><input type="text" id="tgEvents" placeholder="contact.created, deal.won"></div>' +
