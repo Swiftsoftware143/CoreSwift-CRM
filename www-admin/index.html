@@ -4756,7 +4756,7 @@ async function loadTrackedLinksTab() {
       ? '<div class="empty-state"><div class="empty-icon">🔒</div>' +
         '<h3>Tracked Links is not included in this plan</h3>' +
         '<p>No source answered: the server refused GET /api/tracked-links with “Payment required” - the ' +
-        'tracked_links module is not enabled for this workspace, so nothing is known about links here.</p>' +
+        'this workspace’s plan does not include Tracked Links, so nothing is known about links here.</p>' +
         '<button class="btn btn-secondary" onclick="openUpgradeModal()">View Plans</button></div>'
       : '<p style="color:var(--text-secondary)">Tracked Links endpoint: ' + escapeHtml(msg) + '</p>');
   }

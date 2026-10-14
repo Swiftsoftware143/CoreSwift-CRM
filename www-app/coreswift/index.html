@@ -3254,7 +3254,7 @@ async function loadTrackedLinksTab() {
       ? '<div class="empty-state"><div class="empty-icon">🔒</div>' +
         '<h3>Tracked Links is not included in this plan</h3>' +
         '<p>' + escapeHtml(e.planMessage || 'Tracked Links is not available on your current plan. Upgrade to access it.') +
-        ' The tracked_links module is not enabled for this workspace, so nothing is known about links here.</p>' +
+        ' This module may be switched off on your plan — check <strong>Features &amp; Plans</strong>.</p>' +
         '<button class="btn btn-secondary" onclick="openUpgradeModal()">View Plans</button></div>'
       : '<p style="color:var(--text-secondary)">Tracked Links endpoint: ' + escapeHtml(msg) + '</p>');
   }
