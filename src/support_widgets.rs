@@ -58,6 +58,10 @@ pub struct TicketInbox {
     pub name: String,
     pub email_fwd: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// True when THIS app minted the inbox for a widget (POST /api/widgets with no `inbox_id`),
+    /// false when the operator created it by hand through POST /api/widgets/inboxes. Only an
+    /// app-minted inbox may be retired when the widget that needed it goes away (t_a6784da5).
+    pub auto_created: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -169,8 +173,12 @@ pub async fn create_widget(
         iid
     } else {
         let iid = Uuid::new_v4();
-        // Create a default inbox named after the widget
-        sqlx::query("INSERT INTO ticket_inboxes (id, tenant_id, name) VALUES ($1, $2, $3)")
+        // Create a default inbox named after the widget. `auto_created` records that WE minted it,
+        // so DELETE /api/widgets/:id may retire it when the widget goes (card t_a6784da5); an inbox
+        // the operator made by hand through POST /api/widgets/inboxes is never touched.
+        sqlx::query(
+            "INSERT INTO ticket_inboxes (id, tenant_id, name, auto_created) VALUES ($1, $2, $3, true)",
+        )
             .bind(iid)
             .bind(tid)
             .bind(format!("{} Inbox", &req.name))
@@ -258,10 +266,78 @@ pub async fn update_widget(
     .fetch_one(&s.db)
     .await?;
 
+    // Repointing a widget away from the inbox this app minted for it leaks the very same orphan
+    // the widget delete used to leave behind (card t_a6784da5), so retire the old one here too.
+    if widget.inbox_id != existing.inbox_id {
+        retire_auto_inbox(&s, tid, existing.inbox_id, 0).await?;
+    }
+
     Ok(Json(json!({ "widget": widget })))
 }
 
-/// DELETE /api/widgets/:id — delete widget
+/// Retire an inbox this app minted for a widget, once nothing needs it any more.
+///
+/// Card t_a6784da5: POST /api/widgets mints a "<widget name> Inbox" row and points the widget at
+/// it, while the widget delete used to remove the widget row only, leaving that inbox in the
+/// operator's own Inboxes list (GET /api/widgets/inboxes) forever, named after a widget that no
+/// longer exists. Retiring it is safe only when all three hold:
+///   * `ticket_inboxes.auto_created` -- the APP minted it for a widget; an inbox the operator
+///     created through POST /api/widgets/inboxes is never touched;
+///   * no widget in the tenant points at it any more (widgets may share one inbox);
+///   * it carries no tickets. `carried_tickets` is counted by the caller BEFORE it drops the widget
+///     row, because `tickets.widget_id` is ON DELETE SET NULL and afterwards nothing can say which
+///     inbox a ticket arrived through: a non-empty inbox is KEPT as the tenant's support history.
+///
+/// Returns the retired inbox's name, or `None` when the inbox was kept.
+async fn retire_auto_inbox(
+    s: &AppState,
+    tid: Uuid,
+    inbox_id: Uuid,
+    carried_tickets: i64,
+) -> ApiResult<Option<String>> {
+    if carried_tickets > 0 {
+        return Ok(None);
+    }
+
+    let found = sqlx::query_as::<_, TicketInbox>(
+        "SELECT * FROM ticket_inboxes WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(inbox_id)
+    .bind(tid)
+    .fetch_optional(&s.db)
+    .await?;
+
+    let inbox = match found {
+        Some(inbox) => inbox,
+        None => return Ok(None),
+    };
+    if !inbox.auto_created {
+        return Ok(None);
+    }
+
+    let still_used: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM support_widgets WHERE tenant_id = $1 AND inbox_id = $2",
+    )
+    .bind(tid)
+    .bind(inbox_id)
+    .fetch_one(&s.db)
+    .await?;
+    if still_used > 0 {
+        return Ok(None);
+    }
+
+    sqlx::query("DELETE FROM ticket_inboxes WHERE id = $1 AND tenant_id = $2")
+        .bind(inbox_id)
+        .bind(tid)
+        .execute(&s.db)
+        .await?;
+
+    Ok(Some(inbox.name))
+}
+
+/// DELETE /api/widgets/:id -- delete widget, and the inbox it minted when that inbox would
+/// otherwise be left behind as clutter in the operator's own Inboxes list (card t_a6784da5;
+/// see `retire_auto_inbox` for the three conditions).
 pub async fn delete_widget(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
@@ -269,17 +345,36 @@ pub async fn delete_widget(
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let result = sqlx::query("DELETE FROM support_widgets WHERE id = $1 AND tenant_id = $2")
+    let existing = sqlx::query_as::<_, SupportWidget>(
+        "SELECT * FROM support_widgets WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(id)
+    .bind(tid)
+    .fetch_optional(&s.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Widget not found".into()))?;
+
+    // Count this widget's tickets BEFORE it goes: `tickets.widget_id` is ON DELETE SET NULL, so
+    // afterwards nothing can tell which inbox the customer wrote through.
+    let carried_tickets: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM tickets WHERE widget_id = $1")
+            .bind(id)
+            .fetch_one(&s.db)
+            .await?;
+
+    sqlx::query("DELETE FROM support_widgets WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tid)
         .execute(&s.db)
         .await?;
 
-    if result.rows_affected() == 0 {
-        return Err(AppError::NotFound("Widget not found".into()));
-    }
+    let retired = retire_auto_inbox(&s, tid, existing.inbox_id, carried_tickets).await?;
 
-    Ok(Json(json!({ "deleted": true })))
+    Ok(Json(json!({
+        "deleted": true,
+        "inbox_deleted": retired.is_some(),
+        "inbox_name": retired,
+    })))
 }
 
 // ── Inboxes CRUD ────────────────────────────────────────

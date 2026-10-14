@@ -1,0 +1,16 @@
+-- Migration 120: ticket_inboxes.auto_created, so a widget's minted inbox can be retired with it.
+--
+-- Card t_a6784da5. POST /api/widgets (src/support_widgets.rs::create_widget) mints a
+-- "<widget name> Inbox" row when the caller passes no inbox_id, and DELETE /api/widgets/:id used to
+-- remove the widget row only: the inbox it minted stayed in the tenant's own Inboxes list
+-- (GET /api/widgets/inboxes, rendered verbatim by the operator console's Widgets panel) forever,
+-- named after a widget that no longer exists.
+--
+-- delete_widget can only clean that up safely if it can tell an inbox THE APP MINTED for a widget
+-- from one the operator created by hand through POST /api/widgets/inboxes -- the name is not
+-- evidence. So record the fact where it is known: at mint time.
+--
+-- Additive and defaulted, so it changes nothing for existing rows: `false` means "not known to be
+-- app-minted" and such an inbox is never touched. Applied by sqlx::migrate! (checksummed), so this
+-- file must never be edited once applied.
+ALTER TABLE ticket_inboxes ADD COLUMN IF NOT EXISTS auto_created BOOLEAN NOT NULL DEFAULT false;
