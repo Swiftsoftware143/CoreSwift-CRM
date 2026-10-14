@@ -1460,11 +1460,15 @@ const TAB_RENDERERS = {
       '<button class="btn btn-primary btn-sm" data-ops="native-app-config-set" onclick="showNativeConfigModal()">+ Set App Config</button>') +
     '<div id="nativeConfigsTable" data-ops="native-app-configs"><div class="loading-wrap"><div class="spinner"></div> Loading app configs...</div></div>';
   },
-  'audit-log': () => {
-    return pageHeader('Audit Log', 'Track all platform activity',
-      '<button class="btn btn-secondary btn-sm">Export CSV</button>') +
-    card('Activity Log', '<div class="empty-state"><div class="empty-icon">📝</div><h3>No audit entries</h3><p>Audit log entries will appear as users interact with the platform.</p></div>');
-  },
+  // The panel that used to live here was a PLACEHOLDER with a dead control: it printed "No audit
+  // entries" whether or not any existed, and its Export CSV button had no handler. GET /api/audit
+  // (src/audit/mod.rs) has always served the caller's own rows - a backend route with no UI is a
+  // defect. The list below reads it, the export is built from the rows on screen (so a download can
+  // never carry a row the screen did not read), and the caption no longer promises "all platform
+  // activity": the route answers for the caller's own workspace.
+  'audit-log': () => pageHeader('Audit Log', 'Every change recorded for this workspace, newest first',
+      '<button class="btn btn-secondary btn-sm" data-ops="audit-export" onclick="auditExportCsv()">Export CSV</button>') +
+    '<div id="auditContent"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading the audit trail...</div></div>',
   // The panel that used to live here was a hand-written FAKE: "99.9%" uptime, "45ms", "34%" disk,
   // "2.1GB" RAM and five service badges ("API Server ● Online" ... "Email Service ● Degraded") were
   // string literals in this file, measured nowhere, and its Refresh button carried no handler at
@@ -2370,6 +2374,9 @@ function wgDeleteWidget(id) {
 }
 
 const TAB_LOADERS = {
+  // Same rule as every loader below: the renderer runs before its HTML is in the document, so the
+  // audit load registers here and runs against an #auditContent that already exists.
+  'audit-log': async () => { await loadAuditTab(); },
   // The Monitoring panel follows the same rule as every loader below: its renderer runs BEFORE its
   // HTML is in the document, so the load registers here and runs against a #monContent that exists.
   'monitoring': async () => { await loadMonitoringTab(); },
@@ -5258,7 +5265,49 @@ function monDeleteThreshold(id) {
     .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
 }
 
+// ---------------------------------------------------------------- AUDIT LOG
+// Rows are GET /api/audit (tenant-scoped, newest first). The CSV is built from exactly the rows this
+// panel read, so pressing Export can never produce a file the screen did not show.
+let AUDIT_ROWS = [];
+async function loadAuditTab() {
+  const el = document.getElementById('auditContent');
+  if (!el) return;
+  try {
+    const res = await API.get('/audit?per_page=100');
+    const rows = famList(res, 'logs');
+    AUDIT_ROWS = rows;
+    el.innerHTML = dataTable(['When', 'Action', 'Entity', 'Entity id', 'By', 'IP'],
+      rows.map(function (r) {
+        return [r.created_at ? new Date(r.created_at).toLocaleString() : '\u2014',
+          fh(r.action), fh(r.entity_type),
+          '<code style="font-size:.72rem">' + fh(r.entity_id ? String(r.entity_id).slice(0, 8) : '\u2014') + '</code>',
+          fh(r.user_id ? String(r.user_id).slice(0, 8) : 'the platform'),
+          fh(r.ip_address)];
+      }), 'Nothing recorded for this workspace yet \u2014 entries appear as people change things.');
+  } catch (e) {
+    el.innerHTML = '<div class="card"><div class="card-body"><div class="empty-state">' +
+      '<div class="empty-icon">\u26a0\ufe0f</div><h3>Could not read the audit trail</h3><p>' +
+      escapeHtml((e && e.message) || String(e)) + '</p></div></div></div>';
+  }
+}
+function auditExportCsv() {
+  if (!AUDIT_ROWS.length) { toast('Nothing to export yet', 'error'); return; }
+  const cols = ['created_at', 'action', 'entity_type', 'entity_id', 'user_id', 'ip_address'];
+  const esc = function (v) {
+    v = (v === null || v === undefined) ? '' : String(v);
+    return '"' + v.replace(/"/g, '""') + '"';
+  };
+  const csv = [cols.join(',')].concat(AUDIT_ROWS.map(function (r) {
+    return cols.map(function (c) { return esc(r[c]); }).join(',');
+  })).join('\n');
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'audit-log-' + new Date().toISOString().slice(0, 10) + '.csv';
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  toast('Exported ' + AUDIT_ROWS.length + (AUDIT_ROWS.length === 1 ? ' entry' : ' entries'), 'success');
+}
+
 </script>
-
-
-
+</body>
+</html>
