@@ -6836,9 +6836,15 @@ async function loadAiTab() {
   try {
     d = await API.post('/ai/prioritize', { limit: 25 });
   } catch (e) {
-    el.innerHTML = icErr('AI scoring is not switched on for this account',
+    // The plan refusal is shown EXACTLY as the server words it — the same plain sentence every
+    // sibling panel prints ("AI scoring is not available on your current plan. Upgrade to access
+    // it."). Before this the panel substituted its own sentence naming the internal PLAN MODULE KEY
+    // (`ai_enabled`) and blaming "the platform admin", which leaked an internal identifier to the
+    // customer and hid the upgrade path the plan actually provides (Pro and above carry the module,
+    // measured in the live `plan_modules` rows 2026-10-14).
+    el.innerHTML = icErr('AI scoring',
       (e && e.planGate)
-        ? 'The AI scoring module (ai_enabled) is not part of this plan. The platform admin turns it on per plan.'
+        ? planGateText(e)
         : e.message);
     const rec = document.getElementById('aiRecommend');
     if (rec) rec.innerHTML = '';
