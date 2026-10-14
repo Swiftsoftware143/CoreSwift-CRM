@@ -5,11 +5,21 @@
 //! the `support_widgets` module gates the routes, and the `limit_max_widgets`
 //! module feature is the ceiling on how many widgets an account may create.
 //!
-//! Public routes (no auth):
-//! - GET  /api/widgets/:tenant_slug/:widget_slug/embed.js — embeddable JS widget
-//! - POST /api/widgets/:tenant_slug/:widget_slug/submit   — public form submit
+//! Public routes (NO auth) — mounted at the ROOT by `public_router`, which main.rs `merge`s into
+//! the app (kanban t_f6bb2958). The `/s/...` spelling is the ONE canonical public surface for an
+//! embed: it is what `POST /api/widgets` advertises to the operator, it is what both nginx vhosts
+//! proxy to this app (`location /s/` in sites/coreswift.conf, on the marketing host and the app
+//! host), and it is the same `location` the per-tenant ticket widget (`/s/:tenant_id/widget.js`)
+//! and the 💬 My Support portal already use. `/s/**` is a SERVED surface, outside the credential
+//! boundary (src/auth/route_policy.rs `is_guarded_path`), so nothing here is an allowlist entry:
+//! - GET  /s/:tenant_slug/widgets/:widget_slug/embed.js — embeddable JS widget
+//! - POST /s/:tenant_slug/widgets/:widget_slug/submit   — public form submit
 //!
-//! Auth routes:
+//! Nothing under `/api/widgets/**` answers an anonymous caller: the pre-t_f6bb2958 shape nested
+//! this router at `/api/widgets` and hung the two public arms off it, so they were reachable only
+//! at the DOUBLED `/api/widgets/widgets/...` and every real embed URL 404'd.
+//!
+//! Auth routes (all under the `/api/widgets` nest):
 //! - GET    /api/widgets          — list my widgets
 //! - POST   /api/widgets          — create widget
 //! - PATCH  /api/widgets/:id      — update widget
@@ -24,6 +34,7 @@ use axum::{
     extract::{Extension, Path, State},
     http::StatusCode,
     response::IntoResponse,
+    routing::{get, patch, post},
     Json,
 };
 use serde::{Deserialize, Serialize};
@@ -33,6 +44,72 @@ use uuid::Uuid;
 use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
+
+/// The public host every widget embed points at (kanban t_f6bb2958).
+///
+/// ONE spelling for the public surface: the marketing vhost on this domain proxies `/s/` to this
+/// app's port (`location /s/` in /opt/swift/nginx/sites/coreswift.conf — the same location the
+/// per-tenant ticket widget `/s/:tenant_id/widget.js` and the 💬 My Support portal use), so an
+/// operator pasting the advertised snippet on their own site loads the script and the visitor's
+/// form post comes back to the app over a path that is actually served.
+pub const PUBLIC_WIDGET_BASE: &str = "https://coreswiftcrm.com";
+
+/// The canonical public path of one widget's embed script / submit arm. The JS is served from the
+/// first; the script posts the visitor's form to the second on the host that served it.
+pub fn widget_public_path(tenant_slug: &str, widget_slug: &str) -> String {
+    format!("/s/{}/widgets/{}", tenant_slug, widget_slug)
+}
+
+/// Escape a value for a JS SINGLE-QUOTED string literal.
+///
+/// Everything the embed script interpolates goes through this. The widget's greeting and welcome
+/// message are OPERATOR-AUTHORED text, and the DEFAULT welcome message
+/// ("Thanks for reaching out! We'll get back to you shortly.") contains an apostrophe — which used
+/// to close the JS string literal and kill the entire script with
+/// `Uncaught SyntaxError: Unexpected identifier 'll'` before a single element was rendered, so the
+/// widget never appeared on ANY page, for ANY widget (kanban t_f6bb2958, measured in Chromium).
+fn js_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Escape a value for HTML TEXT or ATTRIBUTE context — the panel markup the script builds with
+/// `innerHTML` (the greeting sits both in the header text and in the message placeholder).
+fn html_text(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+/// A CSS colour fit for the widget's own `<style>` element. Keeping only what a colour can contain
+/// means an operator typo (or a pasted stylesheet) cannot inject CSS into the CUSTOMER's page
+/// through the embed. An empty result falls back to the platform default.
+fn css_color(s: &str) -> String {
+    let kept: String = s
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || "#(),.% -/".contains(*c))
+        .collect();
+    let kept = kept.trim();
+    if kept.is_empty() {
+        "#2563eb".to_string()
+    } else {
+        kept.to_string()
+    }
+}
 
 // ── Models ──────────────────────────────────────────────
 
@@ -223,10 +300,16 @@ pub async fn create_widget(
         .fetch_one(&s.db)
         .await?;
 
+    // The operator pastes this on their own site. Both the snippet and the bare URL are the
+    // CANONICAL public surface (/s/...), mounted by `public_router` and proxied by nginx — the
+    // pre-t_f6bb2958 code advertised this path while serving it under the doubled
+    // /api/widgets/widgets/... nest, so every advertised embed URL answered 404 live.
+    let public_path = widget_public_path(&tenant_slug, &slug);
     Ok(Json(json!({
         "widget": widget,
-        "embed_code": format!("<script src=\"https://coreswiftcrm.com/s/{}/widgets/{}/embed.js\" defer></script>", tenant_slug, slug),
-        "embed_url": format!("https://coreswiftcrm.com/s/{}/widgets/{}/embed.js", tenant_slug, slug),
+        "embed_code": format!("<script src=\"{}{}/embed.js\" defer></script>", PUBLIC_WIDGET_BASE, public_path),
+        "embed_url": format!("{}{}/embed.js", PUBLIC_WIDGET_BASE, public_path),
+        "submit_url": format!("{}{}/submit", PUBLIC_WIDGET_BASE, public_path),
     })))
 }
 
@@ -488,11 +571,24 @@ pub async fn widget_embed_js(
     .await?
     .ok_or_else(|| AppError::NotFound("Widget not found".into()))?;
 
-    let endpoint = format!("/api/widgets/{}/{}/submit", tenant_slug, widget_slug);
+    // The visitor's post has to come back to THIS app from whatever page the snippet is pasted
+    // into — including a customer's own site on a different origin. So the script derives its own
+    // origin from the <script> element that loaded it (the snippet carries `defer`, so
+    // `document.currentScript` is null by then and the element is found in the DOM instead) and
+    // falls back to the canonical public host. It is ABSOLUTE either way: the pre-t_f6bb2958 script
+    // posted a bare `/api/widgets/{tenant}/{widget}/submit`, which resolved against the CUSTOMER's
+    // host, so from a real site the POST never reached CoreSwift-CRM at all — and had it somehow
+    // arrived, that single-prefix path is not the mounted one (it is refused 401).
+    let canonical_path = widget_public_path(&tenant_slug, &widget_slug);
+    let js_endpoint_path = format!("{}/submit", canonical_path);
+    let js_endpoint_absolute = format!("{}{}", PUBLIC_WIDGET_BASE, js_endpoint_path);
+    let js_embed_marker = format!("/{}/embed.js", widget_slug);
     let js = format!(
         r#"(function(){{
     var d=document;
     if(d.getElementById('coreswift-widget-{}'))return;
+    var endpoint='{}';
+    try{{var sc=d.currentScript;if(!sc){{var ss=d.getElementsByTagName('script');for(var i=ss.length-1;i>=0;i--){{if(ss[i].src&&ss[i].src.indexOf('{}')>=0){{sc=ss[i];break}}}}}}if(sc&&sc.src){{var u=new URL(sc.src);endpoint=u.protocol+'//'+u.host+'{}'}}}}catch(e){{}}
     var s=d.createElement('style');
     s.textContent='.csw-btn{{position:fixed;{}:20px;bottom:20px;width:56px;height:56px;border-radius:50%;background:{};color:#fff;border:none;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.25);font-size:24px;z-index:9999;display:flex;align-items:center;justify-content:center;transition:transform .2s}}.csw-btn:hover{{transform:scale(1.1)}}.csw-panel{{display:none;position:fixed;{}:20px;bottom:88px;width:340px;max-height:70vh;background:#fff;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.2);z-index:9998;overflow:hidden;font-family:-apple-system,system-ui,sans-serif}}.csw-panel.open{{display:flex;flex-direction:column}}.csw-panel-header{{background:{};color:#fff;padding:16px 20px;font-weight:700;font-size:15px}}.csw-panel-body{{padding:16px;overflow-y:auto;flex:1}}.csw-panel-body input,.csw-panel-body textarea{{width:100%;padding:10px 12px;margin-bottom:10px;border:1px solid #e2e8f0;border-radius:10px;font-size:14px;font-family:inherit;outline:0}}.csw-panel-body input:focus,.csw-panel-body textarea:focus{{border-color:{};box-shadow:0 0 0 3px {}22}}.csw-panel-body textarea{{resize:none;height:100px}}.csw-submit{{width:100%;padding:12px;background:{};color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer}}.csw-submit:hover{{filter:brightness(1.1)}}.csw-msg{{padding:10px;border-radius:8px;font-size:13px;margin-top:10px;display:none}}';
     d.head.appendChild(s);
@@ -501,48 +597,50 @@ pub async fn widget_embed_js(
     d.body.appendChild(btn);
     var panel=d.createElement('div');
     panel.className='csw-panel';panel.id='csw-panel-{}';
-    panel.innerHTML='<div class="csw-panel-header">{}&nbsp;&nbsp;<span style="cursor:pointer;float:right" onclick="document.getElementById(\\'csw-panel-{}\\').classList.remove(\\'open\\')">✕</span></div><div class="csw-panel-body"><input type="text" id="csw-name" placeholder="Your name"><input type="email" id="csw-email" placeholder="Your email"><input type="text" id="csw-subject" placeholder="Subject"><textarea id="csw-message" placeholder="{}"></textarea><button class="csw-submit" onclick="coreswiftWidgetSubmit(\\'csw-panel-{}\\')">Send Message</button><div class="csw-msg" id="csw-msg-{}"></div></div>';
+    panel.innerHTML='<div class="csw-panel-header">{}&nbsp;&nbsp;<span style="cursor:pointer;float:right" onclick="document.getElementById(\'csw-panel-{}\').classList.remove(\'open\')">✕</span></div><div class="csw-panel-body"><input type="text" id="csw-name" placeholder="Your name"><input type="email" id="csw-email" placeholder="Your email"><input type="text" id="csw-subject" placeholder="Subject"><textarea id="csw-message" placeholder="{}"></textarea><button class="csw-submit" onclick="coreswiftWidgetSubmit(\'csw-panel-{}\')">Send Message</button><div class="csw-msg" id="csw-msg-{}"></div></div>';
     d.body.appendChild(panel);
     btn.onclick=function(){{var p=d.getElementById('csw-panel-{}');p.classList.toggle('open')}};
     window.coreswiftWidgetSubmit=function(pid){{
         var p=d.getElementById(pid),name=d.getElementById('csw-name').value.trim(),email=d.getElementById('csw-email').value.trim(),subject=d.getElementById('csw-subject').value.trim(),msg=d.getElementById('csw-message').value.trim(),el=d.getElementById('csw-msg-{}');
         if(!name||!email||!subject||!msg){{el.style.display='block';el.style.background='#fef2f2';el.style.color='#dc2626';el.textContent='Please fill in all fields';return}}
         el.style.display='none';
-        fetch('{}',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{name:name,email:email,subject:subject,message:msg}})}})
+        fetch(endpoint,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{name:name,email:email,subject:subject,message:msg}})}})
         .then(function(r){{return r.json()}})
-        .then(function(d){{
-            if(d.success){{el.style.display='block';el.style.background='#f0fdf4';el.style.color='#166534';el.textContent='{}';d.getElementById('csw-message').value='';d.getElementById('csw-subject').value=''}}
-            else{{el.style.display='block';el.style.background='#fef2f2';el.style.color='#dc2626';el.textContent=d.message||'Something went wrong'}}
+        .then(function(res){{
+            if(res.success){{el.style.display='block';el.style.background='#f0fdf4';el.style.color='#166534';el.textContent='{}';d.getElementById('csw-message').value='';d.getElementById('csw-subject').value=''}}
+            else{{el.style.display='block';el.style.background='#fef2f2';el.style.color='#dc2626';el.textContent=res.message||'Something went wrong'}}
         }}).catch(function(){{el.style.display='block';el.style.background='#fef2f2';el.style.color='#dc2626';el.textContent='Network error. Try again.'}});
     }};
 }})();"#,
-        widget.slug,
+        js_str(&widget.slug),
+        js_endpoint_absolute,
+        js_embed_marker,
+        js_endpoint_path,
         if widget.position == "bottom-left" {
             "left"
         } else {
             "right"
         },
-        widget.theme_color,
+        js_str(&css_color(&widget.theme_color)),
         if widget.position == "bottom-left" {
             "left"
         } else {
             "right"
         },
-        widget.theme_color,
-        widget.theme_color,
-        widget.theme_color,
-        widget.theme_color,
-        widget.slug,
-        widget.slug,
-        widget.greeting,
-        widget.slug,
-        widget.greeting,
-        widget.slug,
-        widget.slug,
-        widget.slug,
-        widget.slug,
-        endpoint,
-        widget.welcome_msg,
+        js_str(&css_color(&widget.theme_color)),
+        js_str(&css_color(&widget.theme_color)),
+        js_str(&css_color(&widget.theme_color)),
+        js_str(&css_color(&widget.theme_color)),
+        js_str(&widget.slug),
+        js_str(&widget.slug),
+        js_str(&html_text(&widget.greeting)),
+        js_str(&widget.slug),
+        js_str(&html_text(&widget.greeting)),
+        js_str(&widget.slug),
+        js_str(&widget.slug),
+        js_str(&widget.slug),
+        js_str(&widget.slug),
+        js_str(&widget.welcome_msg),
     );
 
     Ok((
@@ -603,29 +701,16 @@ pub async fn widget_submit(
 
 // ── Router ──────────────────────────────────────────────
 
+/// The AUTHENTICATED router, mounted by main.rs at `/api/widgets` (kanban t_f6bb2958).
+///
+/// It holds NO public arm: hanging `get(widget_embed_js)`/`post(widget_submit)` off this nest is
+/// what made the only reachable public spelling `/api/widgets/widgets/...` (doubled) while the
+/// advertised `/s/...` URL 404'd. The public pair lives in [`public_router`] and is mounted at the
+/// ROOT. Everything here is behind the module's auth + plan gate.
 pub fn router(state: AppState) -> axum::Router<AppState> {
     use axum::middleware;
-    use axum::routing::{get, patch, post};
 
-    // Public routes — no auth. Both read a body: `embed.js` is built from a path, but `/submit` is a
-    // `Json` extractor a stranger can post to, so the body-read deadline goes on this chain
-    // (kanban t_59745689). No auth here, so there is no ordering question.
-    let public = axum::Router::new()
-        .route(
-            "/widgets/:tenant_slug/:widget_slug/embed.js",
-            get(widget_embed_js),
-        )
-        .route(
-            "/widgets/:tenant_slug/:widget_slug/submit",
-            post(widget_submit),
-        )
-        .layer(axum::middleware::from_fn_with_state(
-            crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
-            crate::body_deadline::body_read_deadline_middleware,
-        ));
-
-    // Protected routes
-    let protected = axum::Router::new()
+    axum::Router::new()
         .route("/", get(list_widgets).post(create_widget))
         .route("/:id", patch(update_widget).delete(delete_widget))
         .route("/inboxes", get(list_inboxes).post(create_inbox))
@@ -647,14 +732,17 @@ pub fn router(state: AppState) -> axum::Router<AppState> {
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,
-        ));
-
-    public.merge(protected)
+        ))
 }
 
-/// Alias for public router — used in main.rs alongside tickets public router
-pub fn public_router(_state: AppState) -> axum::Router<AppState> {
-    use axum::routing::{get, post};
+/// The ONE public widget surface, mounted at the ROOT of the app (main.rs `merge`s it next to the
+/// other `/s/...` support routes, which is what both nginx vhosts proxy — kanban t_f6bb2958).
+///
+/// `/s/:tenant_slug/widgets/:widget_slug/embed.js` is what `POST /api/widgets` advertises in
+/// `embed_url`/`embed_code`, and `/submit` is where the served script posts the visitor's form. The
+/// body-read deadline goes on this chain because `/submit` is a `Json` extractor a stranger can post
+/// to (kanban t_59745689). No auth here, so there is no ordering question.
+pub fn public_router(state: AppState) -> axum::Router<AppState> {
     axum::Router::new()
         .route(
             "/s/:tenant_slug/widgets/:widget_slug/embed.js",
@@ -664,4 +752,105 @@ pub fn public_router(_state: AppState) -> axum::Router<AppState> {
             "/s/:tenant_slug/widgets/:widget_slug/submit",
             post(widget_submit),
         )
+        .layer(axum::middleware::from_fn_with_state(
+            crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
+            crate::body_deadline::body_read_deadline_middleware,
+        ))
+}
+
+#[cfg(test)]
+mod embed_escaping_tests {
+    use super::{css_color, html_text, js_str, widget_public_path, PUBLIC_WIDGET_BASE};
+
+    /// The defect this closes, measured live 2026-10-14 (kanban t_f6bb2958): the DEFAULT welcome
+    /// message went into the served script raw, its apostrophe closed the single-quoted JS string
+    /// literal and Chromium raised `SyntaxError: Unexpected identifier 'll'` — the widget never
+    /// rendered anywhere. Operator-authored text must therefore be neutral for BOTH contexts.
+    #[test]
+    fn the_default_welcome_message_survives_as_a_js_literal() {
+        let welcome = "Thanks for reaching out! We'll get back to you shortly.";
+        let escaped = js_str(welcome);
+        assert!(escaped.contains("We\\'ll"), "{escaped}");
+        assert!(
+            !escaped.contains("'")
+                || escaped.matches("\\'").count() == escaped.matches('\'').count(),
+            "every apostrophe must be escaped: {escaped}"
+        );
+        assert!(!escaped.contains('\n') && !escaped.contains('\r'));
+    }
+
+    #[test]
+    fn js_str_neutralises_the_string_terminators_and_the_backslash() {
+        assert_eq!(js_str("a'b"), "a\\'b");
+        assert_eq!(js_str("a\"b"), "a\\\"b");
+        assert_eq!(js_str("a\\b"), "a\\\\b");
+        assert_eq!(js_str("a\nb"), "a\\nb");
+        assert_eq!(js_str("a\rb"), "a\\rb");
+        assert_eq!(js_str("keep-it_simple #2563eb"), "keep-it_simple #2563eb");
+    }
+
+    /// The greeting lands in the panel's innerHTML (header text AND the message placeholder), so it
+    /// is HTML-escaped; the whole markup is then embedded in a JS literal by `js_str`.
+    #[test]
+    fn the_greeting_is_html_escaped_then_js_escaped() {
+        let raw = "EmbedProof's <UI> \"greeting\"";
+        let html = html_text(raw);
+        assert_eq!(html, "EmbedProof&#39;s &lt;UI&gt; &quot;greeting&quot;");
+        let js = js_str(&html);
+        assert!(
+            !js.contains('\'') && !js.contains('"'),
+            "no bare quote may survive: {js}"
+        );
+        assert!(js.contains("&lt;UI&gt;"));
+    }
+
+    /// A colour only reaches the widget's own `<style>`; anything a colour cannot contain is dropped
+    /// so a typo cannot inject CSS into the customer's page, and an empty value falls back.
+    #[test]
+    fn css_color_keeps_only_colour_characters() {
+        assert_eq!(css_color("#2563eb"), "#2563eb");
+        assert_eq!(css_color("rgb(37, 99, 235)"), "rgb(37, 99, 235)");
+        // A pasted stylesheet loses every character a colour cannot contain, so it cannot open a
+        // rule in the CUSTOMER's page: `;`, braces and `:` never survive the filter.
+        let injected = css_color("red;}body{display:none}");
+        assert_eq!(injected, "redbodydisplaynone");
+        assert!(!injected.contains('{') && !injected.contains('}'));
+        assert!(!injected.contains(';') && !injected.contains(':'));
+        assert_eq!(css_color(""), "#2563eb");
+        assert_eq!(css_color("   "), "#2563eb");
+        assert_eq!(css_color("<script>"), "script");
+    }
+
+    /// One spelling for the public surface: the path the embed script is served from and the path
+    /// the snippet posts to come from the same helper, so they cannot drift apart.
+    #[test]
+    fn the_public_path_shape_is_the_advertised_one() {
+        assert_eq!(
+            widget_public_path("acme", "website-chat"),
+            "/s/acme/widgets/website-chat"
+        );
+        assert_eq!(PUBLIC_WIDGET_BASE, "https://coreswiftcrm.com");
+    }
+
+    /// Regression guard for a shadowed `document` (kanban t_f6bb2958). The response callback took
+    /// its payload as `d`, which shadowed the module's `var d = document`, so the SUCCESS branch
+    /// threw `d.getElementById is not a function` AFTER the fetch had already created the ticket —
+    /// the promise's `catch` then replaced the confirmation with "Network error. Try again.",
+    /// so every visitor who successfully submitted a ticket was told it failed (measured in
+    /// Chromium against the deployed app). The needle is assembled at runtime so this test's own
+    /// text cannot satisfy it.
+    #[test]
+    fn the_response_callback_does_not_shadow_document() {
+        const SRC: &str = include_str!("support_widgets.rs");
+        let shadowing = ["then(function(", "d)"].concat();
+        assert!(
+            !SRC.contains(&shadowing),
+            "the response callback must not reuse `d`, it shadows document: {shadowing}"
+        );
+        let named = ["then(function(", "res)"].concat();
+        assert!(
+            SRC.contains(&named),
+            "the response callback should bind {named}"
+        );
+    }
 }

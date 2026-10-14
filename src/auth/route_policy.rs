@@ -42,17 +42,26 @@
 //!        workspace / a portfolio row each answered 200 carrying a per-id refusal reason. Now 368
 //!        mounted `.route(..)` calls, 356 mounts on /api/**.
 //!
+//!   -2 mounts since (2026-10-14, kanban t_f6bb2958), the embeddable support widget: the two
+//!        public widget arms were mounted INSIDE the router that main.rs nests at `/api/widgets`,
+//!        so they were reachable only at the DOUBLED non-canonical `/api/widgets/widgets/...` while
+//!        the `/s/...` URL `POST /api/widgets` advertises answered 404. Both arms now live in
+//!        `support_widgets::public_router`, merged at the ROOT next to the ticket routes, and both
+//!        allowlist entries went with the mounts. Now 366 mounted `.route(..)` calls, 354 mounts on
+//!        /api/** — and the public widget surface is a SERVED surface (below), not an entry here.
+//!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
 //!        the per-module gate was doing its job. The two /api routes added since (kanban
 //!        t_e968e9ad: `/api/admin/provisioning-config` and
 //!        `/api/v1/internal/provision-free-account`) were measured the same way and each answered
 //!        401 anonymous; both are named in the lists below
-//!    28 deliberate anonymous entries  -> PUBLIC_ROUTES  (25 /api + 3 /inbound)
+//!    26 deliberate anonymous entries  -> PUBLIC_ROUTES  (23 /api + 3 /inbound)
 //!    15 service-to-service entries    -> INTERNAL_ROUTES (all /api, reached with the shared key)
 //!     2 issued-API-key entries        -> API_KEY_ROUTES  (/api/external/**)
-//!     9 served surfaces outside the boundary: the SPA mount, /track/:slug and the eight
-//!        /s/:tenant_id/** support-portal mounts
+//!    11 served surfaces outside the boundary: the SPA mount, /track/:slug, the eight
+//!        /s/:tenant_id/** support-portal mounts and the two /s/:tenant_slug/widgets/**
+//!        embed-widget mounts
 //! ```
 //!
 //! **No route was found answering an anonymous caller by accident.** Every anonymous path is a
@@ -76,8 +85,10 @@
 //!    the path). It is now inside [`is_guarded_path`] with its three mounted shapes named in
 //!    [`PUBLIC_ROUTES`], so a future sibling route there is private by default instead of anonymous.
 //! 3. Template matching is **segment-exact** ([`matches_template`]), never `starts_with`, so a new
-//!    route that merely shares a prefix with an allowlisted one (`/api/widgets/...` vs
-//!    `/api/widgets/widgets/...`) is private until it is written down here.
+//!    route that merely shares a prefix with an allowlisted one
+//!    (`/api/public/bookings/public/slots/available/:tenant_id` does NOT cover its own
+//!    `/api/public/bookings/public/slots/available`, which is private) is private until it is
+//!    written down here.
 //!
 //! The one NAMED GAP this census found — `/api/telnyx/{webhook,sms-webhook}` verified neither a
 //! signature nor a shared key, so an anonymous POST was answered `{"status":"ack"}` — is now CLOSED
@@ -201,12 +212,20 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // check lives in the handler and the entries stay here.
     "/api/telnyx/webhook",
     "/api/telnyx/sms-webhook",
-    // --- public widget surfaces ------------------------------------------------------------------
-    // `embed.js` is the script a customer's own site loads (keyed by the public tenant + widget
-    // slug) and `submit` is the anonymous visitor's form post that script makes. Both are scoped
-    // to the slug pair in the path by the handler.
-    "/api/widgets/widgets/:tenant_slug/:widget_slug/embed.js",
-    "/api/widgets/widgets/:tenant_slug/:widget_slug/submit",
+    // --- the public widget surface is deliberately NOT here ---------------------------------------
+    // It is a SERVED surface: `GET /s/:tenant_slug/widgets/:widget_slug/embed.js` and
+    // `POST /s/:tenant_slug/widgets/:widget_slug/submit`, merged at the ROOT of the router by
+    // main.rs (`support_widgets::public_router`), because that is the URL `POST /api/widgets`
+    // advertises to the operator and the one BOTH nginx vhosts already proxy (`location /s/` in
+    // sites/coreswift.conf — the same family as `/s/:tenant_id/widget.js` and the 💬 My Support
+    // portal). `is_guarded_path` covers `/api/**` and `/inbound/**` only, so it is outside this
+    // boundary by construction and needs no entry, exactly like those.
+    // The two entries that used to sit here were the DOUBLED `/api/widgets/widgets/...` spelling of
+    // arms mounted inside the router main.rs nests at `/api/widgets`: the nest prefix was the bug
+    // (kanban t_f6bb2958). The advertised `/s/...` URL 404'd while a non-canonical doubled path
+    // answered 200. Both entries and both mounts are gone — do NOT "fix" that by allowlisting the
+    // single-prefix `/api/widgets/<tenant>/<widget>/submit` instead: a caller that guesses it is
+    // refused 401 here, like any other unnamed /api path, and that is the intended answer.
     // --- inbound machine receivers (credential = the key prefix in the path) ---------------------
     // `inbound::router` is mounted at the root and authenticates by the key prefix in the URL
     // ("No auth middleware — authentication is via key_prefix in URL"; v1 additionally checks the
@@ -798,8 +817,14 @@ mod tests {
             "/api/internal/something-new",
             "/api/internal/tags/new",
             "/api/v1/internal/whatever",
+            // The widget surface is public on `/s/...` ONLY — and that is a SERVED surface, outside
+            // this boundary (see the test below). Its `/api/widgets/**` spelling, single or doubled
+            // prefix, must stay refused here (kanban t_f6bb2958).
+            "/api/widgets/acme/support/embed.js",
+            "/api/widgets/acme/support/submit",
+            "/api/widgets/widgets/acme/support/embed.js",
+            "/api/widgets/widgets/acme/support/submit",
             // a NEW sibling of an allowlisted prefix must not be swept in by a string prefix
-            "/api/widgets/widgets/tenant/widget/embed.js/extra",
             "/api/public/bookings/public/slots/available",
             "/api/auth/register/confirm",
             // the issued-API-key surface is not anonymous
@@ -839,8 +864,6 @@ mod tests {
             "/api/google-calendar/oauth-callback",
             "/api/telnyx/webhook",
             "/api/telnyx/sms-webhook",
-            "/api/widgets/widgets/acme/support/embed.js",
-            "/api/widgets/widgets/acme/support/submit",
             "/inbound/abc/contact-sync",
             "/inbound/v3/abc/contact-sync",
         ] {
@@ -896,12 +919,12 @@ mod tests {
             "/api/webhook/abc"
         ));
         assert!(matches_template(
-            "/api/widgets/widgets/:tenant_slug/:widget_slug/embed.js",
-            "/api/widgets/widgets/acme/support/embed.js"
+            "/api/public/bookings/public/slots/available/:tenant_id",
+            "/api/public/bookings/public/slots/available/canary-tenant"
         ));
         assert!(!matches_template(
-            "/api/widgets/widgets/:tenant_slug/:widget_slug/embed.js",
-            "/api/widgets/widgets/acme/support/embed.js/x"
+            "/api/public/bookings/public/slots/available/:tenant_id",
+            "/api/public/bookings/public/slots/available/canary-tenant/x"
         ));
         assert!(!matches_template("/api/health", "/api/healthz"));
         assert!(!matches_template("/api/health", "/api/health/extra"));
@@ -922,8 +945,9 @@ mod tests {
     }
 
     /// The served surfaces are outside the boundary by construction. This pins the boundary itself
-    /// so a change to `is_guarded_path` cannot silently pull the SPA, the tracked-link redirect or
-    /// the customer support portal into (or drop the API out of) the credential gate.
+    /// so a change to `is_guarded_path` cannot silently pull the SPA, the tracked-link redirect, the
+    /// customer support portal or the public embed widget into (or drop the API out of) the
+    /// credential gate.
     #[test]
     fn served_surfaces_are_outside_the_boundary() {
         for p in [
@@ -935,6 +959,14 @@ mod tests {
             "/s/canary-tenant/support/login",
             "/s/canary-tenant/widget.js",
             "/s/canary-tenant/ticket",
+            // The public embed widget (kanban t_f6bb2958). It is the URL `POST /api/widgets`
+            // advertises and the one both nginx vhosts proxy, so it MUST be reachable with no
+            // credential — and being a `/s/...` served surface is how that happens. No allowlist
+            // entry exists for it on purpose: an entry would have to name a `/api/**` path, and the
+            // only `/api/**` spelling of this surface is the non-canonical doubled one that was
+            // retired.
+            "/s/canary-tenant/widgets/support/embed.js",
+            "/s/canary-tenant/widgets/support/submit",
         ] {
             assert!(
                 !is_guarded_path(p),
@@ -959,12 +991,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            368,
+            366,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 356,
+            api, 354,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

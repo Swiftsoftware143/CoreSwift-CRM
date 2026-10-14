@@ -685,6 +685,13 @@ async fn main() -> anyhow::Result<()> {
                 ),
             ),
         )
+        // Support widgets' PUBLIC surface (kanban t_f6bb2958): `GET /s/:tenant_slug/widgets/
+        // :widget_slug/embed.js` + `POST …/submit`. This is the `/s/...` URL `POST /api/widgets`
+        // advertises in `embed_url`/`embed_code` and the one both nginx vhosts proxy (`location /s/`
+        // in sites/coreswift.conf), i.e. the same family as the ticket routes just above. It used to
+        // hang off the `/api/widgets` nest, where the nest prefix doubled the path and NOTHING served
+        // the advertised URL; the authenticated widget CRUD stays on that nest.
+        .merge(support_widgets::public_router(state.clone()))
         // Layer stack (inner to outer = last to first in call order)
         .layer(CompressionLayer::new())
         .layer(axum::middleware::from_fn(security_headers_middleware))
