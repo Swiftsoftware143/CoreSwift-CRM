@@ -1465,23 +1465,13 @@ const TAB_RENDERERS = {
       '<button class="btn btn-secondary btn-sm">Export CSV</button>') +
     card('Activity Log', '<div class="empty-state"><div class="empty-icon">📝</div><h3>No audit entries</h3><p>Audit log entries will appear as users interact with the platform.</p></div>');
   },
-  'monitoring': () => {
-    return pageHeader('Monitoring', 'Server and platform health') +
-    '<div class="stats-grid">' +
-      '<div class="stat-card accent"><div class="stat-icon">🟢</div><div class="stat-value">99.9%</div><div class="stat-label">Uptime</div></div>' +
-      '<div class="stat-card"><div class="stat-icon">⚡</div><div class="stat-value">45ms</div><div class="stat-label">Avg Response</div></div>' +
-      '<div class="stat-card"><div class="stat-icon">💾</div><div class="stat-value">34%</div><div class="stat-label">Disk Usage</div></div>' +
-      '<div class="stat-card"><div class="stat-icon">🧠</div><div class="stat-value">2.1GB</div><div class="stat-label">Memory Used</div></div>' +
-    '</div>' +
-    card('Service Status', '' +
-      '<div class="config-list">' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">API Server</div></div><span class="badge badge-success">● Online</span></div>' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">Database</div></div><span class="badge badge-success">● Online</span></div>' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">n8n</div></div><span class="badge badge-success">● Online</span></div>' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">Redis</div></div><span class="badge badge-success">● Online</span></div>' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">Email Service</div></div><span class="badge badge-warning">● Degraded</span></div>' +
-      '</div>', '<button class="btn btn-secondary btn-sm">Refresh</button>');
-  },
+  // The panel that used to live here was a hand-written FAKE: "99.9%" uptime, "45ms", "34%" disk,
+  // "2.1GB" RAM and five service badges ("API Server ● Online" ... "Email Service ● Degraded") were
+  // string literals in this file, measured nowhere, and its Refresh button carried no handler at
+  // all - so the operator's health screen showed a healthy platform whatever the platform was
+  // doing. Everything it renders now comes from a real route, and the customer console already
+  // carries the same replacement (monitoringShell, www-app/coreswift).
+  'monitoring': () => monitoringShell(),
   'telnyx-admin': () => placeholderPanel('Telnyx Admin', 'Configure Telnyx provider settings for all tenants.', '☎️'),
   // Platform mail transport (kanban t_6a330ed2). The form is rendered by loadSystemEmail() from
   // GET /api/admin/email-config, so what is on screen is what the database holds — the renderer
@@ -2380,6 +2370,9 @@ function wgDeleteWidget(id) {
 }
 
 const TAB_LOADERS = {
+  // The Monitoring panel follows the same rule as every loader below: its renderer runs BEFORE its
+  // HTML is in the document, so the load registers here and runs against a #monContent that exists.
+  'monitoring': async () => { await loadMonitoringTab(); },
   // The Tracked Links panel registers a loader instead of loading from inside its renderer: the
   // renderer runs BEFORE its HTML is in the document, so an in-renderer load sees no #trackedLinksTable
   // and bails out (the same reason the Features & Plans panel registers one).
@@ -5163,8 +5156,109 @@ window.appGuidePages = {
     if (n++ < 60) setTimeout(tick, 50);
   })();
 })();
+// ---------------------------------------------------------------- MONITORING (platform + account)
+// Reads what this console can actually measure: GET /api/health (liveness and the version the
+// running binary reports, timed at load) and the /api/monitoring surface the backend has always
+// served (/health = this account's health row, /thresholds = the stored thresholds). Host metrics
+// (disk, memory, uptime) and the Redis/n8n processes cannot be measured from a browser session, so
+// this screen prints no number for them - an unmeasured number on a health screen is worse than no
+// number at all.
+function monitoringShell() {
+  return pageHeader('Monitoring', 'Platform liveness, account health signals and thresholds',
+    '<button class="btn btn-secondary btn-sm" onclick="loadMonitoringTab()">↻ Refresh</button>') +
+    '<div id="monContent"><div style="text-align:center;padding:40px;color:var(--text-muted)">Measuring the platform...</div></div>';
+}
+async function loadMonitoringTab() {
+  const el = document.getElementById('monContent');
+  if (!el) return;
+  // 1. LIVE liveness measurement: the round-trip this console just made to the API.
+  const t0 = (window.performance && performance.now) ? performance.now() : Date.now();
+  let live = null, liveErr = null;
+  try {
+    const r = await fetch('/api/health', { headers: { 'Accept': 'application/json' } });
+    const j = await r.json().catch(function () { return {}; });
+    const t1 = (window.performance && performance.now) ? performance.now() : Date.now();
+    live = { ok: r.ok, status: r.status, service: j.service || '—', version: j.version || '—', ms: Math.round(t1 - t0) };
+  } catch (e) { liveErr = (e && e.message) || String(e); }
+  let h = live
+    ? card('Platform liveness', '<div class="config-list">' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">API (GET /api/health)</div>' +
+          '<div class="config-hint">Measured when this panel loaded - not a stored value.</div></div>' +
+          '<span class="badge badge-' + (live.ok && live.status === 200 ? 'success' : 'danger') + '">' +
+          (live.ok && live.status === 200 ? '● Answering' : '● HTTP ' + live.status) + '</span></div>' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">Service / version</div>' +
+          '<div class="config-hint">What the running binary reports about itself.</div></div>' +
+          '<span class="badge">' + fh(live.service) + ' ' + fh(live.version) + '</span></div>' +
+        '<div class="config-item"><div class="config-info"><div class="config-label">Round-trip</div>' +
+          '<div class="config-hint">This console to the API and back.</div></div>' +
+          '<span class="badge">' + live.ms + ' ms</span></div>' +
+      '</div>' +
+      '<p class="config-hint">Checked at ' + new Date().toLocaleTimeString() + '. Disk, memory, uptime and the Redis/n8n processes are not measured from a browser session, so no number is shown for them.</p>', '')
+    : card('Platform liveness', '<div class="empty-state"><div class="empty-icon">🚨</div>' +
+        '<h3>API unreachable</h3><p>' + fh(liveErr) + '</p></div>', '');
+  // 2. The account-health row and the stored thresholds, both real rows.
+  try {
+    const health = await API.get('/monitoring/health');
+    const thresholds = famList(await API.get('/monitoring/thresholds'), 'thresholds');
+    h += '<br><div class="stats-grid">' +
+      '<div class="stat-card accent"><div class="stat-icon">🧠</div><div class="stat-value">' +
+        (health.score !== undefined && health.score !== null ? health.score : '—') +
+        '</div><div class="stat-label">Account health score</div></div>' +
+      '<div class="stat-card"><div class="stat-icon">🚦</div><div class="stat-value">' + fh(health.risk_level) + '</div><div class="stat-label">Risk level</div></div>' +
+      '<div class="stat-card"><div class="stat-icon">📏</div><div class="stat-value">' + thresholds.length + '</div><div class="stat-label">Thresholds stored</div></div>' +
+      '</div>' +
+      card('Signal status', '<p style="color:var(--text-secondary);margin:0">' + fh(health.message) + '</p>', '') +
+      '<br>' + card('Health thresholds',
+        dataTable(['Name', 'Metric', 'Operator', 'Value', 'Risk', 'Actions'],
+          thresholds.map(function (t) {
+            return [fh(t.name), fh(t.metric), fh(t.operator), t.value, fh(t.risk_level),
+              '<button class="btn btn-ghost btn-xs" onclick="monDeleteThreshold(\'' + t.id + '\')">Delete</button>'];
+          }), 'No thresholds stored yet - add one and it appears here.'),
+        '<button class="btn btn-primary btn-sm" onclick="monNewThreshold()">+ New Threshold</button>');
+  } catch (e) {
+    h += '<br>' + card('Account health', '<div class="empty-state"><div class="empty-icon">⚠️</div>' +
+      '<h3>Could not read the monitoring surface</h3><p>' + escapeHtml((e && e.message) || String(e)) + '</p></div>', '');
+  }
+  el.innerHTML = h;
+}
+function monNewThreshold() {
+  showModal('New Health Threshold',
+    '<div class="form-group"><label>Name</label><input type="text" id="mhName" placeholder="No login in 14 days"></div>' +
+    '<div class="form-group"><label>Entity type</label><select id="mhEntity">' +
+      '<option value="contact">Contact</option><option value="company">Company</option><option value="tenant">Tenant</option></select></div>' +
+    '<div class="form-group"><label>Metric</label><input type="text" id="mhMetric" placeholder="days_inactive"></div>' +
+    '<div class="form-group"><label>Operator</label><select id="mhOp">' +
+      '<option value="gt">&gt;</option><option value="gte">&gt;=</option><option value="lt">&lt;</option>' +
+      '<option value="lte">&lt;=</option><option value="eq">=</option></select></div>' +
+    '<div class="form-group"><label>Value</label><input type="number" id="mhValue" value="14"></div>' +
+    '<div class="form-group"><label>Risk level</label><select id="mhRisk">' +
+      '<option value="warning">Warning</option><option value="critical">Critical</option><option value="info">Info</option></select></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="monCreateThreshold()">Create</button>');
+}
+async function monCreateThreshold() {
+  const name = (document.getElementById('mhName').value || '').trim();
+  const metric = (document.getElementById('mhMetric').value || '').trim();
+  if (!name || !metric) { toast('Name and metric are required', 'error'); return; }
+  try {
+    await API.post('/monitoring/thresholds', {
+      name: name,
+      entity_type: document.getElementById('mhEntity').value,
+      metric: metric,
+      operator: document.getElementById('mhOp').value,
+      value: parseInt(document.getElementById('mhValue').value, 10) || 0,
+      risk_level: document.getElementById('mhRisk').value
+    });
+    closeModal(); toast('Threshold created', 'success'); loadMonitoringTab();
+  } catch (e) { toast('Create failed: ' + e.message, 'error'); }
+}
+function monDeleteThreshold(id) {
+  API.del('/monitoring/thresholds/' + id)
+    .then(function () { toast('Threshold deleted', 'success'); loadMonitoringTab(); })
+    .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+}
+
 </script>
-</body>
-</html>
+
 
 
