@@ -1430,7 +1430,10 @@ const TAB_RENDERERS = {
     return pageHeader('Billing & Plans', 'Manage subscription plans and pricing') +
     '<div id="plansContent"><div class="loading-wrap"><div class="spinner"></div> Loading plans...</div></div>';
   },
-  'widgets': () => placeholderPanel('Widgets', 'Embeddable CRM widgets for your website — contact forms, chat, booking.', '🧩'),
+  // Wired to the real backend (src/support_widgets, mounted at /api/widgets). This tab was a
+  // placeholder while the API served widget + inbox CRUD; the tenant shell already drove it.
+  // The load itself lives in TAB_LOADERS['widgets'].
+  'widgets': () => { return widgetsShell(); },
   // The webhook-ENDPOINTS screen is WORKSPACE-scoped: /api/integrations/webhooks reads and writes
   // only the signed-in workspace's own rows (claims.aid, src/integrations/handlers.rs) and no route
   // lists another workspace's endpoints — so a platform console cannot host an editor for them. The
@@ -2243,6 +2246,135 @@ function bkNewCalendar() {
   });
 }
 
+// ── Widgets: this tab was a placeholder while the backend served the whole support-widget
+// surface (src/support_widgets, mounted at /api/widgets): GET+POST /widgets, PATCH+DELETE
+// /widgets/:id and the same four on /widgets/inboxes. The tenant shell (www-app/coreswift) already
+// drove them; the operator console showed a static paragraph. Same residual dead-endpoint class as
+// the Bookings tab above.
+function widgetsShell() {
+  return pageHeader('Widgets', 'Support widgets and the inboxes their tickets land in',
+    '<button class="btn btn-secondary btn-sm" onclick="wgNewInbox()">+ New Inbox</button> ' +
+    '<button class="btn btn-primary btn-sm" onclick="wgNewWidget()">+ New Widget</button>') +
+    '<div id="wgContent"><div class="loading-wrap"><div class="spinner"></div> Loading widgets...</div></div>';
+}
+
+async function loadWidgetsTab() {
+  const el = document.getElementById('wgContent');
+  if (!el) return;
+  let widgets = [];
+  let inboxes = [];
+  try {
+    widgets = famList(await API.get('/widgets'), 'widgets');
+    inboxes = famList(await API.get('/widgets/inboxes'), 'inboxes');
+  } catch (e) { el.innerHTML = icErr('Could not read the support widgets', e.message); return; }
+  const inboxById = {};
+  inboxes.forEach(function (i) { inboxById[i.id] = i; });
+  let h = card('Inboxes (' + inboxes.length + ')',
+    '<p style="color:var(--text-secondary);margin:0">A widget sends its tickets to one of these.</p>' +
+    dataTable(['Name', 'Forward address', 'Created', ''],
+      inboxes.map(function (i) {
+        return [
+          escapeHtml(i.name || '—'),
+          escapeHtml(i.email_fwd || '—'),
+          escapeHtml(i.created_at ? new Date(i.created_at).toLocaleDateString() : '—'),
+          '<button class="btn btn-ghost btn-xs" onclick="wgDeleteInbox(\'' + escapeHtmlAttr(i.id) + '\')">Delete</button>'
+        ];
+      }), 'No inboxes yet — create one before adding a widget.'), '');
+  h += '<br>' + card('Widgets (' + widgets.length + ')',
+    '<p style="color:var(--text-secondary);margin:0">Paste a widget\'s embed snippet onto the site ' +
+    'you want it on; the snippet is shown when the widget is created.</p>' +
+    dataTable(['Name', 'Slug', 'Inbox', 'Position', 'Active', ''],
+      widgets.map(function (w) {
+        const inb = inboxById[w.inbox_id];
+        return [
+          escapeHtml(w.name || '—'),
+          '<code>' + escapeHtml(w.slug || '') + '</code>',
+          escapeHtml(inb ? inb.name : '—'),
+          escapeHtml(w.position || '—'),
+          w.is_active
+            ? '<span class="badge badge-success">yes</span>'
+            : '<span class="badge badge-muted">no</span>',
+          '<button class="btn btn-ghost btn-xs" onclick="wgDeleteWidget(\'' + escapeHtmlAttr(w.id) + '\')">Delete</button>'
+        ];
+      }), 'No widgets yet.'), '');
+  el.innerHTML = h;
+}
+
+function wgNewInbox() {
+  showModal('New ticket inbox',
+    '<div class="form-group"><label>Name</label><input type="text" id="wgInboxName" placeholder="Support"></div>' +
+    '<div class="form-group"><label>Forward address</label><input type="email" id="wgInboxFwd" placeholder="support@yourdomain.com"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="wgInboxSave">Create</button>');
+  const b = document.getElementById('wgInboxSave');
+  if (b) b.addEventListener('click', async function () {
+    const name = (document.getElementById('wgInboxName').value || '').trim();
+    if (!name) { toast('Inbox name is required', 'error'); return; }
+    b.disabled = true;
+    try {
+      await API.post('/widgets/inboxes', {
+        name: name,
+        email_fwd: (document.getElementById('wgInboxFwd').value || '').trim() || null
+      });
+      closeModal(); toast('Inbox created', 'success'); await loadWidgetsTab();
+    } catch (e) { toast('Create failed: ' + e.message, 'error'); b.disabled = false; }
+  });
+}
+
+function wgNewWidget() {
+  showModal('New support widget',
+    '<div class="form-group"><label>Name</label><input type="text" id="wgName" placeholder="Website chat"></div>' +
+    '<div class="form-group"><label>Theme colour</label><input type="text" id="wgColor" value="#6366f1"></div>' +
+    '<div class="form-group"><label>Greeting</label><input type="text" id="wgGreeting" placeholder="Hi! How can we help?"></div>' +
+    '<div class="form-group"><label>Position</label><select id="wgPos">' +
+      '<option value="bottom-right">bottom-right</option><option value="bottom-left">bottom-left</option></select></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="wgSave">Create</button>');
+  const b = document.getElementById('wgSave');
+  if (b) b.addEventListener('click', async function () {
+    const name = (document.getElementById('wgName').value || '').trim();
+    if (!name) { toast('Widget name is required', 'error'); return; }
+    b.disabled = true;
+    let res = null;
+    try {
+      res = await API.post('/widgets', {
+        name: name,
+        theme_color: (document.getElementById('wgColor').value || '').trim() || null,
+        greeting: (document.getElementById('wgGreeting').value || '').trim() || null,
+        position: document.getElementById('wgPos').value
+      });
+    } catch (e) { toast('Create failed: ' + e.message, 'error'); b.disabled = false; return; }
+    closeModal();
+    toast('Widget created', 'success');
+    await loadWidgetsTab();
+    // The embed snippet is only returned by the CREATE response (GET /widgets serves the widget
+    // row, which has no embed_code column), so it is shown here — it is the whole point of making
+    // a widget: paste it on the site you want it on.
+    if (res && res.embed_code) {
+      showModal('Embed code — ' + (name || 'widget'),
+        '<p style="color:var(--text-secondary);margin:0 0 8px">Paste this where the widget should ' +
+        'appear on your site.</p>' +
+        '<textarea readonly rows="3" style="width:100%;font-family:monospace;font-size:.8rem">' +
+        escapeHtml(res.embed_code) + '</textarea>',
+        '<button class="btn btn-primary" onclick="closeModal()">Done</button>');
+    }
+  });
+}
+
+function wgDeleteInbox(id) {
+  if (!confirm('Delete this inbox?')) return;
+  API.del('/widgets/inboxes/' + encodeURIComponent(id))
+    .then(function () { toast('Inbox deleted', 'success'); loadWidgetsTab(); })
+    .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+}
+
+function wgDeleteWidget(id) {
+  if (!confirm('Delete this widget?')) return;
+  API.del('/widgets/' + encodeURIComponent(id))
+    .then(function () { toast('Widget deleted', 'success'); loadWidgetsTab(); })
+    .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+}
+
 const TAB_LOADERS = {
   // The Tracked Links panel registers a loader instead of loading from inside its renderer: the
   // renderer runs BEFORE its HTML is in the document, so an in-renderer load sees no #trackedLinksTable
@@ -2271,6 +2403,9 @@ const TAB_LOADERS = {
   // Same reason as the loaders above: the renderer runs before its HTML is in the document, so
   // the bookings load registers here and runs against a #bkCalendars that already exists.
   'bookings': async () => { await loadBookingsTab(); },
+  // Same reason as the loaders above: the renderer runs before its HTML is in the document, so
+  // the widgets load registers here and runs against a #wgContent that already exists.
+  'widgets': async () => { await loadWidgetsTab(); },
   // Lead Scoring panel: registers a loader for the same reason as the loaders above (its renderer
   // runs before its HTML is in the document, so an in-renderer load sees no #scoringRules).
   'lead-scoring': async () => { await loadScoringTab(); },
