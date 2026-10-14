@@ -45,7 +45,9 @@
 //! credential harness points a provider at a local SMTP sink and signs up as
 //! `<name>@probe.local`, then reads the credentials message off the wire; suppressing `.local`
 //! would delete the only harness that can prove the send itself still works. Only the fleet's own
-//! `swiftsoftware.local` identity is listed, never the bare `local` TLD.
+//! `swiftsoftware.local` identity is listed, never the bare `local` TLD. `local.coreswift` (the
+//! multi-directory probe's convention, below) is NOT an exception to this: its TLD is `coreswift`,
+//! not `local`, so the sink harness at `<name>@<anything>.local` stays open either way.
 //!
 //! THE OTHER HALF IS THE TENANT MARKER
 //!
@@ -55,6 +57,21 @@
 //! domain this list does not know about. Measured live 2026-10-10 before shipping: 37 tenants, 2
 //! markers (`CNRY…` the tenancy canary, `walk`), and NEITHER belongs to a customer — so the marker
 //! arm cannot silence a real account's credentials mail on this app today.
+//!
+//! MEASURED AGAIN 2026-10-14 — THE CALLER'S OWN CONVENTION (kanban t_d53f82ae)
+//!
+//! A second harness mints workspaces here without ever learning our list: the multi-directory
+//! network-create smoke (`multi-directory/scripts/network-create-admin-smoke.py`) provisions a
+//! CoreSwift workspace per run through `multi-directory/src/coreswift.rs`, which addresses it
+//! `md-<slug>@local.coreswift`. That probe sends NO `X-Swift-Harness` header, so the marker arm is
+//! NULL for every workspace it mints, and `local.coreswift` was not on this list — so BOTH arms
+//! missed and each mintage took a real `Welcome to CoreSwift CRM!` delivery. Live count when this
+//! was filed: 6 suppressed-but-sent messages (`outbound_messages`, status `sent`) to
+//! `md-zz-nw-probe-<ts>@local.coreswift` / `md-zz-nw-probe-api-<ts>@local.coreswift`, 21:58–22:27
+//! UTC, two per probe run, ~2 workspaces every ~15 min while the audit harness ran. The address
+//! class is now listed below, which silences the mail at both doors that consult this module no
+//! matter what the caller does. The residue itself (the workspaces it mints and never deletes) is
+//! the caller's to clean up — that half is carded in the multi-directory lane, not fixable from here.
 
 /// The fleet's own harness domains. Every one of them is fleet-controlled: a message addressed here
 /// can only land in the fleet's own mailboxes, never in a customer's.
@@ -62,6 +79,12 @@ pub const FLEET_HARNESS_DOMAINS: &[&str] = &[
     "swiftsoftware.dev",
     "swiftsoftware.net",
     "swiftsoftware.local",
+    // The multi-directory network-create probe's own convention (kanban t_d53f82ae): its caller
+    // registers the workspace it provisions as `md-<slug>@local.coreswift` and sends no marker, so
+    // this list is the only arm that can catch it. `coreswift` is not a TLD and nothing can own the
+    // name — the same shape as the fleet's own identities above, not the deliberately-open `local`
+    // sink. Measured live 2026-10-14: 6 real `Welcome to CoreSwift CRM!` deliveries to this class.
+    "local.coreswift",
     "example.invalid",
     "example.com",
     "example.net",
@@ -113,6 +136,22 @@ mod tests {
             harness_domain("x@swiftsoftware.local"),
             Some("swiftsoftware.local")
         );
+        // The multi-directory network-create probe's own convention (kanban t_d53f82ae): the exact
+        // shape its caller registers, and the one measured taking a real `Welcome to CoreSwift CRM!`
+        // delivery on 2026-10-14 because neither arm matched it.
+        assert_eq!(
+            harness_domain("md-zz-nw-probe-1792016864@local.coreswift"),
+            Some("local.coreswift")
+        );
+        assert_eq!(
+            harness_domain("md-zz-nw-probe-api-1792016864@local.coreswift"),
+            Some("local.coreswift")
+        );
+        // A subdomain of it is the same class, and the normalisation above applies to it too.
+        assert_eq!(
+            harness_domain(" MD-ZZ-NW-PROBE-1@Local.CoreSwift. "),
+            Some("local.coreswift")
+        );
         // Case, whitespace and a trailing root dot are normalised away.
         assert_eq!(
             harness_domain(" Probe@SwiftSoftware.NET. "),
@@ -150,6 +189,12 @@ mod tests {
         // the module doc). Everything else reserved is suppressed.
         assert_eq!(harness_domain("cr1sink0a1b@probe.local"), None);
         assert_eq!(harness_domain("x@probe.local"), None);
+        // ...and `local.coreswift` is its OWN name, not the `local` TLD: a lookalike that merely
+        // contains it, or that carries it as a subdomain of something else, is not the class.
+        assert_eq!(harness_domain("md-x@coreswift"), None);
+        assert_eq!(harness_domain("md-x@notlocal.coreswift"), None);
+        assert_eq!(harness_domain("md-x@local.coreswift.evil.com"), None);
+        assert_eq!(harness_domain("md-x@probe.local.coreswift.evil.com"), None);
     }
 
     #[test]
