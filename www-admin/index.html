@@ -1312,7 +1312,11 @@ const TAB_RENDERERS = {
     '<div id="calendarContent"><div class="loading-wrap"><div class="spinner"></div> Loading events...</div></div>';
   },
 
-  'bookings': () => placeholderPanel('Bookings', 'Manage appointments and bookings. Share your booking link for self-scheduling.', '📆'),
+  // Wired to the real backend (src/bookings, mounted at /api/bookings). This tab was a
+  // placeholder while the API served calendars, slot inventories and bookings live — and the
+  // console's own inline guide already described the panel as working, so it advertised a
+  // surface that did not exist. The load itself lives in TAB_LOADERS['bookings'].
+  'bookings': () => { return bookingsShell(); },
 
   'ai-assistant': () => {
     return pageHeader('AI Assistant', 'Your AI-powered CRM assistant') +
@@ -2086,6 +2090,159 @@ async function loadTenantsTab() {
   sync();
 }
 
+// ── Bookings: this tab was a placeholder while the backend served calendars, slot inventory and
+// bookings live (src/bookings, mounted at /api/bookings), and the console's own inline guide
+// already described it as working ("Share a booking link", "Review upcoming bookings") — so the
+// tab advertised a surface that did not exist. Same residual dead-endpoint pass the tenant shell
+// (www-app/coreswift) already had; this is the operator-console half.
+const BK = { calendars: [], slots: {}, bookings: [] };
+
+function bookingsShell() {
+  return pageHeader('Bookings', 'Slot inventory per calendar, and the bookings taken against it',
+    '<button class="btn btn-primary btn-sm" onclick="bkNewCalendar()">+ New Calendar</button>') +
+    '<div id="bkCalendars"><div class="loading-wrap"><div class="spinner"></div> Loading calendars...</div></div>' +
+    '<br><div id="bkBookings"><div class="loading-wrap"><div class="spinner"></div> Loading bookings...</div></div>';
+}
+
+async function loadBookingsTab() {
+  const calEl = document.getElementById('bkCalendars');
+  const bkEl = document.getElementById('bkBookings');
+  if (!calEl || !bkEl) return;
+  let cals = [];
+  try { cals = famList(await API.get('/bookings/calendars'), 'calendars'); }
+  catch (e) { calEl.innerHTML = icErr('Could not read the booking calendars', e.message); }
+  BK.calendars = cals;
+  BK.slots = {};
+  for (let i = 0; i < cals.length; i++) {
+    try {
+      BK.slots[cals[i].slug] = famList(
+        await API.get('/bookings/calendars/' + encodeURIComponent(cals[i].slug) + '/slots'), 'slots');
+    } catch (e) { BK.slots[cals[i].slug] = { __error: e.message }; }
+  }
+  if (cals.length) {
+    calEl.innerHTML = cals.map(function (c) {
+      const slots = BK.slots[c.slug];
+      if (slots && slots.__error) {
+        return card('📅 ' + escapeHtml(c.name) + ' — <code>' + escapeHtml(c.slug) + '</code>',
+          icErr('Could not read the slot types', slots.__error), '');
+      }
+      const rows = (slots || []).map(function (s) {
+        const total = s.total_slots == null ? '—' : (s.total_slots < 0 ? 'unlimited' : String(s.total_slots));
+        return [
+          escapeHtml(s.slot_name || ''),
+          escapeHtml(total),
+          escapeHtml(String(s.filled_slots == null ? 0 : s.filled_slots)),
+          escapeHtml(String(s.default_duration_days == null ? '—' : s.default_duration_days)) + 'd',
+          '<button class="btn btn-ghost btn-xs" onclick="bkSetTotalSlots(\'' + escapeHtmlAttr(c.slug) + '\',\'' +
+            escapeHtmlAttr(s.id) + '\',' + (s.total_slots == null ? 0 : s.total_slots) + ')">Set total slots</button>'
+        ];
+      });
+      return card('📅 ' + escapeHtml(c.name) + ' — <code>' + escapeHtml(c.slug) + '</code>',
+        '<p style="color:var(--text-secondary);margin:0">' + escapeHtml(c.calendar_type || 'generic') +
+        (c.is_active === false ? ' · inactive' : '') +
+        ' · public link <code>/book/' + escapeHtml(c.slug) + '</code></p>' +
+        dataTable(['Slot type', 'Total', 'Filled', 'Duration', ''], rows,
+          'No slot types on this calendar yet — add one to start taking bookings.'), '');
+    }).join('<br>');
+  } else {
+    calEl.innerHTML = card('📅 Booking calendars',
+      '<p style="color:var(--text-secondary);margin:0">No booking calendars yet. ' +
+      'Use <b>+ New Calendar</b> to create one, then add a slot type to it.</p>', '');
+  }
+
+  let bookings = [];
+  try { bookings = famList(await API.get('/bookings/bookings'), 'bookings'); }
+  catch (e) { bkEl.innerHTML = icErr('Could not read the bookings', e.message); return; }
+  BK.bookings = bookings;
+  bkEl.innerHTML = card('🗂 Bookings (' + bookings.length + ')',
+    '<p style="color:var(--text-secondary);margin:0">Every booking taken against a slot. ' +
+    'Cancelling frees the slot back into the calendar.</p>' +
+    dataTable(['Business', 'Contact', 'Email', 'Dates', 'Status', 'Paid', ''],
+      bookings.map(function (b) {
+        return [
+          escapeHtml(b.business_name || '—'),
+          escapeHtml(b.contact_name || '—'),
+          escapeHtml(b.contact_email || '—'),
+          escapeHtml(String(b.start_date || '')) + ' → ' + escapeHtml(String(b.end_date || '')),
+          b.status === 'cancelled'
+            ? '<span class="badge badge-muted">cancelled</span>'
+            : '<span class="badge badge-success">' + escapeHtml(b.status || '') + '</span>',
+          escapeHtml(String(b.price_paid == null ? '—' : b.price_paid)) + ' ' + escapeHtml(b.currency || ''),
+          b.status === 'cancelled' ? '' :
+            '<button class="btn btn-ghost btn-xs" onclick="bkCancelBooking(\'' + escapeHtmlAttr(b.id) + '\')">Cancel</button>'
+        ];
+      }), 'No bookings yet.'), '');
+}
+
+// Slot inventory: PATCH /bookings/calendars/:slug/slots/:id — the slug-scoped writer the module
+// docs name as the survivor (the old PATCH /bookings/bookings/:id/adjust-slots was deleted).
+function bkSetTotalSlots(slug, slotId, current) {
+  showModal('Slot inventory',
+    '<div class="form-group"><label>Total slots</label>' +
+    '<input type="number" id="bkSlots" value="' + current + '" min="-1">' +
+    '<span class="form-hint">Use -1 for unlimited.</span></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="bkSlotsSave">Save</button>');
+  const b = document.getElementById('bkSlotsSave');
+  if (!b) return;
+  b.addEventListener('click', async function () {
+    const v = parseInt(document.getElementById('bkSlots').value, 10);
+    if (isNaN(v)) { toast('Total slots must be a number', 'error'); return; }
+    b.disabled = true;
+    try {
+      await API.patch('/bookings/calendars/' + encodeURIComponent(slug) + '/slots/' +
+        encodeURIComponent(slotId), { total_slots: v });
+      closeModal(); toast('Slot inventory updated', 'success'); loadBookingsTab();
+    } catch (e) { toast('Could not update: ' + e.message, 'error'); b.disabled = false; }
+  });
+}
+
+function bkCancelBooking(id) {
+  if (!confirm('Cancel this booking? The slot goes back on the calendar.')) return;
+  API.post('/bookings/bookings/' + encodeURIComponent(id) + '/cancel', {})
+    .then(function () { toast('Booking cancelled', 'success'); loadBookingsTab(); })
+    .catch(function (e) { toast('Could not cancel: ' + e.message, 'error'); });
+}
+
+// Create: POST /bookings/calendars then POST /bookings/calendars/:slug/slots — a calendar with no
+// slot type cannot take a booking, so the create flow adds its first one in the same modal.
+function bkNewCalendar() {
+  showModal('New booking calendar',
+    '<div class="form-group"><label>Name</label>' +
+    '<input type="text" id="bkNewName" placeholder="Consults — Miami" autocomplete="off"></div>' +
+    '<div class="form-group"><label>Slug</label>' +
+    '<input type="text" id="bkNewSlug" placeholder="consults-miami" autocomplete="off">' +
+    '<span class="form-hint">Used in the public booking URL; must be unique on this account.</span></div>' +
+    '<div class="form-group"><label>Type</label>' +
+    '<input type="text" id="bkNewType" value="generic" autocomplete="off"></div>' +
+    '<div class="form-group"><label>Slot type name</label>' +
+    '<input type="text" id="bkNewSlot" value="Appointment" autocomplete="off">' +
+    '<span class="form-hint">Bookings are taken against a slot type, so the new calendar gets one.</span></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="bkNewSave">Create calendar</button>');
+  const b = document.getElementById('bkNewSave');
+  if (b) b.addEventListener('click', async function () {
+    const name = document.getElementById('bkNewName').value.trim();
+    const slug = document.getElementById('bkNewSlug').value.trim();
+    if (!name || !slug) { toast('Name and slug are required', 'error'); return; }
+    b.disabled = true;
+    try {
+      await API.post('/bookings/calendars', {
+        name: name, slug: slug,
+        calendar_type: document.getElementById('bkNewType').value.trim() || 'generic'
+      });
+      const slotName = document.getElementById('bkNewSlot').value.trim();
+      if (slotName) {
+        try {
+          await API.post('/bookings/calendars/' + encodeURIComponent(slug) + '/slots',
+            { slot_name: slotName, total_slots: 10, default_duration_days: 1 });
+        } catch (se) { toast('Calendar created, but the slot type failed: ' + se.message, 'error'); }
+      }
+      closeModal(); toast('Calendar created', 'success'); await loadBookingsTab();
+    } catch (e) { toast('Could not create: ' + e.message, 'error'); b.disabled = false; }
+  });
+}
+
 const TAB_LOADERS = {
   // The Tracked Links panel registers a loader instead of loading from inside its renderer: the
   // renderer runs BEFORE its HTML is in the document, so an in-renderer load sees no #trackedLinksTable
@@ -2111,6 +2268,9 @@ const TAB_LOADERS = {
   // Same reason as the loaders above: the renderer runs before its HTML is in the document, so the
   // checklists load registers here and runs against a #ckContent that already exists.
   'checklists': async () => { await loadChecklistsTab(); },
+  // Same reason as the loaders above: the renderer runs before its HTML is in the document, so
+  // the bookings load registers here and runs against a #bkCalendars that already exists.
+  'bookings': async () => { await loadBookingsTab(); },
   // Lead Scoring panel: registers a loader for the same reason as the loaders above (its renderer
   // runs before its HTML is in the document, so an in-renderer load sees no #scoringRules).
   'lead-scoring': async () => { await loadScoringTab(); },
