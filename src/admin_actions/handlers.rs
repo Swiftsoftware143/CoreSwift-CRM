@@ -759,8 +759,25 @@ pub async fn list_all_tenants(
     use sqlx::Row;
     // id / created_at are cast to ::text on purpose (they are decoded as &str below), which is
     // why neither is a uuid/timestamptz decode: with the cast in place sqlx receives TEXT.
+    //
+    // The owner read (kanban t_25836872): it used to be a hard `u.role = 'owner'` filter, and
+    // `role` cannot be the whole vocabulary — the live row set is `owner`, `agency_admin`,
+    // `business_user`, `user` and `user_role` itself carries seven labels, so that filter named
+    // only 5 of the 16 live workspaces and 11 arrived at the operator's console with no owner at
+    // all. The roles that MEAN "this workspace's owner, or a platform operator" are the four
+    // `crate::auth::middleware::is_account_admin` lists, plus the two `_admin` labels this app's
+    // `user_role` enum carries; anything else falls back to the EARLIEST member, so a workspace is
+    // named whenever it has any user row at all. `u.created_at, u.id` make the pick deterministic
+    // (a workspace can hold several equally-ranked members).
+    //
+    // NULL keeps its meaning: a workspace with no user row (a portfolio / copy row) is genuinely
+    // unidentified, and the console says so rather than showing a bare dash.
+    //
+    // `role::text` is cast explicitly: the column is TEXT today (default `'user'::user_role`), and
+    // the cast keeps the literal list from ever being resolved against the enum, which would fail
+    // the WHOLE read rather than one row.
     let rows = sqlx::query(
-        r#"SELECT t.id::text, t.name, t.slug, (SELECT u.email FROM users u WHERE u.tenant_id = t.id AND u.role = 'owner' LIMIT 1) AS email, t.is_active, t.created_at::text as created_at FROM tenants t ORDER BY t.created_at DESC"#,
+        r#"SELECT t.id::text, t.name, t.slug, (SELECT u.email FROM users u WHERE u.tenant_id = t.id ORDER BY CASE WHEN u.role::text IN ('owner', 'account_owner', 'admin', 'agency_admin', 'company_admin', 'client_admin') THEN 0 ELSE 1 END, u.created_at ASC, u.id ASC LIMIT 1) AS owner_email, t.is_active, t.created_at::text as created_at FROM tenants t ORDER BY t.created_at DESC"#,
     )
     .fetch_all(&s.db)
     .await?;
@@ -785,6 +802,16 @@ pub async fn list_all_tenants(
                 );
             }
             let is_active: Option<bool> = is_active_raw.ok().flatten();
+            // ONE subquery answers both spellings: `email` is the field this endpoint has always
+            // carried (the console's Owner column and the tenants screen read it), and `owner_email`
+            // is the fleet-wide spelling FunnelSwift / missedcallrespondr / WorkflowSwift / ADASwift
+            // now use, so a single operator tool can read all the app lists. Same value, same
+            // Option<String>, so the two can never disagree (t_25836872).
+            let owner_email: Option<String> = r
+                .try_get::<Option<String>, _>("owner_email")
+                .map_err(|e| warn_decode("owner_email", &e))
+                .ok()
+                .flatten();
             json!({
                 "id": r.try_get::<&str,_>("id")
                     .map_err(|e| warn_decode("id", &e)).unwrap_or(""),
@@ -792,8 +819,8 @@ pub async fn list_all_tenants(
                     .map_err(|e| warn_decode("name", &e)).ok().flatten(),
                 "slug": r.try_get::<Option<String>,_>("slug")
                     .map_err(|e| warn_decode("slug", &e)).ok().flatten(),
-                "email": r.try_get::<Option<String>,_>("email")
-                    .map_err(|e| warn_decode("email", &e)).ok().flatten(),
+                "email": owner_email.clone(),
+                "owner_email": owner_email,
                 "is_active": is_active,
                 "created_at": r.try_get::<&str,_>("created_at")
                     .map_err(|e| warn_decode("created_at", &e)).unwrap_or(""),

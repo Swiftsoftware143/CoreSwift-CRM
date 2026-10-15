@@ -2066,6 +2066,35 @@ async function ckAdvance(instanceId, currentStage) {
 // POST /api/admin/tenants/bulk-delete, which answers PER ID — a row the backend refuses (the
 // workspace you are signed in as, a portfolio company) keeps its reason on screen instead of
 // vanishing behind a generic failure.
+//
+// The workspace's OWN owner, for this Tenants list (kanban t_25836872). The API answers the value
+// under BOTH `email` (the field this endpoint has always carried) and `owner_email` (the fleet-wide
+// spelling FunnelSwift / WorkflowSwift / missedcallrespondr / ADASwift now use, so one operator tool
+// reads all the lists). This cell makes the empty case HONEST instead of a bare dash: a workspace
+// with no user row reads "no user" — six of the sixteen live rows are portfolio/copy rows and are
+// genuinely unidentified, and inventing an owner for them would be worse than saying so.
+//
+// An owner address NO customer can hold is badged `probe`, in two arms, because the fleet's own
+// machine-minted probe domains are NOT reserved TLDs and would otherwise sit in the operator's list
+// looking like unrecognised signups — `probe-canary-a@swiftsoftware.dev` (the nightly tenancy canary)
+// did exactly that here:
+//   * the reserved TLDs (RFC 2606/6761: .invalid/.example/.test/.local, plus example.com/.net/.org);
+//   * the fleet's own probe/tooling domains (`swiftsoftware.dev`, `sw.dev`, `local.<app>`).
+// `swiftsoftware.com` is deliberately NOT listed: it is a real, routable domain and the operator's
+// own address lives there.
+const RESERVED_OWNER_RE = /@(?:[^@]*\.)?(?:invalid|example|test|local)$|@(?:[^@]*\.)?example\.(?:com|net|org)$/i;
+const FLEET_PROBE_OWNER_RE = /@(?:[^@]*\.)?(?:swiftsoftware\.(?:dev|local)|sw\.dev)$|@local\.(?:funnelswift|coreswift|adaswift|incentiveswift|workflowswift|missedcallrespondr|multidirectory)$/i;
+function isProbeOwner(addr) {
+  const a = String(addr || '');
+  return RESERVED_OWNER_RE.test(a) || FLEET_PROBE_OWNER_RE.test(a);
+}
+const tenantOwnerCell = (t) => {
+  const oe = String((t && (t.owner_email || t.email)) || '').trim();
+  if (!oe) return '<span style="color:var(--text-muted)">no user</span>';
+  return escapeHtml(oe) + (isProbeOwner(oe)
+    ? ' <span class="badge badge-warning" title="a reserved or fleet-probe address — a probe, not a customer">probe</span>'
+    : '');
+};
 async function loadTenantsTab() {
   const el = document.getElementById('tenantsTable');
   if (!el) return;
@@ -2084,7 +2113,7 @@ async function loadTenantsTab() {
     `<input type="checkbox" class="tn-chk" value="${escapeHtmlAttr(t.id || '')}">`,
     escapeHtml(t.name || '—'),
     `<code>${escapeHtml(t.slug || '—')}</code>`,
-    escapeHtml(t.email || '—'),
+    tenantOwnerCell(t),
     // `is_active` is NULLABLE server-side and travels as JSON null — "unknown" is reported as
     // unknown rather than dressed up as active (the same honesty `list_all_tenants` applies).
     t.is_active === false ? '<span class="badge badge-muted">inactive</span>'
