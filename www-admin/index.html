@@ -1293,9 +1293,18 @@ const TAB_RENDERERS = {
 
   'telnyx': () => placeholderPanel('Telnyx SMS/Voice', 'Connect your Telnyx account in the Integration Center to send SMS and make calls.', '📱'),
 
+  // Communications Log — wired to GET /api/comms/messages (src/communications/handlers.rs::list_messages,
+  // which reads `outbound_messages` for the caller's workspace). This tab WAS a string literal: a
+  // hardcoded "No communications yet" empty state with no loader and no request, so it showed the same
+  // thing whether the workspace had sent nothing or a hundred messages — the sibling `messages` tab
+  // (loadMessagesTab) rendered the real store while this one insisted it was empty. Measured
+  // 2026-10-15 on the live database: the operator's own workspace held 35 rows (channel `email`,
+  // statuses `sent`/`failed`), every one of them invisible on this screen. The renderer now only lays
+  // out the shell; everything on screen comes from the route.
   'comm-log': () => {
-    return pageHeader('Communications Log', 'History of all communications') +
-    card('Communication History', '<div class="empty-state"><div class="empty-icon">📜</div><h3>No communications yet</h3><p>Your communications log will appear here once you start sending messages.</p></div>');
+    return pageHeader('Communications Log', 'Every message this workspace has sent, newest first',
+      '<button class="btn btn-secondary btn-sm" onclick="loadCommLogTab()">\uD83D\uDD04 Reload</button>') +
+    card('Sent Messages', '<div id="commLogContent"><div class="loading-wrap"><div class="spinner"></div> Loading the communications log...</div></div>');
   },
 
   'tickets': () => {
@@ -2415,6 +2424,7 @@ const TAB_LOADERS = {
   'lead-scoring': async () => { await loadScoringTab(); },
   'rules': async () => { await loadRulesTab(); },
   'messages': async () => { await loadMessagesTab(); },
+  'comm-log': async () => { await loadCommLogTab(); },
   // Email Branding panel: registers a loader for the same reason as the loaders above — the renderer
   // runs before its HTML is in the document, so an in-renderer load would see no #brandPane.
   'email-branding': async () => { await loadBrandingTab(); },
@@ -4598,6 +4608,41 @@ async function loadMessagesTab(){
     el.innerHTML=rows.length?('<div class="config-list">'+rows.join('')+'</div>'):'<p style="color:var(--text-secondary)">No messages yet. Use &ldquo;Compose&rdquo;.</p>';
   } catch(e){
     el.innerHTML='<p style="color:var(--text-secondary)">Messages unavailable: '+escapeHtml(String(e.message||e))+'</p>';
+  }
+}
+// Communications Log (TAB_LOADERS['comm-log']). GET /api/comms/messages answers
+// {"messages":[...],"total":N,"page":..,"per_page":..} for the caller's OWN workspace
+// (src/communications/handlers.rs::list_messages binds `WHERE tenant_id = claims.aid`), so this screen
+// shows exactly what the store holds and nothing else. `total` — not the visible page — decides the
+// empty state, and a failed request says so instead of rendering as "nothing sent", which is how a
+// log screen stops being able to lie in either direction.
+async function loadCommLogTab(){
+  const el=document.getElementById('commLogContent');
+  if(!el) return;
+  try {
+    const r=await API.get('/comms/messages?per_page=100');
+    const arr=(r&&Array.isArray(r.messages))?r.messages:[];
+    const total=(r&&typeof r.total==='number')?r.total:arr.length;
+    if(!total){
+      el.innerHTML='<div class="empty-state"><div class="empty-icon">\uD83D\uDCDC</div><h3>No messages yet</h3><p>This workspace has not sent anything. The log fills the moment the first message is stored.</p></div>';
+      return;
+    }
+    const rows=arr.map(m=>{
+      const d=escapeHtml(String(m.created_at||'').replace('T',' ').slice(0,16));
+      const ch=escapeHtml(String(m.channel||'email'));
+      const to=escapeHtml(String(m.to_address||m.recipient||''));
+      const sub=escapeHtml(String(m.subject||'(no subject)'));
+      const st=String(m.status||'');
+      const err=m.error_message?('<div class="config-desc">'+escapeHtml(String(m.error_message))+'</div>'):'';
+      const badge=(st==='failed')?'<span class="badge badge-error">failed</span>'
+        :(st==='sent')?'<span class="badge badge-success">sent</span>'
+        :'<span class="badge badge-muted">'+escapeHtml(st||'unknown')+'</span>';
+      return '<tr><td>'+d+'</td><td>'+ch+'</td><td>'+to+'</td><td>'+sub+err+'</td><td>'+badge+'</td></tr>';
+    });
+    el.innerHTML='<p style="color:var(--text-secondary);margin:0 0 8px">Showing '+arr.length+' of '+total+' recorded message'+(total===1?'':'s')+'</p>'+
+      '<div class="table-wrap"><table><thead><tr><th>Date (UTC)</th><th>Channel</th><th>Recipient</th><th>Subject</th><th>Status</th></tr></thead><tbody>'+rows.join('')+'</tbody></table></div>';
+  } catch(e){
+    el.innerHTML='<p style="color:var(--error)">Could not load the communications log: '+escapeHtml(String((e&&e.message)||e))+'</p>';
   }
 }
 function showAddTicketModal(){ showModal('New Ticket', '<div class="form-group"><label>Subject</label><input type="text" id="newTicketSubject"></div><div class="form-group"><label>Description</label><textarea rows="4" id="newTicketDesc"></textarea></div><div class="form-group"><label>Priority</label><select id="newTicketPriority"><option value="low">Low</option><option value="medium" selected>Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="newTicketCreate" onclick="createTicket()">Create</button>'); }
