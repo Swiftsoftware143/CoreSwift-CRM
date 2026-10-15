@@ -1280,15 +1280,18 @@ const TAB_RENDERERS = {
     '</div>';
   },
 
+  // Notifications — the REAL per-account feed. This screen used to be four hand-written preference
+  // toggles plus a "Save Settings" button that carried no handler at all: nothing was read, nothing
+  // was written, and the same four switches (one of them pre-ticked "Email Opened") were shown to
+  // every operator whatever their account held. The app has a real per-user store — the
+  // `notifications` table behind GET /api/notifications, /unread-count, /:id/read and /read-all, the
+  // same four routes the TENANT console already drives — so this screen now renders that feed. There
+  // is no preference store anywhere in the app, so no preference toggles are invented here.
   'notifications': () => {
-    return pageHeader('Notifications', 'Platform notifications and alerts') +
-    card('Notification Settings', '' +
-      '<div class="config-list">' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">New Contact Added</div><div class="config-desc">Notify when a new contact is created</div></div><label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label></div>' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">Deal Stage Changed</div><div class="config-desc">Notify when a deal moves between stages</div></div><label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label></div>' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">Email Opened</div><div class="config-desc">Notify when a sent email is opened</div></div><label class="toggle"><input type="checkbox"><span class="toggle-slider"></span></label></div>' +
-        '<div class="config-item"><div class="config-info"><div class="config-label">Task Due</div><div class="config-desc">Remind when tasks are approaching due date</div></div><label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label></div>' +
-      '</div>', '<button class="btn btn-primary btn-sm">Save Settings</button>');
+    return pageHeader('Notifications', 'Everything this account has been told, newest first',
+      '<button class="btn btn-secondary btn-sm" onclick="loadNotifFeedTab()">\uD83D\uDD04 Reload</button> ' +
+      '<button class="btn btn-primary btn-sm" onclick="markAllNotifRead()">Mark all read</button>') +
+    card('Inbox', '<div id="notifFeed"><div class="loading-wrap"><div class="spinner"></div> Loading notifications...</div></div>');
   },
 
   'telnyx': () => placeholderPanel('Telnyx SMS/Voice', 'Connect your Telnyx account in the Integration Center to send SMS and make calls.', '📱'),
@@ -2425,6 +2428,7 @@ const TAB_LOADERS = {
   'rules': async () => { await loadRulesTab(); },
   'messages': async () => { await loadMessagesTab(); },
   'comm-log': async () => { await loadCommLogTab(); },
+  'notifications': async () => { await loadNotifFeedTab(); },
   // Email Branding panel: registers a loader for the same reason as the loaders above — the renderer
   // runs before its HTML is in the document, so an in-renderer load would see no #brandPane.
   'email-branding': async () => { await loadBrandingTab(); },
@@ -4644,6 +4648,56 @@ async function loadCommLogTab(){
   } catch(e){
     el.innerHTML='<p style="color:var(--error)">Could not load the communications log: '+escapeHtml(String((e&&e.message)||e))+'</p>';
   }
+}
+// Notifications (TAB_LOADERS['notifications']). GET /api/notifications answers
+// {"notifications":[{"id","message","read","created_at"}],"total":N,...} scoped to BOTH the caller's
+// workspace and the caller's own user id (src/notifications/handlers.rs::list), and
+// GET /api/notifications/unread-count answers {"unread_count":N}. Both routes existed with no caller
+// in this console; the tenant console has driven them for a while. `read === false` is the unread
+// signal the API serialises, and every write here is one of the app's own two routes — no optimistic
+// state, the list is re-read after each mark.
+async function loadNotifFeedTab(){
+  const el=document.getElementById('notifFeed');
+  if(!el) return;
+  try {
+    const d=await API.get('/notifications?per_page=50');
+    const items=(d&&Array.isArray(d.notifications))?d.notifications:[];
+    let count='';
+    try {
+      const c=await API.get('/notifications/unread-count');
+      const n=(c&&typeof c.unread_count==='number')?c.unread_count:0;
+      count='<p style="color:var(--text-secondary);margin:0 0 8px">'+(n?(n+' unread · '):'Nothing unread · ')+items.length+' shown</p>';
+    } catch(_) {}
+    if(!items.length){
+      el.innerHTML=count+'<div class="empty-state"><div class="empty-icon">\uD83D\uDD14</div><h3>No notifications</h3><p>Nothing has been recorded for this account yet. This is the real feed — it fills when the app notifies you.</p></div>';
+      return;
+    }
+    const rows=items.map(n=>{
+      const unread=(n.read===false);
+      const msg=escapeHtml(String(n.message||'(notification)'));
+      const when=n.created_at?escapeHtml(String(n.created_at).replace('T',' ').slice(0,16)):'';
+      return '<div class="config-item"'+(unread?' style="cursor:pointer" onclick="markNotifRead(\''+n.id+'\')"':'')+'>'+
+        '<div class="config-info"><div class="config-label">'+msg+(unread?' <span class="badge badge-primary">new</span>':'')+'</div>'+
+        (when?'<div class="config-desc">'+when+'</div>':'')+'</div>'+
+        (unread?'<span class="config-desc">Mark read</span>':'<span class="badge badge-muted">read</span>')+
+      '</div>';
+    });
+    el.innerHTML=count+'<div class="config-list">'+rows.join('')+'</div>';
+  } catch(e){
+    el.innerHTML='<p style="color:var(--error)">Could not load notifications: '+escapeHtml(String((e&&e.message)||e))+'</p>';
+  }
+}
+async function markNotifRead(id){
+  try { await API.post('/notifications/'+id+'/read'); }
+  catch(e){ toast(String((e&&e.message)||e),'error'); return; }
+  await loadNotifFeedTab();
+}
+async function markAllNotifRead(){
+  try {
+    const r=await API.post('/notifications/read-all');
+    toast((r&&r.message)||'All marked as read','success');
+  } catch(e){ toast(String((e&&e.message)||e),'error'); return; }
+  await loadNotifFeedTab();
 }
 function showAddTicketModal(){ showModal('New Ticket', '<div class="form-group"><label>Subject</label><input type="text" id="newTicketSubject"></div><div class="form-group"><label>Description</label><textarea rows="4" id="newTicketDesc"></textarea></div><div class="form-group"><label>Priority</label><select id="newTicketPriority"><option value="low">Low</option><option value="medium" selected>Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="newTicketCreate" onclick="createTicket()">Create</button>'); }
 // Wired to POST /api/tickets (src/tickets/handlers.rs::create_ticket). This control used to close
