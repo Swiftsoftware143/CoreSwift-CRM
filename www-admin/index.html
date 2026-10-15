@@ -1209,15 +1209,19 @@ const TAB_RENDERERS = {
   },
 
   'analytics': () => {
-    return pageHeader('Analytics', 'Campaign and pipeline performance metrics') +
-    '<div class="stats-grid">' +
-      '<div class="stat-card"><div class="stat-icon">📧</div><div class="stat-value">--</div><div class="stat-label">Emails Sent</div></div>' +
-      '<div class="stat-card"><div class="stat-icon">👆</div><div class="stat-value">--</div><div class="stat-label">Open Rate</div></div>' +
-      '<div class="stat-card"><div class="stat-icon">🖱️</div><div class="stat-value">--</div><div class="stat-label">Click Rate</div></div>' +
-      '<div class="stat-card"><div class="stat-icon">💰</div><div class="stat-value">--</div><div class="stat-label">Conversion Rate</div></div>' +
-    '</div>' +
-    card('Campaign Performance', '<p style="color:var(--text-secondary)">Connect your email provider in the Integration Center to populate analytics data.</p>',
-    '<button class="btn btn-secondary btn-sm" onclick="switchTab(&#39;integrations&#39;)">🔌 Open Integration Center</button>');
+    // The panel is a CONTAINER; every number comes from TAB_LOADERS['analytics'] below.
+    //
+    // This renderer used to be four literal tiles reading "--" above the sentence "Connect your email
+    // provider in the Integration Center to populate analytics data." Both halves were false. (1) The
+    // workspace's provider was connected and had already sent messages — the Communications Log next
+    // door renders 35 of them from GET /api/comms/messages. (2) The data was never provider-side to
+    // begin with: this app has served four real analytics routes all along
+    // (`GET /api/analytics/{contacts,pipelines,scores,tags}` — src/analytics/mod.rs), each scoped to
+    // the caller's own workspace, and NOTHING in this screen ever called one of them. The tenant
+    // console (www-app/) has read those four routes for months; this is the same console behind a
+    // different mount, so the admin shell now reads them too.
+    return pageHeader('Analytics', 'Live counts from the analytics routes this app serves') +
+      '<div id="anContent"><div class="loading-wrap"><div class="spinner"></div> Loading analytics...</div></div>';
   },
 
   'rules': () => {
@@ -2428,6 +2432,10 @@ const TAB_LOADERS = {
   'rules': async () => { await loadRulesTab(); },
   'messages': async () => { await loadMessagesTab(); },
   'comm-log': async () => { await loadCommLogTab(); },
+  // Analytics panel: the renderer paints the container and this loader fills it with the four
+  // /api/analytics/* answers (same reason as the loaders above — the renderer runs before its HTML
+  // is in the document, so an in-renderer load would see no #anContent).
+  'analytics': async () => { await loadAnalyticsTab(); },
   'notifications': async () => { await loadNotifFeedTab(); },
   // Email Branding panel: registers a loader for the same reason as the loaders above — the renderer
   // runs before its HTML is in the document, so an in-renderer load would see no #brandPane.
@@ -4648,6 +4656,50 @@ async function loadCommLogTab(){
   } catch(e){
     el.innerHTML='<p style="color:var(--error)">Could not load the communications log: '+escapeHtml(String((e&&e.message)||e))+'</p>';
   }
+}
+// Analytics (TAB_LOADERS['analytics']). Four routes, every one scoped by the app itself to the
+// caller's OWN workspace (src/analytics/handlers.rs binds each query to `claims.aid`) — so this
+// screen can only ever show what this workspace owns:
+//   GET /api/analytics/contacts  -> {"total_contacts","contacts_with_opportunities","contacts_with_tags","tagged_percentage"}
+//   GET /api/analytics/pipelines -> {"pipelines":[{"pipeline_name","total","open","won","lost"}]}
+//   GET /api/analytics/scores    -> {"distribution":[["<category>",<count>]],"total"}
+//   GET /api/analytics/tags      -> {"tags":[[id,name,category,assignments]]}
+// A tile renders '—' when its route does not answer (never a fabricated 0), and a total outage says
+// so instead of painting an empty workspace — the convention the dashboard loader above sets.
+async function loadAnalyticsTab(){
+  const el=document.getElementById('anContent');
+  if(!el) return;
+  const src=async(p)=>{ try{ return await API.get(p); }catch(_){ return null; } };
+  const n=(v)=>(typeof v==='number'&&isFinite(v))?v:'\u2014';
+  const c=await src('/analytics/contacts');
+  const pipes=famList(await src('/analytics/pipelines'),'pipelines');
+  const scores=famList(await src('/analytics/scores'),'distribution');
+  const tags=famList(await src('/analytics/tags'),'tags');
+  if(!c&&!pipes.length&&!scores.length&&!tags.length){
+    el.innerHTML='<p style="color:var(--error)">The analytics routes did not answer, so nothing is shown here. Reload to try again.</p>';
+    return;
+  }
+  const d=c||{};
+  let h='<div class="stats-grid">'+
+    '<div class="stat-card accent"><div class="stat-icon">\uD83D\uDC65</div><div class="stat-value">'+n(d.total_contacts)+'</div><div class="stat-label">Contacts</div></div>'+
+    '<div class="stat-card"><div class="stat-icon">\uD83C\uDFAF</div><div class="stat-value">'+n(d.contacts_with_opportunities)+'</div><div class="stat-label">With deals</div></div>'+
+    '<div class="stat-card"><div class="stat-icon">\uD83C\uDFF7\uFE0F</div><div class="stat-value">'+n(d.contacts_with_tags)+'</div><div class="stat-label">Tagged</div></div>'+
+    '<div class="stat-card"><div class="stat-icon">\uD83D\uDCC8</div><div class="stat-value">'+n(d.tagged_percentage)+'%</div><div class="stat-label">Tag coverage</div></div>'+
+    '</div>';
+  h+='<h3 style="margin:18px 0 8px">Pipeline performance</h3>'+
+    dataTable(['Pipeline','Total','Open','Won','Lost'],
+      pipes.map(p=>[fh(p.pipeline_name),n(p.total),n(p.open),n(p.won),n(p.lost)]),
+      'No pipelines to analyse yet.');
+  h+='<h3 style="margin:18px 0 8px">Score distribution</h3>'+
+    dataTable(['Category','Contacts'],
+      scores.map(s=>[fh(Array.isArray(s)?s[0]:(s&&s.category)),n(Array.isArray(s)?s[1]:(s&&s.count))]),
+      'No scored contacts yet.');
+  h+='<h3 style="margin:18px 0 8px">Tag usage</h3>'+
+    dataTable(['Tag','Category','Assignments'],
+      tags.map(t=>[fh(Array.isArray(t)?t[1]:(t&&t.name)),fh(Array.isArray(t)?t[2]:(t&&t.category)),
+                   n(Array.isArray(t)?t[3]:(t&&t.assignments))]),
+      'No tag assignments yet.');
+  el.innerHTML=h;
 }
 // Notifications (TAB_LOADERS['notifications']). GET /api/notifications answers
 // {"notifications":[{"id","message","read","created_at"}],"total":N,...} scoped to BOTH the caller's

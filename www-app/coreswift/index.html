@@ -5021,8 +5021,8 @@ async function loadAnalyticsTab() {
       'No pipelines to analyse yet.'), '');
     h += '<br>' + card('Score distribution', dataTable(['Category', 'Contacts'],
       scores.map(function (s) { return [fh(s[0]), s[1]]; }), 'No scored contacts yet.'), '');
-    h += '<br>' + card('Tag usage', dataTable(['Tag', 'Assignments'],
-      tags.map(function (t) { return [fh(t[1]), t[2]]; }), 'No tag assignments yet.'), '');
+    h += '<br>' + card('Tag usage', dataTable(['Tag', 'Category', 'Assignments'],
+      tags.map(function (t) { return [fh(t[1]), fh(t[2]), (typeof t[3] === 'number' ? t[3] : '—')]; }), 'No tag assignments yet.'), '');
     el.innerHTML = h;
   } catch (e) { famErr(el, 'Analytics', e); }
 }
