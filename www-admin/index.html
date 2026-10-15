@@ -825,6 +825,9 @@ document.addEventListener('click', e => {
 const MENU = [
   { id:'dashboard', icon:'📊', label:'Dashboard' },
   { id:'contacts', icon:'👥', label:'Contacts' },
+  // Pipeline cleanliness: GET /api/account-match/duplicates shipped with NO console screen, so
+  // the only way to see two records for one person was psql. This is the read-only report it feeds.
+  { id:'duplicates', icon:'🧭', label:'Possible Duplicates' },
   { id:'companies', icon:'🏢', label:'Companies' },
   { type:'group', icon:'💰', label:'Sales', children:[
     { id:'pipelines', icon:'📈', label:'Pipelines & Deals' }
@@ -1181,6 +1184,27 @@ const TAB_RENDERERS = {
       '<button class="btn btn-primary btn-sm" onclick="showAddContactModal()">+ Add Contact</button>') +
     '<div class="search-bar"><input type="text" placeholder="Search contacts..." oninput="filterContacts(this.value)"></div>' +
     '<div id="contactsTable"><div class="loading-wrap"><div class="spinner"></div> Loading contacts...</div></div>';
+  },
+
+  // Possible Duplicates — the console screen for GET /api/account-match/duplicates
+  // (src/account_match/handlers.rs::duplicates). Read-only: it names the rows to look at.
+  'duplicates': () => {
+    return pageHeader('Possible Duplicates',
+      'Contacts in this workspace that share a phone number or a full name \u2014 the same person captured twice. Nothing is merged here; open a record from Contacts to merge or retire the extra copy.') +
+    '<div id="dupReport"><div class="loading-wrap"><div class="spinner"></div> Checking for duplicates...</div></div>' +
+    // The OTHER route of the same module — POST /api/account-match/resolve — is what every
+    // capture path uses to decide whether an identity is new. Give the operator the same answer
+    // before they add a record by hand, instead of after (the duplicate already exists then).
+    '<div class="card"><div class="card-header">Is this person already in the CRM?</div><div class="card-body">' +
+    '<p style="color:var(--text-secondary)">Type any one of these and press Find. The lookup runs the same cascade the capture paths use: email first, then phone, then first + last name with the company.</p>' +
+    '<div class="form-group"><label>Email</label><input type="email" id="dupMatchEmail" placeholder="person@example.com"></div>' +
+    '<div class="form-group"><label>Phone</label><input type="text" id="dupMatchPhone" placeholder="+1 305 555 0100"></div>' +
+    '<div class="form-group"><label>First name</label><input type="text" id="dupMatchFirst"></div>' +
+    '<div class="form-group"><label>Last name</label><input type="text" id="dupMatchLast"></div>' +
+    '<div class="form-group"><label>Company</label><input type="text" id="dupMatchCompany"></div>' +
+    '<button class="btn btn-primary btn-sm" id="dupMatchBtn" data-ops="account-match-resolve" onclick="runAccountMatch()">Find existing contact</button>' +
+    '<div id="dupMatchResult" style="margin-top:12px"></div>' +
+    '</div></div>';
   },
 
   'companies': () => {
@@ -2389,6 +2413,69 @@ function wgDeleteWidget(id) {
     .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
 }
 
+// POST /api/account-match/resolve (src/account_match/handlers.rs::resolve). Answers
+// {matched, reason: email|phone|name_company|none, confidence, contact?, company?}. A body with
+// no identifier is a 422 there and is caught here FIRST, so the panel never sends an empty ask.
+async function runAccountMatch() {
+  const out = document.getElementById('dupMatchResult');
+  if (!out) return;
+  const v = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const email = v('dupMatchEmail'), phone = v('dupMatchPhone');
+  const first = v('dupMatchFirst'), last = v('dupMatchLast'), company = v('dupMatchCompany');
+  if (!email && !phone && !(first && last)) {
+    out.innerHTML = '<p style="color:var(--text-secondary)">Give at least an email, a phone number, or a first and last name.</p>';
+    return;
+  }
+  const body = {};
+  if (email) body.email = email;
+  if (phone) body.phone = phone;
+  if (first) body.first_name = first;
+  if (last) body.last_name = last;
+  if (company) body.company = company;
+  const btn = document.getElementById('dupMatchBtn');
+  if (btn) btn.disabled = true;
+  out.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Checking...</div>';
+  try {
+    const res = await fetch('/api/account-match/resolve', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, STATE.token ? { 'Authorization': 'Bearer ' + STATE.token } : {}),
+      body: JSON.stringify(body)
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      out.innerHTML = '<p style="color:var(--text-secondary)">' + escapeHtml(j.message || ('HTTP ' + res.status)) + '</p>';
+      return;
+    }
+    // The answering arm comes from `reason`, but on a non-match reason is always "none" — so the
+    // no-match sentence names the arms THIS panel actually tried, not the engine's empty verdict.
+    const armWord = j.reason === 'email' ? 'the email address' : j.reason === 'phone' ? 'the phone number' : j.reason === 'name_company' ? 'the name and company' : 'these details';
+    const tried = [];
+    if (email) tried.push('the email address');
+    if (phone) tried.push('the phone number');
+    if (first && last) tried.push('the name and company');
+    const triedWord = tried.join(' or ') || 'these details';
+    const c = j.contact;
+    if (c) {
+      const nm = escapeHtml(((c.first_name || '') + ' ' + (c.last_name || '')).trim() || '(no name)');
+      const em = c.email ? ' &lt;' + escapeHtml(c.email) + '&gt;' : '';
+      const ph = c.phone ? ' \u00b7 ' + escapeHtml(c.phone) : '';
+      out.innerHTML = '<div class="card"><div class="card-body"><p><strong>Already in the CRM.</strong> This is ' + nm + em + ph +
+        ' \u2014 matched on ' + armWord + ' (confidence ' + Math.round((j.confidence || 0) * 100) + '%).</p>' +
+        '<button class="btn btn-ghost btn-xs" onclick="editContact(\'' + c.id + '\')">Open in Contacts</button>' +
+        (j.company ? '<p style="color:var(--text-secondary)">Company on file: ' + escapeHtml(j.company.name) + '</p>' : '') +
+        '</div></div>';
+    } else {
+      out.innerHTML = '<div class="card"><div class="card-body"><p><strong>No match.</strong> Nothing in this workspace matches on ' + triedWord + ' \u2014 this looks like a new person.</p>' +
+        (j.company ? '<p style="color:var(--text-secondary)">Known company: ' + escapeHtml(j.company.name) + '</p>' : '') +
+        '</div></div>';
+    }
+  } catch (e) {
+    out.innerHTML = '<p style="color:var(--text-secondary)">Lookup failed: ' + escapeHtml(String(e.message || e)) + '</p>';
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 const TAB_LOADERS = {
   // Same rule as every loader below: the renderer runs before its HTML is in the document, so the
   // audit load registers here and runs against an #auditContent that already exists.
@@ -2524,6 +2611,65 @@ const TAB_LOADERS = {
       );
     } catch(e) {
       contactsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Contacts endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    }
+  },
+
+  // The duplicate report. Fetched with a raw fetch (not API.call) so a 402 keeps the BACKEND's
+  // own sentence — 'Account matching is not available on your current plan' — on the panel
+  // instead of collapsing into the generic 'Payment required' toast.
+  'duplicates': async () => {
+    const el = document.getElementById('dupReport');
+    if (!el) return;
+    try {
+      const res = await fetch('/api/account-match/duplicates?limit=100', {
+        headers: STATE.token ? { 'Authorization': 'Bearer ' + STATE.token } : {}
+      });
+      if (res.status === 402) {
+        const j = await res.json().catch(() => ({}));
+        el.innerHTML = '<div class="card"><div class="card-body">' +
+          '<p style="color:var(--text-secondary)">' + escapeHtml(j.message || 'Account matching is not available on your current plan. Upgrade to access it.') + '</p>' +
+          '<button class="btn btn-secondary btn-sm" onclick="openUpgradeModal()">Compare Plans</button>' +
+          '</div></div>';
+        return;
+      }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const groups = Array.isArray(data.groups) ? data.groups : [];
+      if (!groups.length) {
+        el.innerHTML = '<div class="card"><div class="card-body"><div class="empty-state">' +
+          '<div class="empty-icon">\u2728</div><h3>No duplicates found</h3>' +
+          '<p>Every contact in this workspace has its own phone number and name.</p></div></div></div>';
+        return;
+      }
+      // Names for the ids: one read of the workspace's own contacts, keyed by id.
+      const byId = {};
+      try {
+        const contacts = famList(await API.get('/contacts'), 'contacts');
+        if (Array.isArray(contacts)) contacts.forEach(c => { byId[c.id] = c; });
+      } catch (e) { /* ids still render below */ }
+      const rows = groups.map(g => {
+        const members = (g.contact_ids || []).map(id => {
+          const c = byId[id];
+          const nm = c ? (c.name || c.full_name || ((c.first_name || '') + ' ' + (c.last_name || '')).trim()) : '';
+          const em = (c && c.email) ? ' &lt;' + escapeHtml(c.email) + '&gt;' : '';
+          const ph = (c && c.phone) ? ' \u00b7 ' + escapeHtml(c.phone) : '';
+          const label = nm ? escapeHtml(nm) + em + ph : '<code>' + escapeHtml(id) + '</code>';
+          return '<div style="padding:2px 0">' + label + '</div>';
+        }).join('');
+        return [
+          g.kind === 'phone' ? 'Same phone number' : 'Same name',
+          '<code>' + escapeHtml(g.key) + '</code>',
+          String(g.count),
+          members
+        ];
+      });
+      el.innerHTML = '<div class="card"><div class="card-body"><strong>' + data.total_groups + '</strong> ' +
+        (data.total_groups === 1 ? 'group' : 'groups') + ' \u00b7 <strong>' + data.contacts_in_groups + '</strong> ' +
+        (data.contacts_in_groups === 1 ? 'contact looks' : 'contacts look') +
+        ' like duplicates of each other.</div></div>' +
+        dataTable(['Looks like','Shared value','Records','Contacts'], rows);
+    } catch (e) {
+      el.innerHTML = '<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Duplicate report unavailable: ' + escapeHtml(String(e.message || e)) + '</p></div></div>';
     }
   },
 
@@ -5262,6 +5408,7 @@ async function saveProvisioning() {
 window.appGuidePages = {
   dashboard: { title: 'Dashboard', desc: 'Your CRM at a glance — contacts, companies, deals and activity for this workspace.', actions: ['Add contacts from the Contacts tab', 'Work deals in Pipelines & Deals', 'Watch new leads arrive in Contacts'] },
   contacts: { title: 'Contacts', desc: 'Every person in your CRM, with the tags and lists they belong to.', actions: ['+ Add Contact to create one', 'Search to filter the list', 'Open a contact to see its timeline'] },
+  duplicates: { title: 'Possible Duplicates', desc: 'Contacts that share a phone number or a full name \u2014 the same person captured twice. Read-only: nothing is merged here.', actions: ['Open a record from Contacts to merge or retire the extra copy', 'Fix the capture source so the duplicate stops being created', 'Is this person already here? Use the lookup on the same screen before adding a record'] },
   companies: { title: 'Companies', desc: 'The organisations your contacts belong to.', actions: ['Add a company and attach contacts to it'] },
   pipelines: { title: 'Pipelines & Deals', desc: 'Your sales stages and the deals moving through them.', actions: ['Add a deal to a stage', 'Drag/advance a deal as it progresses'] },
   campaigns: { title: 'Campaigns', desc: 'Email campaigns sent to your lists, with their send status.', actions: ['Create a campaign and choose a list', 'Send or schedule it'] },
