@@ -153,6 +153,46 @@ pub async fn handle_tag_provision(
         ));
     }
 
+    // 3b. The PERSON already holds an account (kanban t_f536aa35). The arm above only knows
+    // `contacts`, and an account holder is not a contact row — so a lead who already runs a
+    // workspace of their own still minted a SECOND, userless workspace here. Measured live
+    // 2026-08-08 20:45-20:46: three of them (`FS-ZaarHub`, `FS-Giraudy`, `FS-SwiftImpact`, slug =
+    // the minted uuid, 1 contact each, no `tenant_plans` row) for leads whose real workspaces
+    // (`zaarhub`, `giraudy-capital`, `swiftimpact-solutions`) were created with their owner user
+    // minutes LATER — so nobody could ever sign in to the copies.
+    //
+    // `users.email` is GLOBALLY unique in this schema and `login` resolves an address to exactly one
+    // user, so a user row for this address means the person is already an account holder: answer the
+    // SAME `already_exists` contract the contact arm answers and name THEIR workspace, instead of
+    // minting a copy. No rows are written on this path (the contact arm's contract).
+    let existing_holder: Option<(Uuid, Uuid)> = sqlx::query_as(
+        r#"SELECT u.tenant_id, u.id
+           FROM users u
+           WHERE LOWER(u.email) = $1
+           ORDER BY u.created_at
+           LIMIT 1"#,
+    )
+    .bind(&lookup_email)
+    .fetch_optional(&s.db)
+    .await?;
+
+    if let Some((holder_tenant_id, holder_user_id)) = existing_holder {
+        tracing::info!(
+            "tag_provision: email already holds an account user={} tenant={} — no workspace minted",
+            holder_user_id,
+            holder_tenant_id
+        );
+        return Ok((
+            axum::http::StatusCode::OK,
+            Json(json!({
+                "status": "already_exists",
+                "reason": "user_exists",
+                "user_id": holder_user_id.to_string(),
+                "tenant_id": holder_tenant_id.to_string(),
+            })),
+        ));
+    }
+
     // 4. Create a new tenant for this provisioned contact
     let tenant_id = Uuid::new_v4();
     let tenant_name = if !company_name.is_empty() {
