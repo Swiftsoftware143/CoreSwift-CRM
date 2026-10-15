@@ -4671,6 +4671,7 @@ async function loadAnalyticsTab(){
   if(!el) return;
   const src=async(p)=>{ try{ return await API.get(p); }catch(_){ return null; } };
   const n=(v)=>(typeof v==='number'&&isFinite(v))?v:'\u2014';
+  const pct=(v)=>(typeof v==='number'&&isFinite(v))?(v+'%'):'\u2014';
   const c=await src('/analytics/contacts');
   const pipes=famList(await src('/analytics/pipelines'),'pipelines');
   const scores=famList(await src('/analytics/scores'),'distribution');
@@ -4684,7 +4685,7 @@ async function loadAnalyticsTab(){
     '<div class="stat-card accent"><div class="stat-icon">\uD83D\uDC65</div><div class="stat-value">'+n(d.total_contacts)+'</div><div class="stat-label">Contacts</div></div>'+
     '<div class="stat-card"><div class="stat-icon">\uD83C\uDFAF</div><div class="stat-value">'+n(d.contacts_with_opportunities)+'</div><div class="stat-label">With deals</div></div>'+
     '<div class="stat-card"><div class="stat-icon">\uD83C\uDFF7\uFE0F</div><div class="stat-value">'+n(d.contacts_with_tags)+'</div><div class="stat-label">Tagged</div></div>'+
-    '<div class="stat-card"><div class="stat-icon">\uD83D\uDCC8</div><div class="stat-value">'+n(d.tagged_percentage)+'%</div><div class="stat-label">Tag coverage</div></div>'+
+    '<div class="stat-card"><div class="stat-icon">\uD83D\uDCC8</div><div class="stat-value">'+pct(d.tagged_percentage)+'</div><div class="stat-label">Tag coverage</div></div>'+
     '</div>';
   h+='<h3 style="margin:18px 0 8px">Pipeline performance</h3>'+
     dataTable(['Pipeline','Total','Open','Won','Lost'],
