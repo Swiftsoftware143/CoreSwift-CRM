@@ -213,6 +213,13 @@
  details p { margin-top: 12px; color: var(--text-muted); font-size: 0.95rem; }
 
  footer { border-top: 1px solid var(--border-color); padding: 40px 0; text-align: center; color: var(--text-muted); font-size: 0.875rem; margin-top: 80px; }
+ /* The legal row: the same reachable policy links every sibling marketing site carries. Before this,
+    CoreSwift's ONLY legal links lived inside the cookie-consent banner text, and the served
+    /refunds.html — a real paid-plan Refund & Cancellation Policy that /terms.html refers to — was
+    reachable from NOTHING: not the footer, not /terms.html, not /privacy.html, not the sitemap. */
+ .legal-links { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; margin-top: 16px; }
+ .legal-links a { color: var(--text-muted); text-decoration: none; font-size: 0.8125rem; }
+ .legal-links a:hover { color: var(--accent-blue); text-decoration: underline; }
 
  @media (max-width: 768px) {
  h1 { font-size: 2rem; }
@@ -474,6 +481,11 @@
  <footer>
   <div class="container">
    <p>&copy; 2026 CoreSwift CRM / SwiftSoftware. All rights reserved.</p>
+   <nav class="legal-links" aria-label="Legal">
+    <a href="/privacy.html">Privacy Policy</a>
+    <a href="/terms.html">Terms of Service</a>
+    <a href="/refunds.html">Refund &amp; Cancellation Policy</a>
+   </nav>
   </div>
  </footer>
 
