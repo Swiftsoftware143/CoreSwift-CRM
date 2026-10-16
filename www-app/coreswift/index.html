@@ -369,6 +369,34 @@ const STATE = {
   integrations: {}
 };
 
+// A module the workspace's plan does not include must not offer its own write action: the button
+// can only answer 402. Measured 2026-10-16 in Chromium (Free workspace, app.coreswiftcrm.com): the
+// Round Robin pane printed the lock AND its "+ New Team" opened a working Create form, whose POST
+// was then refused — the customer filled in a form that could never save.
+//
+// Called from BOTH 402 doors: `API.call` and the Webhooks loader's own fetch (`err.locked`), which
+// predates API.call and does not go through it. Gated on the pane body actually carrying the
+// server's sentence, so a 402 raised by a single TILE (the dashboard's /tickets/stats) never hides
+// a pane's unrelated actions. The observer re-applies the hide for a bounded window because a pane
+// can render its lock and then re-render its own header, which would put the button straight back.
+function hideLockedPaneActions(planMessage) {
+  const panels = document.getElementById('tabPanels');
+  if (!panels || !planMessage) return;
+  const hide = function () {
+    if ((panels.innerText || '').indexOf(planMessage) === -1) return;
+    panels.querySelectorAll('.page-actions .btn').forEach(function (b) {
+      // A control explicitly marked as navigation stays usable: the Support Tickets pane's
+      // "My Support" opens the customer portal, whose intake is deliberately NOT plan-gated.
+      if (b.hasAttribute('data-keep-on-lock')) return;
+      if (b.style.display !== 'none') b.style.display = 'none';
+    });
+  };
+  hide();
+  const obs = new MutationObserver(hide);
+  obs.observe(panels, { childList: true, subtree: true, characterData: true });
+  setTimeout(function () { obs.disconnect(); }, 8000);
+}
+
 const API = {
   async call(method, path, body) {
     const headers = { 'Content-Type': 'application/json' };
@@ -396,6 +424,7 @@ const API = {
       const err = new Error(planMessage);
       err.planGate = true;
       err.planMessage = planMessage;
+      hideLockedPaneActions(planMessage);
       throw err;
     }
     if (!res.ok) {
@@ -1045,7 +1074,9 @@ const TAB_RENDERERS = {
     return pageHeader('Support Tickets', 'Manage customer support tickets',
       // CS-22: the customer-facing portal. The URL comes from the API (GET /api/tickets ->
       // portal_url), which builds it from the tenant on the token — nothing hardcoded here.
-      '<button class="btn btn-secondary btn-sm" onclick="openMySupportPortal()">💬 My Support</button>' +
+      // `data-keep-on-lock`: the intake is deliberately NOT plan-gated (the pane says so when the
+      // list itself is locked), so this navigation control survives a plan-locked pane.
+      '<button class="btn btn-secondary btn-sm" data-keep-on-lock="1" onclick="openMySupportPortal()">💬 My Support</button>' +
       '<button class="btn btn-primary btn-sm" onclick="showAddTicketModal()">+ New Ticket</button>') +
     '<div id="ticketsTable"><div class="loading-wrap"><div class="spinner"></div> Loading tickets...</div></div>';
   },
@@ -2044,8 +2075,18 @@ function icErr(title, msg) {
   const upgrade = /payment required|forbidden|not entitled|not (?:available|included) (?:in|on) your current plan/i.test(msg || '')
     ? ' This module may be switched off on your plan — check <strong>Features &amp; Plans</strong>.'
     : '';
+  // A PLAN REFUSAL ALREADY NAMES ITS OWN MODULE. The gate text is the server's own sentence
+  // ("AI scoring is not available on your current plan. Upgrade to access it."), so prefixing the
+  // same label again stutters the sentence the customer reads — measured 2026-10-16 in Chromium on a
+  // Free workspace: the AI Assistant pane rendered "AI scoring: AI scoring is not available on your
+  // current plan. Upgrade to access it." Drop the prefix when the message already opens with it, and
+  // keep it for every other caller (a title that says WHAT failed, e.g. "Could not read your domains").
+  const m = msg || 'request failed';
+  const head = (title && m.toLowerCase().indexOf(String(title).toLowerCase()) === 0)
+    ? ''
+    : escapeHtml(title) + ': ';
   return '<div class="card"><div class="card-body"><p style="color:var(--error);margin:0">' +
-    escapeHtml(title) + ': ' + escapeHtml(msg || 'request failed') + upgrade + '</p></div></div>';
+    head + escapeHtml(m) + upgrade + '</p></div></div>';
 }
 
 function icBind(el) {
@@ -3345,6 +3386,8 @@ async function whCall(method, path, body) {
     showUpgradeBanner();
     const err = new Error(pick || 'Payment required');
     err.locked = true;          // the plan gate, not a failure to load
+    // The locked pane must not keep offering "+ Add Endpoint" (the same rule API.call applies).
+    hideLockedPaneActions(pick || '');
     throw err;
   }
   if (!res.ok) throw new Error(pick || ('HTTP ' + res.status));
