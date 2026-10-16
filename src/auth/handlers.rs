@@ -626,12 +626,16 @@ pub async fn reset_password(
         .map_err(|e| AppError::Internal(format!("Password hashing failed: {}", e)))?
         .to_string();
 
-    // Update user password
-    sqlx::query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2")
-        .bind(&password_hash)
-        .bind(reset.user_id)
-        .execute(&state.db)
-        .await?;
+    // Update user password. A reset IS a password change, so it stamps `password_changed_at` exactly
+    // like the profile change-password path (migration 065: tokens issued before it are invalidated).
+    sqlx::query(
+        "UPDATE users SET password_hash = $1, password_changed_at = NOW(), updated_at = NOW() \
+         WHERE id = $2",
+    )
+    .bind(&password_hash)
+    .bind(reset.user_id)
+    .execute(&state.db)
+    .await?;
 
     // Mark token as used
     sqlx::query("UPDATE password_resets SET used = true WHERE id = $1")
