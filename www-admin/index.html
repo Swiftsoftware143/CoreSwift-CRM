@@ -365,7 +365,29 @@ const API = {
     if (body) opts.body = JSON.stringify(body);
     const res = await fetch('/api' + path, opts);
     if (res.status === 401) { logout(true); throw new Error('Session expired'); }
-    if (res.status === 402) { showUpgradeBanner(); throw new Error('Payment required'); }
+    if (res.status === 402) {
+      showUpgradeBanner();
+      // The gate answers a HUMAN sentence on every module and every ceiling:
+      //   {"code":402,"error":true,"message":"Support tickets is not available on your current plan.
+      //    Upgrade to access it."}   (measured live 2026-10-16 on a free-plan workspace, /api/tickets,
+      //    /api/automation/rules, /api/scoring/rules)
+      // This console used to throw that away and raise the sentinel string 'Payment required', so the
+      // Rules / Lead Scoring / Support Tickets panels printed the internal transport words to the
+      // operator instead of naming the limit — the false-cause defect the tenant console
+      // (www-app/coreswift) and the Round-robin / Checklists panels fixed with the same test. The
+      // SENTINEL message is kept as-is so the callers that test it (rrErr / ckErr) behave exactly as
+      // before; the sentence rides on `planMessage` and is read with `planGateText`.
+      let planMessage = 'This feature is not included in your current plan. Upgrade to access it.';
+      try {
+        const d = await res.clone().json();
+        const pick = [d.error, d.message, d.detail].find(v => typeof v === 'string' && v.trim());
+        if (pick) planMessage = pick;
+      } catch(_){}
+      const err = new Error('Payment required');
+      err.planGate = true;
+      err.planMessage = planMessage;
+      throw err;
+    }
     if (!res.ok) {
       let msg = `HTTP ${res.status}`;
       // Failures answer {"error": true, "message": "<human text>"} (src/errors.rs) — a BOOLEAN
@@ -389,6 +411,16 @@ const API = {
   patch(path, body) { return this.call('PATCH', path, body); },
   del(path) { return this.call('DELETE', path); }
 };
+
+// A 402 from API.call is the PLAN GATE, not a failed load — API.call keeps the sentinel message
+// 'Payment required' (rrErr / ckErr test it) and carries the SERVER's own sentence on
+// `err.planMessage`. Any panel that prints `e.message` raw therefore shows the operator the internal
+// transport words instead of naming the limit. This returns the sentence to show; for every other
+// failure it is the message unchanged, so it is safe to use in every catch block.
+function planGateText(e) {
+  if (e && e.planGate) return e.planMessage || 'This feature is not included in your current plan. Upgrade to access it.';
+  return String((e && e.message) || e);
+}
 
 // ── Modules & Plans: the data-driven module/feature registry ─────────────────
 // Every tool is a MODULE and everything it can do is a FEATURE of it — both are ROWS in the
@@ -1104,7 +1136,7 @@ async function openUpgradeModal() {
     plansHtml += '<p style="color:var(--text-secondary);font-size:13px;margin-top:14px;text-align:center">Plan changes are made by CoreSwift for your workspace \u2014 this comparison is informational.</p>';
     document.querySelector('#modalContainer .modal-body').innerHTML = plansHtml;
   } catch(e) {
-    document.querySelector('#modalContainer .modal-body').innerHTML = `<p style="color:var(--error)">Failed to load plans: ${escapeHtml(e.message)}</p>`;
+    document.querySelector('#modalContainer .modal-body').innerHTML = `<p style="color:var(--error)">Failed to load plans: ${escapeHtml(planGateText(e))}</p>`;
   }
 }
 
@@ -2111,7 +2143,7 @@ async function loadTenantsTab() {
     const data = await API.get('/admin/tenants');
     items = Array.isArray(data) ? data : ((data && (data.tenants || data.items)) || []);
   } catch (e) {
-    el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tenants endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+    el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tenants endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
     return;
   }
 
@@ -2505,7 +2537,7 @@ async function runAccountMatch() {
         '</div></div>';
     }
   } catch (e) {
-    out.innerHTML = '<p style="color:var(--text-secondary)">Lookup failed: ' + escapeHtml(String(e.message || e)) + '</p>';
+    out.innerHTML = '<p style="color:var(--text-secondary)">Lookup failed: ' + escapeHtml(planGateText(e)) + '</p>';
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -2611,7 +2643,7 @@ const TAB_LOADERS = {
       }
       statsGridEl.innerHTML = html || '<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats unavailable — no source answered.</p></div></div>';
     } catch(e) {
-      statsGridEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats unavailable: ${escapeHtml(String(e.message || e))}</p></div></div>`;
+      statsGridEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats unavailable: ${escapeHtml(planGateText(e))}</p></div></div>`;
     }
   },
 
@@ -2645,7 +2677,7 @@ const TAB_LOADERS = {
         'No contacts yet. Add your first contact to get started.'
       );
     } catch(e) {
-      contactsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Contacts endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      contactsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Contacts endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
     }
   },
 
@@ -2704,7 +2736,7 @@ const TAB_LOADERS = {
         ' like duplicates of each other.</div></div>' +
         dataTable(['Looks like','Shared value','Records','Contacts'], rows);
     } catch (e) {
-      el.innerHTML = '<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Duplicate report unavailable: ' + escapeHtml(String(e.message || e)) + '</p></div></div>';
+      el.innerHTML = '<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Duplicate report unavailable: ' + escapeHtml(planGateText(e)) + '</p></div></div>';
     }
   },
 
@@ -2736,7 +2768,7 @@ const TAB_LOADERS = {
         'No companies yet. Add your first company.'
       );
     } catch(e) {
-      companiesTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Companies endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      companiesTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Companies endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
     }
   },
 
@@ -2791,7 +2823,7 @@ const TAB_LOADERS = {
       }
       pipelinesContentEl.innerHTML = html;
     } catch(e) {
-      pipelinesContentEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Pipelines endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      pipelinesContentEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Pipelines endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
     }
   },
 
@@ -2819,7 +2851,7 @@ const TAB_LOADERS = {
         'No campaigns yet. Launch your first marketing campaign.'
       );
     } catch(e) {
-      campaignsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Campaigns endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      campaignsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Campaigns endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
     }
   },
 
@@ -2848,7 +2880,7 @@ const TAB_LOADERS = {
         'No lists yet. Create a list to segment your contacts.'
       );
     } catch(e) {
-      listsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Lists endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      listsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Lists endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
     }
   },
 
@@ -2868,7 +2900,7 @@ const TAB_LOADERS = {
       html += '</div>';
       tagsTableEl.innerHTML = html;
     } catch(e) {
-      tagsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tags endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      tagsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tags endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
     }
   },
 
@@ -2897,7 +2929,7 @@ const TAB_LOADERS = {
         'No templates yet. Create reusable email templates.'
       );
     } catch(e) {
-      templatesTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Templates endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      templatesTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Templates endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
     }
   },
 
@@ -2926,7 +2958,13 @@ const TAB_LOADERS = {
         'No support tickets. Great job keeping customers happy!'
       );
     } catch(e) {
-      ticketsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tickets endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      // A 402 here is the PLAN GATE on GET /api/tickets, not a broken endpoint. Measured live
+      // 2026-10-16: a free-plan operator workspace read "Tickets endpoint: Payment required" — the
+      // internal transport words — while the server had answered "Support tickets is not available on
+      // your current plan. Upgrade to access it.". Name the limit, like the tenant console does.
+      ticketsTableEl.innerHTML = (e && e.planGate)
+        ? `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">🔒 ${escapeHtml(planGateText(e))}</p></div></div>`
+        : `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tickets endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
     }
   },
 
@@ -2958,7 +2996,7 @@ const TAB_LOADERS = {
         'No events scheduled. Add your first calendar event.'
       );
     } catch(e) {
-      calendarContentEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Calendar endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      calendarContentEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Calendar endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
     }
   },
 
@@ -3000,7 +3038,7 @@ const TAB_LOADERS = {
       }
       plansContentEl.innerHTML = html;
     } catch(e) {
-      plansContentEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Plans endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      plansContentEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Plans endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
     }
   },
 
@@ -3028,7 +3066,7 @@ const TAB_LOADERS = {
         'No users yet.'
       );
     } catch(e) {
-      usersTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Users endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      usersTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Users endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
     }
   },
 
@@ -3051,7 +3089,7 @@ const TAB_LOADERS = {
       el.innerHTML = dataTable(['Company','Slug','Email','Status','Created',''], rows,
         'No portfolio companies yet — add one, or run a cross-app sync.');
     } catch(e) {
-      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Portfolio endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Portfolio endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
     }
   },
 
@@ -3074,7 +3112,7 @@ const TAB_LOADERS = {
       el.innerHTML = dataTable(['App','Config','Updated',''], rows,
         'No native app configs stored yet — use “+ Set App Config” to add one (e.g. adaswift base URL).');
     } catch(e) {
-      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Native app configs endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Native app configs endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
     }
   },
 
@@ -3108,7 +3146,7 @@ const TAB_LOADERS = {
       el.innerHTML = dataTable(['Tenant','Retention','Last purge','Limit overrides',''], rows,
         'No per-tenant email limit overrides yet — set retention below to create one.');
     } catch(e) {
-      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Private-email admin endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Private-email admin endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
     }
   }
 };
@@ -4668,7 +4706,12 @@ async function loadRulesTab(){
     });
     el.innerHTML=rows.length?('<div class="config-list">'+rows.join('')+'</div>'):'<p style="color:var(--text-secondary)">No rules yet. Use &ldquo;+ New Rule&rdquo;.</p>';
   } catch(e){
-    el.innerHTML='<p style="color:var(--text-secondary)">Rules unavailable: '+escapeHtml(String(e.message||e))+'</p>';
+    // 402 = the plan gate on GET /api/automation/rules (measured live 2026-10-16: the server answers
+    // "Automations is not available on your current plan. Upgrade to access it."). Printing e.message
+    // raw showed the operator the internal words "Payment required" instead of the limit.
+    el.innerHTML = (e && e.planGate)
+      ? '<p style="color:var(--text-secondary)">🔒 '+escapeHtml(planGateText(e))+'</p>'
+      : '<p style="color:var(--text-secondary)">Rules unavailable: '+escapeHtml(planGateText(e))+'</p>';
   }
 }
 function showAddScoreRuleModal(){ showModal('Add Scoring Criterion', '<div class="form-group"><label>Criterion Name</label><input type="text" id="newScoreName"></div><div class="form-group"><label>Points</label><input type="number" id="newScorePoints" value="5"></div><div class="form-group"><label>Trigger</label><select id="newScoreTrigger"><option value="email.opened">Email Opened</option><option value="email.clicked">Link Clicked</option><option value="form_submit">Form Submitted</option><option value="web_visit">Website Visit</option><option value="deal_closed">Deal Closed</option><option value="call.booked">Booked Call</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="newScoreCreate" onclick="createScoreRule()">Add</button>'); }
@@ -4715,7 +4758,11 @@ async function loadScoringTab(){
     });
     el.innerHTML=rows.length?('<div class="config-list">'+rows.join('')+'</div>'):'<p style="color:var(--text-secondary)">No criteria yet. Use &ldquo;+ Add Criterion&rdquo;.</p>';
   } catch(e){
-    el.innerHTML='<p style="color:var(--text-secondary)">Scoring rules unavailable: '+escapeHtml(String(e.message||e))+'</p>';
+    // 402 = the plan gate on GET /api/scoring/rules (measured live 2026-10-16: the server answers
+    // "AI scoring is not available on your current plan. Upgrade to access it.").
+    el.innerHTML = (e && e.planGate)
+      ? '<p style="color:var(--text-secondary)">🔒 '+escapeHtml(planGateText(e))+'</p>'
+      : '<p style="color:var(--text-secondary)">Scoring rules unavailable: '+escapeHtml(planGateText(e))+'</p>';
   }
 }
 function showAddTemplateModal(){ if(!isPlatformUser()){ toast('Email templates are managed by the platform administrator.','error'); return; } showModal('New Template', '<div class="form-group"><label>Template Name</label><input type="text" id="newTemplateName"></div><div class="form-group"><label>Subject</label><input type="text" id="newTemplateSubject"></div><div class="form-group"><label>Body</label><textarea rows="6" id="newTemplateBody"></textarea></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="newTemplateCreate" onclick="createTemplate()">Save</button>'); }
@@ -4800,7 +4847,7 @@ async function loadMessagesTab(){
     });
     el.innerHTML=rows.length?('<div class="config-list">'+rows.join('')+'</div>'):'<p style="color:var(--text-secondary)">No messages yet. Use &ldquo;Compose&rdquo;.</p>';
   } catch(e){
-    el.innerHTML='<p style="color:var(--text-secondary)">Messages unavailable: '+escapeHtml(String(e.message||e))+'</p>';
+    el.innerHTML='<p style="color:var(--text-secondary)">Messages unavailable: '+escapeHtml(planGateText(e))+'</p>';
   }
 }
 // Communications Log (TAB_LOADERS['comm-log']). GET /api/comms/messages answers
