@@ -3582,7 +3582,10 @@ async function createInvite() {
     if (inp) inp.value = full;
     const box = document.getElementById('inviteResult');
     if (box) box.style.display = 'block';
-    toast('Invite link created — ' + (d.role || role) + ', expires in ' + (d.expires_in_days || 7) + ' days', 'success');
+    // The server answers with the STORED enum ('member'/'admin' — src/auth/handlers.rs::create_invite
+    // binds the column value). The Role select two lines up reads "Member — day-to-day CRM access",
+    // so the raw word in the toast was the one place this screen named a role as its database value.
+    toast('Invite link created — ' + roleLabel(d.role || role) + ', expires in ' + (d.expires_in_days || 7) + ' days', 'success');
     loadInvites();
   } catch (e) {
     toast('Could not create the invite: ' + e.message, 'error');
