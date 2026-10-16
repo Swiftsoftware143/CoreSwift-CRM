@@ -1776,6 +1776,19 @@ function renderSystemEmail(d) {
   html += '<div class="config-list">';
   html += row('Status', d.configured ? '<span class="badge badge-success">● configured</span>' : '<span class="badge badge-error">● not configured</span>',
     'Whether a delivery attempt can be made on the platform transport at all.');
+  // At-rest state of the saved key (kanban t_d1fcda7e). A key saved from this panel is encrypted
+  // before it is written; a row that arrived another way (a restored backup, a direct database
+  // write, a key-rotation tool) can be sitting in the clear until the app's next start, which seals
+  // it automatically. The panel says which of the two it is showing instead of implying that
+  // "saved" also means "encrypted".
+  html += row('Stored credential', !d.stored ? '—' : (d.sealed
+      ? '<span class="badge badge-success">● encrypted at rest</span>'
+      : '<span class="badge badge-warning">● stored in the clear</span>'),
+    !d.stored
+      ? 'Nothing is saved here — the server environment is carrying platform mail.'
+      : (d.sealed
+          ? 'The saved key is encrypted in the database, so a copy of the database cannot yield it.'
+          : 'This key is not encrypted yet. The app encrypts it automatically the next time it starts.'));
   html += row('Carried by', eff ? '<span class="badge badge-primary">' + escapeHtml(eff.source) + '</span>' : '—',
     eff ? escapeHtml(eff.note) : 'Nothing is configured on either store.');
   html += row('Sending domain', escapeHtml((eff && eff.domain) || '—'), 'The Mailgun domain the send endpoint posts to.');

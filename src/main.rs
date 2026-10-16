@@ -256,6 +256,19 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!(error = %e, "integration target storage guard not validated"),
     }
 
+    // t_d1fcda7e: the platform MAIL credential in the `admin_settings.email` row is the one
+    // credential path on this app that had no boot half. `seal_secrets` seals it on the panel's own
+    // write path, but a row that arrived any other way (a dump taken before the envelope existed, a
+    // manual SQL write, a rotation tool that updates the row directly) stayed in the clear for ever
+    // — and this row is the transport every workspace WITHOUT its own SMTP sends through. Same rule
+    // as the four halves above: seal what is plaintext, re-key onto the configured key, leave what
+    // cannot be opened, and never fail the boot over it.
+    match crate::communications::platform_mail_config::seal_legacy_config_secrets(&db).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(rows = n, "platform mail credential sealed at rest"),
+        Err(e) => tracing::warn!(error = %e, "platform mail credential backfill skipped"),
+    }
+
     // Seal-on-WRITE assertion (CS-21b). The backfill above repairs history; this makes sure history
     // cannot quietly repeat — a column that holds a plaintext secret is reported on EVERY boot
     // instead of being tolerated forever. `CORESWIFT_SECRET_AUDIT=1` turns it into a one-shot check

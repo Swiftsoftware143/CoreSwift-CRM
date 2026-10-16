@@ -62,7 +62,11 @@ fn open_configured(tenant_id: Uuid, value: &str) -> Option<String> {
 
 /// Does the CONFIGURED key open this STORED value — prefix and all? (The prefix is part of the
 /// envelope, not of the ciphertext, so it has to come off before the AEAD is handed the value.)
-fn opens_with_configured(tenant_id: Uuid, stored: &str) -> bool {
+///
+/// PUBLIC because it is the exact predicate the boot backfills decide on: a JSONB config row's
+/// credential (the platform mail transport, kanban t_d1fcda7e) must be judged by the same rule as
+/// the columns, or one path re-seals a healthy row while the other leaves a plaintext one alone.
+pub fn opens_with_configured(tenant_id: Uuid, stored: &str) -> bool {
     let body = stored.strip_prefix(PREFIX).unwrap_or(stored);
     open_configured(tenant_id, body).is_some()
 }

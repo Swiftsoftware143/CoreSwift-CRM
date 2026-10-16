@@ -54,6 +54,15 @@ async fn view(state: &AppState) -> Value {
     json!({
         "config": masked,
         "stored": raw.is_some(),
+        // At-rest posture of the stored credential (kanban t_d1fcda7e). `config.api_key_set` says a
+        // credential the SEND path can use; this says whether it is encrypted in the database. The
+        // two differ only between a write made outside this panel (a manual SQL write, a restored
+        // dump, a rotation tool) and the next restart, whose boot backfill seals the row — so the
+        // panel says which of the two it is looking at instead of implying "saved" means "sealed".
+        "sealed": raw
+            .as_ref()
+            .map(platform::stored_credential_sealed)
+            .unwrap_or(false),
         "configured": effective.is_some(),
         "provider": masked.get("provider").cloned().unwrap_or(Value::Null),
         "providers": platform::providers_json(),

@@ -133,6 +133,120 @@ pub fn seal_secrets(cfg: &mut Value) -> Result<(), crate::errors::AppError> {
     Ok(())
 }
 
+/// Is the credential in a STORED (not opened) row already wearing the envelope? The panel reports
+/// this, so "a key is saved" (the send path can use it) and "the key is encrypted at rest" cannot
+/// silently disagree — they differ only between a write made outside this app's write path and the
+/// next restart, whose `seal_legacy_config_secrets` converges the row.
+pub fn stored_credential_sealed(row: &Value) -> bool {
+    field(row, "api_key")
+        .map(|key| crate::secret_box::is_sealed(&key))
+        .unwrap_or(false)
+}
+
+/// Seal every credential still sitting in the clear in the `admin_settings.email` row.
+///
+/// `seal_secrets` covers this app's own write path, so a credential saved THROUGH the panel is
+/// sealed before it is bound. This is the half that converges a row which arrived another way: a
+/// database restored from a dump taken before the envelope existed, a manual SQL write, or a
+/// rotation tool that updates the row directly. Every other credential family on this app has that
+/// half (`backfill_provider_keys`, `backfill_booking_calendar_tokens`,
+/// `backfill_integration_target_keys`, the webhook-endpoint secret) and the five Rust apps each run
+/// a `seal_legacy_config_secrets` at boot — this row had neither, so a plaintext platform key could
+/// sit in the clear for ever (kanban t_d1fcda7e; measured 2026-10-16: the live row was plaintext
+/// until the panel's own PUT re-sealed it, and a planted plaintext field survived a restart on the
+/// previous binary). This row is credential-bearing: it is the transport every workspace WITHOUT its
+/// own SMTP sends through.
+///
+/// Same rule as those columns, so the two halves cannot disagree: a value the configured key already
+/// opens is left exactly as it is — except one still sealed under the built-in legacy key, which is
+/// re-keyed onto the configured one — and a value this deployment cannot open at all is reported and
+/// LEFT ALONE rather than overwritten with a ciphertext of nothing. Idempotent (returns 0 on every
+/// boot after the first) and never fatal: a mail credential must not stop the app booting — the
+/// caller logs and carries on.
+pub async fn seal_legacy_config_secrets(pool: &PgPool) -> Result<usize, crate::errors::AppError> {
+    let raw: Option<Value> = sqlx::query_scalar("SELECT value FROM admin_settings WHERE key = $1")
+        .bind(CONFIG_KEY)
+        .fetch_optional(pool)
+        .await?;
+    let Some(row) = raw else {
+        return Ok(0);
+    };
+    if !row.is_object() {
+        return Ok(0);
+    }
+
+    let mut repaired = row.clone();
+    let mut sealed = 0usize;
+    let mut rekeyed = 0usize;
+    let mut unreadable = 0usize;
+    if let Some(obj) = repaired.as_object_mut() {
+        for name in SECRET_FIELDS {
+            let stored = obj
+                .get(name)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if stored.is_empty()
+                || crate::secret_box::opens_with_configured(platform_scope(), &stored)
+            {
+                continue;
+            }
+            // `open` never fails: an unprefixed value IS the legacy plaintext, and a prefixed one
+            // this deployment cannot authenticate answers empty (counted, never overwritten).
+            let plaintext = crate::secret_box::open(platform_scope(), &stored);
+            if plaintext.is_empty() {
+                unreadable += 1;
+                tracing::warn!(
+                    field = name,
+                    "the stored platform mail credential is neither readable nor sealed here — left untouched"
+                );
+                continue;
+            }
+            match crate::secret_box::seal(platform_scope(), &plaintext) {
+                Ok(out) => {
+                    obj.insert(name.to_string(), Value::String(out));
+                    if crate::secret_box::is_sealed(&stored) {
+                        rekeyed += 1;
+                    } else {
+                        sealed += 1;
+                    }
+                }
+                Err(e) => tracing::error!(
+                    field = name,
+                    error = %e,
+                    "cannot seal the stored platform mail credential (fail closed) — left untouched"
+                ),
+            }
+        }
+    }
+
+    if sealed + rekeyed == 0 {
+        if unreadable > 0 {
+            tracing::warn!(
+                unreadable,
+                "admin_settings.email: {} credential(s) could not be sealed",
+                CONFIG_KEY
+            );
+        }
+        return Ok(0);
+    }
+
+    // Only the credential field is rewritten: every other field of the row (provider, endpoint,
+    // From, updated_by) is left byte-for-byte as the panel saved it.
+    sqlx::query("UPDATE admin_settings SET value = $1::jsonb, updated_at = NOW() WHERE key = $2")
+        .bind(&repaired)
+        .bind(CONFIG_KEY)
+        .execute(pool)
+        .await?;
+    tracing::warn!(
+        sealed,
+        rekeyed,
+        unreadable,
+        "admin_settings.email: sealed legacy plaintext credential(s) at rest"
+    );
+    Ok(sealed + rekeyed)
+}
+
 /// The stored row, OPENED (the credential back in plaintext, so a caller can hand it to a provider
 /// and never an envelope). `None` when there is no row — or when the read failed, which is logged
 /// and treated as "no row", so a database hiccup falls through to the environment instead of
