@@ -2079,11 +2079,17 @@ async function ckAdvance(instanceId, currentStage) {
 // looking like unrecognised signups — `probe-canary-a@swiftsoftware.dev` (the nightly tenancy canary)
 // did exactly that here:
 //   * the reserved TLDs (RFC 2606/6761: .invalid/.example/.test/.local, plus example.com/.net/.org);
-//   * the fleet's own probe/tooling domains (`swiftsoftware.dev`, `sw.dev`, `local.<app>`).
+//   * the fleet's own probe/tooling domains (`swiftsoftware.dev`, `sw.dev`, `local.<app>`, and
+//     `maxxspace.com` — the fleet's mail.tm probe inbox: `probe-arm…@maxxspace.com` is minted as an
+//     account owner address by the tag-provision probe, and IncentiveSwift already carried the arm).
 // `swiftsoftware.com` is deliberately NOT listed: it is a real, routable domain and the operator's
 // own address lives there.
+//
+// kanban t_a9027732: the fleet arm above shipped WITHOUT `maxxspace.com`, so a tag-provision probe
+// landing here would have rendered as an ordinary customer in this very list. Latent today (0 live
+// rows of that shape in this app); closed before the next probe lands.
 const RESERVED_OWNER_RE = /@(?:[^@]*\.)?(?:invalid|example|test|local)$|@(?:[^@]*\.)?example\.(?:com|net|org)$/i;
-const FLEET_PROBE_OWNER_RE = /@(?:[^@]*\.)?(?:swiftsoftware\.(?:dev|local)|sw\.dev)$|@local\.(?:funnelswift|coreswift|adaswift|incentiveswift|workflowswift|missedcallrespondr|multidirectory)$/i;
+const FLEET_PROBE_OWNER_RE = /@(?:[^@]*\.)?(?:swiftsoftware\.(?:dev|local)|sw\.dev|maxxspace\.com)$|@local\.(?:funnelswift|coreswift|adaswift|incentiveswift|workflowswift|missedcallrespondr|multidirectory)$/i;
 function isProbeOwner(addr) {
   const a = String(addr || '');
   return RESERVED_OWNER_RE.test(a) || FLEET_PROBE_OWNER_RE.test(a);
