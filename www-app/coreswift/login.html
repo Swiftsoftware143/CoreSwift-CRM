@@ -148,9 +148,17 @@ button:disabled{opacity:.6;cursor:not-allowed}
   document.getElementById('paneRegister').addEventListener('submit', function (e) {
     e.preventDefault();
     hide();
+    // A whitespace-only "Full name" passes the HTML `required` attribute (a space is still a
+    // non-empty string, so the browser submits) and trims to "" right here — and the server stores
+    // it. Measured LIVE 2026-10-16: POST /api/auth/register {"name":"   "} answered 201 and minted
+    // a workspace labelled "   's Workspace" whose owner has no name. Refused here with a sentence;
+    // the missing BACKEND gate is carded separately, because this app's Rust is not this lane's to
+    // edit.
+    var name = document.getElementById('rgName').value.trim();
+    if (!name) { show('Please enter your name.', false); return; }
     var btn = document.getElementById('rgBtn');
     var body = {
-      name: document.getElementById('rgName').value.trim(),
+      name: name,
       email: document.getElementById('rgEmail').value.trim()
       // NO password: the server mints the login credentials and emails them (David's signup
       // model). Nothing is stored here and there is no auto-login — the user confirms their
