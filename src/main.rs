@@ -64,6 +64,7 @@ pub mod support_widgets;
 pub mod tag_provision_handler;
 pub mod tags;
 pub mod telnyx;
+pub mod tenant_purge;
 pub mod tenants_internal;
 pub mod tickets;
 pub mod tracked_links;

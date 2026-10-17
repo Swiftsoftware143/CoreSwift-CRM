@@ -47,7 +47,7 @@
 //!        so they were reachable only at the DOUBLED non-canonical `/api/widgets/widgets/...` while
 //!        the `/s/...` URL `POST /api/widgets` advertises answered 404. Both arms now live in
 //!        `support_widgets::public_router`, merged at the ROOT next to the ticket routes, and both
-//!        allowlist entries went with the mounts. Now 366 mounted `.route(..)` calls, 354 mounts on
+//!        allowlist entries went with the mounts. Now 367 mounted `.route(..)` calls, 355 mounts on
 //!        /api/** — and the public widget surface is a SERVED surface (below), not an entry here.
 //!
 //!   live, with NO credential, against 127.0.0.1:8084:
@@ -57,7 +57,7 @@
 //!        `/api/v1/internal/provision-free-account`) were measured the same way and each answered
 //!        401 anonymous; both are named in the lists below
 //!    26 deliberate anonymous entries  -> PUBLIC_ROUTES  (23 /api + 3 /inbound)
-//!    15 service-to-service entries    -> INTERNAL_ROUTES (all /api, reached with the shared key)
+//!    16 service-to-service entries    -> INTERNAL_ROUTES (all /api, reached with the shared key)
 //!     2 issued-API-key entries        -> API_KEY_ROUTES  (/api/external/**)
 //!    11 served surfaces outside the boundary: the SPA mount, /track/:slug, the eight
 //!        /s/:tenant_id/** support-portal mounts and the two /s/:tenant_slug/widgets/**
@@ -79,7 +79,8 @@
 //!    so the fifteenth route under that prefix is private by default.
 //!    The census above was taken over the 14 routes that existed then; the account door
 //!    `POST /api/v1/internal/provision-free-account` joined the list after it (kanban t_e968e9ad)
-//!    and verifies the same shared key in its own handler, so the count below is 15 and a route
+//!    and verifies the same shared key in its own handler, so the count below is 16 (the last is
+//!    the workspace-DEPROVISION door `DELETE /api/internal/tenants/:id`, kanban t_c88f907f) and a route
 //!    added under this prefix without an entry here stays private by default.
 //! 2. `/inbound/**` was outside any boundary at all (a root-level `nest`, no middleware, the key in
 //!    the path). It is now inside [`is_guarded_path`] with its three mounted shapes named in
@@ -247,6 +248,11 @@ pub const INTERNAL_ROUTES: &[&str] = &[
     "/api/internal/contacts",
     "/api/internal/lists/:list_id/members",
     "/api/internal/tenants/lookup",
+    // The DEPROVISION door (kanban t_c88f907f): a sibling fleet app takes back the workspace it
+    // was provisioned (`multi-directory`'s delete door). `DELETE`, same shared key, and the
+    // handler additionally requires the workspace's own slug as confirmation and refuses any
+    // workspace that is not a machine-provisioned mirror (`tenant_purge`).
+    "/api/internal/tenants/:id",
     "/api/internal/tags",
     "/api/internal/tags/assign",
     "/api/internal/tags/delete",
@@ -991,12 +997,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            366,
+            367,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 354,
+            api, 355,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

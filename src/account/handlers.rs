@@ -94,14 +94,25 @@ pub async fn delete(
     if c.role != "agency_admin" {
         return Err(AppError::Forbidden);
     }
-    let r = sqlx::query("DELETE FROM tenants WHERE id=$1")
-        .bind(id)
-        .execute(&s.db)
-        .await?;
-    if r.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("Account {id} not found")));
+    // The workspace you are signed in as is a lockout, not a cleanup (kanban t_c88f907f).
+    let aid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    if aid == id {
+        return Err(AppError::Conflict(
+            "refusing to delete the workspace you are signed in as".to_string(),
+        ));
     }
-    Ok(Json(json!({"message":"Deleted"})))
+    // ONE writer for workspace destruction (`tenant_purge`): the same statement the fleet door
+    // uses, with the same portfolio guard. The console keeps its own semantics — it is the
+    // operator's deliberate path, so it may still delete a workspace that has real users — and
+    // the response now reports what went with the workspace instead of a bare `{"message":…}`.
+    let report = crate::tenant_purge::delete_tenant(
+        &s.db,
+        id,
+        crate::tenant_purge::Door::AdminConsole,
+        None,
+    )
+    .await?;
+    Ok(Json(report.to_json()))
 }
 
 pub async fn get_settings(
