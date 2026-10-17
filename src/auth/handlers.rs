@@ -74,15 +74,27 @@ pub async fn register(
     // stores, the tokens carry and the welcome mail is sent to.
     req.email = email_addr::normalize(&req.email).map_err(AppError::Validation)?;
 
+    // ── Name boundary (kanban t_0ab34bd3) ───────────────────────────────────────────────────
+    // `req.name` feeds THREE things on this door: the seat-ceiling/duplicate work below, the
+    // `users.name` bind and the workspace label (both inside `signup::create_account`), and the
+    // credentials mail sent at the bottom of this function. The old test here was
+    // `req.name.is_empty()`, which a whitespace-only name passes, so `"   "` was stored verbatim
+    // as `users.name` and minted the workspace `"   's Workspace"`. The REFUSAL now lives at the
+    // ONE writer (`signup::create_account`), which the machine door
+    // (POST /api/v1/internal/provision-free-account) also calls; trimming here as well means this
+    // door's own mail and its copy of the value carry the SAME trimmed bytes the writer stores,
+    // and the message is the writer's own so the two doors can never disagree about one input.
+    req.name = req.name.trim().to_string();
+    if req.name.is_empty() {
+        return Err(AppError::Validation("name: is required".to_string()));
+    }
+
     // David's signup model (2026-09-29): the page collects NAME + EMAIL only, so `password` may
     // arrive empty. The server then mints one and emails it; the user confirms their address by
     // signing in with it (the real two-step check) and changes it later in profile settings. A
     // caller that still supplies a password is honoured and validated exactly as before.
-    if req.name.is_empty() {
-        return Err(AppError::Validation(
-            "Name and email are required".to_string(),
-        ));
-    }
+    // (The name half of this gate moved up to the trim above, which is where the writer's own
+    // refusal lives — one message for one input, on both doors.)
     if !req.password.is_empty() && req.password.len() < 8 {
         return Err(AppError::Validation(
             "Password must be at least 8 characters".to_string(),

@@ -94,6 +94,23 @@ pub struct MintRequest<'a> {
     pub harness: Option<&'a str>,
 }
 
+/// The owner's name, trimmed — or the ONE refusal every account door shares (kanban t_0ab34bd3).
+///
+/// Kept out of [`create_account`] so the gate is unit-testable without a database: a whitespace-only
+/// name is refused as `AppError::Validation`, which renders as HTTP 422
+/// `{"error":true,"message":"name: is required","code":422}`, and the refusal runs BEFORE the
+/// first INSERT of the mint. Whitespace is measured the way the database and the signup page see
+/// it (`str::trim` — Unicode whitespace), so `""`, `"   "`, `"\t\n "` and `"\u{a0}"` are all
+/// refused while `"  Bob  "` becomes `Bob`, which is what `users.name` stores and what the
+/// auto-named workspace label `"<name>'s Workspace"` interpolates.
+fn validated_owner_name(name: &str) -> Result<&str, AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation("name: is required".to_string()));
+    }
+    Ok(trimmed)
+}
+
 /// Mint one account — or join one, when `invite_token`/`into_tenant` say so.
 ///
 /// `db` is the pool (the seat-ceiling helpers read it directly, as `register` always did); `conn`
@@ -103,6 +120,17 @@ pub async fn create_account(
     conn: &mut PgConnection,
     req: MintRequest<'_>,
 ) -> Result<CreatedAccount, AppError> {
+    // ── 0. the owner's name: the ONE gate both doors inherit (kanban t_0ab34bd3) ───────────────
+    // `req.name` is bound verbatim to `users.name` (step 2) and interpolated into the workspace
+    // label `"<name>'s Workspace"` (tenant_identity), so a name that is only whitespace mints a
+    // nameless owner in a workspace called `"   's Workspace"`. The public door's `is_empty()`
+    // test let `"   "` and `"\t\n "` straight through, and the machine door
+    // (POST /api/v1/internal/provision-free-account) reaches this same function — a guard in one
+    // handler would leave the other door open (fleet rule: second-door rule). So the refusal
+    // lives HERE, at the ONE account writer, before ANY insert: both doors, and any future
+    // caller, inherit it. The trimmed value is what every downstream use reads.
+    let owner_name = validated_owner_name(req.name)?;
+
     // ── 1. the workspace: join an invite, adopt a machine-minted one, or mint a new one ────────
     let (tenant_id, tenant_name, tenant_slug, tenant_is_active, invite_role) = if let Some(token) =
         req.invite_token
@@ -133,7 +161,7 @@ pub async fn create_account(
         seat_entry_plan(&mut *conn, existing, req.entry_plan_slug).await?;
         (existing, name, slug, is_active, None)
     } else {
-        let (name, slug) = tenant_identity(&req);
+        let (name, slug) = tenant_identity(&req, owner_name);
         let tenant_id = Uuid::new_v4();
         let row: (String, String, Option<bool>) = sqlx::query_as(
             r#"INSERT INTO tenants (id, name, slug, probe_harness)
@@ -218,7 +246,7 @@ pub async fn create_account(
     .bind(tenant_id)
     .bind(req.email)
     .bind(&password_hash)
-    .bind(req.name)
+    .bind(owner_name)
     .bind(role)
     .fetch_one(&mut *conn)
     .await
@@ -388,13 +416,17 @@ pub async fn seat_entry_plan(
 }
 
 /// The workspace's name and slug, exactly as the signup has always derived them.
-fn tenant_identity(req: &MintRequest<'_>) -> (String, String) {
+///
+/// `owner_name` is the CALLER'S name already trimmed by `create_account` (kanban t_0ab34bd3) —
+/// the auto arm interpolates it into `"<name>'s Workspace"`, so `"  Bob  "` mints
+/// `Bob's Workspace` and never `"  Bob  's Workspace"`.
+fn tenant_identity(req: &MintRequest<'_>, owner_name: &str) -> (String, String) {
     match (req.account_name, req.account_slug) {
         (Some(name), Some(slug)) => (name.to_string(), slug.to_string()),
         _ => {
             let local_part = req.email.split('@').next().unwrap_or("user");
             (
-                format!("{}'s Workspace", req.name),
+                format!("{}'s Workspace", owner_name),
                 format!("{}-{}", local_part, &Uuid::new_v4().to_string()[..8]),
             )
         }
@@ -413,4 +445,46 @@ async fn load_tenant(
     .fetch_optional(&mut *conn)
     .await?
     .ok_or_else(|| AppError::NotFound(format!("Workspace {} not found", id)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validated_owner_name;
+    use crate::errors::AppError;
+
+    /// Every shape of "no name" a door can present — including the exact two the parent card
+    /// measured live (`"   "` and `"\t\n "`) — is refused with the ONE shared message. This is
+    /// door-independent by construction: both `/api/auth/register` and
+    /// `/api/v1/internal/provision-free-account` refuse through this same function.
+    #[test]
+    fn a_whitespace_only_owner_name_is_refused_with_the_shared_message() {
+        for blank in [
+            "",
+            " ",
+            "   ",
+            "\t",
+            "\n",
+            "\t\n ",
+            "\u{a0}",
+            " \u{2003} ",
+            "\r\n",
+        ] {
+            match validated_owner_name(blank) {
+                Err(AppError::Validation(message)) => {
+                    assert_eq!(message, "name: is required", "input {blank:?}");
+                }
+                other => panic!("{blank:?} must be refused, got {other:?}"),
+            }
+        }
+    }
+
+    /// The trim reaches the value, not just the gate: this is what `users.name` binds and what
+    /// `tenant_identity` interpolates into `"<name>'s Workspace"`.
+    #[test]
+    fn a_padded_owner_name_is_trimmed_for_the_store_and_the_label() {
+        assert_eq!(validated_owner_name("  Bob  ").unwrap(), "Bob");
+        assert_eq!(validated_owner_name("\tBob\n").unwrap(), "Bob");
+        assert_eq!(validated_owner_name("Bob").unwrap(), "Bob");
+        assert_eq!(validated_owner_name("\u{a0}Bob\u{a0}").unwrap(), "Bob");
+    }
 }
