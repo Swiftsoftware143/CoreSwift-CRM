@@ -77,9 +77,11 @@ pub struct MintRequest<'a> {
     pub email: &'a str,
     pub name: &'a str,
     pub password: &'a str,
-    /// Both `Some` names the workspace explicitly (the signup door's contract). With either
-    /// missing, the workspace is auto-named `"<name>'s Workspace"` and slugged from the address —
-    /// byte-identical to the signup's own auto arm.
+    /// A field carrying a real value (non-blank once trimmed) names/slugs the workspace
+    /// explicitly; a field that is `None` or whitespace-only falls back to the signup's own auto
+    /// arm — the name `"<owner>'s Workspace"`, the slug derived from the address (kanban
+    /// t_2e40c9a5). The two halves are judged independently, so a custom name survives a missing
+    /// slug and the other way round.
     pub account_name: Option<&'a str>,
     pub account_slug: Option<&'a str>,
     /// Join an EXISTING workspace (the signup door's invite arm) instead of minting one.
@@ -415,22 +417,45 @@ pub async fn seat_entry_plan(
     Ok(())
 }
 
-/// The workspace's name and slug, exactly as the signup has always derived them.
+/// A caller-supplied workspace field that IS a customisation: trimmed, and `None` when the caller
+/// sent nothing but whitespace.
+///
+/// The same optional-string shape the app already uses elsewhere
+/// (`option.as_deref().map(str::trim).filter(|s| !s.is_empty())`), lifted out so both halves of
+/// [`tenant_identity`] judge a value identically.
+fn supplied(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// The workspace's name and slug, exactly as the signup has always derived them — except that a
+/// supplied field which is not a customisation falls back to the derived one (kanban t_2e40c9a5).
 ///
 /// `owner_name` is the CALLER'S name already trimmed by `create_account` (kanban t_0ab34bd3) —
 /// the auto arm interpolates it into `"<name>'s Workspace"`, so `"  Bob  "` mints
 /// `Bob's Workspace` and never `"  Bob  's Workspace"`.
+///
+/// `account_name`/`account_slug` are OPTIONAL and both used to be bound VERBATIM when supplied, so
+/// `POST /api/auth/register` with `"account_name": "   "` stored `tenants.name = "   "` — a
+/// workspace with a blank label in the tenant list. (`users.name` was never affected: the owner is
+/// a real name. Cosmetic, but a label nobody can read.) Both halves are now trimmed, and a half
+/// that trims away is not treated as "a workspace called nothing" but as NOT SUPPLIED: the name
+/// falls back to `"<owner>'s Workspace"`, the slug to the address-derived one. One rule per column,
+/// so a custom name is never thrown away because the slug was omitted (the old tuple match did
+/// exactly that), and no caller that used to get a `201` now gets a refusal — a blank explicit
+/// value is a caller saying "no preference", which is precisely what the auto arm is for.
 fn tenant_identity(req: &MintRequest<'_>, owner_name: &str) -> (String, String) {
-    match (req.account_name, req.account_slug) {
-        (Some(name), Some(slug)) => (name.to_string(), slug.to_string()),
-        _ => {
+    let name = supplied(req.account_name)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{}'s Workspace", owner_name));
+
+    let slug = supplied(req.account_slug)
+        .map(str::to_string)
+        .unwrap_or_else(|| {
             let local_part = req.email.split('@').next().unwrap_or("user");
-            (
-                format!("{}'s Workspace", owner_name),
-                format!("{}-{}", local_part, &Uuid::new_v4().to_string()[..8]),
-            )
-        }
-    }
+            format!("{}-{}", local_part, &Uuid::new_v4().to_string()[..8])
+        });
+
+    (name, slug)
 }
 
 /// Read a workspace's display fields by id.
@@ -449,7 +474,7 @@ async fn load_tenant(
 
 #[cfg(test)]
 mod tests {
-    use super::validated_owner_name;
+    use super::{supplied, tenant_identity, validated_owner_name, MintRequest};
     use crate::errors::AppError;
 
     /// Every shape of "no name" a door can present — including the exact two the parent card
@@ -486,5 +511,85 @@ mod tests {
         assert_eq!(validated_owner_name("\tBob\n").unwrap(), "Bob");
         assert_eq!(validated_owner_name("Bob").unwrap(), "Bob");
         assert_eq!(validated_owner_name("\u{a0}Bob\u{a0}").unwrap(), "Bob");
+    }
+
+    /// The same family, the OTHER input (kanban t_2e40c9a5): a whitespace-only `account_name` is
+    /// not a customisation. The old bytes stored it verbatim, so the workspace label in the tenant
+    /// list was blank. Every blank shape falls back to the derived label instead, and — because the
+    /// halves are judged independently — the caller keeps the slug they did supply.
+    #[test]
+    fn a_whitespace_only_account_name_cannot_become_the_workspace_label() {
+        for blank in ["", " ", "   ", "\t\n ", "\u{a0}", " \u{2003} "] {
+            let (name, slug) = identity(Some(blank), Some("probe-x"));
+            assert_eq!(
+                name, "Bob's Workspace",
+                "a blank account_name ({blank:?}) must not be the stored label"
+            );
+            assert_eq!(name.trim(), name, "{blank:?} left padding on the label");
+            assert!(!name.trim().is_empty(), "{blank:?} produced a blank label");
+            assert_eq!(
+                slug, "probe-x",
+                "a blank name must not cost the caller their slug"
+            );
+        }
+    }
+
+    /// The control for the test above: a real pair IS the customisation, and it is trimmed on both
+    /// halves exactly like `users.name`.
+    #[test]
+    fn a_supplied_pair_is_honoured_and_trimmed() {
+        assert_eq!(
+            identity(Some("  Acme Ltd  "), Some("  acme  ")),
+            ("Acme Ltd".to_string(), "acme".to_string())
+        );
+    }
+
+    /// One rule per column: the old tuple match fell to the auto arm and THREW AWAY a supplied
+    /// custom name whenever the slug was omitted. The name now survives, and the slug is derived
+    /// from the address.
+    #[test]
+    fn a_custom_name_survives_a_missing_slug() {
+        let (name, slug) = identity(Some("Acme Ltd"), None);
+        assert_eq!(name, "Acme Ltd");
+        assert!(
+            slug.starts_with("probe-x-"),
+            "address-derived slug, got {slug:?}"
+        );
+        assert_eq!(slug.trim(), slug);
+    }
+
+    /// The untouched control: nothing supplied (and the same the other way round) derives both
+    /// fields exactly as the signup always did.
+    #[test]
+    fn a_missing_pair_still_derives_both_fields() {
+        let (name, slug) = identity(None, None);
+        assert_eq!(name, "Bob's Workspace");
+        assert!(
+            slug.starts_with("probe-x-"),
+            "address-derived slug, got {slug:?}"
+        );
+        assert_eq!(slug.len(), "probe-x-".len() + 8);
+
+        let (name, slug) = identity(None, Some("  acme "));
+        assert_eq!(name, "Bob's Workspace");
+        assert_eq!(slug, "acme");
+    }
+
+    /// One mint request, with only the two optional account fields varying.
+    fn identity(account_name: Option<&str>, account_slug: Option<&str>) -> (String, String) {
+        tenant_identity(
+            &MintRequest {
+                email: "probe-x@example.invalid",
+                name: "Bob",
+                password: "generated-by-the-server",
+                account_name,
+                account_slug,
+                invite_token: None,
+                into_tenant: None,
+                entry_plan_slug: "free",
+                harness: None,
+            },
+            "Bob",
+        )
     }
 }

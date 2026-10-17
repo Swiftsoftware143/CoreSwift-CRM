@@ -118,6 +118,11 @@ pub struct TokenResponse {
 /// Team members can join an existing account via invite.
 /// Pass account_name and account_slug to customize the account name,
 /// or pass invite_token to join an existing account via invite.
+/// Both are OPTIONAL and judged independently: a field that is absent — or present but blank
+/// (`"   "`) — is not a customisation, and that half falls back to the auto-derived value
+/// (`"<name>'s Workspace"` / a slug from the address) rather than being stored verbatim, which is
+/// how a whitespace-only `account_name` used to become a blank workspace label in the tenant list
+/// (kanban t_2e40c9a5).
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
     pub name: String,
