@@ -35,15 +35,16 @@ pub async fn internal_create_tag(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    if name.is_empty() {
-        return Err(AppError::BadRequest("name is required".into()));
-    }
+    // `tags.name` is varchar(100) and `tags.color` varchar(7): an over-long value from an internal
+    // caller reached the INSERT and answered 500 instead of naming the field (kanban t_4be4ae4c).
+    let name = crate::security::tag_name::normalize_or_validation(&name)?;
 
     let color = req
         .get("color")
         .and_then(|v| v.as_str())
         .unwrap_or("#6366f1")
         .to_string();
+    let color = crate::security::tag_name::color_or_validation(&color)?;
     let category_id: Option<Uuid> = req
         .get("category_id")
         .and_then(|v| v.as_str())

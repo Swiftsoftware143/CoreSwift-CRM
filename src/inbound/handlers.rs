@@ -427,6 +427,11 @@ async fn create_tag_or_get_id(
     tenant_id: Uuid,
     name: &str,
 ) -> Result<Uuid, AppError> {
+    // `tags.name` is varchar(100) and the name comes from the inbound lead payload, so an over-long
+    // tag used to 500 the whole lead instead of naming the field (kanban t_4be4ae4c).
+    let normalized = crate::security::tag_name::normalize_or_validation(name)?;
+    let name = normalized.as_str();
+
     // Check if tag already exists
     let existing: Option<(Uuid,)> =
         sqlx::query_as("SELECT id FROM tags WHERE tenant_id = $1 AND name = $2")

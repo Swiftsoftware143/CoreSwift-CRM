@@ -170,12 +170,20 @@ pub async fn create_tag(
     Json(r): Json<CreateTagRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    if r.name.is_empty() {
-        return Err(AppError::Validation("Name required".into()));
-    }
+    // `tags.name` is varchar(100) and `tags.color` varchar(7); neither was checked, so an over-long
+    // value reached the INSERT and answered `500 Database error` — measured live 2026-10-17 on this
+    // route (101-char name, 8-char colour). Refuse before the write and bind the trimmed value
+    // (kanban t_4be4ae4c).
+    let name = crate::security::tag_name::normalize_or_validation(&r.name)?;
+    let color = match r.color.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => {
+            Some(crate::security::tag_name::color_or_validation(raw)?)
+        }
+        _ => None,
+    };
     let tag = sqlx::query_as::<_,Tag>("INSERT INTO tags(id,tenant_id,category_id,name,color,parent_id) VALUES($1,$2,$3,$4,$5,$6) RETURNING *")
-        .bind(Uuid::new_v4()).bind(t).bind(r.category_id).bind(&r.name).bind(&r.color).bind(r.parent_id).fetch_one(&s.db).await.map_err(|e| {
-            if let sqlx::Error::Database(ref d) = e { if d.constraint() == Some("idx_tags_name_tenant") { return AppError::Duplicate(format!("Tag '{}' exists", r.name)); } }
+        .bind(Uuid::new_v4()).bind(t).bind(r.category_id).bind(&name).bind(&color).bind(r.parent_id).fetch_one(&s.db).await.map_err(|e| {
+            if let sqlx::Error::Database(ref d) = e { if d.constraint() == Some("idx_tags_name_tenant") { return AppError::Duplicate(format!("Tag '{}' exists", name)); } }
             AppError::Database(e)
         })?;
     Ok((StatusCode::CREATED, Json(json!(tag))))
@@ -203,8 +211,20 @@ pub async fn update_tag(
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
+    // Same guard on rename/recolour: an over-long value used to 500 here too, and a whitespace-only
+    // name would have been stored verbatim (kanban t_4be4ae4c).
+    let name = match r.name.as_deref() {
+        Some(raw) => Some(crate::security::tag_name::normalize_or_validation(raw)?),
+        None => None,
+    };
+    let color = match r.color.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => {
+            Some(crate::security::tag_name::color_or_validation(raw)?)
+        }
+        _ => None,
+    };
     let tag = sqlx::query_as::<_,Tag>("UPDATE tags SET name=COALESCE($1,name), category_id=COALESCE($2,category_id), color=COALESCE($3,color), parent_id=COALESCE($4,parent_id), is_active=COALESCE($5,is_active), updated_at=NOW() WHERE id=$6 AND tenant_id=$7 RETURNING *")
-        .bind(&r.name).bind(r.category_id).bind(&r.color).bind(r.parent_id).bind(r.is_active).bind(id).bind(t).fetch_optional(&s.db).await?.ok_or(AppError::NotFound(format!("Tag {id} not found")))?;
+        .bind(&name).bind(r.category_id).bind(&color).bind(r.parent_id).bind(r.is_active).bind(id).bind(t).fetch_optional(&s.db).await?.ok_or(AppError::NotFound(format!("Tag {id} not found")))?;
     audit::logger::log_event(
         &s.db,
         t,

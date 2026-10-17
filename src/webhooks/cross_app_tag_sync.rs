@@ -406,6 +406,11 @@ async fn create_or_get_tag(
     tenant_id: Uuid,
     tag_name: &str,
 ) -> Result<Uuid, AppError> {
+    // `tags.name` is varchar(100): refuse an over-long pushed tag as a 422 naming the field instead
+    // of the raw 500 the INSERT answered (kanban t_4be4ae4c). Bind the trimmed value.
+    let normalized = crate::security::tag_name::normalize_or_validation(tag_name)?;
+    let tag_name = normalized.as_str();
+
     let existing: Option<(Uuid,)> =
         sqlx::query_as("SELECT id FROM tags WHERE tenant_id = $1 AND name = $2")
             .bind(tenant_id)

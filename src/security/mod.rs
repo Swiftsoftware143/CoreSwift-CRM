@@ -2,3 +2,4 @@
 
 pub mod email_addr;
 pub mod probe_addr;
+pub mod tag_name;

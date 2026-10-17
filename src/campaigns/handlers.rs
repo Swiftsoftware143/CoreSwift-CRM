@@ -79,6 +79,15 @@ pub async fn create(
         return Err(AppError::Validation("name is required".into()));
     }
 
+    // `tags.name` is `varchar(100)` and this value is CALLER-SUPPLIED, so before this guard an
+    // over-long tag reached the tag INSERT below and answered `500 Database error` — AFTER the
+    // campaign row had already been committed, leaving an orphan draft behind. Validate before the
+    // first write so a refusal leaves nothing, and bind the trimmed value (kanban t_4be4ae4c).
+    let funnelswift_tag = match r.funnelswift_tag.as_deref() {
+        Some(raw) => Some(crate::security::tag_name::normalize_or_validation(raw)?),
+        None => None,
+    };
+
     let campaign = sqlx::query_as::<_, EmailCampaign>(
         r#"INSERT INTO email_campaigns (id, tenant_id, name, description, status, created_by)
            VALUES ($1, $2, $3, $4, 'draft', $5) RETURNING *"#,
@@ -110,7 +119,7 @@ pub async fn create(
     let mut tag_id: Option<Uuid> = None;
     let mut funnelswift_synced = false;
 
-    if let Some(ref tag_name) = r.funnelswift_tag {
+    if let Some(ref tag_name) = funnelswift_tag {
         // Create tag in CRM Swift
         let tag = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml!(
             r#"INSERT INTO tags (id, tenant_id, name, color, is_active)
@@ -614,6 +623,14 @@ pub async fn build_campaign(
     if r.name.is_empty() {
         return Err(AppError::Validation("Campaign name is required".into()));
     }
+
+    // Same guard as `create`: `tags.name` is varchar(100) and the tag is written AFTER the campaign
+    // and its steps, so an over-long value answered 500 with the campaign already committed
+    // (kanban t_4be4ae4c). Refuse before the first write and bind the trimmed value.
+    let funnelswift_tag = match r.funnelswift_tag.as_deref() {
+        Some(raw) => Some(crate::security::tag_name::normalize_or_validation(raw)?),
+        None => None,
+    };
     if r.steps.is_empty() {
         return Err(AppError::Validation(
             "At least one email step is required".into(),
@@ -650,7 +667,7 @@ pub async fn build_campaign(
     let mut tag_id: Option<Uuid> = None;
     let mut funnelswift_synced = false;
 
-    if let Some(ref tag_name) = r.funnelswift_tag {
+    if let Some(ref tag_name) = funnelswift_tag {
         // Create or find the tag in CRM Swift
         let tag = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml!(
             r#"INSERT INTO tags (id, tenant_id, name, color, is_active)

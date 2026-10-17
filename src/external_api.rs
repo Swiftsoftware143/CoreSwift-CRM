@@ -411,10 +411,12 @@ async fn apply_tags(
     tags: &[String],
 ) -> Result<(), AppError> {
     for raw in tags {
-        let name = raw.trim();
-        if name.is_empty() {
+        if raw.trim().is_empty() {
             continue;
         }
+        // `tags.name` is varchar(100): an over-long pushed tag used to answer the caller the raw
+        // 500 from this INSERT. Refuse it with the field named (kanban t_4be4ae4c).
+        let name = crate::security::tag_name::normalize_or_validation(raw)?;
         // Ensure tag exists
         let tag_id: Uuid = sqlx::query_scalar(
             "INSERT INTO tags (id, tenant_id, name)

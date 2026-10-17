@@ -352,6 +352,15 @@ async fn handle_build_campaign(
         }
     }
 
+    // `tags.name` is varchar(100) and this value is caller-supplied: an over-long tag used to reach
+    // the tag INSERT AFTER the campaign and its steps were committed, answering 500 with an orphan
+    // draft behind it. Refuse before the first write (kanban t_4be4ae4c).
+    let funnelswift_tag = match funnelswift_tag {
+        Some(raw) => Some(crate::security::tag_name::normalize_or_validation(raw)?),
+        None => None,
+    };
+    let funnelswift_tag = funnelswift_tag.as_deref();
+
     // 1. Create campaign
     let campaign = sqlx::query_scalar::<_, serde_json::Value>(&row_json_dml!(
         r#"INSERT INTO email_campaigns (id, tenant_id, name, description, status, created_by)
