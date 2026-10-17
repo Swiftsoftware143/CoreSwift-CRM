@@ -179,9 +179,21 @@ pub async fn delete_tenant(
 
     // ── the delete: counts first (same transaction), then the one statement ────────────────────
     let mut tx = db.begin().await?;
-    let users_removed: i64 = count_in(&mut tx, "users", id).await?;
-    let contacts_removed: i64 = count_in(&mut tx, "contacts", id).await?;
-    let lists_removed: i64 = count_in(&mut tx, "lists", id).await?;
+    // One const statement per table (never a built string: the pre-deploy gate refuses
+    // concatenated SQL, and a literal is auditable at a glance).
+    let users_removed: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE tenant_id = $1")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    let contacts_removed: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE tenant_id = $1")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let lists_removed: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM lists WHERE tenant_id = $1")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
     let done = sqlx::query("DELETE FROM tenants WHERE id = $1")
         .bind(id)
         .execute(&mut *tx)
@@ -205,20 +217,6 @@ pub async fn delete_tenant(
         contacts_removed,
         lists_removed,
     })
-}
-
-/// Row count for one cascading child table, inside the caller's transaction.
-async fn count_in(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    table: &str,
-    tenant_id: Uuid,
-) -> Result<i64, AppError> {
-    // The table name is not caller-controlled (three literals above), and the tenant id is bound.
-    let sql = format!("SELECT COUNT(*) FROM {table} WHERE tenant_id = $1");
-    Ok(sqlx::query_scalar::<_, i64>(&sql)
-        .bind(tenant_id)
-        .fetch_one(&mut **tx)
-        .await?)
 }
 
 #[cfg(test)]
