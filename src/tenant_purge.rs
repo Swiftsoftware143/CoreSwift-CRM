@@ -111,6 +111,37 @@ pub fn split_by_address_class(emails: &[String]) -> (usize, usize) {
     (machine, emails.len() - machine)
 }
 
+/// The slug-confirmation rule, as a pure function so it is unit-testable.
+///
+/// Driven by the DOOR, not by the caller: the fleet door cannot opt out by OMITTING the parameter.
+/// Measured in the first live run of this card's probe — treating `None` as "the console's
+/// deliberate omission" let an unconfirmed fleet `DELETE` destroy the workspace, because the query
+/// extractor hands a missing `?slug=` over as `None`.
+fn check_confirmation(
+    door: Door,
+    confirmed: Option<&str>,
+    slug: &str,
+    id: Uuid,
+) -> Result<(), String> {
+    const REQUIRED: &str = "refusing to delete: the ?slug=<workspace slug> confirmation is required, so a stale id cannot destroy the wrong workspace";
+    match (door, confirmed) {
+        (Door::Fleet, None) => Err(REQUIRED.to_string()),
+        (Door::AdminConsole, None) => Ok(()),
+        (_, Some(expected)) => {
+            let expected = expected.trim();
+            if expected.is_empty() {
+                Err(REQUIRED.to_string())
+            } else if expected != slug {
+                Err(format!(
+                    "refusing to delete: workspace {id} has slug '{slug}', the caller confirmed '{expected}'"
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
 /// Destroy one workspace and everything its foreign keys cascade to.
 ///
 /// `confirmed_slug` is the caller's echo of the workspace slug (the fleet door requires it; the
@@ -142,20 +173,7 @@ pub async fn delete_tenant(
     }
 
     // ── 2. the caller must name the workspace it means ─────────────────────────────────────────
-    if let Some(expected) = confirmed_slug {
-        let expected = expected.trim();
-        if expected.is_empty() {
-            return Err(AppError::Conflict(
-                "refusing to delete: the ?slug=<workspace slug> confirmation is required, so a stale id cannot destroy the wrong workspace"
-                    .to_string(),
-            ));
-        }
-        if expected != slug {
-            return Err(AppError::Conflict(format!(
-                "refusing to delete: workspace {id} has slug '{slug}', the caller confirmed '{expected}'"
-            )));
-        }
-    }
+    check_confirmation(door, confirmed_slug, &slug, id).map_err(AppError::Conflict)?;
 
     // ── 3./4. the fleet door only ever reaches a machine-provisioned mirror ────────────────────
     if door == Door::Fleet {
@@ -255,6 +273,21 @@ mod tests {
                 "{name} / {slug} is not a portfolio account"
             );
         }
+    }
+
+    /// The rule the first live probe run broke: an OMITTED `?slug=` is not "no confirmation owed"
+    /// on the fleet door. A guard that only arms when the caller supplies a value is not a guard.
+    #[test]
+    fn the_fleet_door_cannot_omit_the_slug_confirmation() {
+        let id = Uuid::nil();
+        assert!(check_confirmation(Door::Fleet, None, "md-x", id).is_err());
+        assert!(check_confirmation(Door::Fleet, Some(""), "md-x", id).is_err());
+        assert!(check_confirmation(Door::Fleet, Some("   "), "md-x", id).is_err());
+        assert!(check_confirmation(Door::Fleet, Some("other-slug"), "md-x", id).is_err());
+        assert!(check_confirmation(Door::Fleet, Some("md-x"), "md-x", id).is_ok());
+        // The console door picked the row in the UI, so it owes no echo — and it is unaffected.
+        assert!(check_confirmation(Door::AdminConsole, None, "md-x", id).is_ok());
+        assert!(check_confirmation(Door::AdminConsole, Some("wrong"), "md-x", id).is_err());
     }
 
     #[test]
