@@ -815,6 +815,10 @@ function logout(silent) {
   STATE.user = null;
   localStorage.removeItem('crm_token');
   localStorage.removeItem('crm_user');
+  // Signing out while impersonating must drop the impersonation session too — leaving its keys
+  // behind would show the red banner over the LOGIN screen on the next load.
+  localStorage.removeItem(IMP_ORIG_KEY);
+  localStorage.removeItem(IMP_NAME_KEY);
   document.getElementById('appWrap').style.display = 'none';
   document.getElementById('loginScreen').style.display = 'flex';
   if (!silent) toast('Signed out', 'info');
@@ -1203,6 +1207,72 @@ function dataTable(headers, rows, emptyMsg) {
     <tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody>
   </table></div></div>`;
 }
+
+// ── Impersonation: the way in, and the way back out ─────────────────────────────────────────────
+// POST /api/admin/impersonate mints a 15-minute token scoped to a tenant (the `aid` claim), and
+// POST /api/admin/stop-impersonation ends it server-side. Until now NOTHING in this console called
+// either one: the routes were reachable with curl, but a platform operator had no control to enter a
+// customer's workspace from the panel — and no way OUT existed at all, so the minted token simply
+// replaced the operator's own with no copy kept and anyone who did it by hand was stranded in the
+// tenant's session. Both halves live here: the operator's own token is kept under its own key, a red
+// banner names the workspace being viewed, and Stop puts the operator's session back exactly as it was.
+//
+// The workspace is named from the row that was clicked, NOT from /api/auth/me: an impersonation token
+// keeps the operator as its SUBJECT (only `aid` moves), so /auth/me keeps answering the operator's own
+// account while every data route answers the tenant's. Measured live 2026-10-18 — under an
+// impersonation token /api/auth/me returned the OPERATOR's account_id while /api/dashboard/stats
+// returned the target's counts — which is exactly why the name travels on the banner.
+const IMP_ORIG_KEY = 'crm_imp_original';
+const IMP_NAME_KEY = 'crm_imp_name';
+let TENANT_NAMES = {};   // id -> name, filled from the list the operator clicked in
+
+function showImpersonationBanner(name) {
+  let b = document.getElementById('imp-banner');
+  if (!b) { b = document.createElement('div'); b.id = 'imp-banner'; document.body.appendChild(b); }
+  b.setAttribute('style', 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#e11d48;' +
+    'color:#fff;padding:8px 24px;font-size:13px;font-weight:600;display:flex;justify-content:center;' +
+    'align-items:center;gap:12px;box-shadow:0 2px 8px rgba(0,0,0,.25)');
+  b.innerHTML = '<span>\u26A0\uFE0F Viewing as <strong id="imp-name"></strong> — every screen below ' +
+    'belongs to that workspace, not to yours</span>' +
+    '<button id="imp-stop" style="background:#fff;color:#e11d48;border:none;border-radius:4px;' +
+    'padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer">Stop impersonating</button>';
+  document.getElementById('imp-name').textContent = name || 'this workspace';
+  document.getElementById('imp-stop').onclick = stopImpersonation;
+}
+
+async function stopImpersonation() {
+  // Tell the server first, so the session it minted is actually ended and not merely dropped by the
+  // browser. A failure here must not strand the operator in the tenant either.
+  try { await API.call('POST', '/admin/stop-impersonation'); } catch (e) { /* fall through */ }
+  const orig = localStorage.getItem(IMP_ORIG_KEY);
+  localStorage.removeItem(IMP_ORIG_KEY);
+  localStorage.removeItem(IMP_NAME_KEY);
+  if (orig) { STATE.token = orig; localStorage.setItem('crm_token', orig); }
+  window.location.reload();
+}
+
+window.crmImpersonate = async function (tenantId) {
+  if (!tenantId) return;
+  const name = TENANT_NAMES[tenantId] || '';
+  try {
+    const res = await API.call('POST', '/admin/impersonate', { tenant_id: tenantId });
+    const token = res && (res.impersonation_token || res.token || res.access_token);
+    if (!token) { toast('No impersonation token was returned', 'error'); return; }
+    // Keep the operator's OWN session before it is replaced, so Stop puts them back exactly here.
+    if (!localStorage.getItem(IMP_ORIG_KEY)) localStorage.setItem(IMP_ORIG_KEY, STATE.token);
+    localStorage.setItem(IMP_NAME_KEY, name);
+    STATE.token = token;
+    localStorage.setItem('crm_token', token);
+    showImpersonationBanner(name);
+    toast('Viewing ' + (name || 'the workspace') + ' — a 15 minute session', 'info');
+    // Re-render from the top, so every panel refetches under the tenant's token rather than
+    // leaving the operator's own numbers on screen under a banner that says otherwise.
+    STATE.activeTab = 'dashboard';
+    showApp();
+  } catch (e) {
+    toast((e && e.message) || 'Could not impersonate that workspace', 'error');
+  }
+};
 
 // ========== SYNC TAB RENDERERS (no API calls needed) ==========
 const TAB_RENDERERS = {
@@ -2162,6 +2232,10 @@ async function loadTenantsTab() {
     return;
   }
 
+  // The impersonation control needs the workspace NAME after the click; keep it keyed by id rather
+  // than pasting a name into an inline onclick (a name with an apostrophe would break the attribute).
+  TENANT_NAMES = {};
+  items.forEach(t => { if (t && t.id) TENANT_NAMES[String(t.id)] = String(t.name || ''); });
   const rows = items.map(t => [
     `<input type="checkbox" class="tn-chk" value="${escapeHtmlAttr(t.id || '')}">`,
     escapeHtml(t.name || '—'),
@@ -2173,10 +2247,15 @@ async function loadTenantsTab() {
       : t.is_active === true ? '<span class="badge badge-success">active</span>'
       : '<span class="badge badge-muted">unknown</span>',
     escapeHtml(t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'),
+    // Enter the workspace as its own session (15 minutes). Platform operators only — the server
+    // refuses anyone else, so offering the button to a tenant would only produce a dead-end error.
+    isPlatformUser()
+      ? `<button class="btn btn-sm btn-outline" onclick="crmImpersonate('${escapeHtmlAttr(t.id || '')}')">Impersonate</button>`
+      : '—',
   ]);
 
   el.innerHTML = dataTable(
-    ['<input type="checkbox" id="tnAll" title="Select all">', 'Name', 'Slug', 'Owner', 'Status', 'Created'],
+    ['<input type="checkbox" id="tnAll" title="Select all">', 'Name', 'Slug', 'Owner', 'Status', 'Created', 'Actions'],
     rows, 'No workspaces returned.');
 
   const boxes = () => Array.from(document.querySelectorAll('.tn-chk'));
@@ -5288,6 +5367,11 @@ window.addEventListener('DOMContentLoaded', () => {
   // Dismiss banner if it was dismissed
   if (localStorage.getItem('crm_banner_dismissed')) {
     document.getElementById('upgradeBanner').classList.add('dismissed');
+  }
+  // An impersonation session survives a reload: the operator must never lose the way back out of a
+  // customer's workspace, and a screen with no banner would read as their own account.
+  if (localStorage.getItem(IMP_ORIG_KEY)) {
+    showImpersonationBanner(localStorage.getItem(IMP_NAME_KEY) || '');
   }
 });
 
