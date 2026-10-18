@@ -1496,6 +1496,7 @@ const TAB_RENDERERS = {
   // row is picked; the loader below arms it with the count and wires the write.
   'tenants': () => {
     return pageHeader('Tenants', 'Every workspace on the platform — select rows to retire them',
+      '<button class="btn btn-sm btn-outline" id="tnProbes" disabled>Select probes (0)</button> ' +
       '<button class="btn btn-danger btn-sm" id="tnDel" disabled>Delete selected</button>') +
     '<div id="tenantsTable"><div class="loading-wrap"><div class="spinner"></div> Loading workspaces...</div></div>';
   },
@@ -2188,6 +2189,26 @@ async function loadTenantsTab() {
     }
     if (all) all.checked = boxes().length > 0 && picked.length === boxes().length;
   };
+  // ONE-CLICK PROBE SELECT (fleet parity, 2026-10-18). The other five admin consoles carry a
+  // "Select probes (N)" control; this one had only Select-all, so retiring probe workspaces here
+  // meant ticking them one by one and a missed row survived the sweep. The predicate is the SAME
+  // one that badges the owner cell `probe` (isProbeOwner), so the button and the badge can never
+  // disagree. A row with NO owner user is never selected — that is what keeps the portfolio/copy
+  // rows (which the server refuses) out of the selection by construction. The write path is
+  // unchanged: this only ticks boxes, "Delete selected" still does the POST.
+  const probeIds = new Set(
+    items.filter(t => isProbeOwner(String((t && (t.owner_email || t.email)) || '')))
+      .map(t => String((t && t.id) || ''))
+  );
+  const probeBtn = document.getElementById('tnProbes');
+  if (probeBtn) {
+    probeBtn.disabled = probeIds.size === 0;
+    probeBtn.textContent = `Select probes (${probeIds.size})`;
+    probeBtn.onclick = () => {
+      boxes().forEach(b => { b.checked = probeIds.has(b.value); });
+      sync();
+    };
+  }
   if (all) all.addEventListener('change', () => { boxes().forEach(b => { b.checked = all.checked; }); sync(); });
   boxes().forEach(b => b.addEventListener('change', sync));
 
@@ -5530,7 +5551,7 @@ window.appGuidePages = {
   'email-branding': { title: 'Email Branding', desc: 'Your logo and display name on every transactional email this account sends. Leave it blank and mail keeps the CoreSwift look.', actions: ['Upload a logo (PNG/JPEG/GIF/WebP, up to 2 MB)', 'Set a brand name and colour, then save'] },
   integrations: { title: 'Integration Center', desc: 'Connect the services this workspace uses, each with your own provider key (BYOK).', actions: ['Paste a provider key and save', 'Email integrations drive the mail you send'] },
   portfolio: { title: 'Portfolio Companies', desc: 'Advisory portfolios — one parent whose companies are managed together.', actions: ['Add a portfolio and its companies'] },
-  tenants: { title: 'Tenants', desc: 'Every workspace on the platform, with a per-row checkbox and Delete selected to retire junk workspaces (the server refuses a protected row and shows why).', actions: ['Tick the workspaces to retire', 'Delete selected removes them with their data'] },
+  tenants: { title: 'Tenants', desc: 'Every workspace on the platform, with a per-row checkbox, a Select probes picker and Delete selected to retire junk workspaces (the server refuses a protected row and shows why).', actions: ['Tick the workspaces to retire, or press Select probes to tick every probe/test workspace at once', 'Delete selected removes them with their data'] },
   users: { title: 'Users', desc: 'The people who can sign in to this workspace, and their roles.', actions: ['Invite a user and set its role'] },
   billing: { title: 'Billing & Plans', desc: 'The workspace\u2019s plan and what each tier includes.', actions: ['Move between tiers', 'See what the current plan allows'] },
   widgets: { title: 'Widgets', desc: 'Embeddable widgets the platform serves.', actions: ['Configure a widget'] },
