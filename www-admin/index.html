@@ -4231,6 +4231,37 @@ async function changePassword() {
 // the stored value when the key is absent.
 function _acctId() { return STATE.user && STATE.user.account_id; }
 
+// What a RECIPIENT sees — mirrors Branding::header_html (src/branding.rs): a centred logo (max 56px
+// high / 240px wide); otherwise the brand name in 20px #111827; then a 3px rule in the brand colour;
+// nothing at all when neither is set. Repainted from the FIELD values (not the saved document) so a
+// name or colour can be judged before saving. It sends nothing and saves nothing.
+function paintBrandPreview(logoUrl) {
+  const box = document.getElementById('brandPreview');
+  if (!box) return;
+  const note = document.getElementById('brandPreviewBlank');
+  const nameEl = document.getElementById('brandName');
+  const hexEl = document.getElementById('brandColor');
+  const name = ((nameEl || {}).value || '').trim();
+  const raw = ((hexEl || {}).value || '').trim();
+  const col = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(raw) ? raw : '#4f46e5';
+  const logo = (logoUrl || '').trim();
+  const branded = !!(name || logo);
+  let html = '';
+  if (branded) {
+    html += '<div style="text-align:center;padding:18px 0 6px">';
+    if (logo) html += '<img src="' + escapeHtmlAttr(logo) + '" alt="' + escapeHtmlAttr(name || 'Your logo') + '" style="max-height:56px;max-width:240px;display:inline-block">';
+    else html += '<span style="font:700 20px/1.3 -apple-system,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#111827">' + escapeHtml(name) + '</span>';
+    html += '</div><div style="border-top:3px solid ' + col + ';margin:0 0 18px"></div>';
+  }
+  html += '<div style="font:14px/1.5 -apple-system,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#111827">Hi Alex &mdash; this is a sample of the message body. ' +
+          (branded ? 'Only the header above comes from your branding.' : 'With no branding set, the mail opens with the app\'s own header.') + '</div>';
+  box.innerHTML = html;
+  if (note) {
+    note.style.display = branded ? 'none' : 'block';
+    note.textContent = branded ? '' : 'Nothing is set yet, so mail keeps the app\'s own header.';
+  }
+}
+
 async function loadBrandingTab() {
   const wrap = document.getElementById('brandPane');
   if (!wrap) return;
@@ -4276,15 +4307,24 @@ async function loadBrandingTab() {
         '</div>' +
         '<div class="form-hint">PNG, JPEG, WebP or GIF, up to 2 MB.</div>' +
       '</div>' +
+      '<div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">' +
+        '<div style="font-weight:600;margin-bottom:4px">What your recipients see</div>' +
+        '<div class="form-hint" style="margin-bottom:10px">The header block the app puts at the top of every email this account sends. It follows the fields above as you type; this preview sends nothing and saves nothing.</div>' +
+        '<div id="brandPreview" style="border:1px solid var(--border);border-radius:12px;padding:22px;background:#fff;max-width:560px"></div>' +
+        '<div id="brandPreviewBlank" class="form-hint" style="margin-top:6px"></div>' +
+      '</div>' +
     '</div>',
     '<button class="btn btn-primary" data-ops="branding-save" onclick="saveBranding()">Save branding</button>'
   );
   const picker = document.getElementById('brandColorPicker');
   const hex = document.getElementById('brandColor');
   if (picker && hex) {
-    picker.addEventListener('input', () => { hex.value = picker.value; });
-    hex.addEventListener('input', () => { if (/^#[0-9a-fA-F]{6}$/.test(hex.value.trim())) picker.value = hex.value.trim(); });
+    picker.addEventListener('input', () => { hex.value = picker.value; paintBrandPreview(logo); });
+    hex.addEventListener('input', () => { if (/^#[0-9a-fA-F]{6}$/.test(hex.value.trim())) picker.value = hex.value.trim(); paintBrandPreview(logo); });
   }
+  const nameField = document.getElementById('brandName');
+  if (nameField) nameField.addEventListener('input', () => paintBrandPreview(logo));
+  paintBrandPreview(logo);
   const file = document.getElementById('brandLogoFile');
   if (file) file.addEventListener('change', uploadBrandingLogo);
 }

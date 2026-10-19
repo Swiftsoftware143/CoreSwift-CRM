@@ -43,6 +43,12 @@ pre code{background:none;padding:0}a{color:#1d4ed8}</style></head><body><h1>Core
 <p>A workspace sets its own brand display name, colour and logo, and every transactional mail it
 sends carries them. Keyed by the tenant id (<code>email_templates.aid</code>), so it is per WORKSPACE,
 not per app.</p>
+<p>The pane shows <strong>what your recipients see</strong>: the header block the app actually builds
+(<code>Branding::header_html</code>, <code>src/branding.rs</code>) &mdash; the logo at most 56&nbsp;px
+high and 240&nbsp;px wide, otherwise the name in 20&nbsp;px, then a 3&nbsp;px rule in the brand colour,
+nothing at all when neither is set &mdash; and it follows the fields as you type, so a name or colour
+can be judged before saving. It sends and saves nothing, and a colour that is not a hex value previews
+as the default <code>#4f46e5</code>, exactly as the mail would paint it.</p>
 <table>
 <thead><tr><th>Piece</th><th>Where</th></tr></thead>
 <tbody>
