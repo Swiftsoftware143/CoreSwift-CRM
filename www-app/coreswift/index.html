@@ -5737,10 +5737,10 @@ function renderBrandHeaderPreview() {
     return;
   }
   const inner = logo
-    ? '<img src="' + escapeHtml(logo) + '" alt="' + escapeHtml(name) + '" style="max-height:56px;max-width:240px;display:inline-block">'
-    : '<span style="font:700 20px/1.3 -apple-system,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#111827">' + escapeHtml(name) + '</span>';
+    ? '<img id="brandHeaderPreviewImg" src="' + escapeHtml(logo) + '" alt="' + escapeHtml(name) + '" style="max-height:56px;max-width:240px;display:inline-block">'
+    : '<span id="brandHeaderPreviewName" style="font:700 20px/1.3 -apple-system,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#111827">' + escapeHtml(name) + '</span>';
   wrap.innerHTML = '<div style="text-align:center;margin:0 0 8px">' + inner + '</div>' +
-    '<div style="border-top:3px solid ' + colour + ';margin:0 0 14px"></div>';
+    '<div id="brandHeaderPreviewRule" style="border-top:3px solid ' + colour + ';margin:0 0 14px"></div>';
 }
 
 function renderBrandLogoPreview(logoPath) {
@@ -5774,6 +5774,26 @@ async function saveBranding() {
   }
 }
 
+// The logo endpoints write `logo_url` with jsonb_set, and jsonb_set cannot CREATE a missing
+// intermediate key: on a workspace whose settings have no `email_branding` object yet — i.e. anyone
+// who uploads a logo before ever saving a name or colour — the pointer was silently dropped. The
+// tab then re-read "No logo uploaded" after a reload, and Branding::load (which reads only that
+// document) put NO header at all in the workspace's mail. Persist the pointer through the settings
+// write, which stores the whole document, so the logo survives a reload and reaches every email.
+// Name and colour come from the STORED document, never from the inputs, so an upload cannot save a
+// half-typed brand name the customer has not pressed Save on.
+async function persistLogoUrl(logoUrl) {
+  const cur = await API.get('/account/' + currentAid() + '/settings');
+  const settings = Object.assign({}, (cur && cur.settings) || {});
+  const prev = settings.email_branding || {};
+  settings.email_branding = {
+    brand_name: prev.brand_name || '',
+    brand_color: prev.brand_color || '',
+    logo_url: logoUrl,
+  };
+  await API.patch('/account/' + currentAid() + '/settings', settings);
+}
+
 async function uploadBrandingLogo() {
   const status = document.getElementById('brandingStatus');
   const input = document.getElementById('brandLogoFile');
@@ -5792,6 +5812,7 @@ async function uploadBrandingLogo() {
     });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const d = await res.json();
+    await persistLogoUrl(d.logo_url || '');
     renderBrandLogoPreview(d.logo_url);
     if (status) status.textContent = 'Logo uploaded.';
   } catch (e) { if (status) status.textContent = 'Upload failed: ' + e.message; }
@@ -5804,6 +5825,7 @@ async function removeBrandingLogo() {
       method: 'DELETE', headers: { 'Authorization': 'Bearer ' + STATE.token },
     });
     if (!res.ok) throw new Error('HTTP ' + res.status);
+    await persistLogoUrl('');
     renderBrandLogoPreview('');
     if (status) status.textContent = 'Logo removed. Your name and colour were kept.';
   } catch (e) { if (status) status.textContent = 'Remove failed: ' + e.message; }
