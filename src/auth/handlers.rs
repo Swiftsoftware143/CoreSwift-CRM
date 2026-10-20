@@ -305,6 +305,13 @@ pub async fn me(State(state): State<AppState>, request: Request) -> ApiResult<im
 
     let claims = middleware::verify_token(token, &state.config.jwt_secret)?;
 
+    // Parsed here rather than by `auth_middleware`, so the boundary's liveness checks do not
+    // apply: refuse a token whose `users` row is gone/disabled itself (kanban t_53fcb666)
+    // instead of leaning on the profile query below to fail in some other shape.
+    if !middleware::user_is_live(&state.db, &claims.sub).await? {
+        return Err(AppError::Unauthorized);
+    }
+
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
 
     let user =
@@ -375,6 +382,12 @@ pub async fn list_invites(
     request: Request,
 ) -> ApiResult<impl IntoResponse> {
     let claims = extract_claims(&request, &state)?;
+    // This handler parses the bearer itself instead of running `auth_middleware`, so it does not
+    // inherit the boundary's liveness checks — apply the user half here (kanban t_53fcb666), or a
+    // deleted account's token could still enumerate the workspace's open invites.
+    if !middleware::user_is_live(&state.db, &claims.sub).await? {
+        return Err(AppError::Unauthorized);
+    }
     if claims.role != "owner" && claims.role != "admin" {
         return Err(AppError::Forbidden);
     }

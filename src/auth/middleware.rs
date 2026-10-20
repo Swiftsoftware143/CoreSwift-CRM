@@ -100,6 +100,24 @@ pub async fn auth_middleware(
         return Err(AppError::Unauthorized);
     }
 
+    // A signature-valid token is also NOT proof that the USER behind it still exists (kanban
+    // t_53fcb666, fleet-wide). `sub` names a `users` row and everything above is built from the
+    // claims alone, so deleting an account left a working credential for the rest of its life —
+    // measured on a sibling app 2026-10-20: after `delete from users` + `delete from tenants`, the
+    // same token still answered 200 from `/api/v1/auth/me` AND from a platform-admin read. Deleting
+    // the row is how the fleet remediates a compromised account and how its probe sweep cleans up
+    // throwaways, so deletion has to BE the revocation. One primary-key read, for every role:
+    // a missing row, a disabled row and a `sub` that is not a uuid all answer 401 exactly like an
+    // expired token (the SPA turns 401 into "Session expired" + sign-out). A database that cannot
+    // answer is a 500 from `?`, never a silent pass.
+    if !user_is_live(&state.db, &claims.sub).await? {
+        tracing::warn!(
+            user = %claims.sub,
+            "rejected a token whose user no longer exists or is disabled"
+        );
+        return Err(AppError::Unauthorized);
+    }
+
     req.extensions_mut().insert(claims);
     Ok(next.run(req).await)
 }
@@ -121,6 +139,25 @@ pub async fn workspace_exists(db: &sqlx::PgPool, aid: &str) -> Result<bool, AppE
         .await?;
 
     Ok(found.is_some())
+}
+
+/// Is the USER named by a token's `sub` claim still a live, enabled row in `users`?
+///
+/// The sibling of [`workspace_exists`], and the half that was missing: a workspace can be alive
+/// while the account that signed in has been deleted or disabled (kanban t_53fcb666). `Ok(false)`
+/// for a `sub` that is not even a uuid — such a claim names no row. `Err(AppError::Database)` when
+/// the database cannot answer, so an outage is never reported as "your account is gone".
+pub async fn user_is_live(db: &sqlx::PgPool, sub: &str) -> Result<bool, AppError> {
+    let Ok(user_id) = uuid::Uuid::parse_str(sub) else {
+        return Ok(false);
+    };
+
+    let active: Option<bool> = sqlx::query_scalar("SELECT is_active FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(db)
+        .await?;
+
+    Ok(active == Some(true))
 }
 
 /// Verify a JWT token and return the claims.
