@@ -206,6 +206,34 @@ pub fn session_predates_password_change(jwt_iat: Option<i64>, changed_at: Option
     }
 }
 
+/// Refuse a credential whose session predates its account's last password change, for the handlers
+/// that parse the bearer THEMSELVES instead of running `auth_middleware` (`GET /api/auth/me`,
+/// `GET /api/auth/invites`). Kanban t_80787a0f: measured on the live app after the boundary arm
+/// shipped — `GET /api/tags` answered 401 for a token minted before the password change while
+/// `GET /api/auth/me` still answered 200, because its own check only asked "does the row exist".
+/// A revoked session must not be able to read its own profile through a side door.
+pub async fn refuse_revoked_session(db: &sqlx::PgPool, claims: &Claims) -> Result<(), AppError> {
+    match user_session_state(db, &claims.sub).await? {
+        Some((true, changed_at)) => {
+            if session_predates_password_change(Some(claims.iat as i64), changed_at) {
+                tracing::warn!(
+                    user = %claims.sub,
+                    "rejected a token minted before the account's password change"
+                );
+                return Err(AppError::Unauthorized);
+            }
+            Ok(())
+        }
+        _ => {
+            tracing::warn!(
+                user = %claims.sub,
+                "rejected a token whose user no longer exists or is disabled"
+            );
+            Err(AppError::Unauthorized)
+        }
+    }
+}
+
 pub async fn user_is_live(db: &sqlx::PgPool, sub: &str) -> Result<bool, AppError> {
     let Ok(user_id) = uuid::Uuid::parse_str(sub) else {
         return Ok(false);

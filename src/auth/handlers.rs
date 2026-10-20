@@ -305,12 +305,11 @@ pub async fn me(State(state): State<AppState>, request: Request) -> ApiResult<im
 
     let claims = middleware::verify_token(token, &state.config.jwt_secret)?;
 
-    // Parsed here rather than by `auth_middleware`, so the boundary's liveness checks do not
-    // apply: refuse a token whose `users` row is gone/disabled itself (kanban t_53fcb666)
-    // instead of leaning on the profile query below to fail in some other shape.
-    if !middleware::user_is_live(&state.db, &claims.sub).await? {
-        return Err(AppError::Unauthorized);
-    }
+    // Parsed here rather than by `auth_middleware`, so the boundary's checks do not apply on
+    // their own: apply BOTH here — the row must still exist and be enabled (kanban t_53fcb666)
+    // and the session must not predate a password change (kanban t_80787a0f, measured live: this
+    // handler answered 200 for a token the boundary had already refused on /api/tags).
+    middleware::refuse_revoked_session(&state.db, &claims).await?;
 
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
 
@@ -383,11 +382,10 @@ pub async fn list_invites(
 ) -> ApiResult<impl IntoResponse> {
     let claims = extract_claims(&request, &state)?;
     // This handler parses the bearer itself instead of running `auth_middleware`, so it does not
-    // inherit the boundary's liveness checks — apply the user half here (kanban t_53fcb666), or a
-    // deleted account's token could still enumerate the workspace's open invites.
-    if !middleware::user_is_live(&state.db, &claims.sub).await? {
-        return Err(AppError::Unauthorized);
-    }
+    // inherit the boundary's checks — apply them here: the user must still exist and be enabled
+    // (kanban t_53fcb666) and the session must not predate a password change (t_80787a0f), or a
+    // revoked token could still enumerate the workspace's open invites.
+    middleware::refuse_revoked_session(&state.db, &claims).await?;
     if claims.role != "owner" && claims.role != "admin" {
         return Err(AppError::Forbidden);
     }
