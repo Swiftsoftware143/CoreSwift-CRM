@@ -110,12 +110,28 @@ pub async fn auth_middleware(
     // a missing row, a disabled row and a `sub` that is not a uuid all answer 401 exactly like an
     // expired token (the SPA turns 401 into "Session expired" + sign-out). A database that cannot
     // answer is a 500 from `?`, never a silent pass.
-    if !user_is_live(&state.db, &claims.sub).await? {
-        tracing::warn!(
-            user = %claims.sub,
-            "rejected a token whose user no longer exists or is disabled"
-        );
-        return Err(AppError::Unauthorized);
+    match user_session_state(&state.db, &claims.sub).await? {
+        Some((true, changed_at)) => {
+            // SESSION REVOCATION (kanban t_80787a0f): this app already stamps
+            // `users.password_changed_at` on both the change and the reset, but nothing read it —
+            // so a token minted before the change kept answering 200 afterwards. A session whose
+            // `iat` predates it is refused here, in the SAME read, with the same 401 a deleted row
+            // gets. NULL (never changed) changes nothing.
+            if session_predates_password_change(Some(claims.iat as i64), changed_at) {
+                tracing::warn!(
+                    user = %claims.sub,
+                    "rejected a token minted before the account's password change"
+                );
+                return Err(AppError::Unauthorized);
+            }
+        }
+        _ => {
+            tracing::warn!(
+                user = %claims.sub,
+                "rejected a token whose user no longer exists or is disabled"
+            );
+            return Err(AppError::Unauthorized);
+        }
     }
 
     req.extensions_mut().insert(claims);
@@ -147,6 +163,49 @@ pub async fn workspace_exists(db: &sqlx::PgPool, aid: &str) -> Result<bool, AppE
 /// while the account that signed in has been deleted or disabled (kanban t_53fcb666). `Ok(false)`
 /// for a `sub` that is not even a uuid — such a claim names no row. `Err(AppError::Database)` when
 /// the database cannot answer, so an outage is never reported as "your account is gone".
+/// What the `users` row named by a token's `sub` still grants: `(is_active, password_changed_at)`,
+/// or `None` when no such row exists.
+///
+/// The existence half is kanban t_53fcb666; the timestamp half is kanban t_80787a0f, which this
+/// app already had data for (`password_changed_at` is stamped by BOTH the change and the reset
+/// writer) but never read. `password_changed_at` arrives as a unix epoch (`None` = never changed,
+/// so no session is restricted).
+pub async fn user_session_state(
+    db: &sqlx::PgPool,
+    sub: &str,
+) -> Result<Option<(bool, Option<i64>)>, AppError> {
+    let Ok(user_id) = uuid::Uuid::parse_str(sub) else {
+        return Ok(None);
+    };
+
+    let row: Option<(bool, Option<i64>)> = sqlx::query_as(
+        "SELECT is_active, floor(EXTRACT(EPOCH FROM password_changed_at))::bigint
+           FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?;
+
+    Ok(row)
+}
+
+/// Does a session minted at `jwt_iat` predate the instant its account last changed its password?
+/// (kanban t_80787a0f)
+///
+/// Pure, so both arms are unit-tested. `changed_at` is `users.password_changed_at` as a unix epoch
+/// (`None` = never changed, which is every account until it rotates its password, so every token
+/// already in the wild keeps working). A session with no `iat` cannot prove it is newer than the
+/// change, and the safe answer for a credential is "cannot prove → refuse". `iat` is second-granularity (and the change's own timestamp is floored to a second for this reason), so a session minted in the SAME second as the change cannot be told apart from a re-login and is allowed.
+pub fn session_predates_password_change(jwt_iat: Option<i64>, changed_at: Option<i64>) -> bool {
+    match changed_at {
+        None => false,
+        Some(v) => match jwt_iat {
+            None => true,
+            Some(iat) => iat < v,
+        },
+    }
+}
+
 pub async fn user_is_live(db: &sqlx::PgPool, sub: &str) -> Result<bool, AppError> {
     let Ok(user_id) = uuid::Uuid::parse_str(sub) else {
         return Ok(false);
@@ -259,5 +318,24 @@ mod tests {
             ))
             .expect_err("an unreachable database must not answer 'workspace is gone'");
         assert!(matches!(err, AppError::Database(_)), "got {err:?}");
+    }
+
+    /// The reported defect (kanban t_80787a0f): this app already stamped
+    /// `users.password_changed_at` on both the change and the reset, but no boundary read it, so a
+    /// token minted before the change kept answering 200. The rule is one comparison, and it must
+    /// change nothing else: NULL (never changed), a session minted at or after the change, and a
+    /// session with no `iat` on an unchanged account all stay exactly as they were.
+    #[test]
+    fn a_session_minted_before_the_password_change_is_refused_and_nothing_else_is() {
+        // NULL column: never restricted, so every token already in the wild keeps working.
+        assert!(!session_predates_password_change(Some(1_000), None));
+        // Minted BEFORE the change -> refused.
+        assert!(session_predates_password_change(Some(1_000), Some(2_000)));
+        // Minted AT the change or after it -> allowed (a re-login must work).
+        assert!(!session_predates_password_change(Some(2_000), Some(2_000)));
+        assert!(!session_predates_password_change(Some(3_000), Some(2_000)));
+        // A session that cannot prove it is newer is refused rather than trusted.
+        assert!(session_predates_password_change(None, Some(2_000)));
+        assert!(!session_predates_password_change(None, None));
     }
 }
