@@ -22,7 +22,8 @@ use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
 
-/// The jsonb path this module writes, expressed once so the statements cannot drift.
+/// The jsonb path this module writes, expressed once so the statements cannot drift. Its
+/// INTERMEDIATE segment is `{email_branding}`, which [`SET_LOGO_URL`] creates when missing.
 const LOGO_PATH: &str = "{email_branding,logo_url}";
 
 const UPSERT_LOGO: &str = "INSERT INTO tenant_logos (tenant_id, content_type, bytes, updated_at) \
@@ -32,19 +33,36 @@ const UPSERT_LOGO: &str = "INSERT INTO tenant_logos (tenant_id, content_type, by
            bytes        = EXCLUDED.bytes, \
            updated_at   = NOW()";
 
+// `jsonb_set` only sets a path whose INTERMEDIATE keys already exist: on a workspace whose settings
+// have no `email_branding` object it answers UPDATE 1 and changes nothing (measured 2026-10-20), so
+// the bytes landed in `tenant_logos` while no mail ever referenced them. The outer statement
+// therefore creates the intermediate object first when it is missing (or is not an object at all,
+// in which case there is no branded header to preserve).
 const SET_LOGO_URL: &str = "UPDATE tenants \
       SET settings = CASE \
             WHEN settings IS NULL OR jsonb_typeof(settings) = 'object' \
-            THEN jsonb_set(COALESCE(settings, '{}'::jsonb), $1::text[], to_jsonb($2::text), true) \
+            THEN jsonb_set( \
+                   jsonb_set( \
+                     COALESCE(settings, '{}'::jsonb), \
+                     '{email_branding}', \
+                     CASE WHEN jsonb_typeof(settings -> 'email_branding') = 'object' \
+                          THEN settings -> 'email_branding' \
+                          ELSE '{}'::jsonb \
+                     END, \
+                     true), \
+                   $1::text[], to_jsonb($2::text), true) \
             ELSE settings \
           END, \
           updated_at = NOW() \
     WHERE id = $3";
 
+// Clearing has nothing to clear when the document is absent — creating an empty object here would
+// add a settings key to a workspace that never had branding, so this arm stays a no-op instead.
 const CLEAR_LOGO_URL: &str = "UPDATE tenants \
       SET settings = CASE \
-            WHEN settings IS NULL OR jsonb_typeof(settings) = 'object' \
-            THEN jsonb_set(COALESCE(settings, '{}'::jsonb), $1::text[], to_jsonb(''::text), true) \
+            WHEN jsonb_typeof(settings) = 'object' \
+             AND jsonb_typeof(settings -> 'email_branding') = 'object' \
+            THEN jsonb_set(settings, $1::text[], to_jsonb(''::text), true) \
             ELSE settings \
           END, \
           updated_at = NOW() \
