@@ -190,6 +190,20 @@ button:disabled{opacity:.6;cursor:not-allowed}
           ? 'You have joined the workspace. Check your email — we sent your login details to ' + body.email + '.'
           : 'Account created! Check your email — we sent your login details to ' + body.email +
             '. You can change your password any time in your profile settings.', true);
+        // A customer whose credentials mail never arrived has a way back in (cron 2026-10-19):
+        // the address they just typed is carried into the reset-request page, so nothing is retyped.
+        (function () {
+          var d = document.createElement('div');
+          d.style.cssText = 'margin-top:12px;padding-top:10px;border-top:1px solid rgba(0,0,0,.08);font-size:13px';
+          d.appendChild(document.createTextNode('Nothing in your inbox after a minute? Check your spam folder, then '));
+          var a = document.createElement('a');
+          a.href = '/forgot-password.html?email=' + encodeURIComponent(body.email);
+          a.style.fontWeight = '600';
+          a.textContent = 'send yourself a reset code';
+          d.appendChild(a);
+          d.appendChild(document.createTextNode('.'));
+          msg.appendChild(d);
+        })();
         btn.disabled = false;
         btn.textContent = INVITE ? 'Join workspace' : 'Check your email';
       });

@@ -5680,6 +5680,13 @@ TAB_RENDERERS['branding'] = () => {
     '<div id="brandLogoPreviewWrap" style="margin-top:12px"></div>',
     '<button class="btn btn-secondary" data-ops="branding-upload" onclick="uploadBrandingLogo()">Upload logo</button> ' +
     '<button class="btn btn-ghost" data-ops="branding-remove" onclick="removeBrandingLogo()">Remove logo</button>') +
+  '<br>' +
+  card('Preview', '' +
+    '<p class="form-hint" style="margin-top:0">The header every email from this workspace opens with. It follows the fields above as you type, and nothing is saved until you press <strong>Save branding</strong>.</p>' +
+    '<div style="border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:16px 14px 12px;background:#fff">' +
+      '<div id="brandHeaderPreview"></div>' +
+      '<div style="font-size:13.5px;color:#111827;line-height:1.5">Hi Alex &mdash; this is a sample of the message body. Only the header above comes from your branding.</div>' +
+    '</div>') +
   '<div id="brandingStatus" style="margin-top:10px;color:var(--text-muted)"></div>';
 };
 
@@ -5696,10 +5703,44 @@ async function loadBrandingTab() {
     if (nameEl) nameEl.value = b.brand_name || '';
     if (colorEl && /^#[0-9a-fA-F]{6}$/.test(b.brand_color || '')) colorEl.value = b.brand_color;
     renderBrandLogoPreview(b.logo_url || '');
+    // oninput (not addEventListener): loadBrandingTab runs on every tab entry, and a stacked
+    // listener would repaint the preview N times for one keystroke.
+    const nameIn = document.getElementById('brandName');
+    const colourIn = document.getElementById('brandColor');
+    if (nameIn) nameIn.oninput = renderBrandHeaderPreview;
+    if (colourIn) colourIn.oninput = renderBrandHeaderPreview;
+    renderBrandHeaderPreview();
     if (status) status.textContent = '';
   } catch (e) {
     if (status) status.textContent = 'Could not load branding: ' + e.message;
   }
+}
+
+// What a RECIPIENT sees — mirrors Branding::header_html (src/branding.rs): a centred logo (max 56px
+// high / 240px wide, alt = the display name) with no name line while a logo is set; otherwise the
+// display name in 20px bold #111827; then a 3px rule in the effective brand colour; and the note
+// when neither is set, which is when mail keeps CoreSwift's own header. It reads this tab's own
+// controls and the logo the tab already rendered, so it sends nothing and cannot disagree with what
+// Save would store.
+function renderBrandHeaderPreview() {
+  const wrap = document.getElementById('brandHeaderPreview');
+  if (!wrap) return;
+  const nameEl = document.getElementById('brandName');
+  const colorEl = document.getElementById('brandColor');
+  const name = ((nameEl && nameEl.value) || '').trim();
+  const rawColour = String((colorEl && colorEl.value) || '').trim();
+  const colour = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(rawColour) ? rawColour : '#4f46e5';
+  const logoImg = document.querySelector('#brandLogoPreviewWrap img');
+  const logo = (logoImg && logoImg.getAttribute('src')) || '';
+  if (!logo && !name) {
+    wrap.innerHTML = '<div style="font-size:13px;color:var(--text-muted,#64748b)">Nothing is set yet, so mail keeps CoreSwift\u2019s own header.</div>';
+    return;
+  }
+  const inner = logo
+    ? '<img src="' + escapeHtml(logo) + '" alt="' + escapeHtml(name) + '" style="max-height:56px;max-width:240px;display:inline-block">'
+    : '<span style="font:700 20px/1.3 -apple-system,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#111827">' + escapeHtml(name) + '</span>';
+  wrap.innerHTML = '<div style="text-align:center;margin:0 0 8px">' + inner + '</div>' +
+    '<div style="border-top:3px solid ' + colour + ';margin:0 0 14px"></div>';
 }
 
 function renderBrandLogoPreview(logoPath) {
@@ -5709,6 +5750,7 @@ function renderBrandLogoPreview(logoPath) {
     ? '<div style="color:var(--text-muted);font-size:12px;margin-bottom:6px">Current logo</div>' +
       '<img src="' + escapeHtml(logoPath) + '" alt="Logo preview" style="max-height:56px;max-width:240px;border:1px solid var(--border,#333);padding:6px;border-radius:6px;background:#fff">'
     : '<div style="color:var(--text-muted);font-size:12px">No logo uploaded.</div>';
+  renderBrandHeaderPreview();
 }
 
 async function saveBranding() {
