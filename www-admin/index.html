@@ -4267,21 +4267,29 @@ async function loadBrandingTab() {
   if (!wrap) return;
   const acct = _acctId();
   let brand = {};
+  let loadFailed = false;
   if (acct) {
     try {
       const res = await API.get('/account/' + encodeURIComponent(acct) + '/settings');
       const doc = (res && res.settings) || {};
       if (doc && typeof doc.email_branding === 'object' && doc.email_branding) brand = doc.email_branding;
-    } catch(e) { /* an unreadable settings document still renders an unbranded pane, never an error page */ }
+    } catch(e) { loadFailed = true; }
   }
   const name = brand.brand_name || '';
   const color = brand.brand_color || '#4f46e5';
   const logo = brand.logo_url || '';
   const branded = !!(name || logo);
+  // An unreadable document is NOT "this workspace has no branding". Rendering the empty form looked
+  // identical to an unbranded workspace, so an operator whose read had failed saw a blank panel and
+  // could reasonably believe their branding had been lost. Name the failure and point at a reload;
+  // the save itself refuses an unreadable document (see saveBranding).
+  const loadNotice = loadFailed
+    ? '<div class="form-hint" data-ops="branding-load-failed" style="margin-bottom:12px;padding:10px 12px;border:1px solid #fca5a5;border-radius:8px;background:#fef2f2;color:#991b1b">Could not read this workspace\'s settings, so the fields below may be incomplete. Reload the page before saving \u2014 nothing has been changed.</div>'
+    : '';
   wrap.innerHTML = card(
     '<span class="card-title">Your branding on transactional email</span>' +
       '<span class="badge ' + (branded ? 'badge-success' : 'badge-muted') + '">' + (branded ? 'branded' : 'not branded') + '</span>',
-    '<div class="form-hint" style="margin-bottom:12px">This is what your customers see at the top of the signup, password-reset and purchase emails sent for your account. Leave it empty to send with the app\'s default identity.</div>' +
+    loadNotice + '<div class="form-hint" style="margin-bottom:12px">This is what your customers see at the top of the signup, password-reset and purchase emails sent for your account. Leave it empty to send with the app\'s default identity.</div>' +
     '<div style="display:grid;grid-template-columns:1fr 220px;gap:16px;align-items:start">' +
       '<div>' +
         '<div class="form-group"><label>Brand display name</label>' +
@@ -4339,13 +4347,24 @@ async function saveBranding() {
   if (!acct) { toast('No account on this session', 'error'); return; }
   const name = ((document.getElementById('brandName') || {}).value || '').trim();
   const color = ((document.getElementById('brandColor') || {}).value || '').trim();
+  // The settings write REPLACES the whole document (UPDATE tenants SET settings = $1), so this save
+  // must echo every other key back. A failed READ therefore cannot be read as "this workspace has no
+  // other settings": doing that wrote `{email_branding}` alone and silently destroyed the rest of the
+  // document (measured 2026-10-21 on a scratch workspace — an unrelated `keep_me` key vanished).
+  // Abort and say so instead; the tenant console's own save has always propagated the read failure.
+  let doc;
   try {
-    let doc = {};
-    try {
-      const cur = await API.get('/account/' + encodeURIComponent(acct) + '/settings');
-      doc = (cur && cur.settings) || {};
-    } catch(_) {}
-    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) doc = {};
+    const cur = await API.get('/account/' + encodeURIComponent(acct) + '/settings');
+    doc = (cur && cur.settings) || {};
+  } catch(e) {
+    toast('Could not read this workspace\'s settings, so nothing was saved: ' + ((e && e.message) || e), 'error');
+    return;
+  }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+    toast('The workspace settings document is not an object, so nothing was saved — this needs an operator.', 'error');
+    return;
+  }
+  try {
     doc.email_branding = { brand_name: name, brand_color: color };
     await API.patch('/account/' + encodeURIComponent(acct) + '/settings', doc);
     toast('Email branding saved', 'success');
