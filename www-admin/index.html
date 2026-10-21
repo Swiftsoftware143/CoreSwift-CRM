@@ -819,6 +819,7 @@ function logout(silent) {
   // behind would show the red banner over the LOGIN screen on the next load.
   localStorage.removeItem(IMP_ORIG_KEY);
   localStorage.removeItem(IMP_NAME_KEY);
+  localStorage.removeItem(IMP_ID_KEY);
   document.getElementById('appWrap').style.display = 'none';
   document.getElementById('loginScreen').style.display = 'flex';
   if (!silent) toast('Signed out', 'info');
@@ -1224,6 +1225,13 @@ function dataTable(headers, rows, emptyMsg) {
 // returned the target's counts — which is exactly why the name travels on the banner.
 const IMP_ORIG_KEY = 'crm_imp_original';
 const IMP_NAME_KEY = 'crm_imp_name';
+// The TARGET tenant id, kept beside the name for one measured reason: an impersonation token
+// moves only the `aid` claim, so /api/auth/me keeps answering the OPERATOR's own account_id.
+// Every pane that keys off STATE.user.account_id therefore pointed at the operator's workspace
+// while the red banner said "viewing as <customer>" — the branding save wrote the operator's
+// own tenants.settings and the logo upload (which takes its id from the claim) wrote the
+// customer's, so one screen edited two different workspaces. _acctId() prefers this key.
+const IMP_ID_KEY = 'crm_imp_id';
 let TENANT_NAMES = {};   // id -> name, filled from the list the operator clicked in
 
 function showImpersonationBanner(name) {
@@ -1247,6 +1255,7 @@ async function stopImpersonation() {
   const orig = localStorage.getItem(IMP_ORIG_KEY);
   localStorage.removeItem(IMP_ORIG_KEY);
   localStorage.removeItem(IMP_NAME_KEY);
+  localStorage.removeItem(IMP_ID_KEY);
   if (orig) { STATE.token = orig; localStorage.setItem('crm_token', orig); }
   window.location.reload();
 }
@@ -1261,6 +1270,7 @@ window.crmImpersonate = async function (tenantId) {
     // Keep the operator's OWN session before it is replaced, so Stop puts them back exactly here.
     if (!localStorage.getItem(IMP_ORIG_KEY)) localStorage.setItem(IMP_ORIG_KEY, STATE.token);
     localStorage.setItem(IMP_NAME_KEY, name);
+    localStorage.setItem(IMP_ID_KEY, tenantId);
     STATE.token = token;
     localStorage.setItem('crm_token', token);
     showImpersonationBanner(name);
@@ -4229,7 +4239,17 @@ async function changePassword() {
 // reads the current one and MERGES — other keys (communications, ai, support_email_box_id) must
 // survive. `logo_url` is deliberately omitted: the logo endpoints own it and the server preserves
 // the stored value when the key is absent.
-function _acctId() { return STATE.user && STATE.user.account_id; }
+function _acctId() {
+  // Under impersonation the account being VIEWED is the target, not the operator's own: the
+  // token moves only `aid`, and /api/auth/me keeps reporting the operator's account_id
+  // (measured live 2026-10-18). Reading the operator's id here made the branding pane read and
+  // PATCH the operator's own tenants.settings while the banner named the customer.
+  try {
+    const impId = localStorage.getItem(IMP_ID_KEY);
+    if (impId) return impId;
+  } catch (e) { /* private mode / storage disabled: fall through to the session's own account */ }
+  return STATE.user && STATE.user.account_id;
+}
 
 // What a RECIPIENT sees — mirrors Branding::header_html (src/branding.rs): a centred logo (max 56px
 // high / 240px wide); otherwise the brand name in 20px #111827; then a 3px rule in the brand colour;
