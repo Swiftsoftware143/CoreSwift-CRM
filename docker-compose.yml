@@ -19,8 +19,24 @@ services:
     network_mode: host
     env_file:
       - /etc/swift/env/coreswift.env
+    # 200-ONLY (kanban t_af4d9006, 2026-10-22). The previous test had a fallback arm that accepted
+    # 401/403/404/405, so a health route that no longer exists (or is gated) still read as HEALTHY.
+    # Measured on the container: /api/health-does-not-exist-xyz answers 401, which the old pattern
+    # scored rc=0 and this one scores rc=1. Tighten only in the 200 direction; never re-add the
+    # permissive arm.
+    #
+    # DB-AWARE (kanban t_ee33b107, 2026-10-22): the probe moved from /api/health to /api/ready.
+    # /api/health is a CONSTANT — no Postgres, no redis — so a container with a dead pool still read
+    # healthy and the fleet monitor stayed green while every real request failed. /api/ready is the
+    # app's own shipped readiness route (public, rate-limit exempt, listed in route_policy's
+    # PUBLIC_ROUTES): it runs `SELECT 1` plus a redis ping and answers 503
+    # {"database":false,"redis":…,"status":"not_ready"} when either is down. No Rust change was
+    # needed. Measured on a scratch boot of the same binary sha 08a60e02846fc151 with the database
+    # path severed: /api/ready 503 database:false (first answer ~30 s — sqlx's pool acquire timeout —
+    # so the 5 s healthcheck timeout is what fires first and marks the container unhealthy), while
+    # /api/health still answered 200. Proof: /opt/swift/audits/t_ee33b107/.
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -sf -o /dev/null 'http://127.0.0.1:8084/api/health' || curl -sk -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8084/api/health' | grep -qE '^(200|401|403|404|405)'"]
+      test: ["CMD", "sh", "-c", "curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8084/api/ready' | grep -qx '200'"]
       interval: 30s
       timeout: 5s
       retries: 3
