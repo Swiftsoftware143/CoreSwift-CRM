@@ -180,6 +180,37 @@ tr:hover td{background:var(--bg-hover)}
 .grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
 @media(max-width:768px){.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}}
 
+/* ===== PHONE SHELL (kanban t_a6772c00) =====
+   This console had no width breakpoint for the shell itself: .sidebar is position:fixed at 260px and
+   .main-wrap carries margin-left:260px at every width, so a 390px phone left the content 130px and
+   pushed the rest of every view off-screen (measured live 2026-10-22 at 390x844 with a probe-tenant
+   token: document.documentElement.scrollWidth 617 vs innerWidth 390 = 227px of horizontal overflow,
+   on every tab including the dashboard).
+   CoreSwift's own convention is the 60px icon rail (STATE.sidebarCollapsed / .sidebar.collapsed), so
+   that is what a phone gets — the same shape FunnelSwift, IncentiveSwift, ADASwift and MissedCall ship
+   at this breakpoint. Desktop is untouched. Both shell rules need !important: the base
+   .main-wrap{margin-left} and the JS-driven .main-wrap.expanded carry their own specificity. */
+@media(max-width:768px){
+  /* #appWrap is a flex item of <body> (display:flex) and .main-wrap is a flex item of #appWrap; both
+     default to min-width:auto, so the wrapper sized itself to its content's min-content (measured 473px
+     at a 390px viewport on Email Branding, 689px at 360px on Integrations) instead of the screen.
+     min-width:0 + width:100% is what lets the shell actually take the phone's width. */
+  #appWrap{width:100%;min-width:0!important}
+  .main-wrap{min-width:0!important}
+  .sidebar{width:var(--sidebar-collapsed)!important}
+  .sidebar .nav-text,.sidebar .nav-arrow,.sidebar .sidebar-brand-text,.sidebar .nav-group-label{display:none!important}
+  .sidebar .nav-item{justify-content:center;padding:10px 0}
+  .sidebar .nav-icon{margin-right:0;font-size:1.2rem}
+  .sidebar .collapse-btn{display:none}
+  .main-wrap,.main-wrap.expanded{margin-left:var(--sidebar-collapsed)!important}
+  .header{padding:0 12px}
+  .header-title{font-size:1rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .user-btn #userEmail{display:none}
+  .content-inner{padding:16px}
+  .grid-2,.grid-3,.grid-4{grid-template-columns:1fr}
+  table{max-width:100%}
+}
+
 /* ===== PROVIDER CARDS ===== */
 .provider-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
 .provider-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;transition:all .2s}
