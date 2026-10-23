@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CoreSwift CRM Admin</title>
+<title>CoreSwift CRM</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -91,7 +91,7 @@ a:hover{color:var(--accent-hover)}
 .sidebar-nav{flex:1;overflow-y:auto;padding:8px 0}
 .nav-section{padding:4px 0}
 .nav-divider{padding:8px 20px;font-size:.7rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px}
-.nav-item{display:flex;align-items:center;gap:10px;padding:9px 20px;cursor:pointer;color:var(--text-secondary);font-size:.88rem;transition:all .15s;border-left:3px solid transparent;white-space:nowrap}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 20px;cursor:pointer;color:var(--text-secondary);font-size:.88rem;transition:all .15s;border-left:3px solid transparent;white-space:nowrap;background:none;border:0;border-left:3px solid transparent;font-family:inherit;box-sizing:border-box;width:100%;text-align:left}
 .nav-item:hover{color:var(--text-primary);background:var(--bg-hover)}
 .nav-item.active{color:#fff;background:var(--accent-subtle);border-left-color:var(--accent)}
 .nav-item .nav-icon{width:20px;text-align:center;flex-shrink:0;font-size:1rem}
@@ -766,19 +766,19 @@ function renderSidebar() {
     const isGroup = it.type === 'group';
     if (isGroup) {
       const gid = 'group-'+it.label.toLowerCase().replace(/[^a-z]/g,'');
-      h += `<div class="nav-item" onclick="toggleGroup('${gid}')" data-group="${gid}">
+      h += `<button type="button" class="nav-item" onclick="toggleGroup('${gid}')" data-group="${gid}" aria-label="${it.label}">
         <span class="nav-icon">${it.icon}</span>
         <span class="nav-text">${it.label}</span>
         <span class="nav-arrow">▶</span>
-      </div>`;
+      </button>`;
       h += `<div class="nav-group-items" id="${gid}">`;
       it.children.forEach(c => item(c, true));
       h += '</div>';
     } else {
-      h += `<div class="nav-item${STATE.activeTab===it.id?' active':''}" onclick="switchTab('${it.id}')" data-tab="${it.id}">
+      h += `<button type="button" class="nav-item${STATE.activeTab===it.id?' active':''}" onclick="switchTab('${it.id}')" data-tab="${it.id}" aria-label="${it.label}">
         <span class="nav-icon">${it.icon}</span>
         <span class="nav-text">${it.label}</span>
-      </div>`;
+      </button>`;
     }
   }
   MENU.forEach(it => item(it, false));
@@ -898,6 +898,69 @@ function dismissBanner() {
   localStorage.setItem('crm_banner_dismissed', '1');
 }
 
+// Ask CoreSwift to move this workspace onto a plan (fleet convention: ADASwift, FunnelSwift,
+// MissedCall, WorkflowSwift and IncentiveSwift all give a customer a one-press way to ASK while
+// self-serve checkout is closed. CoreSwift had only the sentence "plan changes are made by
+// CoreSwift", i.e. a plan screen with no action at all — a dead end for the customer who wants up).
+//
+// WHY the PUBLIC contact intake and not the tenant ticket route: checkout and the plan writers are
+// retired here (tenant tokens get 403 from POST/PATCH /api/billing/subscription) and the tenant
+// ticket route is plan-gated AND tenant-scoped — measured live 2026-10-22 on a fresh Free workspace:
+//   POST /api/tickets -> 402 {"message":"Support tickets is not available on your current plan..."}
+// and every ticket read is `WHERE tenant_id = <caller's own>` (src/tickets/handlers.rs), so a request
+// filed in the customer's own store would be a black hole: the operator's Support Tickets screen only
+// ever lists the OPERATOR's own workspace. CoreSwift's tickets are a tenant's support desk for ITS
+// customers, not a platform inbox.
+// POST /api/public/contact is the intake built for exactly this (no auth, no plan gate) and it writes
+// the ticket against whichever workspace the caller names — so the request is filed into the PLATFORM
+// workspace, which is the one the operator actually reads. Nothing is charged and no plan changes
+// here: the team reads it and makes the switch.
+const CS_PLATFORM_INBOX = '7c1f787c-6f10-4c4d-ac24-71b82c38934e';
+async function requestPlanChange(idx, btn) {
+  const p = (window.__csUpgradePlans || [])[idx];
+  if (!p || !btn || btn.disabled) return;
+  const user = STATE.user || {};
+  if (!user.account_id) { toast('Please sign in again to send a plan request', 'error'); return; }
+  const name = p.name || p.slug || 'this';
+  const price = p.price_monthly || p.price || 0;
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  try {
+    const res = await fetch('/api/public/contact', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tenant_id: CS_PLATFORM_INBOX,
+        subject: 'Upgrade request: ' + name + ' plan',
+        message: 'This workspace asked to move to the ' + name + ' plan ($' + price + '/month) from '
+          + 'Plans & Billing. It is on ' + (STATE.planName || 'no plan') + ' today. Self-serve '
+          + 'checkout is not open on this install, so the switch has to be made by the CoreSwift team.'
+          + ' Workspace: ' + (user.company || user.account_name || '(unnamed)')
+          + ' [' + user.account_id + ']. Requester: ' + (user.email || '(no address)') + '.',
+        name: user.name || user.email || '',
+        email: user.email || '',
+        priority: 'medium'
+      })
+    });
+    const d = await res.json().catch(function () { return {}; });
+    if (!res.ok) {
+      throw new Error((d && (d.message || d.error)) || ('HTTP ' + res.status));
+    }
+    btn.textContent = '✓ Request sent';
+    btn.disabled = true;
+    const note = document.querySelector('[data-plan-request-note]');
+    if (note) {
+      note.style.display = 'block';
+      note.textContent = 'Request sent — CoreSwift will review this workspace for the ' + name
+        + ' plan and email you. Nothing was charged.';
+    }
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Request this plan';
+    toast('The request could not be sent: ' + e.message, 'error');
+  }
+}
+
 async function openUpgradeModal() {
   let plansHtml = '<div class="loading-wrap"><div class="spinner"></div> Loading plans...</div>';
   showModal('Compare Plans', plansHtml, '', true);
@@ -910,7 +973,7 @@ async function openUpgradeModal() {
       return;
     }
     plansHtml = '<div class="plans-grid">';
-    plans.forEach(p => {
+    plans.forEach((p, i) => {
       // the workspace's OWN plan row decides the badge (STATE.planId from checkPlan); a name match can
       // badge two rows, and the plans[0] fallback badged Free for every tenant
       const isCurrent = String(p.id) === String(STATE.planId);
@@ -923,6 +986,7 @@ async function openUpgradeModal() {
         <ul class="plan-features">
           ${features.map(f => `<li class="check">✓ ${escapeHtml(f)}</li>`).join('')}
         </ul>
+        ${isCurrent ? '' : `<button class="btn btn-primary btn-sm" data-request-plan="${i}" style="margin-top:10px">Request this plan</button>`}
       </div>`;
     });
     plansHtml += '</div>';
@@ -931,8 +995,16 @@ async function openUpgradeModal() {
     // every tenant token (t_8d91f70c) -- so a per-plan press could never complete a change. It used
     // to render with no handler at all (kanban t_fa43f3e8). The comparison is informational and
     // CoreSwift assigns the plan to the workspace (PUT /api/admin/tenants/:id/plan).
-    plansHtml += '<p style="color:var(--text-secondary);font-size:13px;margin-top:14px;text-align:center">Plan changes are made by CoreSwift for your workspace \u2014 this comparison is informational.</p>';
+    plansHtml += '<p style="color:var(--text-secondary);font-size:13px;margin-top:14px;text-align:center">Plan changes are made by CoreSwift for your workspace. Press <strong>Request this plan</strong> and it reaches our team.</p>';
+    plansHtml += '<p id="planRequestNote" data-plan-request-note style="display:none;color:var(--success);font-size:13px;margin-top:8px;text-align:center"></p>';
     document.querySelector('#modalContainer .modal-body').innerHTML = plansHtml;
+    // Wire the request buttons AFTER the markup exists (the pane is rebuilt on every open, so a
+    // per-render listener cannot go stale). The plan list is kept on window because the handler is
+    // called from an inline attribute-free listener and needs the row, not a name match.
+    window.__csUpgradePlans = plans;
+    document.querySelectorAll('#modalContainer [data-request-plan]').forEach(b => {
+      b.addEventListener('click', () => requestPlanChange(Number(b.getAttribute('data-request-plan')), b));
+    });
   } catch(e) {
     document.querySelector('#modalContainer .modal-body').innerHTML = `<p style="color:var(--error)">Failed to load plans: ${escapeHtml(e.message)}</p>`;
   }
@@ -7639,7 +7711,7 @@ function auditExportCsv() {
   toast('Exported ' + AUDIT_ROWS.length + (AUDIT_ROWS.length === 1 ? ' entry' : ' entries'), 'success');
 }
 </script>
-<script src="/inline-guide-widget.js?v=0bc326c56c5e"></script>
+<script src="/inline-guide-widget.js?v=20261021a"></script>
 </body>
 </html>
 
