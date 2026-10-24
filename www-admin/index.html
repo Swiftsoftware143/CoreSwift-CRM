@@ -2769,30 +2769,45 @@ const TAB_LOADERS = {
     // exposes a sent-email count) and "Events This Week" (GET /api/events filters by source /
     // event_type only — there is no week window, so "this week" could only be guessed). The admin
     // console carries the SAME tiles from the SAME keys: change the two shells together.
-    const source = async (p) => { try { return await API.get(p); } catch(_) { return null; } };
+    // A source BLOCKED BY THE PLAN is not a failure: 402 carries the server's own sentence
+    // ("Support tickets is not available on your current plan. Upgrade to access it."). Rendering a
+    // mute '—' for it made every Free workspace's Open Tickets tile look broken, with no way to tell
+    // a plan gate from an outage (measured in Chromium 2026-10-23, app.coreswiftcrm.com). A gated
+    // source now renders the tile with the plan note under its label and the server's sentence as
+    // its tooltip; a genuine failure still renders the bare '—'.
+    const source = async (p) => {
+      try { return { value: await API.get(p) }; }
+      catch (e) { return { value: null, gated: !!(e && e.planGate), note: (e && e.planMessage) || '' }; }
+    };
     const cnt = (v) => (typeof v === 'number' && isFinite(v)) ? v : '—';
     const money = (v) => (typeof v === 'number' && isFinite(v)) ? '$' + v.toFixed(2) : '—';
     try {
-      const [stats, pipes, tickets, links] = await Promise.all([
+      const [statsS, pipesS, ticketsS, linksS] = await Promise.all([
         source('/dashboard/stats'), source('/pipelines'), source('/tickets/stats'),
         source('/tracked-links')
       ]);
+      const stats = statsS.value, pipes = pipesS.value, tickets = ticketsS.value, links = linksS.value;
+      // The tile that IS gated names the LEVEL that carries it, and nothing else: the plan row
+      // settles it (support_tickets is false on Free and present on every paid plan), so the note
+      // does not depend on checkPlan() having landed yet — first paint said "this plan" otherwise.
+      const gateNote = ticketsS.gated ? 'On paid plans' : '';
       let html = '';
-      if (stats || pipes || tickets || links) {
+      if (stats || pipes || tickets || links || ticketsS.gated) {
         const items = [
           { icon:'👥', label:'Total Contacts', value: cnt(stats && stats.total_contacts) },
           { icon:'🏢', label:'Companies', value: cnt(stats && stats.total_companies) },
           { icon:'🎯', label:'Opportunities', value: cnt(stats && stats.total_opportunities) },
           { icon:'💰', label:'Won Deal Value', value: money(stats && stats.total_revenue) },
           { icon:'📈', label:'Pipelines', value: cnt(pipes && Array.isArray(pipes.pipelines) ? pipes.pipelines.length : null) },
-          { icon:'🎫', label:'Open Tickets', value: cnt(tickets && tickets.open) },
+          { icon:'🎫', label:'Open Tickets', value: cnt(tickets && tickets.open), note: gateNote, tip: ticketsS.note },
           { icon:'🔗', label:'Tracked Links', value: cnt(links && Array.isArray(links.links) ? links.links.length : null) },
         ];
         items.forEach(it => {
-          html += `<div class="stat-card${it.icon==='👥'?' accent':''}">
+          html += `<div class="stat-card${it.icon==='👥'?' accent':''}"${it.tip ? ` title="${escapeHtml(it.tip)}"` : ''}>
             <div class="stat-icon">${it.icon}</div>
             <div class="stat-value">${it.value}</div>
             <div class="stat-label">${it.label}</div>
+            ${it.note ? `<div class="stat-note" style="font-size:11px;color:var(--text-secondary);margin-top:2px">${escapeHtml(it.note)}</div>` : ''}
           </div>`;
         });
       }
