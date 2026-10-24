@@ -294,13 +294,17 @@ async fn queue_outbound_message(
     html_body: &str,
     is_html: bool,
 ) -> Result<(), String> {
-    // Per-TENANT email branding (kanban t_feab8aff): applied at the ONE queue point BOTH the
+    // Per-workspace email branding (kanban t_feab8aff), applied at the ONE queue point BOTH the
     // `email_templates` row and the inline fallback pass through, so a template added later inherits
-    // the header for free. An account with no branding renders byte-identical mail (the change is
-    // additive — `Branding::from_value` returns None), and the header is prepended BEFORE the
-    // support footer so the footer stays last.
+    // the header for free. A workspace that has configured NONE still sends a header — the app's own
+    // name and wordmark (kanban t_5054a5c9), because the first mail a brand-new customer receives
+    // must say who it is from. The header is prepended BEFORE the support footer so the footer stays
+    // last, and a text-only body stays text-only (one body column means one part).
+    let branding = crate::branding::load(db, tenant_id)
+        .await
+        .unwrap_or_else(app_default_branding);
     let (text_body, html_body, is_html) =
-        apply_branding(db, tenant_id, text_body, html_body, is_html).await;
+        apply_branding(Some(&branding), text_body, html_body, is_html);
     // Every transactional body leaves with the app's own support address on it. Applied HERE, at
     // the single queue point that BOTH the `email_templates` row and the inline fallback pass
     // through, so the address reaches the real message whichever body was chosen.
@@ -568,22 +572,50 @@ mod tests {
     }
 }
 
-/// Prepend the tenant's email-branding header to a body about to be queued (kanban t_feab8aff).
+/// The app's OWN wordmark, used for the header of every message sent for a workspace that has
+/// configured no email branding of its own (kanban t_5054a5c9).
 ///
-/// Returns `(text_body, html_body, is_html)`. Additive by construction: with no branding configured
-/// the inputs come back untouched, so every existing workspace's mail is byte-identical to before
-/// this feature. `{{brand_name}}`/`{{logo_url}}` are bound HERE because they are per-account and
-/// cannot live in a `&'static str` default map. If the message has no HTML part at all, one is built
-/// from the ESCAPED text so the logo has somewhere to render — a text part cannot carry an image,
-/// and `outbound_messages` carries a single body column.
-async fn apply_branding(
-    db: &PgPool,
-    tenant_id: Uuid,
+/// A mail client fetches it over the network with no session, so it is an absolute URL on a host
+/// that answers publicly — and it is a PNG, because Gmail and Outlook do not render the SVG the
+/// pages use. `alt` carries the name, so a client that blocks images still says whose mail this is.
+const APP_LOGO_PATH: &str = "/logo.png";
+
+/// The identity every message falls back to when its workspace has configured none: the app's own
+/// name and wordmark, painted in the fleet accent (`branding::DEFAULT_BRAND_COLOR`).
+///
+/// Before this the header block only appeared once a workspace had uploaded a logo of its own, so
+/// the credentials mail a BRAND-NEW customer receives — the first thing this product ever shows
+/// them — arrived with no wordmark at all (measured live 2026-10-24 on the pre-fix container, from
+/// the app's real send path: no header div, no `<img>`, no colour rule on the captured message,
+/// while it carried a full HTML part the header could have lived in). A workspace's own branding
+/// still wins field by field, because `apply_branding` is handed THIS only when
+/// `branding::load` found nothing configured.
+fn app_default_branding() -> crate::branding::Branding {
+    crate::branding::Branding {
+        brand_name: APP_NAME.to_string(),
+        brand_color: String::new(),
+        logo_url: APP_LOGO_PATH.to_string(),
+    }
+}
+
+/// Prepend the workspace's email-branding header to a body about to be queued (kanban t_feab8aff).
+///
+/// Returns `(text_body, html_body, is_html)`. `branding` is `Option` so this function stays a pure,
+/// testable statement of the render rule: `None` changes NOTHING (the additivity the port pinned —
+/// the inputs come back byte-identical), and every SEND resolves to `Some` because
+/// [`queue_outbound_message`] passes the workspace's own branding or [`app_default_branding`].
+///
+/// `{{brand_name}}`/`{{logo_url}}` are bound HERE because they are per-account and cannot live in
+/// a `&'static str` default map. If the message has no HTML part at all it STAYS that way: this app
+/// queues ONE body and the transport sends it as the text part, so wrapping text in HTML here would
+/// deliver markup as the plain-text part — a regression, not branding.
+fn apply_branding(
+    branding: Option<&crate::branding::Branding>,
     text_body: &str,
     html_body: &str,
     is_html: bool,
 ) -> (String, String, bool) {
-    let Some(brand) = crate::branding::load(db, tenant_id).await else {
+    let Some(brand) = branding else {
         return (text_body.to_string(), html_body.to_string(), is_html);
     };
     let logo_absolute = brand.resolve_logo_url(APP_URL);
@@ -606,6 +638,121 @@ async fn apply_branding(
         // queues ONE body and the transport sends it as the text part, so wrapping the text in HTML
         // here would deliver markup as the plain-text part — a regression, not branding.
         (text_body, html_body, is_html)
+    }
+}
+
+#[cfg(test)]
+mod branding_header_tests {
+    use super::{app_default_branding, apply_branding, APP_LOGO_PATH, APP_NAME, APP_URL};
+    use crate::branding::{Branding, DEFAULT_BRAND_COLOR};
+    use serde_json::json;
+
+    /// The defect this card closes (kanban t_5054a5c9): a workspace with no branding of its own
+    /// used to send mail with NO header at all, so the very first message a new customer receives —
+    /// the credentials mail — carried no wordmark (measured live on the pre-fix container: no
+    /// header div, no `<img>`, no colour rule, on a message that DID carry an HTML part).
+    #[test]
+    fn an_unbranded_workspace_gets_the_apps_own_wordmark() {
+        let b = app_default_branding();
+        assert_eq!(b.brand_name, APP_NAME);
+        assert_eq!(b.logo_url, APP_LOGO_PATH);
+        let url = b
+            .resolve_logo_url(APP_URL)
+            .expect("the app wordmark resolves");
+        // A mail client resolves nothing relative: the PNG must be absolute, on the app's own host.
+        assert_eq!(url, "https://app.coreswiftcrm.com/logo.png");
+        let header = b.header_html(Some(&url));
+        assert!(header.contains("<img"), "{header}");
+        assert!(header.contains("alt=\"CoreSwift CRM\""), "{header}");
+        assert!(
+            header.contains(&format!("border-top:3px solid {DEFAULT_BRAND_COLOR}")),
+            "the app's own header is painted in the fleet accent: {header}"
+        );
+    }
+
+    /// An HTML message opens with the header block, and its text part opens with the app's name.
+    #[test]
+    fn an_html_send_carries_the_header_and_the_apps_name() {
+        let b = app_default_branding();
+        let (text, html, is_html) = apply_branding(Some(&b), "Hi there", "<p>Hi there</p>", true);
+        assert!(text.starts_with("CoreSwift CRM\n\n"), "{text}");
+        assert!(
+            html.starts_with("<div style=\"text-align:center;padding:18px 0 6px\""),
+            "{html}"
+        );
+        assert!(html.contains("<img"), "{html}");
+        assert!(
+            html.ends_with("<p>Hi there</p>"),
+            "the body survives under the header: {html}"
+        );
+        assert!(is_html);
+    }
+
+    /// THE ONE-PART RULE: this app queues a single body and the transport sends it as the text part,
+    /// so a text-only message must NOT be wrapped in HTML to give the logo somewhere to render.
+    #[test]
+    fn a_text_only_send_stays_text_only() {
+        let b = app_default_branding();
+        let (text, html, is_html) = apply_branding(Some(&b), "Hi there", "", false);
+        assert!(text.starts_with("CoreSwift CRM\n\n"), "{text}");
+        assert_eq!(html, "", "no HTML part may be invented");
+        assert!(!is_html);
+    }
+
+    /// A workspace's own branding wins field by field — name, colour and logo — over the app default.
+    #[test]
+    fn the_workspaces_own_branding_wins_field_by_field() {
+        let own = Branding {
+            brand_name: "Acme Plumbing".into(),
+            brand_color: "#0ea5e9".into(),
+            logo_url: "/api/branding/logo/abc?v=7".into(),
+        };
+        let (text, html, _) = apply_branding(Some(&own), "Hi there", "<p>Hi there</p>", true);
+        assert!(text.starts_with("Acme Plumbing\n\n"), "{text}");
+        assert!(html.contains("border-top:3px solid #0ea5e9"), "{html}");
+        assert!(
+            html.contains("https://app.coreswiftcrm.com/api/branding/logo/abc?v=7"),
+            "{html}"
+        );
+        assert!(
+            !html.contains("/logo.png"),
+            "the app wordmark must not appear: {html}"
+        );
+    }
+
+    /// `None` stays a no-op — the additivity the original port pinned. Every SEND resolves to
+    /// `Some` (the workspace's own branding or the app's identity), so this arm is only reachable
+    /// from a test now.
+    #[test]
+    fn none_still_changes_nothing() {
+        let (text, html, is_html) = apply_branding(None, "Hi there", "<p>Hi there</p>", true);
+        assert_eq!(text, "Hi there");
+        assert_eq!(html, "<p>Hi there</p>");
+        assert!(is_html);
+        let (text, html, is_html) = apply_branding(None, "Hi there", "", false);
+        assert_eq!(
+            (text.as_str(), html.as_str(), is_html),
+            ("Hi there", "", false)
+        );
+    }
+
+    /// The binding half: an admin-authored `{{brand_name}}`/`{{logo_url}}` is substituted with the
+    /// resolved identity rather than reaching a recipient as literal text.
+    #[test]
+    fn the_merge_fields_are_bound_on_the_fallback_arm() {
+        let b = app_default_branding();
+        let (_, html, _) = apply_branding(
+            Some(&b),
+            "",
+            "<p>{{brand_name}} &mdash; {{logo_url}}</p>",
+            true,
+        );
+        assert!(html.contains("CoreSwift CRM"), "{html}");
+        assert!(
+            html.contains("https://app.coreswiftcrm.com/logo.png"),
+            "{html}"
+        );
+        assert!(!html.contains("{{"), "{html}");
     }
 }
 

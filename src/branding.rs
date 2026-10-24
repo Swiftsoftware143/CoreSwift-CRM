@@ -22,11 +22,19 @@
 //! (the panel echoes the document it was given, and a stale echo must not un-reference a logo that is
 //! still there). `brand_name` / `brand_color` are owned by the settings write, which validates them.
 //!
-//! # Nothing configured means nothing changes
+//! # Nothing configured means the app's own identity (not nothing at all)
 //!
-//! A tenant with no branding gets byte-identical mail to before this module existed — the header
-//! block is only ever added when a brand name or a logo is actually set (`Branding::from_value`
-//! returns `None` otherwise). That is what makes the change additive for every existing workspace.
+//! [`Branding::from_value`] returns `None` when neither a name nor a logo is set, and the renderer
+//! adds nothing for `None` — that is the additivity property this module was ported with, and it is
+//! still pinned by its own test.
+//!
+//! But an account with no branding of its own must NOT get a headerless message (kanban
+//! t_5054a5c9, the same fleet decision as ADASwift 05af30a / MissedCall Respondr t_6a8af451): the
+//! first mail a brand-new customer receives is the credentials mail, and it has to say who it is
+//! from. So the SEND funnel (`crate::email::queue_outbound_message`) resolves
+//! `load(..).unwrap_or_else(app_default_branding)` — the app's own name plus a PNG wordmark served
+//! on this app's host, painted in [`DEFAULT_BRAND_COLOR`] — while an account's own branding still
+//! wins field by field.
 
 use serde_json::{json, Value};
 use sqlx::PgPool;
