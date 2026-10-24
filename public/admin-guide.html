@@ -78,7 +78,9 @@ the <code>&lt;img src&gt;</code> with no credential. 404 when the workspace has 
 <tr><td>the render hook</td><td><code>src/email.rs::queue_outbound_message</code> — the ONE funnel both
 the <code>email_templates</code> row and the inline fallback pass through. Binds
 <code>{{brand_name}}</code>/<code>{{logo_url}}</code> per account, prepends the header block to the
-HTML part and the brand name to the text part. Additive: no name and no logo renders nothing.</td></tr>
+HTML part and the brand name to the text part. A workspace with nothing configured is NOT unbranded: every send resolves to this app's own
+header (<code>/logo.png</code> and the CoreSwift name), and a workspace's own name, colour
+and logo win field by field.</td></tr>
 </tbody></table>
 <h3>Rules and limits</h3>
 <ul>
