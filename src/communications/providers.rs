@@ -1221,6 +1221,12 @@ mod tests {
             "probe-canary-a@swiftsoftware.dev",
             "zzprobe-profile-1791480727@swiftsoftware.net",
             "x@mail.swiftsoftware.dev",
+            // The app's DISPLAY support address (kanban t_6a779fb6) sits on the fleet's own
+            // harness domain — the address customers are told to write to is
+            // `support@swiftsoftware.net` because `coreswiftcrm.com` publishes no MX. It is only
+            // ever a footer/From a customer's own mail client writes to; if any code ever queued a
+            // message TO it, this arm must keep it off a relay like any other probe destination.
+            "support@swiftsoftware.net",
         ] {
             let outcome = deliver_email(&email_cfg(addr)).await;
             assert!(outcome.permanent && !outcome.ok, "{addr}");
@@ -1263,14 +1269,15 @@ mod tests {
     #[tokio::test]
     async fn a_real_destination_still_reaches_transport_selection() {
         // The owner's proof inbox (the address the fleet's mail-delivery watchdog sends to every
-        // run), the app's own support address and the t_193e2259 proof row: none of these is the
-        // harness class, and all of them must still fall through to the transport. Getting
-        // NOT_CONFIGURED here is the proof the guard did NOT fire.
+        // run) and the t_193e2259 proof row: none of these is the harness class, and all of them
+        // must still fall through to the transport. Getting NOT_CONFIGURED here is the proof the
+        // guard did NOT fire. The app's own DISPLAY support address used to be listed here; since
+        // kanban t_6a779fb6 it sits on the fleet's own harness domain (see the test above), because
+        // `coreswiftcrm.com` publishes no MX and could never receive.
         for addr in [
             "swiftsoftware143@yahoo.com",
             "certifiedtb143@yahoo.com",
             "hello@coreswiftcrm.com",
-            "support@coreswiftcrm.com",
             "t193-delivery-proof@mail.coreswiftcrm.com",
             "a@test.com",
         ] {

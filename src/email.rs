@@ -28,9 +28,24 @@ pub const APP_URL: &str = "https://app.coreswiftcrm.com";
 ///
 /// CoreSwift's transactional mail carried NO support address at all (measured 2026-10-08,
 /// kanban t_f1931c05 -> t_71cc3ad8), so [`with_support_footer`] adds this to every message that
-/// leaves this module. Fleet rule established with the sibling apps: `support@<the app's own main
-/// domain>` — never another company's domain, never the platform's.
-pub const SUPPORT_EMAIL: &str = "support@coreswiftcrm.com";
+/// leaves this module.
+///
+/// REPOINTED 2026-10-23 (kanban t_6a779fb6) — the address used to be `support@coreswiftcrm.com`,
+/// which could not RECEIVE. Measured with two independent resolvers (dns.google and
+/// cloudflare-dns.com): `coreswiftcrm.com` publishes **MX = 0** and no apex SPF, so every message a
+/// customer sent to the address its own welcome mail told them to write to bounced. The earlier
+/// "the app's own main domain, never the platform's" rule was written before that domain was
+/// measured; a company domain with no mail exchanger is not an address, it is a bounce. The
+/// footer now names `support@swiftsoftware.net`, which publishes Cloudflare MX
+/// (route1/2/3.mx.cloudflare.net) and `v=spf1 include:_spf.mx.cloudflare.net ~all` — i.e. a domain
+/// that actually resolves to a mailbox. Same fleet change shipped the same day on IncentiveSwift,
+/// ADASwift, WorkflowSwift, FunnelSwift and missedcallrespondr.
+///
+/// This is a DISPLAY address (a `From`/footer a customer's own mail client writes to), never a
+/// destination this app queues mail for: `swiftsoftware.net` is on the fleet's own harness list, so
+/// a send TO it would be refused at the transport chokepoint. That is asserted in
+/// `security::probe_addr` and `communications::providers`.
+pub const SUPPORT_EMAIL: &str = "support@swiftsoftware.net";
 
 /// Append the support line to a rendered transactional body.
 ///
@@ -540,11 +555,16 @@ mod tests {
     }
 
     #[test]
-    fn support_address_is_on_this_apps_own_domain() {
-        // Exactly the defect this card closes: a support address pointed at the platform/vendor
-        // domain instead of the app's own.
-        assert!(SUPPORT_EMAIL.ends_with("@coreswiftcrm.com"));
-        assert!(!SUPPORT_EMAIL.contains("swiftsoftware.net"));
+    fn support_address_is_one_that_can_receive() {
+        // The defect this card closes (kanban t_6a779fb6): the footer named an address on
+        // `coreswiftcrm.com`, whose apex publishes no MX record at all, so the customer who wrote to
+        // the one address its welcome mail gave them bounced. The address must now sit on a domain
+        // that really resolves to a mail exchanger (`swiftsoftware.net` = Cloudflare MX + SPF).
+        assert_eq!(SUPPORT_EMAIL, "support@swiftsoftware.net");
+        assert!(
+            !SUPPORT_EMAIL.ends_with("@coreswiftcrm.com"),
+            "the app's own domain publishes no MX — mail addressed there cannot be received"
+        );
     }
 }
 

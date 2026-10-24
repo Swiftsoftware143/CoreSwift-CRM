@@ -180,7 +180,10 @@ mod tests {
         assert_eq!(harness_domain("swiftsoftware143@yahoo.com"), None);
         assert_eq!(harness_domain("someone@gmail.com"), None);
         assert_eq!(harness_domain("david@swiftsoftware.com"), None);
-        assert_eq!(harness_domain("support@coreswiftcrm.com"), None);
+        // The app's DISPLAY support address is no longer on `coreswiftcrm.com`: that apex publishes
+        // no MX, so the footer now names `support@swiftsoftware.net` (kanban t_6a779fb6), which IS
+        // the fleet's own harness class — correctly, because it is never a destination this app
+        // queues mail for. `hello@coreswiftcrm.com` is still a real, routable domain.
         assert_eq!(harness_domain("hello@coreswiftcrm.com"), None);
         // A domain that merely CONTAINS a harness domain is not a match.
         assert_eq!(harness_domain("x@notswiftsoftware.dev"), None);
