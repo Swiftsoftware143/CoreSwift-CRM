@@ -645,7 +645,6 @@ fn apply_branding(
 mod branding_header_tests {
     use super::{app_default_branding, apply_branding, APP_LOGO_PATH, APP_NAME, APP_URL};
     use crate::branding::{Branding, DEFAULT_BRAND_COLOR};
-    use serde_json::json;
 
     /// The defect this card closes (kanban t_5054a5c9): a workspace with no branding of its own
     /// used to send mail with NO header at all, so the very first message a new customer receives —
