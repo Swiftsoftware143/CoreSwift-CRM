@@ -4165,6 +4165,11 @@ async function loadProfileTab() {
       '<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">' +
         '<img id="avatarImg" alt="Your profile picture" style="width:72px;height:72px;border-radius:50%;object-fit:cover;background:var(--bg-secondary);display:' + (p.avatar_url ? '' : 'none') + '"' + (p.avatar_url ? ' src="' + escapeHtmlAttr(p.avatar_url) + '"' : '') + '>' +
         '<div><input type="file" id="avatarInput" accept="image/png,image/jpeg,image/gif,image/webp" onchange="uploadAvatar(this)">' +
+        // The REMOVAL twin of the upload (kanban t_d6991cd1). This console carries the SAME picture
+        // card as the workspace SPA and had the same gap: the upload upserts, so an operator could
+        // replace their photo but never get their initials back. Offered only while a picture
+        // exists; paintAvatar() keeps it in step after an upload and after a removal.
+        '<button type="button" class="btn btn-secondary" id="avatarRemove" data-ops="profile-avatar-remove" onclick="removeAvatar()" style="margin-left:8px;' + (p.avatar_url ? '' : 'display:none;') + '">Remove picture</button>' +
         '<p class="form-hint" style="margin-top:6px">PNG, JPEG, GIF or WebP, up to 2 MB. Shown in the header and on this page.</p></div>' +
       '</div>', '') +
     '<br>' +
@@ -4203,6 +4208,10 @@ function paintAvatar() {
     if (u.avatar_url) { img.src = u.avatar_url; img.style.display = ''; }
     else { img.removeAttribute('src'); img.style.display = 'none'; }
   }
+  // The Remove control exists only while a picture does: an account with initials is never offered
+  // a button that would remove nothing (kanban t_d6991cd1).
+  const rm = document.getElementById('avatarRemove');
+  if (rm) rm.style.display = u.avatar_url ? '' : 'none';
 }
 
 async function saveProfile() {
@@ -4247,6 +4256,34 @@ async function uploadAvatar(input) {
     toast('Picture updated', 'success');
   } catch(e) {
     toast('Upload failed: ' + e.message, 'error');
+  }
+}
+
+// The REMOVAL twin of uploadAvatar (kanban t_d6991cd1). Until this existed the picture could only
+// ever be REPLACED — the upload upserts the row — so an operator who wanted their initials back had
+// no way to ask. DELETE /api/profile/avatar clears BOTH the stored bytes and `users.avatar_url`
+// server-side, in one transaction, and answers `avatar_url: ""` so this can repaint from the
+// response rather than re-reading the profile. The route writes the SESSION's own user: there is no
+// id in the request, so nothing here can remove anyone else's picture.
+async function removeAvatar() {
+  if (!(STATE.user && STATE.user.avatar_url)) { toast('There is no picture to remove', 'error'); return; }
+  if (!window.confirm('Remove your profile picture?')) return;
+  try {
+    const res = await fetch('/api/profile/avatar', {
+      method: 'DELETE',
+      headers: { 'Authorization': 'Bearer ' + STATE.token }
+    });
+    if (!res.ok) {
+      let msg = 'HTTP ' + res.status;
+      try { const e = await res.json(); if (e && typeof e.message === 'string') msg = e.message; } catch(_){}
+      throw new Error(msg);
+    }
+    STATE.user.avatar_url = '';
+    localStorage.setItem('crm_user', JSON.stringify(STATE.user));
+    paintAvatar();
+    toast('Picture removed', 'success');
+  } catch(e) {
+    toast('Remove failed: ' + e.message, 'error');
   }
 }
 
