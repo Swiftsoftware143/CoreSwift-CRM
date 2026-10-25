@@ -838,9 +838,24 @@ pub async fn purchase_number(
     // If not BYOK, purchase via Telnyx API
     let byok = tenant_has_own_telnyx(&state.db, tenant_id).await?;
     if !byok {
-        let global = get_global_config(&state.db)
-            .await?
-            .ok_or_else(|| AppError::Internal("Telnyx not configured by admin".into()))?;
+        let global = get_global_config(&state.db).await?.ok_or_else(|| {
+            // Nothing was attempted: this deployment has no phone provider connected and the account
+            // has not brought its own key, so the "+ Add number" button cannot do its job. That is a
+            // missing OPERATOR configuration, not a server fault, and the fleet's rule for it is 503
+            // carried with a caller-facing sentence (AppError::ServiceUnavailable — the same rule
+            // added for the outbound SMS path in kanban t_2ed95642, and applied to this identical arm
+            // in missedcallrespondr, commit f29cfc5). This arm was MISSED: it answered 500 in
+            // operator words, which this app's Internal arm logs and reports as a bare server error —
+            // an alarm in monitoring plus jargon in the buyer's face. The dashboard prints this text
+            // after "Could not add: ", so it says what happened, that nothing was charged, and what
+            // the customer can do next.
+            AppError::ServiceUnavailable(
+                "Phone numbers can't be added yet — the phone service is not set up on this \
+                 deployment. Nothing was charged for this attempt. Please try again later or \
+                 contact support."
+                    .into(),
+            )
+        })?;
 
         let client = reqwest::Client::new();
         let mut purchase_payload = json!({

@@ -55,6 +55,14 @@ pub enum AppError {
     #[error("{0}")]
     BadRequest(String),
 
+    /// 503 — The deployment is missing OPERATOR configuration this request needs (a phone provider,
+    /// an outbound transport), so nothing was attempted. Distinct from [`Internal`]: that means THIS
+    /// service is faulty, and answering 500 puts an operator's setup gap in front of a buyer as a
+    /// server fault, in operator words. The fleet rule (kanban t_2ed95642, the same `telnyx_config`
+    /// emptiness on the SMS path) is 503 with the caller-facing sentence carried verbatim.
+    #[error("{0}")]
+    ServiceUnavailable(String),
+
     /// 500 — Database error
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
@@ -97,6 +105,12 @@ impl IntoResponse for AppError {
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::Validation(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg.clone()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
+            AppError::ServiceUnavailable(msg) => {
+                // Not a fault in this service, so it is a warning, not an error: an operator has not
+                // finished setting this deployment up. The sentence is the caller's, verbatim.
+                tracing::warn!("Service unavailable: {}", msg);
+                (StatusCode::SERVICE_UNAVAILABLE, msg.clone())
+            }
             AppError::Hash(msg) => {
                 tracing::error!("Password hashing error: {}", msg);
                 (
