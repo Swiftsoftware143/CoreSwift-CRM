@@ -9,6 +9,7 @@
 //! PUT  /api/profile           — update the caller's own profile (name/username/company)
 //! PUT  /api/profile/password  — change the caller's password (verifies the current one)
 //! POST /api/profile/avatar    — upload the caller's own profile picture
+//! DELETE /api/profile/avatar  — remove it again (the upload could only REPLACE it before this)
 //!
 //! The ONE anonymous read (`GET /api/avatars/:user_id`, mounted in main.rs outside the auth
 //! middleware) lives beside these in `handlers::serve_avatar`; an `<img src>` cannot carry a token.
@@ -25,7 +26,13 @@ pub fn router(state: AppState) -> Router<AppState> {
             get(handlers::get_profile).put(handlers::update_profile),
         )
         .route("/password", axum::routing::put(handlers::change_password))
-        .route("/avatar", axum::routing::post(handlers::upload_avatar))
+        // `POST` uploads/replaces the picture; `DELETE` takes it down again. Both stay behind the
+        // router's auth middleware (the picture's ONE anonymous read is `GET /api/avatars/:user_id`,
+        // mounted in main.rs) — a route on the same path adds no mount, so the route census holds.
+        .route(
+            "/avatar",
+            axum::routing::post(handlers::upload_avatar).delete(handlers::delete_avatar),
+        )
         .layer(axum::middleware::from_fn_with_state(
             crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
             crate::body_deadline::body_read_deadline_middleware,

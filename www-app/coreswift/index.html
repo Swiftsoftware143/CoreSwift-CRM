@@ -1513,30 +1513,45 @@ const TAB_LOADERS = {
     // exposes a sent-email count) and "Events This Week" (GET /api/events filters by source /
     // event_type only — there is no week window, so "this week" could only be guessed). The admin
     // console carries the SAME tiles from the SAME keys: change the two shells together.
-    const source = async (p) => { try { return await API.get(p); } catch(_) { return null; } };
+    // A source BLOCKED BY THE PLAN is not a failure: 402 carries the server's own sentence
+    // ("Support tickets is not available on your current plan. Upgrade to access it."). Rendering a
+    // mute '—' for it made every Free workspace's Open Tickets tile look broken, with no way to tell
+    // a plan gate from an outage (measured in Chromium 2026-10-23, app.coreswiftcrm.com). A gated
+    // source now renders the tile with the plan note under its label and the server's sentence as
+    // its tooltip; a genuine failure still renders the bare '—'.
+    const source = async (p) => {
+      try { return { value: await API.get(p) }; }
+      catch (e) { return { value: null, gated: !!(e && e.planGate), note: (e && e.planMessage) || '' }; }
+    };
     const cnt = (v) => (typeof v === 'number' && isFinite(v)) ? v : '—';
     const money = (v) => (typeof v === 'number' && isFinite(v)) ? '$' + v.toFixed(2) : '—';
     try {
-      const [stats, pipes, tickets, links] = await Promise.all([
+      const [statsS, pipesS, ticketsS, linksS] = await Promise.all([
         source('/dashboard/stats'), source('/pipelines'), source('/tickets/stats'),
         source('/tracked-links')
       ]);
+      const stats = statsS.value, pipes = pipesS.value, tickets = ticketsS.value, links = linksS.value;
+      // The tile that IS gated names the LEVEL that carries it, and nothing else: the plan row
+      // settles it (support_tickets is false on Free and present on every paid plan), so the note
+      // does not depend on checkPlan() having landed yet — first paint said "this plan" otherwise.
+      const gateNote = ticketsS.gated ? 'On paid plans' : '';
       let html = '';
-      if (stats || pipes || tickets || links) {
+      if (stats || pipes || tickets || links || ticketsS.gated) {
         const items = [
           { icon:'👥', label:'Total Contacts', value: cnt(stats && stats.total_contacts) },
           { icon:'🏢', label:'Companies', value: cnt(stats && stats.total_companies) },
           { icon:'🎯', label:'Opportunities', value: cnt(stats && stats.total_opportunities) },
           { icon:'💰', label:'Won Deal Value', value: money(stats && stats.total_revenue) },
           { icon:'📈', label:'Pipelines', value: cnt(pipes && Array.isArray(pipes.pipelines) ? pipes.pipelines.length : null) },
-          { icon:'🎫', label:'Open Tickets', value: cnt(tickets && tickets.open) },
+          { icon:'🎫', label:'Open Tickets', value: cnt(tickets && tickets.open), note: gateNote, tip: ticketsS.note },
           { icon:'🔗', label:'Tracked Links', value: cnt(links && Array.isArray(links.links) ? links.links.length : null) },
         ];
         items.forEach(it => {
-          html += `<div class="stat-card${it.icon==='👥'?' accent':''}">
+          html += `<div class="stat-card${it.icon==='👥'?' accent':''}"${it.tip ? ` title="${escapeHtml(it.tip)}"` : ''}>
             <div class="stat-icon">${it.icon}</div>
             <div class="stat-value">${it.value}</div>
             <div class="stat-label">${it.label}</div>
+            ${it.note ? `<div class="stat-note" style="font-size:11px;color:var(--text-secondary);margin-top:2px">${escapeHtml(it.note)}</div>` : ''}
           </div>`;
         });
       }
@@ -2713,6 +2728,11 @@ async function loadProfileTab() {
       '<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">' +
         '<img id="avatarImg" alt="Your profile picture" style="width:72px;height:72px;border-radius:50%;object-fit:cover;background:var(--bg-secondary);display:' + (p.avatar_url ? '' : 'none') + '"' + (p.avatar_url ? ' src="' + escapeHtml(p.avatar_url) + '"' : '') + '>' +
         '<div><input type="file" id="avatarInput" accept="image/png,image/jpeg,image/gif,image/webp" onchange="uploadAvatar(this)">' +
+        // The REMOVAL twin of the upload (kanban t_d6991cd1). Until this existed the picture could
+        // only ever be REPLACED (the upload upserts), so a customer who wanted their initials back
+        // had no way to ask. Painted only while a picture exists; paintAvatar() keeps it in step
+        // after an upload and after a removal.
+        '<button type="button" class="btn btn-secondary" id="avatarRemove" data-ops="profile-avatar-remove" onclick="removeAvatar()" style="margin-left:8px;' + (p.avatar_url ? '' : 'display:none;') + '">Remove picture</button>' +
         '<p class="form-hint" style="margin-top:6px">PNG, JPEG, GIF or WebP, up to 2 MB. Shown in the header and on this page.</p></div>' +
       '</div>', '') +
     '<br>' +
@@ -2751,6 +2771,10 @@ function paintAvatar() {
     if (u.avatar_url) { img.src = u.avatar_url; img.style.display = ''; }
     else { img.removeAttribute('src'); img.style.display = 'none'; }
   }
+  // The Remove control exists only while a picture does: an account with initials is never offered
+  // a button that would remove nothing (kanban t_d6991cd1).
+  const rm = document.getElementById('avatarRemove');
+  if (rm) rm.style.display = u.avatar_url ? '' : 'none';
 }
 
 async function saveProfile() {
@@ -2775,6 +2799,23 @@ async function saveProfile() {
 async function uploadAvatar(input) {
   const f = input && input.files && input.files[0];
   if (!f) return;
+  // The panel says "PNG, JPEG, GIF or WebP, up to 2 MB", and until now nothing enforced it: a
+  // 3 MB photo was POSTed anyway and the customer was shown the raw sentence
+  // "Upload failed: HTTP 413" (measured live 2026-10-25). Refuse it HERE, in the customer's own
+  // words, before a byte leaves the page — the same guard the other five apps carry.
+  const MAX_PICTURE = 2 * 1024 * 1024;
+  const PICTURE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+  if (f.size > MAX_PICTURE) {
+    const mb = (f.size / 1048576).toFixed(1);
+    toast('That picture is ' + mb + ' MB — the limit is 2 MB. Please choose a smaller one.', 'error');
+    try { input.value = ''; } catch (_) { }
+    return;
+  }
+  if (f.type && PICTURE_TYPES.indexOf(String(f.type).toLowerCase()) < 0) {
+    toast('That file is ' + String(f.type) + ' — please choose a PNG, JPEG, GIF or WebP picture.', 'error');
+    try { input.value = ''; } catch (_) { }
+    return;
+  }
   const fd = new FormData();
   fd.append('file', f, f.name);
   try {
@@ -2784,6 +2825,12 @@ async function uploadAvatar(input) {
       body: fd
     });
     if (!res.ok) {
+      // A 413 here means the picture passed the browser guard and the SERVER refused the size
+      // (a proxy limit lower than 2 MB). Say that in words rather than echoing the status code.
+      if (res.status === 413) {
+        try { input.value = ''; } catch (_) { }
+        throw new Error('that picture is too large for the server to accept — please choose a smaller one');
+      }
       let msg = 'HTTP ' + res.status;
       try { const e = await res.json(); if (e && typeof e.message === 'string') msg = e.message; } catch(_){}
       throw new Error(msg);
@@ -2795,6 +2842,34 @@ async function uploadAvatar(input) {
     toast('Picture updated', 'success');
   } catch(e) {
     toast('Upload failed: ' + e.message, 'error');
+  }
+}
+
+// The REMOVAL twin of uploadAvatar (kanban t_d6991cd1). Until this existed the picture could only
+// ever be REPLACED — the upload upserts the row — so a customer who wanted their initials back had
+// no way to ask. DELETE /api/profile/avatar clears BOTH the stored bytes and `users.avatar_url`
+// server-side, in one transaction, and answers `avatar_url: ""` so this can repaint from the
+// response rather than re-reading the profile. The route writes the SESSION's own user: there is no
+// id in the request, so nothing here can remove anyone else's picture.
+async function removeAvatar() {
+  if (!(STATE.user && STATE.user.avatar_url)) { toast('There is no picture to remove', 'error'); return; }
+  if (!window.confirm('Remove your profile picture?')) return;
+  try {
+    const res = await fetch('/api/profile/avatar', {
+      method: 'DELETE',
+      headers: { 'Authorization': 'Bearer ' + STATE.token }
+    });
+    if (!res.ok) {
+      let msg = 'HTTP ' + res.status;
+      try { const e = await res.json(); if (e && typeof e.message === 'string') msg = e.message; } catch(_){}
+      throw new Error(msg);
+    }
+    STATE.user.avatar_url = '';
+    localStorage.setItem('crm_user', JSON.stringify(STATE.user));
+    paintAvatar();
+    toast('Picture removed', 'success');
+  } catch(e) {
+    toast('Remove failed: ' + e.message, 'error');
   }
 }
 
@@ -4283,7 +4358,9 @@ function plCache(pid) { return PL_DATA.find(function (x) { return x.pipeline.id 
 
 function pipelinesShell() {
   return pageHeader('Pipelines & Deals', 'Track deals through your sales pipeline',
-    '<button class="btn btn-primary btn-sm" onclick="plNewPipeline()">+ New Pipeline</button>') +
+    '<button class="btn btn-primary btn-sm" onclick="plNewPipeline()">+ New Pipeline</button>' +
+    '<button class="btn btn-secondary btn-sm" onclick="plCsvImportPick()">⬆ Import deals</button>' +
+    '<button class="btn btn-secondary btn-sm" onclick="csvExportDeals()">⬇ Export deals</button>') +
   '<div id="plContent"><div class="loading-wrap"><div class="spinner"></div> Loading pipelines...</div></div>';
 }
 
@@ -7483,6 +7560,128 @@ async function csvExportContacts() {
     a.remove();
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
     toast('Contacts exported', 'success');
+  } catch (e) {
+    toast('Export failed: ' + e.message, 'error');
+  }
+}
+
+// ── Deals (opportunities) CSV — the export's own header names round-trip ────
+// The backend has carried GET /api/csv/export/opportunities and POST
+// /api/csv/import/opportunities since 2026-10-02, but this console called neither: a workspace could
+// export its CONTACTS and never its deals, and an export you cannot re-import is a backup you cannot
+// restore. Both go through the SAME ctCsvFetch helper as the contacts pair (raw fetch + the tenant's
+// bearer token), and the importer resolves the export's own column names — name, contact, company,
+// pipeline, stage, value, probability, expected_close — so no mapping dialog is needed. A row needs a
+// name; pipeline and stage fall back to the workspace's first pipeline that has a stage.
+let PL_CSV_PENDING = null;
+
+function plCsvImportPick() {
+  let inp = document.getElementById('plCsvFile');
+  if (!inp) {
+    inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = '.csv,text/csv';
+    inp.id = 'plCsvFile';
+    inp.style.display = 'none';
+    document.body.appendChild(inp);
+    inp.addEventListener('change', function () {
+      if (inp.files && inp.files[0]) plCsvPreview(inp.files[0]);
+    });
+  }
+  inp.value = '';
+  inp.click();
+}
+
+async function plCsvPreview(file) {
+  PL_CSV_PENDING = null;
+  showModal('Import deals from CSV',
+    '<div id="plCsvBody"><div class="loading-wrap"><div class="spinner"></div> Reading ' +
+      escapeHtml(file.name) + '...</div></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="plCsvGo" disabled onclick="plCsvImport()">Import deals</button>');
+  const body = document.getElementById('plCsvBody');
+  const fd = new FormData();
+  fd.append('file', file);
+  let d;
+  try {
+    d = await (await ctCsvFetch('preview', { method: 'POST', body: fd })).json();
+  } catch (e) {
+    if (body) body.innerHTML = icErr('Could not read the CSV', e.message);
+    return;
+  }
+  const headers = (d && d.headers) || [];
+  const sample = (d && d.sample_rows) || [];
+  const KNOWN = ['name', 'contact', 'company', 'pipeline', 'stage', 'value', 'probability',
+                 'expected_close', 'expected_close_date', 'created_at'];
+  let chips = '';
+  headers.forEach(function (h) {
+    const ok = KNOWN.indexOf(String(h || '').toLowerCase().trim()) >= 0;
+    chips += '<span class="badge ' + (ok ? 'badge-success' : 'badge-muted') +
+      '" style="margin:2px;display:inline-block">' + escapeHtml(h) + (ok ? '' : ' (ignored)') + '</span>';
+  });
+  let table = '';
+  if (sample.length) {
+    table = '<div class="table-wrap" style="margin-top:12px"><table><thead><tr>' +
+      headers.map(function (h) { return '<th>' + escapeHtml(h) + '</th>'; }).join('') +
+      '</tr></thead><tbody>' +
+      sample.map(function (r) {
+        return '<tr>' + headers.map(function (_, i) {
+          return '<td>' + escapeHtml(r[i] || '') + '</td>';
+        }).join('') + '</tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+  const hasName = headers.some(function (h) { return String(h || '').toLowerCase().trim() === 'name'; });
+  PL_CSV_PENDING = hasName ? file : null;
+  if (body) {
+    body.innerHTML =
+      '<p style="margin:0 0 8px">Each row becomes a deal. A row needs a <strong>name</strong>; the ' +
+      'pipeline and stage come from the file when it names them, otherwise from your first pipeline.</p>' +
+      '<div>' + chips + '</div>' + table +
+      (hasName ? '' : '<p style="color:var(--danger,#b91c1c);margin:12px 0 0">This file has no ' +
+        '<strong>name</strong> column, so every row would be skipped. Export deals first to see the ' +
+        'columns this importer expects.</p>');
+  }
+  const go = document.getElementById('plCsvGo');
+  if (go) go.disabled = !PL_CSV_PENDING;
+}
+
+async function plCsvImport() {
+  if (!PL_CSV_PENDING) return;
+  const body = document.getElementById('plCsvBody');
+  if (body) body.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Importing deals...</div>';
+  const fd = new FormData();
+  fd.append('file', PL_CSV_PENDING);
+  let d;
+  try {
+    d = await (await ctCsvFetch('import/opportunities', { method: 'POST', body: fd })).json();
+  } catch (e) {
+    if (body) body.innerHTML = icErr('Import failed', e.message);
+    return;
+  }
+  closeModal();
+  PL_CSV_PENDING = null;
+  const imported = (d && d.imported) || 0;
+  const skipped = (d && d.skipped) || 0;
+  toast('Imported ' + imported + ' deal' + (imported === 1 ? '' : 's') +
+    (skipped ? ' (' + skipped + ' skipped)' : ''), skipped ? 'info' : 'success');
+  if (skipped && d && d.errors && d.errors.length) {
+    console.warn('Deal import skipped rows:', d.errors.slice(0, 20));
+  }
+  loadPipelinesTab();
+}
+
+async function csvExportDeals() {
+  try {
+    const res = await ctCsvFetch('export/opportunities');
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'deals_export.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+    toast('Deals exported', 'success');
   } catch (e) {
     toast('Export failed: ' + e.message, 'error');
   }

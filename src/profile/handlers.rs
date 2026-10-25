@@ -12,6 +12,7 @@
 //! * `PUT  /api/profile`            — `{name?, username?, company?}`; blank name refused 4xx
 //! * `PUT  /api/profile/password`   — `{current_password, new_password}`; wrong current -> 401
 //! * `POST /api/profile/avatar`     — raw image bytes (magic-byte sniffed, <=2 MB), stored per user
+//! * `DELETE /api/profile/avatar`   — remove the caller's own picture; initials placeholder comes back
 //! * `GET  /api/avatars/:user_id`   — PUBLIC: serve the stored bytes (mounted in main.rs)
 
 use axum::{
@@ -297,6 +298,52 @@ pub async fn upload_avatar(
         "avatar_url": avatar_url,
         "content_type": content_type,
         "bytes": byte_len,
+    })))
+}
+
+/// `DELETE /api/profile/avatar` — remove the caller's OWN profile picture.
+///
+/// The upload twin only ever REPLACES the row (`ON CONFLICT (user_id) DO UPDATE`), so before this
+/// route existed a picture could be swapped for another one but never taken down: a customer who
+/// wanted their initial-letter placeholder back had no way to ask, and the Profile screen could
+/// only offer "choose a file". Every other app in the fleet carries this DELETE twin for the same
+/// reason, so this closes the parity gap (kanban t_d6991cd1).
+///
+/// It writes the SESSION's own user — there is no path id to spoof, the same rule `upload_avatar`
+/// follows — and is idempotent: `removed` reports whether a row was actually there, so calling it
+/// on an account with no picture answers 200 rather than inventing a 404 for a state that is
+/// already what the caller asked for. `avatar_url` comes back empty so the console can repaint
+/// from the response instead of re-reading `GET /api/profile`.
+///
+/// TWO places carry the picture and both must be cleared in ONE transaction: the BYTES in
+/// `user_avatars` (what `serve_avatar` streams) and the POINTER on `users.avatar_url` (what
+/// `get_profile` hands the console, and what the Profile screen and the header chip key their
+/// picture/placeholder off). The upload writes both; a delete that cleared only the bytes would
+/// leave `GET /api/profile` still returning a URL that 404s, so the screen would keep painting a
+/// picture that is gone — the pointer shape's own trap, measured live on FunnelSwift before its
+/// transaction was added.
+pub async fn delete_avatar(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> ApiResult<Json<Value>> {
+    let id = subject(&c)?;
+
+    let mut tx = s.db.begin().await?;
+    let removed = sqlx::query("DELETE FROM user_avatars WHERE user_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    sqlx::query("UPDATE users SET avatar_url = NULL, updated_at = NOW() WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    Ok(Json(json!({
+        "status": "ok",
+        "removed": removed,
+        "avatar_url": "",
     })))
 }
 
