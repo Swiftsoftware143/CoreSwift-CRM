@@ -489,8 +489,15 @@ pub(crate) fn verify_password(password: &str, hash: &str) -> Result<bool, AppErr
         Argon2,
     };
 
-    let parsed_hash = PasswordHash::new(hash)
-        .map_err(|e| AppError::Hash(format!("Invalid password hash format: {}", e)))?;
+    // A stored hash that is not a usable PHC string is NOT a credential: no password can ever
+    // match it, so this is the ordinary "wrong password" answer at every call site (login answers
+    // InvalidCredentials, change-password answers UnauthorizedReason). It must never become a 500 —
+    // that both announces the row is broken and turns it into a probe target, which is exactly what
+    // the two placeholder canaries in `users` were doing. Same rule FunnelSwift's sign-in states
+    // (f2e6198) and WorkflowSwift's login already states.
+    let Ok(parsed_hash) = PasswordHash::new(hash) else {
+        return Ok(false);
+    };
 
     Ok(Argon2::default()
         .verify_password(password.as_bytes(), &parsed_hash)
