@@ -340,7 +340,16 @@ tr:hover td{background:var(--bg-hover)}
         <div class="dropdown">
           <button class="user-btn" onclick="toggleUserMenu()">
             <div class="avatar" id="userAvatar">S</div>
-            <span id="userEmail">admin</span>
+            <!-- The header used to show the raw EMAIL only, and the plan nowhere outside the upgrade
+                 banner (which hides itself for a paid tier). An operator therefore could not see their
+                 own name, nor which tier the workspace is on, without opening Profile / Billing.
+                 `#userName` carries the account's real name (falling back to the address) and
+                 `#userPlanBadge` the REAL plan name painted by checkPlan() from the tenant's own row.
+                 `#userEmail` stays in the DOM (other code and the mobile rule address it) but is no
+                 longer the visible label. -->
+            <span id="userName" class="user-name">admin</span>
+            <span id="userPlanBadge" class="badge badge-primary" style="display:none"></span>
+            <span id="userEmail" style="display:none">admin</span>
             <span style="font-size:.7rem">▾</span>
           </button>
           <div class="dropdown-menu" id="userMenu">
@@ -867,6 +876,9 @@ function showApp() {
   wrap.classList.remove('hidden');
   wrap.style.display = '';
   document.getElementById('userEmail').textContent = STATE.user.email;
+  // The visible label is the operator's NAME, not the raw address (kanban t_20261026-console-identity).
+  const nameEl = document.getElementById('userName');
+  if (nameEl) nameEl.textContent = STATE.user.name || STATE.user.email;
   paintAvatar();
   renderSidebar();
   switchTab('dashboard');
@@ -1114,6 +1126,11 @@ async function checkPlan() {
     STATE.planName = (mine && mine.name) ? String(mine.name) : '';
     const label = document.getElementById('currentPlanName');
     if (label) label.textContent = STATE.planName;
+    // The same REAL plan name, painted in the header next to the operator's name. Shown only when a
+    // plan was actually read (STATE.planName === '' means "not known", never a guess): an unknown
+    // tier leaves the badge hidden rather than inventing "Free" for a paid workspace.
+    const hdr = document.getElementById('userPlanBadge');
+    if (hdr) { hdr.textContent = STATE.planName || ''; hdr.style.display = STATE.planName ? '' : 'none'; }
     // The "You're on the X plan." half shows ONLY when a plan was really read: showUpgradeBanner()
     // also runs on the 402 path (API.call), before/without this, and may not claim a plan it never read.
     const wrap = document.getElementById('currentPlanWrap');

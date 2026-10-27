@@ -1090,6 +1090,7 @@ const TAB_RENDERERS = {
 
   'dashboard': () => {
     return pageHeader('Dashboard', 'Overview of your CRM performance') +
+    '<div id="firstSteps"></div>' +
     '<div class="stats-grid" id="statsGrid"><div class="loading-wrap"><div class="spinner"></div> Loading stats...</div></div>' +
     '<div id="dashboardExtra"></div>';
   },
@@ -1570,6 +1571,56 @@ const TAB_LOADERS = {
         });
       }
       statsGridEl.innerHTML = html || '<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats unavailable — no source answered.</p></div></div>';
+
+    // cron 2026-10-27 — a brand-new workspace landed on a dashboard of seven zeros with no next
+    // step: measured on a fresh signup (real numbers from the app's own routes) the tiles read
+    // 0 contacts / 0 companies / 0 opportunities / $0.00 won / 0 pipelines / 0 tracked links, and
+    // the three things a CRM needs before any of that means anything were discoverable only by
+    // reading the sidebar. This card names them and links each to the screen that does it.
+    // It paints ONLY for a workspace where EVERY read it depends on answered AND every count is
+    // zero, so a failed read can never make a busy workspace look new; and it removes itself the
+    // moment any one of them is non-zero, so it never becomes permanent furniture.
+    // `ticketsS.gated` is deliberately NOT part of the predicate: a 402 is the plan gate talking,
+    // not a missing read (a Free workspace has no support tickets at all).
+    (function paintFirstSteps(){
+      const box = document.getElementById('firstSteps');
+      if (!box) return;
+      if (!stats || !pipes || !links) { box.innerHTML = ''; return; }
+      const num = (v) => (typeof v === 'number' && isFinite(v)) ? v : 0;
+      const pipesN = Array.isArray(pipes.pipelines) ? pipes.pipelines.length : null;
+      const linksN = Array.isArray(links.links) ? links.links.length : null;
+      if (pipesN === null || linksN === null) { box.innerHTML = ''; return; }
+      const existing = num(stats.total_contacts) + num(stats.total_companies)
+                     + num(stats.total_opportunities) + pipesN + linksN;
+      if (existing > 0) { box.innerHTML = ''; return; }
+      // The nav hides a roles[] entry from a 'member' (see the SETTINGS_MENU filter); the card
+      // follows the same rule, so it never offers a screen whose API answers 403.
+      const role = (STATE.user && STATE.user.role) || 'member';
+      const canInvite = role === 'owner' || role === 'admin';
+      const steps = [
+        ['Add your first contact',
+         'The person you are going to sell to. A whole spreadsheet can come in at once with Import CSV, on the same screen.',
+         'contacts'],
+        ['Set up a pipeline',
+         'The stages a deal moves through, so a won deal has somewhere to land and the Won Deal Value tile can count it.',
+         'pipelines'],
+        ['Invite your team',
+         'Bring in the people who work the deals. Each person gets their own sign-in in this workspace.',
+         'team'],
+      ].filter((s) => s[2] !== 'team' || canInvite);
+      let h = '<div class="card" data-first-steps="1" style="margin-bottom:16px"><div class="card-body">';
+      h += '<h3 style="margin:0 0 4px">Get set up</h3>';
+      h += '<p style="color:var(--text-secondary);font-size:13px;margin:0 0 12px">Three steps and this workspace is ready to work. This card goes away once you have done any one of them.</p>';
+      steps.forEach((s, i) => {
+        h += '<div style="display:flex;gap:12px;align-items:flex-start;padding:10px 0' + (i ? ';border-top:1px solid #e2e8f0' : '') + '">';
+        h += '<div style="flex:0 0 24px;height:24px;border-radius:50%;background:#eef2ff;color:#4338ca;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center">' + (i + 1) + '</div>';
+        h += '<div style="flex:1"><div style="font-weight:600;font-size:14px">' + escapeHtml(s[0]) + '</div>';
+        h += '<div style="color:var(--text-secondary);font-size:12px;margin:2px 0 6px;max-width:60ch">' + escapeHtml(s[1]) + '</div>';
+        h += '<button type="button" class="btn btn-primary btn-sm" data-first-step="' + s[2] + '" onclick="switchTab(\'' + s[2] + '\')">' + escapeHtml(s[0]) + '</button></div></div>';
+      });
+      h += '</div></div>';
+      box.innerHTML = h;
+    })();
     } catch(e) {
       statsGridEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats unavailable: ${escapeHtml(String(e.message || e))}</p></div></div>`;
     }
