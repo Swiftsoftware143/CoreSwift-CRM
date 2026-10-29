@@ -38,6 +38,15 @@ pub fn router(state: AppState) -> Router<AppState> {
     let protected = Router::new()
         .route("/invite", axum::routing::post(handlers::create_invite))
         .route("/me/usage", axum::routing::get(handlers::get_usage))
+        // The way back in when signup MINTED a password and the mail carrying it did not go out
+        // (kanban t_d841df4f). Authenticated like every other act on the caller's own account: the
+        // token the signup response already carried IS the credential, and the one-shot
+        // `users.password_undelivered` latch bounds the offer. Deliberately NOT public — it is on
+        // this guarded group, so the boundary refuses an anonymous caller before the handler runs.
+        .route(
+            "/initial-password",
+            axum::routing::post(handlers::set_initial_password),
+        )
         // INNERMOST, deliberately: `auth_middleware` is applied below (a later `.layer()` is
         // OUTERMOST in axum) so it stays outside the deadline. An unauthenticated request with a
         // declared body is answered 401 at once without its body ever being read, and a declared

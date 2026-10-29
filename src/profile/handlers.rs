@@ -242,8 +242,11 @@ pub async fn change_password(
     }
 
     let new_hash = hash_password(&req.new_password)?;
+    // `password_undelivered = false` (kanban t_d841df4f): a customer who changes their own password
+    // obviously has one they can use, so the "choose your own password" door has nothing left to set.
     sqlx::query(
-        "UPDATE users SET password_hash = $2, password_changed_at = NOW(), updated_at = NOW() \
+        "UPDATE users SET password_hash = $2, password_changed_at = NOW(), \
+         password_undelivered = false, updated_at = NOW() \
          WHERE id = $1",
     )
     .bind(id)

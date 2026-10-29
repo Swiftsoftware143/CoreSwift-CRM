@@ -149,6 +149,11 @@ pub struct RegisterResponse {
     pub next_steps: Vec<String>,
     /// The resolved platform authority for this session (see `team_member_payload`).
     pub platform_admin: bool,
+    /// Did the credentials mail actually leave? `false` means this account exists with a password
+    /// nobody has read — a send failure, or an address the sender withholds (kanban t_d841df4f).
+    /// The signup page keys the "choose your own password" chooser on this value instead of
+    /// promising mail that was never sent. Same shape as ADASwift / FunnelSwift / IncentiveSwift.
+    pub credentials_emailed: bool,
 }
 
 /// Account info for response (from `tenants` table).

@@ -100,7 +100,10 @@ pub async fn register(
             "Password must be at least 8 characters".to_string(),
         ));
     }
-    let password = if req.password.is_empty() {
+    // Whether THIS door minted the password (kanban t_d841df4f): only that arm can leave an account
+    // whose password nobody has ever read, because a caller who brought their own already knows it.
+    let password_minted = req.password.is_empty();
+    let password = if password_minted {
         crate::auth::signup::generate_temp_password()
     } else {
         req.password.clone()
@@ -177,8 +180,12 @@ pub async fn register(
 
     // The credentials mail is the SAME template the machine door sends
     // (`auth::signup::send_credentials_email`) — one implementation, so a change to the
-    // credentials shape cannot land on only one door.
-    crate::auth::signup::send_credentials_email(
+    // credentials shape cannot land on only one door. It is AWAITED and its outcome is reported
+    // (kanban t_d841df4f): the response carries `credentials_emailed`, so the page can stop
+    // promising an inbox that will stay empty. The account is already committed above, so a slow or
+    // failing provider can never undo it — the worst case is the page saying "we could not send it",
+    // which is true.
+    let credentials_emailed = crate::auth::signup::send_credentials_email(
         &state.db,
         tenant_id,
         &tenant_name,
@@ -187,6 +194,25 @@ pub async fn register(
         &password,
     )
     .await;
+
+    // The state the "choose your own password" door keys on: THIS door minted the first password and
+    // the mail carrying it did not go out, so the customer holds an account whose password nobody has
+    // read. Only the minted arm can set it — a caller who brought their own already knows it,
+    // whatever the welcome mail did. Best-effort: the account is already minted, and refusing the
+    // signup here would be worse than the state it describes.
+    if password_minted && !credentials_emailed {
+        if let Err(e) = sqlx::query("UPDATE users SET password_undelivered = true WHERE id = $1")
+            .bind(user.id)
+            .execute(&state.db)
+            .await
+        {
+            tracing::warn!(
+                error = %e,
+                user = %user.id,
+                "register: could not mark the undelivered credential"
+            );
+        }
+    }
     let mut next_steps = vec![
         "Connect your apps — POST /api/native/apps/{slug}/connect".to_string(),
         "Create contacts — POST /api/contacts".to_string(),
@@ -211,6 +237,8 @@ pub async fn register(
             expires_in,
             team_member: team_member_payload(user, platform_admin),
             platform_admin,
+            // Truthful answer to "did the login mail leave?" (kanban t_d841df4f).
+            credentials_emailed,
             account: AccountResponse {
                 id: tenant_id,
                 name: tenant_name,
@@ -658,8 +686,11 @@ pub async fn reset_password(
 
     // Update user password. A reset IS a password change, so it stamps `password_changed_at` exactly
     // like the profile change-password path (migration 065: tokens issued before it are invalidated).
+    // It also CLEARS `password_undelivered` (kanban t_d841df4f): the customer now holds a password
+    // they chose themselves, so the "choose your own password" door has nothing left to offer.
     sqlx::query(
-        "UPDATE users SET password_hash = $1, password_changed_at = NOW(), updated_at = NOW() \
+        "UPDATE users SET password_hash = $1, password_changed_at = NOW(), \
+         password_undelivered = false, updated_at = NOW() \
          WHERE id = $2",
     )
     .bind(&password_hash)
@@ -676,6 +707,68 @@ pub async fn reset_password(
     Ok(Json(
         json!({"message": "Password has been reset successfully."}),
     ))
+}
+
+/// `POST /api/auth/initial-password` — the customer sets the first password they will ever know.
+///
+/// Signup mints a password and MAILS it, and that mail is the only way in. When the send does not go
+/// out (the provider refuses, or the address is one the sender withholds) the account is left with a
+/// password nobody has seen, and the signup page used to still promise the mail (kanban t_d841df4f).
+/// `users.password_undelivered` marks exactly that state and nothing else; this door is the way out.
+///
+/// Deliberately ONE-SHOT: the UPDATE writes the chosen password and clears the latch in the SAME
+/// statement, and the latch is also a WHERE condition, so a replay finds no row and is refused. The
+/// latch — not the JWT — is what makes it one-shot: `password_changed_at` is compared in whole
+/// seconds, so a replay inside the same second would otherwise pass the session boundary check and
+/// REPLACE the password the first call had just set.
+///
+/// No current password is asked for: the state this door exists for is precisely "the customer has
+/// never seen a password". What authenticates the caller is the token the signup response already
+/// carried for that minted account.
+#[derive(serde::Deserialize)]
+pub struct SetInitialPasswordRequest {
+    pub password: String,
+}
+
+pub async fn set_initial_password(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<SetInitialPasswordRequest>,
+) -> ApiResult<impl IntoResponse> {
+    if req.password.chars().count() < 8 {
+        return Err(AppError::Validation(
+            "Password must be at least 8 characters".to_string(),
+        ));
+    }
+
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+    let new_hash = hash_password(&req.password)?;
+
+    // One statement, one shot: the latch is a WHERE condition AND is cleared by the same write, so
+    // two racing calls cannot both succeed and a replay after the first finds no row. Stamping
+    // `password_changed_at` retires every session minted before this instant, exactly as the
+    // change-password and reset writers do (this app's revocation boundary).
+    let updated: Option<Uuid> = sqlx::query_scalar(
+        "UPDATE users \
+            SET password_hash = $1, password_undelivered = false, \
+                password_changed_at = NOW(), updated_at = NOW() \
+          WHERE id = $2 AND password_undelivered = true \
+        RETURNING id",
+    )
+    .bind(&new_hash)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    match updated {
+        Some(_) => Ok(Json(json!({ "status": "password_set" }))),
+        // NOT a validation error: the request is well-formed and the caller owns the account —
+        // there is simply nothing left to set, because a password they can already use is on the row.
+        None => Err(AppError::UnauthorizedReason(
+            "This account already has a password you can use. Sign in with it, or use \"Forgot password?\" to reset it."
+                .to_string(),
+        )),
+    }
 }
 
 // ── Internal row types ──

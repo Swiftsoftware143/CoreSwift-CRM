@@ -280,8 +280,13 @@ pub async fn create_account(
 /// template that carries the password line (`register` has always sent this one with the
 /// plaintext password in its variables).
 ///
+/// Does the credentials mail actually leave? `true` ONLY when a message was queued, `false` when the
+/// send was suppressed (probe/harness class, kanban t_12a8d509) or the send failed.
 /// A send failure is logged and swallowed — the account is already real, and a mail outage must
-/// not turn a completed mint into an error response.
+/// not turn a completed mint into an error response. But it is now REPORTED: `register` turns a
+/// `false` on a MINTED password into `users.password_undelivered = true`, which is the state
+/// `/api/auth/initial-password` exists for (kanban t_d841df4f). Before this the value was an
+/// invisible `()`, so the page had to promise mail whether or not any had been sent.
 ///
 /// ── PROBE / HARNESS ACCOUNTS NEVER SEND (kanban t_12a8d509) ─────────────────────────────────────
 /// This app was the only fleet app that mailed its own harnesses. Measured on the app's own
@@ -310,7 +315,7 @@ pub async fn send_credentials_email(
     email: &str,
     name: &str,
     password: &str,
-) {
+) -> bool {
     if let Some(reason) = credentials_send_suppression(db, tenant_id, email).await {
         tracing::info!(
             email = %email,
@@ -319,7 +324,7 @@ pub async fn send_credentials_email(
             "credentials email SUPPRESSED — probe/harness account. The account is real and the \
              generated password was returned to the caller; no mail was queued."
         );
-        return;
+        return false;
     }
     let vars = serde_json::json!({
         "name": name,
@@ -328,9 +333,12 @@ pub async fn send_credentials_email(
         "account_name": tenant_name,
         "app_url": "https://app.coreswiftcrm.com",
     });
-    if let Err(e) = crate::email::send_template_email(db, tenant_id, email, "welcome", &vars).await
-    {
-        tracing::warn!(error = %e, "Welcome email via template failed");
+    match crate::email::send_template_email(db, tenant_id, email, "welcome", &vars).await {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(error = %e, "Welcome email via template failed");
+            false
+        }
     }
 }
 
