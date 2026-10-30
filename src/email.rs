@@ -194,6 +194,46 @@ pub async fn send_template_email(
     template_type: &str,
     vars: &serde_json::Value,
 ) -> Result<(), String> {
+    let rendered = render_email(db, tenant_id, template_type, vars).await?;
+    queue_rendered(db, tenant_id, to, &rendered).await
+}
+
+/// A transactional email exactly as this app QUEUES it: the subject plus the ONE body the transport
+/// delivers, after the workspace's branded header and the support footer have been applied.
+///
+/// Produced by [`render_email`], which stores nothing — so the console's branding preview can show
+/// the bytes the mailer really produces instead of drawing its own copy of
+/// `Branding::header_html` in JavaScript, which is a SECOND implementation of the renderer and can
+/// therefore describe a message this app never sends (kanban t_c5bec49c).
+#[derive(Debug, Clone)]
+pub struct RenderedEmail {
+    /// The subject line, merge fields resolved.
+    pub subject: String,
+    /// The plain-text part, with the brand name in front of it.
+    pub text: String,
+    /// The HTML part with the branded header, or empty when the message has no HTML body.
+    pub html: String,
+    /// Whether the body being delivered is `html` (one body column, migration 117).
+    pub is_html: bool,
+    /// Whether this workspace has branding of its OWN configured (a name or a logo).
+    pub branded: bool,
+    /// Whether that branding carries a logo this workspace uploaded.
+    pub own_logo: bool,
+}
+
+/// Render a templated email through the ONE path a real send uses, and RETURN it instead of
+/// queueing it.
+///
+/// Every step of a send happens here — template selection, merge fields, the branded header, the
+/// support footer — up to but excluding the `outbound_messages` INSERT. A caller that only wants to
+/// SEE the message (the branding preview) therefore cannot drift from the message a customer
+/// receives. Nothing is mailed and no row is written.
+pub async fn render_email(
+    db: &PgPool,
+    tenant_id: Uuid,
+    template_type: &str,
+    vars: &serde_json::Value,
+) -> Result<RenderedEmail, String> {
     let app_name = APP_NAME;
     let app_url = APP_URL;
     let vars = render_vars(vars, app_name, app_url);
@@ -228,7 +268,7 @@ pub async fn send_template_email(
         }
     };
 
-    match template {
+    let (template_id, subject, text_body, html_body, use_html) = match template {
         Some(t) => {
             // Use DB template
             let subject = render_template(
@@ -253,68 +293,89 @@ pub async fn send_template_email(
             // The live table has no `is_html` column: the flag is DERIVED exactly as the registry
             // handler derives it for its JSON payload — a template with an HTML body is HTML.
             let use_html = t.html_body.is_some();
-
-            for (field, text) in [
-                ("subject", subject.as_str()),
-                ("html_body", html_body.as_str()),
-                ("body", text_body.as_str()),
-            ] {
-                let leftover = leftover_placeholders(text, &get_merge_fields(template_type));
-                if !leftover.is_empty() {
-                    tracing::warn!(
-                        template = %t.id,
-                        template_type = %template_type,
-                        field,
-                        placeholders = ?leftover,
-                        "email template placeholder is UNRESOLVED and will be sent literally — \
-                         templates use {{key}} double braces"
-                    );
-                }
-            }
-
-            queue_outbound_message(
-                db, tenant_id, to, &subject, &text_body, &html_body, use_html,
-            )
-            .await
+            (Some(t.id), subject, text_body, html_body, use_html)
         }
         None => {
-            // No row for this template_type: the inline bodies are the fallback
-            send_inline(db, tenant_id, to, template_type, &vars, app_name, app_url).await
+            let (subject, text_body, html_body, use_html) =
+                inline_bodies(template_type, &vars, app_name, app_url);
+            (None, subject, text_body, html_body, use_html)
+        }
+    };
+
+    for (field, text) in [
+        ("subject", subject.as_str()),
+        ("html_body", html_body.as_str()),
+        ("body", text_body.as_str()),
+    ] {
+        let leftover = leftover_placeholders(text, &get_merge_fields(template_type));
+        if !leftover.is_empty() {
+            tracing::warn!(
+                template = ?template_id,
+                template_type = %template_type,
+                field,
+                placeholders = ?leftover,
+                "email template placeholder is UNRESOLVED and will be sent literally — \
+                 templates use {{key}} double braces"
+            );
         }
     }
+
+    let (text, html, is_html, branded, own_logo) =
+        compose_body(db, tenant_id, &text_body, &html_body, use_html).await;
+
+    Ok(RenderedEmail {
+        subject,
+        text,
+        html,
+        is_html,
+        branded,
+        own_logo,
+    })
 }
 
-/// Queue an outbound message for async delivery
-async fn queue_outbound_message(
+/// The branding + support-footer pass, applied at the ONE place a body becomes a message.
+///
+/// Returns `(text, html, is_html, branded, own_logo)`. BOTH the queueing path and the preview path
+/// go through it, so the header on screen is the header in the mail.
+///
+/// Per-workspace email branding (kanban t_feab8aff) is applied at the ONE point both the
+/// `email_templates` row and the inline fallback pass through, so a template added later inherits the
+/// header for free. A workspace that has configured NONE still sends a header — the app's own name
+/// and wordmark (kanban t_5054a5c9), because the first mail a brand-new customer receives must say
+/// who it is from. Every transactional body also leaves with the app's own support address on it,
+/// applied HERE for the same one-place reason and AFTER the header so the footer stays last.
+async fn compose_body(
     db: &PgPool,
     tenant_id: Uuid,
-    to: &str,
-    subject: &str,
     text_body: &str,
     html_body: &str,
     is_html: bool,
-) -> Result<(), String> {
-    // Per-workspace email branding (kanban t_feab8aff), applied at the ONE queue point BOTH the
-    // `email_templates` row and the inline fallback pass through, so a template added later inherits
-    // the header for free. A workspace that has configured NONE still sends a header — the app's own
-    // name and wordmark (kanban t_5054a5c9), because the first mail a brand-new customer receives
-    // must say who it is from. The header is prepended BEFORE the support footer so the footer stays
-    // last, and a text-only body stays text-only (one body column means one part).
-    let branding = crate::branding::load(db, tenant_id)
-        .await
-        .unwrap_or_else(app_default_branding);
+) -> (String, String, bool, bool, bool) {
+    let stored = crate::branding::load(db, tenant_id).await;
+    let branded = stored.is_some();
+    let own_logo = stored
+        .as_ref()
+        .and_then(|b| b.resolve_logo_url(APP_URL))
+        .is_some();
+    let branding = stored.unwrap_or_else(app_default_branding);
     let (text_body, html_body, is_html) =
         apply_branding(Some(&branding), text_body, html_body, is_html);
-    // Every transactional body leaves with the app's own support address on it. Applied HERE, at
-    // the single queue point that BOTH the `email_templates` row and the inline fallback pass
-    // through, so the address reaches the real message whichever body was chosen.
     let (text_body, html_body) = with_support_footer(&text_body, &html_body);
+    (text_body, html_body, is_html, branded, own_logo)
+}
 
+/// Queue a rendered email for async delivery
+async fn queue_rendered(
+    db: &PgPool,
+    tenant_id: Uuid,
+    to: &str,
+    rendered: &RenderedEmail,
+) -> Result<(), String> {
     // Build the body: use html if available and is_html, otherwise text
-    let body = if is_html && !html_body.is_empty() {
-        html_body
+    let body = if rendered.is_html && !rendered.html.is_empty() {
+        rendered.html.as_str()
     } else {
-        text_body
+        rendered.text.as_str()
     };
 
     sqlx::query(
@@ -324,10 +385,10 @@ async fn queue_outbound_message(
     .bind(Uuid::new_v4())
     .bind(tenant_id)
     .bind(to)
-    .bind(subject)
-    .bind(&body)
+    .bind(&rendered.subject)
+    .bind(body)
     // Whether THIS body is HTML, so the delivery path can send an `html` part (migration 117).
-    .bind(is_html)
+    .bind(rendered.is_html)
     .execute(db)
     .await
     .map_err(|e| format!("Failed to queue email: {}", e))?;
@@ -345,16 +406,18 @@ fn get_default_subject(template_type: &str, app_name: &str) -> String {
     }
 }
 
-/// Fallback hardcoded templates — used when no DB template is found
-async fn send_inline(
-    db: &PgPool,
-    tenant_id: Uuid,
-    to: &str,
+/// Fallback hardcoded templates — used when no DB template is found.
+///
+/// Returns `(subject, text_body, html_body, use_html)` instead of queueing, so the preview surface
+/// renders the same message a send would produce. Every arm is plain text (`use_html` false),
+/// exactly as the inline path has always been: wrapping these in HTML would change what a customer
+/// receives today.
+fn inline_bodies(
     template_type: &str,
     vars: &serde_json::Value,
     app_name: &str,
     app_url: &str,
-) -> Result<(), String> {
+) -> (String, String, String, bool) {
     let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
     let email = vars.get("email").and_then(|v| v.as_str()).unwrap_or("");
     let password = vars.get("password").and_then(|v| v.as_str()).unwrap_or("");
@@ -371,7 +434,7 @@ async fn send_inline(
                 "Welcome to {}, {}!\n\nYour account has been created.\n\nEmail: {}\nPassword: {}\n\nLogin at: {}/login\n\nNext steps:\n- Connect your apps\n- Import your contacts\n- Set up your pipelines\n- Invite your team\n\n{} Team",
                 app_name, name, email, password, app_url, app_name
             );
-            queue_outbound_message(db, tenant_id, to, &subject, &body, "", false).await
+            (subject, body, String::new(), false)
         }
         "purchase_confirmed" => {
             let subject = "Payment Received — Thank You!".to_string();
@@ -379,7 +442,7 @@ async fn send_inline(
                 "Hi {},\n\nYour payment for {} has been confirmed. Thank you!\n\nLogin at: {}/login\n\nThank you for your business!\n- {} Team",
                 name, plan_name_val, app_url, app_name
             );
-            queue_outbound_message(db, tenant_id, to, &subject, &body, "", false).await
+            (subject, body, String::new(), false)
         }
         "password_reset" => {
             let subject = "Password Reset Request".to_string();
@@ -387,14 +450,43 @@ async fn send_inline(
                 "Hi {},\n\nWe received a request to reset your password for {}.\n\nYour reset token is: {}\n\nReset URL: {}/auth/reset-password?token={}\n\nThis token expires in 1 hour.\n\nIf you did not request this, please ignore this email.\n\n- {} Team",
                 name, app_name, token, app_url, token, app_name
             );
-            queue_outbound_message(db, tenant_id, to, &subject, &body, "", false).await
+            (subject, body, String::new(), false)
         }
         _ => {
             let subject = format!("{} Notification", app_name);
             let body = format!("{} Notification:\n\n{}", app_name, vars);
-            queue_outbound_message(db, tenant_id, to, &subject, &body, "", false).await
+            (subject, body, String::new(), false)
         }
     }
+}
+
+/// The template type the branding preview renders: the FIRST mail a new customer receives, which is
+/// the one a customer judges this workspace's branding on.
+pub const PREVIEW_TEMPLATE_TYPE: &str = "welcome";
+
+/// What the preview prints where the real mail prints the customer's password.
+///
+/// The welcome mail IS the credentials mail, so it carries `{{password}}`. A preview must never show
+/// a plausible credential: masking it keeps the pane honest and makes the rendered message useless
+/// as a credential, since nothing is read from the row and nothing is mailed.
+pub const PREVIEW_CREDENTIAL_MASK: &str = "••••••••";
+
+/// Render the message this workspace's branding actually produces, for the console's preview pane.
+///
+/// `name`/`to` describe the CALLER — the handler reads them from the signed-in user's own row — so
+/// nothing here can address a third party. Returns the bytes; sends nothing.
+pub async fn render_branding_preview(
+    db: &PgPool,
+    tenant_id: Uuid,
+    name: &str,
+    to: &str,
+) -> Result<RenderedEmail, String> {
+    let vars = json!({
+        "name": name,
+        "email": to,
+        "password": PREVIEW_CREDENTIAL_MASK,
+    });
+    render_email(db, tenant_id, PREVIEW_TEMPLATE_TYPE, &vars).await
 }
 
 // ---- Data types ----

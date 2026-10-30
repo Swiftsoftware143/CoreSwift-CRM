@@ -24,6 +24,13 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/branding/logo",
             axum::routing::post(branding::upload_logo).delete(branding::delete_logo),
         )
+        // The email this workspace's branding actually produces, RENDERED and returned — not sent
+        // (kanban t_c5bec49c). The console's Preview card reads this instead of drawing its own
+        // copy of the renderer, so what an operator sees cannot disagree with what is mailed.
+        .route(
+            "/branding/preview-body",
+            axum::routing::get(branding::preview_body),
+        )
         .layer(axum::middleware::from_fn_with_state(
             crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
             crate::body_deadline::body_read_deadline_middleware,

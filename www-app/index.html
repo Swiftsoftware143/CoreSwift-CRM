@@ -5900,11 +5900,10 @@ TAB_RENDERERS['branding'] = () => {
     '<button class="btn btn-ghost" data-ops="branding-remove" onclick="removeBrandingLogo()">Remove logo</button>') +
   '<br>' +
   card('Preview', '' +
-    '<p class="form-hint" style="margin-top:0">The header every email from this workspace opens with. It follows the fields above as you type, and nothing is saved until you press <strong>Save branding</strong>.</p>' +
-    '<div style="border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:16px 14px 12px;background:#fff">' +
-      '<div id="brandHeaderPreview"></div>' +
-      '<div style="font-size:13.5px;color:#111827;line-height:1.5">Hi Alex &mdash; this is a sample of the message body. Only the header above comes from your branding.</div>' +
-    '</div>') +
+    '<p class="form-hint" style="margin-top:0">The message a new customer receives, rendered by the mailer itself &mdash; your logo, display name and colour included. It shows your <strong>saved</strong> branding: press <strong>Save branding</strong> to see a change here.</p>' +
+    '<div id="brandPreviewSubject" style="font-weight:600;font-size:13.5px;color:var(--text-primary);margin:12px 0 8px"></div>' +
+    '<iframe id="brandPreviewFrame" sandbox="" title="Email preview" style="width:100%;height:440px;border:1px solid var(--border,#e5e7eb);border-radius:8px;background:#fff"></iframe>' +
+    '<div id="brandPreviewNote" class="form-hint" style="margin-top:8px"></div>') +
   '<div id="brandingStatus" style="margin-top:10px;color:var(--text-muted)"></div>';
 };
 
@@ -5925,40 +5924,55 @@ async function loadBrandingTab() {
     // listener would repaint the preview N times for one keystroke.
     const nameIn = document.getElementById('brandName');
     const colourIn = document.getElementById('brandColor');
-    if (nameIn) nameIn.oninput = renderBrandHeaderPreview;
-    if (colourIn) colourIn.oninput = renderBrandHeaderPreview;
-    renderBrandHeaderPreview();
+    if (nameIn) nameIn.oninput = markBrandingUnsaved;
+    if (colourIn) colourIn.oninput = markBrandingUnsaved;
+    loadBrandPreview();
     if (status) status.textContent = '';
   } catch (e) {
     if (status) status.textContent = 'Could not load branding: ' + e.message;
   }
 }
 
-// What a RECIPIENT sees — mirrors Branding::header_html (src/branding.rs): a centred logo (max 56px
-// high / 240px wide, alt = the display name) with no name line while a logo is set; otherwise the
-// display name in 20px bold #111827; then a 3px rule in the effective brand colour; and the note
-// when neither is set, which is when mail keeps CoreSwift's own header. It reads this tab's own
-// controls and the logo the tab already rendered, so it sends nothing and cannot disagree with what
-// Save would store.
-function renderBrandHeaderPreview() {
-  const wrap = document.getElementById('brandHeaderPreview');
-  if (!wrap) return;
-  const nameEl = document.getElementById('brandName');
-  const colorEl = document.getElementById('brandColor');
-  const name = ((nameEl && nameEl.value) || '').trim();
-  const rawColour = String((colorEl && colorEl.value) || '').trim();
-  const colour = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(rawColour) ? rawColour : '#4f46e5';
-  const logoImg = document.querySelector('#brandLogoPreviewWrap img');
-  const logo = (logoImg && logoImg.getAttribute('src')) || '';
-  if (!logo && !name) {
-    wrap.innerHTML = '<div style="font-size:13px;color:var(--text-muted,#64748b)">Nothing is set yet, so mail keeps CoreSwift\u2019s own header.</div>';
-    return;
+// The email this workspace REALLY sends, fetched from the mail path — never redrawn here.
+//
+// GET /api/account/branding/preview-body renders the subject and body through the SAME renderer
+// every real send uses (template selection, merge fields, branded header, support footer) and
+// returns them WITHOUT mailing anything. Before this the pane mirrored `Branding::header_html` in
+// JavaScript and printed a made-up body line, so it could describe a message this app never emits
+// and could not prove an uploaded logo reached the mail. With the renderer's own output on screen
+// there is no second implementation to drift.
+function markBrandingUnsaved() {
+  const note = document.getElementById('brandPreviewNote');
+  if (note) note.textContent = 'Unsaved changes — press Save branding to see them in this preview.';
+}
+
+async function loadBrandPreview() {
+  const frame = document.getElementById('brandPreviewFrame');
+  if (!frame) return;
+  const subject = document.getElementById('brandPreviewSubject');
+  const note = document.getElementById('brandPreviewNote');
+  try {
+    const d = await API.get('/account/branding/preview-body');
+    // `sandbox=""` on the frame means this markup cannot run a script or reach this document.
+    const body = d.html
+      ? d.html
+      : '<pre style="white-space:pre-wrap;margin:0;font:13.5px/1.5 -apple-system,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#111827">' +
+        escapeHtml(d.text || '') + '</pre>';
+    frame.srcdoc = '<!doctype html><meta charset="utf-8">' +
+      '<body style="margin:0;padding:16px 14px;background:#fff;font:13.5px/1.5 -apple-system,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#111827">' +
+      body + '</body>';
+    if (subject) subject.textContent = d.subject ? ('Subject: ' + d.subject) : '';
+    if (note) {
+      note.textContent = d.branded
+        ? (d.logo_is_own
+            ? 'The real message, built from your saved logo, display name and colour.'
+            : 'The real message, built from your saved display name and colour.')
+        : 'Nothing is branded yet, so this is the header your customers receive today. Set a name or a logo and save to change it.';
+    }
+  } catch (e) {
+    if (subject) subject.textContent = '';
+    if (note) note.textContent = 'Could not load the email preview: ' + ((e && e.message) || 'unknown error');
   }
-  const inner = logo
-    ? '<img id="brandHeaderPreviewImg" src="' + escapeHtml(logo) + '" alt="' + escapeHtml(name) + '" style="max-height:56px;max-width:240px;display:inline-block">'
-    : '<span id="brandHeaderPreviewName" style="font:700 20px/1.3 -apple-system,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#111827">' + escapeHtml(name) + '</span>';
-  wrap.innerHTML = '<div style="text-align:center;margin:0 0 8px">' + inner + '</div>' +
-    '<div id="brandHeaderPreviewRule" style="border-top:3px solid ' + colour + ';margin:0 0 14px"></div>';
 }
 
 function renderBrandLogoPreview(logoPath) {
@@ -5968,7 +5982,7 @@ function renderBrandLogoPreview(logoPath) {
     ? '<div style="color:var(--text-muted);font-size:12px;margin-bottom:6px">Current logo</div>' +
       '<img src="' + escapeHtml(logoPath) + '" alt="Logo preview" style="max-height:56px;max-width:240px;border:1px solid var(--border,#333);padding:6px;border-radius:6px;background:#fff">'
     : '<div style="color:var(--text-muted);font-size:12px">No logo uploaded.</div>';
-  renderBrandHeaderPreview();
+  loadBrandPreview();
 }
 
 async function saveBranding() {
@@ -5987,6 +6001,7 @@ async function saveBranding() {
     // in a real browser on the live console, kanban t_feab8aff).
     await API.patch('/account/' + currentAid() + '/settings', settings);
     if (status) status.textContent = 'Branding saved.';
+    loadBrandPreview();
   } catch (e) {
     if (status) status.textContent = 'Could not save: ' + e.message;
   }

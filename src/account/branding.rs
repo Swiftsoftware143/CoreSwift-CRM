@@ -135,6 +135,52 @@ pub async fn delete_logo(
     Ok(Json(json!({"removed": removed > 0})))
 }
 
+/// `GET /api/account/branding/preview-body` — the email this workspace's branding produces, rendered
+/// and returned, NOT sent (kanban t_c5bec49c).
+///
+/// The console's Preview card used to draw its own copy of `Branding::header_html` in JavaScript, so
+/// it could describe a header the mailer never emits — and it could not prove that an UPLOADED logo
+/// reached the body, because nothing read the result back. This answers with the bytes the real send
+/// path produces (template selection, merge fields and the branded header included), so the pane has
+/// no second implementation to drift from.
+///
+/// Nothing is mailed, and the recipient fields describe the CALLER — read from their own row in
+/// their own workspace, never from the request — so this cannot be used as a relay.
+pub async fn preview_body(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    let user_id = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
+
+    let row: Option<(String, String)> =
+        sqlx::query_as("SELECT email, name FROM users WHERE id = $1 AND tenant_id = $2")
+            .bind(user_id)
+            .bind(tenant_id)
+            .fetch_optional(&s.db)
+            .await?;
+    let (to, name) = row.ok_or_else(|| AppError::NotFound("No such user".to_string()))?;
+    let name = if name.trim().is_empty() {
+        "there".to_string()
+    } else {
+        name
+    };
+
+    let rendered = crate::email::render_branding_preview(&s.db, tenant_id, name.trim(), to.trim())
+        .await
+        .map_err(AppError::Internal)?;
+
+    Ok(Json(json!({
+        "sent": false,
+        "to": to,
+        "subject": rendered.subject,
+        "html": rendered.html,
+        "text": rendered.text,
+        "branded": rendered.branded,
+        "logo_is_own": rendered.own_logo,
+    })))
+}
+
 /// `GET /api/branding/logo/:tenant_id` — PUBLIC: serve the stored bytes, or 404.
 ///
 /// Deliberately reads nothing else: no name, no colour, no existence of the tenant beyond whether a

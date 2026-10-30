@@ -57,6 +57,14 @@
 //!        lists are untouched; measured live with no credential: 401. Now 368 mounted
 //!        `.route(..)` calls (367 before this mount), 356 mounts on /api/**.
 //!
+//!   +1 mount / +1 path since (2026-10-30, kanban t_c5bec49c), the email-branding preview:
+//!        `GET /api/account/branding/preview-body` on the account router, next to the logo writers.
+//!        It answers with the message this workspace's branding produces, RENDERED by the mail path
+//!        and not sent, so the console's Preview card stops mirroring `Branding::header_html` in
+//!        JavaScript. The recipient fields come from the caller's own `users` row (never the
+//!        request), and it is on no allowlist — private by default, measured live with no
+//!        credential: 401. Now 369 mounted `.route(..)` calls, 357 mounts on /api/**.
+//!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
 //!        the per-module gate was doing its job. The two /api routes added since (kanban
@@ -1004,12 +1012,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            368,
+            369,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 356,
+            api, 357,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.
