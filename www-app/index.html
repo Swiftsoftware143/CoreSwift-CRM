@@ -904,6 +904,12 @@ async function checkPlan() {
 }
 
 function showUpgradeBanner() {
+  // kanban cron 2026-10-31: a dismissal is the USER's answer and it must outrank the upsell.
+  // Every plan-gated call answers 402 and the 402 path calls this function, and a Free workspace
+  // fires six gated calls on load — so removing the class unconditionally re-showed the banner on
+  // every reload even though dismissBanner() had written `crm_banner_dismissed`. Respect the flag;
+  // the gated pane's own lock card still explains the gate to whoever lands on it.
+  if (localStorage.getItem('crm_banner_dismissed')) return;
   document.getElementById('upgradeBanner').classList.remove('dismissed');
 }
 
