@@ -54,12 +54,15 @@ pre code{background:none;padding:0}a{color:#1d4ed8}
 <p>A workspace sets its own brand display name, colour and logo, and every transactional mail it
 sends carries them. Keyed by the tenant id (<code>email_templates.aid</code>), so it is per WORKSPACE,
 not per app.</p>
-<p>The pane shows <strong>what your recipients see</strong>: the header block the app actually builds
-(<code>Branding::header_html</code>, <code>src/branding.rs</code>) &mdash; the logo at most 56&nbsp;px
-high and 240&nbsp;px wide, otherwise the name in 20&nbsp;px, then a 3&nbsp;px rule in the brand colour,
-nothing at all when neither is set &mdash; and it follows the fields as you type, so a name or colour
-can be judged before saving. It sends and saves nothing, and a colour that is not a hex value previews
-as the default <code>#4f46e5</code>, exactly as the mail would paint it.</p>
+<p>The pane shows <strong>what your recipients see</strong> by asking the mailer itself:
+<code>GET /api/account/branding/preview-body</code> renders the welcome message through the SAME path
+a real send uses &mdash; template selection, merge fields, the branded header and the support footer
+&mdash; and returns it as <code>{sent, to, subject, html, text, branded, logo_is_own}</code> without
+mailing anything. The console paints that answer in a sandboxed frame and names the subject, so the
+pane cannot describe a message this app never emits and an uploaded logo is visible in the body. It
+shows the <strong>saved</strong> branding: editing the fields marks the preview unsaved until
+<strong>Save branding</strong> runs. Purple <code>#4f46e5</code> is the fallback rule colour when the
+saved value is not a hex colour, exactly as the mail paints it.</p>
 <table>
 <thead><tr><th>Piece</th><th>Where</th></tr></thead>
 <tbody>
@@ -75,6 +78,12 @@ binary and <code>migrations/</code>, so a run-time file would die on the next re
 <tr><td><code>GET /api/branding/logo/:tenant_id</code></td>
 <td><strong>PUBLIC</strong> (in <code>auth::route_policy::PUBLIC_ROUTES</code>): a mail client fetches
 the <code>&lt;img src&gt;</code> with no credential. 404 when the workspace has no logo.</td></tr>
+<tr><td><code>GET /api/account/branding/preview-body</code></td>
+<td>authenticated and read-only: renders the welcome mail with this workspace's SAVED branding
+through the real send path and returns <code>{sent: false, to, subject, html, text, branded,
+logo_is_own}</code>. Mails nothing. In an operator impersonation session it renders the workspace
+being viewed (the branding id is the JWT <code>aid</code>; the recipient fields are the caller's own
+row, never the request).</td></tr>
 <tr><td>the render hook</td><td><code>src/email.rs::queue_outbound_message</code> — the ONE funnel both
 the <code>email_templates</code> row and the inline fallback pass through. Binds
 <code>{{brand_name}}</code>/<code>{{logo_url}}</code> per account, prepends the header block to the

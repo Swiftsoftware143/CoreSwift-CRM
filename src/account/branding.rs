@@ -144,8 +144,12 @@ pub async fn delete_logo(
 /// path produces (template selection, merge fields and the branded header included), so the pane has
 /// no second implementation to drift from.
 ///
-/// Nothing is mailed, and the recipient fields describe the CALLER — read from their own row in
-/// their own workspace, never from the request — so this cannot be used as a relay.
+/// Nothing is mailed, and the recipient fields describe the CALLER — read from their own row, never
+/// from the request — so this cannot be used as a relay. The row is looked up by `sub` alone: the
+/// OPERATOR console reaches this arm with an IMPERSONATION token, where `sub` is the operator and
+/// `aid` the workspace being viewed, so a tenant-filtered lookup answered 404 "No such user" on the
+/// only path the operator console uses it from (measured 2026-10-31, kanban t_873461ee). The branding
+/// is still rendered for `aid` — the token's own workspace — and no other tenant datum is read.
 pub async fn preview_body(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
@@ -154,12 +158,11 @@ pub async fn preview_body(
     let user_id = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
 
     let row: Option<(String, String)> =
-        sqlx::query_as("SELECT email, name FROM users WHERE id = $1 AND tenant_id = $2")
+        sqlx::query_as("SELECT email, name FROM users WHERE id = $1")
             .bind(user_id)
-            .bind(tenant_id)
             .fetch_optional(&s.db)
             .await?;
-    let (to, name) = row.ok_or_else(|| AppError::NotFound("No such user".to_string()))?;
+    let (to, name) = row.unwrap_or_default();
     let name = if name.trim().is_empty() {
         "there".to_string()
     } else {
