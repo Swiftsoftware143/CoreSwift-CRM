@@ -807,6 +807,77 @@ function showModal(title, bodyHtml, footerHtml, large) {
 }
 function closeModal() { document.getElementById('modalContainer').innerHTML = ''; }
 
+// The Users row used to carry an Edit button with no handler at all — a control that silently did
+// nothing (David's rule: worse than no control). This binary has NO user-update route (GET
+// /api/admin/users is its only admin user endpoint), so the row's useful, WORKING action is the
+// fleet-wide remedy for "the customer never got in": the app's own reset mail.
+// POST /api/auth/forgot-password mints a one-hour token and sends the `password_reset` template
+// through the same sender the login page uses; the operator gets the server's own sentence back,
+// and an address that could never receive mail is refused by the same boundary check as signup.
+async function adminSendReset(btn) {
+  const email = (btn && btn.dataset && btn.dataset.email) || '';
+  if (!email) { toast('That account has no address to send a reset link to.', 'error'); return; }
+  if (!confirm('Send a one-hour password-reset link to ' + email + '?')) return;
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  try {
+    const r = await API.post('/auth/forgot-password', { email: email });
+    const msg = (r && (r.message || r.detail)) || 'If that email is registered, a reset link has been sent.';
+    toast(msg, 'success');
+  } catch (e) {
+    toast('The reset could not be sent: ' + ((e && e.message) || e), 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+// Email Templates carried the same inert Edit button. PUT /api/email-templates/{id} has existed all
+// along (name/subject/body/html_body; an absent field is left untouched), so this opens the template
+// as it is stored NOW (a fresh read, never a stale list row) and saves the fields an operator edits.
+async function editEmailTemplate(btn) {
+  const id = (btn && btn.dataset && btn.dataset.id) || '';
+  if (!id) { toast('That template has no id, so it cannot be opened.', 'error'); return; }
+  let t;
+  try {
+    const r = await API.get('/email-templates/' + encodeURIComponent(id));
+    t = (r && r.item) || r;
+  } catch (e) {
+    toast('The template could not be read: ' + ((e && e.message) || e), 'error');
+    return;
+  }
+  if (!t) { toast('The template could not be read.', 'error'); return; }
+  showModal('Edit email template',
+    '<div class="form-group"><label>Name</label><input type="text" id="et-name" value="' + escapeHtmlAttr(t.name || '') + '"></div>' +
+    '<div class="form-group"><label>Subject</label><input type="text" id="et-subject" value="' + escapeHtmlAttr(t.subject || '') + '"></div>' +
+    '<div class="form-group"><label>Body</label><textarea id="et-body" rows="14" style="font-family:ui-monospace,monospace;width:100%">' + escapeHtml(t.body || '') + '</textarea></div>' +
+    (t.html_body ? '<p class="form-hint">This template also carries an HTML body (' + escapeHtml(String(t.html_body).length) + ' characters). Saving the text above leaves it untouched.</p>' : ''),
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="saveEmailTemplate(this)" data-id="' + escapeHtmlAttr(id) + '">Save</button>', true);
+}
+
+async function saveEmailTemplate(btn) {
+  const id = (btn && btn.dataset && btn.dataset.id) || '';
+  const name = ((document.getElementById('et-name') || {}).value || '');
+  const subject = ((document.getElementById('et-subject') || {}).value || '');
+  const body = ((document.getElementById('et-body') || {}).value || '');
+  if (!String(subject).trim()) { toast('A template needs a subject.', 'error'); return; }
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  try {
+    await API.put('/email-templates/' + encodeURIComponent(id), { name: name, subject: subject, body: body });
+    toast('Template saved.', 'success');
+    closeModal();
+    if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['email-templates']) TAB_LOADERS['email-templates']();
+  } catch (e) {
+    toast('The template could not be saved: ' + ((e && e.message) || e), 'error');
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
 // Auth
 async function doLogin() {
   const email = document.getElementById('loginEmail').value.trim();
@@ -3108,7 +3179,7 @@ const TAB_LOADERS = {
           escapeHtml(t.subject || '—'),
           `<span class="badge badge-muted">${escapeHtml(t.template_type || t.type || 'email')}</span>`,
           escapeHtml(t.updated_at ? new Date(t.updated_at).toLocaleDateString() : '—'),
-          `<button class="btn btn-ghost btn-xs">Edit</button>`
+          `<button class="btn btn-ghost btn-xs" data-ops="template-edit" data-id="${escapeHtmlAttr(t.id || '')}" onclick="editEmailTemplate(this)">Edit</button>`
         ]);
       }
       templatesTableEl.innerHTML = dataTable(
@@ -3174,12 +3245,11 @@ const TAB_LOADERS = {
           escapeHtml(e.event_date || e.date || e.start_date || '—'),
           escapeHtml(e.start_time || e.time || '—'),
           `<span class="badge badge-muted">${escapeHtml(e.event_type || e.type || 'meeting')}</span>`,
-          escapeHtml(e.location || '—'),
-          `<button class="btn btn-ghost btn-xs">Edit</button>`
+          escapeHtml(e.location || '—')
         ]);
       }
       calendarContentEl.innerHTML = dataTable(
-        ['Event','Date','Time','Type','Location',''], rows,
+        ['Event','Date','Time','Type','Location'], rows,
         'No events scheduled. Add your first calendar event.'
       );
     } catch(e) {
@@ -3245,7 +3315,9 @@ const TAB_LOADERS = {
           escapeHtml(u.email || '—'),
           `<span class="badge ${u.role==='agency_admin'?'badge-primary':'badge-muted'}">${escapeHtml(roleLabel(u.role))}</span>`,
           escapeHtml(u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'),
-          `<button class="btn btn-ghost btn-xs">Edit</button>`
+          (u.email
+            ? `<button class="btn btn-ghost btn-xs" data-ops="user-send-reset" data-email="${escapeHtmlAttr(u.email)}" onclick="adminSendReset(this)">Send reset</button>`
+            : '—')
         ]);
       }
       usersTableEl.innerHTML = dataTable(
