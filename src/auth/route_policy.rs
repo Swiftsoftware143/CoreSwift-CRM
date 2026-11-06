@@ -65,14 +65,16 @@
 //!        request), and it is on no allowlist — private by default, measured live with no
 //!        credential: 401. Now 369 mounted `.route(..)` calls, 357 mounts on /api/**.
 //!
-//!   +1 mount / +1 path since (2026-11-06, kanban t_90845bc1), the branding preview SEND:
+//!   +2 mounts / +2 paths since (2026-11-06): (a) kanban t_90845bc1, the branding preview SEND —
 //!        `POST /api/account/branding/preview` on the account router, beside the renderer above. It
 //!        mails the SAME rendered message to the CALLER'S OWN address — read from their `users` row,
 //!        with no body and no recipient field, so it cannot be pointed at a third party — through
 //!        the one queueing funnel (`outbound_messages`), because the pane proves what the mailer
 //!        BUILDS and only an inbox proves what a customer's client RENDERS. Private by default, on
-//!        no allowlist, measured live with no credential: 401. Now 370 mounted `.route(..)` calls,
-//!        358 mounts on /api/**.
+//!        no allowlist, measured live with no credential: 401. (b) `POST /api/public/support-request`
+//!        (commit b741a10, the locked-out-customer form, PUBLIC_ROUTES) landed without moving this
+//!        census, so it is recorded here to keep the pinned numbers honest. Now 371 mounted
+//!        `.route(..)` calls, 359 mounts on /api/**.
 //!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
@@ -1027,12 +1029,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            370,
+            371,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 358,
+            api, 359,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.
