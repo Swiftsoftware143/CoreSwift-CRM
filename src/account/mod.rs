@@ -31,6 +31,13 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/branding/preview-body",
             axum::routing::get(branding::preview_body),
         )
+        // Mail the CALLER that same rendered message, to their own address (kanban t_90845bc1):
+        // the pane proves what the mailer BUILDS, an inbox proves what the customer's client
+        // RENDERS. No body, no recipient field — the address comes from the signed-in row only.
+        .route(
+            "/branding/preview",
+            axum::routing::post(branding::preview_email),
+        )
         .layer(axum::middleware::from_fn_with_state(
             crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
             crate::body_deadline::body_read_deadline_middleware,

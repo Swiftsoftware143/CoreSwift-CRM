@@ -184,6 +184,70 @@ pub async fn preview_body(
     })))
 }
 
+/// `POST /api/account/branding/preview` — mail the CALLER a sample of their OWN branded mail
+/// (kanban t_90845bc1).
+///
+/// `GET …/preview-body` shows the pane what the mailer produces, but only a real inbox can prove
+/// what a customer's client renders — so this mails that same message to the signed-in operator.
+///
+/// There is NO body extractor and NO recipient field anywhere in this arm: the address is read from
+/// the caller's own `users` row, so it can never be pointed at a third party and cannot be a relay.
+/// Reserved test domains (`example.invalid` and friends) answer 200 `{sent:false}` with the fleet's
+/// sentence — never a 4xx and never a false "sent" — because nothing was queued. Queueing (not a
+/// synchronous SMTP call) is CoreSwift's own delivery path: `outbound_messages` + `src/worker.rs`.
+pub async fn preview_email(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    let user_id = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
+
+    let row: Option<(String, String)> =
+        sqlx::query_as("SELECT email, name FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(&s.db)
+            .await?;
+    let (to, name) = row.unwrap_or_default();
+    let to = to.trim().to_string();
+    if to.is_empty() {
+        return Err(AppError::BadRequest(
+            "This account has no email address to send the preview to".into(),
+        ));
+    }
+    if let Some(domain) = crate::communications::providers::reserved_domain(&to) {
+        return Ok(Json(json!({
+            "sent": false,
+            "to": to,
+            "detail": format!(
+                "'{domain}' is a reserved test address, so it cannot receive mail — no preview was sent."
+            ),
+        })));
+    }
+
+    let name = if name.trim().is_empty() {
+        "there".to_string()
+    } else {
+        name.trim().to_string()
+    };
+
+    match crate::email::send_branding_preview_email(&s.db, tenant_id, &to, &name).await {
+        Ok(()) => {
+            let branded = crate::branding::load(&s.db, tenant_id).await.is_some();
+            Ok(Json(json!({
+                "sent": true,
+                "to": to,
+                "branded": branded,
+                "detail": if branded {
+                    "Preview sent to your own address, with your logo and brand name at the top."
+                } else {
+                    "Preview sent to your own address. Nothing is branded yet, so it carries the CoreSwift CRM header — set a name or a logo, save, and send it again."
+                },
+            })))
+        }
+        Err(detail) => Ok(Json(json!({ "sent": false, "to": to, "detail": detail }))),
+    }
+}
+
 /// `GET /api/branding/logo/:tenant_id` — PUBLIC: serve the stored bytes, or 404.
 ///
 /// Deliberately reads nothing else: no name, no colour, no existence of the tenant beyond whether a

@@ -481,12 +481,38 @@ pub async fn render_branding_preview(
     name: &str,
     to: &str,
 ) -> Result<RenderedEmail, String> {
-    let vars = json!({
+    let vars = branding_preview_vars(name, to);
+    render_email(db, tenant_id, PREVIEW_TEMPLATE_TYPE, &vars).await
+}
+
+/// The merge fields the branding sample is built from — ONE builder for the pane and the mail, so
+/// the rendered sample and the mailed sample cannot describe different messages.
+fn branding_preview_vars(name: &str, to: &str) -> serde_json::Value {
+    json!({
         "name": name,
         "email": to,
         "password": PREVIEW_CREDENTIAL_MASK,
-    });
-    render_email(db, tenant_id, PREVIEW_TEMPLATE_TYPE, &vars).await
+    })
+}
+
+/// Mail the branding sample to the CALLER'S OWN address (kanban t_90845bc1).
+///
+/// The send twin of [`render_branding_preview`]: same template type, same merge fields, and it goes
+/// through [`send_template_email`] — the ONE funnel that renders, applies the workspace's branded
+/// header plus the support footer and queues an `outbound_messages` row. So the mail a workspace
+/// operator receives carries exactly the bytes `GET /api/account/branding/preview-body` shows them,
+/// which is the only way to confirm what a customer's mail client really renders.
+///
+/// `to` is the caller's own `users.email`, read by the handler from the signed-in row — this function
+/// has no caller-supplied recipient, so it can never be used as a relay.
+pub async fn send_branding_preview_email(
+    db: &PgPool,
+    tenant_id: Uuid,
+    to: &str,
+    name: &str,
+) -> Result<(), String> {
+    let vars = branding_preview_vars(name, to);
+    send_template_email(db, tenant_id, to, PREVIEW_TEMPLATE_TYPE, &vars).await
 }
 
 // ---- Data types ----
