@@ -2833,7 +2833,17 @@ async function loadProfileTab() {
       '<div class="form-group"><label>New Password</label><input type="password" id="newPw" autocomplete="new-password"></div>' +
       '<div class="form-group"><label>Confirm New Password</label><input type="password" id="confirmPw" autocomplete="new-password"></div>' +
       '<div class="form-group"><label>Current Password</label><input type="password" id="currentPw" autocomplete="current-password"> <span class="form-hint">Required — proves it is really you.</span></div>',
-      '<button class="btn btn-primary" data-ops="profile-password" onclick="changePassword()">Update Password</button>');
+      '<button class="btn btn-primary" data-ops="profile-password" onclick="changePassword()">Update Password</button>') +
+    '<br>' +
+    // Where a customer turns when the console cannot do the thing they need (cron 2026-11-06).
+    // The tenant shell carried NO support address anywhere: the guide told a reader "contact
+    // support to change" the login email, and then named no address, so the instruction had no
+    // way to be followed from inside the product. Every sibling console offers this same
+    // mailto to the fleet's support address; this one was the exception.
+    card('Need a hand?',
+      '<p style="color:var(--text-secondary);margin:0 0 10px">Stuck on something, or need a change made to your workspace that this console does not offer yet? Our team reads every message sent here.</p>' +
+      '<a class="btn btn-secondary" href="mailto:support@swiftsoftware.net?subject=CoreSwift%20CRM%20support%20request">\u2709\ufe0f Email support</a>' +
+      '<span class="form-hint" style="margin-left:10px">support@swiftsoftware.net</span>', '');
 }
 
 // Paint the header chip's picture (or the initial letter) from STATE.user.avatar_url, and keep the
