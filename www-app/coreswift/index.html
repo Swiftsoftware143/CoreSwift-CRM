@@ -49,6 +49,9 @@ a:hover{color:var(--accent-hover)}
 .login-card h1{font-size:1.4rem;margin-bottom:4px;text-align:center}
 .login-card .sub{color:var(--text-secondary);margin-bottom:28px;text-align:center;font-size:.9rem}
 .login-error{background:rgba(239,68,68,.12);color:var(--error);padding:10px 14px;border-radius:var(--radius-sm);margin-bottom:16px;font-size:.85rem;display:none}
+/* WCAG 1.4.3: white on indigo-500 is 4.47:1 (just under AA). The login button uses the same
+   indigo one step darker so its label clears 4.5:1; the rest of the dark console is unchanged. */
+#loginScreen .btn-primary{background:#4f46e5}#loginScreen .btn-primary:hover{background:#4338ca}
 
 /* ===== FORMS ===== */
 .form-group{margin-bottom:16px}
@@ -281,12 +284,12 @@ tr:hover td{background:var(--bg-hover)}
     <p class="sub">Admin Dashboard</p>
     <div id="loginError" class="login-error"></div>
     <div class="form-group">
-      <label>Email</label>
+      <label for="loginEmail">Email</label>
       <input type="email" id="loginEmail" placeholder="admin@example.com" value=""
              onkeydown="if(event.key==='Enter'){event.preventDefault();doLogin();}">
     </div>
     <div class="form-group">
-      <label>Password</label>
+      <label for="loginPassword">Password</label>
       <input type="password" id="loginPassword" placeholder="Enter password"
              onkeydown="if(event.key==='Enter'){event.preventDefault();doLogin();}">
     </div>
@@ -734,7 +737,7 @@ const MENU = [
   ]},
   { id:'tickets', icon:'🎫', label:'Support Tickets' },
   { type:'group', icon:'📬', label:'Inbox', children:[
-    { id:'inbox', icon:'📬', label:'Private Email' }
+    { id:'inbox', icon:'📬', label:'Shared Inbox' }
   ]},
   { id:'calendar', icon:'📅', label:'Calendar' },
   { id:'bookings', icon:'📆', label:'Bookings' },
@@ -2842,8 +2845,8 @@ async function loadProfileTab() {
     // mailto to the fleet's support address; this one was the exception.
     card('Need a hand?',
       '<p style="color:var(--text-secondary);margin:0 0 10px">Stuck on something, or need a change made to your workspace that this console does not offer yet? Our team reads every message sent here.</p>' +
-      '<a class="btn btn-secondary" href="mailto:support@swiftsoftware.net?subject=CoreSwift%20CRM%20support%20request">\u2709\ufe0f Email support</a>' +
-      '<span class="form-hint" style="margin-left:10px">support@swiftsoftware.net</span>', '');
+      '<a class="btn btn-secondary" href="/contact.html">✉️ Contact us</a>' +
+      '<span class="form-hint" style="margin-left:10px">/contact.html</span>', '');
 }
 
 // Paint the header chip's picture (or the initial letter) from STATE.user.avatar_url, and keep the
@@ -8170,7 +8173,7 @@ function auditExportCsv() {
   toast('Exported ' + AUDIT_ROWS.length + (AUDIT_ROWS.length === 1 ? ' entry' : ' entries'), 'success');
 }
 </script>
-<script src="/inline-guide-widget.js?v=20261021a"></script>
+<script src="/inline-guide-widget.js?v=20261106a"></script>
 <script src="/private-email-inbox.js?v=20261105b"></script>
 </body>
 </html>

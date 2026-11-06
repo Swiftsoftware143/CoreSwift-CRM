@@ -644,6 +644,20 @@ async fn main() -> anyhow::Result<()> {
                 ),
             ),
         )
+        // THE SERIES: the served contact page's own filing arm (2026-11-06). Every support address this
+        // app printed lived on a domain publishing MX = 0, with nothing on this host listening on :25,
+        // so a locked-out customer's message bounced and they stayed locked out. No credential and no
+        // workspace: ONE ticket with a NULL tenant plus the address the visitor typed. Named in
+        // `auth::route_policy::PUBLIC_ROUTES`.
+        .route(
+            "/api/public/support-request",
+            axum::routing::post(tickets::handlers::public_support_request).layer(
+                axum::middleware::from_fn_with_state(
+                    body_read_deadline,
+                    body_deadline::body_read_deadline_middleware,
+                ),
+            ),
+        )
         .route(
             "/s/:tenant_id/widget.js",
             axum::routing::get(tickets::handlers::support_embed_script),

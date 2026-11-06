@@ -188,6 +188,11 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/public/bookings/public/slots/questions",
     // Public contact form on the marketing site.
     "/api/public/contact",
+    // The served contact page's filing arm (2026-11-06). Every support address this app printed lived
+    // on a domain publishing MX = 0, so a locked-out customer's message bounced and they stayed locked
+    // out. No credential, no workspace: ONE ticket with a NULL tenant, the address the visitor typed,
+    // at most three per address per hour. A platform admin's queue labels it "Website visitor".
+    "/api/public/support-request",
     // The per-tenant email-branding logo (kanban t_feab8aff). A MAIL CLIENT fetches this <img src>
     // with NO credential at all — a token-gated logo would simply never render. It returns one
     // thing: the image that tenant uploaded, keyed by an unguessable uuid; 404 when there is none.
@@ -877,6 +882,7 @@ mod tests {
             "/api/public/bookings/public/slots/available/canary-tenant",
             "/api/public/bookings/public/slots/questions",
             "/api/public/contact",
+            "/api/public/support-request",
             "/api/branding/logo/canary-tenant",
             "/api/avatars/canary-user",
             "/api/webhook/abc123/create",

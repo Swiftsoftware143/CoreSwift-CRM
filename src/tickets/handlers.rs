@@ -26,12 +26,21 @@ pub async fn list_tickets(
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let limit = q.limit.unwrap_or(50).min(100);
     let offset = q.offset.unwrap_or(0);
+    // A message filed from the PUBLIC contact page has no workspace (2026-11-06), so no tenant owns it
+    // and the workspace-scoped read below could never show it to the one person who can answer. A
+    // platform admin's queue therefore ALSO carries those rows; a tenant still sees strictly its own,
+    // so nothing widens across workspaces.
+    let is_platform = crate::auth::platform_admin::is_platform_admin(&s.db, &c.sub).await?;
 
     let tickets = sqlx::query_as::<_, Ticket>(
         r#"SELECT id, tenant_id, subject, description, status, priority, assigned_to, contact_id,
-                  created_at, updated_at, source, contact_email, contact_name
+                  created_at, updated_at, source, contact_email,
+                  CASE
+                    WHEN tenant_id IS NULL THEN COALESCE(NULLIF(contact_name, ''), 'Website visitor')
+                    ELSE contact_name
+                  END AS contact_name
            FROM tickets
-           WHERE tenant_id = $1
+           WHERE (tenant_id = $1 OR ($7 AND tenant_id IS NULL))
              AND ($2::text IS NULL OR status = $2)
              AND ($3::text IS NULL OR priority = $3)
              AND ($4::uuid IS NULL OR contact_id = $4)
@@ -51,6 +60,7 @@ pub async fn list_tickets(
     .bind(&q.contact_id)
     .bind(limit)
     .bind(offset)
+    .bind(is_platform)
     .fetch_all(&s.db)
     .await?;
 
@@ -193,12 +203,17 @@ pub async fn add_message(
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
-    // Verify ticket belongs to tenant
+    // Verify the ticket is reachable by this caller: their own workspace's, or — for a platform admin
+    // — a message filed from the public contact page, which belongs to no workspace (2026-11-06).
+    // Without the second arm the operator could see such a row in the queue and still answer 404 to
+    // their own reply.
+    let is_platform = crate::auth::platform_admin::is_platform_admin(&s.db, &c.sub).await?;
     let exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM tickets WHERE id = $1 AND tenant_id = $2)",
+        "SELECT EXISTS(SELECT 1 FROM tickets WHERE id = $1 AND (tenant_id = $2 OR ($3 AND tenant_id IS NULL)))",
     )
     .bind(ticket_id)
     .bind(tid)
+    .bind(is_platform)
     .fetch_one(&s.db)
     .await?;
 
@@ -278,6 +293,132 @@ pub async fn ticket_stats(
         "resolved": resolved,
         "closed": closed
     })))
+}
+
+// ── Public: the served contact page (no auth, no workspace) ───────────
+
+/// How many messages ONE address may file through the public contact page per hour.
+///
+/// The arm is anonymous, so without a bound one script could fill the operator's queue. Three is
+/// enough for a person writing about a lost password, then a correction.
+const PUBLIC_SUPPORT_HOURLY_LIMIT: i64 = 3;
+
+/// Trim and cap a free-text field by CHARACTERS (not bytes): the cap is the client's to exceed and
+/// must never split a multi-byte character.
+fn cap_chars(raw: &str, max: usize) -> String {
+    raw.trim()
+        .chars()
+        .take(max)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// POST /api/public/support-request — a visitor who cannot sign in reaches the team (2026-11-06).
+///
+/// MEASURED (dns.google and cloudflare-dns.com agree): MX = 0 for this app's domain and every
+/// sibling's, and nothing on this host listens on port 25, so every "write to support@…" sentence this
+/// app printed sent a customer's message into a bounce — and a locked-out customer, the person who
+/// needs help most, had no way to reach anyone.
+///
+/// This arm files the message into the operator's EXISTING queue: one ticket with no workspace
+/// (`tenant_id` NULL, migration 122), the address the visitor typed in `contact_email` (the column this
+/// app already answers a form request on), source `form`. A platform admin's ticket queue shows those
+/// rows labelled "Website visitor", so the person who can help sees them without a new screen.
+///
+/// Guards, all refusing BEFORE a row is written: a syntactically real address, a non-empty bounded
+/// message, at most three messages from one address per hour (429), and idempotence on an already open
+/// ticket with the same address and subject.
+pub async fn public_support_request(
+    State(s): State<AppState>,
+    Json(body): Json<super::models::PublicSupportRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let email = crate::security::email_addr::normalize(&body.email)
+        .map_err(|e| AppError::BadRequest(format!("{e} — we need an address we can reply to")))?;
+    let name = cap_chars(body.name.as_deref().unwrap_or(""), 120);
+    let message = cap_chars(
+        body.body
+            .as_deref()
+            .or(body.message.as_deref())
+            .unwrap_or(""),
+        4000,
+    );
+    if message.is_empty() {
+        return Err(AppError::Validation(
+            "Write your message so the team knows what you need.".into(),
+        ));
+    }
+    let subject = cap_chars(&body.subject, 200);
+    if subject.is_empty() {
+        return Err(AppError::Validation(
+            "Give your message a short subject so the team knows what it is about.".into(),
+        ));
+    }
+
+    let recent: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM tickets \
+          WHERE tenant_id IS NULL AND lower(contact_email) = $1 \
+            AND created_at > now() - interval '1 hour'",
+    )
+    .bind(&email)
+    .fetch_one(&s.db)
+    .await?;
+    if recent >= PUBLIC_SUPPORT_HOURLY_LIMIT {
+        return Ok((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({
+                "status": 429,
+                "error": "You have sent us several messages in the last hour. Please wait a little, or reply to the email we already have from you.",
+                "retry_after_seconds": 3600
+            })),
+        ));
+    }
+
+    // A second identical message is not a second request: the form stays pressable after a send, so a
+    // visitor who pressed twice must not mint a twin the operator has to work twice.
+    let existing: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM tickets \
+          WHERE tenant_id IS NULL AND lower(contact_email) = $1 \
+            AND lower(subject) = lower($2) AND status IN ('open','in_progress') \
+          ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&email)
+    .bind(&subject)
+    .fetch_optional(&s.db)
+    .await?;
+    if let Some(id) = existing {
+        return Ok((
+            StatusCode::OK,
+            Json(json!({
+                "status": "existing",
+                "ticket_id": id,
+                "message": "We already have your message with that subject — the team will reply to the address you gave."
+            })),
+        ));
+    }
+
+    // `source = 'form'` is the value the schema's own check constraint allows for a form submission;
+    // the no-workspace marker is `tenant_id IS NULL`, which is what the queue labels on.
+    let ticket_id: Uuid = sqlx::query_scalar(
+        r#"INSERT INTO tickets (tenant_id, subject, description, status, priority, source, contact_email, contact_name)
+           VALUES (NULL, $1, $2, 'open', 'medium', 'form', $3, $4)
+           RETURNING id"#,
+    )
+    .bind(&subject)
+    .bind(&message)
+    .bind(&email)
+    .bind(if name.is_empty() { None } else { Some(name.as_str()) })
+    .fetch_one(&s.db)
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "status": "open",
+            "ticket_id": ticket_id,
+            "message": "Your message is with our team. We will reply to the address you gave."
+        })),
+    ))
 }
 
 // ── Public Contact Form (no auth) ─────────────────────────────────────
