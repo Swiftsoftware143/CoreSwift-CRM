@@ -282,11 +282,13 @@ tr:hover td{background:var(--bg-hover)}
     <div id="loginError" class="login-error"></div>
     <div class="form-group">
       <label>Email</label>
-      <input type="email" id="loginEmail" placeholder="admin@example.com" value="">
+      <input type="email" id="loginEmail" placeholder="admin@example.com" value=""
+             onkeydown="if(event.key==='Enter'){event.preventDefault();doLogin();}">
     </div>
     <div class="form-group">
       <label>Password</label>
-      <input type="password" id="loginPassword" placeholder="Enter password">
+      <input type="password" id="loginPassword" placeholder="Enter password"
+             onkeydown="if(event.key==='Enter'){event.preventDefault();doLogin();}">
     </div>
     <button class="btn btn-primary btn-block" onclick="doLogin()">Sign In</button>
   </div>
@@ -590,11 +592,16 @@ function showModal(title, bodyHtml, footerHtml, large) {
 function closeModal() { document.getElementById('modalContainer').innerHTML = ''; }
 
 // Auth
+// A sign-in must never post twice: Enter is now wired on both fields as well as the
+// button, and a held key would otherwise fire a request per repeat.
+let loginBusy = false;
 async function doLogin() {
+  if (loginBusy) return;
   const email = document.getElementById('loginEmail').value.trim();
   const password = document.getElementById('loginPassword').value;
   const errEl = document.getElementById('loginError');
   if (!email || !password) { errEl.textContent = 'Please enter email and password.'; errEl.style.display='block'; return; }
+  loginBusy = true;
   try {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
@@ -629,6 +636,8 @@ async function doLogin() {
   } catch(e) {
     errEl.textContent = e.message;
     errEl.style.display = 'block';
+  } finally {
+    loginBusy = false;
   }
 }
 
@@ -697,6 +706,11 @@ document.addEventListener('click', e => {
 const MENU = [
   { id:'dashboard', icon:'📊', label:'Dashboard' },
   { id:'contacts', icon:'👥', label:'Contacts' },
+  // Duplicate detection (kanban 2026-11-01). GET /api/account-match/duplicates has existed since
+  // migration 113 and is granted to every paid plan, but nothing in this console ever called it —
+  // the report an operator needs to keep the pipeline clean was reachable only by hand with a token.
+  // It is a top-level entry next to Contacts because that is the screen it reports on.
+  { id:'duplicates', icon:'🧬', label:'Duplicates' },
   { id:'industries', icon:'🏭', label:'Industries' },
   { type:'group', icon:'💰', label:'Sales', children:[
     { id:'pipelines', icon:'📈', label:'Pipelines & Deals' }
@@ -904,6 +918,12 @@ async function checkPlan() {
 }
 
 function showUpgradeBanner() {
+  // kanban cron 2026-10-31: a dismissal is the USER's answer and it must outrank the upsell.
+  // Every plan-gated call answers 402 and the 402 path calls this function, and a Free workspace
+  // fires six gated calls on load — so removing the class unconditionally re-showed the banner on
+  // every reload even though dismissBanner() had written `crm_banner_dismissed`. Respect the flag;
+  // the gated pane's own lock card still explains the gate to whoever lands on it.
+  if (localStorage.getItem('crm_banner_dismissed')) return;
   document.getElementById('upgradeBanner').classList.remove('dismissed');
 }
 
@@ -6064,6 +6084,151 @@ async function removeBrandingLogo() {
   } catch (e) { if (status) status.textContent = 'Remove failed: ' + e.message; }
 }
 
+// ── Duplicates: the pipeline-cleanliness report ── (kanban 2026-11-01)
+// GET /api/account-match/duplicates answers
+//   { groups:[{kind:'phone'|'name', key, count, contact_ids:[uuid]}], total_groups, contacts_in_groups }
+// — contacts of the SIGNED-IN workspace that share a normalised phone number, or a normalised
+// first+last name. Email is deliberately not a key: `idx_contacts_tenant_email` is unique per
+// tenant, so an email collision is impossible and a report keyed on it could only return {}.
+//
+// The route is gated by the `account_match` module (granted on every paid plan, off on Free), so a
+// Free workspace gets a 402 and this pane must print the SERVER's sentence rather than an empty
+// "no duplicates" table — "you have none" and "you are not allowed to look" are different answers.
+//
+// This pane is READ-ONLY on purpose: nothing here merges. The engine explicitly names the rows an
+// operator has to look at instead of silently merging them, so every row carries an Edit button into
+// the existing contact editor (editContact) and the operator decides what the merged record says.
+// The name lookup is paged (100/page, the server's ceiling) and BOUNDED: if a group names a contact
+// beyond the page budget the row falls back to the id, and the header says the lookup was partial,
+// so a truncated read can never look like "that contact does not exist".
+const DUP_MAX_GROUPS = 25;
+const DUP_PAGE_BUDGET = 5; // x100 = at most 500 contacts resolved by name
+
+function duplicatesShell() {
+  return pageHeader('Duplicates', 'Contacts in this workspace that look like the same person',
+    '<button class="btn btn-secondary btn-sm" onclick="loadDuplicatesTab()">Refresh</button>') +
+  '<div id="duplicatesBody"><div class="loading-wrap"><div class="spinner"></div> Loading duplicates...</div></div>';
+}
+
+async function loadDuplicatesTab() {
+  const el = document.getElementById('duplicatesBody');
+  if (!el) return;
+  el.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Loading duplicates...</div>';
+  let report;
+  try {
+    report = await API.get('/account-match/duplicates?limit=' + DUP_MAX_GROUPS);
+  } catch (e) {
+    // The 402 arm carries the server's own sentence (API.call fills err.planMessage) — print that,
+    // never a bare "HTTP 402", and never an empty table a reader would mistake for a clean bill.
+    if (e && e.planGate) {
+      el.innerHTML = card('Duplicate detection is not on this plan',
+        '<p style="color:var(--text-secondary);margin:0 0 10px">' + escapeHtml(e.planMessage || 'This feature is not included in your current plan.') + '</p>' +
+        '<button class="btn btn-primary btn-sm" onclick="showUpgradeBanner()">See plans</button>');
+      return;
+    }
+    el.innerHTML = card('Duplicates unavailable',
+      '<p style="color:var(--text-secondary);margin:0">' + escapeHtml(e && e.message ? e.message : String(e)) + '</p>');
+    return;
+  }
+
+  const groups = (report && Array.isArray(report.groups)) ? report.groups : [];
+  const totalGroups = (report && typeof report.total_groups === 'number') ? report.total_groups : groups.length;
+  const inGroups = (report && typeof report.contacts_in_groups === 'number') ? report.contacts_in_groups : 0;
+
+  if (!groups.length) {
+    el.innerHTML = card('No duplicates found',
+      '<div class="empty-state"><div style="font-size:32px">✅</div>' +
+      '<h3>Every contact looks distinct</h3>' +
+      '<p style="color:var(--text-secondary)">No two active contacts in this workspace share a phone number or a first and last name. This screen re-reads the report every time you open it — run it again after an import.</p></div>');
+    return;
+  }
+
+  // Resolve the ids the report named to real people, so a row reads "Dana Ruiz" and not a uuid.
+  const wanted = new Set();
+  groups.slice(0, DUP_MAX_GROUPS).forEach(function (g) {
+    (g.contact_ids || []).forEach(function (id) { wanted.add(String(id)); });
+  });
+  const byId = {};
+  let resolvedAll = true;
+  try {
+    for (let pg = 1; pg <= DUP_PAGE_BUDGET; pg++) {
+      const rows = famList(await API.get('/contacts?page=' + pg + '&per_page=100'), 'contacts');
+      rows.forEach(function (c) { byId[String(c.id)] = c; });
+      if (rows.length < 100) break;
+      const stillMissing = [...wanted].filter(function (id) { return !byId[id]; });
+      if (!stillMissing.length) break;
+      if (pg === DUP_PAGE_BUDGET) resolvedAll = false;
+    }
+  } catch (_) {
+    resolvedAll = false; // names are a nicety; the ids and the Edit button still work
+  }
+  const missingNames = [...wanted].filter(function (id) { return !byId[id]; }).length;
+  if (missingNames) resolvedAll = false;
+
+  function who(id) {
+    const c = byId[String(id)];
+    if (!c) return { name: String(id).slice(0, 8) + '…', sub: 'not on the first pages of Contacts' };
+    const nm = ((c.first_name || '') + ' ' + (c.last_name || '')).trim() || c.name || '(no name)';
+    const bits = [];
+    if (c.email) bits.push(c.email);
+    if (c.phone) bits.push(c.phone);
+    return { name: nm, sub: bits.join(' · ') || 'no email or phone on file' };
+  }
+
+  const phoneGroups = groups.filter(function (g) { return g.kind === 'phone'; });
+  const nameGroups = groups.filter(function (g) { return g.kind === 'name'; });
+
+  function groupCard(g, title, why) {
+    const ids = (g.contact_ids || []);
+    const rows = ids.map(function (id) {
+      const w = who(id);
+      return [
+        escapeHtml(w.name),
+        escapeHtml(w.sub),
+        '<button class="btn btn-ghost btn-xs" onclick="editContact(\'' + String(id) + '\')">Edit</button>'
+      ];
+    });
+    return card(title + ' — ' + escapeHtml(g.key) + ' <span class="badge">' + ids.length + ' records</span>',
+      '<p style="color:var(--text-secondary);font-size:12px;margin:0 0 8px">' + escapeHtml(why) + '</p>' +
+      dataTable(['Contact', 'Email · Phone', ''], rows, 'No contacts in this group.'));
+  }
+
+  let h = card('What this report is',
+    '<p style="margin:0;color:var(--text-secondary);font-size:13px">' +
+    escapeHtml(String(inGroups)) + ' active contacts sit in ' + escapeHtml(String(totalGroups)) +
+    ' group' + (totalGroups === 1 ? '' : 's') + ' that look like the same person — ' +
+    'by shared phone number, or by the same first and last name. Nothing is merged automatically: ' +
+    'open a record, decide which one you keep, and edit or delete the others on the Contacts screen.' +
+    (resolvedAll ? '' : ' <strong>Some names could not be resolved</strong> (the lookup stops after ' +
+      (DUP_PAGE_BUDGET * 100) + ' contacts) — those rows show the record id instead, and their Edit button still opens the right contact.') +
+    '</p>');
+  h += '<br>';
+
+  if (phoneGroups.length) {
+    h += '<h3 style="margin:0 0 8px">Same phone number (' + phoneGroups.length + ')</h3>';
+    phoneGroups.forEach(function (g) {
+      h += groupCard(g, '📞 Share', 'These records have the same phone number once punctuation and spacing are ignored.');
+      h += '<div style="height:10px"></div>';
+    });
+    h += '<br>';
+  }
+  if (nameGroups.length) {
+    h += '<h3 style="margin:0 0 8px">Same name (' + nameGroups.length + ')</h3>';
+    nameGroups.forEach(function (g) {
+      h += groupCard(g, '👤 Share', 'These records have the same first and last name. Two real people can share a name — this is a prompt to look, not a verdict.');
+      h += '<div style="height:10px"></div>';
+    });
+  }
+  if (totalGroups > groups.length) {
+    h += '<p style="color:var(--text-secondary);font-size:12px">Showing the first ' + groups.length +
+         ' of ' + escapeHtml(String(totalGroups)) + ' groups.</p>';
+  }
+  el.innerHTML = h;
+}
+
+TAB_RENDERERS['duplicates'] = duplicatesShell;
+TAB_LOADERS['duplicates'] = loadDuplicatesTab;
+
 TAB_RENDERERS['checklists'] = checklistsShell;
 TAB_RENDERERS['round-robin'] = roundRobinShell;
 TAB_RENDERERS['monitoring'] = monitoringShell;
@@ -7911,6 +8076,7 @@ TAB_LOADERS['bookings'] = loadBookingsTab;
 window.appGuidePages = {
   dashboard:       { title: "Dashboard", desc: "Your workspace at a glance — contacts, deals, activity and what needs attention today.", actions: ["Scan the counters and recent activity", "Jump to anything that needs a follow-up"] },
   contacts:        { title: "Contacts", desc: "The people and companies you do business with. Each contact carries its history, tags and deals.", actions: ["Add a contact", "Open one to see its full record", "Search by name or email"] },
+  duplicates:      { title: "Duplicates", desc: "Contacts in this workspace that look like the same person — the same phone number, or the same first and last name. Nothing is merged for you.", actions: ["Scan the groups for two records of one person", "Edit the record you keep, then remove the other on Contacts"] },
   industries:      { title: "Industries", desc: "Group your contacts by the industry they belong to, so you can target and report on segments.", actions: ["Review the industries in use", "Assign a contact to one"] },
   pipelines:       { title: "Pipelines & Deals", desc: "Your sales stages and the deals moving through them, from first contact to closed.", actions: ["Create a pipeline", "Add a deal", "Move a deal to its next stage"] },
   campaigns:       { title: "Campaigns", desc: "Outbound email campaigns — who is being contacted, with what, and how it is performing.", actions: ["Start a campaign", "Pick the list it sends to", "Check its results"] },
@@ -7995,6 +8161,7 @@ function auditExportCsv() {
 }
 </script>
 <script src="/inline-guide-widget.js?v=20261021a"></script>
+<script src="/private-email-inbox.js?v=20261105b"></script>
 </body>
 </html>
 
