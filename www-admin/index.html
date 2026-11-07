@@ -5260,7 +5260,7 @@ async function loadMessagesTab(){
     let rows=arr.map(m=>{
       const sub=escapeHtml(String(m.subject||'(no subject)'));
       const st=escapeHtml(String(m.status||''));
-      const d=escapeHtml(String(m.created_at||'').replace('T',' ').slice(0,16));
+      const d=m.created_at?escapeHtml(new Date(m.created_at).toLocaleString()):'';
       return '<div class="config-item"><div class="config-info"><div class="config-label">'+sub+'</div><div class="config-desc">'+(d||'')+(st?' \u00b7 '+st:'')+'</div></div></div>';
     });
     el.innerHTML=rows.length?('<div class="config-list">'+rows.join('')+'</div>'):'<p style="color:var(--text-secondary)">No messages yet. Use &ldquo;Compose&rdquo;.</p>';
@@ -5286,7 +5286,7 @@ async function loadCommLogTab(){
       return;
     }
     const rows=arr.map(m=>{
-      const d=escapeHtml(String(m.created_at||'').replace('T',' ').slice(0,16));
+      const d=m.created_at?escapeHtml(new Date(m.created_at).toLocaleString()):'';
       const ch=escapeHtml(String(m.channel||'email'));
       const to=escapeHtml(String(m.to_address||m.recipient||''));
       const sub=escapeHtml(String(m.subject||'(no subject)'));
@@ -5374,7 +5374,7 @@ async function loadNotifFeedTab(){
     const rows=items.map(n=>{
       const unread=(n.read===false);
       const msg=escapeHtml(String(n.message||'(notification)'));
-      const when=n.created_at?escapeHtml(String(n.created_at).replace('T',' ').slice(0,16)):'';
+      const when=n.created_at?escapeHtml(new Date(n.created_at).toLocaleString()):'';
       return '<div class="config-item"'+(unread?' style="cursor:pointer" onclick="markNotifRead(\''+n.id+'\')"':'')+'>'+
         '<div class="config-info"><div class="config-label">'+msg+(unread?' <span class="badge badge-primary">new</span>':'')+'</div>'+
         (when?'<div class="config-desc">'+when+'</div>':'')+'</div>'+
