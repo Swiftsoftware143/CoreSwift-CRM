@@ -84,6 +84,17 @@ pub struct PublicSupportRequest {
     pub message: Option<String>,
 }
 
+/// What the served contact page posts to read the team's answer (`POST /api/public/support-answer`).
+///
+/// The reference is the ticket's own uuid, handed to the visitor the moment the form was sent; the
+/// address is the one they filed with. Both must match the row, and the route answers the same
+/// neutral sentence for every mismatch — so it cannot be used to test whether a reference is real.
+#[derive(Debug, Deserialize)]
+pub struct PublicSupportAnswer {
+    pub ticket_id: String,
+    pub email: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ContactFormRequest {
     pub tenant_id: uuid::Uuid,

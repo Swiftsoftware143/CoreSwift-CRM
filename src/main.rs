@@ -658,6 +658,18 @@ async fn main() -> anyhow::Result<()> {
                 ),
             ),
         )
+        // The READ side of the filing arm above: the visitor who cannot sign in reads the team's
+        // answer here, with the reference they were given plus the address they filed with. Named in
+        // `auth::route_policy::PUBLIC_ROUTES`; it reads a body, so it sits behind the same deadline.
+        .route(
+            "/api/public/support-answer",
+            axum::routing::post(tickets::handlers::public_support_answer).layer(
+                axum::middleware::from_fn_with_state(
+                    body_read_deadline,
+                    body_deadline::body_read_deadline_middleware,
+                ),
+            ),
+        )
         .route(
             "/s/:tenant_id/widget.js",
             axum::routing::get(tickets::handlers::support_embed_script),

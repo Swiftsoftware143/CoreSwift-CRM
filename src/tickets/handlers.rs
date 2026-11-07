@@ -421,6 +421,80 @@ pub async fn public_support_request(
     ))
 }
 
+/// POST /api/public/support-answer — the person who wrote from the contact page reads our answer.
+///
+/// The filing arm above (2026-11-06) writes ONE ticket with no workspace and the address the visitor
+/// typed. The operator answers it through the existing queue, which writes the words into
+/// `ticket_messages` (`sender_type = 'agent'`) — a thread only a SIGNED-IN caller could load. The
+/// person who filed from the contact page is, by definition, the one who cannot sign in, so they
+/// hand-wrote their problem and then had no way to read the answer. This route is that way.
+///
+/// The capability is the pair: the ticket's own uuid (given to the visitor when the form was sent)
+/// plus the address they filed with. Both must match the row, and every mismatch — unknown
+/// reference, malformed reference, another person's reference — answers the SAME neutral sentence,
+/// so the route cannot be used to test whether a reference exists.
+pub async fn public_support_answer(
+    State(s): State<AppState>,
+    Json(body): Json<super::models::PublicSupportAnswer>,
+) -> ApiResult<impl IntoResponse> {
+    let missing = || {
+        AppError::NotFound(
+            "We have no message from that address with that reference. Check the reference and the \
+             email address you filed with."
+                .to_string(),
+        )
+    };
+    let id = Uuid::parse_str(body.ticket_id.trim()).map_err(|_| missing())?;
+    // The filing arm stores the address NORMALISED, so the read normalises the same way: a visitor
+    // who types `Probe@Example.com ` must find the row filed as `probe@example.com`.
+    let email = crate::security::email_addr::normalize(&body.email).map_err(|_| missing())?;
+
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT subject, status FROM tickets \
+          WHERE id = $1 AND tenant_id IS NULL AND lower(contact_email) = $2",
+    )
+    .bind(id)
+    .bind(&email)
+    .fetch_optional(&s.db)
+    .await?;
+    let Some((subject, status)) = row else {
+        return Err(missing());
+    };
+
+    let messages: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT sender_type, message, created_at::text FROM ticket_messages \
+          WHERE ticket_id = $1 ORDER BY created_at ASC",
+    )
+    .bind(id)
+    .fetch_all(&s.db)
+    .await?;
+
+    // `from` is what the page prints in front of each bubble: our words vs the visitor's own. An
+    // empty thread is honest (`answered: false`) rather than an empty green box.
+    let answered = messages.iter().any(|(sender, _, _)| sender == "agent");
+    let thread: Vec<serde_json::Value> = messages
+        .into_iter()
+        .map(|(sender, message, at)| {
+            json!({
+                "from": if sender == "agent" { "us" } else { "you" },
+                "message": message,
+                "at": at,
+            })
+        })
+        .collect();
+
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "id": id.to_string(),
+            "subject": subject,
+            "status": status,
+            "answered": answered,
+            "messages": thread,
+        })),
+    ))
+}
+
 // ── Public Contact Form (no auth) ─────────────────────────────────────
 
 /// POST /api/public/contact — creates a ticket without auth
