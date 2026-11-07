@@ -44,6 +44,21 @@ button:disabled{opacity:.6;cursor:default}
     </form>
     <div class="back"><a href="/login">&larr; Back to sign in</a></div>
   </div>
+
+  <div class="card" style="margin-top:18px" id="answer-card">
+    <h1 style="font-size:17px">Already wrote to us?</h1>
+    <p class="sub">Read the team's answer here. Type the reference you were given when you sent your
+      message, and the same email address you filed with.</p>
+    <form id="af" novalidate>
+      <label for="ref">Reference</label>
+      <input id="ref" type="text" autocomplete="off" spellcheck="false" required maxlength="40" placeholder="e.g. 3f7c1a20-9d4e-...">
+      <label for="aem">Email you filed with</label>
+      <input id="aem" type="email" autocomplete="email" required maxlength="254">
+      <button id="read" type="submit">Read our answer</button>
+      <div id="am" class="msg" role="status" aria-live="polite"></div>
+    </form>
+    <div id="thread" style="display:none;margin-top:14px"></div>
+  </div>
 </div>
 <script>
 (function(){
@@ -64,7 +79,11 @@ button:disabled{opacity:.6;cursor:default}
     }).then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,body:j}; }); })
       .then(function(res){
         if(res.ok){
-          say((res.body&&res.body.message)||'Your message is with our team.',true);
+          var ref=(res.body&&res.body.ticket_id)||'';
+          say(((res.body&&res.body.message)||'Your message is with our team.')
+              + (ref?(' Your reference is ' + ref + ' \u2014 keep it: come back to this page with it and your email to read our answer.') : '')
+              + (ref? '' : ''), true);
+          if(ref){ var rf=document.getElementById('ref'); if(rf){ rf.value=ref; } var ae=document.getElementById('aem'); if(ae && !ae.value){ ae.value=email; } }
           f.querySelectorAll('input,textarea').forEach(function(el){ el.value=''; });
           b.disabled=true; b.textContent='Sent';
         } else if(res.status===429){
@@ -76,6 +95,51 @@ button:disabled{opacity:.6;cursor:default}
         }
       })
       .catch(function(){ say('That did not go through. Check your connection and try again.',false); b.disabled=false; });
+  });
+
+  // ── Read the team's answer ────────────────────────────────────────────────
+  // The message this page files belongs to no account, so a locked-out visitor has no sign-in that
+  // would ever show it. The reference handed out above plus the address they filed with is the
+  // whole capability; the panel below prints the thread the operator answered on.
+  var af=document.getElementById('af'), am=document.getElementById('am'), th=document.getElementById('thread'),
+      rb=document.getElementById('read');
+  function asay(t,ok){ am.textContent=t; am.className='msg '+(ok?'ok':'err'); }
+  function esc(t){ return String(t==null?'':t).replace(/[&<>"']/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  af.addEventListener('submit', function(e){
+    e.preventDefault();
+    var ref=(document.getElementById('ref').value||'').trim(),
+        em=(document.getElementById('aem').value||'').trim();
+    if(!ref){ asay('Enter the reference you were given.',false); return; }
+    if(!em){ asay('Enter the email address you filed with.',false); return; }
+    rb.disabled=true; th.style.display='none'; asay('Looking…',true);
+    fetch('/api/public/support-answer',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ticket_id:ref,email:em})
+    }).then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,body:j}; }); })
+      .then(function(res){
+        rb.disabled=false;
+        if(!res.ok){
+          asay((res.body&&(res.body.error||res.body.message))||'We have no message from that address with that reference. Check both and try again.',false);
+          return;
+        }
+        var d=res.body||{}, msgs=Array.isArray(d.messages)?d.messages:[];
+        var html='<div style="font-size:13px;color:#475569;margin-bottom:10px">'
+               + 'Subject: <strong>'+esc(d.subject)+'</strong> &middot; status: '+esc(d.status)+'</div>';
+        if(!msgs.length){
+          html+='<div class="msg ok" style="display:block">Your message is with the team. No answer yet \u2014 come back with the same reference.</div>';
+        } else {
+          for(var i=0;i<msgs.length;i++){
+            var m=msgs[i], ours=m.from==='us';
+            html+='<div style="margin:8px 0;padding:10px 12px;border-radius:10px;background:'+(ours?'#eef2ff':'#f1f5f9')+';border:1px solid '+(ours?'#c7d2fe':'#e2e8f0')+'">'
+                + '<div style="font-size:11px;font-weight:700;letter-spacing:.03em;color:'+(ours?'#4338ca':'#64748b')+';text-transform:uppercase">'+(ours?'Our team':'You')+'</div>'
+                + '<div style="font-size:14px;line-height:1.55;white-space:pre-wrap;margin-top:4px">'+esc(m.message)+'</div></div>';
+          }
+        }
+        th.innerHTML=html; th.style.display='block';
+        asay(d.answered?'Here is our answer.':(msgs.length?'Your message and our thread so far.':'No answer yet.'),true);
+      })
+      .catch(function(){ rb.disabled=false; asay('That did not load. Check your connection and try again.',false); });
   });
 })();
 </script>
