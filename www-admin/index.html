@@ -1584,7 +1584,8 @@ const TAB_RENDERERS = {
     '<div id="ticketsTable"><div class="loading-wrap"><div class="spinner"></div> Loading tickets...</div></div>';
   },
 
-  'inbox': () => placeholderPanel('Private Email', 'Connect a mail provider (Mailgun, SendGrid) in the Integration Center to enable private email sending and inbound routing.', '📬'),
+  // B200: the receiving half, which had NO screen (see renderPrivateEmailInbox at the end of this script).
+  'inbox': () => renderPrivateEmailInbox(),
 
   'calendar': () => {
     return pageHeader('Calendar', 'Schedule and manage events',
@@ -6111,6 +6112,244 @@ function auditExportCsv() {
   document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   toast('Exported ' + AUDIT_ROWS.length + (AUDIT_ROWS.length === 1 ? ' entry' : ' entries'), 'success');
 }
+
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// Private Email — the SHARED INBOX (kanban B200).
+//
+// The receiving half of this app has shipped for months: the Mailgun inbound webhook
+// (POST /api/v1/webhooks/mailgun/inbound) verifies the domain's signing key, creates the contact and
+// files a ticket with source='email'. What did not exist was a screen: this console's "Private Email"
+// menu entry rendered a placeholder telling the operator to "connect a mail provider ... to enable
+// private email SENDING and inbound routing" — on a workspace that already had a sending domain. So
+// mail arrived, sat in `tickets`, and nobody could read or answer it from here.
+//
+// Every call below is an EXISTING route. Nothing on the server changed for this screen:
+//   GET   /api/tickets?limit=100       -> {count, tickets:[{id,subject,description,status,priority,
+//                                          created_at,source,contact_email,contact_name}]}
+//   GET   /api/tickets/:id             -> {ticket, messages:[{sender_type,message,created_at}]}
+//   GET   /api/private-email/boxes     -> [{id,email_address,...}]      the From identities
+//   GET   /api/private-email/domains   -> [{id,domain,...}]
+//   POST  /api/tickets/:id/messages    -> records the reply on the thread
+//   POST  /api/private-email/send      -> {from_address,to,subject,body,in_reply_to}
+//   PATCH /api/tickets/:id             -> {status}
+//
+// The tenant's own console (app.coreswiftcrm.com) has the setup half of this tab — adding a domain and
+// a mailbox. This screen is the READING half, for the operator: one list of every address, newest
+// first, open a thread, reply from the address the mail was sent to.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+const PEI = { tickets: [], boxes: [], domains: [], mailOnly: true, err: null, open: null, loaded: false };
+
+function renderPrivateEmailInbox() {
+  return pageHeader('Private Email',
+    'Read the mail that arrives on your domains and reply from the address it was sent to',
+    '<button class="btn btn-secondary btn-sm" onclick="loadPrivateEmailTab()">\uD83D\uDD03 Refresh</button>') +
+    '<div id="peiInbox"><div class="loading-wrap"><div class="spinner"></div> Loading the shared inbox...</div></div>' +
+    '<div id="peiSetup" style="margin-top:16px"></div>';
+}
+
+function peiWhen(d) {
+  if (!d) return '';
+  try { return new Date(d).toLocaleString(); } catch (e) { return String(d); }
+}
+
+function peiWho(t) {
+  return (t && (t.contact_name || t.contact_email)) || 'Unknown sender';
+}
+
+function peiIsMail(t) {
+  const s = String((t && t.source) || '').toLowerCase();
+  return s === 'email' || s === 'mail' || s === 'inbound';
+}
+
+async function loadPrivateEmailTab() {
+  const listEl = document.getElementById('peiInbox');
+  if (!listEl) return;
+  PEI.err = null;
+  const r = await Promise.all([
+    API.get('/tickets?limit=100').catch(e => ({ __err: e })),
+    API.get('/private-email/boxes').catch(() => []),
+    API.get('/private-email/domains').catch(() => [])
+  ]);
+  const t = r[0] || {};
+  if (t.__err) { PEI.err = (t.__err && t.__err.message) || 'The ticket list could not be loaded.'; PEI.tickets = []; }
+  else PEI.tickets = (t.tickets || t.items || (Array.isArray(t) ? t : [])) || [];
+  const b = r[1], d = r[2];
+  PEI.boxes = Array.isArray(b) ? b : ((b && (b.boxes || b.items)) || []);
+  PEI.domains = Array.isArray(d) ? d : ((d && (d.domains || d.items)) || []);
+  PEI.loaded = true;
+  peiPaintList();
+  peiPaintSetup();
+}
+
+function peiPaintList() {
+  const el = document.getElementById('peiInbox');
+  if (!el) return;
+  const all = PEI.tickets || [];
+  const rows = PEI.mailOnly ? all.filter(peiIsMail) : all;
+  let html = '';
+  if (PEI.err) {
+    html += '<div class="card" style="border-left:3px solid #dc2626;padding:12px"><strong>The inbox could not be read.</strong>' +
+      '<div style="margin-top:4px">' + escapeHtml(PEI.err) + '</div></div>';
+  }
+  html += '<div class="card">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">' +
+    '<div><strong>Shared inbox</strong><div style="opacity:.7;font-size:13px">' +
+    rows.length + (rows.length === 1 ? ' message' : ' messages') +
+    (PEI.mailOnly ? ' that arrived by email' : ' (mail and other tickets)') +
+    ' \u00B7 every address in one box</div></div>' +
+    '<label style="font-size:13px;opacity:.85;cursor:pointer"><input type="checkbox" id="peiMailOnly"' +
+    (PEI.mailOnly ? ' checked' : '') + ' style="margin-right:6px">Mail only</label></div>';
+
+  if (!rows.length) {
+    html += '<div style="margin-top:14px;padding:14px;border:1px dashed rgba(128,128,128,.45);border-radius:8px">' +
+      '<strong>' + (PEI.mailOnly && all.length ? 'No mail yet' : 'Nothing in the inbox yet') + '</strong>' +
+      '<div style="margin:6px 0 8px">Incoming email becomes a ticket and appears here. Three things make that happen:</div>' +
+      '<ol style="margin:0 0 8px 18px;line-height:1.6">' +
+      '<li>Add the domain you receive on, then in Mailgun point its MX records at <code>mxa.mailgun.org</code> and <code>mxb.mailgun.org</code>.</li>' +
+      '<li>Wait until Mailgun shows the domain as <strong>Active</strong>, then create the mailbox below.</li>' +
+      '<li>Email that address. It lands here within a few seconds.</li></ol>' +
+      '<div style="opacity:.75">Sending and receiving are separate setups — sending can work while receiving is still being verified.</div></div>';
+  } else {
+    html += '<table style="width:100%;border-collapse:collapse;margin-top:12px"><thead><tr style="text-align:left;opacity:.7;font-size:13px">' +
+      '<th style="padding:6px 8px">From</th><th style="padding:6px 8px">Subject</th>' +
+      '<th style="padding:6px 8px">Received</th><th style="padding:6px 8px">Status</th></tr></thead><tbody>';
+    rows.forEach(function (t) {
+      const id = escapeHtml(t.id);
+      const unread = /open|new/i.test(String(t.status || '')) ? 'font-weight:600' : '';
+      html += '<tr class="pei-row" data-id="' + id + '" style="cursor:pointer;border-top:1px solid rgba(128,128,128,.25);' + unread + '">' +
+        '<td style="padding:8px">' + escapeHtml(peiWho(t)) + '</td>' +
+        '<td style="padding:8px">' + escapeHtml(t.subject || '(no subject)') + '</td>' +
+        '<td style="padding:8px;white-space:nowrap;opacity:.8">' + escapeHtml(peiWhen(t.created_at)) + '</td>' +
+        '<td style="padding:8px;opacity:.8">' + escapeHtml(t.status || '') + '</td></tr>';
+    });
+    html += '</tbody></table>';
+  }
+  html += '<div id="peiDetail"></div></div>';
+  el.innerHTML = html;
+
+  const cb = document.getElementById('peiMailOnly');
+  if (cb) cb.onchange = function () { PEI.mailOnly = !!cb.checked; peiPaintList(); };
+  const rs = document.querySelectorAll('.pei-row');
+  for (let i = 0; i < rs.length; i++) {
+    rs[i].onclick = function () { peiOpen(this.getAttribute('data-id')); };
+  }
+}
+
+function peiPaintSetup() {
+  const el = document.getElementById('peiSetup');
+  if (!el) return;
+  const doms = (PEI.domains || []).map(function (d) { return escapeHtml(d.domain || d.name || ''); }).filter(Boolean);
+  const boxes = (PEI.boxes || []).map(function (b) { return escapeHtml(b.email_address || b.address || ''); }).filter(Boolean);
+  let html = '<div class="card"><strong>This workspace&rsquo;s mailboxes</strong>' +
+    '<div style="margin-top:6px;font-size:13px;opacity:.85">' +
+    'Domains: ' + (doms.length ? doms.join(', ') : 'none yet') + '<br>' +
+    'Addresses: ' + (boxes.length ? boxes.join(', ') + ' \u2014 all of them land in this one list' : 'none yet') +
+    '</div>';
+  if (!doms.length || !boxes.length) {
+    html += '<div style="margin-top:10px;font-size:13px;line-height:1.6">' +
+      '<strong>To receive mail:</strong> add the domain and a mailbox in the workspace&rsquo;s own console ' +
+      '(Private Email tab on app.coreswiftcrm.com). Mailgun has to show the domain as Active first, ' +
+      'or inbound mail is rejected before it reaches this app.</div>';
+  }
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+async function peiOpen(id) {
+  const d = document.getElementById('peiDetail');
+  if (!d) return;
+  const t = (PEI.tickets || []).find(function (x) { return String(x.id) === String(id); }) || { id: id };
+  PEI.open = id;
+  d.innerHTML = '<div style="margin-top:14px;padding:14px;border:1px solid rgba(128,128,128,.35);border-radius:8px">' +
+    '<div class="loading-wrap"><div class="spinner"></div> Opening the thread...</div></div>';
+
+  let thread = null;
+  try { thread = await API.get('/tickets/' + encodeURIComponent(id)); } catch (e) { thread = null; }
+  const msgs = (thread && (thread.messages || thread.ticket_messages)) || [];
+  const full = (thread && thread.ticket) || t;
+  const to = full.contact_email || t.contact_email || '';
+  const boxOpts = (PEI.boxes || []).map(function (b) {
+    const a = b.email_address || b.address || '';
+    return '<option value="' + escapeHtml(a) + '">' + escapeHtml(a) + '</option>';
+  }).join('');
+
+  let chat = '';
+  if (msgs.length) {
+    chat = '<div style="margin:10px 0;padding:10px;border-radius:8px;background:rgba(128,128,128,.08)">' +
+      msgs.map(function (m) {
+        const mine = /agent|you|staff/i.test(String(m.sender_type || ''));
+        return '<div style="margin-bottom:8px"><div style="font-size:12px;opacity:.7">' +
+          (mine ? 'You' : 'Customer') + ' \u00B7 ' + escapeHtml(peiWhen(m.created_at)) + '</div>' +
+          '<div style="white-space:pre-wrap">' + escapeHtml(m.message || '') + '</div></div>';
+      }).join('') + '</div>';
+  }
+
+  d.innerHTML = '<div style="margin-top:14px;padding:14px;border:1px solid rgba(128,128,128,.35);border-radius:8px">' +
+    '<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:start">' +
+    '<div><h3 style="margin:0 0 2px">' + escapeHtml(full.subject || '(no subject)') + '</h3>' +
+    '<div style="opacity:.75;font-size:13px">From ' + escapeHtml(peiWho(full)) +
+    (to ? ' &lt;' + escapeHtml(to) + '&gt;' : '') + ' \u00B7 ' + escapeHtml(peiWhen(full.created_at)) + '</div></div>' +
+    '<select id="peiStatus" style="font-size:13px">' +
+    ['open', 'in_progress', 'resolved', 'closed'].map(function (s) {
+      return '<option value="' + s + '"' + (String(full.status) === s ? ' selected' : '') + '>' + s.replace('_', ' ') + '</option>';
+    }).join('') + '</select></div>' +
+    '<div style="white-space:pre-wrap;margin:12px 0">' + escapeHtml(full.description || t.description || '') + '</div>' +
+    chat +
+    '<div style="margin-top:10px"><label style="display:block;font-size:12px;opacity:.75;margin-bottom:4px">Reply as</label>' +
+    (boxOpts ? '<select id="peiFrom" style="margin-bottom:8px">' + boxOpts + '</select>'
+      : '<div style="margin-bottom:8px;color:#b45309">No mailbox is set up yet, so there is no address to reply from. Add one in the workspace console (Private Email &rarr; Set up your mailbox).</div>') +
+    '<textarea id="peiText" rows="4" placeholder="Write your reply..." style="width:100%;margin-bottom:8px"></textarea>' +
+    '<button class="btn btn-primary" id="peiSend"' + (boxOpts && to ? '' : ' disabled') + '>Send reply</button>' +
+    ' <span id="peiMsg" style="margin-left:8px"></span>' +
+    (!to ? '<div style="margin-top:6px;color:#b45309;font-size:13px">This ticket carries no sender address, so it cannot be replied to.</div>' : '') +
+    '</div></div>';
+
+  const st = document.getElementById('peiStatus');
+  if (st) st.onchange = async function () {
+    const btn = st;
+    btn.disabled = true;
+    try { await API.patch('/tickets/' + encodeURIComponent(id), { status: st.value }); toast('Ticket marked ' + st.value.replace('_', ' '), 'success'); }
+    catch (e) { toast('Could not change the status: ' + ((e && e.message) || e), 'error'); }
+    btn.disabled = false;
+  };
+  const send = document.getElementById('peiSend');
+  if (send) send.onclick = function () { peiSendReply(id, full, to); };
+}
+
+async function peiSendReply(id, t, to) {
+  const btn = document.getElementById('peiSend');
+  const msg = document.getElementById('peiMsg');
+  const fromEl = document.getElementById('peiFrom');
+  const bodyEl = document.getElementById('peiText');
+  const from = fromEl ? fromEl.value : '';
+  const body = bodyEl ? bodyEl.value.trim() : '';
+  if (!from) { if (msg) msg.textContent = 'Add a mailbox first.'; return; }
+  if (!body) { if (msg) msg.textContent = 'Write a reply first.'; return; }
+  btn.disabled = true;
+  if (msg) msg.textContent = 'Sending...';
+  try {
+    await API.post('/private-email/send', {
+      from_address: from, to: to, subject: 'Re: ' + (t.subject || ''), body: body, in_reply_to: t.id
+    });
+  } catch (e) {
+    if (msg) msg.textContent = 'Not sent: ' + ((e && e.message) || e);
+    btn.disabled = false;
+    return;
+  }
+  // The message is SENT at this point. Recording it on the thread is a second, separate write: if it
+  // fails the operator must be told the truth (sent, not logged) rather than shown a green tick.
+  let logged = true;
+  try { await API.post('/tickets/' + encodeURIComponent(id) + '/messages', { sender_type: 'agent', message: body }); }
+  catch (e) { logged = false; }
+  if (msg) msg.textContent = logged ? 'Sent \u2713' : 'Sent, but the thread log could not be updated.';
+  if (bodyEl) bodyEl.value = '';
+  btn.disabled = false;
+  if (logged) setTimeout(function () { peiOpen(id); }, 600);
+}
+
+TAB_RENDERERS['inbox'] = renderPrivateEmailInbox;
+TAB_LOADERS['inbox'] = loadPrivateEmailTab;
 
 </script>
 </body>
