@@ -24,52 +24,45 @@ use uuid::Uuid;
 pub const APP_NAME: &str = "CoreSwift CRM";
 pub const APP_URL: &str = "https://app.coreswiftcrm.com";
 
-/// The app's own support address — the one a customer writes to.
+/// The app's OWN support channel — a PAGE, not a mailbox (measured 2026-11-07 on dns.google and
+/// 8.8.8.8): every address this product printed lived on a domain publishing **MX = 0**, with
+/// nothing on this host listening on port 25, so a customer's message BOUNCED. The app serves a
+/// contact form on its own host, `POST /api/public/support-request`, that files the message into
+/// the operator's own support queue — so [`with_support_footer`] names that page.
 ///
-/// CoreSwift's transactional mail carried NO support address at all (measured 2026-10-08,
-/// kanban t_f1931c05 -> t_71cc3ad8), so [`with_support_footer`] adds this to every message that
-/// leaves this module.
-///
-/// REPOINTED 2026-10-23 (kanban t_6a779fb6) — the address used to be `support@coreswiftcrm.com`,
-/// which could not RECEIVE. Measured with two independent resolvers (dns.google and
-/// cloudflare-dns.com): `coreswiftcrm.com` publishes **MX = 0** and no apex SPF, so every message a
-/// customer sent to the address its own welcome mail told them to write to bounced. The earlier
-/// "the app's own main domain, never the platform's" rule was written before that domain was
-/// measured; a company domain with no mail exchanger is not an address, it is a bounce. The
-/// footer now names `support@swiftsoftware.net`, which publishes Cloudflare MX
-/// (route1/2/3.mx.cloudflare.net) and `v=spf1 include:_spf.mx.cloudflare.net ~all` — i.e. a domain
-/// that actually resolves to a mailbox. Same fleet change shipped the same day on IncentiveSwift,
-/// ADASwift, WorkflowSwift, FunnelSwift and missedcallrespondr.
-///
-/// This is a DISPLAY address (a `From`/footer a customer's own mail client writes to), never a
-/// destination this app queues mail for: `swiftsoftware.net` is on the fleet's own harness list, so
-/// a send TO it would be refused at the transport chokepoint. That is asserted in
-/// `security::probe_addr` and `communications::providers`.
-pub const SUPPORT_EMAIL: &str = "support@swiftsoftware.net";
+/// History: the footer first carried no address at all (kanban t_71cc3ad8), then
+/// `support@coreswiftcrm.com` (apex publishes no MX — a bounce), then
+/// `support@swiftsoftware.net` (kanban t_6a779fb6, on the claim that it published Cloudflare
+/// MX; that MX was later removed and the address bounces too — measured 2026-11-07 with
+/// dns.google and 8.8.8.8, NOERROR/NODATA, SOA only). A domain with no mail exchanger is not an
+/// address, it is a bounce, so the fleet's rule is now a page on a host this app actually serves.
+/// ADASwift, WorkflowSwift, IncentiveSwift, FunnelSwift and MissedCall all name their own contact
+/// page the same way.
+pub const SUPPORT_CONTACT: &str = "https://app.coreswiftcrm.com/contact.html";
 
 /// Append the support line to a rendered transactional body.
 ///
 /// Applied in [`queue_outbound_message`] rather than to one body literal, so a body that comes from
-/// the AUTHORITATIVE `email_templates` row carries the address exactly like the inline fallback
-/// does, and a template added later inherits it. An EMPTY body stays empty (an empty `html_body`
-/// means "no HTML part" and must not become a footer-only part), and a body that already carries the
-/// address is returned untouched, so this is idempotent.
+/// the AUTHORITATIVE `email_templates` row carries the contact page exactly like the inline
+/// fallback does, and a template added later inherits it. An EMPTY body stays empty (an empty
+/// `html_body` means "no HTML part" and must not become a footer-only part), and a body that
+/// already carries the page is returned untouched, so this is idempotent.
 ///
 /// `pub(crate)` so the admin test-send route (`src/admin_actions/email_config.rs`) — which builds its
 /// body inline and never touches [`queue_outbound_message`] — can put the SAME footer on the message
 /// an operator inspects, instead of a second, quietly drifting copy of the wording.
 pub(crate) fn with_support_footer(text: &str, html: &str) -> (String, String) {
-    let text = if text.is_empty() || text.contains(SUPPORT_EMAIL) {
+    let text = if text.is_empty() || text.contains(SUPPORT_CONTACT) {
         text.to_string()
     } else {
-        format!("{}\n\nNeed help? Contact {}\n", text, SUPPORT_EMAIL)
+        format!("{}\n\nNeed help? {}\n", text, SUPPORT_CONTACT)
     };
-    let html = if html.is_empty() || html.contains(SUPPORT_EMAIL) {
+    let html = if html.is_empty() || html.contains(SUPPORT_CONTACT) {
         html.to_string()
     } else {
         format!(
-            "{}\n<p style=\"font-size:13px;color:#6b7280;text-align:center;\">Need help? Contact <a href=\"mailto:{}\">{}</a></p>",
-            html, SUPPORT_EMAIL, SUPPORT_EMAIL
+            "{}\n<p style=\"font-size:13px;color:#6b7280;text-align:center;\">Need help? <a href=\"{}\">Send us a message</a> — no sign-in needed.</p>",
+            html, SUPPORT_CONTACT
         )
     };
     (text, html)
@@ -651,42 +644,45 @@ mod tests {
     }
 
     #[test]
-    fn the_seeded_welcome_template_body_gains_the_support_address() {
-        // Regression guard for the whole card (t_71cc3ad8): the transactional body that reaches the
-        // message must name the app's OWN support address, whichever body was chosen.
+    fn the_seeded_welcome_template_body_gains_the_support_contact_page() {
+        // Regression guard for the whole class (t_71cc3ad8, t_17277fd5): the transactional body
+        // that reaches the message must name a way to reach the operator, whichever body was
+        // chosen — and it must be a PAGE, because every address this app has printed bounced.
         let (text, html) = with_support_footer(SEEDED_BODY, SEEDED_HTML);
         assert!(
-            text.contains(SUPPORT_EMAIL),
-            "text body lacks the support address"
+            text.contains(SUPPORT_CONTACT),
+            "text body lacks the support contact page"
         );
         assert!(
-            html.contains(SUPPORT_EMAIL),
-            "html body lacks the support address"
+            html.contains(SUPPORT_CONTACT),
+            "html body lacks the support contact page"
         );
     }
 
     #[test]
     fn support_footer_is_idempotent_and_never_added_to_an_empty_body() {
         let (t, h) = with_support_footer("Body", "<p>Body</p>");
-        assert!(t.ends_with(&format!("Need help? Contact {}\n", SUPPORT_EMAIL)));
-        assert!(h.contains(&format!("mailto:{}", SUPPORT_EMAIL)));
-        // a body that already carries the address is returned untouched
+        assert!(t.ends_with(&format!("Need help? {}\n", SUPPORT_CONTACT)));
+        // the HTML arm links the page, rather than pasting it as bare text
+        assert!(h.contains(&format!("<a href=\"{}\">", SUPPORT_CONTACT)));
+        // a body that already carries the page is returned untouched
         assert_eq!(with_support_footer(&t, &h), (t.clone(), h.clone()));
         // "" means "no body part", not "footer only"
         assert_eq!(with_support_footer("", ""), (String::new(), String::new()));
     }
 
     #[test]
-    fn support_address_is_one_that_can_receive() {
-        // The defect this card closes (kanban t_6a779fb6): the footer named an address on
-        // `coreswiftcrm.com`, whose apex publishes no MX record at all, so the customer who wrote to
-        // the one address its welcome mail gave them bounced. The address must now sit on a domain
-        // that really resolves to a mail exchanger (`swiftsoftware.net` = Cloudflare MX + SPF).
-        assert_eq!(SUPPORT_EMAIL, "support@swiftsoftware.net");
+    fn support_footer_names_no_mailbox_that_bounces() {
+        // The defect this card closes (kanban t_17277fd5): the footer named
+        // `support@swiftsoftware.net`, whose MX was removed, so the customer who wrote to the one
+        // address its welcome mail gave them bounced. Neither of this app's own domains publishes a
+        // mail exchanger, so the footer must name a served page and carry no `@` at all.
+        assert_eq!(SUPPORT_CONTACT, "https://app.coreswiftcrm.com/contact.html");
         assert!(
-            !SUPPORT_EMAIL.ends_with("@coreswiftcrm.com"),
-            "the app's own domain publishes no MX — mail addressed there cannot be received"
+            !SUPPORT_CONTACT.contains('@'),
+            "a mailbox here is a bounce: no address on this product's domains can receive"
         );
+        assert!(SUPPORT_CONTACT.starts_with(APP_URL));
     }
 }
 
