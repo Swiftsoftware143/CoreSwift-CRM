@@ -482,7 +482,7 @@ async fn load_tenant(
 
 #[cfg(test)]
 mod tests {
-    use super::{supplied, tenant_identity, validated_owner_name, MintRequest};
+    use super::{tenant_identity, validated_owner_name, MintRequest};
     use crate::errors::AppError;
 
     /// Every shape of "no name" a door can present — including the exact two the parent card

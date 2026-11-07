@@ -76,6 +76,19 @@
 //!        census, so it is recorded here to keep the pinned numbers honest. Now 371 mounted
 //!        `.route(..)` calls, 359 mounts on /api/**.
 //!
+//!   +1 mount / +1 path since (2026-11-07, kanban t_53de22f5), the contact-page ANSWER read:
+//!        `POST /api/public/support-answer` (commit 396c0cd — the person who wrote from the contact
+//!        page reads the team's reply, matched on the reference they were given plus the address
+//!        they filed with). It is mounted in `main.rs` itself, beside the filing arm, behind the
+//!        body-read deadline, and named in PUBLIC_ROUTES. It shipped WITHOUT moving this census,
+//!        which left both the documented numbers and the test that pins them one behind the tree —
+//!        the standard gate is fmt/check/clippy and never runs `cargo test`, so nothing caught it.
+//!        Re-counted from source at HEAD 895e482 / eead91b: 372 mounted `.route(..)` calls, 360
+//!        mounts on /api/** (372 = 360 /api + the 12 root-level mounts). Measured live on
+//!        127.0.0.1:8084 with NO credential: an empty JSON body answers 422 (missing field
+//!        `ticket_id`) and a body with no content type answers 415 — i.e. the global layer lets it
+//!        through exactly as PUBLIC_ROUTES declares, and it is not a 401 by accident.
+//!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
 //!        the per-module gate was doing its job. The two /api routes added since (kanban
@@ -1035,12 +1048,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            371,
+            372,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 359,
+            api, 360,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.
