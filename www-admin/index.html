@@ -485,6 +485,70 @@ async function loadFeatureMatrix() {
   }
 }
 
+// ---- Plan payment links (2026-11-08) -------------------------------------
+// `plans.checkout_url` is the hosted payment page a buyer is handed to when this
+// installation holds no payment-provider key. CoreSwift's plan rows already carry
+// four of them, and until this panel existed NO screen in any console showed the
+// value or offered a way to set it — so a dead or mistyped link was invisible and
+// untouchable while the customer's only plan action was "Request this plan".
+// Reads the same GET /billing/plans the customer modal reads; saves with
+// PATCH /billing/plans/{id}, which this console's own operator (agency_admin) may call.
+let FP_PLANS = [];
+async function loadPlanPaymentLinks() {
+  const wrap = document.getElementById('fpPay');
+  if (!wrap) return;
+  try {
+    FP_PLANS = famList(await API.get('/billing/plans'), 'plans');
+  } catch (e) {
+    wrap.innerHTML = '<div style="padding:12px;color:var(--danger,#f66)">Could not load the plan list: ' +
+      escapeHtml(e.message) + '</div>';
+    return;
+  }
+  const rows = FP_PLANS.map(p => {
+    const link = String(p.checkout_url || '').trim();
+    const price = (p.price_monthly != null && p.price_monthly !== '') ? p.price_monthly : '0';
+    const state = !link
+      ? '<span class="badge" style="background:#fef3c7;color:#92400e">not set</span>'
+      : (/^https:\/\/[^\s"']+$/i.test(link)
+        ? '<span class="badge badge-success">set</span> <a href="' + escapeHtml(link) + '" target="_blank" rel="noopener" style="font-size:12px">open</a>'
+        : '<span class="badge" style="background:#fee2e2;color:#991b1b">not a secure link</span>');
+    return '<tr>' +
+      '<td><strong>' + escapeHtml(p.name || p.slug || '') + '</strong>' +
+        '<div style="font-size:11px;color:var(--text-muted)">$' + escapeHtml(String(price)) + '/mo</div></td>' +
+      '<td>' + state + '</td>' +
+      '<td><input class="input" data-pay="' + escapeHtml(String(p.id)) + '" value="' + escapeHtml(link) +
+        '" placeholder="https://buy.stripe.com/…" style="min-width:320px"></td>' +
+      '<td><button class="btn btn-primary btn-sm" data-save="' + escapeHtml(String(p.id)) + '">Save</button></td>' +
+      '</tr>';
+  }).join('');
+  wrap.innerHTML = '<div class="card"><div class="card-header"><h3 style="margin:0;font-size:16px">Plan payment links</h3></div>' +
+    '<div class="card-body">' +
+    '<p style="font-size:13px;color:var(--text-muted);margin:0 0 12px">A hosted payment page for a plan — a Stripe Payment Link, a PayPal button, anything that takes the money. A plan carrying one can be sold while this installation holds no payment key: the buyer pays on that page and the workspace is switched on here once the money lands. Leave a plan empty to keep it request-only.</p>' +
+    '<div class="table-wrap"><table class="table"><thead><tr><th>Plan</th><th>Link</th><th>Payment page</th><th></th></tr></thead><tbody>' +
+    (rows || '<tr><td colspan="4">No plans found</td></tr>') + '</tbody></table></div></div></div>';
+  wrap.querySelectorAll('[data-save]').forEach(b => {
+    b.addEventListener('click', () => savePlanPaymentLink(b.getAttribute('data-save'), b));
+  });
+}
+
+async function savePlanPaymentLink(id, btn) {
+  const input = document.querySelector('#fpPay [data-pay="' + id + '"]');
+  if (!input || !btn || btn.disabled) return;
+  const url = String(input.value || '').trim();
+  if (url && !/^https?:\/\//i.test(url)) { toast('A payment link must start with https://', 'error'); return; }
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  try {
+    await API.patch('/billing/plans/' + encodeURIComponent(id), { checkout_url: url });
+    toast(url ? 'Payment link saved' : 'Payment link cleared', 'success');
+    await loadPlanPaymentLinks();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Save';
+    toast('Could not save the link: ' + e.message, 'error');
+  }
+}
+
 // `indeterminate` cannot be expressed in HTML markup — it is a DOM property. This runs right after the
 // matrix is written and applies it, so a parent checkbox shows "some of this module is on" instead of
 // claiming either full or none.
@@ -1705,6 +1769,7 @@ const TAB_RENDERERS = {
   'tenants': () => {
     return pageHeader('Users', 'Every workspace on the platform — select rows to retire them. Probe/test workspaces are a picker, not customers: hidden until you tick Show probe workspaces',
       '<label style="display:inline-flex;align-items:center;gap:6px;margin-right:12px;font-size:13px"><input type="checkbox" id="tnShowProbes"> Show probe workspaces</label> ' +
+      '<span id="tnProbeHidden" class="badge badge-warning" style="display:none;margin-right:12px"></span> ' +
       '<button class="btn btn-sm btn-outline" id="tnProbes" disabled>Select probes (0)</button> ' +
       '<button class="btn btn-danger btn-sm" id="tnDel" disabled>Delete selected</button>') +
     '<div id="tenantsTable"><div class="loading-wrap"><div class="spinner"></div> Loading workspaces...</div></div>';
@@ -1789,7 +1854,8 @@ const TAB_RENDERERS = {
   'features-plans': () => {
     // the load itself lives in TAB_LOADERS['features-plans'] — see the note there
     return pageHeader('Modules & Plans', 'Every module and every feature, assigned per plan — read from the registry, enforced on every request') +
-      '<div id="fpWrap"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading the module registry…</div></div>';
+      '<div id="fpWrap"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading the module registry…</div></div>' +
+      '<div id="fpPay" style="margin-top:24px"></div>';
   },
   // The form is rendered by loadProvisioning() from GET /api/admin/provisioning-config, so what is
   // on screen is what the account door reads; the renderer below only lays out the shell.
@@ -2350,12 +2416,28 @@ function isProbeOwner(addr) {
   const a = String(addr || '');
   return RESERVED_OWNER_RE.test(a) || FLEET_PROBE_OWNER_RE.test(a);
 }
+// A PROBE WORKSPACE CAN ARRIVE WITH NO OWNER USER AT ALL (2026-11-09). A harness that mints a
+// tenant and no member leaves `owner_email` empty, so the owner predicate above reads "" and the row
+// is listed as an ordinary customer with "no user" — invisible to both the badge and the filter.
+// Measured live on this console: three such rows ("Probe Customer's Workspace" x2, "Probe Cx's
+// Workspace") sat in the operator's workspace list while the sweep tool saw them as residue. The
+// tenant's own NAME and SLUG carry the tell, so they join the predicate. The slug shapes are the
+// sweep tool's own (`probe-`, `zz-`, `b124probe`, `md-`).
+const PROBE_SLUG_RE = /^(?:probe-|zz-|b124probe|md-)/i;
+const PROBE_NAME_RE = /^probe\b/i;
+function isProbeTenant(t) {
+  if (!t) return false;
+  if (isProbeOwner(String(t.owner_email || t.email || ''))) return true;
+  if (PROBE_SLUG_RE.test(String(t.slug || t.tenant_slug || ''))) return true;
+  return PROBE_NAME_RE.test(String(t.name || ''));
+}
 const tenantOwnerCell = (t) => {
   const oe = String((t && (t.owner_email || t.email)) || '').trim();
-  if (!oe) return '<span style="color:var(--text-muted)">no user</span>';
-  return escapeHtml(oe) + (isProbeOwner(oe)
-    ? ' <span class="badge badge-warning" title="a reserved or fleet-probe address — a probe, not a customer">probe</span>'
-    : '');
+  const badge = isProbeTenant(t)
+    ? ' <span class="badge badge-warning" title="a reserved address, a probe-shaped slug, or a probe-named workspace — a harness artifact, not a customer">probe</span>'
+    : '';
+  if (!oe) return '<span style="color:var(--text-muted)">no user</span>' + badge;
+  return escapeHtml(oe) + badge;
 };
 async function loadTenantsTab() {
   const el = document.getElementById('tenantsTable');
@@ -2382,13 +2464,23 @@ async function loadTenantsTab() {
   // so the filter and the badge can never disagree. "Select probes" turns the filter on instead of
   // ticking rows that are not in the DOM.
   const probeSet = new Set(items
-    .filter(t => isProbeOwner(String((t && (t.owner_email || t.email)) || '')))
+    .filter(t => isProbeTenant(t))
     .map(t => String((t && t.id) || '')));
   const showProbesEl = document.getElementById('tnShowProbes');
   if (showProbesEl) showProbesEl.onchange = () => loadTenantsTab();
   const visible = (showProbesEl && showProbesEl.checked)
     ? items
     : items.filter(t => !probeSet.has(String((t && t.id) || '')));
+  // SAY WHAT IS HIDDEN (2026-11-09). The filter itself is right — a probe is not a customer — but a
+  // SILENT filter means an operator reading "N workspaces" cannot see that a harness left rows
+  // behind. Count the difference between the listing and the drawn rows (the same two arrays, so the
+  // number can never drift from what the table shows).
+  const hiddenEl = document.getElementById('tnProbeHidden');
+  if (hiddenEl) {
+    const n = probeSet.size;
+    hiddenEl.textContent = n ? (n + ' test workspace' + (n === 1 ? '' : 's') + ' hidden') : '';
+    hiddenEl.style.display = n ? 'inline-block' : 'none';
+  }
   const rows = visible.map(t => [
     `<input type="checkbox" class="tn-chk" value="${escapeHtmlAttr(t.id || '')}">`,
     escapeHtml(t.name || '—'),
@@ -2845,7 +2937,7 @@ const TAB_LOADERS = {
   // renderer runs BEFORE its HTML is in the document, so an in-renderer load saw no `#fpWrap`,
   // bailed out, and the panel sat on "Loading feature registry..." for ever. Every other
   // server-backed panel here registers a loader for the same reason.
-  'features-plans': async () => { await loadFeatureMatrix(); },
+  'features-plans': async () => { await loadFeatureMatrix(); await loadPlanPaymentLinks(); },
   // Same reason as the loaders above: the renderer runs before its HTML is in the document, so the
   // round-robin load registers here and runs against a #rrContent that already exists.
   'round-robin': async () => { await loadRoundRobinTab(); },

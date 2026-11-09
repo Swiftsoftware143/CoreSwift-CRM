@@ -1024,6 +1024,9 @@ async function openUpgradeModal() {
           ${features.map(f => `<li class="check">✓ ${escapeHtml(f)}</li>`).join('')}
         </ul>
         ${isCurrent ? '' : `<button class="btn btn-primary btn-sm" data-request-plan="${i}" style="margin-top:10px">Request this plan</button>`}
+        ${(!isCurrent && /^https:\/\/[^\s"']+$/i.test(String(p.checkout_url || '').trim()))
+          ? `<a class="btn btn-secondary btn-sm" data-pay-link="${i}" href="${escapeHtml(String(p.checkout_url).trim())}" target="_blank" rel="noopener" style="margin-top:8px;display:inline-block">Open payment page</a>`
+          : ''}
       </div>`;
     });
     plansHtml += '</div>';
@@ -1032,7 +1035,17 @@ async function openUpgradeModal() {
     // every tenant token (t_8d91f70c) -- so a per-plan press could never complete a change. It used
     // to render with no handler at all (kanban t_fa43f3e8). The comparison is informational and
     // CoreSwift assigns the plan to the workspace (PUT /api/admin/tenants/:id/plan).
-    plansHtml += '<p style="color:var(--text-secondary);font-size:13px;margin-top:14px;text-align:center">Plan changes are made by CoreSwift for your workspace. Press <strong>Request this plan</strong> and it reaches our team.</p>';
+    // 2026-11-08: a plan the operator has given a hosted payment page (`plans.checkout_url`) ALSO
+    // shows that page as a second door. Nothing about it runs on this installation -- the buyer pays
+    // on the operator's own page and the workspace is switched on by hand -- which is exactly why the
+    // request button stays first and stays wired. If the page does not open, the request still works.
+    var anyPayLink = plans.some(p => /^https:\/\/[^\s"']+$/i.test(String(p.checkout_url || '').trim())
+      && String(p.id) !== String(STATE.planId));
+    plansHtml += '<p style="color:var(--text-secondary);font-size:13px;margin-top:14px;text-align:center">'
+      + (anyPayLink
+        ? 'A plan with a payment page can be paid for now: <strong>Open payment page</strong> takes you to our own secure checkout, and your workspace is switched onto the plan once the payment lands. Prefer a hand-off from our team? Press <strong>Request this plan</strong>.'
+        : 'Plan changes are made by CoreSwift for your workspace. Press <strong>Request this plan</strong> and it reaches our team.')
+      + '</p>';
     plansHtml += '<p id="planRequestNote" data-plan-request-note style="display:none;color:var(--success);font-size:13px;margin-top:8px;text-align:center"></p>';
     document.querySelector('#modalContainer .modal-body').innerHTML = plansHtml;
     // Wire the request buttons AFTER the markup exists (the pane is rebuilt on every open, so a
