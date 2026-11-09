@@ -508,6 +508,149 @@ pub async fn send_branding_preview_email(
     send_template_email(db, tenant_id, to, PREVIEW_TEMPLATE_TYPE, &vars).await
 }
 
+/// The operator alert's two bodies, built from the asker's own words.
+///
+/// Split out so the escaping is testable without a database. The TEXT part keeps the words exactly
+/// as typed (a human reads them); the HTML part escapes `& < > " '`, so no word of a stranger's
+/// message can inject markup into the operator's inbox.
+fn support_alert_bodies(
+    who: &str,
+    reply_to: &str,
+    subject_line: &str,
+    message: &str,
+) -> (String, String) {
+    let esc = |s: &str| {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&#39;")
+    };
+    let text = format!(
+        "{who} wrote to support.\n\n\
+         Subject: {subject_line}\n\
+         Reply to: {reply_to}\n\n\
+         {message}\n\n\
+         Answer it in the admin console (Support -> Tickets) and the asker is mailed your reply.\n"
+    );
+    let html = format!(
+        "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
+         <p><strong>{}</strong> wrote to support.</p>\
+         <p>Subject: <strong>{}</strong></p>\
+         <p>Reply to: <strong>{}</strong></p>\
+         <pre style=\"white-space:pre-wrap;font-family:inherit\">{}</pre>\
+         <p>Answer it in the admin console (Support &rarr; Tickets) and the asker is mailed your reply.</p>\
+         </body></html>",
+        esc(who),
+        esc(subject_line),
+        esc(reply_to),
+        esc(message),
+    );
+    (text, html)
+}
+
+/// Tell the OPERATOR that somebody wrote to support (2026-11-09).
+///
+/// WHY THIS EXISTS (measured live on the sibling apps the same day): `POST /api/public/support-request`
+/// — the contact page's form, the door a LOCKED-OUT customer has — validated the input, filed ONE
+/// ticket and answered 201 "Your message is with our team" while queueing ZERO mail. The request
+/// waited in a console nobody had been told to open, so the person who cannot sign in was the person
+/// nobody answered. IncentiveSwift, WorkflowSwift, ADASwift, MissedCall and FunnelSwift closed the
+/// identical gap on the same day; this is CoreSwift's half.
+///
+/// Destination = the operator's own `operator_alert_email` (`admin_settings.email`, set from the
+/// console's Email Provider card). An unset address sends nothing: this code never invents a
+/// mailbox. Sent through the PLATFORM mail transport explicitly, never a workspace's own identity,
+/// so the alert still arrives when a workspace's mail server is the broken thing. The asker's words
+/// are HTML-escaped before they enter the operator's inbox, and the attempt is recorded in the
+/// app's one send log (`outbound_messages`, with NO workspace) so the panel can answer "did the
+/// provider take it?" instead of this function's opinion.
+///
+/// Best effort by design: the ticket row is already the record, so a failure is logged by the caller
+/// and never turns a filed request into an error page.
+pub async fn send_support_request_operator_alert(
+    db: &PgPool,
+    who: &str,
+    reply_to: &str,
+    subject_line: &str,
+    message: &str,
+) -> Result<(), String> {
+    let Some(to) = crate::communications::platform_mail_config::operator_alert_email(db).await
+    else {
+        // Nothing configured is a normal state, not a failure: no mailbox is invented.
+        return Ok(());
+    };
+    let Some(transport) = crate::communications::platform_mail_config::resolved(db).await else {
+        return Err(
+            "the platform mail transport is not configured, so the operator alert was not sent"
+                .to_string(),
+        );
+    };
+
+    let who = if who.trim().is_empty() {
+        "A customer"
+    } else {
+        who.trim()
+    };
+    let subject = format!("A support request needs an answer: {}", subject_line.trim());
+    let (text, html) = support_alert_bodies(who, reply_to, subject_line, message);
+
+    // Recorded with `tenant_id` NULL: this alert belongs to no workspace. The row is what the
+    // Communications Log shows, so the send is auditable like every other mail this app sends.
+    let msg_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, is_html, status)
+         VALUES ($1, NULL, 'email', $2, $3, $4, false, 'queued')",
+    )
+    .bind(msg_id)
+    .bind(&to)
+    .bind(&subject)
+    .bind(&text)
+    .execute(db)
+    .await
+    .map_err(|e| format!("could not record the operator alert: {e}"))?;
+
+    // The platform transport is named explicitly (never resolved per workspace). `Uuid::nil()` is
+    // bookkeeping only: the message belongs to no workspace.
+    let cfg = crate::communications::providers::platform_send_config(
+        Uuid::nil(),
+        msg_id,
+        &to,
+        &subject,
+        &text,
+        Some(&html),
+        &transport.mail(),
+    );
+    let outcome = crate::communications::providers::deliver(&cfg).await;
+    if let Err(e) = crate::communications::providers::record_attempt(db, msg_id, &outcome).await {
+        tracing::error!(msg = %msg_id, error = %e, "failed to record the support-request operator alert");
+    }
+    if outcome.ok {
+        tracing::info!(
+            msg = %msg_id,
+            to = %to,
+            "support-request operator alert accepted by the provider"
+        );
+        return Ok(());
+    }
+
+    // No workspace owns this row, so the queue can never retry it (the worker retires a NULL-tenant
+    // row): close it out here with the provider's own words rather than leave a retry that cannot run.
+    if let Err(e) = sqlx::query(
+        "UPDATE outbound_messages SET status = 'failed', scheduled_at = NULL \
+          WHERE id = $1 AND status = 'queued'",
+    )
+    .bind(msg_id)
+    .execute(db)
+    .await
+    {
+        tracing::error!(msg = %msg_id, error = %e, "failed to close out the support-request operator alert row");
+    }
+    Err(outcome
+        .error
+        .unwrap_or_else(|| "the provider refused the operator alert".to_string()))
+}
+
 // ---- Data types ----
 
 #[derive(Debug, sqlx::FromRow)]
@@ -889,5 +1032,35 @@ mod branding_fields_tests {
             assert!(f.contains(&"brand_name"), "{t} is missing brand_name");
             assert!(f.contains(&"logo_url"), "{t} is missing logo_url");
         }
+    }
+}
+
+#[cfg(test)]
+mod support_alert_tests {
+    use super::support_alert_bodies;
+
+    /// The asker is a STRANGER writing to a public form: nothing they type may become markup in
+    /// the operator's inbox, while the text part still reads exactly as they wrote it.
+    #[test]
+    fn the_askers_words_are_escaped_in_the_html_part_only() {
+        let message = "Hi <script>alert('x')</script> & \"quoted\"";
+        let (text, html) = support_alert_bodies(
+            "Probe <b>",
+            "probe@example.invalid",
+            "Cannot <sign> in",
+            message,
+        );
+        assert!(
+            text.contains("<script>"),
+            "the text part keeps the words as typed: {text}"
+        );
+        assert!(
+            !html.contains("<script>"),
+            "no injected tag in the html part: {html}"
+        );
+        assert!(html.contains("&lt;script&gt;"), "{html}");
+        assert!(html.contains("&amp;"), "{html}");
+        assert!(html.contains("&#39;"), "{html}");
+        assert!(!html.contains("Probe <b>"), "{html}");
     }
 }

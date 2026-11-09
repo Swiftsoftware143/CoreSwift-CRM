@@ -158,6 +158,20 @@ pub async fn update_config(
         None => platform::field(&existing, "from_name").unwrap_or_default(),
     };
 
+    // The OPERATOR's own alert address (2026-11-09): where "a customer wrote to support" alerts go.
+    // Not a credential — a destination — so it is stored in the clear and served back by the panel.
+    // Omitted keeps the stored address (a provider save cannot silently wipe where alerts go);
+    // an explicit empty string clears it, and an unset address simply sends no alerts.
+    let operator_alert_email = match body_str(&body, "operator_alert_email") {
+        Some(addr) => addr,
+        None => platform::field(&existing, "operator_alert_email").unwrap_or_default(),
+    };
+    if !operator_alert_email.is_empty() && !platform::plausible_address(&operator_alert_email) {
+        return Err(AppError::BadRequest(format!(
+            "'{operator_alert_email}' is not an email address — that is where support-request alerts would go."
+        )));
+    }
+
     // The credential precedence, in one place: absent or masked = keep what is stored (re-sealing
     // the same plaintext below), empty = clear, anything else = the new credential.
     let stored_key = platform::field(&existing, "api_key").unwrap_or_default();
@@ -188,13 +202,20 @@ pub async fn update_config(
         "api_key": api_key,
         "from_address": from_address,
         "from_name": from_name,
+        "operator_alert_email": operator_alert_email,
         "updated_at": chrono::Utc::now().to_rfc3339(),
     });
     let updated_by = admin_email(&state.db, &claims.sub).await;
     if let Some(obj) = doc.as_object_mut() {
         // An empty field is "not configured here", not an empty string in the row: leave it out so
         // the environment fallback is what a reader sees, and so the row reads honestly.
-        for key in ["api_url", "api_key", "from_address", "from_name"] {
+        for key in [
+            "api_url",
+            "api_key",
+            "from_address",
+            "from_name",
+            "operator_alert_email",
+        ] {
             let empty = obj
                 .get(key)
                 .and_then(|v| v.as_str())

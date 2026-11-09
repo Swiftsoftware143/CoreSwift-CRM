@@ -411,6 +411,20 @@ pub async fn public_support_request(
     .fetch_one(&s.db)
     .await?;
 
+    // TELL THE OPERATOR (2026-11-09). The row above is the record the queue reads; this is the
+    // notification that makes anyone read it. Until it existed a locked-out customer's only way back
+    // in was a console nobody had been told to open. Best effort by design: the ticket is already
+    // written, so a mail failure is logged and the 201 kept (never lose a filed request to a mailer).
+    if let Err(e) =
+        crate::email::send_support_request_operator_alert(&s.db, &name, &email, &subject, &message)
+            .await
+    {
+        tracing::warn!(
+            ticket = %ticket_id,
+            "public support request operator alert was not sent: {e}"
+        );
+    }
+
     Ok((
         StatusCode::CREATED,
         Json(json!({

@@ -2090,6 +2090,10 @@ function renderSystemEmail(d) {
       ? 'A key is saved (' + (cfg.api_key_len === null || cfg.api_key_len === undefined ? 'length unknown' : cfg.api_key_len + ' characters') + '). Leave the dots to keep it, or clear the field to remove it.'
       : 'No key saved here — the server environment is carrying mail.') + '</div></div>';
   html += '<div class="form-group"><label>Send a test to</label><input type="text" id="se_test_to" value="" placeholder="' + escapeHtmlAttr(STATE.user && STATE.user.email ? STATE.user.email : 'you@yourdomain.com') + '"><div class="form-hint">A real message is sent and recorded in the Communications Log. Empty = your own account address.</div></div>';
+  // 2026-11-09: the destination for "a customer wrote to support" alerts. The public contact page
+  // files the request into the ticket queue either way; without an address here nobody is TOLD about
+  // it, which is exactly the state a locked-out customer cannot escape from. Empty = no alert sent.
+  html += '<div class="form-group"><label>Operator alert address</label><input type="text" id="se_operator_alert_email" value="' + escapeHtmlAttr(cfg.operator_alert_email || '') + '" placeholder="you@yourcompany.com"><div class="form-hint">Where a support request from the public contact page is emailed to you. Leave empty and no alert is sent — the request still lands in Support &rarr; Tickets.</div></div>';
   html += '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
     '<button class="btn btn-primary" onclick="saveSystemEmail()">💾 Save credential</button>' +
     '<button class="btn btn-secondary" onclick="sendSystemEmailTest()">✉️ Send test email</button>' +
@@ -2106,7 +2110,8 @@ async function saveSystemEmail() {
     api_url: v('se_api_url'),
     from_name: v('se_from_name'),
     from_address: v('se_from_address'),
-    api_key: v('se_api_key')
+    api_key: v('se_api_key'),
+    operator_alert_email: v('se_operator_alert_email')
   };
   try {
     const r = await API.put('/admin/email-config', payload);

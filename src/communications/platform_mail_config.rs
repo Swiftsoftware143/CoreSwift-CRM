@@ -65,6 +65,17 @@ pub fn field(cfg: &Value, key: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+/// Is this a destination the operator-alert path may mail? Deliberately looser than any mailer —
+/// it refuses only what could never be an address, so a perfectly valid one is never rejected here.
+pub fn plausible_address(addr: &str) -> bool {
+    let a = addr.trim();
+    !a.is_empty()
+        && a.contains('@')
+        && !a.starts_with('@')
+        && !a.ends_with('@')
+        && !a.chars().any(char::is_whitespace)
+}
+
 /// Is this a provider the platform transport can carry? (Never a silent fallback: the panel's
 /// select is built from `providers_json`, and a value from anywhere else is refused by name.)
 pub fn is_supported_provider(name: &str) -> bool {
@@ -271,6 +282,21 @@ pub async fn stored(pool: &PgPool) -> Option<Value> {
     Some(row)
 }
 
+/// The operator's own alert address, stored beside the transport in the SAME `admin_settings.email`
+/// row (`operator_alert_email`, set from the console's Email Provider card).
+///
+/// UNSET is a normal state and answers `None`: this code never invents a mailbox. A stored value
+/// that could not be an address is treated as unset too — a send to it could only fail, and the
+/// write path refuses such a value before it is ever stored.
+///
+/// WHY IT LIVES HERE: the person who can answer a support request is the operator, and the address
+/// they can actually read is the one they entered in the panel that already edits the sender
+/// (2026-11-09). Beside the transport means one save surface, one row, and no second place to drift.
+pub async fn operator_alert_email(pool: &PgPool) -> Option<String> {
+    let row = stored(pool).await?;
+    field(&row, "operator_alert_email").filter(|a| plausible_address(a))
+}
+
 /// Which store carried the resolved transport. Reported on every surface that must SAY where mail
 /// is going, so "the panel says configured" and "the send path has a credential" cannot disagree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -435,6 +461,8 @@ pub fn masked_config(row: &Value) -> Value {
         "api_url": field(row, "api_url"),
         "from_address": field(row, "from_address"),
         "from_name": field(row, "from_name"),
+        // Not a credential: served back in full so the panel can show what it edits.
+        "operator_alert_email": field(row, "operator_alert_email"),
         "api_key": if key.is_some() { MASK } else { "" },
         "api_key_set": key.is_some(),
         "api_key_len": key.map(|k| k.chars().count()),

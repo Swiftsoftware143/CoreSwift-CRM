@@ -349,6 +349,25 @@ pub fn platform_test_config(
     body: &str,
     mail: &PlatformMail,
 ) -> DeliveryConfig {
+    // The operator's own diagnostic test body is plain text; it renders no template.
+    platform_send_config(tenant_id, msg_id, to, subject, body, None, mail)
+}
+
+/// A config carrying the PLATFORM transport for an arbitrary message — `body` is the plain-text
+/// part, `html` an OPTIONAL separate HTML part (the operator's support alert carries both).
+///
+/// Same reasoning as [`platform_test_config`]: the platform credential is named explicitly, never
+/// resolved from a workspace, so an alert arrives even when a workspace's own mail server is the
+/// broken thing. Everything downstream is the one delivery path the worker and every send use.
+pub fn platform_send_config(
+    tenant_id: Uuid,
+    msg_id: Uuid,
+    to: &str,
+    subject: &str,
+    body: &str,
+    html: Option<&str>,
+    mail: &PlatformMail,
+) -> DeliveryConfig {
     DeliveryConfig {
         tenant_id,
         msg_id,
@@ -356,8 +375,9 @@ pub fn platform_test_config(
         to: to.to_string(),
         subject: Some(subject.to_string()),
         body: body.to_string(),
-        // The operator's own diagnostic test body is plain text; it renders no template.
+        // `body` stays the TEXT part; the markup, when there is any, rides in `html` below.
         is_html: false,
+        html: html.filter(|h| !h.is_empty()).map(str::to_string),
         // The platform transport this app carries is the Mailgun arm; the provider field on the
         // admin row is informational (see `platform_mail_config::resolved`).
         email_provider: "mailgun".to_string(),
@@ -418,6 +438,10 @@ pub struct DeliveryConfig {
     /// (kanban t_feab8aff): a row holding `<h2>Welcome to CoreSwift CRM…` was sent and carried in
     /// the text field. The flag lets the Mailgun arm attach the same bytes as the `html` part too.
     pub is_html: bool,
+    /// A SEPARATE HTML part to attach beside `body` (which is then the plain-text part). The
+    /// operator's support alert has both: the asker's words as text, and the same words escaped as
+    /// markup. `None` leaves every existing send path byte-for-byte as it was.
+    pub html: Option<String>,
     pub email_provider: String,
     pub sms_provider: String,
     /// The transport this attempt will use (tenant BYOK / platform / none).
@@ -594,6 +618,9 @@ async fn deliver_via_mailgun(cfg: &DeliveryConfig) -> DeliveryOutcome {
     params.insert("text", cfg.body.as_str());
     if cfg.is_html {
         params.insert("html", cfg.body.as_str());
+    } else if let Some(html) = cfg.html.as_deref().filter(|h| !h.is_empty()) {
+        // A caller that built a real HTML part beside its text body (the operator support alert).
+        params.insert("html", html);
     }
     if let Some(reply_to) = cfg.reply_to.as_deref() {
         params.insert("h:Reply-To", reply_to);
@@ -1022,6 +1049,7 @@ pub async fn load_delivery_config(
         subject,
         body: body.to_string(),
         is_html,
+        html: None,
         email_provider: field("email_provider").unwrap_or_else(|| "mailgun".to_string()),
         sms_provider: field("sms_provider").unwrap_or_else(|| "telnyx".to_string()),
         transport: resolved.transport,
@@ -1187,6 +1215,7 @@ mod tests {
             subject: Some("Welcome to CoreSwift CRM!".to_string()),
             body: "body".to_string(),
             is_html: false,
+            html: None,
             email_provider: "mailgun".to_string(),
             sms_provider: "telnyx".to_string(),
             transport: TransportSource::Platform,
