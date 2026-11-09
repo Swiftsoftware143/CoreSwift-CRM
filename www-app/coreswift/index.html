@@ -1533,6 +1533,21 @@ function escapeHtmlAttr(str) {
 }
 
 // ========== ASYNC TAB LOADERS (fetch real data) ==========
+// Harness identities (fleet walkers + the tenancy canary) live on RESERVED addresses — RFC 2606 /
+// 6761 domains that can never receive mail — and the send path already suppresses them at source.
+// They are machinery, not customers, so the operator's People list hides them by default with an
+// always-available Show control (the same contract the sibling apps' account lists ship).
+let CS_SHOW_TEST_USERS = false;
+function csIsTestIdentity(email) {
+  const e = String(email || '').trim().toLowerCase();
+  if (!e || e.indexOf('@') < 1) return false;
+  const at = e.lastIndexOf('@');
+  const local = e.slice(0, at);
+  const domain = e.slice(at + 1);
+  if (domain === 'swiftsoftware.dev' || domain.endsWith('.swiftsoftware.dev')) return local.indexOf('probe') === 0;
+  if (domain === 'example.com' || domain === 'example.net' || domain === 'example.org') return true;
+  return /\.(invalid|test|example|localhost)$/.test(domain);
+}
 const TAB_LOADERS = {
   // Same rule as every loader below: the renderer runs before its HTML is in the document, so the
   // audit load registers here and runs against an #auditContent that already exists.
@@ -1842,11 +1857,21 @@ const TAB_LOADERS = {
   'users': async () => {
     // GET /api/users was never registered (404). People across all tenants live next to the
     // tenant list, under the platform-admin gate: GET /api/admin/users.
+    // HARNESS TRAFFIC IS NOT A CUSTOMER (measured live 2026-11-09 on this install): the fleet's
+    // walkers and the tenancy canary mint REAL rows on reserved addresses, and this screen listed
+    // "Tenancy Canary A/B" (probe-canary-*@swiftsoftware.dev) among the people as if they had
+    // signed up. Every sibling app hides harness rows from the operator's list (FunnelSwift
+    // `?include_probe`, ADASwift, MissedCall, WorkflowSwift, IncentiveSwift), so the count the
+    // owner reads here disagreed with the one he reads everywhere else. The filter lives in the
+    // console because this app's People list is the only reader; a Show/Hide control keeps the
+    // hidden rows auditable for support instead of losing them.
     const el = document.getElementById('usersTable');
     if (!el) return;
     try {
       const d = await API.get('/admin/users?per_page=50');
-      const users = (d && d.users) || [];
+      const allUsers = (d && d.users) || [];
+      const testUsers = allUsers.filter(u => csIsTestIdentity(u.email));
+      const users = CS_SHOW_TEST_USERS ? allUsers : allUsers.filter(u => !csIsTestIdentity(u.email));
       const rows = users.slice(0, 50).map(u => [
         escapeHtml(u.name || '—'),
         escapeHtml(u.email || '—'),
@@ -1854,10 +1879,16 @@ const TAB_LOADERS = {
         escapeHtml(u.tenant_name || '—'),
         escapeHtml(u.created_at ? new Date(u.created_at).toLocaleDateString() : '—')
       ]);
+      const note = testUsers.length
+        ? '<p style="font-size:12px;color:var(--text-secondary);margin:6px 2px">' + testUsers.length
+          + ' test identit' + (testUsers.length === 1 ? 'y is' : 'ies are') + ' hidden — these are harness rows on reserved addresses, not customers. '
+          + '<button class="btn btn-ghost btn-xs" onclick="CS_SHOW_TEST_USERS=!CS_SHOW_TEST_USERS;TAB_LOADERS[\'users\']();">'
+          + (CS_SHOW_TEST_USERS ? 'Hide test identities' : 'Show ' + testUsers.length + ' test identities') + '</button></p>'
+        : '';
       el.innerHTML = dataTable(
         ['Name','Email','Role','Workspace','Created'], rows,
         'No users yet.'
-      );
+      ) + note;
     } catch(e) {
       el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Users: ${escapeHtml(e.message)}</p></div></div>`;
     }
