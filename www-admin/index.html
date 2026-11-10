@@ -1370,6 +1370,103 @@ function placeholderPanel(title, desc, icon) {
   </div>`;
 }
 
+// ── Telnyx Admin (real panel, 2026-11-09) ────────────────────────────────────────────────
+// Replaces a placeholder screen. GET /api/telnyx/config, PUT /api/telnyx/config and
+// GET /api/telnyx/available already existed, so the console told the operator a key could be
+// configured while offering no field to paste it into. Every value rendered here is read back
+// from those routes — nothing on this screen is a literal.
+function telnyxAdminShell() {
+  return pageHeader('Telnyx Admin', 'The platform-level Telnyx transport behind SMS and voice',
+    '<button class="btn btn-secondary btn-sm" onclick="loadTelnyxAdmin()">🔄 Reload</button>') +
+    '<div id="telnyxWrap"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading the Telnyx configuration…</div></div>';
+}
+
+async function loadTelnyxAdmin() {
+  const wrap = document.getElementById('telnyxWrap');
+  if (!wrap) return;                 // the tab was switched away mid-load
+  wrap.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading the Telnyx configuration…</div>';
+  try {
+    renderTelnyxAdmin(await API.get('/telnyx/config'));
+  } catch (e) {
+    wrap.innerHTML = '<div class="card" style="text-align:center;padding:40px">' +
+      '<p style="color:var(--error)">Failed to load the Telnyx configuration: ' + escapeHtml(e.message) + '</p>' +
+      '<button class="btn btn-secondary btn-sm" onclick="loadTelnyxAdmin()">Retry</button></div>';
+  }
+}
+
+function renderTelnyxAdmin(d) {
+  const wrap = document.getElementById('telnyxWrap');
+  if (!wrap) return;
+  const mode = (d && d.mode) || 'none';
+  const badge = mode === 'byok' ? '<span class="badge badge-success">● this account\'s own key</span>'
+    : (mode === 'global' ? '<span class="badge badge-primary">● platform key</span>'
+    : '<span class="badge badge-error">● not configured</span>');
+  const row = (label, value, hint) =>
+    '<div class="config-item"><div class="config-info"><div class="config-label">' + label + '</div>' +
+    (hint ? '<div class="config-desc">' + hint + '</div>' : '') + '</div>' +
+    '<div style="font-size:.86rem;color:var(--text-primary);text-align:right;word-break:break-all">' + value + '</div></div>';
+
+  let html = '<div class="card" style="margin-bottom:20px"><div class="card-header">Provider status</div><div class="card-body"><div class="config-list">';
+  html += row('Status', badge, mode === 'none'
+    ? 'No key is stored, so SMS and voice calls cannot be made.'
+    : 'Calls authenticate with the key described below.');
+  html += row('Stored key', escapeHtml((d && d.api_key_masked) || '—'),
+    'Shown masked only. The stored secret is never returned in full.');
+  html += row('Messaging profile', escapeHtml((d && d.messaging_profile_id) || '—'),
+    'The Telnyx messaging profile SMS is sent under.');
+  html += row('Voice profile', escapeHtml((d && d.profile_id) || '—'),
+    'The Telnyx connection used for voice.');
+  if (d && d.message) html += row('Note', escapeHtml(d.message), '');
+  html += '</div></div></div>';
+
+  html += '<div class="card"><div class="card-header">Save a key</div><div class="card-body">' +
+    '<p class="config-desc" style="margin-bottom:14px">Paste the Telnyx API key for this account. It is encrypted before it is stored.</p>' +
+    '<div class="form-group" style="margin-bottom:12px"><label class="form-label">API key</label>' +
+    '<input class="form-input" id="tx_api_key" type="password" placeholder="KEY…" autocomplete="off" value=""></div>' +
+    '<div class="form-group" style="margin-bottom:12px"><label class="form-label">Messaging profile ID (optional)</label>' +
+    '<input class="form-input" id="tx_msg_profile" placeholder="optional" value="' + escapeHtml((d && d.messaging_profile_id) || '') + '"></div>' +
+    '<div class="form-group" style="margin-bottom:16px"><label class="form-label">Voice profile / connection ID (optional)</label>' +
+    '<input class="form-input" id="tx_profile" placeholder="optional" value="' + escapeHtml((d && d.profile_id) || '') + '"></div>' +
+    '<button class="btn btn-primary" onclick="saveTelnyxAdmin()">Save configuration</button> ' +
+    '<button class="btn btn-secondary" onclick="loadTelnyxNumbers()">Show numbers on this account</button>' +
+    '<div id="txNumbers" style="margin-top:16px"></div>' +
+    '</div></div>';
+  wrap.innerHTML = html;
+}
+
+async function saveTelnyxAdmin() {
+  const v = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const key = v('tx_api_key');
+  if (!key) { toast('Paste the Telnyx API key first — a blank save would store an empty secret.', 'warning'); return; }
+  try {
+    await API.put('/telnyx/config', {
+      api_key: key,
+      profile_id: v('tx_profile') || null,
+      messaging_profile_id: v('tx_msg_profile') || null
+    });
+    toast('Telnyx configuration saved.', 'success');
+    loadTelnyxAdmin();
+  } catch (e) {
+    toast('Save failed: ' + e.message, 'error');
+  }
+}
+
+async function loadTelnyxNumbers() {
+  const box = document.getElementById('txNumbers');
+  if (!box) return;
+  box.innerHTML = '<div style="color:var(--text-muted)">Reading the numbers on this account…</div>';
+  try {
+    const d = await API.get('/telnyx/available');
+    const items = (d && d.items) || [];
+    box.innerHTML = items.length
+      ? '<div class="config-label" style="margin-bottom:8px">Numbers on this account</div><ul style="margin:0;padding-left:18px">' +
+        items.map(n => '<li>' + escapeHtml(n.phone_number || n.number || JSON.stringify(n)) + '</li>').join('') + '</ul>'
+      : '<div style="color:var(--text-muted)">The provider returned no numbers.</div>';
+  } catch (e) {
+    box.innerHTML = '<div style="color:var(--error)">Could not read numbers: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
 function pageHeader(title, desc, actions) {
   return `<div class="page-header">
     <h2>${title}</h2>
@@ -1824,7 +1921,10 @@ const TAB_RENDERERS = {
   // doing. Everything it renders now comes from a real route, and the customer console already
   // carries the same replacement (monitoringShell, www-app/coreswift).
   'monitoring': () => monitoringShell(),
-  'telnyx-admin': () => placeholderPanel('Telnyx Admin', 'Configure Telnyx provider settings for all tenants.', '☎️'),
+  // Telnyx Admin is a REAL panel since 2026-11-09. It rendered a placeholder while
+  // GET/PUT /api/telnyx/config and GET /api/telnyx/available were already live, so the operator
+  // had no way to paste the key the console described. See telnyxAdminShell() below.
+  'telnyx-admin': () => telnyxAdminShell(),
   // Platform mail transport (kanban t_6a330ed2). The form is rendered by loadSystemEmail() from
   // GET /api/admin/email-config, so what is on screen is what the database holds — the renderer
   // below only lays out the shell.
@@ -2932,6 +3032,9 @@ const TAB_LOADERS = {
   // Same reason as the two above: the renderer runs before its HTML exists, so the load registers
   // here and runs against a #sysEmailWrap that is already in the document.
   'system-email': async () => { await loadSystemEmail(); },
+  // Same reason: the Telnyx renderer runs before its HTML exists, so the load registers here and
+  // runs against a #telnyxWrap already in the document.
+  'telnyx-admin': async () => { await loadTelnyxAdmin(); },
   // Same reason as the three above: the Profile renderer runs before its HTML exists, so the load
   // registers here and runs against a #profileWrap already in the document.
   'profile': async () => { await loadProfileTab(); },
