@@ -4707,6 +4707,33 @@ async function loadBrandPreview() {
   }
 }
 
+// POST /api/account/branding/preview — mail the SIGNED-IN operator this workspace's own branded
+// message. There is no recipient field on the wire (the server reads the address off the caller's
+// own row), so it can never be pointed at a third party and cannot be used as a relay. The iframe
+// above proves what the MAILER builds; only a real inbox proves what a customer's mail client
+// RENDERS, and until this button existed the operator had no way to ask for that from the panel
+// (the endpoint shipped with no UI). The server answers {sent, to, detail} — a reserved test
+// address answers sent:false with a plain sentence, which is a result to show, not a failure.
+async function sendBrandingPreview() {
+  const out = document.getElementById('brandSendStatus');
+  const btn = document.getElementById('brandSendBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending...'; }
+  try {
+    const d = await API.post('/account/branding/preview');
+    if (out) {
+      const ok = !!(d && d.sent);
+      out.textContent = ok
+        ? ('Sent to ' + (d.to || 'your address') + ' — check that inbox to see exactly what a recipient gets.')
+        : ((d && d.detail) || 'No preview was sent.');
+      out.style.color = ok ? '#166534' : '#92400e';
+    }
+  } catch (e) {
+    if (out) { out.textContent = 'Could not send the preview: ' + planGateText(e); out.style.color = '#991b1b'; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Email it to me'; }
+  }
+}
+
 async function loadBrandingTab() {
   const wrap = document.getElementById('brandPane');
   if (!wrap) return;
@@ -4766,6 +4793,11 @@ async function loadBrandingTab() {
         '<div id="brandPreviewSubject" style="font-weight:600;font-size:13px;color:var(--text-primary,inherit);margin:0 0 8px"></div>' +
         '<iframe id="brandPreviewFrame" sandbox="" title="Email preview" style="width:100%;max-width:560px;height:420px;border:1px solid var(--border);border-radius:12px;background:#fff"></iframe>' +
         '<div id="brandPreviewNote" class="form-hint" style="margin-top:6px"></div>' +
+        '<div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
+          '<button class="btn btn-secondary btn-sm" data-ops="branding-preview-send" id="brandSendBtn" onclick="sendBrandingPreview()">Email it to me</button>' +
+          '<span id="brandSendStatus" class="form-hint" style="margin:0"></span>' +
+        '</div>' +
+        '<div class="form-hint" style="margin-top:6px">Sends this exact message to your own signed-in address, so you can see it in a real inbox &mdash; the frame above proves what the mailer builds, an inbox proves what a mail client renders.</div>' +
       '</div>' +
     '</div>',
     '<button class="btn btn-primary" data-ops="branding-save" onclick="saveBranding()">Save branding</button>'
@@ -6137,7 +6169,7 @@ window.appGuidePages = {
   checklists: { title: 'Checklists', desc: 'Step lists attached to contacts or deals, so a process is followed.', actions: ['Create a checklist and attach it'] },
   'round-robin': { title: 'Round Robin', desc: 'Distributes new leads evenly across your team.', actions: ['Choose the team and the rotation'] },
   profile: { title: 'Profile', desc: 'Your own name, company, password and picture.', actions: ['Update your name and company and save', 'Upload a picture (PNG/JPEG/GIF/WebP, up to 2 MB)', 'Change your password (your current one is required)'] },
-  'email-branding': { title: 'Email Branding', desc: 'Your logo and display name on every transactional email this account sends. Leave it blank and mail keeps the CoreSwift look.', actions: ['Upload a logo (PNG/JPEG/GIF/WebP, up to 2 MB)', 'Set a brand name and colour, then save'] },
+  'email-branding': { title: 'Email Branding', desc: 'Your logo and display name on every transactional email this account sends. Leave it blank and mail keeps the CoreSwift look.', actions: ['Upload a logo (PNG/JPEG/GIF/WebP, up to 2 MB)', 'Set a brand name and colour, then save', 'Press “Email it to me” to have the exact message sent to your own inbox'] },
   integrations: { title: 'Integration Center', desc: 'Connect the services this workspace uses, each with your own provider key (BYOK).', actions: ['Paste a provider key and save', 'Email integrations drive the mail you send'] },
   portfolio: { title: 'Portfolio Companies', desc: 'Advisory portfolios — one parent whose companies are managed together.', actions: ['Add a portfolio and its companies'] },
   tenants: { title: 'Tenants', desc: 'Every workspace on the platform, with a per-row checkbox, a Select probes picker and Delete selected to retire junk workspaces (the server refuses a protected row and shows why).', actions: ['Tick the workspaces to retire, or press Select probes to tick every probe/test workspace at once', 'Delete selected removes them with their data'] },
