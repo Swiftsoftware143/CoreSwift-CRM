@@ -71,6 +71,7 @@ pub mod tracked_links;
 pub mod webhook;
 pub mod webhooks;
 pub mod worker;
+pub mod workspaces;
 
 use axum::{
     http::{HeaderValue, StatusCode},
@@ -608,6 +609,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api", tickets::router(state.clone()))
         .nest("/api/widgets", support_widgets::router(state.clone()))
         .nest("/api/private-email", private_email::router(state.clone()))
+        .nest("/api/workspaces", workspaces::router(state.clone()))
         // Public redirect for tracked links (no auth)
         .nest("/track", tracked_links::public_router())
         // Mailgun inbound webhook (no auth — called by Mailgun)
