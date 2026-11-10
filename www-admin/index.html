@@ -506,7 +506,6 @@ async function loadPlanPaymentLinks() {
   }
   const rows = FP_PLANS.map(p => {
     const link = String(p.checkout_url || '').trim();
-    const price = (p.price_monthly != null && p.price_monthly !== '') ? p.price_monthly : '0';
     const state = !link
       ? '<span class="badge" style="background:#fef3c7;color:#92400e">not set</span>'
       : (/^https:\/\/[^\s"']+$/i.test(link)
@@ -514,7 +513,7 @@ async function loadPlanPaymentLinks() {
         : '<span class="badge" style="background:#fee2e2;color:#991b1b">not a secure link</span>');
     return '<tr>' +
       '<td><strong>' + escapeHtml(p.name || p.slug || '') + '</strong>' +
-        '<div style="font-size:11px;color:var(--text-muted)">$' + escapeHtml(String(price)) + '/mo</div></td>' +
+        '<div style="font-size:11px;color:var(--text-muted)">' + planPriceHtml(p, true) + '</div></td>' +
       '<td>' + state + '</td>' +
       '<td><input class="input" data-pay="' + escapeHtml(String(p.id)) + '" value="' + escapeHtml(link) +
         '" placeholder="https://buy.stripe.com/…" style="min-width:320px"></td>' +
@@ -1313,12 +1312,11 @@ async function openUpgradeModal() {
       // the workspace's OWN plan row decides the badge (STATE.planId from checkPlan); a name match can
       // badge two rows, and the plans[0] fallback badged Free for every tenant
       const isCurrent = String(p.id) === String(STATE.planId);
-      const price = p.price_monthly || p.price || 0;
       const features = planFeatureList(p.features);
       plansHtml += `<div class="plan-card${isCurrent?' current':''}">
         ${isCurrent ? '<span class="badge badge-primary plan-badge">Current</span>' : ''}
         <div class="plan-name">${escapeHtml(p.name)}</div>
-        <div class="plan-price">$${price}<span>/mo</span></div>
+        ${planPriceHtml(p)}
         <ul class="plan-features">
           ${features.map(f => `<li class="check">✓ ${escapeHtml(f)}</li>`).join('')}
         </ul>
@@ -3510,7 +3508,6 @@ const TAB_LOADERS = {
       if (plans.length > 0) {
         html = '<div class="plans-grid">';
         plans.forEach(p => {
-          const price = p.price_monthly || p.price || 0;
           // the ONE feature shape lives in planFeatureList() beside famList(); this tab's inline copy
           // moved onto it so both shells and every plan card render identically
           const features = planFeatureList(p.features);
@@ -3518,7 +3515,7 @@ const TAB_LOADERS = {
           // the admin-only Modules & Plans panel), so it could only ever be a lie on a real card.
           html += `<div class="plan-card">
             <div class="plan-name">${escapeHtml(p.name)}</div>
-            <div class="plan-price">$${price}<span>/mo</span></div>
+            ${planPriceHtml(p)}
             <ul class="plan-features">
               ${features.map(f => `<li class="check">✓ ${escapeHtml(f)}</li>`).join('')}
             </ul>
@@ -4975,6 +4972,24 @@ function planFeatureList(raw) {
   }
   return out.slice(0, 6);
 }
+// A plan's PRICE, on both terms. Every CoreSwift row carries a real `price_yearly` (measured live
+// 2026-11-10: Starter 290, Pro 290, Professional 790, Enterprise 1990, Agency 1490) yet every place
+// this console painted a price hard-coded "/mo" -- so an operator could not read the yearly figure a
+// customer is charged on any screen, and a plan priced yearly only read "$0/mo". One renderer, three
+// call sites, so the operator pane and the customer comparison can never disagree.
+function planPriceHtml(p, compact) {
+  const monthly = (p && p.price_monthly !== null && p.price_monthly !== undefined && p.price_monthly !== '')
+    ? p.price_monthly : ((p && p.price) || 0);
+  const yearly = Number((p && p.price_yearly) || 0);
+  const term = yearly > 0
+    ? '<span class="plan-term" data-plan-yearly="' + escapeHtml(String(yearly)) + '"' +
+      (compact ? ' style="margin-left:6px"' : ' style="display:block;font-size:.8rem;margin-top:2px;color:var(--text-secondary)"') +
+      '>$' + escapeHtml(String(yearly)) + ' billed yearly</span>'
+    : '';
+  if (compact) return '$' + escapeHtml(String(monthly)) + '/mo' + term;
+  return '<div class="plan-price">$' + escapeHtml(String(monthly)) + '<span>/mo</span>' + term + '</div>';
+}
+
 function fh(v) { return escapeHtml(String(v === null || v === undefined || v === '' ? '—' : v)); }
 
 async function ctOpenTags(cid) {
@@ -6480,12 +6495,49 @@ function peiPaintSetup() {
     '</div>';
   if (!doms.length || !boxes.length) {
     html += '<div style="margin-top:10px;font-size:13px;line-height:1.6">' +
-      '<strong>To receive mail:</strong> add the domain and a mailbox in the workspace&rsquo;s own console ' +
-      '(Private Email tab on app.coreswiftcrm.com). Mailgun has to show the domain as Active first, ' +
-      'or inbound mail is rejected before it reaches this app.</div>';
+      '<strong>Set up receiving.</strong> Mailgun must show the domain as Active first, or inbound mail is rejected before it reaches this app.' +
+      '<div style="margin-top:10px"><strong>1. The domain you receive on</strong><br>' +
+      '<input id="peiDom" placeholder="swiftsoftware.net" style="margin:4px 6px 0 0">' +
+      '<input id="peiKey" placeholder="Mailgun API key (optional)" style="width:220px;margin:4px 6px 0 0">' +
+      '<button class="btn btn-primary btn-sm" id="peiAddDom">Add domain</button> <span id="peiDomMsg"></span></div>' +
+      '<div style="margin-top:10px"><strong>2. Addresses people write to</strong><br>' +
+      '<input id="peiLocal" placeholder="info" style="width:130px;margin:4px 6px 0 0">' +
+      '<button class="btn btn-primary btn-sm" id="peiAddBox">Add address</button> <span id="peiBoxMsg"></span>' +
+      '<div style="opacity:.75;margin-top:4px">One per address — info, support, sales. All of them land in this one list, and each becomes a From choice when you reply.</div></div>' +
+      '</div>';
   }
   html += '</div>';
   el.innerHTML = html;
+  peiBindSetup();
+}
+
+function peiBindSetup() {
+  var ad = document.getElementById('peiAddDom');
+  if (ad) ad.onclick = async function () {
+    var dEl = document.getElementById('peiDom'), kEl = document.getElementById('peiKey'), m = document.getElementById('peiDomMsg');
+    var dom = (dEl && dEl.value || '').trim();
+    if (!dom) { m.textContent = 'Enter your domain'; return; }
+    this.disabled = true; m.textContent = 'Adding…';
+    try {
+      await API.post('/private-email/domains', { domain: dom, mailgun_api_key: (kEl && kEl.value || '').trim() || null });
+      m.textContent = 'Added'; await loadPrivateEmailTab();
+    } catch (e) { m.textContent = 'Failed: ' + ((e && e.message) || e); }
+    this.disabled = false;
+  };
+  var ab = document.getElementById('peiAddBox');
+  if (ab) ab.onclick = async function () {
+    var lEl = document.getElementById('peiLocal'), m = document.getElementById('peiBoxMsg');
+    var local = (lEl && lEl.value || '').trim();
+    var dom = (PEI.domains || [])[0];
+    if (!dom) { m.textContent = 'Add a domain first'; return; }
+    if (!local) { m.textContent = 'Enter an address, e.g. info'; return; }
+    this.disabled = true; m.textContent = 'Adding…';
+    try {
+      await API.post('/private-email/boxes', { domain_id: dom.id, local_part: local });
+      m.textContent = 'Added'; await loadPrivateEmailTab();
+    } catch (e) { m.textContent = 'Failed: ' + ((e && e.message) || e); }
+    this.disabled = false;
+  };
 }
 
 async function peiOpen(id) {
