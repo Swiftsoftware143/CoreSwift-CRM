@@ -756,6 +756,9 @@ const MENU = [
 
 const SETTINGS_MENU = [
   { id:'profile', icon:'👤', label:'Profile' },
+  // Workspaces (2026-11-11). The five /api/workspaces routes existed with no screen; the
+  // panel lives in this file's final section. Account-scoped, so it sits beside Profile.
+  { id:'workspaces', icon:'🗂️', label:'Workspaces' },
   { id:'integrations', icon:'🔌', label:'Integration Center' },
   // Tenant-side team management. roles[] hides the nav entry from a 'member': the API
   // answers 403 for any non-owner/admin token, so offering it would only dead-end.
@@ -8294,6 +8297,174 @@ TAB_LOADERS['bookings'] = loadBookingsTab;
   };
 })();
 
+// ── Workspaces: the names that organise this account ── (2026-11-11)
+// src/workspaces/mod.rs has answered five routes since migration 124 — GET/POST
+// /api/workspaces, PATCH/DELETE /api/workspaces/:id and POST /api/workspaces/:id/default —
+// and no console ever called one of them, so "an account can hold many workspaces" was
+// reachable only with a token and curl. This panel is that whole surface: list, add,
+// rename, choose the default, remove.
+//
+// Every rule is the SERVER's and is printed in the server's own words instead of being
+// restated here: one workspace always remains, a duplicate name is refused case-insensitively,
+// the very first workspace is created as the default, deleting the default promotes the oldest
+// remaining one, and a plan that declares `max_workspaces` refuses with its 402 upgrade
+// sentence (API.call puts that sentence on planMessage). A refusal is SHOWN in the panel —
+// never swallowed behind a green toast.
+const WS = { items: [], editing: null, busy: false };
+
+function wsShell() {
+  return pageHeader('Workspaces', 'The names that organise this account') +
+    '<div id="wsBody"><div class="loading-wrap"><div class="spinner"></div> Loading workspaces...</div></div>' +
+    '<br>' +
+    card('Add a workspace',
+      '<div class="form-group"><label>Workspace name</label>' +
+        '<input type="text" id="wsNewName" maxlength="120" placeholder="e.g. Miami office">' +
+        '<span class="form-hint">Up to 120 characters. Two workspaces in one account cannot share a name.</span></div>' +
+      '<div id="wsAddMsg" style="font-size:13px;margin-top:6px"></div>',
+      '<button class="btn btn-primary" id="wsAddBtn" onclick="wsCreate()">Add workspace</button>');
+}
+
+TAB_RENDERERS['workspaces'] = wsShell;
+TAB_LOADERS['workspaces'] = wsLoad;
+
+function wsSay(boxId, ok, text) {
+  const el = document.getElementById(boxId);
+  if (!el) return;
+  el.style.color = ok ? 'var(--success,#15803d)' : 'var(--danger,#b91c1c)';
+  el.textContent = text || '';
+}
+
+async function wsLoad() {
+  const body = document.getElementById('wsBody');
+  if (!body) return;
+  try {
+    const d = await API.get('/workspaces');
+    WS.items = (d && Array.isArray(d.workspaces)) ? d.workspaces : [];
+    wsRender();
+  } catch (e) {
+    body.innerHTML = card('Workspaces unavailable',
+      '<p style="color:var(--text-secondary);margin:0">' +
+      escapeHtml((e && e.message) ? e.message : String(e)) + '</p>');
+  }
+}
+
+function wsRender() {
+  const body = document.getElementById('wsBody');
+  if (!body) return;
+  if (!WS.items.length) {
+    body.innerHTML = card('No workspaces yet',
+      '<p style="margin:0;color:var(--text-secondary)">This account has no workspace row yet. Add one below and it becomes the default.</p>');
+    return;
+  }
+  let h = '<div class="table-wrap"><table><thead><tr>' +
+    '<th style="text-align:left">Workspace</th><th style="text-align:left">Default</th>' +
+    '<th style="text-align:right">Actions</th></tr></thead><tbody>';
+  WS.items.forEach(function (w) {
+    const id = escapeHtml(w.id);
+    const isDefault = !!w.is_default;
+    const nameCell = (WS.editing === w.id)
+      ? '<input type="text" id="wsRenameInput" maxlength="120" value="' + escapeHtml(w.name) + '" style="width:100%">'
+      : '<strong>' + escapeHtml(w.name) + '</strong>';
+    h += '<tr>' +
+      '<td>' + nameCell + '</td>' +
+      '<td>' + (isDefault
+        ? '<span class="badge badge-success">Default</span>'
+        : '<span style="color:var(--text-muted)">not default</span>') + '</td>' +
+      '<td style="text-align:right;white-space:nowrap">' +
+        (WS.editing === w.id
+          ? '<button class="btn btn-primary btn-sm" onclick="wsRenameSave(\'' + id + '\')">Save</button> ' +
+            '<button class="btn btn-ghost btn-sm" onclick="wsRenameCancel()">Cancel</button>'
+          : '<button class="btn btn-secondary btn-sm" onclick="wsRenameStart(\'' + id + '\')">Rename</button> ' +
+            (isDefault ? ''
+              : '<button class="btn btn-secondary btn-sm" onclick="wsSetDefault(\'' + id + '\')">Make default</button> ') +
+            '<button class="btn btn-danger btn-sm" onclick="wsDelete(\'' + id + '\')">Delete</button>') +
+      '</td></tr>';
+  });
+  h += '</tbody></table></div><div id="wsRowMsg" style="margin-top:10px;font-size:13px"></div>';
+  body.innerHTML = h;
+  if (WS.editing) {
+    const inp = document.getElementById('wsRenameInput');
+    if (inp) { inp.focus(); inp.select(); }
+  }
+}
+
+async function wsCreate() {
+  const inp = document.getElementById('wsNewName');
+  const btn = document.getElementById('wsAddBtn');
+  if (!inp || WS.busy) return;
+  const name = (inp.value || '').trim();
+  if (!name) { wsSay('wsAddMsg', false, 'Type a name for the new workspace first.'); return; }
+  WS.busy = true; if (btn) btn.disabled = true;
+  wsSay('wsAddMsg', true, 'Adding...');
+  try {
+    const d = await API.post('/workspaces', { name: name });
+    const nm = (d && d.workspace && d.workspace.name) ? d.workspace.name : name;
+    inp.value = '';
+    wsSay('wsAddMsg', true, 'Added "' + nm + '".');
+    toast('Workspace added', 'success');
+    await wsLoad();
+  } catch (e) {
+    // 402 (plan ceiling) and 409 (duplicate) are the server's sentences — print them.
+    wsSay('wsAddMsg', false, (e && e.message) ? e.message : 'Could not add that workspace.');
+  } finally {
+    WS.busy = false; if (btn) btn.disabled = false;
+  }
+}
+
+function wsRenameStart(id) {
+  WS.editing = id;
+  wsRender();
+}
+
+function wsRenameCancel() {
+  WS.editing = null;
+  wsRender();
+  wsSay('wsRowMsg', true, '');
+}
+
+async function wsRenameSave(id) {
+  const inp = document.getElementById('wsRenameInput');
+  if (!inp || WS.busy) return;
+  const name = (inp.value || '').trim();
+  if (!name) { wsSay('wsRowMsg', false, 'A workspace needs a name.'); return; }
+  WS.busy = true;
+  try {
+    await API.patch('/workspaces/' + id, { name: name });
+    WS.editing = null;
+    toast('Workspace renamed', 'success');
+    await wsLoad();
+  } catch (e) {
+    wsSay('wsRowMsg', false, (e && e.message) ? e.message : 'Could not rename that workspace.');
+  } finally { WS.busy = false; }
+}
+
+async function wsSetDefault(id) {
+  if (WS.busy) return;
+  WS.busy = true;
+  try {
+    await API.post('/workspaces/' + id + '/default', {});
+    toast('Default workspace changed', 'success');
+    await wsLoad();
+  } catch (e) {
+    wsSay('wsRowMsg', false, (e && e.message) ? e.message : 'Could not change the default workspace.');
+  } finally { WS.busy = false; }
+}
+
+async function wsDelete(id) {
+  if (WS.busy) return;
+  const row = (WS.items || []).filter(function (w) { return w.id === id; })[0];
+  const name = row ? row.name : 'this workspace';
+  if (!confirm('Delete "' + name + '"? An account must always keep at least one workspace.')) return;
+  WS.busy = true;
+  try {
+    await API.del('/workspaces/' + id);
+    toast('Workspace deleted', 'success');
+    await wsLoad();
+  } catch (e) {
+    wsSay('wsRowMsg', false, (e && e.message) ? e.message : 'Could not delete that workspace.');
+  } finally { WS.busy = false; }
+}
+
 </script>
 <script>
 /* Inline guide content (fleet standard; the in-app counterpart of the guide page). One entry per
@@ -8303,6 +8474,7 @@ window.appGuidePages = {
   dashboard:       { title: "Dashboard", desc: "Your workspace at a glance — contacts, deals, activity and what needs attention today.", actions: ["Scan the counters and recent activity", "Jump to anything that needs a follow-up"] },
   contacts:        { title: "Contacts", desc: "The people and companies you do business with. Each contact carries its history, tags and deals.", actions: ["Add a contact", "Open one to see its full record", "Search by name or email"] },
   duplicates:      { title: "Duplicates", desc: "Contacts in this workspace that look like the same person — the same phone number, or the same first and last name. Nothing is merged for you.", actions: ["Scan the groups for two records of one person", "Edit the record you keep, then remove the other on Contacts"] },
+  workspaces:      { title: "Workspaces", desc: "The names that organise this account. The workspace marked Default is the one a new session is meant to open.", actions: ["Add a workspace", "Rename one", "Make one the default", "Delete one you no longer use — an account always keeps at least one"] },
   industries:      { title: "Industries", desc: "Group your contacts by the industry they belong to, so you can target and report on segments.", actions: ["Review the industries in use", "Assign a contact to one"] },
   pipelines:       { title: "Pipelines & Deals", desc: "Your sales stages and the deals moving through them, from first contact to closed.", actions: ["Create a pipeline", "Add a deal", "Move a deal to its next stage"] },
   campaigns:       { title: "Campaigns", desc: "Outbound email campaigns — who is being contacted, with what, and how it is performing.", actions: ["Start a campaign", "Pick the list it sends to", "Check its results"] },
