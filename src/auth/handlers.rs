@@ -164,6 +164,15 @@ pub async fn register(
     let tenant_slug = account.tenant_slug;
     let tenant_is_active = account.tenant_is_active;
     let is_first_user = account.is_first_user;
+    // Minted inside the signup transaction; the page shows it once here AND it stays viewable in
+    // Settings (kanban t_7863696b).
+    let api_key = json!({
+        "id": account.api_key.id.to_string(),
+        "name": account.api_key.name,
+        "prefix": account.api_key.prefix,
+        "key": account.api_key.key,
+        "note": "Your account's API key. View and copy it any time in Settings > Integration Center."
+    });
 
     // Platform authority is resolved from the DATABASE by the token subject, never from
     // `user.role`: a fresh signup is `owner` of its own tenant, which grants nothing
@@ -239,6 +248,7 @@ pub async fn register(
             platform_admin,
             // Truthful answer to "did the login mail leave?" (kanban t_d841df4f).
             credentials_emailed,
+            api_key,
             account: AccountResponse {
                 id: tenant_id,
                 name: tenant_name,

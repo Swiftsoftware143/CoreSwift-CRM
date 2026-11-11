@@ -68,6 +68,11 @@ pub struct CreatedAccount {
     pub tenant_is_active: Option<bool>,
     /// The first user of a workspace owns it; a later join gets the inviter's role.
     pub is_first_user: bool,
+    /// The API key this account was provisioned with, minted INSIDE the same transaction (kanban
+    /// t_7863696b). An account is not fully provisioned without one: a rolled-back signup leaves no
+    /// key row, and a committed signup always has one. The plaintext rides in memory only for the
+    /// registration response; the database keeps the hash and the sealed copy.
+    pub api_key: crate::personal_api_keys::MintedKey,
 }
 
 /// Everything [`create_account`] needs. `email` must ALREADY be normalised
@@ -266,6 +271,14 @@ pub async fn create_account(
         AppError::Database(e)
     })?;
 
+    // ── 5. the account's API key — minted HERE, in the same transaction (kanban t_7863696b) ────
+    // Two doors reach this function (the public signup and the machine provisioning endpoint), so
+    // the mint lives at the ONE account writer: every account that exists has a key, and a refusal
+    // after this point rolls the key back with the workspace and the user.
+    let api_key =
+        crate::personal_api_keys::mint_on(&mut *conn, tenant_id, Some(user.id), "auto-provisioned")
+            .await?;
+
     Ok(CreatedAccount {
         user,
         tenant_id,
@@ -273,6 +286,7 @@ pub async fn create_account(
         tenant_slug,
         tenant_is_active,
         is_first_user,
+        api_key,
     })
 }
 

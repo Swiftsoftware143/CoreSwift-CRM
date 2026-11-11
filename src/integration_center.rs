@@ -312,7 +312,8 @@ pub async fn overview(
 
     // 3. The tenant's csk_ keys — prefix only.
     let key_rows = sqlx::query(
-        "SELECT id, name, key_prefix, is_active, last_used_at, created_at
+        "SELECT id, name, key_prefix, is_active, last_used_at, created_at,
+                (key_sealed IS NOT NULL) AS recoverable
          FROM personal_api_keys WHERE tenant_id = $1 ORDER BY created_at DESC",
     )
     .bind(tenant_id)
@@ -329,6 +330,8 @@ pub async fn overview(
                 "is_active": r.get::<bool, _>("is_active"),
                 "last_used_at": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_used_at"),
                 "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                // `true` when the sealed copy exists, i.e. the View control can show the key.
+                "recoverable": r.get::<bool, _>("recoverable"),
             })
         })
         .collect();

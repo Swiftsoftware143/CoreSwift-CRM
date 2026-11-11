@@ -154,6 +154,10 @@ pub struct RegisterResponse {
     /// The signup page keys the "choose your own password" chooser on this value instead of
     /// promising mail that was never sent. Same shape as ADASwift / FunnelSwift / IncentiveSwift.
     pub credentials_emailed: bool,
+    /// The API key minted INSIDE the signup transaction (kanban t_7863696b): `{id, name, prefix,
+    /// key}`. Every account is provisioned with one; the plaintext is also sealed at rest, so the
+    /// page can show it now and the customer can view/copy it again in Settings at any time.
+    pub api_key: Value,
 }
 
 /// Account info for response (from `tenants` table).

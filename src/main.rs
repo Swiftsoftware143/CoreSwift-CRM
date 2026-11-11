@@ -201,6 +201,18 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!(error = %e, "provider key backfill skipped"),
     }
 
+    // Kanban t_7863696b: every workspace that exists today holds a key it can view. One-time (a
+    // `fleet_data_backfills` marker gates it) so a customer who revoked every key is never re-minted
+    // behind their back; a tenant already holding an active key is skipped.
+    match crate::personal_api_keys::backfill_missing_keys(&db).await {
+        Ok((minted, unrecoverable)) => tracing::info!(
+            minted,
+            unrecoverable,
+            "personal API key backfill complete — every workspace holds a key"
+        ),
+        Err(e) => tracing::warn!(error = %e, "personal API key backfill skipped"),
+    }
+
     // The storage guard (`migrations/075_…`) is armed NOT VALID so it could be added to a table that
     // still held legacy rows; now that the backfill has sealed every row there is nothing to exempt,
     // so validating it makes the constraint fully enforced. Best-effort: a missing constraint warns.
