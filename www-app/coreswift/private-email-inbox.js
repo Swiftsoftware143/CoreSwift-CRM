@@ -137,7 +137,13 @@
     var groups = rec.groups || [];
     groups.forEach(function (g) {
       var rows = (g.records || []).map(recordRowHtml).join('');
-      if (!rows) return;
+      if (!rows) {
+        // A group Mailgun returns nothing for (some verified domains have no echo of their DNS
+        // entries). Say so, rather than rendering an empty heading the customer reads as a fault.
+        out += '<h5 style="margin:14px 0 4px">' + esc(g.title) + '</h5>'
+          + '<p style="margin:4px 0 10px;font-size:13px;opacity:.75">Nothing to add here — your mail provider reports no records for this group on this domain.</p>';
+        return;
+      }
       out += '<h5 style="margin:14px 0 4px">' + esc(g.title) + '</h5>'
         + '<table style="width:100%;border-collapse:collapse;margin-bottom:4px"><thead><tr style="text-align:left;opacity:.6;font-size:11px">'
         + '<th style="padding:4px 8px">Type</th><th style="padding:4px 8px">Name</th><th style="padding:4px 8px">Value</th>'

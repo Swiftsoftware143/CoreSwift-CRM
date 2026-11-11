@@ -675,8 +675,12 @@ pub async fn domain_records(
         .filter(|r| r["section"] == "sending")
         .cloned()
         .collect();
+    // A domain Mailgun returns NO records for cannot be assessed from that list (some domains are
+    // verified at the provider without the API echoing their DNS entries). That is not "not ready":
+    // the provider's own `active` state decides, and the caller still sees an honest checklist. A
+    // domain with records is held to them — one invalid record keeps the create button closed.
     let receiving_ok =
-        !receiving.is_empty() && receiving.iter().all(|r| r["valid"].as_bool() == Some(true));
+        receiving.is_empty() || receiving.iter().all(|r| r["valid"].as_bool() == Some(true));
 
     // DMARC is not in Mailgun's DNS answer, and Gmail/Yahoo bulk-sender rules expect it. Without it
     // a brand-new domain's first sends get filtered and the customer blames the inbox. It is
@@ -696,8 +700,8 @@ pub async fn domain_records(
         .iter()
         .filter(|r| r["checked_by_provider"] != json!(false))
         .collect();
-    let sending_ok = !checked_sending.is_empty()
-        && checked_sending
+    let sending_ok = checked_sending.is_empty()
+        || checked_sending
             .iter()
             .all(|r| r["valid"].as_bool() == Some(true));
 
