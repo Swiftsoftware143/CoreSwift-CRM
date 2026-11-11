@@ -77,15 +77,89 @@ async fn limit_for(pool: &PgPool, tenant_id: Uuid, key: &str) -> Result<i32, App
     })
 }
 
-/// The pre-registry read of `plans.features`, kept only for the two keys that have no registry
-/// feature yet. Absent JSON or an unrecognised shape yields the defaults (0 / false).
+/// The two spellings `catch_all` is stored under: `catch_all` is what the live `plans.features`
+/// rows carry, `catch_all_enabled` is this module's own field name (and what an override may have
+/// been written with).
+const CATCH_ALL_KEYS: &[&str] = &["catch_all", "catch_all_enabled"];
+
+/// Read a boolean out of a plan/override JSON blob under ANY of `keys`; the first name PRESENT
+/// wins, so an override blob and a plan blob are read by the same helper.
+///
+/// BOTH shapes this schema writes are accepted: a bare boolean (`{"catch_all": true}`, what every
+/// live `plans.features` row carries) and the registry's object form
+/// (`{"catch_all": {"enabled": true}}`, the shape `module_registry::override_value` reads out of
+/// `tenant_plans.feature_overrides`). Reading only one shape is the defect this replaces: a
+/// `#[derive(Deserialize)]` struct matched ONE spelling and answered `false` for every other one,
+/// silently. Measured live 2026-11-11 (kanban t_3b954854): the paid tiers that sell catch-all
+/// (`professional`, `agency`, `enterprise`) carry `"catch_all": true`, while
+/// `PrivateEmailPlanFeatures::catch_all_enabled` only ever looked for `catch_all_enabled` — so the
+/// deserialise answered `false` for EVERY tenant and `PATCH /api/private-email/domains/<id>` was
+/// refused with 400 "Catch-all requires Pro plan or higher" (that copy named an inactive tier and
+/// has since been corrected to the Professional plan) for owners, agency admins and
+/// impersonated sessions alike. The three live domains only carried `catch_all_enabled = true`
+/// because that column had been written by direct SQL, i.e. no shipped surface could produce the
+/// state the rows were in.
+fn json_bool(v: &Value, keys: &[&str]) -> Option<bool> {
+    keys.iter().find_map(|k| {
+        let x = v.get(*k)?;
+        x.as_bool()
+            .or_else(|| x.get("enabled").and_then(|e| e.as_bool()))
+    })
+}
+
+/// Read an integer out of a plan/override JSON blob under ANY of `keys`, same "first present wins"
+/// rule and the same two shapes as `json_bool` (`25` or `{"limit_value": 25}`).
+///
+/// The SIGN is preserved on purpose: `-1` is this schema's established spelling for "unlimited"
+/// (`plans.features.max_users` and friends, migration 064) and the read this replaces kept it, so
+/// clamping negatives to 0 would silently turn "unlimited aliases" into "no aliases".
+fn json_i32(v: &Value, keys: &[&str]) -> Option<i32> {
+    keys.iter().find_map(|k| {
+        let x = v.get(*k)?;
+        let n = x.as_i64().or_else(|| {
+            x.get("limit_value")
+                .and_then(|l| l.as_i64().or_else(|| l.as_f64().map(|f| f.floor() as i64)))
+        })?;
+        Some(n.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+    })
+}
+
+/// The two keys that have no registry feature yet (`catch_all`, `max_aliases_per_mailbox`),
+/// resolved from one plan's `features` blob and one tenant's `feature_overrides` blob.
+///
+/// Pure on purpose: this mapping — plan JSON key to feature flag — is exactly what was broken, so it
+/// has to be testable without a database. Most specific first, the order
+/// `module_registry::resolve` documents: an explicit per-tenant override outranks the plan, and an
+/// absent key at both levels means the defaults (false / 0), never "yes".
+fn pre_registry_features(plan: &Value, overrides: &Value) -> (bool, i32) {
+    let catch_all = json_bool(overrides, CATCH_ALL_KEYS)
+        .or_else(|| json_bool(plan, CATCH_ALL_KEYS))
+        .unwrap_or(false);
+    let max_aliases = json_i32(overrides, &["max_aliases_per_mailbox"])
+        .or_else(|| json_i32(plan, &["max_aliases_per_mailbox"]))
+        .unwrap_or(0);
+    (catch_all, max_aliases)
+}
+
+/// The two keys that have no registry feature yet: `catch_all` and `max_aliases_per_mailbox`.
+///
+/// Read from `tenant_plans.feature_overrides` and then the tenant's ACTIVE plan, through
+/// `pre_registry_features`. The override arm exists because that column is the operator's instrument
+/// for one tenant: this app's admin override route only accepts keys registered in `modules` /
+/// `module_features`, and neither of these two is, so an override for them arrives by a direct row
+/// write — which is exactly what the catch-all workaround used to be. It now parses as an override
+/// instead of being the only way to get the behaviour.
+///
+/// The tenant is the ACCOUNT the caller's token points at (`claims.aid`), for every role: this
+/// function takes an id and never a token, so an impersonation session (`role = "impersonated"`,
+/// `aid` = the target workspace) resolves exactly the plan that workspace's own owner resolves.
 async fn legacy_alias_features(
     pool: &PgPool,
     tenant_id: Uuid,
 ) -> Result<PrivateEmailPlanFeatures, AppError> {
-    let row = sqlx::query_as::<_, (Value,)>(
+    let row = sqlx::query_as::<_, (Value, Value)>(
         r#"
-        SELECT p.features
+        SELECT p.features, COALESCE(tp.feature_overrides, '{}'::jsonb)
         FROM tenant_plans tp
         JOIN plans p ON p.id = tp.plan_id
         WHERE tp.tenant_id = $1 AND tp.status = 'active'
@@ -97,12 +171,84 @@ async fn legacy_alias_features(
     .await
     .map_err(AppError::Database)?;
 
-    Ok(match row {
-        Some((features,)) => {
-            serde_json::from_value::<PrivateEmailPlanFeatures>(features).unwrap_or_default()
-        }
-        None => PrivateEmailPlanFeatures::default(),
+    let Some((features, overrides)) = row else {
+        return Ok(PrivateEmailPlanFeatures::default());
+    };
+
+    let (catch_all, max_aliases) = pre_registry_features(&features, &overrides);
+
+    Ok(PrivateEmailPlanFeatures {
+        private_email: true,
+        // Owned by the registry (`limit_for` above) on purpose: `plans.features` also carries
+        // `max_users`/`max_contacts`-style numbers, and reading domain/mailbox ceilings from here
+        // would create the second source of truth this module was cleaned of (CS-25/CS-26).
+        max_domains: 0,
+        max_mailboxes: 0,
+        max_aliases_per_mailbox: max_aliases,
+        catch_all_enabled: catch_all,
     })
+}
+
+#[cfg(test)]
+mod plan_feature_key_tests {
+    use super::{json_bool, json_i32, pre_registry_features};
+    use serde_json::json;
+
+    /// The defect this guard exists for (kanban t_3b954854): the plans table stores `catch_all`, the
+    /// Rust struct names the field `catch_all_enabled`, and a derive-based read answered `false` for
+    /// every paid tenant. The PRODUCTION composition is what is asserted here, so dropping either
+    /// spelling from the call site fails this test.
+    #[test]
+    fn the_plan_key_that_is_sold_grants_catch_all() {
+        assert!(pre_registry_features(&json!({"catch_all": true}), &json!({})).0);
+        assert!(pre_registry_features(&json!({"catch_all_enabled": true}), &json!({})).0);
+        // A plan that does not sell it stays refused: absent is not "yes".
+        assert!(!pre_registry_features(&json!({"max_users": 3}), &json!({})).0);
+        assert!(!pre_registry_features(&json!({"catch_all": false}), &json!({})).0);
+    }
+
+    /// Both shapes are honoured: a bare boolean and the registry's `{enabled}` object.
+    #[test]
+    fn both_json_shapes_are_read() {
+        assert_eq!(
+            json_bool(&json!({"catch_all": true}), &["catch_all"]),
+            Some(true)
+        );
+        assert_eq!(
+            json_bool(&json!({"catch_all": {"enabled": true}}), &["catch_all"]),
+            Some(true)
+        );
+        assert_eq!(
+            json_i32(
+                &json!({"max_aliases_per_mailbox": {"limit_value": 25}}),
+                &["max_aliases_per_mailbox"]
+            ),
+            Some(25)
+        );
+    }
+
+    /// An explicit per-tenant override is the most specific answer and is read first — in either
+    /// direction, because a `false` override is a real answer and not a missing one.
+    #[test]
+    fn an_override_outranks_the_plan_blob() {
+        assert!(pre_registry_features(&json!({"catch_all": false}), &json!({"catch_all": true})).0);
+        assert!(
+            !pre_registry_features(&json!({"catch_all": true}), &json!({"catch_all": false})).0
+        );
+    }
+
+    /// `-1` is this schema's "unlimited"; it must survive the read (0 is "not included").
+    #[test]
+    fn unlimited_survives_and_junk_does_not() {
+        assert_eq!(
+            pre_registry_features(&json!({"max_aliases_per_mailbox": -1}), &json!({})).1,
+            -1
+        );
+        assert_eq!(
+            pre_registry_features(&json!({"max_aliases_per_mailbox": "25"}), &json!({})).1,
+            0
+        );
+    }
 }
 
 /// Check if tenant has room for another domain.

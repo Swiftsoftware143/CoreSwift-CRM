@@ -198,8 +198,13 @@ pub async fn update_domain(
         if catch_all {
             let allowed = feature_gate::can_enable_catch_all(&state.db, account_id).await?;
             if !allowed {
+                // Names a tier that is ON SALE. The previous wording ("Pro plan or higher") named
+                // `pro`, which is inactive: the tier that actually sells catch-all is
+                // `professional` (measured live 2026-11-11 — `professional`, `agency` and
+                // `enterprise` carry `features.catch_all = true`; `free` and `starter` do not), so
+                // a customer on a paid-but-excluded tier was sent to buy a plan they cannot find.
                 return Err(AppError::BadRequest(
-                    "Catch-all requires Pro plan or higher".into(),
+                    "Catch-all requires the Professional plan or higher".into(),
                 ));
             }
         }
