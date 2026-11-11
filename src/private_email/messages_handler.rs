@@ -137,7 +137,12 @@ pub async fn list_messages(
                  WHEN 'spam'      THEN m.folder = 'spam'
                  WHEN 'trash'     THEN m.folder = 'trash'
                  WHEN 'all'       THEN m.folder NOT IN ('trash','spam')
-                 ELSE (m.folder = 'inbox' OR m.folder LIKE 'inbox/%')
+                 -- A path the account MADE is a view of its own mail too: the exact path plus
+                 -- everything filed below it. Matched case-insensitively because a message's folder
+                 -- is stored lower-cased while a folder row may predate that normalisation, and with
+                 -- `left(..)` rather than LIKE so a '%' in a folder name can never widen the match.
+                 ELSE (lower(m.folder) = lower($2)
+                       OR left(lower(m.folder), length($2) + 1) = lower($2) || '/')
                END
            AND ( $3 = 'all'
                  OR ($3 = 'misc' AND m.mailbox_id IS NULL)
@@ -1149,7 +1154,8 @@ pub async fn list_folders(
         SELECT f.id, f.path, f.name, f.parent,
                (SELECT count(*) FROM private_email_messages m
                  WHERE m.tenant_id = f.tenant_id
-                   AND (m.folder = f.path OR m.folder LIKE f.path || '/%')
+                   AND (lower(m.folder) = lower(f.path)
+                        OR left(lower(m.folder), length(f.path) + 1) = lower(f.path) || '/')
                    AND m.folder <> 'trash') AS count
           FROM private_email_folders f
          WHERE f.tenant_id = $1
@@ -1210,7 +1216,7 @@ pub async fn create_folder(
     let parent = req.parent.trim().trim_matches('/').to_lowercase();
     let parent_ok = SYSTEM_FOLDERS.contains(&parent.as_str())
         || sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM private_email_folders WHERE tenant_id = $1 AND path = $2",
+            "SELECT count(*) FROM private_email_folders WHERE tenant_id = $1 AND lower(path) = $2",
         )
         .bind(tenant_id)
         .bind(&parent)
@@ -1225,7 +1231,10 @@ pub async fn create_folder(
         )));
     }
 
-    let path = format!("{}/{}", parent, name);
+    // The path is stored lower case, because a message's folder is stored lower case
+    // (update_message normalises it): an as-typed path like 'inbox/Clients' could never match — or
+    // count — the mail filed into it. `name` keeps the spelling the user typed, for the rail.
+    let path = format!("{}/{}", parent, name.to_lowercase());
     let exists: Option<(Uuid,)> = sqlx::query_as(
         "SELECT id FROM private_email_folders WHERE tenant_id = $1 AND lower(path) = lower($2)",
     )
