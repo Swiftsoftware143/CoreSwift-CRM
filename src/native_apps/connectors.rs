@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 pub mod adaswift;
 pub mod funnelswift;
+pub mod incentiveswift;
 pub mod missedcall_responder;
 pub mod multi_directory;
 pub mod workflowswift;
@@ -61,6 +62,14 @@ pub static NATIVE_APPS: &[AppConnector] = &[
         access_level: "admin_tenant",
     },
     AppConnector {
+        slug: "incentiveswift",
+        name: "IncentiveSwift",
+        description: "Loyalty and rewards engine — programmes, campaigns, members and points. Tenants connect their own IncentiveSwift account with an API key from its API Keys screen.",
+        auth_type: "api_key",
+        auth_fields: &["api_key", "base_url"],
+        access_level: "admin_tenant",
+    },
+    AppConnector {
         slug: "multi-directory",
         name: "Multi-Directory App",
         description: "Multi-account business directory system with automated follow-up sequences across directories. Admin-only — internal tool.",
@@ -81,6 +90,7 @@ pub async fn test_connection(
     let result = match slug {
         "adaswift" => adaswift::test(credentials).await,
         "funnelswift" => funnelswift::test(credentials).await,
+        "incentiveswift" => incentiveswift::test(credentials).await,
         "workflowswift" => workflowswift::test(credentials).await,
         "missedcall-responder" => missedcall_responder::test(credentials).await,
         "multi-directory" => multi_directory::test(credentials).await,
@@ -101,6 +111,7 @@ pub async fn push_data(
     match slug {
         "adaswift" => adaswift::push_entity(credentials, entity_type, data).await,
         "funnelswift" => funnelswift::push_entity(credentials, entity_type, data).await,
+        "incentiveswift" => incentiveswift::push_entity(credentials, entity_type, data).await,
         "workflowswift" => workflowswift::push_entity(credentials, entity_type, data).await,
         "missedcall-responder" => {
             missedcall_responder::push_entity(credentials, entity_type, data).await
@@ -120,6 +131,7 @@ pub async fn pull_data(
     match slug {
         "adaswift" => adaswift::pull_entity(credentials, entity_type, filters).await,
         "funnelswift" => funnelswift::pull_entity(credentials, entity_type, filters).await,
+        "incentiveswift" => incentiveswift::pull_entity(credentials, entity_type, filters).await,
         "workflowswift" => workflowswift::pull_entity(credentials, entity_type, filters).await,
         "missedcall-responder" => {
             missedcall_responder::pull_entity(credentials, entity_type, filters).await
@@ -134,6 +146,7 @@ pub fn get_app_meta(slug: &str) -> Option<serde_json::Value> {
     match slug {
         "adaswift" => Some(adaswift::get_meta()),
         "funnelswift" => Some(funnelswift::get_meta()),
+        "incentiveswift" => Some(incentiveswift::get_meta()),
         "workflowswift" => Some(workflowswift::get_meta()),
         "missedcall-responder" => Some(missedcall_responder::get_meta()),
         "multi-directory" => Some(multi_directory::get_meta()),
