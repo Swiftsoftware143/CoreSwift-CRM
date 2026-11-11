@@ -522,7 +522,7 @@ async function loadPlanPaymentLinks() {
   }).join('');
   wrap.innerHTML = '<div class="card"><div class="card-header"><h3 style="margin:0;font-size:16px">Plan payment links</h3></div>' +
     '<div class="card-body">' +
-    '<p style="font-size:13px;color:var(--text-muted);margin:0 0 12px">A hosted payment page for a plan — a Stripe Payment Link, a PayPal button, anything that takes the money. A plan carrying one can be sold while this installation holds no payment key: the buyer pays on that page and the workspace is switched on here once the money lands. Leave a plan empty to keep it request-only.</p>' +
+    '<p style="font-size:13px;color:var(--text-muted);margin:0 0 12px">A hosted payment page for a plan — a Stripe Payment Link, a PayPal button, anything that takes the money. A plan carrying one can be sold while this installation holds no payment key: the buyer pays on that page and the workspace is switched on here once the money lands. Leave a plan empty to keep it request-only. Create a link in <a href="https://dashboard.stripe.com/payment-links" target="_blank" rel="noopener">Stripe &rsaquo; Products &rsaquo; Payment links</a> and paste its https://buy.stripe.com/&hellip; address here. The Dashboard opens every link and reports the dead ones, so an empty box is honest and a dead link is not.</p>' +
     '<div class="table-wrap"><table class="table"><thead><tr><th>Plan</th><th>Link</th><th>Payment page</th><th></th></tr></thead><tbody>' +
     (rows || '<tr><td colspan="4">No plans found</td></tr>') + '</tbody></table></div></div></div>';
   wrap.querySelectorAll('[data-save]').forEach(b => {
