@@ -3673,15 +3673,33 @@ const TAB_LOADERS = {
         return t ? (t.name || t.slug || id) : id;
       };
       const nz = v => (v === null || v === undefined) ? '—' : v;
+      // Catch-all is a PLAN entitlement, not a domain setting (kanban t_6b54961b): the inbound
+      // router asks the plan at delivery time, so a workspace moved to a plan that does not sell it
+      // keeps the remembered switch while every unmatched address is refused. This column is those
+      // three answers, from the same helper the router uses — a table that only showed the stored
+      // switch would read as "catch-all on" for a workspace whose mail is being dropped.
+      const ca = r => {
+        if (typeof r.sells_catch_all === 'undefined') return '—';
+        const stored = r.catch_all_domains_enabled || 0;
+        const off = r.catch_all_domains_off_plan || 0;
+        if (off > 0) {
+          return '<span class="badge badge-warning">off plan</span> ' + off +
+            ' domain' + (off === 1 ? '' : 's') + ' refused';
+        }
+        return r.sells_catch_all
+          ? 'included' + (stored ? ' · ' + stored + ' on' : '')
+          : 'not on plan';
+      };
       const rows = list.map(r => [
         escapeHtml(nameOf(r.tenant_id)),
         nz(r.retention_days) + ' days',
         escapeHtml(r.last_purged_at ? new Date(r.last_purged_at).toLocaleString() : 'never'),
         'domains ' + nz(r.max_domains) + ' · boxes ' + nz(r.max_mailboxes) + ' · aliases ' + nz(r.max_aliases_per_mailbox),
+        ca(r),
         `<button class="btn btn-ghost btn-xs" data-ops="pe-retention-row" onclick="useTenantRetention('${r.tenant_id}')">Retention</button>` +
         `<button class="btn btn-ghost btn-xs" onclick="showPurgeModal('${r.tenant_id}')">Purge</button>`
       ]);
-      el.innerHTML = dataTable(['Tenant','Retention','Last purge','Limit overrides',''], rows,
+      el.innerHTML = dataTable(['Tenant','Retention','Last purge','Limit overrides','Catch-all',''], rows,
         'No per-tenant email limit overrides yet — set retention below to create one.');
     } catch(e) {
       el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Private-email admin endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;

@@ -191,7 +191,7 @@ async fn legacy_alias_features(
 
 #[cfg(test)]
 mod plan_feature_key_tests {
-    use super::{json_bool, json_i32, pre_registry_features};
+    use super::{catch_all_effective, json_bool, json_i32, pre_registry_features};
     use serde_json::json;
 
     /// The defect this guard exists for (kanban t_3b954854): the plans table stores `catch_all`, the
@@ -248,6 +248,22 @@ mod plan_feature_key_tests {
             pre_registry_features(&json!({"max_aliases_per_mailbox": "25"}), &json!({})).1,
             0
         );
+    }
+
+    /// The WITHDRAWAL arm (kanban t_6b54961b): a stored preference is only permission while the
+    /// plan still sells the feature. Asserting the four combinations means a later "fix" that reads
+    /// the column alone, or the plan alone, goes red instead of silently re-opening the paid
+    /// feature to a downgraded workspace.
+    #[test]
+    fn a_stored_preference_is_in_force_only_while_the_plan_sells_it() {
+        // enabled on a plan that sells it -> delivered (the normal paid state)
+        assert!(catch_all_effective(true, true));
+        // enabled, then downgraded -> REFUSED (the defect this arm closes)
+        assert!(!catch_all_effective(true, false));
+        // off, plan sells it -> refused (nothing was asked for)
+        assert!(!catch_all_effective(false, true));
+        // off, plan does not sell it -> refused
+        assert!(!catch_all_effective(false, false));
     }
 }
 
@@ -334,11 +350,52 @@ pub async fn check_mailbox_limit(pool: &PgPool, tenant_id: Uuid) -> Result<(), A
 }
 
 pub async fn can_enable_catch_all(pool: &PgPool, tenant_id: Uuid) -> Result<bool, AppError> {
-    let features = get_plan_features(pool, tenant_id).await?.ok_or_else(|| {
+    plan_catch_all(pool, tenant_id).await?.ok_or_else(|| {
         AppError::UpgradeRequired(
             "Private email is not available on your current plan. Upgrade to enable it.".into(),
         )
-    })?;
+    })
+}
 
-    Ok(features.catch_all_enabled)
+/// Is catch-all IN FORCE for this tenant right now — asked where the mail is actually routed.
+///
+/// WHY THIS EXISTS (kanban t_6b54961b — the WITHDRAWAL arm). Catch-all is a paid entitlement, but
+/// it was only checked on the way IN: `can_enable_catch_all` guarded the PATCH that switches it on,
+/// while inbound routing keyed on the bare `private_email_domains.catch_all_enabled` column. A
+/// workspace that legitimately enabled catch-all on a plan that sells it and was then moved to
+/// free/starter (or downgraded) therefore kept accepting mail for every unmatched address, while a
+/// fresh PATCH on that same workspace was refused with 400 — the feature was sold, the withdrawal
+/// did not exist.
+///
+/// WHY THE PLAN IS ASKED AT THE POINT OF USE INSTEAD OF CLEARING THE COLUMN ON A PLAN CHANGE.
+/// There are three writers of `tenant_plans` today (`assign_tenant_plan`, `update_subscription`,
+/// `cancel_subscription`) and a fourth would silently miss the clear — and clearing the column also
+/// throws away the customer's own choice, so an upgrade could not restore what they had set. Asking
+/// the plan where the decision is made cannot be bypassed by any plan writer, and the column stays
+/// exactly what it is: the tenant's stored preference (`catch_all_effective` below is the only rule
+/// that reads it as permission).
+///
+/// It deliberately shares `plan_catch_all` with `can_enable_catch_all`, so the door that lets a
+/// tenant switch catch-all on and the router that lets mail in can never disagree about the plan.
+/// A tenant whose plan does not include private email at all answers `false` here (not an error):
+/// the receiver must refuse the delivery, and a paid-feature question is not a server fault.
+pub async fn catch_all_granted(pool: &PgPool, tenant_id: Uuid) -> Result<bool, AppError> {
+    Ok(plan_catch_all(pool, tenant_id).await?.unwrap_or(false))
+}
+
+/// The plan's own answer, `None` when the tenant's plan does not include private email at all.
+/// One expression, two callers: `can_enable_catch_all` (which turns `None` into the upgrade 400 the
+/// console prints verbatim) and `catch_all_granted` (which turns it into "not granted").
+async fn plan_catch_all(pool: &PgPool, tenant_id: Uuid) -> Result<Option<bool>, AppError> {
+    Ok(get_plan_features(pool, tenant_id)
+        .await?
+        .map(|f| f.catch_all_enabled))
+}
+
+/// THE one rule: a stored catch-all preference is in force only while the plan still sells it.
+///
+/// Both the inbound router and the domain list apply this, so what the panel reports and what the
+/// mail path decides cannot drift (kanban t_6b54961b).
+pub fn catch_all_effective(stored: bool, plan_sells: bool) -> bool {
+    stored && plan_sells
 }

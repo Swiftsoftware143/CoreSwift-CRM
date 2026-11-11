@@ -3,6 +3,7 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
+use super::feature_gate;
 use super::messages_handler::{self, InboundMessage};
 use super::providers;
 use super::send_handler::load_provider_config;
@@ -142,7 +143,32 @@ pub async fn inbound_webhook(
 
             match catch_all {
                 // Stored with no mailbox row, which is exactly what makes it MISC.
-                Some((domain, tenant)) => (tenant, domain, None),
+                Some((domain, tenant)) => {
+                    // THE WITHDRAWAL ARM (kanban t_6b54961b). `catch_all_enabled` is the tenant's
+                    // stored PREFERENCE, not the entitlement. Reading it here as if it were
+                    // permission is why a workspace moved off a plan that sells catch-all (free,
+                    // starter, or a past-due downgrade) kept accepting mail for every unmatched
+                    // address, while a fresh PATCH on that same workspace was refused.
+                    // The plan is asked AT THE MOMENT OF USE through the same helper the PATCH arm
+                    // uses, so the two answers cannot disagree, and no plan writer (assign, update
+                    // or cancel) has to remember to withdraw anything — a new writer cannot open a
+                    // hole. The refusal is byte-identical to a domain with catch-all switched off,
+                    // because a sender is not owed our billing state.
+                    let plan_sells_catch_all =
+                        feature_gate::catch_all_granted(&state.db, tenant).await?;
+                    if !feature_gate::catch_all_effective(true, plan_sells_catch_all) {
+                        tracing::warn!(
+                            domain = %domain_part,
+                            tenant = %tenant,
+                            "catch-all delivery refused: this workspace's current plan does not \
+                             sell catch-all, so its stored switch is not in force"
+                        );
+                        return Ok(Json(
+                            json!({"received": false, "error": "no matching mailbox"}),
+                        ));
+                    }
+                    (tenant, domain, None)
+                }
                 None => {
                     return Ok(Json(
                         json!({"received": false, "error": "no matching mailbox"}),

@@ -20,20 +20,32 @@ use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
 
-/// GET /api/v1/private-email/admin/limits/:tenant_id
-/// Returns the tenant's plan defaults, any overrides, and effective limits.
-pub async fn get_tenant_limits(
-    State(state): State<AppState>,
-    Extension(claims): Extension<Claims>,
-    Path(tenant_id): Path<Uuid>,
-) -> ApiResult<Json<serde_json::Value>> {
-    crate::auth::platform_admin::require_platform_admin(&state.db, &claims.sub).await?;
-
-    let features = feature_gate::get_plan_features(&state.db, tenant_id)
+/// One builder for both the GET and the PATCH answer, so the operator's view of a tenant's limits
+/// (including the catch-all honesty block, kanban t_6b54961b) cannot differ between the two routes.
+async fn limits_response(
+    db: &sqlx::PgPool,
+    tenant_id: Uuid,
+) -> Result<serde_json::Value, AppError> {
+    let features = feature_gate::get_plan_features(db, tenant_id)
         .await?
         .unwrap_or_default();
+    let overrides = feature_gate::get_tenant_limits(db, tenant_id).await?;
 
-    let overrides = feature_gate::get_tenant_limits(&state.db, tenant_id).await?;
+    // The entitlement the inbound router asks — the SAME helper, so this report cannot drift from
+    // what the mail path decides.
+    let sells_catch_all = feature_gate::catch_all_granted(db, tenant_id).await?;
+
+    // How many of this workspace's domains still carry the stored switch (the customer's
+    // preference, which a downgrade does not erase). Under a plan that sells catch-all they are all
+    // in force; under one that does not, every one of them is refused by the router.
+    let stored: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM private_email_domains WHERE tenant_id = $1 AND catch_all_enabled = true",
+    )
+    .bind(tenant_id)
+    .fetch_one(db)
+    .await
+    .map_err(AppError::Database)?;
+    let off_plan = if sells_catch_all { 0 } else { stored };
 
     let response = TenantEmailLimitsResponse {
         tenant_id,
@@ -51,9 +63,24 @@ pub async fn get_tenant_limits(
             .unwrap_or(features.max_aliases_per_mailbox),
         plan_defaults: features,
         overrides,
+        sells_catch_all,
+        catch_all_domains_enabled: stored,
+        catch_all_domains_off_plan: off_plan,
     };
 
-    Ok(Json(serde_json::to_value(&response).unwrap()))
+    Ok(serde_json::to_value(&response).unwrap())
+}
+
+/// GET /api/v1/private-email/admin/limits/:tenant_id
+/// Returns the tenant's plan defaults, any overrides, and effective limits.
+pub async fn get_tenant_limits(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(tenant_id): Path<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    crate::auth::platform_admin::require_platform_admin(&state.db, &claims.sub).await?;
+
+    Ok(Json(limits_response(&state.db, tenant_id).await?))
 }
 
 /// PATCH /api/v1/private-email/admin/limits/:tenant_id
@@ -87,31 +114,7 @@ pub async fn set_tenant_limits(
     .await
     .map_err(AppError::Database)?;
 
-    // Return the updated row
-    let overrides = feature_gate::get_tenant_limits(&state.db, tenant_id).await?;
-    let features = feature_gate::get_plan_features(&state.db, tenant_id)
-        .await?
-        .unwrap_or_default();
-
-    let response = TenantEmailLimitsResponse {
-        tenant_id,
-        effective_max_domains: overrides
-            .as_ref()
-            .and_then(|o| o.max_domains)
-            .unwrap_or(features.max_domains),
-        effective_max_mailboxes: overrides
-            .as_ref()
-            .and_then(|o| o.max_mailboxes)
-            .unwrap_or(features.max_mailboxes),
-        effective_max_aliases_per_mailbox: overrides
-            .as_ref()
-            .and_then(|o| o.max_aliases_per_mailbox)
-            .unwrap_or(features.max_aliases_per_mailbox),
-        plan_defaults: features,
-        overrides,
-    };
-
-    Ok(Json(serde_json::to_value(&response).unwrap()))
+    Ok(Json(limits_response(&state.db, tenant_id).await?))
 }
 
 /// GET /api/v1/private-email/admin/limits
@@ -129,7 +132,37 @@ pub async fn list_all_overrides(
     .await
     .map_err(AppError::Database)?;
 
-    Ok(Json(serde_json::to_value(&rows).unwrap()))
+    // Per-tenant catch-all honesty (kanban t_6b54961b): the same three answers the per-tenant
+    // report carries, added to every row (each existing field is preserved, so nothing that reads
+    // this array breaks). Without it an operator scanning this table cannot tell a workspace that
+    // legitimately holds catch-all from one whose stored switch the router is now refusing because
+    // the plan it was moved to does not sell the feature.
+    let mut out: Vec<serde_json::Value> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let sells = feature_gate::catch_all_granted(&state.db, row.tenant_id).await?;
+        let stored: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM private_email_domains WHERE tenant_id = $1 AND catch_all_enabled = true",
+        )
+        .bind(row.tenant_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(AppError::Database)?;
+        let mut v = serde_json::to_value(&row).unwrap_or_else(|_| serde_json::json!({}));
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert("sells_catch_all".into(), serde_json::json!(sells));
+            obj.insert(
+                "catch_all_domains_enabled".into(),
+                serde_json::json!(stored),
+            );
+            obj.insert(
+                "catch_all_domains_off_plan".into(),
+                serde_json::json!(if sells { 0 } else { stored }),
+            );
+        }
+        out.push(v);
+    }
+
+    Ok(Json(serde_json::json!(out)))
 }
 
 // ── Retention Endpoints ──

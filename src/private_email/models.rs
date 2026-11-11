@@ -301,6 +301,16 @@ pub struct TenantEmailLimitsResponse {
     pub effective_max_domains: i32,
     pub effective_max_mailboxes: i32,
     pub effective_max_aliases_per_mailbox: i32,
+    /// Does the tenant's CURRENT plan sell catch-all? This is the entitlement the inbound router
+    /// asks, reported here so an operator reads the same answer the mail path uses instead of
+    /// inferring it from a stored switch (kanban t_6b54961b).
+    pub sells_catch_all: bool,
+    /// Domains on this workspace that still carry the stored catch-all switch.
+    pub catch_all_domains_enabled: i64,
+    /// Of those, how many are REFUSED right now because the current plan does not sell catch-all.
+    /// Non-zero is the ordinary residue of a downgrade: the switch is remembered, the router is
+    /// honouring the plan. The operator can see that state instead of having to reason about it.
+    pub catch_all_domains_off_plan: i64,
 }
 
 // Plan feature limits

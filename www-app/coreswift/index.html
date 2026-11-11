@@ -6928,7 +6928,19 @@ function peCredentialCell(d) {
 // higher" — instead of a client-side guess about which plans sell it, so the copy cannot drift from
 // the gate. The success message is only shown when the returned row really carries the new value.
 function peCatchAllCell(d) {
+  // The stored switch is NOT the entitlement (kanban t_6b54961b). Catch-all is sold by the plan,
+  // and the inbound router asks the plan at the moment a delivery needs it, so a workspace that
+  // enabled it and was then moved to a plan that does not sell it keeps this switch remembered
+  // while every unmatched delivery is refused. The server reports exactly that state as
+  // catch_all_off_plan, and painting "on" there would promise mail the router is dropping — the
+  // panel has to say what is actually true, and the server's hint names the one remedy.
   const on = !!d.catch_all_enabled;
+  if (d.catch_all_off_plan) {
+    return '<span class="badge badge-warning">off — not on your plan</span>' +
+      (d.catch_all_hint
+        ? '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">' + escapeHtml(d.catch_all_hint) + '</div>'
+        : '');
+  }
   return (on
       ? '<span class="badge badge-success">on</span>'
       : '<span class="badge badge-muted">off</span>') +
@@ -8301,7 +8313,7 @@ window.appGuidePages = {
   "comm-log":      { title: "Communications Log", desc: "Every message in and out — email, text and calls — in one chronological history.", actions: ["Filter by contact or channel", "Open an entry to see its content"] },
   tickets:         { title: "Support Tickets", desc: "Support requests raised in your workspace and their status.", actions: ["Open a ticket", "Reply and change its status"] },
   inbox:           { title: "Shared Inbox", desc: "The mail that has arrived at your workspace's addresses, in one place — filter by address, read a message, turn one into a ticket.", actions: ["Pick an address to narrow the list", "Open a message", "Mark one as a ticket"] },
-  "email-settings":{ title: "Email Domains & Sending", desc: "The sending half of your mail: the domains you send from, their catch-all switch, mailboxes, auto-replies and a form to send from a mailbox.", actions: ["Enable or disable catch-all on a domain", "Add a domain and check its verification", "Create a mailbox"] },
+  "email-settings":{ title: "Email Domains & Sending", desc: "The sending half of your mail: the domains you send from, their catch-all switch, mailboxes, auto-replies and a form to send from a mailbox.", actions: ["Enable or disable catch-all on a domain", "Add a domain and check its verification", "Create a mailbox", "Catch-all is included in the plan, not the domain: if this workspace is moved to a plan that does not include it, the switch is remembered but mail to an address that does not exist on the domain is refused until you upgrade. The Catch-all cell says so, and never shows it as on."] },
   calendar:        { title: "Calendar", desc: "Events and appointments for you and your team.", actions: ["Create an event", "Open one to see its details"] },
   bookings:        { title: "Bookings", desc: "Appointment slots people can book with you, and the bookings they made.", actions: ["Set your availability", "Review upcoming bookings"] },
   "ai-assistant":  { title: "AI Assistant", desc: "Ask questions about your data, or have it draft content for you.", actions: ["Connect an AI provider in the Integration Center", "Ask it something"] },

@@ -49,9 +49,15 @@ pub async fn list_domains(
     // only symptom was a failed send ("Stored API key for domain … cannot be read").
     let (keys, provider_keys) = load_credential_maps(&state.db, account_id).await?;
 
+    // Does this workspace's CURRENT plan sell catch-all? Read once for the whole list, by the same
+    // helper the inbound router and the switch's own gate use (kanban t_6b54961b), so a domain that
+    // still carries the stored preference on a downgraded plan is reported as off-plan instead of
+    // reading "on" while every unmatched delivery is refused.
+    let plan_sells_catch_all = feature_gate::catch_all_granted(&state.db, account_id).await?;
+
     let out: Vec<serde_json::Value> = domains
         .iter()
-        .map(|d| with_credential_status(account_id, d, &keys, &provider_keys))
+        .map(|d| with_credential_status(account_id, d, &keys, &provider_keys, plan_sells_catch_all))
         .collect();
 
     Ok(Json(serde_json::json!(out)))
@@ -125,6 +131,7 @@ fn with_credential_status(
     d: &PrivateEmailDomain,
     keys: &std::collections::HashMap<Uuid, String>,
     provider_keys: &std::collections::HashMap<Uuid, String>,
+    plan_sells_catch_all: bool,
 ) -> serde_json::Value {
     let status = domain_credential_status(tenant_id, d, keys, provider_keys);
     let mut v = serde_json::to_value(d).unwrap_or_else(|_| json!({}));
@@ -145,6 +152,33 @@ fn with_credential_status(
         let (wh_status, wh_len) = webhook_key_status(tenant_id, d);
         obj.insert("webhook_signing_key_status".into(), json!(wh_status));
         obj.insert("webhook_signing_key_length".into(), json!(wh_len));
+
+        // Honesty about a paid feature the current plan no longer sells (kanban t_6b54961b). The
+        // stored column can read `true` while the inbound router refuses every unmatched address,
+        // so a panel driven by the column alone would claim catch-all is on for a workspace that is
+        // not entitled to it. The stored preference stays in `catch_all_enabled` (that is what the
+        // switch remembers and what an upgrade restores); the EFFECTIVE answer and a sentence sit
+        // beside it, decided by the very same rule the router applies.
+        let stored = d.catch_all_enabled;
+        let off_plan = stored && !plan_sells_catch_all;
+        obj.insert(
+            "catch_all_effective".into(),
+            json!(super::feature_gate::catch_all_effective(
+                stored,
+                plan_sells_catch_all
+            )),
+        );
+        obj.insert("catch_all_off_plan".into(), json!(off_plan));
+        if off_plan {
+            obj.insert(
+                "catch_all_hint".into(),
+                json!(
+                    "Catch-all is off: your current plan does not include it, so mail to an \
+                     address that does not exist on this domain is refused. Upgrade to the \
+                     Professional plan or higher to restore it — this switch is remembered."
+                ),
+            );
+        }
     }
     v
 }
@@ -310,11 +344,18 @@ pub async fn update_domain(
     match row {
         Some(domain) => {
             let (keys, provider_keys) = load_credential_maps(&state.db, account_id).await?;
+            // Same plan question the list asks, so the updated row answers with the same honest
+            // effective state (kanban t_6b54961b). A PATCH that switches catch-all ON on an
+            // unentitled plan was already refused above; this matters for the DOWNGRADED row, whose
+            // stored value survives a plan change while the entitlement does not.
+            let plan_sells_catch_all =
+                feature_gate::catch_all_granted(&state.db, account_id).await?;
             Ok(Json(with_credential_status(
                 account_id,
                 &domain,
                 &keys,
                 &provider_keys,
+                plan_sells_catch_all,
             )))
         }
         None => Err(AppError::NotFound("Domain not found".into())),
@@ -480,7 +521,14 @@ pub async fn verify_domain(
     }
 
     let (keys, provider_keys) = load_credential_maps(&state.db, account_id).await?;
-    let mut body = with_credential_status(account_id, &row, &keys, &provider_keys);
+    let plan_sells_catch_all = feature_gate::catch_all_granted(&state.db, account_id).await?;
+    let mut body = with_credential_status(
+        account_id,
+        &row,
+        &keys,
+        &provider_keys,
+        plan_sells_catch_all,
+    );
     if let Some(obj) = body.as_object_mut() {
         obj.insert("mailgun_state".into(), json!(mailgun_state));
         obj.insert("verified_before".into(), json!(verified_before));
@@ -790,11 +838,13 @@ async fn add_mailgun_domain(
     // the webhook key is reported as presence + length (never the value), so the panel can say
     // whether inbound mail can be authenticated yet.
     let (keys, provider_keys) = load_credential_maps(&state.db, account_id).await?;
+    let plan_sells_catch_all = feature_gate::catch_all_granted(&state.db, account_id).await?;
     Ok(Json(with_credential_status(
         account_id,
         &row,
         &keys,
         &provider_keys,
+        plan_sells_catch_all,
     )))
 }
 
