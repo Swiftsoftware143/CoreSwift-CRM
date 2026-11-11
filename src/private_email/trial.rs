@@ -205,25 +205,14 @@ pub async fn enforce_send(
         }
     }
 
-    // Storage ceiling (free plans: 5 GB). Mail is never deleted to make room — sending stops and
-    // the customer is told why, which is the honest edge of a storage promise.
-    if let Some(mb) = limit_of(db, tenant_id, "email_storage_mb").await? {
-        let limit_bytes = mb.saturating_mul(1024 * 1024);
-        let (used,): (i64,) = sqlx::query_as(
-            "SELECT COALESCE(SUM(size_bytes), 0)::int8 FROM private_email_messages WHERE tenant_id = $1",
-        )
-        .bind(tenant_id)
-        .fetch_one(db)
-        .await
-        .map_err(AppError::Database)?;
-        if used >= limit_bytes {
-            return Err(AppError::UpgradeRequired(format!(
-                "Your free mailbox has filled its {} GB of storage, so this message was not sent. \
-                 Nothing has been deleted — upgrade for more room and sending resumes immediately.",
-                mb / 1024
-            )));
-        }
-    }
+    // ── STORAGE DOES NOT BLOCK SENDING (B206, David 2026-11-11) ──────────────────────────────────
+    // This function used to stop a send once `email_storage_mb` was reached, and it counted only
+    // stored messages. That was the clock-era rule wearing a quota's clothes: it refused the ONE
+    // action a support inbox exists for while doing nothing about the number itself. The decided
+    // rule is narrower and honest — a full mailbox keeps accepting plain mail and keeps sending it;
+    // the only thing it pauses is adding NEW attachments/files, which is enforced at the upload
+    // door (`storage::enforce_new_file_room`). Deleting nothing and refusing nothing is the promise;
+    // the meter, the banner and the monthly reminder are how the owner is told to make room.
 
     Ok(())
 }
@@ -323,14 +312,6 @@ pub async fn mailbox_status(pool: &PgPool, tenant_id: Uuid) -> Result<Value, App
     .await
     .map_err(AppError::Database)?;
 
-    let (storage_used,): (i64,) = sqlx::query_as(
-        "SELECT COALESCE(SUM(size_bytes), 0)::int8 FROM private_email_messages WHERE tenant_id = $1",
-    )
-    .bind(tenant_id)
-    .fetch_one(pool)
-    .await
-    .map_err(AppError::Database)?;
-
     let mailboxes: Vec<Value> = boxes
         .iter()
         .map(|b| {
@@ -349,6 +330,9 @@ pub async fn mailbox_status(pool: &PgPool, tenant_id: Uuid) -> Result<Value, App
         })
         .collect();
 
+    let storage_usage = super::storage::usage(pool, tenant_id).await;
+    let storage_retention = super::storage::retention(pool, tenant_id).await;
+
     Ok(json!({
         "plan_sells_sending": sells,
         "can_send": access.allowed,
@@ -359,8 +343,17 @@ pub async fn mailbox_status(pool: &PgPool, tenant_id: Uuid) -> Result<Value, App
         "days_left": access.days_left,
         "sent_last_24h": sent_today,
         "send_cap_per_day": limit_of(pool, tenant_id, "email_outbound_per_day").await?,
-        "storage_used_bytes": storage_used,
-        "storage_limit_mb": limit_of(pool, tenant_id, "email_storage_mb").await?,
+        // The storage state, from the ONE calculation the meter, the banner and the 100% refusal
+        // share (`storage::usage`). `storage_limit_mb` keeps its old name for the console.
+        "storage_used_bytes": storage_usage.used_bytes,
+        "storage_limit_mb": storage_usage.quota_bytes / (1024 * 1024),
+        "storage_quota_bytes": storage_usage.quota_bytes,
+        "storage_percent": storage_usage.percent(),
+        "storage_level": storage_usage.level(),
+        "attachments_accepted": storage_usage.accepts_new_files(),
+        "retention_days": storage_retention.days,
+        "retention_first_expiry_at": storage_retention.first_expiry_at,
+        "retention_sentence": super::storage::retention_sentence(&storage_retention),
         "mailboxes": mailboxes,
         // The plan's mailbox allowance, resolved from the registry. A defined number (or null when
         // the plan sells unlimited mailboxes); never "module on, limit missing", which is the

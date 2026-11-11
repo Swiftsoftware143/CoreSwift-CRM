@@ -328,6 +328,38 @@
       + '<button class="btn btn-secondary btn-sm" onclick="openUpgradeModal()">Upgrade CRM</button></div></div>';
   }
 
+  // STORAGE (B206, David 2026-11-11). The meter is always on screen; the warning block appears at
+  // 50 / 75 / 99 / 100 and stays until space is freed. Both come from GET /messages/counts, whose
+  // numbers are the same `storage::usage` the server refuses a new file with — so this panel cannot
+  // show room the server would refuse. Nothing here is dismissible.
+  function storagePanelHtml() {
+    var st = S.counts && S.counts.storage;
+    if (!st) return '';
+    var pct = Math.max(0, Math.min(100, Number(st.percent || 0)));
+    var colour = pct >= 100 ? '#b91c1c' : (pct >= 75 ? '#b45309' : '#2563eb');
+    var html = '<div style="padding:12px 14px;border:1px solid rgba(128,128,128,.3);border-radius:8px;margin-bottom:16px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">'
+      + '<strong style="font-size:13px">Storage</strong>'
+      + '<span style="font-size:12px;opacity:.8">' + esc(st.used_human || '') + ' of '
+      + esc(st.quota_human || '') + ' used (' + pct + '%)</span></div>'
+      + '<div style="height:8px;border-radius:999px;background:rgba(128,128,128,.25);margin:8px 0 6px;overflow:hidden">'
+      + '<i style="display:block;height:100%;width:' + pct + '%;background:' + colour + '"></i></div>'
+      + '<div style="font-size:12px;opacity:.75">Incoming mail is never refused and nothing is deleted to make room.</div>';
+    if (st.banner) {
+      var b = st.banner;
+      var bg = b.level >= 100 ? 'rgba(220,38,38,.14)' : (b.level >= 75 ? 'rgba(245,158,11,.16)' : 'rgba(59,130,246,.12)');
+      var bd = b.level >= 100 ? 'rgba(220,38,38,.5)' : (b.level >= 75 ? 'rgba(245,158,11,.55)' : 'rgba(59,130,246,.45)');
+      html += '<div style="margin-top:10px;padding:10px 12px;border-radius:8px;background:' + bg + ';border:1px solid ' + bd + '">'
+        + '<strong>' + esc(b.headline) + '</strong>'
+        + '<div style="font-size:12.5px;opacity:.85;margin-top:3px">' + esc(b.action) + '</div>'
+        + '<div style="margin-top:8px"><button class="btn btn-primary btn-sm" onclick="openUpgradeModal()">'
+        + (b.level >= 100 ? 'Get more storage' : 'See plans') + '</button></div></div>';
+    }
+    var ret = (S.counts && S.counts.retention && S.counts.retention.sentence) || '';
+    if (ret) html += '<div style="font-size:11.5px;opacity:.6;margin-top:8px">' + esc(ret) + '</div>';
+    return html + '</div>';
+  }
+
   function messagesHtml() {
     var m = (S.messages || []).slice();
     if (S.sort === 'alpha') {
@@ -475,6 +507,7 @@
       + '</div>'
       + (S.err ? '<div style="padding:8px;margin-bottom:8px;border-radius:6px;background:rgba(220,80,80,.15)">' + esc(S.err) + '</div>' : '')
       + trialBannerHtml()
+      + storagePanelHtml()
       + '<div style="padding:14px;border:1px solid rgba(128,128,128,.3);border-radius:8px;margin-bottom:16px">'
       + '<h4 style="margin:0 0 10px">Your inboxes</h4>' + inboxesHtml() + '</div>'
       + '<div style="padding:14px;border:1px solid rgba(128,128,128,.3);border-radius:8px">'
@@ -485,7 +518,7 @@
       + '<div>' + (S.label ? '<button class="btn btn-ghost btn-xs" onclick="peSetLabel(\'\')">Clear label</button> ' : '')
       + addressFilterHtml()
       + '<button class="btn btn-ghost btn-xs" onclick="peLoad()">Refresh</button></div></div>'
-      + '<div style="font-size:12px;opacity:.7;margin-bottom:8px">Mail stays here. A plan can limit how far back the history goes, but the free trial ending never deletes a message — it only stops sending.</div>'
+      + '<div style="font-size:12px;opacity:.7;margin-bottom:8px">Mail stays here and is never deleted to make room for new mail. A plan sets how much storage you have; the free trial ending never deletes a message — it only stops sending. The time-based backstop, if any applies to this account, is stated with the meter above.</div>'
       + messagesHtml() + '</div>'
       + '<div id="peDetail"></div>'
       + '</div>';

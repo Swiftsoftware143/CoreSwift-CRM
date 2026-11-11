@@ -22,7 +22,9 @@ pub struct SetRetentionRequest {
 }
 
 fn default_retention() -> i32 {
-    365
+    // The backstop, not the product rule (B206 revised): ten years, so an unset window never deletes
+    // a customer's mail on a clock. An admin may still set a shorter window deliberately.
+    3650
 }
 
 /// Request body for triggering a manual purge.
@@ -38,7 +40,11 @@ pub struct PurgeTriggerRequest {
 pub struct PurgeSummaryResponse {
     pub tenants_checked: i64,
     pub tenants_purged: i64,
+    /// Outbound `outbound_messages` rows removed (the delivery log, not mail the customer reads).
     pub messages_deleted: i64,
+    /// Stored inbox messages removed by the retention BACKSTOP (B206: ten years by default, so in
+    /// normal operation this is 0 — nothing is deleted on a clock, and never to make room).
+    pub inbox_messages_deleted: i64,
     pub events_deleted: i64,
     pub errors: Vec<String>,
 }
@@ -55,6 +61,7 @@ impl PurgeSummaryResponse {
             tenants_checked: 0,
             tenants_purged: 0,
             messages_deleted: 0,
+            inbox_messages_deleted: 0,
             events_deleted: 0,
             errors: Vec::new(),
         }

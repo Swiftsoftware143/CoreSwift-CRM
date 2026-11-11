@@ -20,6 +20,11 @@ use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
 
+/// The retention window an account with NO explicit setting reports and is swept by: ten years. The
+/// clock is a far backstop behind the storage quota (B206 revised), so the operator's readout must
+/// name the same number the sweep uses rather than the old 365-day default.
+const PURGE_BACKSTOP_DAYS: i32 = purge::DEFAULT_RETENTION_DAYS;
+
 /// One builder for both the GET and the PATCH answer, so the operator's view of a tenant's limits
 /// (including the catch-all honesty block, kanban t_6b54961b) cannot differ between the two routes.
 async fn limits_response(
@@ -185,8 +190,8 @@ pub async fn get_retention(
     .map_err(AppError::Database)?;
 
     let (retention_days, last_purged_at) = row
-        .map(|(d, p)| (d.unwrap_or(365), p))
-        .unwrap_or((365, None));
+        .map(|(d, p)| (d.unwrap_or(PURGE_BACKSTOP_DAYS), p))
+        .unwrap_or((PURGE_BACKSTOP_DAYS, None));
 
     Ok(Json(
         serde_json::to_value(RetentionResponse {

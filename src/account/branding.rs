@@ -79,6 +79,9 @@ pub async fn upload_logo(
     mut multipart: Multipart,
 ) -> ApiResult<Json<serde_json::Value>> {
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    // STORAGE (B206): a full account keeps accepting mail but takes no new files. Refused BEFORE the
+    // bytes are read/stored, with the real numbers in the sentence.
+    crate::private_email::storage::enforce_new_file_room(&s.db, tenant_id, "logo").await?;
     let (content_type, bytes) = crate::image_store::read_uploaded_image(&mut multipart).await?;
     let byte_len = bytes.len();
 

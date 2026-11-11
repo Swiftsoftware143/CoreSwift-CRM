@@ -229,12 +229,24 @@ pub async fn message_counts(
     .map_err(AppError::Database)?;
 
     let get = |k: &str| row.try_get::<i64, _>(k).unwrap_or(0);
-    let used: i64 = row.try_get::<i64, _>("used_bytes").unwrap_or(0);
 
-    // Storage is stated, not enforced on a clock (B206). The plan's storage_gb is the ceiling; the
-    // inbox never refuses inbound mail, so this number only informs.
-    let storage_gb = plan_storage_gb(&state, tenant_id).await.unwrap_or(2.0);
-    let limit_bytes = (storage_gb * 1024.0 * 1024.0 * 1024.0) as i64;
+    // STORAGE (B206, David 2026-11-11). ONE source for the allowance and the usage: the module
+    // registry row this account's plan carries (`email_storage_mb`, 2 GB on free) and the bytes the
+    // account really stores (messages + the logo + profile pictures). The meter, the banner, the
+    // reminder email and the 100% attachment refusal all read `storage::usage`, so the number shown
+    // here and the number that refuses a file can never disagree.
+    //
+    // This read also EVALUATES the three rungs (50 / 75 / 99). That is deliberate: a customer who
+    // opens their mail is told the moment the screen can tell them, and the ledger in
+    // `private_email_storage_notices` means the email is sent at most once per rung per month no
+    // matter how often this endpoint is called.
+    let storage = crate::private_email::storage::usage(&state.db, tenant_id).await;
+    let notified = crate::private_email::storage::evaluate_and_notify(&state.db, tenant_id).await;
+    if !notified.is_empty() {
+        tracing::info!(tenant = %tenant_id, rungs = ?notified, "storage reminder rungs claimed on a counts read");
+    }
+    let retention = crate::private_email::storage::retention(&state.db, tenant_id).await;
+    let banner = crate::private_email::storage::banner(&storage);
 
     Ok(Json(json!({
         "inbox": get("inbox"),
@@ -246,9 +258,33 @@ pub async fn message_counts(
         "spam": get("spam"),
         "trash": get("trash"),
         "tickets": get("tickets"),
-        "used_bytes": used,
-        "limit_bytes": limit_bytes,
-        "storage_gb": storage_gb,
+        // The flat figures the mail client's rail already read, kept for compatibility, plus the
+        // whole storage state under `storage` for the meter and the banner.
+        "used_bytes": storage.used_bytes,
+        "limit_bytes": storage.quota_bytes,
+        "storage_gb": storage.quota_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+        "storage": {
+            "used_bytes": storage.used_bytes,
+            "quota_bytes": storage.quota_bytes,
+            "mail_bytes": storage.mail_bytes,
+            "file_bytes": storage.file_bytes,
+            "used_human": storage.used_human(),
+            "quota_human": storage.quota_human(),
+            "percent": storage.percent(),
+            "level": storage.level(),
+            "attachments_accepted": storage.accepts_new_files(),
+            "banner": banner,
+        },
+        // The time-based rule survives only as a far backstop (10 years by default, raised from 365
+        // days by migration 142, so no customer mail is deleted on a clock). It is stated on screen
+        // with the account's REAL window whenever one applies.
+        "retention": {
+            "days": retention.days,
+            "oldest_message_at": retention.oldest_message_at,
+            "first_expiry_at": retention.first_expiry_at,
+            "expired_messages": retention.expired_messages,
+            "sentence": crate::private_email::storage::retention_sentence(&retention),
+        },
         // Whether the Summarise control can work at all. The client hides it when false rather
         // than offering a button that can only fail (B205 "no dead ends").
         "ai_summary": !ai_keys(&state, tenant_id).await.is_empty(),
@@ -1483,29 +1519,6 @@ async fn message_labels(
             "color": r.try_get::<String, _>("color").unwrap_or_default(),
         }))
         .collect::<Vec<Value>>()))
-}
-
-/// The account's plan storage in GB. 2 GB is the stated default (B206), and a plan that names a
-/// size wins. A failed read is the default, never an error: the banner must not hide mail.
-async fn plan_storage_gb(state: &AppState, tenant_id: Uuid) -> Option<f64> {
-    let row = sqlx::query(
-        r#"
-        SELECT p.features
-          FROM tenant_plans tp
-          JOIN plans p ON p.id = tp.plan_id
-         WHERE tp.tenant_id = $1 AND tp.status = 'active'
-         LIMIT 1
-        "#,
-    )
-    .bind(tenant_id)
-    .fetch_optional(&state.db)
-    .await
-    .ok()??;
-    let features: Value = row.try_get("features").ok()?;
-    let gb = features.get("storage_gb").and_then(|v| v.as_f64())?;
-    // A plan naming less than the sold 2 GB minimum is read as the minimum: the inbox exists to
-    // receive, and a 0.1 GB free tier would make the meter meaningless.
-    Some(gb.max(2.0))
 }
 
 // ────────────────────────────────────────────────────────────────────────────────────────────────

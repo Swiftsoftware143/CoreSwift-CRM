@@ -13,6 +13,7 @@ pub mod models;
 pub mod providers;
 pub mod purge;
 pub mod send_handler;
+pub mod storage;
 pub mod trial;
 pub mod webhook_handler;
 

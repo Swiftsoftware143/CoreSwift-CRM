@@ -23,6 +23,9 @@ use uuid::Uuid;
 /// caller because [`render_vars`] injects them.
 pub const APP_NAME: &str = "CoreSwift CRM";
 pub const APP_URL: &str = "https://app.coreswiftcrm.com";
+/// The mail client's own front door (B211): the storage reminder links the owner to the screen where
+/// the messages and the meter actually are, not to the CRM dashboard.
+pub const APP_URL_MAIL: &str = "https://inbox.coreswiftcrm.com";
 
 /// The app's OWN support channel — a PAGE, not a mailbox (measured 2026-11-07 on dns.google and
 /// 8.8.8.8): every address this product printed lived on a domain publishing **MX = 0**, with
@@ -470,6 +473,56 @@ fn inline_bodies(
                  The link works once and expires in 2 hours. Until you open it, nothing changes: your \
                  current address still works and your password stays the same. If you did not ask for \
                  this, ignore this email and nothing will happen.\n\n\
+                 - The {app_name} Team"
+            );
+            (subject, body, String::new(), false)
+        }
+        // The storage rung reminder (B206). Plain text on purpose: it carries numbers and a plain
+        // instruction, and it must read the same in every mail client. It NEVER says mail will be
+        // deleted to make room — that is the promise the whole rule exists to keep. The subject
+        // states the actual figures because a customer reads the subject first.
+        "storage_warning" => {
+            let used = vars.get("used").and_then(|v| v.as_str()).unwrap_or("some");
+            let quota = vars
+                .get("quota")
+                .and_then(|v| v.as_str())
+                .unwrap_or("your plan");
+            let percent = vars.get("percent").and_then(|v| v.as_i64()).unwrap_or(0);
+            let threshold = vars.get("threshold").and_then(|v| v.as_i64()).unwrap_or(50);
+            let inbox_url = vars
+                .get("inbox_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or(app_url);
+            let plans_url = vars
+                .get("plans_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or(app_url);
+            let retention = vars.get("retention").and_then(|v| v.as_str()).unwrap_or("");
+            let subject = format!(
+                "Your mailbox is {}% full — {} of {} used",
+                percent, used, quota
+            );
+            let action = if percent >= 100 {
+                "Your mailbox is FULL. Mail is still arriving and nothing has been deleted, but new attachments \
+                 and files are paused until you clear space or upgrade."
+            } else if threshold >= 99 {
+                "Your mailbox is almost full. Plain mail still arrives and nothing is deleted, but once the \
+                 allowance is reached new attachments and files are paused."
+            } else {
+                "You have room for now. Clearing out mail you no longer need (Trash and Spam count too) keeps \
+                 the meter down, and a bigger plan raises the allowance."
+            };
+            let body = format!(
+                "Hi {name},\n\n\
+                 This is a storage update for your mailbox: you are using {used} of {quota} ({percent}%).\n\n\
+                 {action}\n\n\
+                 Two things that are ALWAYS true here: mail sent to you keeps arriving, and nothing is deleted \
+                 to make room for new mail. The only thing a full mailbox pauses is adding new attachments or \
+                 files.\n\n\
+                 Open your mail and clear some space:\n    {inbox_url}\n\n\
+                 See the plans with more storage:\n    {plans_url}\n\n\
+                 {retention}\n\n\
+                 You will get at most one of these messages per storage level per month.\n\n\
                  - The {app_name} Team"
             );
             (subject, body, String::new(), false)

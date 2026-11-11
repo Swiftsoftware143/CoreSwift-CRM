@@ -36,7 +36,11 @@
   .folder.active{background:var(--accent-soft);color:#1e3a8a;font-weight:600}
   .folder .count{font-size:11px;color:var(--muted)}
   .rail h5{margin:14px 4px 6px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
-  .main{display:grid;grid-template-columns:minmax(280px,360px) 1fr;min-width:0}
+  .main{display:grid;grid-template-columns:minmax(280px,360px) 1fr;grid-template-rows:auto 1fr;min-width:0}
+  /* The storage banner (B206) spans the whole mail area above the list + reader, and stays until
+     space is freed: it is rendered from live usage, so nothing dismisses it but deleting mail or
+     upgrading. */
+  .storage-banner{grid-column:1 / -1;display:flex;gap:12px;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px}
   .list{border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-width:0}
   .list-head{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   .rows{overflow-y:auto;overflow-x:hidden;flex:1;min-width:0}
@@ -87,6 +91,6 @@
 </head>
 <body>
 <div id="app"><div class="empty">Loading CoreSwift Mail…</div></div>
-<script src="/mail.js?v=20261111f"></script>
+<script src="/mail.js?v=20261111g"></script>
 </body>
 </html>

@@ -134,6 +134,22 @@ pub async fn start_worker(db: PgPool) -> Result<(), Box<dyn std::error::Error + 
     })?;
     sched.add(job8).await?;
 
+    // Job 9: EVERY 10 MINUTES, at :13 — storage rungs (B206). One reminder email per account owner
+    // per rung per month, for an owner who never opens the app; it sends nothing once the rung's
+    // ledger row exists, and it never refuses mail or deletes a row. The inbox's counts read
+    // evaluates the same rungs, so the banner and the mail are always in step.
+    let db9 = db.clone();
+    let job9 = Job::new_async("13 */10 * * * *", move |_uuid, _lock| {
+        let db = db9.clone();
+        Box::pin(async move {
+            let queued = crate::private_email::storage::sweep(&db).await;
+            if queued > 0 {
+                tracing::info!(queued, "storage sweep queued reminders to account owners");
+            }
+        })
+    })?;
+    sched.add(job9).await?;
+
     // A BOOT-TIME sweep as well: after a restart an overdue trial is flipped immediately instead of
     // waiting up to an hour for the next tick. Idempotent (`WHERE access_mode = 'trial'`), so both
     // paths can run without touching a mailbox twice or writing two audit rows.
@@ -151,7 +167,7 @@ pub async fn start_worker(db: PgPool) -> Result<(), Box<dyn std::error::Error + 
     }
 
     sched.start().await?;
-    tracing::info!("Flawless Follow-up background worker started (8 cron jobs)");
+    tracing::info!("Flawless Follow-up background worker started (9 cron jobs)");
 
     Ok(())
 }

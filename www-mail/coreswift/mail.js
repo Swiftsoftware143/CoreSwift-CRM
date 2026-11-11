@@ -20,6 +20,9 @@
   'use strict';
 
   var TOKEN_KEY = 'csmail_token';
+  // The CRM console, where Plans & Billing lives. The storage banner's "See plans" door needs an
+  // address that actually opens that screen: `?tab=billing` is honoured by the console's boot.
+  var CRM_APP_URL = 'https://app.coreswiftcrm.com';
   var S = {
     token: localStorage.getItem(TOKEN_KEY) || '',
     me: null,
@@ -234,8 +237,14 @@
           + (S.domains[0].catch_all_enabled ? 'checked' : '') + '> Catch-all is on for ' + esc(S.domains[0].domain) + '</label>'
         : '')
       + '</div>'
-      + '<p style="color:var(--muted);font-size:12px">Mail is kept while you have storage (' + (S.counts.storage_gb || 2) + ' GB on this plan, upgraded with your plan). '
-      + 'Past that, mail older than your plan\'s retention period is removed — never silently, and never to make room for new mail: incoming mail is always accepted.</p>'
+      + '<p style="color:var(--muted);font-size:12px">'
+      + (S.counts.storage
+          ? ('Storage on this plan: ' + esc(S.counts.storage.quota_human || '') + ' — you are using '
+             + esc(S.counts.storage.used_human || '0 B') + ' (' + (S.counts.storage.percent || 0) + '%). ')
+          : 'Storage is included with your plan and grows with it. ')
+      + 'Incoming mail is always accepted and nothing is deleted to make room. '
+      + ((S.counts.retention && S.counts.retention.sentence) ? esc(S.counts.retention.sentence) : '')
+      + '</p>'
       + '</div>';
   }
 
@@ -412,20 +421,15 @@
         + '<button class="btn-ghost" data-labelmenu="' + esc(l.id) + '" title="Label actions">&#8942;</button></div>';
     }).join('');
 
-    var used = S.counts.used_bytes || 0, limit = S.counts.limit_bytes || 0;
-    var pct = limit ? Math.min(100, Math.round(used / limit * 100)) : 0;
-
     return '<div class="rail">'
       + '<div class="brand">CoreSwift Mail</div>'
       + '<button class="btn btn-primary" id="mCompose" style="width:100%">Compose</button>'
       + '<div style="margin-top:12px">' + rows + '</div>'
       + '<h5>Folders you made</h5>' + (customRows || '<div style="color:var(--muted);font-size:12px;padding:0 9px">None yet — use a folder\'s menu.</div>')
-      + '<h5>Labels <button class="btn-ghost" id="mNewLabel" title="Create label">+</button></h5>' + (labelRows || '<div style="color:var(--muted);font-size:12px;padding:0 9px">None yet.</div>')
-      + '<div class="storage" style="margin-top:auto;padding-top:12px">'
-      + '<div style="font-size:11px;color:var(--muted)">' + bytes(used) + ' of ' + bytes(limit) + ' used</div>'
-      + '<div class="meter"><i style="width:' + pct + '%"></i></div>'
-      + '<div style="font-size:11px;color:var(--muted)">Mail is kept while you have storage. Incoming mail is never refused.</div>'
-      + '</div></div>';
+      + '<h5>Labels <button class="btn-ghost" id="mNewLabel" title="Create label">+</button></h5>'
+      + (labelRows || '<div style="color:var(--muted);font-size:12px;padding:0 9px">None yet.</div>')
+      + storageMeterHtml()
+      + '</div>';
   }
 
   function addressOptions() {
@@ -454,6 +458,55 @@
         + '<span class="when">' + esc(fmt(m.received_at)) + '</span></div>';
     }).join('');
     return head + '<div class="rows">' + rows + '</div>';
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  // STORAGE (B206, David 2026-11-11)
+  //
+  // The meter and the banner are ONE read: GET /private-email/messages/counts returns
+  // `storage.banner` computed from the same `storage::usage` the server refuses a new file with, so
+  // this screen cannot promise room the server would refuse, or warn about a number it did not
+  // measure. The banner appears at 50 / 75 / 99 / 100 and STAYS until space is freed — it is derived
+  // from live usage, not from a dismissible flag.
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  function storageState() {
+    var st = S.counts && S.counts.storage;
+    return (st && typeof st === 'object') ? st : null;
+  }
+
+  function storageBannerHtml() {
+    var st = storageState();
+    if (!st || !st.banner) return '';
+    var b = st.banner;
+    var colours = b.level >= 100
+      ? ['#fee2e2', '#991b1b']
+      : (b.level >= 75 ? ['#fef3c7', '#92400e'] : ['#e0e7ff', '#1e3a8a']);
+    return '<div class="storage-banner" style="background:' + colours[0] + ';color:' + colours[1] + '">'
+      + '<div style="min-width:0"><strong>' + esc(b.headline) + '</strong>'
+      + '<div style="font-size:12.5px;margin-top:3px">' + esc(b.action) + '</div></div>'
+      + '<a class="btn btn-ghost" style="color:inherit;white-space:nowrap" href="'
+      + esc(CRM_APP_URL + '/?tab=billing') + '" target="_blank" rel="noopener">'
+      + (b.level >= 100 ? 'Get more storage' : 'See plans') + '</a></div>';
+  }
+
+  /// The permanent meter in the rail: the ACTUAL figures, never just "storage".
+  function storageMeterHtml() {
+    var st = storageState();
+    if (!st) return '';
+    var pct = Math.max(0, Math.min(100, Number(st.percent || 0)));
+    var colour = pct >= 100 ? '#b91c1c' : (pct >= 75 ? '#b45309' : (pct >= 50 ? '#1d4ed8' : '#1d4ed8'));
+    var ret = (S.counts && S.counts.retention && S.counts.retention.sentence) || '';
+    var paused = (st.attachments_accepted === false)
+      ? '<div style="font-size:11px;color:#991b1b;margin-top:4px">New attachments and files are paused until space is freed. Mail still arrives.</div>'
+      : '';
+    return '<div class="storage" style="margin-top:auto;padding-top:12px">'
+      + '<div style="font-size:11px;color:var(--muted)">' + esc(st.used_human || '') + ' of '
+      + esc(st.quota_human || '') + ' used (' + pct + '%)</div>'
+      + '<div class="meter"><i style="width:' + pct + '%;background:' + colour + '"></i></div>'
+      + paused
+      + '<div style="font-size:11px;color:var(--muted);margin-top:4px">Incoming mail is never refused and nothing is deleted to make room.</div>'
+      + (ret ? '<div style="font-size:10.5px;color:var(--muted);margin-top:4px">' + esc(ret) + '</div>' : '')
+      + '</div>';
   }
 
   function readerHtml() {
@@ -500,7 +553,8 @@
 
   function mailPage() {
     return '<div class="mail">' + railHtml()
-      + '<div class="main"><div class="list">' + listHtml() + '</div>'
+      + '<div class="main">' + storageBannerHtml()
+      + '<div class="list">' + listHtml() + '</div>'
       + '<div class="reader">' + readerHtml() + '</div></div></div>';
   }
 

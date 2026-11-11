@@ -683,6 +683,15 @@ function showApp() {
   paintAvatar();
   renderSidebar();
   switchTab('dashboard');
+  // DEEP LINK (?tab=billing). The mail client's storage banner has to send an owner to the screen
+  // that sells more storage; before this the console ignored the query string, so the only door was
+  // "sign in, then find Plans & Billing yourself". Only a REAL tab id is honoured, so a typo can
+  // never paint an empty screen.
+  try {
+    const wanted = new URLSearchParams(window.location.search).get('tab');
+    const known = [...MENU, ...SETTINGS_MENU, ...ADMIN_MENU].flatMap(it => it.type === 'group' && it.children ? it.children.map(c => c.id) : [it.id]);
+    if (wanted && known.indexOf(wanted) >= 0) switchTab(wanted);
+  } catch (_) { /* a malformed query string must never block the console */ }
   checkPlan();
   loadUsage();
   loadNotifCount();
@@ -8757,7 +8766,7 @@ function auditExportCsv() {
 }
 </script>
 <script src="/inline-guide-widget.js?v=20261106a"></script>
-<script src="/private-email-inbox.js?v=20261111i"></script>
+<script src="/private-email-inbox.js?v=20261111j"></script>
 </body>
 </html>
 

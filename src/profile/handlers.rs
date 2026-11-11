@@ -268,6 +268,11 @@ pub async fn upload_avatar(
     mut multipart: Multipart,
 ) -> ApiResult<Json<Value>> {
     let id = subject(&c)?;
+    // STORAGE (B206): the same file door rule as the workspace logo — a full account takes no new
+    // files, while its mail keeps arriving and nothing is deleted.
+    if let Ok(tenant_id) = Uuid::parse_str(&c.aid) {
+        crate::private_email::storage::enforce_new_file_room(&s.db, tenant_id, "picture").await?;
+    }
     let (content_type, bytes) = crate::image_store::read_uploaded_image(&mut multipart).await?;
     let byte_len = bytes.len();
 

@@ -278,6 +278,22 @@ pub async fn inbound_webhook(
 
     let (message_id, message_created) = stored;
 
+    // ── STORAGE (B206, David 2026-11-11) ────────────────────────────────────────────────────────
+    // A stored message is the only thing that moves the storage meter, so this is where a rung can
+    // be crossed. The evaluation CLAIMS each of 50 / 75 / 99 once per month and queues ONE reminder
+    // to the account owner; it never refuses the delivery and never deletes anything. It runs after
+    // the row is committed and off the request path, so a slow mail queue can never delay or fail an
+    // inbound delivery — the provider sees the same 200 it always did.
+    if message_created {
+        let db = state.db.clone();
+        tokio::spawn(async move {
+            let rungs = crate::private_email::storage::evaluate_and_notify(&db, tenant_id).await;
+            if !rungs.is_empty() {
+                tracing::info!(tenant = %tenant_id, rungs = ?rungs, "storage reminder queued after an inbound delivery");
+            }
+        });
+    }
+
     // Spam is filed, not answered: no contact, no ticket, no auto-reply. It is still a stored
     // message the user can see, restore and delete forever.
     if is_spam {
