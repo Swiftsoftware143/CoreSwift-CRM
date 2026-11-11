@@ -65,7 +65,23 @@ pub struct UpdateMessageRequest {
     pub is_starred: Option<bool>,
     /// Move to a real store: inbox | archive | spam | trash | drafts, or a subfolder path.
     pub folder: Option<String>,
-    pub assigned_user_id: Option<Uuid>,
+    /// The teammate this conversation belongs to (kanban t_5f314e9a). Same double-option contract as
+    /// the mailbox assignment: absent = leave it, `null` = give it back to the workspace, uuid =
+    /// assign it. A single `Option<Uuid>` plus `COALESCE` made this a SET-ONLY door — the teammate
+    /// who left, or the work that was handed back, could never be cleared.
+    #[serde(default, deserialize_with = "deserialize_optional_nullable_uuid")]
+    pub assigned_user_id: Option<Option<Uuid>>,
+}
+
+/// `{"assigned_user_id": "…"}` -> `Some(Some(id))`; `{"assigned_user_id": null}` -> `Some(None)`;
+/// absent -> `None`. The shape three "who is this for" fields on this app share.
+fn deserialize_optional_nullable_uuid<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<Uuid>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<Uuid>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Deserialize)]
@@ -401,15 +417,18 @@ pub async fn update_message(
         }
     }
 
-    // Assigning is the same object as ticket assignment (B204): the person must be in this account.
-    if let Some(user_id) = req.assigned_user_id {
-        let member: Option<(Uuid,)> =
-            sqlx::query_as("SELECT id FROM users WHERE id = $1 AND tenant_id = $2")
-                .bind(user_id)
-                .bind(tenant_id)
-                .fetch_optional(&state.db)
-                .await
-                .map_err(AppError::Database)?;
+    // Assigning is the same object as ticket assignment (B204): the person must be an ACTIVE member
+    // of this account. A former teammate's row is refused, so a removal cannot be undone by
+    // assigning work to somebody who can no longer sign in.
+    if let Some(Some(user_id)) = req.assigned_user_id {
+        let member: Option<(Uuid,)> = sqlx::query_as(
+            "SELECT id FROM users WHERE id = $1 AND tenant_id = $2 AND is_active = true",
+        )
+        .bind(user_id)
+        .bind(tenant_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::Database)?;
         if member.is_none() {
             return Err(AppError::Validation(
                 "That person is not a member of this account.".into(),
@@ -423,7 +442,7 @@ pub async fn update_message(
            SET is_read          = COALESCE($3, is_read),
                is_starred       = COALESCE($4, is_starred),
                folder           = COALESCE($5, folder),
-               assigned_user_id = COALESCE($6, assigned_user_id),
+               assigned_user_id = CASE WHEN $6::bool THEN $7::uuid ELSE assigned_user_id END,
                updated_at       = NOW()
          WHERE id = $1 AND tenant_id = $2
         RETURNING id, mailbox_id, address, folder, direction, from_address, from_name,
@@ -436,7 +455,10 @@ pub async fn update_message(
     .bind(req.is_read)
     .bind(req.is_starred)
     .bind(req.folder.as_deref().map(|f| f.trim().to_lowercase()))
-    .bind(req.assigned_user_id)
+    // `mentioned` / `person`: absent = leave the assignment alone, explicit null = clear it (the
+    // work goes back to the whole workspace), uuid = assign it.
+    .bind(req.assigned_user_id.is_some())
+    .bind(req.assigned_user_id.flatten())
     .fetch_optional(&state.db)
     .await
     .map_err(AppError::Database)?
@@ -1068,14 +1090,26 @@ pub async fn summarize_message(
 ///
 /// "Assign to a team member" is the same object as ticket assignment (B204), and a name that is not
 /// in this account must never be offered. Members see the account's people; nothing outside it.
+///
+/// ACTIVE people only (kanban t_5f314e9a): a teammate who was removed must not stay in the picker —
+/// the assignment write refuses an inactive row anyway, so offering it would be a control that
+/// dead-ends. The NAME comes from `users.name` with the first/last pair as a fallback: signup and the
+/// invite door write `name`, while only some writers fill `first_name`/`last_name`, and a picker of
+/// blank people is unusable.
 pub async fn list_members(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<Json<Value>> {
     let tenant_id = account_id(&claims)?;
     let rows = sqlx::query(
-        "SELECT id, first_name, last_name, email, role
-           FROM users WHERE tenant_id = $1 ORDER BY first_name, last_name",
+        r#"SELECT id,
+                  COALESCE(NULLIF(btrim(name), ''),
+                           NULLIF(btrim(coalesce(first_name, '') || ' ' || coalesce(last_name, '')), ''),
+                           email) AS display_name,
+                  email, role
+             FROM users
+            WHERE tenant_id = $1 AND is_active = true
+            ORDER BY display_name"#,
     )
     .bind(tenant_id)
     .fetch_all(&state.db)
@@ -1085,11 +1119,9 @@ pub async fn list_members(
     let members: Vec<Value> = rows
         .iter()
         .map(|r| {
-            let first: String = r.try_get("first_name").unwrap_or_default();
-            let last: String = r.try_get("last_name").unwrap_or_default();
             json!({
                 "id": r.try_get::<Uuid, _>("id").ok(),
-                "name": format!("{} {}", first, last).trim().to_string(),
+                "name": r.try_get::<String, _>("display_name").unwrap_or_default(),
                 "email": r.try_get::<Option<String>, _>("email").unwrap_or(None),
                 "role": r.try_get::<Option<String>, _>("role").unwrap_or(None),
             })

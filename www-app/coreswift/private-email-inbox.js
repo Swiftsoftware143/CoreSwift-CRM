@@ -29,6 +29,9 @@
   var S = {
     boxes: [], domains: [], messages: [], counts: {}, addresses: [], labels: [],
     folders: { system: [], custom: [] },
+    // The people work can be handed to (kanban t_5f314e9a): the SAME list the Team screen shows,
+    // read from `/private-email/members`, which only ever answers ACTIVE members of this account.
+    members: [],
     miscTotal: 0, allTotal: null, view: 'inbox', address: 'all', sel: null, err: null,
     // The label that is filtering the list (a label row behaves like a folder view: the server
     // filters on it, so the count beside the label and the rows shown can never disagree).
@@ -100,6 +103,10 @@
         + (branded ? 'opens at inbox.' + esc(dom.domain) : 'opens at inbox.coreswiftcrm.com until inbox.' + esc(dom.domain || 'your domain') + ' is live')
         + '</div></td>'
         + '<td style="padding:8px;opacity:.75">' + count + '</td>'
+        // WHO LOOKS AFTER THIS INBOX (kanban t_5f314e9a). The teammate is a real person in this
+        // account; clearing it gives the address back to the whole workspace. The write goes to
+        // PATCH /private-email/boxes/:id, the SAME `user_id` column this inbox was provisioned with.
+        + '<td style="padding:8px">' + assignSelectHtml('box', b.id, b.user_id) + '</td>'
         + '<td style="padding:8px;text-align:right;white-space:nowrap">'
         + '<label style="font-size:11px;opacity:.75;margin-right:10px;cursor:pointer"><input type="checkbox" '
         + (b.creates_ticket ? 'checked ' : '') + 'onchange="peToggleTicket(\'' + esc(b.id) + '\',this.checked)"> also a ticket</label>'
@@ -110,8 +117,36 @@
         + '</td></tr>';
     }).join('');
     return '<table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:left;opacity:.7">'
-      + '<th style="padding:6px 8px">Inbox</th><th style="padding:6px 8px">Status</th><th style="padding:6px 8px">Messages</th><th></th>'
+      + '<th style="padding:6px 8px">Inbox</th><th style="padding:6px 8px">Status</th><th style="padding:6px 8px">Messages</th><th style="padding:6px 8px">Assigned to</th><th></th>'
       + '</tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  // "Who is this for" — the ONE assignment control, used by an inbox row and by a conversation.
+  //
+  // Both write the same thing: a person in THIS account (the server refuses anybody else, and refuses
+  // a removed teammate). An empty choice is a real answer, not "no change": it hands the inbox or the
+  // conversation back to the whole workspace, which is what a set-only door could never do.
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  function memberById(id) {
+    if (!id) return null;
+    return (S.members || []).filter(function (m) { return m.id === id; })[0] || null;
+  }
+
+  function memberLabel(m) {
+    return (m && (m.name || m.email)) || 'someone';
+  }
+
+  function assignSelectHtml(kind, id, currentId) {
+    var cur = currentId || '';
+    var opts = '<option value="">Nobody — the whole workspace</option>'
+      + (S.members || []).map(function (m) {
+        return '<option value="' + esc(m.id) + '"' + (m.id === cur ? ' selected' : '') + '>'
+          + esc(memberLabel(m)) + '</option>';
+      }).join('');
+    return '<select class="pe-assign" data-kind="' + esc(kind) + '" data-id="' + esc(id) + '" '
+      + 'onchange="peAssign(this.getAttribute(\'data-kind\'),this.getAttribute(\'data-id\'),this.value)" '
+      + 'style="max-width:180px;font-size:12px" title="Who looks after this">' + opts + '</select>';
   }
 
   // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -330,6 +365,11 @@
         + '<td style="padding:8px">' + esc(x.from_name || x.from_address || 'Unknown sender') + '</td>'
         + '<td style="padding:8px">' + esc(x.subject || '(no subject)')
         + (x.is_ticket ? ' <span style="background:#dcfce7;color:#166534;padding:1px 6px;border-radius:8px;font-size:11px">TICKET</span>' : '')
+        // Who is working this thread — the same assignment the ticket queue shows (kanban t_5f314e9a).
+        + (x.assigned_user_id
+          ? ' <span style="background:#e0e7ff;color:#3730a3;padding:1px 6px;border-radius:8px;font-size:11px">'
+            + esc(memberLabel(memberById(x.assigned_user_id))) + '</span>'
+          : '')
         + '</td>'
         + '<td style="padding:8px;opacity:.7;font-size:12px">' + esc(x.address || '') + '</td>'
         + '<td style="padding:8px;opacity:.7;white-space:nowrap">' + esc(fmt(x.received_at)) + '</td>'
@@ -481,7 +521,10 @@
         api().get('/private-email/mailbox-status').catch(function () { return null; }),
         // Labels are account-level name+colour rows with a live usage count; the rail and the
         // message screen both read this one list so the two can never disagree.
-        api().get('/private-email/labels').catch(function () { return { labels: [] }; })
+        api().get('/private-email/labels').catch(function () { return { labels: [] }; }),
+        // WHO WORK CAN BE HANDED TO (kanban t_5f314e9a). Active members of this account only — the
+        // same roster the Team screen lists, so a removed teammate disappears from every picker.
+        api().get('/private-email/members').catch(function () { return { members: [] }; })
       ]);
       S.boxes = Array.isArray(results[0]) ? results[0] : (results[0].boxes || []);
       S.domains = Array.isArray(results[1]) ? results[1] : (results[1].domains || []);
@@ -497,6 +540,7 @@
       };
       S.status = results[6] || null;
       S.labels = (results[7] && Array.isArray(results[7].labels)) ? results[7].labels : [];
+      S.members = (results[8] && Array.isArray(results[8].members)) ? results[8].members : [];
       // A label that was deleted elsewhere (or never existed) must not keep filtering the list to
       // an empty page: drop the filter when it names a label this account no longer has.
       if (S.label && !S.labels.some(function (l) { return l.id === S.label; })) S.label = '';
@@ -1032,6 +1076,36 @@
     } catch (e) { toastMsg(fail(e), 'error'); }
   };
 
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  // Assign (kanban t_5f314e9a) — ONE writer for both objects.
+  //
+  // `box` writes `private_email_boxes.user_id` (who looks after an address) and `message` writes
+  // `private_email_messages.assigned_user_id` (who owns a conversation) — the same teammate, the same
+  // roster, and the conversation's answer is also what the ticket queue reads through its ticket
+  // link. `''` (the "Nobody" option) is sent as an explicit `null`, which the server treats as "give
+  // it back to the workspace" rather than "leave it alone".
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  window.peAssign = async function (kind, id, userId) {
+    var who = userId ? memberLabel(memberById(userId)) : '';
+    try {
+      if (kind === 'box') {
+        await api().patch('/private-email/boxes/' + id, { user_id: userId || null });
+        toastMsg(userId ? 'This inbox is ' + who + "'s now" : 'This inbox is back with the whole workspace', 'success');
+        await load();
+        return;
+      }
+      await api().patch('/private-email/messages/' + id, { assigned_user_id: userId || null });
+      toastMsg(userId ? 'Assigned to ' + who : 'Back with the whole workspace', 'success');
+      await load();
+      window.peOpenMessage(id);
+    } catch (e) {
+      toastMsg(fail(e), 'error');
+      // Repaint from the server so a refused assignment cannot leave the control showing a value
+      // the database never took.
+      await load();
+    }
+  };
+
   window.peOpenMessage = async function (id) {
     var d = document.getElementById('peDetail');
     if (!d) return;
@@ -1060,6 +1134,14 @@
           : '<div style="margin:10px 0;padding:6px 10px;border-radius:6px;background:#fef3c7;color:#92400e;font-size:13px;display:flex;justify-content:space-between;align-items:center">'
             + '<span>In the inbox only — nobody is working this yet.</span>'
             + '<button class="btn btn-primary btn-xs" onclick="peMakeTicket(\'' + esc(m.id) + '\')">Turn into a ticket</button></div>')
+        + '<div style="margin:10px 0;padding:8px 10px;border:1px solid rgba(128,128,128,.25);border-radius:6px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">'
+        + '<div style="font-size:12px;opacity:.7">Assigned to</div>'
+        + assignSelectHtml('message', m.id, m.assigned_user_id)
+        + '<div style="font-size:12px;opacity:.7">'
+        + (m.assigned_user_id
+          ? 'This thread is ' + esc(memberLabel(memberById(m.assigned_user_id))) + '\'s. The ticket queue shows the same person.'
+          : 'Nobody owns this thread yet — the whole workspace can see it in the shared inbox.')
+        + '</div></div>'
         + '<div style="margin:10px 0;padding:8px 10px;border:1px solid rgba(128,128,128,.25);border-radius:6px">'
         + '<div style="font-size:12px;opacity:.7;margin-bottom:6px">Labels</div>'
         + '<div>' + labelChipsHtml(m) + '</div>'

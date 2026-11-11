@@ -280,6 +280,25 @@ pub struct UpdateMailboxRequest {
     pub forwarding_enabled: Option<bool>,
     /// Tick or untick this address as a ticket source (B204). Absent leaves it alone.
     pub creates_ticket: Option<bool>,
+    /// The teammate this address is assigned to (kanban t_5f314e9a).
+    ///
+    /// DELIBERATELY a double option: an ABSENT key means "leave the assignment alone", a `null`
+    /// means "give this inbox back to the workspace", and a uuid means "assign it to that person".
+    /// A single `Option<Uuid>` cannot say the middle thing, which is how `assigned_user_id` on a
+    /// conversation became a set-only door that could never be cleared.
+    #[serde(default, deserialize_with = "deserialize_optional_nullable_uuid")]
+    pub user_id: Option<Option<Uuid>>,
+}
+
+/// `{"user_id": "…"}` -> `Some(Some(id))`, `{"user_id": null}` -> `Some(None)`, absent -> `None`.
+fn deserialize_optional_nullable_uuid<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<Uuid>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Uuid>::deserialize(deserializer)?;
+    Ok(Some(value))
 }
 
 // Admin override types

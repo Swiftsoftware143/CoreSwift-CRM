@@ -248,12 +248,34 @@ pub async fn update_mailbox(
 ) -> ApiResult<Json<serde_json::Value>> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
+    // ── WHO GETS THIS INBOX (kanban t_5f314e9a) ──────────────────────────────────────────────────
+    // The person named must be an ACTIVE member of THIS workspace. The column already existed and
+    // was only ever written at provision time, so "assign an inbox to a teammate" had no door: it
+    // is the same object as the conversation assignment (`private_email_messages.assigned_user_id`),
+    // one teammate, two things they are responsible for.
+    if let Some(Some(user_id)) = req.user_id {
+        let member: Option<(Uuid,)> = sqlx::query_as(
+            "SELECT id FROM users WHERE id = $1 AND tenant_id = $2 AND is_active = true",
+        )
+        .bind(user_id)
+        .bind(account_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::Database)?;
+        if member.is_none() {
+            return Err(AppError::Validation(
+                "That person is not an active member of this account.".into(),
+            ));
+        }
+    }
+
     let row = sqlx::query_as::<_, PrivateEmailBox>(
         r#"
         UPDATE private_email_boxes
         SET signature = COALESCE($3, signature),
             forwarding_enabled = COALESCE($4, forwarding_enabled),
             creates_ticket = COALESCE($5, creates_ticket),
+            user_id = CASE WHEN $6::bool THEN $7::uuid ELSE user_id END,
             updated_at = NOW()
         WHERE id = $1 AND tenant_id = $2
         RETURNING *
@@ -264,6 +286,11 @@ pub async fn update_mailbox(
     .bind(&req.signature)
     .bind(req.forwarding_enabled)
     .bind(req.creates_ticket)
+    // `mentioned` / `person`: an absent key leaves the assignment alone, an explicit null clears it,
+    // a uuid sets it. Binding a bare Option<Option<Uuid>> is not a thing sqlx can carry, so the two
+    // facts travel as two binds and the CASE decides.
+    .bind(req.user_id.is_some())
+    .bind(req.user_id.flatten())
     .fetch_optional(&state.db)
     .await
     .map_err(AppError::Database)?;

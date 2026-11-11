@@ -1399,22 +1399,42 @@ const TAB_RENDERERS = {
           'The API enforces the same rule, so there is nothing to manage here.</p>');
     }
     return pageHeader('Team & Invites', 'Bring your teammates into this workspace') +
-      card('Invite a teammate',
+      // ── THE REAL SECOND LOGIN (kanban t_5f314e9a) ──────────────────────────────────────────
+      // David 2026-11-11: the owner invites a teammate BY EMAIL, the system sets their password and
+      // emails it, and they sign in to the shared inbox. There is deliberately NO password field
+      // anywhere on this card — the owner never chooses (or learns) a teammate's password.
+      card('Add a teammate',
+        '<div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">' +
+          '<div style="flex:1 1 220px"><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Their email address</label>' +
+            '<input id="teamEmail" type="email" placeholder="teammate@yourcompany.com" style="width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary)"></div>' +
+          '<div style="flex:1 1 200px"><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Their name (optional)</label>' +
+            '<input id="teamName" placeholder="Jane Doe" style="width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary)"></div>' +
+          '<div style="flex:0 0 230px"><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">What they can do</label>' +
+            '<select id="teamRole" style="width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary)">' +
+              '<option value="member">Member — the shared inbox and day-to-day work</option>' +
+              '<option value="admin">Admin — full workspace access</option>' +
+            '</select></div>' +
+          '<button class="btn btn-primary" id="teamInviteBtn" onclick="inviteTeammate()">Send the invitation</button>' +
+        '</div>' +
+        '<p style="color:var(--text-secondary);font-size:.82rem;margin:10px 0 0">We set their password and email it to that address, so there is nothing for them to choose here. They sign in at the normal login page and land in the shared inbox.</p>' +
+        '<div id="teamInviteMsg" style="display:none;margin-top:12px;font-size:.88rem"></div>',
+        'Only the owner or an admin of this workspace can add somebody.') +
+      '<div id="teamPeopleWrap"><div class="loading-wrap"><div class="spinner"></div> Loading your team...</div></div>' +
+      card('Invite a teammate with a link instead',
         '<div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">' +
           '<div style="flex:0 0 250px"><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Role for the new teammate</label>' +
             '<select id="inviteRole" style="width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary)">' +
               '<option value="member">Member — day-to-day CRM access</option>' +
               '<option value="admin">Admin — full workspace access</option>' +
             '</select></div>' +
-          '<button class="btn btn-primary" id="inviteBtn" onclick="createInvite()">➕ Create invite link</button>' +
+          '<button class="btn btn-secondary" id="inviteBtn" onclick="createInvite()">➕ Create invite link</button>' +
         '</div>' +
         '<div id="inviteResult" style="display:none;margin-top:16px">' +
           '<label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Invite link &mdash; send this to your teammate</label>' +
           '<div style="display:flex;gap:8px"><input id="inviteUrl" readonly style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:.85rem">' +
           '<button class="btn btn-secondary" id="inviteCopyBtn" onclick="copyInviteUrl()">📋 Copy</button></div>' +
-          '<p style="color:var(--text-secondary);font-size:.82rem;margin:8px 0 0">Single use, expires 7 days after creation. Opening it lets them create an account that joins this workspace.</p>' +
-        '</div>',
-        'Only the owner or an admin of this workspace can create invites.') +
+          '<p style="color:var(--text-secondary);font-size:.82rem;margin:8px 0 0">Single use, expires 7 days after creation. Opening it lets them create an account that joins this workspace and choose their own password.</p>' +
+        '</div>', 'A link is for a teammate who would rather pick their own password; the form above is the one that emails ours.') +
       '<div id="invitesWrap"><div class="loading-wrap"><div class="spinner"></div> Loading invites...</div></div>';
   }
 };
@@ -1591,7 +1611,7 @@ const TAB_LOADERS = {
   'tracked-links': async () => { await loadTrackedLinksTab(); },
   'webhooks': async () => { await loadWebhooksTab(); },
   'industries': async () => { await loadIndustriesPanel(); },
-  'team': async () => { await loadInvites(); },
+  'team': async () => { await loadTeamMembers(); await loadInvites(); },
   'profile': async () => { await loadProfileTab(); },
   'rules': async () => { await loadRulesTab(); },
   'messages': async () => { await loadMessagesTab(); },
@@ -1825,12 +1845,15 @@ const TAB_LOADERS = {
           `<span class="badge ${t.status==='open'?'badge-error':t.status==='in_progress'?'badge-warning':'badge-success'}">${escapeHtml(t.status||'open')}</span>`,
           escapeHtml(t.priority || 'normal'),
           escapeHtml(t.contact_name || t.contact_email || t.requester || '—'),
+          // The SAME assignment the shared inbox writes (kanban t_5f314e9a): one conversation, two
+          // views. A ticket raised by hand has no conversation behind it, so it shows nobody.
+          escapeHtml((t.assigned_member && (t.assigned_member.name || t.assigned_member.email)) || '—'),
           escapeHtml(t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'),
           `<button class="btn btn-ghost btn-xs" onclick="openTicket('${t.id}')">View</button>`
         ]);
       }
       ticketsTableEl.innerHTML = dataTable(
-        ['Subject','Status','Priority','Contact','Created',''], rows,
+        ['Subject','Status','Priority','Contact','Assigned to','Created',''], rows,
         'No support tickets. Great job keeping customers happy!'
       );
     } catch(e) {
@@ -3527,11 +3550,17 @@ async function openTicket(id) {
     const data = await API.get('/tickets/' + id);
     const t = (data && data.ticket) || {};
     const msgs = (data && data.messages) || [];
+    const assignee = data && data.assigned_member;
     let html = '<div class="card"><div class="card-body">' +
       '<p style="margin-bottom:8px"><strong>' + escapeHtml(t.subject || 'Ticket') + '</strong></p>' +
       '<p style="color:var(--text-secondary);white-space:pre-wrap">' + escapeHtml(t.description || '') + '</p>' +
       '<p style="color:var(--text-muted);font-size:12px">Status: ' + escapeHtml(t.status || 'open') +
-      ' · Priority: ' + escapeHtml(t.priority || 'medium') + ' · Source: ' + escapeHtml(t.source || 'form') + '</p>' +
+      ' · Priority: ' + escapeHtml(t.priority || 'medium') + ' · Source: ' + escapeHtml(t.source || 'form') +
+      // The same person the shared inbox shows for this thread (kanban t_5f314e9a). Assignment is
+      // made in the Inbox — one object, two views — so this line reports it instead of inventing a
+      // second, ticket-only owner that the inbox would never show.
+      ' · Assigned to: <strong>' + escapeHtml((assignee && (assignee.name || assignee.email)) || 'nobody yet') + '</strong>' +
+      (assignee ? ' <span style="opacity:.7">(set in the shared inbox)</span>' : ' <span style="opacity:.7">(assign it from the shared inbox)</span>') + '</p>' +
       // CS-22: what the customer needs in order to see this request in the 💬 My Support portal —
       // their address plus a reference. The ticket id is already on screen; nothing is hardcoded.
       '<p style="color:var(--text-muted);font-size:12px">Customer portal reference: <code>' +
@@ -3955,6 +3984,127 @@ function filterCompanies(query) {
     row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
   });
 }
+
+// ========== TEAM SEATS (POST /api/auth/team/invite, GET /api/auth/team/members) ==========
+// kanban t_5f314e9a: a teammate is a REAL login into this account. The owner types an address, the
+// server generates the password and emails it, and the person signs in to the shared inbox. The
+// roster below is the same list the Inbox's "Assign to" picker reads, so the two screens cannot
+// describe different teams.
+async function loadTeamMembers() {
+  var wrap = document.getElementById('teamPeopleWrap');
+  if (!wrap) return;
+  try {
+    var d = await API.get('/auth/team/members');
+    wrap.innerHTML = teamPeopleHtml(d);
+  } catch (e) {
+    wrap.innerHTML = card('People in this workspace',
+      '<p style="color:var(--danger,#f66);margin:0">Could not load your team: ' + escapeHtml(e.message) + '</p>');
+  }
+}
+
+function teamPeopleHtml(d) {
+  var members = (d && d.members) || [];
+  var seats = (d && d.seats) || {};
+  var canManage = !!(d && d.can_manage);
+  var limit = (seats.limit === null || seats.limit === undefined) ? null : Number(seats.limit);
+  var used = Number(seats.used || 0);
+  var seatLine = (limit === null)
+    ? used + ' active ' + (used === 1 ? 'person' : 'people') + ' — your plan does not cap the number of seats.'
+    : used + ' of ' + limit + ' ' + (limit === 1 ? 'seat' : 'seats') + ' used';
+  if (!members.length) {
+    return card('People in this workspace', '<div class="empty-state"><div class="empty-icon">👥</div>' +
+      '<h3>Nobody here yet</h3><p>Add your first teammate with the form above.</p></div>');
+  }
+  var now = Date.now();
+  var body = members.map(function (m) {
+    var added = m.joined_at ? fmtTeamDate(m.joined_at) : '—';
+    var via = m.invited_by ? ('invited by ' + m.invited_by) : 'owner of the workspace';
+    var state = m.is_active === false
+      ? '<span style="color:var(--text-muted)">Removed</span>'
+      : '<span style="color:var(--success,#34d399)">Active</span>';
+    var warn = m.password_undelivered
+      ? '<div style="font-size:.75rem;color:var(--warning,#fbbf24)">The password email did not go out — ask them to use “Forgot password”.</div>'
+      : '';
+    var action = '';
+    if (canManage && m.is_active !== false) {
+      action = (m.is_owner || m.is_me)
+        ? '<span style="color:var(--text-muted);font-size:.8rem">' + (m.is_owner ? 'Owner' : 'You') + '</span>'
+        : '<button class="btn btn-ghost btn-xs" onclick="removeTeammate(\'' + escapeHtmlAttr(String(m.id)) + '\',\'' + escapeHtmlAttr(m.email || '') + '\')">Remove access</button>';
+    }
+    return '<tr>' +
+      '<td><strong>' + escapeHtml(m.name || m.email || '—') + '</strong>' +
+        (m.is_owner ? ' <span style="font-size:.72rem;color:var(--text-muted)">owner</span>' : '') + warn + '</td>' +
+      '<td>' + escapeHtml(m.email || '—') + '</td>' +
+      '<td>' + escapeHtml(roleLabel(m.role)) + '</td>' +
+      '<td>' + escapeHtml(added) + '<div style="font-size:.72rem;color:var(--text-muted)">' + escapeHtml(via) + '</div></td>' +
+      '<td>' + state + '</td>' +
+      '<td>' + action + '</td>' +
+    '</tr>';
+  }).join('');
+  return card('People in this workspace — ' + seatLine,
+    '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Added</th><th>Status</th><th></th></tr></thead>' +
+    '<tbody>' + body + '</tbody></table></div>' +
+    '<p style="color:var(--text-secondary);font-size:.8rem;margin:10px 0 0">Removing somebody takes their access away and puts their conversations and inboxes back in the workspace. Nothing is deleted.</p>');
+}
+
+async function inviteTeammate() {
+  if (!canManageTeam()) { toast('Only the owner or an admin can add teammates', 'error'); return; }
+  var emailEl = document.getElementById('teamEmail');
+  var nameEl = document.getElementById('teamName');
+  var roleEl = document.getElementById('teamRole');
+  var msg = document.getElementById('teamInviteMsg');
+  var btn = document.getElementById('teamInviteBtn');
+  var email = ((emailEl && emailEl.value) || '').trim();
+  if (!email) { showTeamMsg('Type their email address first.', false); return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  try {
+    var d = await API.post('/auth/team/invite', {
+      email: email,
+      name: (nameEl && nameEl.value || '').trim() || null,
+      role: (roleEl && roleEl.value) || 'member'
+    });
+    showTeamMsg(d.message || 'Invitation sent.', true);
+    if (emailEl) emailEl.value = '';
+    if (nameEl) nameEl.value = '';
+    await loadTeamMembers();
+  } catch (e) {
+    // A 402 is the plan's seat ceiling and carries the whole sentence (which plan adds seats, what
+    // it costs). Show it as written — it is the upsell, not an error string.
+    showTeamMsg(e.message, false);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Send the invitation'; }
+  }
+}
+
+function showTeamMsg(text, ok) {
+  var box = document.getElementById('teamInviteMsg');
+  if (!box) return;
+  box.style.display = 'block';
+  box.style.color = ok ? 'var(--success,#34d399)' : 'var(--danger,#f66)';
+  box.textContent = text || '';
+}
+
+async function removeTeammate(id, email) {
+  if (!canManageTeam()) { toast('Only the owner or an admin can remove a teammate', 'error'); return; }
+  if (!window.confirm('Remove ' + (email || 'this person') + ' from the workspace?\n\n' +
+    'They will not be able to sign in any more. Their conversations and inboxes come back to the ' +
+    'workspace and nothing is deleted.')) return;
+  try {
+    var d = await API.del('/auth/team/members/' + id);
+    var un = (d && d.unassigned) || {};
+    var extra = [];
+    if (Number(un.conversations || 0)) extra.push(Number(un.conversations) + ' conversation' + (Number(un.conversations) === 1 ? '' : 's') + ' back in the inbox');
+    if (Number(un.mailboxes || 0)) extra.push(Number(un.mailboxes) + ' inbox' + (Number(un.mailboxes) === 1 ? '' : 'es') + ' unassigned');
+    toast((d && d.message) || 'Access removed', 'success');
+    if (extra.length) toast(extra.join(' · '), 'info');
+    await loadTeamMembers();
+  } catch (e) {
+    toast('Could not remove them: ' + e.message, 'error');
+  }
+}
+window.inviteTeammate = inviteTeammate;
+window.removeTeammate = removeTeammate;
+window.loadTeamMembers = loadTeamMembers;
 
 // ========== TEAM & INVITES (POST /api/auth/invite, GET /api/auth/invites) ==========
 // The API is the real gate: create_invite/list_invites answer 403 for any role other than

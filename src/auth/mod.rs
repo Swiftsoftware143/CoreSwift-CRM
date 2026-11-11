@@ -12,6 +12,9 @@ pub mod route_policy;
 /// The ONE account-minting writer both the signup door and the machine (tag) door call
 /// (kanban t_e968e9ad).
 pub mod signup;
+/// The workspace's own people: invite by email, the roster, removal (kanban t_5f314e9a). The ONE
+/// seat writer, shared by the HTTP door and the automation webhook.
+pub mod team;
 
 // Re-export Claims for convenience (used by all modules)
 pub use models::Claims;
@@ -37,6 +40,17 @@ pub fn router(state: AppState) -> Router<AppState> {
 
     let protected = Router::new()
         .route("/invite", axum::routing::post(handlers::create_invite))
+        // ── TEAM SEATS (kanban t_5f314e9a) ────────────────────────────────────────────────────
+        // The owner adds a teammate BY EMAIL: the server generates the password and mails it, and
+        // the person signs in to the shared inbox. `GET .../members` is readable by every signed-in
+        // member (the Inbox's assignment picker is the same list); the invite and the removal are
+        // owner/admin only, enforced in the handlers from the SESSION's tenant.
+        .route("/team/invite", axum::routing::post(team::invite_member))
+        .route("/team/members", axum::routing::get(team::list_members))
+        .route(
+            "/team/members/:id",
+            axum::routing::delete(team::remove_member),
+        )
         .route("/me/usage", axum::routing::get(handlers::get_usage))
         // The way back in when signup MINTED a password and the mail carrying it did not go out
         // (kanban t_d841df4f). Authenticated like every other act on the caller's own account: the

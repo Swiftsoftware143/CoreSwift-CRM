@@ -64,15 +64,78 @@ pub async fn list_tickets(
     .fetch_all(&s.db)
     .await?;
 
+    // ── ONE CONVERSATION, TWO VIEWS (kanban t_5f314e9a) ──────────────────────────────────────────
+    // The assignment lives on the CONVERSATION (`private_email_messages.assigned_user_id`) — the
+    // same object the shared inbox writes — and a ticket that came from a message carries no second
+    // copy of it. This attaches who is working each ticket by reading that ONE column through the
+    // link (`private_email_messages.ticket_id`), so the inbox and the work queue can never disagree
+    // about who owns a thread. A ticket raised by hand (no conversation behind it) has no member
+    // assignment to show, and says so with `null` rather than an invented name.
+    let ids: Vec<Uuid> = tickets.iter().map(|t| t.id).collect();
+    let assigned = assigned_members_for(&s.db, &ids).await?;
+    let tickets_json: Vec<serde_json::Value> = tickets
+        .into_iter()
+        .map(|t| {
+            let mut v = serde_json::to_value(&t).unwrap_or(serde_json::Value::Null);
+            v["assigned_member"] = assigned
+                .get(&t.id)
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            v
+        })
+        .collect();
+
     Ok(Json(json!({
-        "tickets": tickets,
-        "count": tickets.len(),
+        "tickets": tickets_json,
+        "count": tickets_json.len(),
         // CS-22 — the customer-facing portal URL, derived on the server from the tenant on the
         // token so no front end has to hardcode an account id. The customer signs in there with
         // their address plus this ticket's reference (the first 8 characters of its id).
         "portal_url": format!("/s/{tid}/support"),
         "portal_reference_hint": "the first 8 characters of a ticket id"
     })))
+}
+
+/// Who is working each of these tickets, read from the CONVERSATION they came from.
+///
+/// One query for a whole page of tickets: `DISTINCT ON` picks the newest linked message per ticket,
+/// which is the conversation's current owner (a thread that was assigned and reassigned keeps its
+/// latest answer). A removed teammate is not reported — their assignment is cleared on removal, and
+/// an inactive row would otherwise still paint as "worked by somebody who cannot sign in".
+async fn assigned_members_for(
+    db: &sqlx::PgPool,
+    ticket_ids: &[Uuid],
+) -> Result<std::collections::HashMap<Uuid, serde_json::Value>, AppError> {
+    let mut out = std::collections::HashMap::new();
+    if ticket_ids.is_empty() {
+        return Ok(out);
+    }
+    let rows = sqlx::query(
+        r#"SELECT DISTINCT ON (m.ticket_id)
+                  m.ticket_id, u.id AS user_id, u.name, u.email
+             FROM private_email_messages m
+             JOIN users u ON u.id = m.assigned_user_id
+            WHERE m.ticket_id = ANY($1)
+              AND u.is_active = true
+            ORDER BY m.ticket_id, m.received_at DESC"#,
+    )
+    .bind(ticket_ids)
+    .fetch_all(db)
+    .await?;
+
+    for r in rows {
+        let ticket_id: Uuid = sqlx::Row::get(&r, "ticket_id");
+        let name: String = sqlx::Row::try_get(&r, "name").unwrap_or_default();
+        out.insert(
+            ticket_id,
+            json!({
+                "id": sqlx::Row::try_get::<Uuid, _>(&r, "user_id").ok(),
+                "name": name,
+                "email": sqlx::Row::try_get::<Option<String>, _>(&r, "email").ok().flatten(),
+            }),
+        );
+    }
+    Ok(out)
 }
 
 /// GET /api/tickets/:id
@@ -97,7 +160,18 @@ pub async fn get_ticket(
     .fetch_all(&s.db)
     .await?;
 
-    Ok(Json(json!({ "ticket": ticket, "messages": messages })))
+    // The SAME assignment the shared inbox writes (kanban t_5f314e9a): one conversation, two views.
+    let assigned = assigned_members_for(&s.db, &[ticket_id])
+        .await?
+        .get(&ticket_id)
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+
+    Ok(Json(json!({
+        "ticket": ticket,
+        "messages": messages,
+        "assigned_member": assigned
+    })))
 }
 
 /// POST /api/tickets

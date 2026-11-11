@@ -1266,17 +1266,17 @@ pub async fn route_action(
         // ── Users ──
         "users.invite" => {
             let body = data.ok_or("data required")?;
-            // ── Address boundary (kanban t_9252c512) ────────────────────────────────────────
-            // Normalise + validate BEFORE the tenants/users INSERTs below. Both arms that reach
-            // this line mint a login identity for someone else (a provisioned owner, an invited
-            // teammate); the Err arm of this route already answers 400 with the same text, so a
-            // caller that sends something that is not an address gets an `email: …` 4xx instead
-            // of an account no mail can ever reach.
+            // ── ONE SEAT WRITER (kanban t_5f314e9a) ─────────────────────────────────────────
+            // This arm used to write its own `users` row with `password_hash = 'PLACEHOLDER_HASH'`
+            // — a seat that existed and NOBODY could ever sign into: no password existed and no
+            // mail was sent, so the invited person was stuck at a login they could not pass. It now
+            // calls the SAME writer the console's invite uses (address boundary, seat ceiling,
+            // generated password, hashed once, credentials mail), so the two doors cannot drift
+            // into one that mails a password and one that only claims a person was invited.
             let email = body
                 .get("email")
                 .and_then(|v| v.as_str())
                 .ok_or("email required")?;
-            let email = crate::security::email_addr::normalize(email)?;
             let name = body
                 .get("name")
                 .and_then(|v| v.as_str())
@@ -1285,21 +1285,24 @@ pub async fn route_action(
                 .get("role")
                 .and_then(|v| v.as_str())
                 .unwrap_or("member");
-            if role != "member" && role != "admin" {
-                return Err("role must be 'member' or 'admin'".to_string());
-            }
-            let uid = Uuid::new_v4();
-            let _temp_password = format!("temp-{}", &Uuid::new_v4().to_string()[..8]);
-            // Use a placeholder password hash; the invited user must reset on first login
-            sqlx::query(
-                "INSERT INTO users (id, tenant_id, email, password_hash, name, role, is_active) VALUES ($1, $2, $3, $4, $5, $6, true)"
-            )
-            .bind(uid).bind(tenant_id).bind(&email).bind("PLACEHOLDER_HASH").bind(name).bind(role)
-            .execute(db).await
-            .map_err(|e| format!("DB error: {}", e))?;
+            let invited =
+                crate::auth::team::mint_member(db, tenant_id, None, email, Some(name), Some(role))
+                    .await
+                    .map_err(|e| e.to_string())?;
             Ok((
                 201,
-                json!({"id": uid, "email": email, "name": name, "role": role, "user_created": true, "invited": true}),
+                json!({
+                    "id": invited.user_id,
+                    "email": invited.email,
+                    "name": invited.name,
+                    "role": invited.role,
+                    "user_created": true,
+                    "invited": true,
+                    // `false` = the seat is real but no credentials mail was queued (probe class
+                    // or a mail outage). The caller can then tell the person out of band instead
+                    // of assuming a password is on its way.
+                    "password_emailed": invited.mail_sent,
+                }),
             ))
         }
         "users.list" => {
