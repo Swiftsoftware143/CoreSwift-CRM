@@ -738,7 +738,11 @@ const MENU = [
   ]},
   { id:'tickets', icon:'🎫', label:'Support Tickets' },
   { type:'group', icon:'📬', label:'Inbox', children:[
-    { id:'inbox', icon:'📬', label:'Shared Inbox' }
+    { id:'inbox', icon:'📬', label:'Shared Inbox' },
+    // The settings half of private email: the domains you send from (with their catch-all switch,
+    // provider credential and inbound signing key), mailboxes, auto-replies and the send form. It
+    // used to be the 'inbox' tab, which the mail client now owns — see the TAB_RENDERERS note below.
+    { id:'email-settings', icon:'🌐', label:'Email Domains & Sending' }
   ]},
   { id:'calendar', icon:'📅', label:'Calendar' },
   { id:'bookings', icon:'📆', label:'Bookings' },
@@ -6828,7 +6832,7 @@ async function loadInboxTab() {
       escapeHtml(d.label || '—'),
       escapeHtml(d.provider_type || 'mailgun'),
       peVerifyCell(d),
-      d.catch_all_enabled ? 'catch-all' : '—',
+      peCatchAllCell(d),
       peCredentialCell(d),
       peInboundCell(d)
     ]);
@@ -6898,6 +6902,50 @@ function peCredentialCell(d) {
   }
   if (s === 'empty') return '<span class="badge badge-warning">empty key</span>';
   return '<span class="badge badge-muted">no key</span>';
+}
+
+// ── Catch-all switch (kanban t_5e47191a) ──────────────────────────────────────────────────────
+// The column used to be display-only: PATCH /api/private-email/domains/:id accepted
+// {catch_all_enabled} and the plan gate answered correctly, but NO shipped surface sent it, so a
+// customer who bought catch-all had to call the API. This cell is that missing screen: it reads the
+// row's own value and offers the opposite state.
+//
+// The SERVER is the only judge of the entitlement. On refusal (a free/starter workspace answers 400)
+// the toast prints the server's sentence VERBATIM — "Catch-all requires the Professional plan or
+// higher" — instead of a client-side guess about which plans sell it, so the copy cannot drift from
+// the gate. The success message is only shown when the returned row really carries the new value.
+function peCatchAllCell(d) {
+  const on = !!d.catch_all_enabled;
+  return (on
+      ? '<span class="badge badge-success">on</span>'
+      : '<span class="badge badge-muted">off</span>') +
+    ' <button class="btn btn-ghost btn-xs" onclick="peToggleCatchAll(\'' + d.id + '\', ' + (on ? 'false' : 'true') + ')">' +
+    (on ? 'Disable' : 'Enable catch-all') + '</button>';
+}
+
+async function peToggleCatchAll(domainId, next) {
+  const d = (PE.domains || []).filter(function (x) { return x.id === domainId; })[0] || {};
+  const dom = d.domain || 'this domain';
+  const btns = document.querySelectorAll('[onclick*="peToggleCatchAll(\'' + domainId + '\'"]');
+  Array.prototype.forEach.call(btns, function (b) { b.disabled = true; });
+  try {
+    const r = await API.patch('/private-email/domains/' + encodeURIComponent(domainId),
+      { catch_all_enabled: next });
+    const got = !!(r && r.catch_all_enabled);
+    if (got === next) {
+      toast(next
+        ? 'Catch-all on — mail to an address that does not exist on ' + dom + ' now lands in this workspace'
+        : 'Catch-all off — mail to an unknown address on ' + dom + ' is now refused', 'success');
+    } else {
+      toast('Saved, but the server reports catch-all ' + (got ? 'on' : 'off') + ' for ' + dom,
+        got ? 'success' : 'error');
+    }
+    await loadInboxTab();
+  } catch (e) {
+    // A 400 here is the plan gate's own refusal sentence; print it as the server wrote it.
+    toast(e.message, 'error');
+    Array.prototype.forEach.call(btns, function (b) { b.disabled = false; });
+  }
 }
 
 // ── Inbound mail: the domain's Mailgun WEBHOOK SIGNING KEY (kanban t_fbd607a7) ─────────────────
@@ -7432,9 +7480,18 @@ async function icSyncHistory(slug) {
 // (`/native/apps/ada-campaigns`) are gone. The manual connector push is the only path to AdaSwift.
 TAB_RENDERERS['telnyx'] = telnyxShell;
 TAB_RENDERERS['inbox'] = inboxShell;
+// This panel needs a tab of its OWN (kanban t_5e47191a). `TAB_RENDERERS['inbox']` above is claimed
+// TWICE: this inline script registers inboxShell, then private-email-inbox.js (loaded after it) does
+// `TAB_RENDERERS['inbox'] = window.renderPeInbox` and wins. Measured in Chromium 2026-11-11: opening
+// Shared Inbox renders the mail client, so the domains/mailboxes/auto-replies/send panel had NO
+// reachable route — every control in it (catch-all, provider credential, inbound signing key,
+// Add domain) was dead on arrival. Registering the same panel under its own id gives it a menu entry
+// that cannot be taken over, without touching the mail client's file.
+TAB_RENDERERS['email-settings'] = inboxShell;
 TAB_RENDERERS['calendar'] = calendarShell;
 TAB_LOADERS['telnyx'] = loadTelnyxTab;
 TAB_LOADERS['inbox'] = loadInboxTab;
+TAB_LOADERS['email-settings'] = loadInboxTab;
 TAB_LOADERS['calendar'] = loadCalendarTab;
 
 TAB_LOADERS['pipelines'] = loadPipelinesTab;
@@ -8220,7 +8277,8 @@ window.appGuidePages = {
   telnyx:          { title: "Telnyx SMS/Voice", desc: "Send texts and place calls through your connected Telnyx number.", actions: ["Connect your Telnyx account", "Send a text", "Check the message log"] },
   "comm-log":      { title: "Communications Log", desc: "Every message in and out — email, text and calls — in one chronological history.", actions: ["Filter by contact or channel", "Open an entry to see its content"] },
   tickets:         { title: "Support Tickets", desc: "Support requests raised in your workspace and their status.", actions: ["Open a ticket", "Reply and change its status"] },
-  inbox:           { title: "Private Email", desc: "A mailbox for your own domain: send from it, and replies land on the contact's timeline.", actions: ["Connect your domain", "Send from your mailbox"] },
+  inbox:           { title: "Shared Inbox", desc: "The mail that has arrived at your workspace's addresses, in one place — filter by address, read a message, turn one into a ticket.", actions: ["Pick an address to narrow the list", "Open a message", "Mark one as a ticket"] },
+  "email-settings":{ title: "Email Domains & Sending", desc: "The sending half of your mail: the domains you send from, their catch-all switch, mailboxes, auto-replies and a form to send from a mailbox.", actions: ["Enable or disable catch-all on a domain", "Add a domain and check its verification", "Create a mailbox"] },
   calendar:        { title: "Calendar", desc: "Events and appointments for you and your team.", actions: ["Create an event", "Open one to see its details"] },
   bookings:        { title: "Bookings", desc: "Appointment slots people can book with you, and the bookings they made.", actions: ["Set your availability", "Review upcoming bookings"] },
   "ai-assistant":  { title: "AI Assistant", desc: "Ask questions about your data, or have it draft content for you.", actions: ["Connect an AI provider in the Integration Center", "Ask it something"] },
@@ -8290,7 +8348,7 @@ function auditExportCsv() {
 }
 </script>
 <script src="/inline-guide-widget.js?v=20261106a"></script>
-<script src="/private-email-inbox.js?v=20261111c"></script>
+<script src="/private-email-inbox.js?v=20261111d"></script>
 </body>
 </html>
 
