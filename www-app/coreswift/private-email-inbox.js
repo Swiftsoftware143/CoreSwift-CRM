@@ -28,6 +28,7 @@
 
   var S = {
     boxes: [], domains: [], messages: [], counts: {}, addresses: [],
+    folders: { system: [], custom: [] },
     miscTotal: 0, view: 'inbox', address: 'all', sel: null, err: null
   };
 
@@ -122,8 +123,19 @@
   function messagesHtml() {
     var m = S.messages || [];
     if (!m.length) {
-      return '<div class="empty-state" style="padding:20px"><h4 style="margin:0 0 6px">No mail here yet</h4>'
-        + '<p style="margin:0">Every message that arrives at one of your addresses appears here — including mail to addresses that do not create tickets.</p></div>';
+      // A view-picker that always says "No mail" teaches nothing: an empty Spam is GOOD news and an
+      // empty Trash means a delete really happened, so the sentence names the view it is about.
+      var name = viewLabel();
+      var hint = {
+        spam: 'Messages the app treated as junk land here. Nothing here means no junk was caught.',
+        trash: 'Deleted mail stays here until it is deleted for good from inside this view.',
+        favorites: 'Press the star beside any message to keep it here.',
+        archive: 'Archive a message and it leaves the inbox but stays searchable here.',
+        drafts: 'Drafts you save while writing appear here.',
+        sent: 'Replies and mail you send from this account appear here.'
+      }[S.view] || 'Every message that arrives at one of your addresses appears here — including mail to addresses that do not create tickets.';
+      return '<div class="empty-state" style="padding:20px"><h4 style="margin:0 0 6px">Nothing in ' + esc(name) + '</h4>'
+        + '<p style="margin:0">' + esc(hint) + '</p></div>';
     }
     var rows = m.map(function (x) {
       return '<tr data-id="' + esc(x.id) + '" class="pe-row" style="cursor:pointer;border-bottom:1px solid rgba(128,128,128,.2);'
@@ -143,6 +155,36 @@
       + '</tr></thead><tbody>' + rows + '</tbody></table>';
   }
 
+  // The folder RAIL. Every view below is a real server-side store the app already keeps
+  // (`GET /private-email/folders` answers the eight system views with live counts plus any
+  // subfolder the account created); this screen used to offer none of them, so Spam, Trash,
+  // Archive and Favorites were unreachable from the CRM even though the mail was there.
+  function railHtml() {
+    var sys = S.folders.system || [];
+    var custom = S.folders.custom || [];
+    if (!sys.length) return '';
+    function btn(f) {
+      var active = (S.view === f.id);
+      return '<button type="button" class="btn ' + (active ? 'btn-primary' : 'btn-ghost') + ' btn-xs"'
+        + ' data-folder="' + esc(f.id) + '"'
+        + ' aria-pressed="' + (active ? 'true' : 'false') + '"'
+        + ' onclick="peSetView(\'' + esc(f.id) + '\')"'
+        + ' style="margin:0 6px 6px 0">' + esc(f.name || f.id)
+        + ' <span style="opacity:.75">' + Number(f.count || 0) + '</span></button>';
+    }
+    return '<div style="margin:0 0 10px">' + sys.map(btn).join('')
+      + (custom.length
+        ? '<div style="opacity:.7;font-size:12px;margin:2px 0 6px">Your folders</div>' + custom.map(btn).join('')
+        : '')
+      + '</div>';
+  }
+
+  function viewLabel() {
+    var all = (S.folders.system || []).concat(S.folders.custom || []);
+    var f = all.filter(function (x) { return x.id === S.view; })[0];
+    return (f && f.name) ? f.name : 'Mail';
+  }
+
   function render() {
     var c = S.counts || {};
     return '<div>'
@@ -155,8 +197,9 @@
       + '<div style="padding:14px;border:1px solid rgba(128,128,128,.3);border-radius:8px;margin-bottom:16px">'
       + '<h4 style="margin:0 0 10px">Your inboxes</h4>' + inboxesHtml() + '</div>'
       + '<div style="padding:14px;border:1px solid rgba(128,128,128,.3);border-radius:8px">'
+      + railHtml()
       + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
-      + '<h4 style="margin:0">Recent mail</h4><div>' + addressFilterHtml()
+      + '<h4 style="margin:0" data-view-label="' + esc(S.view) + '">' + esc(viewLabel()) + '</h4><div>' + addressFilterHtml()
       + '<button class="btn btn-ghost btn-xs" onclick="peLoad()">Refresh</button></div></div>'
       + '<div style="font-size:12px;opacity:.7;margin-bottom:8px">Mail is kept while you have storage. Nothing is deleted on a clock.</div>'
       + messagesHtml() + '</div>'
@@ -177,7 +220,12 @@
         api().get('/private-email/domains').catch(function () { return []; }),
         api().get('/private-email/messages?folder=' + encodeURIComponent(S.view) + '&address=' + encodeURIComponent(S.address) + '&limit=50'),
         api().get('/private-email/messages/counts').catch(function () { return {}; }),
-        api().get('/private-email/addresses').catch(function () { return {}; })
+        api().get('/private-email/addresses').catch(function () { return {}; }),
+        // The rail the server already keeps: eight folder VIEWS with live counts plus any real
+        // subfolder. Reading it here is what lets this screen offer Spam/Trash/Favorites at all —
+        // without it the tab could only ever show the inbox, while mail in every other store was
+        // unreachable from the CRM.
+        api().get('/private-email/folders').catch(function () { return { system: [], custom: [] }; })
       ]);
       S.boxes = Array.isArray(results[0]) ? results[0] : (results[0].boxes || []);
       S.domains = Array.isArray(results[1]) ? results[1] : (results[1].domains || []);
@@ -185,6 +233,11 @@
       S.counts = results[3] || {};
       S.addresses = (results[4] && results[4].addresses) || [];
       S.miscTotal = (results[4] && results[4].misc && results[4].misc.total) || 0;
+      var rail = results[5] || {};
+      S.folders = {
+        system: Array.isArray(rail.system) ? rail.system : [],
+        custom: Array.isArray(rail.custom) ? rail.custom : []
+      };
       S.err = null;
     } catch (e) {
       S.err = fail(e);
@@ -280,6 +333,25 @@
 
   window.peSetAddress = function (a) { S.address = a; load(); };
 
+  // The rail's own control: the view is what the server's folder column filters on, so switching is a
+  // reload — never a client-side hide, which would disagree with the counts beside the buttons.
+  window.peSetView = function (v) {
+    S.view = v || 'inbox';
+    var d = document.getElementById('peDetail'); if (d) d.innerHTML = '';
+    load();
+  };
+
+  // Move a message to a real store. `spam` and `trash` are where mail a customer calls junk or
+  // unwanted belongs; both are restorable until deleted from inside their own view.
+  window.peMove = async function (id, folder) {
+    try {
+      await api().patch('/private-email/messages/' + id, { folder: folder });
+      var d = document.getElementById('peDetail'); if (d) d.innerHTML = '';
+      toastMsg(folder === 'spam' ? 'Moved to Spam' : folder === 'trash' ? 'Moved to Trash' : 'Moved to Inbox', 'success');
+      load();
+    } catch (e) { toastMsg(fail(e), 'error'); }
+  };
+
   // ─────────────────────────────────────────────────────────────────────────────────────────────
   // Message actions
   // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -308,6 +380,8 @@
         + ' · to ' + esc(m.address || '') + ' · ' + esc(fmt(m.received_at)) + '</div></div>'
         + '<div style="white-space:nowrap">'
         + '<button class="btn btn-ghost btn-xs" onclick="peStar(\'' + esc(m.id) + '\',' + (!m.is_starred) + ')">' + (m.is_starred ? '★ Starred' : '☆ Star') + '</button> '
+        + (m.folder !== 'inbox' ? '<button class="btn btn-ghost btn-xs" onclick="peMove(\'' + esc(m.id) + '\',\'inbox\')">To Inbox</button> ' : '')
+        + (m.folder !== 'spam' ? '<button class="btn btn-ghost btn-xs" onclick="peMove(\'' + esc(m.id) + '\',\'spam\')">Spam</button> ' : '')
         + '<button class="btn btn-ghost btn-xs" onclick="peArchive(\'' + esc(m.id) + '\')">Archive</button> '
         + '<button class="btn btn-ghost btn-xs" onclick="peDeleteMsg(\'' + esc(m.id) + '\',\'' + esc(m.folder || '') + '\')">Delete</button>'
         + '</div></div>'
