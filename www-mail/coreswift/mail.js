@@ -129,10 +129,15 @@
     render();
   }
 
+  // Every view the rail offers is one GET: the server's eight own views, plus the path of a folder
+  // this account made — a made path is a view of its own (the exact path and everything filed below
+  // it), so nothing is filtered here. Before CoreSwift's message query learned that, this client
+  // paged the widest view and kept the rows sitting in the path, which capped a folder at 1,000
+  // rows; that workaround went with the server fix (kanban t_d43ee278).
   async function loadMessages() {
-    var q = '/private-email/messages?folder=' + encodeURIComponent(S.folder) + '&address=' + encodeURIComponent(S.address)
-      + '&label=' + encodeURIComponent(S.label || '') + '&limit=100';
     try {
+      var q = '/private-email/messages?folder=' + encodeURIComponent(S.folder) + '&address=' + encodeURIComponent(S.address)
+        + '&label=' + encodeURIComponent(S.label || '') + '&limit=100';
       var r = await api('GET', q);
       S.messages = (r && r.messages) || [];
     } catch (e) {
@@ -382,6 +387,7 @@
         + '<div class="meta">To ' + esc(m.to_address || '(nobody yet)') + ' · ' + esc(fmt(m.received_at)) + '</div>'
         + '<div class="body">' + esc(m.body_plain || '(empty)') + '</div>'
         + '<div class="actions"><button class="btn btn-primary" data-act="continue">Continue writing</button>'
+        + '<button class="btn btn-ghost" data-act="move">Move to…</button>'
         + '<button class="btn btn-ghost" data-act="delete">Discard</button></div></div>';
     }
     var assignOpts = '<option value="">Assign to…</option>' + S.members.map(function (u) {
@@ -399,6 +405,7 @@
       + '<button class="btn" data-act="forward">Forward</button>'
       + '<button class="btn btn-ghost" data-act="star">' + (m.is_starred ? '★ Starred' : '☆ Star') + '</button>'
       + '<button class="btn btn-ghost" data-act="archive">Archive</button>'
+      + '<button class="btn btn-ghost" data-act="move">Move to…</button>'
       + '<button class="btn btn-ghost" data-act="delete">' + (spam || trash ? 'Delete forever' : 'Delete') + '</button>'
       + (S.counts.ai_summary ? '<button class="btn btn-ghost" data-act="summarize">Summarise</button>' : '')
       + '<select id="mAssign" style="width:auto">' + assignOpts + '</select>'
@@ -498,6 +505,7 @@
     try {
       if (act === 'star') { await api('PATCH', '/private-email/messages/' + m.id, { is_starred: !m.is_starred }); return openMessage(m.id); }
       if (act === 'archive') { await api('PATCH', '/private-email/messages/' + m.id, { folder: 'archive' }); S.sel = null; await boot(); toast('Archived'); return; }
+      if (act === 'move') { moveModal(); return; }
       if (act === 'delete') {
         var forever = m.folder === 'spam' || m.folder === 'trash';
         if (!confirm(forever ? 'This message will be destroyed for good. Delete it?' : 'Move this message to Trash? It can be restored from there.')) return;
@@ -627,7 +635,9 @@
       if (act === 'subfolder') {
         var name = prompt('Name for the subfolder inside "' + folder + '"?');
         if (!name || !name.trim()) return;
-        await api('POST', '/private-email/folders', { parent: folder, name: name.trim() });
+        // Lower case, because the server stores every message's folder path lower-cased: a folder
+        // made as "Clients" would never match (or count) the mail filed into it.
+        await api('POST', '/private-email/folders', { parent: folder, name: name.trim().toLowerCase() });
         closeModal(); toast('Folder created'); await boot(); return;
       }
       if (act === 'sort') {
@@ -644,6 +654,67 @@
       toast(act === 'empty' ? ('Destroyed ' + (r.destroyed || 0)) : 'Done');
       await boot();
     } catch (e) { if (err) err.textContent = fail(e); else toast(fail(e), 'error'); }
+  }
+
+  // ── Move a message into a folder ────────────────────────────────────────────────────────────
+  // The server accepts any system folder or any subfolder path (PATCH /messages/:id {folder}), and
+  // the rail lists the account's own subfolders — but nothing in this client could put a message
+  // INTO one, so "Folders you made" could only ever be filled by mail arriving on a filter.
+  var SYSTEM_ORDER = [['inbox', 'Inbox'], ['archive', 'Archive'], ['spam', 'Spam'], ['trash', 'Trash'], ['drafts', 'Drafts']];
+
+  function moveModal() {
+    var m = S.sel;
+    if (!m) return;
+    var custom = (S.folders.custom || []).filter(function (f) { return f.path !== m.folder; });
+    var sys = SYSTEM_ORDER.filter(function (f) { return f[0] !== m.folder; });
+    var html = '<p style="margin:0 0 8px;color:var(--muted)">Where should this message go?</p>'
+      + '<div style="display:flex;flex-wrap:wrap;gap:6px">'
+      + sys.map(function (f) { return '<button class="btn" data-mto="' + f[0] + '">' + f[1] + '</button>'; }).join('')
+      + '</div>'
+      + (custom.length
+        ? '<div style="margin-top:12px"><div style="font-size:11px;color:var(--muted);margin-bottom:4px">Folders you made</div>'
+          + '<div style="display:flex;flex-wrap:wrap;gap:6px">'
+          + custom.map(function (f) {
+              return '<button class="btn" data-mto="' + esc(f.path) + '">' + esc(f.name || f.path) + '</button>';
+            }).join('')
+          + '</div></div>'
+        : '<div style="margin-top:12px;font-size:12px;color:var(--muted)">You have no folders of your own yet — make one below and the message goes straight in.</div>')
+      + '<label class="f" style="margin-top:14px">New folder name</label>'
+      + '<input id="mvNewName" placeholder="clients">'
+      + '<div style="font-size:11px;color:var(--muted);margin-top:4px">Stored in lower case, so the folder and the mail filed in it always agree.</div>'
+      + '<div class="err" id="mvErr"></div>';
+
+    modal('Move to folder', html,
+      '<button class="btn" onclick="csmCloseModal()">Cancel</button><button class="btn btn-primary" id="mvNewGo">Create and move</button>',
+      function () {
+        Array.prototype.forEach.call(document.querySelectorAll('[data-mto]'), function (b) {
+          b.onclick = function () { moveTo(b.getAttribute('data-mto')); };
+        });
+        $('mvNewGo').onclick = async function () {
+          var name = ($('mvNewName').value || '').trim().toLowerCase();
+          if (!name) { $('mvErr').textContent = 'Type a name for the new folder first.'; return; }
+          if (name.indexOf('/') !== -1) { $('mvErr').textContent = 'A folder name cannot contain a slash.'; return; }
+          try {
+            var f = await api('POST', '/private-email/folders', { parent: 'archive', name: name });
+            await moveTo(f.path, true);
+          } catch (e) { $('mvErr').textContent = fail(e); }
+        };
+      });
+  }
+
+  async function moveTo(path, made) {
+    var m = S.sel;
+    if (!m) { closeModal(); return; }
+    try {
+      await api('PATCH', '/private-email/messages/' + m.id, { folder: path });
+      closeModal();
+      S.sel = null;
+      await boot();
+      toast(made ? ('Folder made and message moved to ' + path) : ('Moved to ' + path));
+    } catch (e) {
+      var err = $('mvErr');
+      if (err) err.textContent = fail(e); else toast(fail(e), 'error');
+    }
   }
 
   // ── Labels ──────────────────────────────────────────────────────────────────────────────────

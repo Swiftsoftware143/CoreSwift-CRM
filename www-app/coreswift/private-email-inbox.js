@@ -27,9 +27,15 @@
   var MAIL_HOST = 'https://inbox.coreswiftcrm.com';
 
   var S = {
-    boxes: [], domains: [], messages: [], counts: {}, addresses: [],
+    boxes: [], domains: [], messages: [], counts: {}, addresses: [], labels: [],
     folders: { system: [], custom: [] },
-    miscTotal: 0, view: 'inbox', address: 'all', sel: null, err: null,
+    miscTotal: 0, allTotal: null, view: 'inbox', address: 'all', sel: null, err: null,
+    // The label that is filtering the list (a label row behaves like a folder view: the server
+    // filters on it, so the count beside the label and the rows shown can never disagree).
+    label: '',
+    // How the list is ordered. 'date' is the server's own newest-first order; 'alpha' sorts the
+    // rows this screen already has by subject/sender. Sort is a per-view choice, not stored state.
+    sort: 'date',
     // The FREE mailbox's trial state (kanban t_2ef67217): read from the server, which computes it
     // from the same registry rows the send path enforces — so a countdown here can never promise
     // sending the send path would refuse.
@@ -224,7 +230,11 @@
   }
 
   function addressFilterHtml() {
-    var opts = ['<option value="all"' + (S.address === 'all' ? ' selected' : '') + '>All addresses (' + (S.counts.inbox || 0) + ')</option>'];
+    // The server answers an `all` total for exactly this filter (every message not in Trash), so the
+    // count beside "All addresses" is that number rather than the Inbox badge, which counts a
+    // different set of rows.
+    var allTotal = (S.allTotal == null) ? (S.counts.inbox || 0) : S.allTotal;
+    var opts = ['<option value="all"' + (S.address === 'all' ? ' selected' : '') + '>All addresses (' + allTotal + ')</option>'];
     (S.addresses || []).forEach(function (a) {
       opts.push('<option value="' + esc(a.address) + '"' + (S.address === a.address ? ' selected' : '') + '>' + esc(a.address) + ' (' + a.total + ')</option>');
     });
@@ -267,19 +277,31 @@
   }
 
   function messagesHtml() {
-    var m = S.messages || [];
+    var m = (S.messages || []).slice();
+    if (S.sort === 'alpha') {
+      // Alphabetical is a CLIENT-side order over the page the server returned: the server's own
+      // order is by arrival (newest first) and it has no sort parameter. Sorting the rows in hand
+      // keeps the promise the menu makes without pretending to sort mail it never fetched.
+      m.sort(function (a, b) {
+        var ka = String(a.subject || a.from_name || a.from_address || '').toLowerCase();
+        var kb = String(b.subject || b.from_name || b.from_address || '').toLowerCase();
+        return ka < kb ? -1 : ka > kb ? 1 : 0;
+      });
+    }
     if (!m.length) {
       // A view-picker that always says "No mail" teaches nothing: an empty Spam is GOOD news and an
       // empty Trash means a delete really happened, so the sentence names the view it is about.
       var name = viewLabel();
-      var hint = {
+      var hint = S.label
+        ? 'No message carries this label yet. Open any message and pick it under Labels.'
+        : ({
         spam: 'Messages the app treated as junk land here. Nothing here means no junk was caught.',
         trash: 'Deleted mail stays here until it is deleted for good from inside this view.',
         favorites: 'Press the star beside any message to keep it here.',
         archive: 'Archive a message and it leaves the inbox but stays searchable here.',
         drafts: 'Drafts you save while writing appear here.',
         sent: 'Replies and mail you send from this account appear here.'
-      }[S.view] || 'Every message that arrives at one of your addresses appears here — including mail to addresses that do not create tickets.';
+      }[S.view] || 'Every message that arrives at one of your addresses appears here — including mail to addresses that do not create tickets.');
       return '<div class="empty-state" style="padding:20px"><h4 style="margin:0 0 6px">Nothing in ' + esc(name) + '</h4>'
         + '<p style="margin:0">' + esc(hint) + '</p></div>';
     }
@@ -309,23 +331,70 @@
     var sys = S.folders.system || [];
     var custom = S.folders.custom || [];
     if (!sys.length) return '';
-    function btn(f) {
-      var active = (S.view === f.id);
-      return '<button type="button" class="btn ' + (active ? 'btn-primary' : 'btn-ghost') + ' btn-xs"'
-        + ' data-folder="' + esc(f.id) + '"'
+    // A folder that is a real STORE can be acted on (make a subfolder, mark all read/unread,
+    // empty it). Unread and Favorites are VIEWS over other stores: a bulk action there would
+    // silently reach mail the user cannot see in that view, so no menu is offered.
+    var STORES = { inbox: 1, drafts: 1, sent: 1, archive: 1, spam: 1, trash: 1 };
+    function btn(f, isCustom) {
+      var raw = f.id;
+      var active = !S.label && (S.view === raw);
+      return '<span style="display:inline-flex;align-items:center;margin:0 6px 6px 0">'
+        + '<button type="button" class="btn ' + (active ? 'btn-primary' : 'btn-ghost') + ' btn-xs"'
+        + ' data-folder="' + esc(raw) + '"'
         + ' aria-pressed="' + (active ? 'true' : 'false') + '"'
-        + ' onclick="peSetView(\'' + esc(f.id) + '\')"'
-        + ' style="margin:0 6px 6px 0">' + esc(f.name || f.id)
-        + ' <span style="opacity:.75">' + Number(f.count || 0) + '</span></button>';
+        + ' onclick="peSetView(\'' + esc(raw) + '\')">' + esc(f.name || f.id)
+        + ' <span style="opacity:.75">' + Number(f.count || 0) + '</span></button>'
+        + ((isCustom || STORES[f.id])
+          ? '<button type="button" class="btn btn-ghost btn-xs" style="padding:0 4px"'
+            + ' title="' + esc((f.name || f.id) + ' actions') + '"'
+            + ' aria-label="' + esc((f.name || f.id) + ' actions') + '"'
+            + ' onclick="peFolderMenu(\'' + esc(raw) + '\',' + (isCustom ? 'true' : 'false') + ')">&#8942;</button>'
+          : '')
+        + '</span>';
     }
-    return '<div style="margin:0 0 10px">' + sys.map(btn).join('')
+    return '<div style="margin:0 0 10px">' + sys.map(function (f) { return btn(f, false); }).join('')
       + (custom.length
-        ? '<div style="opacity:.7;font-size:12px;margin:2px 0 6px">Your folders</div>' + custom.map(btn).join('')
+        ? '<div style="opacity:.7;font-size:12px;margin:2px 0 6px">Your folders</div>'
+          + custom.map(function (f) { return btn(f, true); }).join('')
         : '')
+      + labelsRailHtml()
       + '</div>';
   }
 
+  // The labels rail: one row per label, its colour, how much mail carries it, and a menu to edit
+  // or delete it. Clicking the row filters the list by that label (the server-side filter above),
+  // so a label behaves like a folder view rather than a decoration.
+  function labelsRailHtml() {
+    var labels = S.labels || [];
+    var head = '<div style="opacity:.7;font-size:12px;margin:6px 0 6px;display:flex;align-items:center;gap:8px">'
+      + '<span>Labels</span>'
+      + '<button type="button" class="btn btn-ghost btn-xs" style="padding:0 4px" title="Create a label"'
+      + ' onclick="peLabelNew()">+</button></div>';
+    if (!labels.length) {
+      return head + '<div style="opacity:.6;font-size:12px;margin:0 0 6px">None yet — press + to make one, then tag any message.</div>';
+    }
+    var rows = labels.map(function (l) {
+      var active = S.label === l.id;
+      return '<span style="display:inline-flex;align-items:center;margin:0 6px 6px 0">'
+        + '<button type="button" class="btn ' + (active ? 'btn-primary' : 'btn-ghost') + ' btn-xs"'
+        + ' data-label="' + esc(l.id) + '" aria-pressed="' + (active ? 'true' : 'false') + '"'
+        + ' onclick="peSetLabel(\'' + esc(l.id) + '\')">'
+        + '<i style="display:inline-block;width:9px;height:9px;border-radius:999px;margin-right:6px;background:' + esc(l.color || '#64748b') + '"></i>'
+        + esc(l.name) + ' <span style="opacity:.75">' + Number(l.used || 0) + '</span></button>'
+        + '<button type="button" class="btn btn-ghost btn-xs" style="padding:0 4px"'
+        + ' title="' + esc(l.name + ' actions') + '" aria-label="' + esc(l.name + ' actions') + '"'
+        + ' onclick="peLabelMenu(\'' + esc(l.id) + '\')">&#8942;</button>'
+        + '</span>';
+    }).join('');
+    return head + '<div>' + rows + '</div>';
+  }
+
+
   function viewLabel() {
+    if (S.label) {
+      var l = (S.labels || []).filter(function (x) { return x.id === S.label; })[0];
+      if (l) return 'Label: ' + l.name;
+    }
     var all = (S.folders.system || []).concat(S.folders.custom || []);
     var f = all.filter(function (x) { return x.id === S.view; })[0];
     return (f && f.name) ? f.name : 'Mail';
@@ -346,7 +415,10 @@
       + '<div style="padding:14px;border:1px solid rgba(128,128,128,.3);border-radius:8px">'
       + railHtml()
       + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
-      + '<h4 style="margin:0" data-view-label="' + esc(S.view) + '">' + esc(viewLabel()) + '</h4><div>' + addressFilterHtml()
+      + '<h4 style="margin:0" data-view-label="' + esc(viewLabel()) + '">' + esc(viewLabel())
+      + ' <span style="font-size:12px;opacity:.6;font-weight:400">' + (S.sort === 'alpha' ? 'A–Z' : 'newest first') + '</span></h4>'
+      + '<div>' + (S.label ? '<button class="btn btn-ghost btn-xs" onclick="peSetLabel(\'\')">Clear label</button> ' : '')
+      + addressFilterHtml()
       + '<button class="btn btn-ghost btn-xs" onclick="peLoad()">Refresh</button></div></div>'
       + '<div style="font-size:12px;opacity:.7;margin-bottom:8px">Mail stays here. A plan can limit how far back the history goes, but the free trial ending never deletes a message — it only stops sending.</div>'
       + messagesHtml() + '</div>'
@@ -365,7 +437,13 @@
       var results = await Promise.all([
         api().get('/private-email/boxes').catch(function () { return []; }),
         api().get('/private-email/domains').catch(function () { return []; }),
-        api().get('/private-email/messages?folder=' + encodeURIComponent(S.view) + '&address=' + encodeURIComponent(S.address) + '&limit=50'),
+        // A label is a filter over the whole mailbox (the server's `folder=all` excludes Spam and
+        // Trash exactly as the All view does), so picking a label leaves the folder view rather
+        // than intersecting two filters the user cannot see at once.
+        api().get('/private-email/messages?folder=' + encodeURIComponent(S.label ? 'all' : S.view)
+          + '&address=' + encodeURIComponent(S.address)
+          + (S.label ? '&label=' + encodeURIComponent(S.label) : '')
+          + '&limit=50'),
         api().get('/private-email/messages/counts').catch(function () { return {}; }),
         api().get('/private-email/addresses').catch(function () { return {}; }),
         // The rail the server already keeps: eight folder VIEWS with live counts plus any real
@@ -375,7 +453,10 @@
         api().get('/private-email/folders').catch(function () { return { system: [], custom: [] }; }),
         // The trial: countdown, whether sending is allowed, and the fair-use / storage meters. The
         // server derives all of it from the registry rows the send path enforces.
-        api().get('/private-email/mailbox-status').catch(function () { return null; })
+        api().get('/private-email/mailbox-status').catch(function () { return null; }),
+        // Labels are account-level name+colour rows with a live usage count; the rail and the
+        // message screen both read this one list so the two can never disagree.
+        api().get('/private-email/labels').catch(function () { return { labels: [] }; })
       ]);
       S.boxes = Array.isArray(results[0]) ? results[0] : (results[0].boxes || []);
       S.domains = Array.isArray(results[1]) ? results[1] : (results[1].domains || []);
@@ -383,12 +464,17 @@
       S.counts = results[3] || {};
       S.addresses = (results[4] && results[4].addresses) || [];
       S.miscTotal = (results[4] && results[4].misc && results[4].misc.total) || 0;
+      S.allTotal = (results[4] && results[4].all && results[4].all.total != null) ? results[4].all.total : null;
       var rail = results[5] || {};
       S.folders = {
         system: Array.isArray(rail.system) ? rail.system : [],
         custom: Array.isArray(rail.custom) ? rail.custom : []
       };
       S.status = results[6] || null;
+      S.labels = (results[7] && Array.isArray(results[7].labels)) ? results[7].labels : [];
+      // A label that was deleted elsewhere (or never existed) must not keep filtering the list to
+      // an empty page: drop the filter when it names a label this account no longer has.
+      if (S.label && !S.labels.some(function (l) { return l.id === S.label; })) S.label = '';
       S.err = null;
       // First-run setup (BYOK): with no mailbox yet, the checklist needs the domain's records. Read
       // them through the app's own endpoint — Mailgun's values, never a hardcoded DKIM — and keep a
@@ -411,10 +497,7 @@
       S.err = fail(e);
       S.messages = [];
     }
-    el.innerHTML = render();
-    Array.prototype.forEach.call(document.querySelectorAll('.pe-row'), function (r) {
-      r.onclick = function () { window.peOpenMessage(r.getAttribute('data-id')); };
-    });
+    paint();
   }
 
   // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -608,6 +691,22 @@
   // reload — never a client-side hide, which would disagree with the counts beside the buttons.
   window.peSetView = function (v) {
     S.view = v || 'inbox';
+    // Choosing a folder leaves a label filter: otherwise the heading would say one thing and the
+    // rows would still be filtered by a label picked earlier.
+    S.label = '';
+    var d = document.getElementById('peDetail'); if (d) d.innerHTML = '';
+    load();
+  };
+
+  // Pick a label to filter by (or pass '' to clear it). The label is a server-side filter, so the
+  // rows and the number beside the label row come from the same place.
+  window.peSetLabel = function (id) {
+    var want = id || '';
+    // Remember the folder the user was in, so clearing the label puts them back where they were
+    // instead of dumping them into the All view.
+    if (want && !S.label) S.prevView = S.view;
+    S.label = want;
+    S.view = want ? 'all' : (S.prevView || 'inbox');
     var d = document.getElementById('peDetail'); if (d) d.innerHTML = '';
     load();
   };
@@ -621,6 +720,276 @@
       toastMsg(folder === 'spam' ? 'Moved to Spam' : folder === 'trash' ? 'Moved to Trash' : 'Moved to Inbox', 'success');
       load();
     } catch (e) { toastMsg(fail(e), 'error'); }
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  // Folder menus — the bulk actions the server already serves (B205)
+  //
+  // Every item here posts to a route that exists: POST /folders (create a subfolder) and
+  // POST /folders/action (read | unread | empty | to_inbox | trash_all). The destructive ones say
+  // the real count first and report what the server did afterwards, so "Empty folder" is a counted
+  // act rather than a promise. Only real STORES get a menu; Unread and Favorites are views.
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+
+  function allFolders() { return (S.folders.system || []).concat(S.folders.custom || []); }
+
+  function paint() {
+    var el = document.getElementById('peWrap');
+    if (!el) return;
+    el.innerHTML = render();
+    Array.prototype.forEach.call(document.querySelectorAll('.pe-row'), function (r) {
+      r.onclick = function () { window.peOpenMessage(r.getAttribute('data-id')); };
+    });
+  }
+
+  window.peFolderMenu = function (folder, isCustom) {
+    var f = allFolders().filter(function (x) { return x.id === folder; })[0]
+      || { id: folder, name: folder, count: 0 };
+    var isArchive = folder === 'archive';
+    var isHolding = folder === 'spam' || folder === 'trash';
+    var items = [
+      ['sub', 'Create subfolder', 'Make a folder inside ' + f.name + ' and file mail into it'],
+      ['read', 'Mark all as read', 'Every message in ' + f.name + ' stops showing as new'],
+      ['unread', 'Mark all as unread', 'Puts every message in ' + f.name + ' back as new'],
+      ['sort', S.sort === 'alpha' ? 'Sort newest first' : 'Sort alphabetically',
+        S.sort === 'alpha' ? 'Go back to the order mail arrived' : 'Order this list by subject']
+    ];
+    if (isArchive) {
+      items.push(['to_inbox', 'Move all to Inbox', 'Puts every archived message back in the Inbox']);
+      items.push(['trash_all', 'Delete all messages', 'Moves every archived message to Trash — restorable from there']);
+    }
+    if (isHolding) {
+      items.push(['empty', 'Empty ' + f.name, 'Destroys ' + Number(f.count || 0) + ' message'
+        + (Number(f.count || 0) === 1 ? '' : 's') + ' for good. This cannot be undone.']);
+    }
+    var body = '<p style="margin:0 0 10px;opacity:.8">Actions for <strong>' + esc(f.name) + '</strong>'
+      + (Number(f.count || 0) ? ' · ' + Number(f.count || 0) + ' message' + (Number(f.count || 0) === 1 ? '' : 's') : '')
+      + '</p><div style="display:flex;flex-direction:column;gap:6px">'
+      + items.map(function (it) {
+        return '<button type="button" class="btn btn-ghost" style="text-align:left" data-fa="' + esc(it[0]) + '">'
+          + '<strong>' + esc(it[1]) + '</strong>'
+          + '<div style="font-size:12px;opacity:.7;font-weight:400">' + esc(it[2]) + '</div></button>';
+      }).join('') + '</div>';
+    window.showModal('Folder actions', body, '<button class="btn btn-secondary" onclick="closeModal()">Close</button>');
+    Array.prototype.forEach.call(document.querySelectorAll('[data-fa]'), function (b) {
+      b.onclick = function () { window.peFolderDo(folder, b.getAttribute('data-fa')); };
+    });
+  };
+
+  window.peFolderDo = async function (folder, action) {
+    if (action === 'sort') {
+      S.sort = (S.sort === 'alpha') ? 'date' : 'alpha';
+      window.closeModal();
+      paint();
+      return;
+    }
+    if (action === 'sub') { window.peSubfolderModal(folder); return; }
+    if (action === 'empty') {
+      var f = allFolders().filter(function (x) { return x.id === folder; })[0] || {};
+      var n = Number(f.count || 0);
+      var where = (f.name || folder);
+      if (!window.confirm('Empty ' + where + '?\n\nThis destroys ' + n + ' message' + (n === 1 ? '' : 's')
+        + ' for good. It cannot be undone.\n\n' + (folder === 'spam'
+          ? 'Spam mail is never moved to Trash — it is deleted on the spot.'
+          : 'Trash mail is deleted on the spot.'))) return;
+      try {
+        var r = await api().post('/private-email/folders/action', { folder: folder, action: 'empty' });
+        window.closeModal();
+        toastMsg('Destroyed ' + Number(r.destroyed || 0) + ' message' + (Number(r.destroyed || 0) === 1 ? '' : 's') + ' from ' + where, 'success');
+        load();
+      } catch (e) { toastMsg(fail(e), 'error'); }
+      return;
+    }
+    try {
+      var res = await api().post('/private-email/folders/action', { folder: folder, action: action });
+      window.closeModal();
+      if (action === 'read' || action === 'unread') {
+        toastMsg('Marked ' + Number(res.updated || 0) + ' message' + (Number(res.updated || 0) === 1 ? '' : 's') + ' as ' + action, 'success');
+      } else if (action === 'to_inbox' || action === 'trash_all') {
+        toastMsg('Moved ' + Number(res.moved || 0) + ' message' + (Number(res.moved || 0) === 1 ? '' : 's') + ' to ' + (res.to === 'trash' ? 'Trash' : 'Inbox'), 'success');
+      }
+      if (S.view === folder) { /* stay in the folder the user is looking at */ }
+      load();
+    } catch (e) { toastMsg(fail(e), 'error'); }
+  };
+
+  window.peSubfolderModal = function (folder) {
+    window.showModal('Create a subfolder',
+      '<div class="form-group"><label>Folder name</label>'
+      + '<input id="peSubName" placeholder="clients" style="width:100%">'
+      + '<p style="font-size:12px;opacity:.7;margin:6px 0 0">It appears under your folders in the rail. '
+      + 'Mail can be moved into it from any message.</p></div>'
+      + '<div id="peSubMsg" style="font-size:13px"></div>',
+      '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>'
+      + '<button class="btn btn-primary" onclick="peSubfolderCreate(\'' + esc(folder) + '\')">Create</button>');
+  };
+
+  window.peSubfolderCreate = async function (folder) {
+    var inp = document.getElementById('peSubName');
+    var msg = document.getElementById('peSubMsg');
+    var name = ((inp && inp.value) || '').trim();
+    if (!name) { if (msg) msg.textContent = 'Give the folder a name.'; return; }
+    if (msg) msg.textContent = 'Creating…';
+    try {
+      await api().post('/private-email/folders', { parent: folder, name: name });
+      window.closeModal();
+      toastMsg('Folder created', 'success');
+      load();
+    } catch (e) { if (msg) msg.textContent = fail(e); else toastMsg(fail(e), 'error'); }
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  // Labels — name + colour, per account: GET/POST /labels, PATCH/DELETE /labels/:id, and
+  // POST|DELETE /labels/:id/apply with message_ids. The rail's label rows filter the list through
+  // the server's own `label` parameter, so a label never becomes a client-side decoration.
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+
+  function labelById(id) { return (S.labels || []).filter(function (l) { return l.id === id; })[0]; }
+
+  function labelChipsHtml(m) {
+    var applied = (m && m.labels) || [];
+    if (!applied.length) {
+      return '<span style="font-size:12px;opacity:.6">No labels on this message yet.</span>';
+    }
+    return applied.map(function (l) {
+      return '<span style="display:inline-flex;align-items:center;gap:6px;background:rgba(128,128,128,.14);'
+        + 'border-radius:999px;padding:2px 8px;margin:0 6px 6px 0;font-size:12px">'
+        + '<i style="display:inline-block;width:8px;height:8px;border-radius:999px;background:' + esc(l.color || '#64748b') + '"></i>'
+        + esc(l.name)
+        + '<button type="button" class="btn btn-ghost btn-xs" style="padding:0 2px" title="Remove this label"'
+        + ' onclick="peLabelToggle(\'' + esc(m.id) + '\',\'' + esc(l.id) + '\',false)">&#215;</button></span>';
+    }).join('');
+  }
+
+  function labelPickerHtml(m) {
+    var applied = ((m && m.labels) || []).map(function (l) { return l.id; });
+    var free = (S.labels || []).filter(function (l) { return applied.indexOf(l.id) < 0; });
+    var opts = '<option value="">Add a label…</option>' + free.map(function (l) {
+      return '<option value="' + esc(l.id) + '">' + esc(l.name) + '</option>';
+    }).join('');
+    return '<div style="display:flex;gap:6px;align-items:center;margin-top:6px">'
+      + '<select id="peLabelPick" style="width:auto" onchange="peLabelApply(this.value)">' + opts + '</select>'
+      + '<button type="button" class="btn btn-ghost btn-xs" onclick="peLabelNew()">+ New label</button></div>';
+  }
+
+  window.peLabelApply = async function (labelId) {
+    if (!labelId || !S.sel) return;
+    try {
+      await api().post('/private-email/labels/' + labelId + '/apply', { message_ids: [S.sel.id] });
+      var id = S.sel.id;
+      await load();
+      window.peOpenMessage(id);
+    } catch (e) { toastMsg(fail(e), 'error'); }
+  };
+
+  window.peLabelToggle = async function (messageId, labelId, want) {
+    try {
+      if (want) {
+        await api().post('/private-email/labels/' + labelId + '/apply', { message_ids: [messageId] });
+      } else {
+        // DELETE with a body: the route takes { message_ids } and API.call forwards a body on any
+        // verb, while API.del(path) sends none.
+        await api().call('DELETE', '/private-email/labels/' + labelId + '/apply', { message_ids: [messageId] });
+      }
+      await load();
+      window.peOpenMessage(messageId);
+    } catch (e) { toastMsg(fail(e), 'error'); }
+  };
+
+  window.peLabelNew = function () { window.peLabelForm(null); };
+
+  window.peLabelForm = function (label) {
+    var editing = !!label;
+    window.showModal(editing ? 'Edit label' : 'New label',
+      '<div class="form-group"><label>Name</label>'
+      + '<input id="peLabelName" maxlength="64" placeholder="Urgent" value="' + esc(editing ? label.name : '') + '"></div>'
+      + '<div class="form-group"><label>Colour</label>'
+      + '<input id="peLabelColor" type="color" value="' + esc(editing && label.color ? label.color : '#64748b') + '" style="width:80px;padding:2px"></div>'
+      + '<div id="peLabelMsg" style="font-size:13px"></div>',
+      '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>'
+      + '<button class="btn btn-primary" onclick="peLabelSave(' + (editing ? '\'' + esc(label.id) + '\'' : 'null') + ')">'
+      + (editing ? 'Save' : 'Create label') + '</button>');
+  };
+
+  window.peLabelSave = async function (labelId) {
+    var nameEl = document.getElementById('peLabelName');
+    var colorEl = document.getElementById('peLabelColor');
+    var msg = document.getElementById('peLabelMsg');
+    var name = ((nameEl && nameEl.value) || '').trim();
+    var color = (colorEl && colorEl.value) || '#64748b';
+    if (!name) { if (msg) msg.textContent = 'Give the label a name.'; return; }
+    if (msg) msg.textContent = 'Saving…';
+    try {
+      if (labelId) {
+        await api().patch('/private-email/labels/' + labelId, { name: name, color: color });
+      } else {
+        await api().post('/private-email/labels', { name: name, color: color });
+      }
+      window.closeModal();
+      toastMsg(labelId ? 'Label saved' : 'Label created', 'success');
+      await load();
+      if (S.sel) window.peOpenMessage(S.sel.id);
+    } catch (e) { if (msg) msg.textContent = fail(e); }
+  };
+
+  window.peLabelMenu = function (id) {
+    var l = labelById(id);
+    if (!l) return;
+    window.showModal('Label: ' + l.name,
+      '<p style="margin:0 0 10px;opacity:.8">' + Number(l.used || 0) + ' message'
+      + (Number(l.used || 0) === 1 ? '' : 's') + ' carry this label.</p>'
+      + '<div style="display:flex;flex-direction:column;gap:6px">'
+      + '<button type="button" class="btn btn-ghost" style="text-align:left" onclick="closeModal();peLabelFormById(\'' + esc(id) + '\')">'
+      + '<strong>Edit label</strong><div style="font-size:12px;opacity:.7;font-weight:400">Rename it or change its colour</div></button>'
+      + '<button type="button" class="btn btn-ghost" style="text-align:left;color:#b91c1c" onclick="peLabelDelete(\'' + esc(id) + '\')">'
+      + '<strong>Delete label</strong><div style="font-size:12px;opacity:.7;font-weight:400">The mail stays; only the tag goes away</div></button>'
+      + '</div>',
+      '<button class="btn btn-secondary" onclick="closeModal()">Close</button>');
+  };
+
+  window.peLabelFormById = function (id) {
+    var l = labelById(id);
+    if (l) window.peLabelForm(l);
+  };
+
+  window.peLabelDelete = async function (id) {
+    var l = labelById(id) || {};
+    if (!window.confirm('Delete the label "' + (l.name || '') + '"?\n\n'
+      + Number(l.used || 0) + ' message' + (Number(l.used || 0) === 1 ? '' : 's')
+      + ' keep their mail — only the tag is removed.')) return;
+    try {
+      await api().del('/private-email/labels/' + id);
+      window.closeModal();
+      if (S.label === id) { S.label = ''; S.view = 'inbox'; }
+      toastMsg('Label deleted', 'success');
+      await load();
+      if (S.sel) window.peOpenMessage(S.sel.id);
+    } catch (e) { toastMsg(fail(e), 'error'); }
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  // Summarise — POST /messages/:id/summarize. The server refuses with a plain sentence when the
+  // account has no AI key, and that sentence is shown where the button is; the button itself is
+  // only rendered when /counts says a key exists.
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+
+  window.peSummarize = async function (id) {
+    var box = document.getElementById('peSummaryBox');
+    var btn = document.getElementById('peSumBtn');
+    if (box) box.innerHTML = '<span style="opacity:.7">Summarising…</span>';
+    if (btn) btn.disabled = true;
+    try {
+      var r = await api().post('/private-email/messages/' + id + '/summarize', {});
+      if (box) {
+        box.innerHTML = '<div style="padding:8px 10px;border-left:3px solid #93c5fd;background:rgba(147,197,253,.12);'
+          + 'white-space:pre-wrap">' + esc(r.summary || '(no summary returned)') + '</div>';
+      }
+    } catch (e) {
+      if (box) box.innerHTML = '<div style="padding:8px 10px;border-left:3px solid #f59e0b;background:rgba(245,158,11,.12)">'
+        + esc(fail(e)) + '</div>';
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   };
 
   // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -654,13 +1023,23 @@
         + (m.folder !== 'inbox' ? '<button class="btn btn-ghost btn-xs" onclick="peMove(\'' + esc(m.id) + '\',\'inbox\')">To Inbox</button> ' : '')
         + (m.folder !== 'spam' ? '<button class="btn btn-ghost btn-xs" onclick="peMove(\'' + esc(m.id) + '\',\'spam\')">Spam</button> ' : '')
         + '<button class="btn btn-ghost btn-xs" onclick="peArchive(\'' + esc(m.id) + '\')">Archive</button> '
-        + '<button class="btn btn-ghost btn-xs" onclick="peDeleteMsg(\'' + esc(m.id) + '\',\'' + esc(m.folder || '') + '\')">Delete</button>'
+        + '<button class="btn btn-ghost btn-xs" onclick="peDeleteMsg(\'' + esc(m.id) + '\',\'' + esc(m.folder || '') + '\')">'
+        + ((m.folder === 'spam' || m.folder === 'trash') ? 'Delete forever' : 'Delete') + '</button>'
         + '</div></div>'
         + (m.is_ticket
           ? '<div style="margin:10px 0;padding:6px 10px;border-radius:6px;background:#dcfce7;color:#166534;font-size:13px">In the work queue as a ticket.</div>'
           : '<div style="margin:10px 0;padding:6px 10px;border-radius:6px;background:#fef3c7;color:#92400e;font-size:13px;display:flex;justify-content:space-between;align-items:center">'
             + '<span>In the inbox only — nobody is working this yet.</span>'
             + '<button class="btn btn-primary btn-xs" onclick="peMakeTicket(\'' + esc(m.id) + '\')">Turn into a ticket</button></div>')
+        + '<div style="margin:10px 0;padding:8px 10px;border:1px solid rgba(128,128,128,.25);border-radius:6px">'
+        + '<div style="font-size:12px;opacity:.7;margin-bottom:6px">Labels</div>'
+        + '<div>' + labelChipsHtml(m) + '</div>'
+        + labelPickerHtml(m)
+        + '</div>'
+        + (S.counts.ai_summary
+          ? '<div style="margin:10px 0"><button class="btn btn-secondary btn-sm" id="peSumBtn" onclick="peSummarize(\'' + esc(m.id) + '\')">Summarise this message</button>'
+            + '<div id="peSummaryBox" style="margin-top:8px;font-size:13px"></div></div>'
+          : '')
         + '<div style="white-space:pre-wrap;margin:12px 0;max-height:420px;overflow:auto">' + esc(m.body_plain || '(no text)') + '</div>'
         + '<label style="display:block;font-size:12px;opacity:.75;margin-bottom:4px">Reply as</label>'
         + '<select id="peFrom" style="margin-bottom:8px">' + fromOpts + '</select>'
