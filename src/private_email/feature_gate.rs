@@ -251,19 +251,23 @@ mod plan_feature_key_tests {
     }
 
     /// The WITHDRAWAL arm (kanban t_6b54961b): a stored preference is only permission while the
-    /// plan still sells the feature. Asserting the four combinations means a later "fix" that reads
-    /// the column alone, or the plan alone, goes red instead of silently re-opening the paid
-    /// feature to a downgraded workspace.
+    /// plan still sells the feature. Asserting the four combinations on the DECISION the router
+    /// itself calls means a later "fix" that reads the column alone, or the plan alone, goes red
+    /// instead of silently re-opening the paid feature to a downgraded workspace.
     #[test]
     fn a_stored_preference_is_in_force_only_while_the_plan_sells_it() {
+        use super::{catch_all_route, CatchAllRoute};
         // enabled on a plan that sells it -> delivered (the normal paid state)
-        assert!(catch_all_effective(true, true));
+        assert_eq!(catch_all_route(true, true), CatchAllRoute::Route);
         // enabled, then downgraded -> REFUSED (the defect this arm closes)
-        assert!(!catch_all_effective(true, false));
+        assert_eq!(catch_all_route(true, false), CatchAllRoute::Refuse);
         // off, plan sells it -> refused (nothing was asked for)
-        assert!(!catch_all_effective(false, true));
+        assert_eq!(catch_all_route(false, true), CatchAllRoute::Refuse);
         // off, plan does not sell it -> refused
-        assert!(!catch_all_effective(false, false));
+        assert_eq!(catch_all_route(false, false), CatchAllRoute::Refuse);
+        // and the boolean the reporting surfaces use is the same rule, not a second one
+        assert!(catch_all_effective(true, true));
+        assert!(!catch_all_effective(true, false));
     }
 }
 
@@ -386,16 +390,47 @@ pub async fn catch_all_granted(pool: &PgPool, tenant_id: Uuid) -> Result<bool, A
 /// The plan's own answer, `None` when the tenant's plan does not include private email at all.
 /// One expression, two callers: `can_enable_catch_all` (which turns `None` into the upgrade 400 the
 /// console prints verbatim) and `catch_all_granted` (which turns it into "not granted").
+///
+/// Reads exactly what `get_plan_features` reads for this ONE field — the private_email module is
+/// granted, and the plan/override blob sells catch-all — but skips the domain/mailbox limit lookups
+/// nothing here consumes. That matters because `catch_all_granted` sits on the UNAUTHENTICATED
+/// inbound path (a catch-all domain receives the most junk), where an extra query is paid per
+/// delivery before the signature is even checked. The answer is provably the same: both read
+/// `legacy_alias_features`, and both treat "this plan does not include private email" as not
+/// granted, which is what keeps the switch and the router agreeing.
 async fn plan_catch_all(pool: &PgPool, tenant_id: Uuid) -> Result<Option<bool>, AppError> {
-    Ok(get_plan_features(pool, tenant_id)
-        .await?
-        .map(|f| f.catch_all_enabled))
+    let module = crate::module_registry::resolve(pool, tenant_id, "private_email").await?;
+    if !module.enabled || module.source == "no_plan" {
+        return Ok(None);
+    }
+    Ok(Some(
+        legacy_alias_features(pool, tenant_id)
+            .await?
+            .catch_all_enabled,
+    ))
+}
+
+/// The inbound router's decision, named as its own type so the seam is testable and the router
+/// cannot quietly go back to reading the stored column alone (kanban t_6b54961b).
+#[derive(Debug, PartialEq, Eq)]
+pub enum CatchAllRoute {
+    Route,
+    Refuse,
 }
 
 /// THE one rule: a stored catch-all preference is in force only while the plan still sells it.
 ///
 /// Both the inbound router and the domain list apply this, so what the panel reports and what the
 /// mail path decides cannot drift (kanban t_6b54961b).
+pub fn catch_all_route(stored: bool, plan_sells: bool) -> CatchAllRoute {
+    if stored && plan_sells {
+        CatchAllRoute::Route
+    } else {
+        CatchAllRoute::Refuse
+    }
+}
+
+/// The same rule as a boolean, for the reporting surfaces (`true` = catch-all is in force).
 pub fn catch_all_effective(stored: bool, plan_sells: bool) -> bool {
-    stored && plan_sells
+    catch_all_route(stored, plan_sells) == CatchAllRoute::Route
 }

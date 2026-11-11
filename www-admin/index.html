@@ -1939,7 +1939,8 @@ const TAB_RENDERERS = {
     '<br>' +
     card('Tenant Retention', '<div class="form-group"><label>Tenant</label><select id="peRetTenant" data-ops="pe-retention"></select></div>' +
       '<div class="form-group"><label>Retention (days, 30–3650)</label><input type="number" id="peRetDays" min="30" max="3650" value="365"></div>' +
-      '<p class="form-hint" id="peRetStatus">Pick a tenant, press “Load Current”, then save. Saving creates the override row if the tenant has none.</p>',
+      '<p class="form-hint" id="peRetStatus">Pick a tenant, press “Load Current”, then save. Saving creates the override row if the tenant has none.</p>' +
+      '<p class="form-hint" id="peCatchAllStatus" data-ops="pe-catchall-status">Catch-all: pick a tenant to see whether its plan still sells it.</p>',
       '<button class="btn btn-secondary" data-ops="pe-retention-load" onclick="loadRetentionForTenant()">Load Current</button>' +
       '<button class="btn btn-primary" data-ops="pe-retention-save" onclick="saveRetentionForTenant()">Save Retention</button>') +
     '<br>' +
@@ -3889,6 +3890,36 @@ async function loadRetentionForTenant() {
     if (st) st.textContent = 'Current retention: ' + ((r && r.retention_days) || '—') + ' days · last purge: ' + ((r && r.last_purged_at) || 'never');
   } catch(e) {
     if (st) st.textContent = 'Failed to load retention: ' + e.message;
+  }
+  // Catch-all is a PLAN entitlement (kanban t_6b54961b): the per-tenant limits report carries the
+  // answer the inbound router uses. This is its console caller — without it the operator could only
+  // learn a workspace's switch is being refused by curl, and the overrides table above is empty for
+  // every workspace nobody has set retention on.
+  refreshCatchAllStatus(sel.value);
+}
+
+async function refreshCatchAllStatus(tenantId) {
+  const el = document.getElementById('peCatchAllStatus');
+  if (!el || !tenantId) return;
+  el.textContent = 'Catch-all: reading the plan…';
+  try {
+    const r = await API.get('/private-email/admin/limits/' + encodeURIComponent(tenantId));
+    const stored = Number(r.catch_all_domains_enabled || 0);
+    const off = Number(r.catch_all_domains_off_plan || 0);
+    if (off > 0) {
+      el.innerHTML = '<span class="badge badge-warning">off plan</span> ' + off + ' domain' +
+        (off === 1 ? '' : 's') + ' still ' + (off === 1 ? 'carries' : 'carry') +
+        ' the remembered switch, and every mail to an unknown address on ' +
+        (off === 1 ? 'it is' : 'them is') + ' refused until the workspace is moved back to a plan that sells catch-all.';
+    } else if (r.sells_catch_all) {
+      el.innerHTML = '<span class="badge badge-success">included</span> this plan sells catch-all · ' +
+        stored + ' domain' + (stored === 1 ? '' : 's') + ' with the switch on.';
+    } else {
+      el.innerHTML = '<span class="badge badge-muted">not on plan</span> this plan does not sell catch-all' +
+        (stored ? ' · ' + stored + ' domain(s) holding a remembered switch that is refused' : '') + '.';
+    }
+  } catch (e) {
+    el.textContent = 'Catch-all: could not read the plan — ' + e.message;
   }
 }
 

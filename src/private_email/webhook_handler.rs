@@ -156,7 +156,9 @@ pub async fn inbound_webhook(
                     // because a sender is not owed our billing state.
                     let plan_sells_catch_all =
                         feature_gate::catch_all_granted(&state.db, tenant).await?;
-                    if !feature_gate::catch_all_effective(true, plan_sells_catch_all) {
+                    if feature_gate::catch_all_route(true, plan_sells_catch_all)
+                        != feature_gate::CatchAllRoute::Route
+                    {
                         tracing::warn!(
                             domain = %domain_part,
                             tenant = %tenant,
