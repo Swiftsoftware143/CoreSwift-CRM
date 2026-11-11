@@ -2741,11 +2741,16 @@ function icRenderKeys() {
     k.is_active ? '<span class="badge badge-success">active</span>' : '<span class="badge badge-muted">revoked</span>',
     escapeHtml(icFmtDate(k.last_used_at)),
     escapeHtml(icFmtDate(k.created_at)),
-    '<button class="btn btn-ghost btn-xs" onclick="icRotateKey(\'' + escapeHtmlAttr(k.id) + '\')">Rotate</button> ' +
+    (k.is_active
+      ? (k.recoverable
+          ? '<button class="btn btn-ghost btn-xs" onclick="icViewKey(\'' + escapeHtmlAttr(k.id) + '\')">View</button> '
+          : '<button class="btn btn-ghost btn-xs" title="Created before keys were stored recoverably — regenerate to get a key you can view" onclick="icRotateKey(\'' + escapeHtmlAttr(k.id) + '\')">Regenerate to view</button> ')
+      : '') +
+    '<button class="btn btn-ghost btn-xs" onclick="icRotateKey(\'' + escapeHtmlAttr(k.id) + '\')">Regenerate</button> ' +
     '<button class="btn btn-ghost btn-xs" onclick="icRevokeKey(\'' + escapeHtmlAttr(k.id) + '\')">Revoke</button>'
   ]);
   const body = '<p style="color:var(--text-secondary);margin:0 0 10px">Each key lets a capture app deliver leads into <strong>this account</strong>. ' +
-    'Only the prefix is ever displayed — the full key is shown once, at creation. <strong>' + active + '</strong> active of ' + items.length + ' total.</p>' +
+    'The key itself stays retrievable: press <strong>View</strong> and re-enter your password to see it and copy it again at any time. <strong>' + active + '</strong> active of ' + items.length + ' total.</p>' +
     dataTable(['Name', 'Prefix', 'Status', 'Last used', 'Created', ''], rows,
       'No keys yet — create one and paste it into a capture app\'s CoreSwift integration.');
   const footer = '<button class="btn btn-primary btn-sm" onclick="icCreateKey()">+ Create lead-delivery key</button>';
@@ -2762,10 +2767,10 @@ async function icCreateKey() {
 }
 
 async function icRotateKey(id) {
-  if (!confirm('Rotate this key? The current secret stops working immediately.')) return;
+  if (!confirm('Regenerate this key? The current key stops working immediately, so anything you have already wired up with it stops delivering until you paste the new one in. You can copy the new key from this screen.')) return;
   try {
     const d = await API.post('/personal-api-keys/' + encodeURIComponent(id) + '/rotate', {});
-    await icShowKeyOnce(d, 'Key rotated');
+    await icShowKeyOnce(d, 'Key regenerated');
   } catch (e) {
     toast('Could not rotate: ' + e.message, 'error');
   }
@@ -2783,14 +2788,50 @@ async function icRevokeKey(id) {
 }
 
 async function icShowKeyOnce(d, title) {
+  icShowKeyCard(title, d && d.key, d && d.prefix,
+    'Paste this into the capture app. You can come back and view or copy it again any time — press View and re-enter your password.');
+  await icLoadOverview();
+}
+
+// One key modal shared by creation, regeneration and View: the value is a readonly input (selectable
+// if the clipboard API is unavailable) plus a one-click Copy button.
+function icShowKeyCard(title, key, prefix, blurb) {
   showModal(escapeHtml(title),
-    '<p style="margin:0 0 8px">Paste this into the capture app now — it is shown <strong>once</strong> and can never be retrieved again.</p>' +
-    '<div class="form-group"><label>Key</label><input id="icNewKey" readonly value="' + escapeHtmlAttr(d && d.key || '') + '"></div>' +
-    '<div style="font-size:.75rem;color:var(--text-muted)">Prefix ' + escapeHtml(d && d.prefix || '') + '</div>',
-    '<button class="btn btn-secondary" onclick="closeModal()">Done</button>');
+    '<p style="margin:0 0 8px">' + escapeHtml(blurb) + '</p>' +
+    '<div class="form-group"><label>Key</label><input id="icNewKey" readonly value="' + escapeHtmlAttr(key || '') + '"></div>' +
+    '<div style="font-size:.75rem;color:var(--text-muted)">Prefix ' + escapeHtml(prefix || '') + '</div>',
+    '<button class="btn btn-secondary" onclick="closeModal()">Close</button>' +
+    '<button class="btn btn-primary" onclick="icCopyShownKey()">Copy key</button>');
   const inp = document.getElementById('icNewKey');
   if (inp) { inp.focus(); inp.select(); }
-  await icLoadOverview();
+}
+
+function icCopyShownKey() {
+  const inp = document.getElementById('icNewKey');
+  if (!inp || !inp.value) return;
+  tlCopyUrl(inp.value);
+}
+
+// View = re-authenticate, then show the SAME stored key. Repeatable: nothing is consumed.
+async function icViewKey(id) {
+  showModal('View your API key',
+    '<p style="margin:0 0 8px">Confirm it is you before the key is shown. Enter your account password.</p>' +
+    '<div class="form-group"><label>Password</label><input type="password" id="icViewPassword" autocomplete="current-password"></div>',
+    '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="icDoViewKey(\'' + escapeHtmlAttr(id) + '\')">Show key</button>');
+  const inp = document.getElementById('icViewPassword');
+  if (inp) inp.focus();
+}
+
+async function icDoViewKey(id) {
+  const pw = (document.getElementById('icViewPassword') || {}).value || '';
+  if (!pw) { toast('Enter your password', 'error'); return; }
+  try {
+    const d = await API.post('/personal-api-keys/' + encodeURIComponent(id) + '/reveal', { password: pw });
+    icShowKeyCard('Your API key', d && d.key, d && d.prefix, 'This is the same key as before. Every view is recorded.');
+  } catch (e) {
+    toast('Could not show key: ' + e.message, 'error');
+  }
 }
 
 // ── Sister products as upgrade paths ──
@@ -8243,7 +8284,7 @@ function auditExportCsv() {
 }
 </script>
 <script src="/inline-guide-widget.js?v=20261106a"></script>
-<script src="/private-email-inbox.js?v=20261110a"></script>
+<script src="/private-email-inbox.js?v=20261111a"></script>
 </body>
 </html>
 
