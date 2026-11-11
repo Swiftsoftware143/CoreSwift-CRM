@@ -92,26 +92,34 @@ pub async fn connect_app(
     let config = r.config.unwrap_or_else(|| json!({}));
 
     if existing > 0 {
-        // Update existing connection
+        // Update existing connection. `test_ok` is bound (instead of a literal
+        // `true`) so the row records the verdict this request actually got —
+        // the early return above makes it true, this keeps the two arms honest.
         sqlx::query(
-            "UPDATE app_connections SET credentials = $1, config = $2, status = 'connected', last_test_at = NOW(), last_test_ok = true, error_message = NULL, updated_at = NOW() WHERE tenant_id = $3 AND app_slug = $4"
+            "UPDATE app_connections SET credentials = $1, config = $2, status = 'connected', last_test_at = NOW(), last_test_ok = $3, error_message = NULL, updated_at = NOW() WHERE tenant_id = $4 AND app_slug = $5"
         )
         .bind(&r.credentials)
         .bind(&config)
+        .bind(test_ok)
         .bind(account_id)
         .bind(&app_slug)
         .execute(&s.db)
         .await?;
     } else {
-        // Create new connection
+        // Create new connection — and record the test this request just ran.
+        // The UPDATE arm always did; the INSERT arm used to write only
+        // (id, tenant_id, app_slug, credentials, config, status), so a
+        // first-ever connection showed as "never tested" in the Integration
+        // Center until the same app was connected a second time (t_4d2776a4).
         sqlx::query(
-            "INSERT INTO app_connections (id, tenant_id, app_slug, credentials, config, status) VALUES ($1, $2, $3, $4, $5, 'connected')"
+            "INSERT INTO app_connections (id, tenant_id, app_slug, credentials, config, status, last_test_at, last_test_ok, error_message) VALUES ($1, $2, $3, $4, $5, 'connected', NOW(), $6, NULL)"
         )
         .bind(Uuid::new_v4())
         .bind(account_id)
         .bind(&app_slug)
         .bind(&r.credentials)
         .bind(&config)
+        .bind(test_ok)
         .execute(&s.db)
         .await?;
     }
