@@ -4052,7 +4052,8 @@ document.addEventListener('click', e => {
     n: { desc: 'g n  → Notifications', tab: 'notifications' },
     x: { desc: 'g x  → Telnyx SMS/Voice', tab: 'telnyx' },
     k: { desc: 'g k  → Support Tickets', tab: 'tickets' },
-    b: { desc: 'g b  → Private Email (Inbox)', tab: 'inbox' },
+    b: { desc: 'g b  → Shared Inbox', tab: 'inbox' },
+    v: { desc: 'g v  → Email Domains & Sending', tab: 'email-settings' },
     y: { desc: 'g y  → Calendar', tab: 'calendar' },
     u: { desc: 'g u  → Bookings', tab: 'bookings' },
     q: { desc: 'g q  → AI Assistant', tab: 'ai-assistant' },
@@ -6878,6 +6879,14 @@ async function loadInboxTab() {
 
   const activeBoxes = PE.boxes.filter(b => b.status === 'active')
     .map(b => '<option value="' + escapeHtmlAttr(b.email_address) + '">' + escapeHtml(b.email_address) + '</option>').join('');
+  // Keep a half-typed message alive across a re-render. Every control on this panel reloads the tab
+  // (catch-all, credential, re-check), and rebuilding the send form used to blank the subject and
+  // body mid-sentence — a one-click switch discarding what the customer had typed on the same screen.
+  const draft = {};
+  ['peFrom', 'peTo', 'peSubject', 'peBody'].forEach(function (id) {
+    const el = document.getElementById(id);
+    if (el) draft[id] = el.value;
+  });
   peSendEl.innerHTML = card('✉️ Send from your domain',
     (activeBoxes ? '' : '<p style="color:var(--text-secondary)">No active mailbox on this account yet, and outbound mail must be sent FROM one.</p>') +
     '<div class="form-group"><label>From</label><select id="peFrom">' + (activeBoxes || '<option value="">no mailboxes</option>') + '</select></div>' +
@@ -6887,6 +6896,10 @@ async function loadInboxTab() {
     '<button class="btn btn-primary btn-sm" id="peSendBtn"' + (activeBoxes ? '' : ' disabled') + '>Send email</button>');
   const sb = document.getElementById('peSendBtn');
   if (sb) sb.addEventListener('click', peSend);
+  Object.keys(draft).forEach(function (id) {
+    const el = document.getElementById(id);
+    if (el && draft[id]) el.value = draft[id];
+  });
 }
 
 // ── Credential health: a stored key nobody can open must not read as configured ────────────────
@@ -6933,9 +6946,19 @@ async function peToggleCatchAll(domainId, next) {
       { catch_all_enabled: next });
     const got = !!(r && r.catch_all_enabled);
     if (got === next) {
-      toast(next
-        ? 'Catch-all on — mail to an address that does not exist on ' + dom + ' now lands in this workspace'
-        : 'Catch-all off — mail to an unknown address on ' + dom + ' is now refused', 'success');
+      // Catch-all only DELIVERS if this domain's inbound receiver is armed: without the webhook
+      // signing key, POST /api/v1/webhooks/mailgun/inbound refuses every delivery (t_fbd607a7) and
+      // the row beside this button says so. Promising "it now lands in your workspace" while the
+      // same row reads "no key — inbound refused" would be a false confirmation.
+      const armed = !!(r && r.webhook_signing_key_status === 'usable');
+      if (next && !armed) {
+        toast('Catch-all on — but this domain has no inbound signing key, so deliveries are still ' +
+          'refused. Set the key in the Inbound mail column to start receiving.', 'error');
+      } else {
+        toast(next
+          ? 'Catch-all on — mail to an address that does not exist on ' + dom + ' now lands in this workspace'
+          : 'Catch-all off — mail to an unknown address on ' + dom + ' is now refused', 'success');
+      }
     } else {
       toast('Saved, but the server reports catch-all ' + (got ? 'on' : 'off') + ' for ' + dom,
         got ? 'success' : 'error');
