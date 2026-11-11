@@ -739,18 +739,33 @@ fn flatten_records(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_uppercase();
-        let name = r.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        // v4 omits `name` on the MX rows (they apply at the domain root) and spells `valid` as the
+        // STRING "valid"/"invalid". Both shapes are accepted here, or the two records a receiving
+        // domain cannot live without were silently dropped and every other row read as invalid.
+        let name = r
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or("@");
         let value = r.get("value").and_then(|v| v.as_str()).unwrap_or("");
-        if name.is_empty() || value.is_empty() {
+        if value.is_empty() {
             continue;
         }
+        let valid = match r.get("valid") {
+            Some(serde_json::Value::Bool(b)) => *b,
+            Some(serde_json::Value::String(s)) => s.eq_ignore_ascii_case("valid"),
+            _ => r
+                .get("is_active")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        };
         out.push(json!({
             "section": section,
             "type": kind,
             "name": name,
             "value": value,
             "priority": r.get("priority").cloned().unwrap_or(serde_json::Value::Null),
-            "valid": r.get("valid").and_then(|v| v.as_bool()).unwrap_or(false),
+            "valid": valid,
             "purpose": purpose,
         }));
     }
@@ -768,7 +783,39 @@ async fn mailgun_domain_detail(
     } else {
         "https://api.mailgun.net"
     };
-    let resp = reqwest::Client::new()
+    let client = reqwest::Client::new();
+
+    // v4 FIRST: on this account `GET /v3/domains/<name>` answers the domain object WITHOUT
+    // `receiving_dns_records` / `sending_dns_records` (measured 2026-11-11 on a verified domain), so
+    // a v3-only read produced an EMPTY schedule page — the customer was asked to add records that
+    // were never listed. v4 returns them beside the domain object; the two are merged into one
+    // payload so callers that read `state` keep working.
+    let v4 = client
+        .get(format!("{}/v4/domains/{}", base_url, domain))
+        .basic_auth("api", Some(api_key))
+        .send()
+        .await;
+    if let Ok(resp) = v4 {
+        if resp.status().is_success() {
+            if let Ok(payload) = resp.json::<serde_json::Value>().await {
+                let mut merged = payload
+                    .get("domain")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                for key in ["receiving_dns_records", "sending_dns_records"] {
+                    if let Some(v) = payload.get(key) {
+                        merged[key] = v.clone();
+                    }
+                }
+                if merged.get("state").is_some() || merged.get("receiving_dns_records").is_some() {
+                    return Some(merged);
+                }
+            }
+        }
+    }
+
+    // Older accounts: the v3 domain object carries the arrays inline.
+    let resp = client
         .get(format!("{}/v3/domains/{}", base_url, domain))
         .basic_auth("api", Some(api_key))
         .send()
