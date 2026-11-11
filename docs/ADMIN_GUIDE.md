@@ -283,6 +283,30 @@ All four are platform-admin only. The credential is sealed at rest with the app'
 (the same one `provider_keys` uses, under a scope of its own), so a database dump yields no usable
 key, and no read route returns the key or a digest of it.
 
+## Native app connectors — who may connect what
+
+Two doors write `app_connections`, and both apply **one** rule (written on
+`native_apps::connectors::connect_refusal`):
+
+* the **Integration Center** — `POST /api/native/apps/{slug}/connect`, signed in;
+* the **automation webhook** — `POST /api/webhook/{token}/native.connect`, token only.
+
+| Connector `access_level` | Integration Center | Automation webhook |
+|---|---|---|
+| `admin_tenant` — the workspace's own apps (FunnelSwift, WorkflowSwift, MissedCall Respondr, IncentiveSwift) | any signed-in member | allowed |
+| `admin` — platform-operator tooling (AdaSwift, Multi-Directory) | an account admin (`owner` / `account_owner` / `admin` / `agency_admin`) | **refused** — 400, *"… is available to the platform operator only — connect it from the Integration Center while signed in as an account admin."* |
+
+Why the webhook side is the one refused: an `automation_webhooks` row names a **workspace**, never a
+person (it carries `tenant_id`, a name, the token and an action allow-list — no author), so a token
+cannot prove an account admin and is treated as the workspace's least-privileged member. AdaSwift and
+Multi-Directory are driven with a **platform-held** AdaSwift admin bearer token, so a tenant token
+must never be able to make the platform store or send one. The refusal happens **before** the
+connection test, so no credential leaves the box on that leg. Connecting a new app is not affected:
+an account admin does it from the console.
+
+Either door also only writes `connected` after a live connection test it actually ran, so the badge
+on the Integration Center can never be an untested claim.
+
 ## Deployment
 
 ```bash

@@ -79,6 +79,44 @@ pub static NATIVE_APPS: &[AppConnector] = &[
     },
 ];
 
+/// Why a caller may not connect `app` — the ONE access rule BOTH connecting doors apply
+/// (kanban t_0db782c6).
+///
+/// The two doors, and what each knows:
+///
+/// * [`crate::native_apps::handlers::connect_app`] — the Integration Center (SPA) door. It has
+///   a `Claims`, so it passes `is_account_admin(claims.role)`.
+/// * [`crate::webhook::actions::route_action`]'s `native.connect` arm — the automation door. It
+///   has a TENANT and no user: an `automation_webhooks` row carries `tenant_id`, `name`,
+///   `webhook_token` and `allowed_actions` — never an author. A token therefore carries no role
+///   and is treated as the tenant's least-privileged member (`is_person_admin = false`).
+///
+/// DECISION: an `access_level = "admin"` connector (`adaswift`, `multi-directory`) is
+/// platform-operator tooling — it is driven with an AdaSwift admin bearer token, i.e. a
+/// credential the PLATFORM holds on the operator's behalf. Connecting one requires an admin
+/// PERSON, which only the SPA door can establish. A tenant-scoped automation token cannot, so
+/// the webhook door refuses an app that an account admin of the same tenant may connect from
+/// the console. That difference is intended and is exactly why the rule lives here, in one
+/// function called by both doors, instead of in either of them: the doors do not disagree about
+/// the rule, they differ only in the identity they can prove. An `admin_tenant` connector
+/// belongs to the tenant itself, so both doors allow it.
+///
+/// Rejected alternative (kanban t_0db782c6 option 2 — "tenant tokens are trusted operator
+/// tooling"): it would have required widening `connect_app` to match, i.e. handing every tenant
+/// that owns a webhook token the platform's operator credentials. That is a privilege expansion
+/// with no functional gain: the operator connects these apps from the console.
+pub fn connect_refusal(app: &AppConnector, is_person_admin: bool) -> Option<String> {
+    if app.access_level == "admin" && !is_person_admin {
+        Some(format!(
+            "{} is available to the platform operator only — connect it from the Integration \
+             Center while signed in as an account admin.",
+            app.name
+        ))
+    } else {
+        None
+    }
+}
+
 /// Test a connection to the given app with the provided credentials.
 /// Returns (success, message, latency_ms).
 pub async fn test_connection(
@@ -151,5 +189,63 @@ pub fn get_app_meta(slug: &str) -> Option<serde_json::Value> {
         "missedcall-responder" => Some(missedcall_responder::get_meta()),
         "multi-directory" => Some(multi_directory::get_meta()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app(slug: &str) -> &'static AppConnector {
+        NATIVE_APPS
+            .iter()
+            .find(|a| a.slug == slug)
+            .expect("catalogue entry")
+    }
+
+    /// The webhook door (`is_person_admin = false`) refuses every admin-only connector —
+    /// the exact set the catalogue marks for the platform operator.
+    #[test]
+    fn tenant_token_may_not_connect_admin_only_apps() {
+        for a in NATIVE_APPS.iter().filter(|a| a.access_level == "admin") {
+            let reason = connect_refusal(a, false).expect("admin-only app must be refused");
+            assert!(
+                reason.contains("platform operator only"),
+                "refusal must say who may connect it: {reason}"
+            );
+            assert!(
+                reason.contains(a.name),
+                "refusal must name the app: {reason}"
+            );
+        }
+        // …and the two connectors the card names are in that set.
+        assert!(connect_refusal(app("adaswift"), false).is_some());
+        assert!(connect_refusal(app("multi-directory"), false).is_some());
+    }
+
+    /// The SPA door passes the signed-in role, so an account admin IS allowed — that is the
+    /// intended difference between the doors, and it must not drift.
+    #[test]
+    fn account_admin_may_connect_admin_only_apps_from_the_console() {
+        assert!(connect_refusal(app("adaswift"), true).is_none());
+        assert!(connect_refusal(app("multi-directory"), true).is_none());
+    }
+
+    /// `admin_tenant` connectors belong to the tenant, so both doors allow them (the webhook
+    /// door passes `false` and must still be allowed).
+    #[test]
+    fn admin_tenant_apps_are_allowed_on_both_doors() {
+        for a in NATIVE_APPS
+            .iter()
+            .filter(|a| a.access_level == "admin_tenant")
+        {
+            assert!(
+                connect_refusal(a, false).is_none(),
+                "{} is tenant-scoped and must be connectable by a tenant token",
+                a.slug
+            );
+            assert!(connect_refusal(a, true).is_none(), "{}", a.slug);
+        }
+        assert!(connect_refusal(app("workflowswift"), false).is_none());
     }
 }

@@ -482,6 +482,22 @@ pub async fn route_action(
                 .get("app_slug")
                 .and_then(|v| v.as_str())
                 .ok_or("app_slug required")?;
+            // ACCESS LEVEL FIRST (kanban t_0db782c6): this token names a TENANT, never a person
+            // — `automation_webhooks` has no author column — so it carries no role and this arm
+            // passes `is_person_admin = false` to the shared rule. An admin-only connector
+            // (`adaswift`, `multi-directory`) is platform-operator tooling driven with a
+            // platform-held bearer token, so it is refused here BEFORE the connection test: a
+            // tenant token must not even make the platform send that credential anywhere. The
+            // SPA door (native_apps::handlers::connect_app) calls the same function with the
+            // signed-in role and is where an account admin connects these apps. Why this side is
+            // the one refused is written on `connectors::connect_refusal`.
+            let app = crate::native_apps::connectors::NATIVE_APPS
+                .iter()
+                .find(|a| a.slug == app_slug)
+                .ok_or_else(|| format!("App '{}' not found", app_slug))?;
+            if let Some(reason) = crate::native_apps::connectors::connect_refusal(app, false) {
+                return Err(reason);
+            }
             let plaintext = body.get("credentials").ok_or("credentials required")?;
             // Test with the caller's own plaintext, BEFORE anything is stored, and refuse
             // with the same sentence `connect_app` uses so both doors answer alike.

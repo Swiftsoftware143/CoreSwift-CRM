@@ -53,8 +53,14 @@ pub async fn connect_app(
         .find(|a| a.slug == app_slug)
         .ok_or_else(|| AppError::NotFound(format!("App '{}' not found", app_slug)))?;
 
-    // Check access level
-    if app.access_level == "admin" && !is_admin {
+    // Access level — the ONE rule, shared with the automation door via
+    // `connectors::connect_refusal` (kanban t_0db782c6). This door can prove an admin PERSON
+    // (the signed-in role), so an account admin may connect an admin-only app here while the
+    // same tenant's automation token may not: `webhook::actions::route_action`'s
+    // `native.connect` arm passes `is_person_admin = false` because an `automation_webhooks`
+    // row names a tenant, never a user. The reason the webhook side is refused rather than this
+    // side widened is written on `connect_refusal`.
+    if connectors::connect_refusal(app, is_admin).is_some() {
         return Err(AppError::Forbidden);
     }
 
