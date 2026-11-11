@@ -8,6 +8,7 @@ pub mod domain_handler;
 pub mod encryption;
 pub mod feature_gate;
 pub mod mailbox_handler;
+pub mod messages_handler;
 pub mod models;
 pub mod providers;
 pub mod purge;
@@ -49,6 +50,59 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route(
             "/boxes/:id",
             axum::routing::delete(mailbox_handler::delete_mailbox),
+        )
+        // ── Messages: the inbox's own records (B204/B205/B211) ──────────────────────────────────
+        // Every received message, the address it arrived on, and whether it also became a ticket.
+        // The inbox reads THESE, not tickets — which is what makes mail to an unticketed address
+        // (info@, david@) visible instead of acknowledged-and-invisible.
+        .route(
+            "/messages",
+            axum::routing::get(messages_handler::list_messages),
+        )
+        // Static segment before the capture, so /messages/counts is never read as an id.
+        .route(
+            "/messages/counts",
+            axum::routing::get(messages_handler::message_counts),
+        )
+        .route(
+            "/messages/:id",
+            axum::routing::get(messages_handler::get_message)
+                .patch(messages_handler::update_message)
+                .delete(messages_handler::delete_message),
+        )
+        .route(
+            "/messages/:id/ticket",
+            axum::routing::post(messages_handler::create_ticket_from_message),
+        )
+        .route(
+            "/messages/:id/reply",
+            axum::routing::post(messages_handler::reply_to_message),
+        )
+        // The address filter's source of truth: every address this account receives on, plus MISC.
+        .route(
+            "/addresses",
+            axum::routing::get(messages_handler::list_addresses),
+        )
+        // Mark all read / unread, and empty Spam or Trash (destructive, always reports a count).
+        .route(
+            "/folders/action",
+            axum::routing::post(messages_handler::folder_action),
+        )
+        // Labels: name + colour, per account, applied to one or many messages.
+        .route(
+            "/labels",
+            axum::routing::get(messages_handler::list_labels)
+                .post(messages_handler::create_label),
+        )
+        .route(
+            "/labels/:id",
+            axum::routing::patch(messages_handler::update_label)
+                .delete(messages_handler::delete_label),
+        )
+        .route(
+            "/labels/:id/apply",
+            axum::routing::post(messages_handler::apply_label)
+                .delete(messages_handler::remove_label),
         )
         // Send email
         .route("/send", axum::routing::post(send_handler::send_email))

@@ -1,131 +1,381 @@
-(function(){
-  var S={tickets:[],boxes:[],sel:null,err:null};
-  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
-  function fmt(d){try{return d?new Date(d).toLocaleString():'';}catch(e){return String(d||'');}}
-  function who(t){return t.from_name||t.from_email||t.contact_email||t.email||'Unknown sender';}
-  function render(){
-    var tk=S.tickets;
-    var rows=tk.map(function(t){
-      return '<tr class="pe-row" data-id="'+esc(t.id)+'" style="cursor:pointer;border-bottom:1px solid rgba(128,128,128,.25)">'
-        +'<td style="padding:8px">'+esc(who(t))+'</td>'
-        +'<td style="padding:8px">'+esc(t.subject||'(no subject)')+'</td>'
-        +'<td style="padding:8px;white-space:nowrap;opacity:.75">'+esc(fmt(t.created_at||t.received_at))+'</td>'
-        +'<td style="padding:8px;opacity:.75">'+esc(t.status||'')+'</td></tr>';
+/*
+ * CoreSwift — the Inbox tab of the CRM console.
+ *
+ * WHAT THIS SCREEN IS (kanban B204 / B205 / B211, David 2026-11-11)
+ *
+ * Two questions, both answered from the account's own records:
+ *
+ *   1. WHICH INBOXES DO I HAVE, and how do I open one? A list of the account's mailboxes, each
+ *      row with a LOGIN button on the right, plus a "Create new inbox" button. LOGIN opens the mail
+ *      client on its own host in a new window — the inbox behaves like separate software with its
+ *      own front door (B211). A mailbox whose domain is still waiting for its mail records says so
+ *      and its LOGIN is refused: never show a working login on an inbox that cannot receive.
+ *
+ *   2. WHAT MAIL HAS ARRIVED? Every message that was received, tagged with the address it came to
+ *      and whether it ALSO became a ticket. This is the fix for the defect that made info@ mail
+ *      invisible: the screen used to read TICKETS, so a message that did not create one was stored
+ *      nowhere a human could see. It reads /private-email/messages now — the messages themselves.
+ *
+ * Plan ceilings are answered by the server with a plain sentence (402); this screen shows that
+ * sentence as an upgrade notice and never a dead button.
+ */
+(function () {
+  'use strict';
+
+  // The mail client's own front door (B211). One host serves every account: same login, same data,
+  // opened in a NEW window so the CRM stays where it was.
+  var MAIL_HOST = 'https://inbox.coreswiftcrm.com';
+
+  var S = {
+    boxes: [], domains: [], messages: [], counts: {}, addresses: [],
+    miscTotal: 0, view: 'inbox', address: 'all', sel: null, err: null
+  };
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function fmt(d) {
+    if (!d) return '';
+    try {
+      var t = new Date(d), now = new Date();
+      return t.toDateString() === now.toDateString()
+        ? t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : t.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    } catch (e) { return String(d); }
+  }
+  function fmtBytes(n) {
+    n = Number(n || 0);
+    if (n >= 1073741824) return (n / 1073741824).toFixed(1) + ' GB';
+    if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+    if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
+    return n + ' B';
+  }
+  function api() { return window.API; }
+  function fail(e) { return (e && (e.message || e.error)) || String(e); }
+  function toastMsg(m, t) { if (window.toast) window.toast(m, t || 'info'); }
+
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  // Render
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+
+  function inboxesHtml() {
+    if (S.domains.length && !S.domains.some(function (d) { return d.verified; })) {
+      // Readiness rule (B211): an inbox cannot exist until the domain's mail records are live.
+      return '<div class="empty-state" style="padding:16px;text-align:left">'
+        + '<h4 style="margin:0 0 6px">Waiting for your mail records</h4>'
+        + '<p style="margin:0 0 8px">Your domain <strong>' + esc(S.domains[0].domain) + '</strong> is not receiving mail yet, so an inbox on it would not work. '
+        + 'Add the records at the company where your domain lives, wait until they show <strong>Active</strong>, then press <strong>Check again</strong>.</p>'
+        + '<button class="btn btn-secondary btn-sm" onclick="peCheckDomain(\'' + esc(S.domains[0].id) + '\')">Check again</button>'
+        + '<span id="peDomainMsg" style="margin-left:8px;opacity:.8"></span></div>';
+    }
+    if (!S.boxes.length) {
+      return '<div class="empty-state" style="padding:16px;text-align:left">'
+        + '<h4 style="margin:0 0 6px">No inboxes yet</h4>'
+        + '<p style="margin:0 0 8px">An inbox is an address people can write to — <strong>info@</strong>, <strong>support@</strong>, or your own name. '
+        + 'You need a domain that is already receiving mail before one can be created.</p>'
+        + '<button class="btn btn-primary btn-sm" onclick="peCreateInbox()">Create your first inbox</button></div>';
+    }
+    var rows = S.boxes.map(function (b) {
+      var dom = S.domains.filter(function (d) { return d.id === b.domain_id; })[0] || {};
+      var ready = !!dom.verified;
+      var count = (S.addresses.filter(function (a) { return a.address === b.email_address; })[0] || {}).total || 0;
+      return '<tr>'
+        + '<td style="padding:8px"><strong>' + esc(b.email_address) + '</strong>'
+        + (b.creates_ticket ? ' <span style="background:#e0f2fe;color:#075985;padding:1px 6px;border-radius:8px;font-size:11px">tickets</span>' : '')
+        + '</td>'
+        + '<td style="padding:8px;opacity:.75">' + (ready ? 'Receiving' : 'Waiting for mail records') + '</td>'
+        + '<td style="padding:8px;opacity:.75">' + count + '</td>'
+        + '<td style="padding:8px;text-align:right;white-space:nowrap">'
+        + '<label style="font-size:11px;opacity:.75;margin-right:10px;cursor:pointer"><input type="checkbox" '
+        + (b.creates_ticket ? 'checked ' : '') + 'onchange="peToggleTicket(\'' + esc(b.id) + '\',this.checked)"> also a ticket</label>'
+        + (ready
+          ? '<button class="btn btn-primary btn-sm" onclick="peLogin(\'' + esc(b.email_address) + '\')">LOG IN</button>'
+          : '<button class="btn btn-secondary btn-sm" disabled title="This address cannot receive mail yet">LOG IN</button>')
+        + ' <button class="btn btn-ghost btn-xs" title="Delete this inbox" onclick="peDeleteBox(\'' + esc(b.id) + '\',\'' + esc(b.email_address) + '\')">Delete</button>'
+        + '</td></tr>';
     }).join('');
-    var empty='<div style="padding:18px;border:1px dashed rgba(128,128,128,.4);border-radius:8px">'
-      +'<h4 style="margin:0 0 6px">No mail yet</h4>'
-      +'<p style="margin:0 0 8px">Incoming email becomes a ticket and appears here. Two things make that happen:</p>'
-      +'<ol style="margin:0 0 8px 18px"><li>Add your domain in Mailgun, then point its MX records at <code>mxa.mailgun.org</code> and <code>mxb.mailgun.org</code>.</li>'
-      +'<li>Wait until Mailgun shows the domain as Active, then create a mailbox below and email it.</li></ol>'
-      +'<p style="margin:0;opacity:.75">Sending and receiving are separate setups — sending can work while receiving is still off.</p></div>';
+    return '<table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:left;opacity:.7">'
+      + '<th style="padding:6px 8px">Inbox</th><th style="padding:6px 8px">Status</th><th style="padding:6px 8px">Messages</th><th></th>'
+      + '</tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  function addressFilterHtml() {
+    var opts = ['<option value="all"' + (S.address === 'all' ? ' selected' : '') + '>All addresses (' + (S.counts.inbox || 0) + ')</option>'];
+    (S.addresses || []).forEach(function (a) {
+      opts.push('<option value="' + esc(a.address) + '"' + (S.address === a.address ? ' selected' : '') + '>' + esc(a.address) + ' (' + a.total + ')</option>');
+    });
+    if (S.miscTotal > 0) {
+      opts.push('<option value="misc"' + (S.address === 'misc' ? ' selected' : '') + '>Everything else / MISC (' + S.miscTotal + ')</option>');
+    }
+    return '<select onchange="peSetAddress(this.value)" style="margin-right:8px">' + opts.join('') + '</select>';
+  }
+
+  function messagesHtml() {
+    var m = S.messages || [];
+    if (!m.length) {
+      return '<div class="empty-state" style="padding:20px"><h4 style="margin:0 0 6px">No mail here yet</h4>'
+        + '<p style="margin:0">Every message that arrives at one of your addresses appears here — including mail to addresses that do not create tickets.</p></div>';
+    }
+    var rows = m.map(function (x) {
+      return '<tr data-id="' + esc(x.id) + '" class="pe-row" style="cursor:pointer;border-bottom:1px solid rgba(128,128,128,.2);'
+        + (x.is_read ? '' : 'font-weight:600;') + '">'
+        + '<td style="padding:8px;width:26px" onclick="event.stopPropagation();peStar(\'' + esc(x.id) + '\',' + (!x.is_starred) + ')">'
+        + (x.is_starred ? '★' : '<span style="opacity:.3">☆</span>') + '</td>'
+        + '<td style="padding:8px">' + esc(x.from_name || x.from_address || 'Unknown sender') + '</td>'
+        + '<td style="padding:8px">' + esc(x.subject || '(no subject)')
+        + (x.is_ticket ? ' <span style="background:#dcfce7;color:#166534;padding:1px 6px;border-radius:8px;font-size:11px">TICKET</span>' : '')
+        + '</td>'
+        + '<td style="padding:8px;opacity:.7;font-size:12px">' + esc(x.address || '') + '</td>'
+        + '<td style="padding:8px;opacity:.7;white-space:nowrap">' + esc(fmt(x.received_at)) + '</td>'
+        + '</tr>';
+    }).join('');
+    return '<table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:left;opacity:.7;font-size:12px">'
+      + '<th></th><th style="padding:6px 8px">From</th><th style="padding:6px 8px">Subject</th><th style="padding:6px 8px">Arrived on</th><th style="padding:6px 8px">Received</th>'
+      + '</tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  function render() {
+    var c = S.counts || {};
     return '<div>'
-      +'<div style="display:flex;justify-content:space-between;align-items:center;margin:0 0 10px">'
-      +'<h3 style="margin:0">Shared Inbox</h3><span style="opacity:.7">'+tk.length+' message'+(tk.length===1?'':'s')+' · every address in one box</span></div>'
-      +(S.err?'<div style="padding:8px;margin-bottom:8px;border-radius:6px;background:rgba(220,80,80,.15)">'+esc(S.err)+'</div>':'')
-      +(tk.length?'<table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:left;opacity:.7">'
-        +'<th style="padding:6px 8px">From</th><th style="padding:6px 8px">Subject</th><th style="padding:6px 8px">Received</th><th style="padding:6px 8px">Status</th></tr></thead><tbody>'+rows+'</tbody></table>':empty)
-      +'<div id="peDetail"></div></div>';
+      + '<div style="display:flex;justify-content:space-between;align-items:center;margin:0 0 12px">'
+      + '<div><h3 style="margin:0">Mail</h3><span style="opacity:.7;font-size:13px">'
+      + (c.unread || 0) + ' unread · ' + (c.tickets || 0) + ' turned into tickets · ' + fmtBytes(c.used_bytes) + ' of ' + fmtBytes(c.limit_bytes) + ' used'
+      + '</span></div>'
+      + '<button class="btn btn-primary btn-sm" onclick="peCreateInbox()">+ Create new inbox</button></div>'
+      + (S.err ? '<div style="padding:8px;margin-bottom:8px;border-radius:6px;background:rgba(220,80,80,.15)">' + esc(S.err) + '</div>' : '')
+      + '<div style="padding:14px;border:1px solid rgba(128,128,128,.3);border-radius:8px;margin-bottom:16px">'
+      + '<h4 style="margin:0 0 10px">Your inboxes</h4>' + inboxesHtml() + '</div>'
+      + '<div style="padding:14px;border:1px solid rgba(128,128,128,.3);border-radius:8px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+      + '<h4 style="margin:0">Recent mail</h4><div>' + addressFilterHtml()
+      + '<button class="btn btn-ghost btn-xs" onclick="peLoad()">Refresh</button></div></div>'
+      + '<div style="font-size:12px;opacity:.7;margin-bottom:8px">Mail is kept while you have storage. Nothing is deleted on a clock.</div>'
+      + messagesHtml() + '</div>'
+      + '<div id="peDetail"></div>'
+      + '</div>';
   }
-  async function load(){
-    var el=document.getElementById('peWrap');
-    if(!el) return;
-    try{
-      var r=await Promise.all([API.get('/tickets'),API.get('/private-email/boxes').catch(function(){return [];}),API.get('/private-email/domains').catch(function(){return [];})]);
-      var t=r[0],b=r[1],d=r[2];
-      S.tickets=(t&&(t.tickets||t.items))||(Array.isArray(t)?t:[])||[];
-      S.boxes=Array.isArray(b)?b:((b&&(b.boxes||b.items))||[]);
-      S.domains=Array.isArray(d)?d:((d&&(d.domains||d.items))||[]);
-      S.err=null;
-    }catch(e){S.err=(e&&e.message)||String(e);}
-    el.innerHTML=render()+setupHtml();
-    var rs=document.querySelectorAll('.pe-row');
-    for(var i=0;i<rs.length;i++){rs[i].onclick=function(){openT(this.getAttribute('data-id'));};}
-    bindSetup();
+
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  // Loading
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+
+  async function load() {
+    var el = document.getElementById('peWrap');
+    if (!el) return;
+    try {
+      var results = await Promise.all([
+        api().get('/private-email/boxes').catch(function () { return []; }),
+        api().get('/private-email/domains').catch(function () { return []; }),
+        api().get('/private-email/messages?folder=' + encodeURIComponent(S.view) + '&address=' + encodeURIComponent(S.address) + '&limit=50'),
+        api().get('/private-email/messages/counts').catch(function () { return {}; }),
+        api().get('/private-email/addresses').catch(function () { return {}; })
+      ]);
+      S.boxes = Array.isArray(results[0]) ? results[0] : (results[0].boxes || []);
+      S.domains = Array.isArray(results[1]) ? results[1] : (results[1].domains || []);
+      S.messages = (results[2] && results[2].messages) || [];
+      S.counts = results[3] || {};
+      S.addresses = (results[4] && results[4].addresses) || [];
+      S.miscTotal = (results[4] && results[4].misc && results[4].misc.total) || 0;
+      S.err = null;
+    } catch (e) {
+      S.err = fail(e);
+      S.messages = [];
+    }
+    el.innerHTML = render();
+    Array.prototype.forEach.call(document.querySelectorAll('.pe-row'), function (r) {
+      r.onclick = function () { window.peOpenMessage(r.getAttribute('data-id')); };
+    });
   }
-  function setupHtml(){
-    var domOpts=(S.domains||[]).map(function(x){return '<option value="'+esc(x.id)+'">'+esc(x.domain)+'</option>';}).join('');
-    var domList=(S.domains&&S.domains.length)?S.domains.map(function(x){return esc(x.domain);}).join(', '):'none yet';
-    var boxList=(S.boxes&&S.boxes.length)?S.boxes.map(function(x){return esc(x.email_address);}).join(', '):'none yet';
-    return '<div style="margin-top:18px;padding:14px;border:1px solid rgba(128,128,128,.35);border-radius:8px">'
-      +'<h4 style="margin:0 0 10px">Set up your mailbox</h4>'
-      +'<div style="margin-bottom:16px"><strong>1. Add a sending domain</strong>'
-      +'<div style="opacity:.75;margin:2px 0 6px">One key covers both directions: it receives inbound mail and sends your replies. Mailgun needs MX (receiving) and SPF+DKIM (sending).</div>'
-      +'<input id="peDom" placeholder="yourcompany.com" style="margin-right:6px">'
-      +'<input id="peKey" placeholder="Mailgun sending key" style="width:230px;margin-right:6px">'
-      +'<button class="btn btn-primary" id="peAddDom">Add domain</button><span id="peDomMsg" style="margin-left:8px"></span></div>'
-      +'<div><strong>2. Add a reply-to inbox</strong>'
-      +'<div style="opacity:.75;margin:2px 0 6px">A public address people write to — info@, support@. All of them share this one inbox.</div>'
-      +((S.domains&&S.domains.length)?('<select id="peDomSel" style="margin-right:6px">'+domOpts+'</select>'):'<span style="opacity:.7">Add a domain first.</span> ')
-      +'<input id="peLocal" placeholder="info" style="width:120px;margin-right:6px">'
-      +'<button class="btn btn-primary" id="peAddBox">Add inbox</button><span id="peBoxMsg" style="margin-left:8px"></span></div>'
-      +'<div style="margin-top:12px;opacity:.75">Domains: '+domList+'<br>Inboxes: '+boxList+'</div>'
-      +((S.domains&&S.domains.length)?('<div style="margin-top:10px"><label style="cursor:pointer"><input type="checkbox" id="peCatchAll"'+((S.domains[0]&&S.domains[0].catch_all_enabled)?' checked':'')+'> <strong>Catch-all</strong> — deliver mail sent to any address on this domain, including ones you have not created, into this one inbox.</label></div>'):'')
-      +'</div>';
-  }
-  function bindSetup(){
-    var ad=document.getElementById('peAddDom');
-    if(ad) ad.onclick=async function(){
-      var de=document.getElementById('peDom'),ke=document.getElementById('peKey'),m=document.getElementById('peDomMsg');
-      var dom=((de&&de.value)||'').trim();
-      if(!dom){m.textContent='Enter a domain';return;}
-      this.disabled=true;m.textContent='Adding…';
-      try{await API.post('/private-email/domains',{domain:dom,mailgun_api_key:((ke&&ke.value)||'').trim()||null});m.textContent='Added ✓';await load();}
-      catch(e){m.textContent='Failed: '+((e&&e.message)||e);}
-      this.disabled=false;
-    };
-    var ab=document.getElementById('peAddBox');
-    if(ab) ab.onclick=async function(){      var s=document.getElementById('peDomSel'),l=document.getElementById('peLocal'),m=document.getElementById('peBoxMsg');
-      if(!s){m.textContent='Add a domain first';return;}
-      var lp=((l&&l.value)||'').trim();
-      if(!lp){m.textContent='Enter a mailbox name';return;}
-      this.disabled=true;m.textContent='Adding…';
-      try{await API.post('/private-email/boxes',{domain_id:s.value,local_part:lp});m.textContent='Added ✓';await load();}
-      catch(e){m.textContent='Failed: '+((e&&e.message)||e);}
-      this.disabled=false;
-    };
-    var ca=document.getElementById('peCatchAll');
-    if(ca) ca.onchange=async function(){
-      var d0=(S.domains||[])[0];
-      if(!d0){ this.checked=!this.checked; return; }
-      var want=this.checked, box=this;
-      box.disabled=true;
-      try{ await API.patch('/private-email/domains/'+d0.id,{catch_all_enabled:want}); d0.catch_all_enabled=want; }
-      catch(e){ box.checked=!want; alert('Could not save catch-all: '+((e&&e.message)||e)); }
-      box.disabled=false;
-    };
-  }
-  function openT(id){
-    var t=null;for(var i=0;i<S.tickets.length;i++){if(String(S.tickets[i].id)===String(id))t=S.tickets[i];}
-    var d=document.getElementById('peDetail');
-    if(!t||!d) return;
-    var opts=S.boxes.map(function(x){return '<option value="'+esc(x.email_address)+'">'+esc(x.email_address)+'</option>';}).join('')
-      ||'<option value="">(no mailbox yet)</option>';
-    d.innerHTML='<div style="margin-top:14px;padding:14px;border:1px solid rgba(128,128,128,.35);border-radius:8px">'
-      +'<h4 style="margin:0 0 4px">'+esc(t.subject||'(no subject)')+'</h4>'
-      +'<div style="opacity:.75;margin-bottom:10px">From '+esc(who(t))+'</div>'
-      +'<div style="white-space:pre-wrap;margin-bottom:12px">'+esc(t.description||t.body||t.message||'')+'</div>'
-      +'<label style="display:block;font-size:12px;opacity:.75;margin-bottom:4px">Reply as</label>'
-      +'<select id="peFrom" style="margin-bottom:8px">'+opts+'</select>'
-      +'<textarea id="peText" rows="4" placeholder="Write your reply…" style="width:100%;margin-bottom:8px"></textarea>'
-      +'<button class="btn btn-primary" id="peSend">Send reply</button> <span id="peMsg" style="margin-left:8px"></span></div>';
-    document.getElementById('peSend').onclick=async function(){
-      var btn=this,from=document.getElementById('peFrom').value
-        ,body=document.getElementById('peText').value.trim()
-        ,to=t.from_email||t.contact_email||t.email||''
-        ,m=document.getElementById('peMsg');
-      if(!from){m.textContent='Create a mailbox first';return;}
-      if(!body){m.textContent='Write a reply first';return;}
-      btn.disabled=true;m.textContent='Sending…';
-      try{
-        await API.post('/private-email/send',{from_address:from,to:to,subject:'Re: '+(t.subject||''),body:body,in_reply_to:t.id});
-        m.textContent='Sent ✓';document.getElementById('peText').value='';
-      }catch(e){m.textContent='Failed: '+((e&&e.message)||e);}
-      btn.disabled=false;
-    };
-  }
-  window.renderPeInbox=function(){return '<div id="peWrap"><p>Loading shared inbox…</p></div>';};
-  window.loadPeInbox=load;
-  if(typeof TAB_RENDERERS!=='undefined'){TAB_RENDERERS['inbox']=window.renderPeInbox;}
-  if(typeof TAB_LOADERS!=='undefined'){TAB_LOADERS['inbox']=window.loadPeInbox;}
-  /*PART2*/
+
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  // Inbox actions
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+
+  window.peLogin = function (address) {
+    var url = MAIL_HOST + '/?address=' + encodeURIComponent(address);
+    var w = window.open(url, '_blank', 'noopener');
+    if (!w) toastMsg('Allow pop-ups for this site to open your mail client', 'error');
+  };
+
+  window.peCheckDomain = async function (domainId) {
+    var m = document.getElementById('peDomainMsg');
+    if (m) m.textContent = 'Checking…';
+    try {
+      var r = await api().post('/private-email/domains/' + domainId + '/verify', {});
+      if (m) m.textContent = r.verified ? 'Active — you can create an inbox now' : ('Still ' + (r.mailgun_state || 'waiting') + ' — the records have not gone live yet');
+      if (r.verified) load();
+    } catch (e) {
+      if (m) m.textContent = fail(e);
+    }
+  };
+
+  window.peCreateInbox = function () {
+    var verified = S.domains.filter(function (d) { return d.verified; });
+    if (!verified.length) {
+      var waiting = S.domains.map(function (d) {
+        return '<li>' + esc(d.domain) + ' — <button class="btn btn-ghost btn-xs" onclick="peCheckDomain(\'' + esc(d.id) + '\')">Check again</button></li>';
+      }).join('');
+      window.showModal('Not ready for an inbox yet',
+        '<p>An inbox needs a domain that is already receiving mail, so nothing here can receive yet.</p>'
+        + (waiting ? '<p>Domains on this account:</p><ul>' + waiting + '</ul>' : '<p>Add your domain first, then come back.</p>')
+        + '<p style="opacity:.75">When the domain shows <strong>Active</strong>, this button will create the address for you.</p>',
+        '<button class="btn btn-secondary" onclick="closeModal()">Close</button>');
+      return;
+    }
+    var opts = verified.map(function (d) { return '<option value="' + esc(d.id) + '">' + esc(d.domain) + '</option>'; }).join('');
+    window.showModal('Create a new inbox',
+      '<div class="form-group"><label>Which domain?</label><select id="peNewDomain">' + opts + '</select></div>'
+      + '<div class="form-group"><label>The address</label>'
+      + '<div style="display:flex;align-items:center;gap:6px"><input id="peNewLocal" placeholder="info" style="flex:1"><span style="opacity:.75">@ your domain</span></div>'
+      + '<p style="font-size:12px;opacity:.7;margin:6px 0 0">Common ones: <strong>info@</strong> for enquiries, <strong>support@</strong> for customers who need help, and your own name.</p></div>'
+      + '<div id="peNewMsg" style="font-size:13px"></div>',
+      '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>'
+      + '<button class="btn btn-primary" onclick="peSubmitInbox()">Create inbox</button>');
+  };
+
+  window.peSubmitInbox = async function () {
+    var d = document.getElementById('peNewDomain');
+    var l = document.getElementById('peNewLocal');
+    var m = document.getElementById('peNewMsg');
+    var local = ((l && l.value) || '').trim().replace(/@.*$/, '');
+    if (!local) { if (m) m.textContent = 'Enter the part before the @ sign.'; return; }
+    if (m) m.textContent = 'Creating…';
+    try {
+      await api().post('/private-email/boxes', { domain_id: d.value, local_part: local });
+      window.closeModal();
+      toastMsg('Inbox created', 'success');
+      load();
+    } catch (e) {
+      // A plan ceiling and a refusal both carry the server's own sentence; show it where the user
+      // is looking rather than as a disappearing toast.
+      if (m) m.textContent = fail(e); else toastMsg(fail(e), 'error');
+    }
+  };
+
+  window.peToggleTicket = async function (boxId, want) {
+    try {
+      await api().patch('/private-email/boxes/' + boxId, { creates_ticket: !!want });
+      toastMsg(want ? 'Mail to this address will also open a ticket' : 'Mail to this address lands in the inbox only', 'success');
+    } catch (e) {
+      toastMsg(fail(e), 'error');
+      load();
+    }
+  };
+
+  window.peDeleteBox = function (boxId, address) {
+    if (!window.confirm('Delete the inbox ' + address + '?\n\nMail that already arrived stays in your inbox — only the address goes away.')) return;
+    api().del('/private-email/boxes/' + boxId)
+      .then(function () { toastMsg('Inbox deleted', 'success'); load(); })
+      .catch(function (e) { toastMsg(fail(e), 'error'); });
+  };
+
+  window.peSetAddress = function (a) { S.address = a; load(); };
+
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  // Message actions
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+
+  window.peStar = async function (id, want) {
+    try {
+      await api().patch('/private-email/messages/' + id, { is_starred: !!want });
+      load();
+    } catch (e) { toastMsg(fail(e), 'error'); }
+  };
+
+  window.peOpenMessage = async function (id) {
+    var d = document.getElementById('peDetail');
+    if (!d) return;
+    d.innerHTML = '<div style="padding:12px;opacity:.7">Opening…</div>';
+    try {
+      var m = await api().get('/private-email/messages/' + id);
+      S.sel = m;
+      var fromOpts = S.boxes.map(function (b) {
+        return '<option value="' + esc(b.email_address) + '"' + (m.address === b.email_address ? ' selected' : '') + '>' + esc(b.email_address) + '</option>';
+      }).join('') || '<option value="">(no inbox yet)</option>';
+      d.innerHTML = '<div style="margin-top:16px;padding:14px;border:1px solid rgba(128,128,128,.35);border-radius:8px">'
+        + '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">'
+        + '<div><h4 style="margin:0 0 4px">' + esc(m.subject || '(no subject)') + '</h4>'
+        + '<div style="opacity:.75;font-size:13px">From ' + esc(m.from_name || m.from_address)
+        + ' · to ' + esc(m.address || '') + ' · ' + esc(fmt(m.received_at)) + '</div></div>'
+        + '<div style="white-space:nowrap">'
+        + '<button class="btn btn-ghost btn-xs" onclick="peStar(\'' + esc(m.id) + '\',' + (!m.is_starred) + ')">' + (m.is_starred ? '★ Starred' : '☆ Star') + '</button> '
+        + '<button class="btn btn-ghost btn-xs" onclick="peArchive(\'' + esc(m.id) + '\')">Archive</button> '
+        + '<button class="btn btn-ghost btn-xs" onclick="peDeleteMsg(\'' + esc(m.id) + '\',\'' + esc(m.folder || '') + '\')">Delete</button>'
+        + '</div></div>'
+        + (m.is_ticket
+          ? '<div style="margin:10px 0;padding:6px 10px;border-radius:6px;background:#dcfce7;color:#166534;font-size:13px">In the work queue as a ticket.</div>'
+          : '<div style="margin:10px 0;padding:6px 10px;border-radius:6px;background:#fef3c7;color:#92400e;font-size:13px;display:flex;justify-content:space-between;align-items:center">'
+            + '<span>In the inbox only — nobody is working this yet.</span>'
+            + '<button class="btn btn-primary btn-xs" onclick="peMakeTicket(\'' + esc(m.id) + '\')">Turn into a ticket</button></div>')
+        + '<div style="white-space:pre-wrap;margin:12px 0;max-height:420px;overflow:auto">' + esc(m.body_plain || '(no text)') + '</div>'
+        + '<label style="display:block;font-size:12px;opacity:.75;margin-bottom:4px">Reply as</label>'
+        + '<select id="peFrom" style="margin-bottom:8px">' + fromOpts + '</select>'
+        + '<textarea id="peText" rows="4" placeholder="Write your reply…" style="width:100%;margin-bottom:8px"></textarea>'
+        + '<button class="btn btn-primary" id="peSend">Send reply</button> <span id="peMsg" style="margin-left:8px"></span>'
+        + '</div>';
+      document.getElementById('peSend').onclick = function () { window.peReply(m.id); };
+      d.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (e) {
+      d.innerHTML = '<div style="padding:12px;color:#b91c1c">' + esc(fail(e)) + '</div>';
+    }
+  };
+
+  window.peReply = async function (id) {
+    var from = (document.getElementById('peFrom') || {}).value || '';
+    var body = ((document.getElementById('peText') || {}).value || '').trim();
+    var m = document.getElementById('peMsg');
+    if (!from) { if (m) m.textContent = 'Create an inbox first.'; return; }
+    if (!body) { if (m) m.textContent = 'Write a reply first.'; return; }
+    if (m) m.textContent = 'Sending…';
+    try {
+      await api().post('/private-email/messages/' + id + '/reply', { from_address: from, body: body });
+      if (m) m.textContent = 'Sent';
+      var t = document.getElementById('peText'); if (t) t.value = '';
+    } catch (e) { if (m) m.textContent = fail(e); }
+  };
+
+  window.peMakeTicket = async function (id) {
+    try {
+      await api().post('/private-email/messages/' + id + '/ticket', {});
+      toastMsg('Ticket created', 'success');
+      window.peOpenMessage(id);
+      load();
+    } catch (e) { toastMsg(fail(e), 'error'); }
+  };
+
+  window.peArchive = async function (id) {
+    try {
+      await api().patch('/private-email/messages/' + id, { folder: 'archive' });
+      var d = document.getElementById('peDetail'); if (d) d.innerHTML = '';
+      toastMsg('Archived', 'success');
+      load();
+    } catch (e) { toastMsg(fail(e), 'error'); }
+  };
+
+  window.peDeleteMsg = function (id, folder) {
+    var forever = folder === 'spam' || folder === 'trash';
+    var msg = forever
+      ? 'This message will be destroyed for good. Delete it?'
+      : 'Move this message to Trash? It can be restored from there.';
+    if (!window.confirm(msg)) return;
+    api().del('/private-email/messages/' + id)
+      .then(function () {
+        var d = document.getElementById('peDetail'); if (d) d.innerHTML = '';
+        toastMsg(forever ? 'Deleted' : 'Moved to Trash', 'success');
+        load();
+      })
+      .catch(function (e) { toastMsg(fail(e), 'error'); });
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  // Tab registration
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+
+  window.renderPeInbox = function () { return '<div id="peWrap"><p>Loading your mail…</p></div>'; };
+  window.loadPeInbox = load;
+  window.peLoad = load;
+  if (typeof TAB_RENDERERS !== 'undefined') { TAB_RENDERERS['inbox'] = window.renderPeInbox; }
+  if (typeof TAB_LOADERS !== 'undefined') { TAB_LOADERS['inbox'] = window.loadPeInbox; }
 })();

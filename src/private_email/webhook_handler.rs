@@ -3,6 +3,7 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
+use super::messages_handler::{self, InboundMessage};
 use super::providers;
 use super::send_handler::load_provider_config;
 
@@ -38,6 +39,37 @@ pub struct MailgunInbound {
     pub token: String,
     #[serde(default)]
     pub signature: String,
+    /// Mailgun's own spam verdict. A domain is created with `spam_action=tag`, so a message it
+    /// considers spam still arrives — carrying this header instead of being dropped. Filing it in
+    /// Spam instead of Inbox is the difference between a usable inbox and one nobody can read
+    /// (B205), and it must never mean the message is discarded.
+    #[serde(default, alias = "X-Mailgun-Sflag")]
+    pub sflag: String,
+    /// The full header block, when the webhook is configured to send it. Read only to recover the
+    /// spam flag on a domain whose webhook does not forward the S-flag as its own field.
+    #[serde(default, alias = "message-headers")]
+    pub message_headers: String,
+    #[serde(default, alias = "attachment-count")]
+    pub attachment_count: String,
+}
+
+impl MailgunInbound {
+    fn is_spam(&self) -> bool {
+        if self.sflag.trim().eq_ignore_ascii_case("yes") {
+            return true;
+        }
+        // `message-headers` is a JSON array of [name, value] pairs.
+        if let Ok(headers) = serde_json::from_str::<Vec<(String, String)>>(&self.message_headers) {
+            return headers.iter().any(|(k, v)| {
+                k.eq_ignore_ascii_case("X-Mailgun-Sflag") && v.trim().eq_ignore_ascii_case("yes")
+            });
+        }
+        false
+    }
+
+    fn has_attachments(&self) -> bool {
+        self.attachment_count.trim().parse::<u32>().unwrap_or(0) > 0
+    }
 }
 
 /// Webhook handler for inbound Mailgun emails.
@@ -46,16 +78,23 @@ pub struct MailgunInbound {
 /// Mailgun calls this with no session, so the per-domain Mailgun signing key IS the
 /// credential: `providers::mailgun::accept_inbound` verifies HMAC-SHA256(signing_key,
 /// timestamp + token) whenever `private_email_domains.webhook_signing_key_encrypted` is set,
-/// and this handler now REFUSES a delivery whose signature does not validate — including a
+/// and this handler REFUSES a delivery whose signature does not validate — including a
 /// domain that has no signing key configured at all (kanban t_7f134e77). It used to process
 /// that case anyway, which made the endpoint an anonymous writer of contacts/tickets/events.
+///
+/// WHAT IT STORES (B204/B211): every authenticated delivery now becomes a row in
+/// `private_email_messages`, tagged with the address it arrived on and flagged with whether it
+/// ALSO became a ticket. Before this, a message whose mailbox was not ticked for ticketing was
+/// acknowledged and then invisible — accepted by the provider and stored nowhere a human could
+/// see it. The ticket decision is now a routing decision layered on top of a stored message,
+/// never a condition for storing it.
 pub async fn inbound_webhook(
     State(state): State<AppState>,
     body: String,
 ) -> ApiResult<Json<serde_json::Value>> {
     // ── Step 1: Extract sender + recipient (multi-provider) ─────
     // Try Mailgun form-urlencoded first, then JSON (SES SNS, Postmark)
-    let (sender_email, recipient_email, _mailgun_payload) = try_parse_inbound(&body);
+    let (sender_email, recipient_email, mailgun_payload) = try_parse_inbound(&body);
 
     if sender_email.is_empty() || recipient_email.is_empty() {
         return Ok(Json(
@@ -63,12 +102,16 @@ pub async fn inbound_webhook(
         ));
     }
 
-    // Find which mailbox this is for (by recipient email)
-    let mailbox = sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>)>(
+    // ── Step 2: who is this mail FOR? ───────────────────────────────────────────────────────────
+    // A created mailbox first; then the domain's catch-all, which accepts mail for addresses
+    // nobody created (the MISC bucket, B211). Both paths store the message: a catch-all arrival
+    // used to be answered "routed: catch_all" and then dropped, which is the same defect wearing
+    // a friendlier sentence.
+    let mailbox = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
         r#"
-        SELECT id, tenant_id, user_id
+        SELECT id, tenant_id, domain_id
         FROM private_email_boxes
-        WHERE email_address = $1 AND status = 'active'
+        WHERE lower(email_address) = lower($1) AND status = 'active'
         LIMIT 1
         "#,
     )
@@ -77,31 +120,29 @@ pub async fn inbound_webhook(
     .await
     .map_err(AppError::Database)?;
 
-    let (mailbox_id, tenant_id, _assigned_user_id) = match mailbox {
-        Some(m) => m,
+    let (tenant_id, domain_id, mailbox_id) = match mailbox {
+        Some((box_id, tenant, domain)) => (tenant, domain, Some(box_id)),
         None => {
-            // No matching mailbox — try catch-all domain routing
-            let domain_part = recipient_email.split('@').nth(1).unwrap_or("");
-            let catch_all = sqlx::query_as::<_, (Uuid,)>(
+            let domain_part = recipient_email
+                .rsplit('@')
+                .next()
+                .unwrap_or("")
+                .to_lowercase();
+            let catch_all = sqlx::query_as::<_, (Uuid, Uuid)>(
                 r#"
-                SELECT id FROM private_email_domains
-                WHERE domain = $1 AND catch_all_enabled = true
+                SELECT id, tenant_id FROM private_email_domains
+                WHERE lower(domain) = $1 AND catch_all_enabled = true
                 LIMIT 1
                 "#,
             )
-            .bind(domain_part)
+            .bind(&domain_part)
             .fetch_optional(&state.db)
             .await
             .map_err(AppError::Database)?;
 
             match catch_all {
-                Some((_domain_id,)) => {
-                    return Ok(Json(json!({
-                        "received": true,
-                        "routed": "catch_all",
-                        "note": "No specific mailbox found, routed via catch-all"
-                    })));
-                }
+                // Stored with no mailbox row, which is exactly what makes it MISC.
+                Some((domain, tenant)) => (tenant, domain, None),
                 None => {
                     return Ok(Json(
                         json!({"received": false, "error": "no matching mailbox"}),
@@ -110,17 +151,6 @@ pub async fn inbound_webhook(
             }
         }
     };
-
-    // Get domain_id for the mailbox to validate webhook signature
-    let domain_row =
-        sqlx::query_as::<_, (Uuid,)>("SELECT domain_id FROM private_email_boxes WHERE id = $1")
-            .bind(mailbox_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(AppError::Database)?
-            .ok_or_else(|| AppError::NotFound("Mailbox domain not found".into()))?;
-
-    let domain_id = domain_row.0;
 
     // Load provider config to validate webhook signature
     let provider_config = load_provider_config(&state.db, domain_id, tenant_id)
@@ -169,7 +199,71 @@ pub async fn inbound_webhook(
         }
     };
 
-    // Find or create contact by sender email
+    let is_spam = mailgun_payload
+        .as_ref()
+        .map(|p| p.is_spam())
+        .unwrap_or_else(|| {
+            // Providers that do not speak Mailgun's fields still get the header check.
+            body.contains("X-Mailgun-Sflag") && body.contains("Yes")
+        });
+
+    // ── Step 3: store the message ITSELF ────────────────────────────────────────────────────────
+    // One row per delivery, whatever the ticket toggle says. Idempotent on the sender's
+    // Message-Id, so a provider retry cannot turn one email into two.
+    let stored = messages_handler::store_inbound(
+        &state.db,
+        &InboundMessage {
+            tenant_id,
+            mailbox_id,
+            address: &recipient_email,
+            from_address: &inbound.from,
+            from_name: mailgun_payload
+                .as_ref()
+                .map(|p| p.sender.as_str())
+                .and_then(display_name),
+            to_address: &inbound.to,
+            cc_address: None,
+            subject: &inbound.subject,
+            body_plain: &inbound.body_plain,
+            body_html: inbound.body_html.as_deref(),
+            message_id: inbound
+                .message_id
+                .as_deref()
+                .filter(|m| !m.trim().is_empty()),
+            in_reply_to: inbound
+                .in_reply_to
+                .as_deref()
+                .filter(|m| !m.trim().is_empty()),
+            provider: provider.name(),
+            provider_message_id: inbound
+                .provider_message_id
+                .as_deref()
+                .filter(|m| !m.trim().is_empty()),
+            is_spam,
+            has_attachments: mailgun_payload
+                .as_ref()
+                .map(|p| p.has_attachments())
+                .unwrap_or(false),
+        },
+    )
+    .await?;
+
+    let (message_id, message_created) = stored;
+
+    // Spam is filed, not answered: no contact, no ticket, no auto-reply. It is still a stored
+    // message the user can see, restore and delete forever.
+    if is_spam {
+        return Ok(Json(json!({
+            "received": true,
+            "stored": message_created,
+            "message_id": message_id,
+            "folder": "spam",
+            "provider": provider.name(),
+            "to": recipient_email,
+        })));
+    }
+
+    // ── Step 4: find or create the contact ─────────────────────────────────────────────────────
     let contact_id = match sqlx::query_as::<_, (Uuid,)>(
         "SELECT id FROM contacts WHERE tenant_id = $1 AND email = $2 LIMIT 1",
     )
@@ -220,23 +314,27 @@ pub async fn inbound_webhook(
         }
     };
 
-    // ── Support Ticket Routing ─────────────────────────────────
-    // Mail ALWAYS arrives in the inbox and is tagged with the address it came to.
+    // ── Step 5: Support Ticket Routing ─────────────────────────────────
+    // Mail ALWAYS arrives in the inbox and is tagged with the address it came to (step 3).
     // This decides only which messages ALSO become a ticket automatically, per
     // mailbox (private_email_boxes.creates_ticket, migration 125):
     //   support@ ships ON  - it is the work queue people write to for help
     //   the rest ship OFF  - they land in the inbox and can be converted by hand
     // The user can tick or untick any mailbox. The legacy single designated
     // support box is still honoured so an upgraded account keeps working.
-    let creates_ticket: Option<bool> = sqlx::query_scalar(
-        "SELECT creates_ticket FROM private_email_boxes WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(mailbox_id)
-    .bind(tenant_id)
-    .fetch_optional(&state.db)
-    .await
-    .ok()
-    .flatten();
+    // A catch-all arrival has no mailbox row, so it never becomes a ticket by itself.
+    let creates_ticket: Option<bool> = match mailbox_id {
+        Some(box_id) => sqlx::query_scalar(
+            "SELECT creates_ticket FROM private_email_boxes WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(box_id)
+        .bind(tenant_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten(),
+        None => None,
+    };
 
     let legacy_support_box: Option<Uuid> = sqlx::query_scalar(
         "SELECT (settings->>'support_email_box_id')::uuid FROM tenants WHERE id = $1",
@@ -249,24 +347,34 @@ pub async fn inbound_webhook(
 
     let should_ticket = creates_ticket.unwrap_or(false)
         || legacy_support_box
-            .map(|id| id == mailbox_id)
+            .map(|id| Some(id) == mailbox_id)
             .unwrap_or(false);
 
-    {
-        if should_ticket {
-            let contact_name = inbound.from.split('@').next().unwrap_or(&inbound.from);
-            let _ = sqlx::query_scalar::<_, Uuid>(
-                r#"INSERT INTO tickets (tenant_id, subject, description, status, priority, source, contact_email, contact_name)
-                   VALUES ($1, $2, $3, 'open', 'medium', 'email', $4, $5)
-                   RETURNING id"#
-            )
-            .bind(tenant_id)
-            .bind(&inbound.subject)
-            .bind(&inbound.body_plain)
-            .bind(&inbound.from)
-            .bind(contact_name)
-            .fetch_one(&state.db)
-            .await;
+    let mut ticket_created: Option<Uuid> = None;
+    if should_ticket {
+        let contact_name = inbound.from.split('@').next().unwrap_or(&inbound.from);
+        match sqlx::query_scalar::<_, Uuid>(
+            r#"INSERT INTO tickets (tenant_id, subject, description, status, priority, source, contact_email, contact_name)
+               VALUES ($1, $2, $3, 'open', 'medium', 'email', $4, $5)
+               RETURNING id"#,
+        )
+        .bind(tenant_id)
+        .bind(&inbound.subject)
+        .bind(&inbound.body_plain)
+        .bind(&inbound.from)
+        .bind(contact_name)
+        .fetch_one(&state.db)
+        .await
+        {
+            Ok(ticket_id) => {
+                ticket_created = Some(ticket_id);
+                if let Err(e) =
+                    messages_handler::link_ticket(&state.db, tenant_id, message_id, ticket_id).await
+                {
+                    tracing::warn!(error = %e, "message stored, but linking its ticket failed");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "message stored, but creating its ticket failed"),
         }
     }
 
@@ -276,16 +384,22 @@ pub async fn inbound_webhook(
     // answered 500 *after* the ticket had already been created — the caller (Mailgun / any
     // provider) sees a failure and RETRIES, which is how one email becomes several tickets. The
     // event is a side effect of a request that has already succeeded, so a failure here is
-    // recorded and not escalated: the ticket is the contract, the event is bookkeeping.
+    // recorded and not escalated: the stored message is the contract, the event is bookkeeping.
+    // Byte-safe preview: slicing a String at a byte index panics when the 500th byte lands inside
+    // a multi-byte character (an accented name in the first paragraph is enough). `chars().take`
+    // cannot.
+    let preview: String = inbound.body_plain.chars().take(500).collect();
     let event_payload = serde_json::json!({
         "from": inbound.from,
         "to": inbound.to,
         "subject": inbound.subject,
-        "body_preview": &inbound.body_plain[..inbound.body_plain.len().min(500)],
+        "body_preview": preview,
         "message_id": inbound.message_id,
         "in_reply_to": inbound.in_reply_to,
         "provider_message_id": inbound.provider_message_id,
         "provider": provider.name(),
+        "message_row_id": message_id,
+        "ticket_id": ticket_created,
     });
     let event_title = if inbound.subject.trim().is_empty() {
         "(no subject)".to_string()
@@ -320,17 +434,32 @@ pub async fn inbound_webhook(
 
     Ok(Json(json!({
         "received": true,
+        "stored": message_created,
+        "message_id": message_id,
+        "to": recipient_email,
+        "is_ticket": ticket_created.is_some(),
+        "ticket_id": ticket_created,
         "provider": provider.name(),
         "from": inbound.from,
-        "to": inbound.to,
         "subject": inbound.subject,
     })))
 }
 
+/// `"David Giraudy <david@x.com>"` -> `Some("David Giraudy")`.
+fn display_name(raw: &str) -> Option<&str> {
+    let start = raw.find('<')?;
+    let name = raw[..start].trim().trim_matches('"');
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
 fn extract_email(raw: &str) -> String {
     if let Some(start) = raw.find('<') {
-        if let Some(end) = raw.find('>') {
-            return raw[start + 1..end].trim().to_lowercase();
+        if let Some(end) = raw[start..].find('>') {
+            return raw[start + 1..start + end].trim().to_lowercase();
         }
     }
     raw.trim().to_lowercase()
@@ -368,4 +497,53 @@ fn try_parse_inbound(body: &str) -> (String, String, Option<MailgunInbound>) {
         }
     }
     (String::new(), String::new(), None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_email_unwraps_a_display_name() {
+        assert_eq!(
+            extract_email("David Giraudy <David@Example.COM>"),
+            "david@example.com"
+        );
+        assert_eq!(extract_email("  INFO@x.com "), "info@x.com");
+    }
+
+    #[test]
+    fn display_name_is_read_from_the_sender_header() {
+        assert_eq!(
+            display_name("David Giraudy <david@x.com>"),
+            Some("David Giraudy")
+        );
+        assert_eq!(display_name("david@x.com"), None);
+        assert_eq!(display_name("<david@x.com>"), None);
+    }
+
+    #[test]
+    fn spam_is_read_from_mailguns_sflag() {
+        let mut p = MailgunInbound {
+            sender: String::new(),
+            recipient: String::new(),
+            subject: String::new(),
+            body_plain: String::new(),
+            body_html: String::new(),
+            message_id: String::new(),
+            in_reply_to: String::new(),
+            stripped_text: String::new(),
+            timestamp: String::new(),
+            token: String::new(),
+            signature: String::new(),
+            sflag: "Yes".into(),
+            message_headers: String::new(),
+            attachment_count: String::new(),
+        };
+        assert!(p.is_spam());
+        p.sflag = "No".into();
+        assert!(!p.is_spam());
+        p.message_headers = r#"[["X-Mailgun-Sflag","Yes"]]"#.into();
+        assert!(p.is_spam());
+    }
 }

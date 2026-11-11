@@ -33,6 +33,19 @@ pub async fn provision_mailbox(
 
     let domain = domain.ok_or_else(|| AppError::NotFound("Domain not found".into()))?;
 
+    // ── The readiness gate (B211, David 2026-11-11) ─────────────────────────────────────────────
+    // A mailbox can only RECEIVE once the domain's mail records are live, so creating one before
+    // that produces an address that silently rejects mail — the worst kind of empty promise. The
+    // server refuses, and says what to press; the check is here and not only in the UI so a second
+    // door (an API client) cannot skip it.
+    if !domain.verified {
+        return Err(AppError::Validation(format!(
+            "{} is not receiving mail yet, so an inbox on it would not work. Press \"Check again\" \
+             on the domain once the mail records show Active, then create the inbox.",
+            domain.domain
+        )));
+    }
+
     // Check for duplicate
     let email_address = format!("{}@{}", req.local_part, domain.domain);
     let existing = sqlx::query_as::<_, PrivateEmailBox>(
@@ -117,7 +130,9 @@ pub async fn list_mailboxes(
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let boxes = sqlx::query_as::<_, PrivateEmailBox>(
-        "SELECT * FROM private_email_boxes WHERE tenant_id = $1 ORDER BY created_at DESC",
+        "SELECT * FROM private_email_boxes
+          WHERE tenant_id = $1 AND status = 'active'
+          ORDER BY created_at DESC",
     )
     .bind(account_id)
     .fetch_all(&state.db)
@@ -145,14 +160,26 @@ pub async fn delete_mailbox(
 
     let mailbox = mailbox.ok_or_else(|| AppError::NotFound("Mailbox not found".into()))?;
 
-    // Soft-deactivate
-    sqlx::query(
-        "UPDATE private_email_boxes SET status = 'deprovisioned', updated_at = NOW() WHERE id = $1",
-    )
-    .bind(box_id)
-    .execute(&state.db)
-    .await
-    .map_err(AppError::Database)?;
+    // A REAL delete. This used to set status='deprovisioned' and call it deleted, which is why a
+    // stray mailbox (deploytest@zaarhub.com) survived the panel's own DELETE: the row was still
+    // there, `list_mailboxes` still listed it, and the only way out was a hand-written SQL
+    // statement. The mailbox IS the row — there is no provider-side object to leave behind (a
+    // Mailgun route is per DOMAIN, not per address), so the row goes.
+    //
+    // The mail that already arrived through it is NOT destroyed: `private_email_messages.mailbox_id`
+    // is ON DELETE SET NULL and keeps the address it arrived on, so deleting an address never
+    // deletes history (B204: nothing may disappear).
+    let deleted = sqlx::query("DELETE FROM private_email_boxes WHERE id = $1 AND tenant_id = $2")
+        .bind(box_id)
+        .bind(account_id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::Database)?
+        .rows_affected();
+
+    if deleted == 0 {
+        return Err(AppError::NotFound("Mailbox not found".into()));
+    }
 
     Ok(Json(
         json!({"deleted": true, "email": mailbox.email_address}),
@@ -172,6 +199,7 @@ pub async fn update_mailbox(
         UPDATE private_email_boxes
         SET signature = COALESCE($3, signature),
             forwarding_enabled = COALESCE($4, forwarding_enabled),
+            creates_ticket = COALESCE($5, creates_ticket),
             updated_at = NOW()
         WHERE id = $1 AND tenant_id = $2
         RETURNING *
@@ -181,6 +209,7 @@ pub async fn update_mailbox(
     .bind(account_id)
     .bind(&req.signature)
     .bind(req.forwarding_enabled)
+    .bind(req.creates_ticket)
     .fetch_optional(&state.db)
     .await
     .map_err(AppError::Database)?;

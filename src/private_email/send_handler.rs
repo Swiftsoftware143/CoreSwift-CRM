@@ -9,50 +9,50 @@ use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
 
-/// Send an email via the domain's configured provider (Mailgun, SMTP, etc).
-/// The provider is selected automatically based on the domain's provider_type.
-pub async fn send_email(
-    State(state): State<AppState>,
-    Extension(claims): Extension<Claims>,
-    Json(req): Json<SendEmailRequest>,
-) -> ApiResult<Json<serde_json::Value>> {
-    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-
-    // Find the sending mailbox
+/// The ONE place mail leaves this account.
+///
+/// Every sender funnels here — `POST /send`, the reply arm of the inbox, and (later) automation —
+/// so a message can never leave by a second route with different rules: the From must be one of
+/// THIS account's active mailboxes, the signature is appended here and nowhere else, and the
+/// provider/credential is resolved from the mailbox's own domain.
+pub async fn deliver(
+    db: &sqlx::PgPool,
+    tenant_id: Uuid,
+    from_address: &str,
+    to: &str,
+    subject: &str,
+    body: &str,
+    in_reply_to: Option<&str>,
+) -> Result<Option<String>, AppError> {
     let mailbox = sqlx::query_as::<_, PrivateEmailBox>(
         "SELECT * FROM private_email_boxes WHERE tenant_id = $1 AND email_address = $2 AND status = 'active'",
     )
-    .bind(account_id)
-    .bind(&req.from_address)
-    .fetch_optional(&state.db)
+    .bind(tenant_id)
+    .bind(from_address)
+    .fetch_optional(db)
     .await
-    .map_err(AppError::Database)?;
+    .map_err(AppError::Database)?
+    .ok_or_else(|| AppError::NotFound("Sending mailbox not found or not active".into()))?;
 
-    let mailbox = mailbox
-        .ok_or_else(|| AppError::NotFound("Sending mailbox not found or not active".into()))?;
-
-    // Load provider config for this domain
-    let provider_config = load_provider_config(&state.db, mailbox.domain_id, account_id)
+    let provider_config = load_provider_config(db, mailbox.domain_id, tenant_id)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to load provider config: {}", e)))?;
 
     // Build body with optional signature
-    let body = if let Some(ref sig) = mailbox.signature {
-        format!("{}\n\n--\n{}", req.body, sig)
-    } else {
-        req.body.clone()
+    let body = match mailbox.signature.as_deref() {
+        Some(sig) if !sig.trim().is_empty() => format!("{}\n\n--\n{}", body, sig),
+        _ => body.to_string(),
     };
 
-    // Select provider and send
     let provider = providers::provider_for(&provider_config);
     let result = provider
         .send(
             &provider_config,
-            &req.from_address,
-            &req.to,
-            &req.subject,
+            from_address,
+            to,
+            subject,
             &body,
-            req.in_reply_to.as_deref(),
+            in_reply_to,
         )
         .await;
 
@@ -63,6 +63,70 @@ pub async fn send_email(
             provider.name(),
             err
         )));
+    }
+
+    Ok(result.provider_message_id)
+}
+
+/// Send an email via the domain's configured provider (Mailgun, SMTP, etc).
+/// The provider is selected automatically based on the domain's provider_type.
+pub async fn send_email(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<SendEmailRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+
+    let provider_message_id = deliver(
+        &state.db,
+        account_id,
+        &req.from_address,
+        &req.to,
+        &req.subject,
+        &req.body,
+        req.in_reply_to.as_deref(),
+    )
+    .await?;
+    let provider = "account-provider";
+
+    // The answer is recorded in Sent, so the account's own outgoing mail is visible where a mail
+    // client expects it. A failure to record is logged, never escalated: the mail HAS left, and
+    // answering 500 would invite the caller to send it twice.
+    let snippet: String = req.body.chars().take(500).collect();
+    let mailbox_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM private_email_boxes
+          WHERE tenant_id = $1 AND email_address = $2 AND status = 'active'",
+    )
+    .bind(account_id)
+    .bind(&req.from_address)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    if let Err(e) = sqlx::query(
+        r#"INSERT INTO private_email_messages (
+              tenant_id, mailbox_id, address, folder, direction, from_address, to_address,
+              subject, body_plain, snippet, in_reply_to, provider, provider_message_id,
+              size_bytes, is_read, received_at
+           ) VALUES ($1,$2,$3,'sent','outbound',$4,$5,$6,$7,$8,$9,$10,$11,$12,true,NOW())"#,
+    )
+    .bind(account_id)
+    .bind(mailbox_id)
+    .bind(&req.from_address)
+    .bind(&req.from_address)
+    .bind(&req.to)
+    .bind(&req.subject)
+    .bind(&req.body)
+    .bind(&snippet)
+    .bind(req.in_reply_to.as_deref())
+    .bind(provider)
+    .bind(provider_message_id.as_deref())
+    .bind(req.body.len() as i32)
+    .execute(&state.db)
+    .await
+    {
+        tracing::warn!(error = %e, "mail was sent, but recording it in Sent failed");
     }
 
     // Try to match recipient to a contact and log as event
@@ -78,8 +142,8 @@ pub async fn send_email(
             "from": req.from_address,
             "to": req.to,
             "subject": req.subject,
-            "provider": provider.name(),
-            "provider_message_id": result.provider_message_id,
+            "provider": provider,
+            "provider_message_id": provider_message_id,
             "body_preview": &req.body[..req.body.len().min(500)]
         });
         let _ = sqlx::query(
@@ -97,8 +161,8 @@ pub async fn send_email(
 
     Ok(Json(serde_json::json!({
         "sent": true,
-        "provider": provider.name(),
-        "provider_message_id": result.provider_message_id,
+        "provider": provider,
+        "provider_message_id": provider_message_id,
         "from": req.from_address,
         "to": req.to,
         "subject": req.subject,

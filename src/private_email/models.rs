@@ -104,6 +104,10 @@ pub struct PrivateEmailBox {
     pub forwarding_enabled: bool,
     pub signature: Option<String>,
     pub status: String,
+    /// Whether mail to this address ALSO creates a ticket (migration 125). Every message reaches
+    /// the inbox either way; this is the routing decision on top of it, and the user can tick or
+    /// untick any mailbox (B204).
+    pub creates_ticket: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -258,6 +262,8 @@ mod webhook_key_request_tests {
 pub struct UpdateMailboxRequest {
     pub signature: Option<String>,
     pub forwarding_enabled: Option<bool>,
+    /// Tick or untick this address as a ticket source (B204). Absent leaves it alone.
+    pub creates_ticket: Option<bool>,
 }
 
 // Admin override types
