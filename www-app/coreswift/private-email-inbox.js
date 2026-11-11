@@ -49,16 +49,18 @@
     return '<div style="margin-top:18px;padding:14px;border:1px solid rgba(128,128,128,.35);border-radius:8px">'
       +'<h4 style="margin:0 0 10px">Set up your mailbox</h4>'
       +'<div style="margin-bottom:16px"><strong>1. Add a sending domain</strong>'
-      +'<div style="opacity:.75;margin:2px 0 6px">The domain your mail comes from and arrives on. Mailgun shows the DNS records to add.</div>'
+      +'<div style="opacity:.75;margin:2px 0 6px">One key covers both directions: it receives inbound mail and sends your replies. Mailgun needs MX (receiving) and SPF+DKIM (sending).</div>'
       +'<input id="peDom" placeholder="yourcompany.com" style="margin-right:6px">'
-      +'<input id="peKey" placeholder="Mailgun API key (optional)" style="width:230px;margin-right:6px">'
+      +'<input id="peKey" placeholder="Mailgun sending key" style="width:230px;margin-right:6px">'
       +'<button class="btn btn-primary" id="peAddDom">Add domain</button><span id="peDomMsg" style="margin-left:8px"></span></div>'
       +'<div><strong>2. Add a reply-to inbox</strong>'
       +'<div style="opacity:.75;margin:2px 0 6px">A public address people write to — info@, support@. All of them share this one inbox.</div>'
       +((S.domains&&S.domains.length)?('<select id="peDomSel" style="margin-right:6px">'+domOpts+'</select>'):'<span style="opacity:.7">Add a domain first.</span> ')
       +'<input id="peLocal" placeholder="info" style="width:120px;margin-right:6px">'
       +'<button class="btn btn-primary" id="peAddBox">Add inbox</button><span id="peBoxMsg" style="margin-left:8px"></span></div>'
-      +'<div style="margin-top:12px;opacity:.75">Domains: '+domList+'<br>Inboxes: '+boxList+'</div></div>';
+      +'<div style="margin-top:12px;opacity:.75">Domains: '+domList+'<br>Inboxes: '+boxList+'</div>'
+      +((S.domains&&S.domains.length)?('<div style="margin-top:10px"><label style="cursor:pointer"><input type="checkbox" id="peCatchAll"'+((S.domains[0]&&S.domains[0].catch_all_enabled)?' checked':'')+'> <strong>Catch-all</strong> — deliver mail sent to any address on this domain, including ones you have not created, into this one inbox.</label></div>'):'')
+      +'</div>';
   }
   function bindSetup(){
     var ad=document.getElementById('peAddDom');
@@ -72,8 +74,7 @@
       this.disabled=false;
     };
     var ab=document.getElementById('peAddBox');
-    if(ab) ab.onclick=async function(){
-      var s=document.getElementById('peDomSel'),l=document.getElementById('peLocal'),m=document.getElementById('peBoxMsg');
+    if(ab) ab.onclick=async function(){      var s=document.getElementById('peDomSel'),l=document.getElementById('peLocal'),m=document.getElementById('peBoxMsg');
       if(!s){m.textContent='Add a domain first';return;}
       var lp=((l&&l.value)||'').trim();
       if(!lp){m.textContent='Enter a mailbox name';return;}
@@ -81,6 +82,16 @@
       try{await API.post('/private-email/boxes',{domain_id:s.value,local_part:lp});m.textContent='Added ✓';await load();}
       catch(e){m.textContent='Failed: '+((e&&e.message)||e);}
       this.disabled=false;
+    };
+    var ca=document.getElementById('peCatchAll');
+    if(ca) ca.onchange=async function(){
+      var d0=(S.domains||[])[0];
+      if(!d0){ this.checked=!this.checked; return; }
+      var want=this.checked, box=this;
+      box.disabled=true;
+      try{ await API.patch('/private-email/domains/'+d0.id,{catch_all_enabled:want}); d0.catch_all_enabled=want; }
+      catch(e){ box.checked=!want; alert('Could not save catch-all: '+((e&&e.message)||e)); }
+      box.disabled=false;
     };
   }
   function openT(id){
