@@ -98,83 +98,63 @@ pub async fn list_messages(
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<Value>> {
     let tenant_id = account_id(&claims)?;
-    let view = q.folder.as_deref().unwrap_or("inbox");
+    let view = q.folder.as_deref().unwrap_or("inbox").to_string();
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let offset = q.offset.unwrap_or(0).max(0);
 
-    // The view -> predicate mapping. Every branch is a real column, so a tab can never be empty for
-    // a reason the server invented (B205 "no dead ends").
-    let folder_predicate: &str = match view {
-        "unread" => "m.is_read = false AND m.folder NOT IN ('trash','spam','drafts','sent')",
-        "favorites" => "m.is_starred = true AND m.folder <> 'trash'",
-        "drafts" => "m.folder = 'drafts'",
-        "sent" => "m.folder = 'sent'",
-        "archive" => "m.folder = 'archive'",
-        "spam" => "m.folder = 'spam'",
-        "trash" => "m.folder = 'trash'",
-        "all" => "m.folder NOT IN ('trash','spam')",
-        // 'inbox' and every custom subfolder under it.
-        _ => "m.folder = 'inbox' OR m.folder LIKE 'inbox/%'",
-    };
-
+    // The address filter's value, normalised: "all" (everything), "misc" (catch-all arrivals with no
+    // mailbox row) or one exact address.
     let address_filter = q.address.as_deref().unwrap_or("all").trim().to_lowercase();
-    let address_predicate = match address_filter.as_str() {
-        "" | "all" => "",
-        "misc" => " AND m.mailbox_id IS NULL",
-        _ => " AND m.address = $4",
-    };
+    let search =
+        q.q.as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("")
+            .to_string();
 
-    let search = q
-        .q
-        .as_deref()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .map(|s| format!("%{}%", s.replace('%', "").replace('_', "")));
-
-    let search_predicate = if search.is_some() {
-        if address_predicate.is_empty() {
-            " AND (m.subject ILIKE $4 OR m.from_address ILIKE $4 OR m.snippet ILIKE $4)"
-        } else {
-            " AND (m.subject ILIKE $5 OR m.from_address ILIKE $5 OR m.snippet ILIKE $5)"
-        }
-    } else {
-        ""
-    };
-
-    // Placeholders are fixed in order: $1 tenant, $2 limit, $3 offset, then optional address $4
-    // and optional search (next free number). Built HERE, from constants only — no caller text ever
-    // reaches the SQL string (the fleet's rule against run-time-built SQL).
-    let sql = format!(
+    // ONE statement, every filter a BIND. The view -> predicate mapping lives inside a CASE over
+    // $2 and the optional filters are written as `$n = 'sentinel' OR <predicate>`, so no caller
+    // value is ever concatenated into SQL text: the fleet's rule against run-time-built SQL, and
+    // what keeps an address like `x' OR 1=1 --` a value rather than a statement.
+    let rows = sqlx::query(
         r#"
         SELECT m.id, m.mailbox_id, m.address, m.folder, m.direction,
                m.from_address, m.from_name, m.to_address, m.subject, m.snippet,
                m.is_read, m.is_starred, m.ticket_id, m.is_ticket, m.assigned_user_id,
-               m.has_attachments, m.size_bytes, m.received_at, m.message_id,
-               m.cc_address
+               m.has_attachments, m.size_bytes, m.received_at, m.message_id, m.cc_address
           FROM private_email_messages m
          WHERE m.tenant_id = $1
-           AND ({folder_predicate})
-           {address_predicate}
-           {search_predicate}
+           AND CASE $2
+                 WHEN 'unread'    THEN m.is_read = false AND m.folder NOT IN ('trash','spam','drafts','sent')
+                 WHEN 'favorites' THEN m.is_starred = true AND m.folder <> 'trash'
+                 WHEN 'drafts'    THEN m.folder = 'drafts'
+                 WHEN 'sent'      THEN m.folder = 'sent'
+                 WHEN 'archive'   THEN m.folder = 'archive'
+                 WHEN 'spam'      THEN m.folder = 'spam'
+                 WHEN 'trash'     THEN m.folder = 'trash'
+                 WHEN 'all'       THEN m.folder NOT IN ('trash','spam')
+                 ELSE (m.folder = 'inbox' OR m.folder LIKE 'inbox/%')
+               END
+           AND ( $3 = 'all'
+                 OR ($3 = 'misc' AND m.mailbox_id IS NULL)
+                 OR m.address = $3 )
+           AND ( $4 = ''
+                 OR m.subject ILIKE '%' || $4 || '%'
+                 OR m.from_address ILIKE '%' || $4 || '%'
+                 OR m.snippet ILIKE '%' || $4 || '%' )
          ORDER BY m.received_at DESC
-         LIMIT $2 OFFSET $3
+         LIMIT $5 OFFSET $6
         "#,
-        folder_predicate = folder_predicate,
-        address_predicate = address_predicate,
-        search_predicate = search_predicate,
-    );
-
-    let mut query = sqlx::query(&sql).bind(tenant_id).bind(limit).bind(offset);
-    if !address_predicate.is_empty() {
-        query = query.bind(address_filter.clone());
-    }
-    if let Some(s) = search.clone() {
-        query = query.bind(s);
-    }
-    let rows = query
-        .fetch_all(&state.db)
-        .await
-        .map_err(AppError::Database)?;
+    )
+    .bind(tenant_id)
+    .bind(&view)
+    .bind(&address_filter)
+    .bind(&search)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await
+    .map_err(AppError::Database)?;
 
     let messages: Vec<Value> = rows.iter().map(message_json).collect();
 
@@ -320,7 +300,10 @@ pub async fn get_message(
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> ApiResult<Json<Value>> {
     let tenant_id = account_id(&claims)?;
-    let peek = q.get("peek").map(|v| v == "1" || v == "true").unwrap_or(false);
+    let peek = q
+        .get("peek")
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(false);
 
     if !peek {
         sqlx::query(
@@ -521,10 +504,7 @@ pub async fn create_ticket_from_message(
     .ok_or_else(|| AppError::NotFound("Message not found".into()))?;
 
     // Already a ticket: answer with it instead of stacking a second work item on the same mail.
-    if let Some(existing) = row
-        .try_get::<Option<Uuid>, _>("ticket_id")
-        .unwrap_or(None)
-    {
+    if let Some(existing) = row.try_get::<Option<Uuid>, _>("ticket_id").unwrap_or(None) {
         return Ok(Json(json!({ "ticket_id": existing, "created": false })));
     }
 
@@ -533,7 +513,9 @@ pub async fn create_ticket_from_message(
         .unwrap_or_else(|_| "(no subject)".into());
     let body: String = row.try_get::<String, _>("body_plain").unwrap_or_default();
     let from: String = row.try_get::<String, _>("from_address").unwrap_or_default();
-    let name: Option<String> = row.try_get::<Option<String>, _>("from_name").unwrap_or(None);
+    let name: Option<String> = row
+        .try_get::<Option<String>, _>("from_name")
+        .unwrap_or(None);
 
     let ticket_id: Uuid = sqlx::query_scalar(
         r#"INSERT INTO tickets (tenant_id, subject, description, status, priority, source,
@@ -549,7 +531,10 @@ pub async fn create_ticket_from_message(
     })
     .bind(&body)
     .bind(&from)
-    .bind(name.as_deref().unwrap_or(from.split('@').next().unwrap_or("")))
+    .bind(
+        name.as_deref()
+            .unwrap_or(from.split('@').next().unwrap_or("")),
+    )
     .fetch_one(&state.db)
     .await
     .map_err(AppError::Database)?;
@@ -790,13 +775,14 @@ pub async fn create_label(
     }
     let color = req.color.as_deref().unwrap_or("#64748b");
 
-    let exists: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM private_email_labels WHERE tenant_id = $1 AND lower(name) = lower($2)")
-            .bind(tenant_id)
-            .bind(name)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(AppError::Database)?;
+    let exists: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM private_email_labels WHERE tenant_id = $1 AND lower(name) = lower($2)",
+    )
+    .bind(tenant_id)
+    .bind(name)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(AppError::Database)?;
     if exists.is_some() {
         return Err(AppError::Duplicate(format!(
             "A label called '{}' already exists.",
