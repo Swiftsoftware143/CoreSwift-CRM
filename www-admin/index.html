@@ -1575,6 +1575,7 @@ const TAB_RENDERERS = {
   'dashboard': () => {
     return pageHeader('Dashboard', 'Overview of your CRM performance') +
     '<div class="stats-grid" id="statsGrid"><div class="loading-wrap"><div class="spinner"></div> Loading stats...</div></div>' +
+    '<div id="payCard"></div>' +
     '<div id="dashboardExtra"></div>';
   },
 
@@ -3016,6 +3017,48 @@ async function runAccountMatch() {
   }
 }
 
+// ── CAN ANYBODY PAY? the operator finally learns it from the dashboard they already open ────────
+// CoreSwift has no card checkout: `POST /checkout/create` and its provider webhooks were RETIRED
+// 2026-09-25 and no payment provider is in `available_providers`. The ONLY arm a buyer can be
+// charged on is a plan's own hosted payment page (`plans.checkout_url`, the console's "Open payment
+// page"). So the honest question is not "is there a row" — it is "does any of those pages OPEN?".
+// MEASURED 2026-11-11: all four plan links on this install answer 404 to a GET (a real slug and an
+// invented one answer identically), so every buyer who pressed Upgrade landed on "No Data Found."
+// and nothing told the operator (kanban t_f11f71fb). `GET /api/billing/readiness` answers it from
+// the server (`src/billing/readiness.rs`, cached, platform-admin only) because a browser cannot
+// probe another origin.
+//
+// NON-VACUITY: painted ONLY from a SUCCESSFUL read that says `can_sell: false`, and never when the
+// probes came back "unknown" instead of "dead" — a slow payment host must not be reported as a shut
+// till. `plans_with_link === 0` needs no probe at all: with no link and no checkout arm, nothing can
+// be bought. A working payment page (or a live provider, once one exists) means `can_sell: true`
+// and NO card.
+async function loadPaymentGap() {
+  const box = document.getElementById('payCard');
+  if (!box) return;
+  if (!isPlatformUser()) return;          // the read is platform-admin only; a tenant never asks
+  let r;
+  try { r = await API.get('/billing/readiness'); } catch (_) { return; }   // failed read -> no card
+  if (!r || typeof r.can_sell !== 'boolean') return;
+  if (r.can_sell === true) { box.innerHTML = ''; return; }
+  const checked = Number(r.links_checked) || 0;
+  const withLink = Number(r.plans_with_link) || 0;
+  const paid = Number(r.paid_plans) || 0;
+  // "Could not tell" is not "cannot pay": when every link is still unknown, say nothing.
+  if (withLink > 0 && checked === 0) { box.innerHTML = ''; return; }
+  const why = withLink === 0
+    ? 'None of your ' + paid + ' paid plan' + (paid === 1 ? '' : 's') + ' carries a payment page, and this app has no card checkout of its own, so a buyer who presses Upgrade can only ask you to switch the plan by hand.'
+    : 'Every payment link your paid plans carry answered a dead page (not found), so a buyer who presses Upgrade lands on nothing and nothing is charged. Paste working payment links on each paid plan, or the press can only ask you.';
+  box.innerHTML = '<div class="card" data-console="payments-closed" data-payment-provider-missing="1" style="border-left:4px solid #dc2626">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">'
+    + '<div><div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.04em">Checkout is switched off</div>'
+    + '<div style="font-size:20px;font-weight:800">Buyers cannot pay</div>'
+    + '<div style="color:#475569;font-size:13px;margin-top:2px">' + escapeHtml(why) + '</div></div>'
+    + '<button type="button" class="btn btn-primary" data-open-plans="1">Open Plans &amp; Billing</button></div></div>';
+  const btn = box.querySelector('[data-open-plans]');
+  if (btn) btn.onclick = () => switchTab('billing');
+}
+
 const TAB_LOADERS = {
   // Same rule as every loader below: the renderer runs before its HTML is in the document, so the
   // audit load registers here and runs against an #auditContent that already exists.
@@ -3136,6 +3179,8 @@ const TAB_LOADERS = {
     } catch(e) {
       statsGridEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats unavailable: ${escapeHtml(planGateText(e))}</p></div></div>`;
     }
+    // CAN ANYBODY PAY? (kanban t_f11f71fb, 2026-11-11) — see loadPaymentGap() below.
+    loadPaymentGap();
   },
 
   'contacts': async () => {
@@ -6159,7 +6204,7 @@ async function saveProvisioning() {
      it. appGuidePages MUST be defined BEFORE the widget script loads. -->
 <script>
 window.appGuidePages = {
-  dashboard: { title: 'Dashboard', desc: 'Your CRM at a glance — contacts, companies, deals and activity for this workspace.', actions: ['Add contacts from the Contacts tab', 'Work deals in Pipelines & Deals', 'Watch new leads arrive in Contacts'] },
+  dashboard: { title: 'Dashboard', desc: 'Your CRM at a glance — contacts, companies, deals and activity for this workspace. When a platform operator opens this console and nobody can actually be charged (no plan\'s payment page opens, and this app has no card checkout of its own), a red "Buyers cannot pay" card sits above the figures with the button that opens Plans & Billing.', actions: ['Add contacts from the Contacts tab', 'Work deals in Pipelines & Deals', 'Watch new leads arrive in Contacts', 'If Buyers cannot pay is showing, press Open Plans & Billing'] },
   contacts: { title: 'Contacts', desc: 'Every person in your CRM, with the tags and lists they belong to.', actions: ['+ Add Contact to create one', 'Search to filter the list', 'Open a contact to see its timeline'] },
   duplicates: { title: 'Possible Duplicates', desc: 'Contacts that share a phone number or a full name \u2014 the same person captured twice. Read-only: nothing is merged here.', actions: ['Open a record from Contacts to merge or retire the extra copy', 'Fix the capture source so the duplicate stops being created', 'Is this person already here? Use the lookup on the same screen before adding a record'] },
   companies: { title: 'Companies', desc: 'The organisations your contacts belong to.', actions: ['Add a company and attach contacts to it'] },

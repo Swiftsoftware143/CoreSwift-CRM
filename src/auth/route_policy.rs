@@ -83,8 +83,11 @@
 //!        body-read deadline, and named in PUBLIC_ROUTES. It shipped WITHOUT moving this census,
 //!        which left both the documented numbers and the test that pins them one behind the tree —
 //!        the standard gate is fmt/check/clippy and never runs `cargo test`, so nothing caught it.
-//!        Re-counted from source at HEAD 895e482 / eead91b: 372 mounted `.route(..)` calls, 360
-//!        mounts on /api/** (372 = 360 /api + the 12 root-level mounts). Measured live on
+//!        Re-counted from source at HEAD 895e482 / eead91b: 373 mounted `.route(..)` calls, 361
+//!        mounts on /api/** (373 = 361 /api + the 12 root-level mounts; the 373rd/361st is
+//!        `GET /api/billing/readiness`, the payment-readiness read the operator dashboard asks,
+//!        kanban t_f11f71fb — a PROTECTED mount on the billing router, platform-admin gated inside
+//!        the handler and therefore deliberately absent from PUBLIC_ROUTES). Measured live on
 //!        127.0.0.1:8084 with NO credential: an empty JSON body answers 422 (missing field
 //!        `ticket_id`) and a body with no content type answers 415 — i.e. the global layer lets it
 //!        through exactly as PUBLIC_ROUTES declares, and it is not a 401 by accident.
@@ -1048,12 +1051,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            372,
+            373,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 360,
+            api, 361,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

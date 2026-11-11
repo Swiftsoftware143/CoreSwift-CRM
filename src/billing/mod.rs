@@ -6,6 +6,7 @@
 pub mod credits;
 pub mod handlers;
 pub mod models;
+pub mod readiness;
 
 use crate::AppState;
 use axum::{middleware, Router};
@@ -43,6 +44,14 @@ pub fn router(state: AppState) -> Router<AppState> {
             axum::routing::post(handlers::cancel_subscription),
         )
         .route("/features", axum::routing::get(handlers::get_features))
+        // CAN ANYBODY PAY? (kanban t_f11f71fb, 2026-11-11). This app's only money arm is a plan's
+        // own hosted payment page, so the operator's dashboard needs to know whether any of them
+        // actually OPENS — not whether a row exists. Read-only, platform-admin only, cached
+        // (`readiness.rs` carries the measurements and the non-vacuity rules).
+        .route(
+            "/readiness",
+            axum::routing::get(readiness::payment_readiness),
+        )
         // Credit-based billing
         .route(
             "/credits/balance",
