@@ -1473,6 +1473,17 @@ existed. Removing the logo keeps the name and the colour.</p>
 
 
 <section class="navx-rel" aria-labelledby="navx-rel-h"><h2 id="navx-rel-h">Keep exploring CoreSwift-CRM</h2><ul><li><a href="/admin-guide.html">Admin guide</a></li><li><a href="/pricing.html">Pricing</a></li><li><a href="/">Home</a></li><li><a href="/terms.html">Terms of Service</a></li></ul></section>
+<h2>Your inbox: bring your own domain</h2>
+<p><strong>CoreSwift does not give out an address on our domain.</strong> You keep the domain you already own (for example <code>yourbusiness.com</code>) and your own Mailgun account, and your mail is delivered straight to you. Open the <strong>Inbox</strong> tab in the console: the setup page is the onboarding, in three plain steps, with a copy button beside every value.</p>
+<ol>
+<li><strong>Add your domain.</strong> Type the domain and paste your Mailgun API key and your Mailgun webhook signing key. Both are stored sealed and are used only for your own mail.</li>
+<li><strong>Add the records at your own DNS host</strong> (Cloudflare, or your registrar). Three groups: <strong>MX</strong> &mdash; <code>mxa.mailgun.org</code> and <code>mxb.mailgun.org</code>, where mail is delivered; <strong>SPF and DKIM</strong> &mdash; <code>v=spf1 include:mailgun.org ~all</code> plus the DKIM value your own Mailgun mints, which prove the mail is really from you; and one <strong>CNAME</strong> &mdash; <code>inbox</code> &rarr; <code>inbox.coreswiftcrm.com</code>, which makes <code>inbox.yourbusiness.com</code> open your mail. Every row carries a copy button, one sentence saying what it does, and a live <strong>Active</strong> / <strong>Waiting</strong> / <strong>Needs attention</strong> badge. Press <strong>Check again</strong> after adding them.</li>
+<li><strong>Create your inbox.</strong> The button stays disabled until receiving and sending both verify, because an address that cannot receive is worse than no address at all. <strong>Nothing is charged and no mailbox exists until then.</strong></li>
+</ol>
+<p><strong>One difference on Cloudflare:</strong> the mail records must be <strong>DNS only (grey cloud)</strong> &mdash; the orange proxy breaks mail. The <code>inbox</code> CNAME is the one exception: it must be <strong>Proxied (orange cloud)</strong>, because Cloudflare then serves the padlock on your own address.</p>
+<p><strong>Logging in takes you to a mailbox chooser.</strong> Sign in and you see the mailboxes you created; pick one and it opens. The <strong>Inbox</strong> tab lists the same inboxes, each row with a <strong>LOG IN</strong> button on the right that opens your mail in a new window &mdash; at <code>inbox.yourbusiness.com</code> once that record is live, or at <code>inbox.coreswiftcrm.com</code> until it is &mdash; plus a <strong>Create new inbox</strong> button.</p>
+<p><strong>Your 30 free days start at your first verified inbox</strong>, not at signup: the days you spend waiting on DNS cost you nothing. During the trial, sending has a fair-use ceiling of <strong>200 messages a day</strong> to protect the address&rsquo;s deliverability. When the 30 days end the address keeps receiving and only sending stops; <strong>Keep inbox &mdash; $1/mo</strong> or an <strong>Upgrade CRM</strong> restores it immediately and nothing is ever deleted.</p>
+<p><strong>When your plan already includes every inbox you have</strong>, <strong>Create new inbox</strong> answers with the plan that unlocks more and what it costs, never a dead button.</p>
 </body>
 </html>
 

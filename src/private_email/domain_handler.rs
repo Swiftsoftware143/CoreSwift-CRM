@@ -3,10 +3,134 @@ use axum::{
     Extension, Json,
 };
 use serde_json::json;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use super::feature_gate;
 use super::models::*;
+
+/// The mail client's own host. A customer's BRANDED address (`inbox.<their-domain>`) is a CNAME to
+/// this name, Proxied at THEIR Cloudflare, so their own certificate carries the padlock. Nothing
+/// here renders an IP address, and the mail itself never passes through this host — only the
+/// screens do (the records that carry mail are the customer's own Mailgun ones).
+pub const MAIL_CLIENT_HOST: &str = "inbox.coreswiftcrm.com";
+
+/// Whether `inbox.<domain>` really opens our mail client right now.
+///
+/// Three answers, because "not working" is not one state to a customer:
+///   * `Active`    — the name answers and serves our client: the branded front door works;
+///   * `Waiting`   — the name does not resolve yet: the CNAME is not added (or DNS has not spread);
+///   * `Attention` — the name resolves but serves something else (wrong target, or their Cloudflare
+///     is refusing the connection, which is what SSL/TLS mode "Full (strict)" does to an origin
+///     certificate that does not carry their hostname).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Branded {
+    Active,
+    Waiting,
+    Attention,
+}
+
+impl Branded {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Branded::Active => "active",
+            Branded::Waiting => "waiting",
+            Branded::Attention => "attention",
+        }
+    }
+}
+
+/// One probe per domain per minute: the setup page and the inbox tab both ask, and Mailgun's own
+/// record read is already a network round trip — this must not add a second one per render.
+fn branded_cache() -> &'static Mutex<HashMap<String, (Instant, Branded)>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, (Instant, Branded)>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// A short-TTL cached verdict on `inbox.<domain>`.
+pub async fn branded_state(domain: &str) -> Branded {
+    let key = domain.trim().to_ascii_lowercase();
+    if let Ok(cache) = branded_cache().lock() {
+        if let Some((at, state)) = cache.get(&key) {
+            if at.elapsed() < Duration::from_secs(60) {
+                return *state;
+            }
+        }
+    }
+    let state = probe_branded(&key).await;
+    if let Ok(mut cache) = branded_cache().lock() {
+        cache.insert(key, (Instant::now(), state));
+    }
+    state
+}
+
+async fn probe_branded(domain: &str) -> Branded {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(6))
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Branded::Waiting,
+    };
+    let url = format!("https://inbox.{}/", domain);
+    match client
+        .get(&url)
+        .header("User-Agent", "CoreSwift-setup-check")
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let code = resp.status().as_u16();
+            // 525/526 are Cloudflare's "cannot reach the origin over TLS" pair: the record is
+            // there and their edge is answering, so this is a setting to fix, not a record to add.
+            if code == 525 || code == 526 {
+                return Branded::Attention;
+            }
+            if !resp.status().is_success() {
+                return Branded::Attention;
+            }
+            match resp.text().await {
+                // The mail client under the branded name — the whole point of the record.
+                Ok(body) if body.contains("CoreSwift Mail") => Branded::Active,
+                _ => Branded::Attention,
+            }
+        }
+        // No answer at all: the name does not resolve, so the record is not added yet.
+        Err(_) => Branded::Waiting,
+    }
+}
+
+/// The provider's LIVE verdict on a stored domain, for the create-mailbox gate.
+///
+/// `private_email_domains.verified` is only what the last check saw; a customer who finished their
+/// DNS after adding the domain would be refused with "not receiving mail yet" while Mailgun already
+/// says `active`. The gate asks the provider before refusing — and only then. `None` means the
+/// provider could not be read at all, which is not a verdict and never becomes one.
+pub async fn domain_is_active(
+    pool: &sqlx::PgPool,
+    tenant_id: Uuid,
+    domain: &PrivateEmailDomain,
+) -> Option<bool> {
+    if domain.provider_type != "mailgun" {
+        // An SMTP/SES domain has no provider state to read: its credential IS its mailbox, and the
+        // stored flag is the only word there is. Treat it as its stored answer.
+        return Some(domain.verified);
+    }
+    let candidates =
+        recheck_credentials(pool, tenant_id, &domain.mailgun_api_key, domain.api_key_id)
+            .await
+            .ok()?;
+    for key in &candidates {
+        if let Some(state) = mailgun_domain_state(key, &domain.domain, &domain.mailgun_region).await
+        {
+            return Some(state.eq_ignore_ascii_case("active"));
+        }
+    }
+    None
+}
 
 use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
@@ -59,6 +183,22 @@ pub async fn list_domains(
         .iter()
         .map(|d| with_credential_status(account_id, d, &keys, &provider_keys, plan_sells_catch_all))
         .collect();
+
+    // Is each domain's BRANDED front door (`inbox.<domain>`) really serving the mail client? The
+    // inbox tab opens its LOG IN button on that name, so the tab has to know whether it works now or
+    // whether the customer should be sent to the shared host while the CNAME spreads. Cached for a
+    // minute per domain, so a list render cannot turn into one network round trip per row.
+    let mut out = out;
+    for (i, d) in domains.iter().enumerate() {
+        let state = branded_state(&d.domain).await;
+        if let Some(obj) = out[i].as_object_mut() {
+            obj.insert("branded".into(), json!(state.as_str()));
+            obj.insert(
+                "branded_url".into(),
+                json!(format!("https://inbox.{}", d.domain)),
+            );
+        }
+    }
 
     Ok(Json(serde_json::json!(out)))
 }
@@ -665,6 +805,15 @@ pub async fn domain_records(
     // the customer's own provider (their Mailgun, their DNS) — nothing this app renders hands out our
     // server's address or a CNAME to us: their domain never points at our infrastructure for mail,
     // and there is no certificate of ours in the path.
+    // A row whose name Mailgun leaves as "@" (the v4 shape for an apex MX) is rendered as the
+    // customer's own domain: "@" is DNS shorthand a business owner should not have to decode on an
+    // onboarding page, and every other row already names its host in full.
+    for r in records.iter_mut() {
+        if r["name"].as_str().map(|n| n.trim()) == Some("@") {
+            r["name"] = json!(domain);
+        }
+    }
+
     let receiving: Vec<serde_json::Value> = records
         .iter()
         .filter(|r| r["section"] == "receiving")
@@ -705,22 +854,60 @@ pub async fn domain_records(
             .iter()
             .all(|r| r["valid"].as_bool() == Some(true));
 
+    // ── The BRANDED front door: `inbox.<their-domain>` (David 2026-11-11) ────────────────────────
+    // Mailgun knows nothing about this one: it is the customer's own mail SCREEN, not a delivery
+    // record. It is a CNAME to our mail client, Proxied at their Cloudflare so THEIR certificate
+    // carries the padlock — which is why it is the one record on this page that must be orange-cloud,
+    // the opposite of every mail record above it. Its status is MEASURED (the app asks the name for
+    // the mail client), never assumed: a customer who has not added it must see "Waiting", and one
+    // whose Cloudflare refuses the connection must see "Needs attention" instead of a dead link.
+    let branded = branded_state(&domain).await;
+    let branded_row = json!({
+        "section": "branded",
+        "type": "CNAME",
+        "name": format!("inbox.{}", domain),
+        "value": MAIL_CLIENT_HOST,
+        "priority": serde_json::Value::Null,
+        "valid": branded == Branded::Active,
+        "attention": branded == Branded::Attention,
+        "checked_by_provider": false,
+        "measured": true,
+        "proxied_required": true,
+        "purpose": "Your branded front door: this one makes inbox.<your domain> open your mail, with the padlock on the address.",
+        "note": "Set this record to Proxied (orange cloud). Cloudflare then serves the padlock for your address. Your mail records above stay grey (DNS only) — proxying those breaks mail.",
+    });
+    records.push(branded_row.clone());
+
+    // Mailgun's own `active` is the live answer; the stored column is only what the last check saw.
+    // The create button must not stay shut on a domain Mailgun has since activated (the customer
+    // would press Check again and be told everything passes while the button stayed grey).
+    let provider_state = detail
+        .get("state")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let verified_live = verified || provider_state.eq_ignore_ascii_case("active");
+
     Ok(Json(json!({
         "domain": domain,
         "domain_id": domain_id,
-        "verified": verified,
-        "state": detail.get("state").and_then(|v| v.as_str()).unwrap_or("unknown"),
+        "verified": verified_live,
+        "state": provider_state,
         "records": records,
         // The setup page's checklist, in the order the customer must do it.
         "groups": [
             { "key": "receiving", "title": "Receiving — so your mail lands in CoreSwift", "records": receiving },
             { "key": "sending", "title": "Sending proof — so your replies are not marked as spam", "records": sending },
+            { "key": "branded", "title": "Your branded address — the padlock on your own name", "records": [branded_row] },
         ],
         "receiving_ok": receiving_ok,
         "sending_ok": sending_ok,
+        // The branded link the inbox tab opens, and whether it is the branded name or the shared one.
+        "branded": branded.as_str(),
+        "branded_url": format!("https://inbox.{}", domain),
+        "mail_client_url": format!("https://{}", MAIL_CLIENT_HOST),
         // The create-mailbox button is enabled by this, so a customer can never make an address that
         // cannot receive. `provision_mailbox` refuses independently (a second door must not skip it).
-        "can_create_mailbox": verified && receiving_ok && sending_ok,
+        "can_create_mailbox": verified_live && receiving_ok && sending_ok,
         "mailgun_state": detail.get("state").cloned().unwrap_or(serde_json::Value::Null),
     })))
 }

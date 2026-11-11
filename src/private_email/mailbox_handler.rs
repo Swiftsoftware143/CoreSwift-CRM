@@ -39,7 +39,30 @@ pub async fn provision_mailbox(
     // that produces an address that silently rejects mail — the worst kind of empty promise. The
     // server refuses, and says what to press; the check is here and not only in the UI so a second
     // door (an API client) cannot skip it.
-    if !domain.verified {
+    //
+    // The stored flag is not the verdict: a customer who finishes their DNS after adding the domain
+    // has `verified = false` on the row while Mailgun already reports `active`. Before refusing, ask
+    // the provider — and when it says active, promote the row so the whole app agrees.
+    let mut domain_ready = domain.verified;
+    if !domain_ready {
+        if let Some(true) =
+            super::domain_handler::domain_is_active(&state.db, account_id, &domain).await
+        {
+            if let Err(e) = sqlx::query(
+                "UPDATE private_email_domains SET verified = TRUE, updated_at = NOW()
+                  WHERE id = $1 AND tenant_id = $2 AND verified = FALSE",
+            )
+            .bind(domain.id)
+            .bind(account_id)
+            .execute(&state.db)
+            .await
+            {
+                tracing::warn!(error = %e, domain = %domain.domain, "could not persist a live domain verification");
+            }
+            domain_ready = true;
+        }
+    }
+    if !domain_ready {
         return Err(AppError::Validation(format!(
             "{} is not receiving mail yet, so an inbox on it would not work. Press \"Check again\" \
              on the domain once the mail records show Active, then create the inbox.",
@@ -105,6 +128,24 @@ pub async fn provision_mailbox(
             .map_err(AppError::Validation)?;
     }
 
+    // ── The trial clock starts at the FIRST VERIFIED MAILBOX, never at signup ────────────────────
+    // BYOK setup takes days of DNS, and the card's rule is explicit: 30 days from the first mailbox
+    // that exists on a verified domain. A later mailbox on the same account INHERITS that window —
+    // it must not restart the clock, or an account could keep a free trial alive by adding a box
+    // every month. (The free plan sells one mailbox, but a plan change must not re-mint the window.)
+    let window: (
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    ) = sqlx::query_as(
+        "SELECT MIN(trial_started_at), MIN(trial_ends_at)
+           FROM private_email_boxes
+          WHERE tenant_id = $1 AND trial_started_at IS NOT NULL",
+    )
+    .bind(account_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+
     let row = sqlx::query_as::<_, PrivateEmailBox>(
         r#"
         INSERT INTO private_email_boxes
@@ -112,8 +153,8 @@ pub async fn provision_mailbox(
              access_mode, trial_started_at, trial_ends_at)
         VALUES ($1, $2, $3, $4, $5,
                 CASE WHEN $6 THEN 'trial' ELSE 'paid' END,
-                CASE WHEN $6 THEN NOW() END,
-                CASE WHEN $6 THEN NOW() + ($7 || ' days')::interval END)
+                CASE WHEN $6 THEN COALESCE($7::timestamptz, NOW()) END,
+                CASE WHEN $6 THEN COALESCE($8::timestamptz, NOW() + ($9 || ' days')::interval) END)
         RETURNING *
         "#,
     )
@@ -126,6 +167,8 @@ pub async fn provision_mailbox(
     // own) starts the SAME trial as the free CoreSwift address — otherwise adding your own domain
     // would silently produce a mailbox with no sending rights at all and no clock to explain it.
     .bind(!trial::plan_sells_sending(&state.db, account_id).await?)
+    .bind(window.0)
+    .bind(window.1)
     .bind(trial::trial_days(&state.db, account_id).await?.to_string())
     .fetch_one(&state.db)
     .await

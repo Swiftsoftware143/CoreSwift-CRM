@@ -328,11 +328,23 @@ pub async fn check_mailbox_limit(pool: &PgPool, tenant_id: Uuid) -> Result<(), A
         features.max_mailboxes
     };
 
+    // The refusal names the door (David 2026-11-11): "Upgrade to create more mailboxes" tells a
+    // customer nothing about what to buy or what it costs. The next plan that actually carries MORE
+    // inboxes is read from the same registry the gate enforces, so the sentence can never promise an
+    // allowance the plan does not sell.
+    let next_plan = |current: i32| async move { next_mailbox_plan(pool, current).await };
+
     if max_mailboxes == 0 {
-        return Err(AppError::UpgradeRequired(
-            "Mailbox provisioning is not available on your plan. Upgrade to create a mailbox."
-                .into(),
-        ));
+        let unlock = match next_plan(0).await {
+            Some((name, price, limit)) => format!(
+                "{} includes up to {} inboxes for ${:.0}/month.",
+                name, limit, price
+            ),
+            None => "Add an inbox plan to your account to use it.".to_string(),
+        };
+        return Err(AppError::UpgradeRequired(format!(
+            "Private email is not part of your current plan. {unlock}"
+        )));
     }
 
     let count: (i64,) = sqlx::query_as(
@@ -344,13 +356,56 @@ pub async fn check_mailbox_limit(pool: &PgPool, tenant_id: Uuid) -> Result<(), A
     .map_err(AppError::Database)?;
 
     if max_mailboxes > 0 && count.0 >= max_mailboxes as i64 {
+        let noun = if max_mailboxes == 1 {
+            "inbox"
+        } else {
+            "inboxes"
+        };
+        let detail = match next_plan(max_mailboxes).await {
+            Some((name, price, limit)) => format!(
+                "{} lifts that to {} inboxes for ${:.0}/month and you can add the next address right away.",
+                name, limit, price
+            ),
+            // Already on the largest allowance: the honest door is freeing a slot, not buying.
+            None => "You are on the largest inbox allowance, so free a slot by deleting an inbox you \
+                     no longer use."
+                .to_string(),
+        };
         return Err(AppError::UpgradeRequired(format!(
-            "Mailbox limit reached ({}/{}). Upgrade to create more mailboxes.",
-            count.0, max_mailboxes
+            "Your plan includes {} {} and all of them are in use. {} Nothing is charged and no mail \
+             is deleted either way.",
+            max_mailboxes, noun, detail
         )));
     }
 
     Ok(())
+}
+
+/// The cheapest plan that carries MORE mailboxes than `current`, with its price and allowance.
+async fn next_mailbox_plan(pool: &PgPool, current: i32) -> Option<(String, f64, i32)> {
+    sqlx::query_as::<_, (String, f64, f64)>(
+        r#"
+        SELECT p.name, p.price_monthly::float8, pf.limit_value::float8
+          FROM plans p
+          JOIN plan_module_features pf ON pf.plan_id = p.id
+          JOIN module_features f ON f.id = pf.module_feature_id
+         WHERE f.key = 'email_mailboxes'
+           AND pf.enabled
+           -- Only a plan a customer can actually buy: naming an inactive plan in a refusal sends
+           -- them to a plan screen with no working payment page.
+           AND p.is_active
+           AND pf.limit_value IS NOT NULL
+           AND pf.limit_value > $1
+         ORDER BY p.price_monthly ASC NULLS LAST
+         LIMIT 1
+        "#,
+    )
+    .bind(current as f64)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .map(|(name, price, limit)| (name, price, limit as i32))
 }
 
 pub async fn can_enable_catch_all(pool: &PgPool, tenant_id: Uuid) -> Result<bool, AppError> {

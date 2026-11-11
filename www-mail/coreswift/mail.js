@@ -25,7 +25,11 @@
     me: null,
     boxes: [], domains: [], folders: { system: [], custom: [] }, counts: {},
     labels: [], messages: [], addresses: [], misc: 0, members: [],
-    folder: 'inbox', address: 'all', label: '', sel: null, view: 'mail', err: '', busy: false
+    folder: 'inbox', address: 'all', label: '', sel: null, view: 'mail', err: '', busy: false,
+    // Which mailbox the user picked on the chooser. Signing in never drops someone into one inbox:
+    // the account's mailboxes are listed and the user picks (David 2026-11-11, B205). A LOG IN press
+    // on the CRM's Inbox tab arrives as ?address=, which IS the choice, so that skips the list.
+    picked: false
   };
 
   var $ = function (id) { return document.getElementById(id); };
@@ -84,6 +88,7 @@
   function signOut(quiet) {
     S.token = ''; localStorage.removeItem(TOKEN_KEY);
     S.me = null; S.boxes = []; S.domains = []; S.messages = []; S.sel = null; S.view = 'setup';
+    S.picked = false; CHOSEN_ADDRESS = '';
     render();
     if (!quiet) toast('Signed out');
   }
@@ -118,9 +123,11 @@
       S.misc = (rs[6] && rs[6].misc && rs[6].misc.total) || 0;
       S.err = '';
       // A mailbox chosen from the CRM's LOG IN button arrives as ?address=. With no inboxes at all
-      // there is nothing to read, so the user lands on the setup page instead.
+      // there is nothing to read, so the user lands on the setup page instead. With inboxes but no
+      // choice yet, the user gets the MAILBOX CHOOSER — signing in never picks an inbox for them.
       if (!S.boxes.length) S.view = 'setup';
-      else if (S.view !== 'mail') S.view = 'mail';
+      else if (CHOSEN_ADDRESS) { S.address = CHOSEN_ADDRESS; S.picked = true; S.view = 'mail'; }
+      else if (S.view !== 'mail' || !S.picked) S.view = 'choose';
       if (S.view === 'mail') await loadMessages();
     } catch (e) {
       S.err = fail(e);
@@ -151,6 +158,7 @@
     var app = $('app');
     if (!S.token) { app.innerHTML = setupPage(); bindSetup(); return; }
     if (S.view === 'setup') { app.innerHTML = setupPage(); bindSetup(); return; }
+    if (S.view === 'choose') { app.innerHTML = chooserPage(); bindChooser(); return; }
     app.innerHTML = mailPage();
     bindMail();
   }
@@ -168,10 +176,12 @@
         + '<div id="smRecList"></div></div>';
     } else {
       step3 = '<div class="card"><h3>3. Add these records where your domain lives</h3>'
-        + '<p style="color:var(--muted);margin-top:0">Your domain stays at your own provider (Cloudflare, your registrar, anywhere). Two kinds of record are needed:</p>'
+        + '<p style="color:var(--muted);margin-top:0">Your domain stays at your own provider (Cloudflare, your registrar, anywhere). Three groups of record are needed, and every value gets a copy button once you sign in:</p>'
         + '<div class="rec"><strong>MX</strong><span><code>mxa.mailgun.org</code><br><span style="color:var(--muted)">Where the internet delivers your mail.</span></span><span></span></div>'
         + '<div class="rec"><strong>MX</strong><span><code>mxb.mailgun.org</code><br><span style="color:var(--muted)">The second delivery server, used if the first is busy.</span></span><span></span></div>'
-        + '<div class="rec"><strong>TXT</strong><span><code>SPF and DKIM values</code> — shown to you after you add your domain, with a copy button beside each one.<br><span style="color:var(--muted)">SPF proves you are allowed to send; DKIM signs your mail so it is not marked as spam.</span></span><span></span></div></div>';
+        + '<div class="rec"><strong>TXT</strong><span><code>SPF and DKIM values</code><br><span style="color:var(--muted)">SPF proves you are allowed to send; DKIM signs your mail so it is not marked as spam.</span></span><span></span></div>'
+        + '<div class="rec"><strong>CNAME</strong><span><code>inbox &rarr; inbox.coreswiftcrm.com</code><br><span style="color:var(--muted)">Your branded address: this makes <strong>inbox.yourbusiness.com</strong> open your mail. Set this one to Proxied (orange cloud) — your Cloudflare then serves the padlock.</span></span><span></span></div>'
+        + '<p style="color:var(--muted);font-size:12px;margin:8px 0 0">Nothing is charged and no mailbox exists until these records verify. Until then this page is the whole product.</p></div>';
     }
 
     return '<div class="setup">'
@@ -205,9 +215,9 @@
       + '<p style="margin:0;color:var(--muted)">Mailgun is the mail service that carries your messages. Your key stays yours: sending is charged to your own Mailgun account and nothing here shares it.</p></div>'
       + step3
       + '<div class="card"><h3>4. Wait until it shows Active, then press Check again</h3>'
-      + '<p style="margin:0;color:var(--muted)">Records take a few minutes to spread. When your domain says <strong>Active</strong>, you can create mailboxes.</p></div>'
+      + '<p style="margin:0;color:var(--muted)">Records take a few minutes to spread. When your domain says <strong>Active</strong>, you can create mailboxes. Nothing is charged until then, and no mailbox exists until then.</p></div>'
       + '<div class="card"><h3>5. Create your mailboxes</h3>'
-      + '<p style="color:var(--muted);margin-top:0">An address people can write to:</p>'
+      + '<p style="color:var(--muted);margin-top:0">An address people can write to. Your 30 free days start at the first mailbox you create — not at signup, so the days you spend waiting on DNS cost you nothing:</p>'
       + '<ul style="margin:0 0 10px 18px;color:var(--muted)"><li><strong>info@</strong> — enquiries from the public</li>'
       + '<li><strong>support@</strong> — customers who need help (this one also opens a ticket in your CRM)</li>'
       + '<li>a personal one, such as your own name</li></ul>'
@@ -235,7 +245,7 @@
     var so = $('smSignOut');
     if (so) so.onclick = function () { signOut(); };
     var op = $('smOpen');
-    if (op) op.onclick = function () { S.view = 'mail'; render(); };
+    if (op) op.onclick = function () { S.view = 'choose'; S.picked = false; render(); };
     var ad = $('smAddDomain');
     if (ad) ad.onclick = async function () {
       var d = ($('smDomain') || {}).value || '';
@@ -255,15 +265,26 @@
       try {
         var r = await api('GET', '/private-email/domains/' + S.domains[0].id + '/records');
         m.textContent = '';
+        var status = function (x) {
+          if (x.valid === true) return '<span class="ok">Active</span>';
+          if (x.attention) return '<span style="color:var(--warn)">Needs attention</span>';
+          if (x.valid === false) return '<span style="color:var(--warn)">Waiting</span>';
+          return '<span style="color:var(--muted)">Add this</span>';
+        };
         box.innerHTML = r.records.length
           ? r.records.map(function (x) {
             return '<div class="rec"><strong>' + esc(x.type) + '</strong><span><code>' + esc(x.name) + '</code><br>'
               + '<code>' + esc(x.value) + '</code>'
               + (x.priority != null ? ' <span style="color:var(--muted)">priority ' + esc(x.priority) + '</span>' : '')
-              + '<br><span style="color:var(--muted)">' + esc(x.purpose) + '</span></span>'
+              + '<br><span style="color:var(--muted)">' + esc(x.purpose) + '</span>'
+              + (x.note ? '<br><span style="color:var(--warn)">' + esc(x.note) + '</span>' : '')
+              + ' ' + status(x)
+              + '</span>'
               + '<button class="btn btn-ghost" onclick="csmCopy(this,\'' + esc(x.value) + '\')">Copy</button></div>';
           }).join('')
-          : '<p class="err">Mailgun returned no records for this domain.</p>';
+          : '<p class="err">Mailgun returned no records for this domain.</p>'
+            + '<p style="color:var(--muted);font-size:12px;margin:6px 0 0">Add the domain in your own Mailgun account first — that is where these values come from.</p>'
+            + '<button class="btn" onclick="csmCheckDomain(\'' + esc(S.domains[0].id) + '\')">Check again</button>';
       } catch (e) { m.textContent = fail(e); }
     };
     var ca = $('smCatchAll');
@@ -310,6 +331,62 @@
           catch (e) { $('lmErr').textContent = fail(e); btn.disabled = false; }
         };
       });
+  }
+
+  // ── The mailbox chooser (David 2026-11-11, B205) ─────────────────────────────────────────────
+  // Logging in lists the mailboxes this ACCOUNT has. The user picks one; nothing is opened behind
+  // their back, and "everything in one list" is offered for an account that wants a combined view.
+  function chooserPage() {
+    var cards = S.boxes.map(function (b) {
+      var a = (S.addresses || []).filter(function (x) { return x.address === b.email_address; })[0] || {};
+      var dom = (S.domains || []).filter(function (d) { return d.id === b.domain_id; })[0] || {};
+      var branded = dom.branded === 'active';
+      return '<button class="card" data-pick="' + esc(b.email_address) + '" style="display:flex;justify-content:space-between;'
+        + 'align-items:center;width:100%;text-align:left;margin:0 0 10px;cursor:pointer">'
+        + '<span><strong style="font-size:15px">' + esc(b.email_address) + '</strong>'
+        + (b.creates_ticket ? ' <span style="font-size:11px;color:var(--accent)">also opens a ticket</span>' : '')
+        + '<br><span style="color:var(--muted);font-size:12px">'
+        + (a.total || 0) + ' message' + ((a.total || 0) === 1 ? '' : 's') + ' in this mailbox'
+        + (branded ? ' · ' + esc('inbox.' + dom.domain) + ' works' : '')
+        + '</span></span>'
+        + '<span class="btn btn-primary">Open</span></button>';
+    }).join('');
+    var head = '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px">'
+      + '<div><div style="font-weight:700;font-size:18px">Choose a mailbox</div>'
+      + '<div style="color:var(--muted);font-size:13px">Same login, same account. Pick the address you want to read.</div></div>'
+      + '<div><button class="btn" id="smSignOut2">Sign out</button></div></div>';
+    var empty = '<div class="card"><p style="margin:0;color:var(--muted)">No mailboxes yet on this account. '
+      + 'Press <strong>Set up my mail</strong> to add your domain and create one.</p>'
+      + '<div style="margin-top:10px"><button class="btn btn-primary" id="smSetup">Set up my mail</button></div></div>';
+    return '<div class="setup">' + head
+      + (S.boxes.length ? cards
+        + '<button class="btn" id="smAll" style="margin-top:4px">See everything in one list</button>'
+        : empty)
+      + '</div>';
+  }
+
+  function bindChooser() {
+    var so = $('smSignOut2');
+    if (so) so.onclick = function () { signOut(); };
+    var st = $('smSetup');
+    if (st) st.onclick = function () { S.view = 'setup'; render(); };
+    Array.prototype.forEach.call(document.querySelectorAll('[data-pick]'), function (b) {
+      b.onclick = async function () {
+        S.address = b.getAttribute('data-pick');
+        S.picked = true;
+        S.view = 'mail';
+        await loadMessages();
+        render();
+      };
+    });
+    var all = $('smAll');
+    if (all) all.onclick = async function () {
+      S.address = 'all';
+      S.picked = true;
+      S.view = 'mail';
+      await loadMessages();
+      render();
+    };
   }
 
   // ── The mail screen ──────────────────────────────────────────────────────────────────────────
@@ -809,7 +886,8 @@
   // A mailbox chosen on the CRM's Inbox tab arrives as ?address=, so the user lands where they
   // pressed instead of on a chooser they already answered (B211).
   var params = new URLSearchParams(location.search);
-  if (params.get('address')) S.address = params.get('address');
+  var CHOSEN_ADDRESS = params.get('address') || '';
+  if (CHOSEN_ADDRESS) S.address = CHOSEN_ADDRESS;
 
   if (S.token) { boot(); } else { render(); }
 })();

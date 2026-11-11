@@ -86,17 +86,25 @@
       // An address that has actually RECEIVED mail is working, whatever a stale `verified` flag says
       // — the flag is Mailgun's word at the last check, and mail in the inbox is proof.
       var ready = !!dom.verified || count > 0;
+      // The LOG IN button opens the customer's OWN branded name when it really serves the mail
+      // client, and the shared host while their CNAME is still spreading — a button that opens a
+      // broken address is worse than one that opens a working one under our name.
+      var branded = dom.branded === 'active' && !!dom.branded_url;
+      var base = branded ? dom.branded_url : MAIL_HOST;
       return '<tr>'
         + '<td style="padding:8px"><strong>' + esc(b.email_address) + '</strong>'
         + (b.creates_ticket ? ' <span style="background:#e0f2fe;color:#075985;padding:1px 6px;border-radius:8px;font-size:11px">tickets</span>' : '')
         + '</td>'
-        + '<td style="padding:8px;opacity:.75">' + (ready ? 'Receiving' : 'Waiting for mail records') + '</td>'
+        + '<td style="padding:8px;opacity:.75">' + (ready ? 'Receiving' : 'Waiting for mail records')
+        + '<div style="font-size:11px;opacity:.8">'
+        + (branded ? 'opens at inbox.' + esc(dom.domain) : 'opens at inbox.coreswiftcrm.com until inbox.' + esc(dom.domain || 'your domain') + ' is live')
+        + '</div></td>'
         + '<td style="padding:8px;opacity:.75">' + count + '</td>'
         + '<td style="padding:8px;text-align:right;white-space:nowrap">'
         + '<label style="font-size:11px;opacity:.75;margin-right:10px;cursor:pointer"><input type="checkbox" '
         + (b.creates_ticket ? 'checked ' : '') + 'onchange="peToggleTicket(\'' + esc(b.id) + '\',this.checked)"> also a ticket</label>'
         + (ready
-          ? '<button class="btn btn-primary btn-sm" onclick="peLogin(\'' + esc(b.email_address) + '\')">LOG IN</button>'
+          ? '<button class="btn btn-primary btn-sm" onclick="peLogin(\'' + esc(base) + '\',\'' + esc(b.email_address) + '\')">LOG IN</button>'
           : '<button class="btn btn-secondary btn-sm" disabled title="This address cannot receive mail yet">LOG IN</button>')
         + ' <button class="btn btn-ghost btn-xs" title="Delete this inbox" onclick="peDeleteBox(\'' + esc(b.id) + '\',\'' + esc(b.email_address) + '\')">Delete</button>'
         + '</td></tr>';
@@ -120,6 +128,7 @@
   // ─────────────────────────────────────────────────────────────────────────────────────────────
 
   function badgeFor(r) {
+    if (r.attention) return '<span style="background:#fee2e2;color:#991b1b;padding:1px 7px;border-radius:8px;font-size:11px">Needs attention</span>';
     if (r.optional && r.valid == null) return '<span style="background:#e5e7eb;color:#374151;padding:1px 7px;border-radius:8px;font-size:11px">Optional</span>';
     if (r.valid === true) return '<span style="background:#dcfce7;color:#166534;padding:1px 7px;border-radius:8px;font-size:11px">Active</span>';
     if (r.valid === false) return '<span style="background:#fef3c7;color:#92400e;padding:1px 7px;border-radius:8px;font-size:11px">Waiting</span>';
@@ -127,13 +136,20 @@
   }
 
   function recordRowHtml(r) {
+    // Every row carries ONE plain sentence about what it does (the card's rule) and the value's own
+    // copy button. The branded CNAME adds its orange-cloud note, because it is the only record on
+    // this page that must be proxied — the opposite of every mail record above it.
     return '<tr>'
-      + '<td style="padding:6px 8px;white-space:nowrap"><strong>' + esc(r.type) + '</strong></td>'
-      + '<td style="padding:6px 8px;font-family:monospace;font-size:12px;word-break:break-all">' + esc(r.name) + '</td>'
-      + '<td style="padding:6px 8px;font-family:monospace;font-size:12px;word-break:break-all;max-width:420px">' + esc(r.value) + '</td>'
-      + '<td style="padding:6px 8px;text-align:center">' + (r.priority == null ? '' : esc(String(r.priority))) + '</td>'
-      + '<td style="padding:6px 8px;white-space:nowrap">' + badgeFor(r) + '</td>'
-      + '<td style="padding:6px 8px;text-align:right"><button class="btn btn-ghost btn-xs" data-copy="'
+      + '<td style="padding:6px 8px;white-space:nowrap;vertical-align:top"><strong>' + esc(r.type) + '</strong></td>'
+      + '<td style="padding:6px 8px;font-family:monospace;font-size:12px;word-break:break-all;vertical-align:top">' + esc(r.name) + '</td>'
+      + '<td style="padding:6px 8px;word-break:break-all;max-width:420px;vertical-align:top">'
+      + '<span style="font-family:monospace;font-size:12px">' + esc(r.value) + '</span>'
+      + (r.purpose ? '<div style="font-size:12px;opacity:.75;margin-top:2px">' + esc(r.purpose) + '</div>' : '')
+      + (r.note ? '<div style="font-size:12px;color:#92400e;margin-top:2px">' + esc(r.note) + '</div>' : '')
+      + '</td>'
+      + '<td style="padding:6px 8px;text-align:center;vertical-align:top">' + (r.priority == null ? '' : esc(String(r.priority))) + '</td>'
+      + '<td style="padding:6px 8px;white-space:nowrap;vertical-align:top">' + badgeFor(r) + '</td>'
+      + '<td style="padding:6px 8px;text-align:right;vertical-align:top"><button class="btn btn-ghost btn-xs" data-copy="'
       + esc(r.value) + '" onclick="peCopy(this)">Copy</button></td>'
       + '</tr>';
   }
@@ -167,6 +183,7 @@
       + '<li>The DKIM value is very long — add it as <strong>one</strong> record; Cloudflare splits long text itself.</li>'
       + '<li><strong>One SPF record per domain.</strong> If you already have one, merge <code>include:mailgun.org</code> into it — do not add a second.</li>'
       + '<li>Add the domain in <strong>your Mailgun account first</strong>, then paste these records, then press Check again.</li>'
+      + '<li>The <strong>inbox CNAME</strong> (the branded address) is the ONE exception: it must be <strong>Proxied (orange cloud)</strong>, because your Cloudflare serves the padlock on that name.</li>'
       + '</ul></div>';
   }
 
@@ -216,7 +233,7 @@
       + '<span style="opacity:.75">@ ' + esc(d ? d.domain : 'your domain') + '</span></div>'
       + '<button class="btn btn-primary btn-sm" ' + (ready && !busy ? '' : 'disabled') + ' onclick="peSetupCreateInbox()">'
       + (ready ? 'Create my inbox' : 'Create my inbox — waiting for the records') + '</button>'
-      + '<p style="font-size:12px;opacity:.7;margin:8px 0 0">Your free month starts when the inbox is created, not before — so time spent waiting on DNS costs you nothing. It runs for 30 days with full send and receive; after that the address keeps receiving and only sending stops, unless you keep it for $1/month or upgrade the CRM. No mail is ever deleted.</p>';
+      + '<p style="font-size:12px;opacity:.7;margin:8px 0 0">Your free month starts at your first verified inbox — when you create it on a domain whose records are Active, not when you signed up — so time spent waiting on DNS costs you nothing. It runs for 30 days with full send and receive; after that the address keeps receiving and only sending stops, unless you keep it for $1/month or upgrade the CRM. No mail is ever deleted.</p>';
 
     return '<div style="padding:2px;text-align:left">'
       + '<h4 style="margin:0 0 4px">Set up your inbox</h4>'
@@ -407,7 +424,15 @@
       + '<div><h3 style="margin:0">Mail</h3><span style="opacity:.7;font-size:13px">'
       + (c.unread || 0) + ' unread · ' + (c.tickets || 0) + ' turned into tickets · ' + fmtBytes(c.used_bytes) + ' of ' + fmtBytes(c.limit_bytes) + ' used'
       + '</span></div>'
-      + '<button class="btn btn-primary btn-sm"' + (S.boxes.length ? '' : ' style="display:none"') + ' onclick="peCreateInbox()">+ Create new inbox</button></div>'
+      + '<button class="btn btn-primary btn-sm"' + (S.boxes.length ? '' : ' style="display:none"') + ' '
+      + ((S.domains || []).filter(function (d) { return d.verified; }).length
+        ? 'onclick="peCreateInbox()"'
+        : 'disabled title="Available once your mail records verify"')
+      + '>+ Create new inbox</button>'
+      + ((S.boxes.length && !(S.domains || []).filter(function (d) { return d.verified; }).length)
+        ? '<div style="font-size:12px;opacity:.75;margin-top:4px">New inboxes unlock once your mail records verify. Nothing is charged before then.</div>'
+        : '')
+      + '</div>'
       + (S.err ? '<div style="padding:8px;margin-bottom:8px;border-radius:6px;background:rgba(220,80,80,.15)">' + esc(S.err) + '</div>' : '')
       + trialBannerHtml()
       + '<div style="padding:14px;border:1px solid rgba(128,128,128,.3);border-radius:8px;margin-bottom:16px">'
@@ -504,8 +529,12 @@
   // Inbox actions
   // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-  window.peLogin = function (address) {
-    var url = MAIL_HOST + '/?address=' + encodeURIComponent(address);
+  window.peLogin = function (base, address) {
+    // `base` is the mailbox's own branded name when it is live, otherwise the shared mail host.
+    // Either way the chosen address travels in the query string, so the client opens THAT mailbox
+    // instead of a chooser the user already answered.
+    var host = (typeof base === 'string' && base.indexOf('http') === 0) ? base : MAIL_HOST;
+    var url = host + '/?address=' + encodeURIComponent(address || '');
     var w = window.open(url, '_blank', 'noopener');
     if (!w) toastMsg('Allow pop-ups for this site to open your mail client', 'error');
   };
@@ -643,7 +672,7 @@
       '<div class="form-group"><label>Which domain?</label><select id="peNewDomain">' + opts + '</select></div>'
       + '<div class="form-group"><label>The address</label>'
       + '<div style="display:flex;align-items:center;gap:6px"><input id="peNewLocal" placeholder="info" style="flex:1"><span style="opacity:.75">@ your domain</span></div>'
-      + '<p style="font-size:12px;opacity:.7;margin:6px 0 0">Common ones: <strong>info@</strong> for enquiries, <strong>support@</strong> for customers who need help, and your own name.</p></div>'
+      + '<p style="font-size:12px;opacity:.7;margin:6px 0 0">Common ones: <strong>info@</strong> for enquiries, <strong>support@</strong> for customers who need help, and your own name. Nothing is charged until your records verify, and no inbox exists before then.</p></div>'
       + '<div id="peNewMsg" style="font-size:13px"></div>',
       '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>'
       + '<button class="btn btn-primary" onclick="peSubmitInbox()">Create inbox</button>');

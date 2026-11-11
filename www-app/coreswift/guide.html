@@ -1,0 +1,1562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CoreSwift CRM — User Guide</title>
+<style>
+  :root {
+    --primary: #1d4ed8; --primary-light: #3b82f6; --primary-dark: #1e3a8a; --primary-bg: #eff6ff;
+    --g50: #f9fafb; --g100: #f3f4f6; --g200: #e5e7eb; --g300: #d1d5db; --g400: #9ca3af;
+    --g500: #6b7280; --g600: #4b5563; --g700: #374151; --g800: #1f2937; --g900: #111827;
+    --green: #059669; --green-bg: #ecfdf5; --amber: #d97706; --amber-bg: #fffbeb;
+    --red: #dc2626; --red-bg: #fef2f2; --purple: #7c3aed; --purple-bg: #f5f3ff;
+    --border: var(--g200);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    background: var(--g50); color: var(--g800); line-height: 1.6;
+  }
+  .header {
+    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+    color: #fff; padding: 0; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  }
+  .header-inner { max-width: 1200px; margin: 0 auto; padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem; }
+  .header-logo {
+    width: 44px; height: 44px; background: #fff; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.4rem; font-weight: 800; color: var(--primary); flex-shrink: 0;
+  }
+  .header-title h1 { font-size: 1.4rem; font-weight: 700; }
+  .header-title .sub { font-size: 0.85rem; opacity: 0.85; font-weight: 400; }
+  .header-badge {
+    margin-left: auto; background: rgba(255,255,255,0.2); padding: 0.3rem 0.8rem;
+    border-radius: 20px; font-size: 0.8rem; font-weight: 500; white-space: nowrap;
+  }
+  .nav-bar { background: #fff; border-bottom: 1px solid var(--g200); position: sticky; top: 68px; z-index: 99; overflow-x: auto; }
+  .nav-inner { max-width: 1200px; margin: 0 auto; display: flex; gap: 0; padding: 0 1rem; }
+  .nav-inner a {
+    display: block; padding: 0.75rem 1.1rem; font-size: 0.88rem; font-weight: 500;
+    color: var(--g600); text-decoration: none; white-space: nowrap;
+    border-bottom: 3px solid transparent; transition: all .15s;
+  }
+  .nav-inner a:hover, .nav-inner a.active { color: var(--primary); border-bottom-color: var(--primary); }
+  .container { max-width: 1000px; margin: 2rem auto; padding: 0 1.5rem; }
+  .hero {
+    background: linear-gradient(135deg, var(--primary-bg) 0%, #dbeafe 100%);
+    border-radius: 16px; padding: 2.5rem 3rem; margin-bottom: 2.5rem; border: 1px solid #bfdbfe;
+  }
+  .hero h2 { font-size: 1.8rem; color: var(--primary-dark); margin-bottom: 0.5rem; }
+  .hero p { color: var(--g600); max-width: 700px; font-size: 1.05rem; }
+  section { margin-bottom: 3rem; }
+  .sec-title {
+    font-size: 1.5rem; font-weight: 700; color: var(--g900);
+    padding-bottom: 0.5rem; border-bottom: 3px solid var(--primary); margin-bottom: 1.5rem;
+    display: flex; align-items: center; gap: 0.5rem;
+  }
+  .sec-num {
+    background: var(--primary); color: #fff; width: 30px; height: 30px; border-radius: 8px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 0.85rem; font-weight: 600; flex-shrink: 0;
+  }
+  .card {
+    background: #fff; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.25rem;
+    border: 1px solid var(--g200); box-shadow: 0 1px 3px rgba(0,0,0,0.05); transition: box-shadow .2s;
+  }
+  .card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+  .card h3 { font-size: 1.1rem; font-weight: 600; color: var(--g800); margin-bottom: 0.75rem; }
+  .card h4 { font-size: 0.95rem; font-weight: 600; color: var(--primary); margin-bottom: 0.5rem; }
+  .card p, .card li { color: var(--g600); font-size: 0.95rem; }
+  .card ul { padding-left: 1.5rem; margin: 0.5rem 0; }
+  .card ul li { margin-bottom: 0.3rem; }
+  code {
+    background: var(--g100); padding: 0.15rem 0.4rem; border-radius: 4px;
+    font-size: 0.88em; color: var(--primary-dark);
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  }
+  pre {
+    background: var(--g800); color: #e5e7eb; padding: 1rem 1.25rem; border-radius: 8px;
+    overflow-x: auto; font-size: 0.85rem; line-height: 1.5; margin: 0.75rem 0;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  }
+  .callout { padding: 1rem 1.25rem; border-radius: 10px; margin: 1rem 0; border-left: 4px solid; }
+  .callout.tip { background: var(--green-bg); border-color: var(--green); }
+  .callout.tip strong { color: var(--green); }
+  .callout.info { background: var(--primary-bg); border-color: var(--primary-light); }
+  .callout.info strong { color: var(--primary); }
+  .callout.warn { background: var(--amber-bg); border-color: var(--amber); }
+  .callout.warn strong { color: var(--amber); }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem; margin: 1rem 0;
+  }
+  .stat {
+    background: #fff; border: 1px solid var(--g200); border-radius: 10px;
+    padding: 1.25rem; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .stat .val { font-size: 1.75rem; font-weight: 700; color: var(--primary); }
+  .stat .lbl { font-size: 0.85rem; color: var(--g500); margin-top: 0.25rem; }
+  .stat .ico { font-size: 1.5rem; margin-bottom: 0.3rem; }
+  .twrap { overflow-x: auto; margin: 0.75rem 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+  th { background: var(--g100); color: var(--g700); font-weight: 600; text-align: left; padding: 0.6rem 0.8rem; border-bottom: 2px solid var(--g200); }
+  td { padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--g100); }
+  tr:hover td { background: var(--g50); }
+  .steps { counter-reset: step; }
+  .step {
+    counter-increment: step;
+    padding: 1rem 1.25rem 1rem 3.5rem; position: relative;
+    margin-bottom: 0.75rem; background: #fff; border: 1px solid var(--g200); border-radius: 10px;
+  }
+  .step::before {
+    content: counter(step);
+    position: absolute; left: 0.9rem; top: 1.1rem;
+    width: 26px; height: 26px; background: var(--primary); color: #fff;
+    font-weight: 700; font-size: 0.8rem; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step strong { color: var(--g800); }
+  .step p { color: var(--g600); margin-top: 0.2rem; }
+  .mlist {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 0.75rem; margin: 1rem 0;
+  }
+  .mi {
+    background: #fff; border: 1px solid var(--g200); border-radius: 10px;
+    padding: 1rem; display: flex; align-items: center; gap: 0.75rem; transition: border-color .15s;
+  }
+  .mi:hover { border-color: var(--primary-light); }
+  .mico {
+    width: 36px; height: 36px; background: var(--primary-bg); border-radius: 8px;
+    display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0;
+  }
+  .mtxt { font-weight: 500; font-size: 0.92rem; color: var(--g700); }
+  .mdesc { font-size: 0.8rem; color: var(--g400); }
+  .tag {
+    display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px;
+    font-size: 0.78rem; font-weight: 500; color: #fff; margin: 0.1rem;
+  }
+  .tblue { background: #3b82f6; }
+  .tgreen { background: #059669; }
+  .tamber { background: #d97706; }
+  .tred { background: #dc2626; }
+  .tpurple { background: #7c3aed; }
+  .tgray { background: #6b7280; }
+  .foot {
+    background: var(--g800); color: var(--g400); text-align: center;
+    padding: 2rem; font-size: 0.85rem; margin-top: 3rem;
+  }
+  .foot a { color: var(--primary-light); text-decoration: none; }
+  /* legacy affiliate-block vocabulary (the same box/list/muted classes the guide body
+     and cs-guides-build.py emit) — previously undefined, so those blocks rendered bare */
+  .alert {
+    padding: 1rem 1.25rem; border-radius: 10px; margin: 1rem 0; border-left: 4px solid;
+    background: var(--primary-bg); border-color: var(--primary-light);
+  }
+  .alert-success { background: var(--green-bg); border-color: var(--green); }
+  .alert-success strong { color: var(--green); }
+  .muted { color: var(--g500); font-size: 0.9rem; }
+  .step-list { padding-left: 1.5rem; margin: 0.75rem 0; }
+  .step-list li { margin-bottom: 0.6rem; }
+  .step-list li p { margin-top: 0.25rem; color: var(--g600); }
+  .tbl { overflow-x: auto; margin: 0.75rem 0; }
+  @media (max-width: 768px) {
+    .header-inner { padding: 0.75rem 1rem; flex-wrap: wrap; }
+    .header-title h1 { font-size: 1.1rem; }
+    .header-badge { font-size: 0.7rem; padding: 0.2rem 0.6rem; }
+    .hero { padding: 1.5rem; }
+    .hero h2 { font-size: 1.3rem; }
+    .nav-inner a { padding: 0.6rem 0.8rem; font-size: 0.82rem; }
+    .container { padding: 0 1rem; }
+    .grid { grid-template-columns: repeat(2, 1fr); }
+    .mlist { grid-template-columns: 1fr; }
+    .step { padding-left: 3rem; }
+  }
+  @media (max-width: 480px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header class="header">
+  <div class="header-inner">
+    <div class="header-logo">CS</div>
+    <div>
+      <h1>CoreSwift CRM</h1>
+      <div class="sub">Customer Relationship Management Platform</div>
+    </div>
+    <span class="header-badge">v0.1.0 &middot; API /api/</span>
+  </div>
+</header>
+<nav class="nav-bar">
+  <div class="nav-inner">
+    <a href="#getting-started">Getting Started</a>
+    <a href="#dashboard">Dashboard</a>
+    <a href="#sales">Sales</a>
+    <a href="#marketing">Marketing</a>
+    <a href="#operations">Events, Portfolio &amp; Lists</a>
+    <a href="#support-portal">Support</a>
+    <a href="#automation-features">Automation</a>
+    <a href="#tags-lists">Tags &amp; Lists</a>
+    <a href="#tag-to-free-account">Tag to free account</a>
+    <a href="#webhooks">Webhooks</a>
+    <a href="#settings">Settings</a>
+  </div>
+</nav>
+<div class="container">
+
+<div class="hero">
+  <h2>Welcome to CoreSwift CRM</h2>
+  <p>A modern, multi-tenant Customer Relationship Management platform built to manage contacts, companies, sales pipelines, opportunities, tags, lists, and webhook integrations  all in one place.</p>
+</div>
+
+<!-- ======= 1. GETTING STARTED ======= -->
+<section id="getting-started">
+  <h2 class="sec-title"><span class="sec-num">1</span> Getting Started</h2>
+  <div class="card">
+    <h3>Login to CoreSwift CRM</h3>
+    <p>Navigate to:</p>
+    <pre>https://coreswiftcrm.com</pre>
+    <p>Enter your email and password.</p>
+    <div class="callout info"><strong>Demo Account</strong>  Ask the operator for a demo sign-in &mdash; the password is rotated (see the admin guide).</div>
+    <p>On success, you receive a JWT access token and refresh token. The app stores these for all API calls. You'll be redirected to the Dashboard.</p>
+  </div>
+  <div class="card">
+    <h3>Navigation</h3>
+    <div class="mlist">
+      <div class="mi"><div class="mico">??</div><div><div class="mtxt">Dashboard</div><div class="mdesc">Stats and activity</div></div></div>
+      <div class="mi"><div class="mico">??</div><div><div class="mtxt">Contacts</div><div class="mdesc">People management</div></div></div>
+      <div class="mi"><div class="mico">??</div><div><div class="mtxt">Companies</div><div class="mdesc">Organizations</div></div></div>
+      <div class="mi"><div class="mico">??</div><div><div class="mtxt">Pipelines</div><div class="mdesc">Sales stages</div></div></div>
+      <div class="mi"><div class="mico">??</div><div><div class="mtxt">Opportunities</div><div class="mdesc">Deals &amp; values</div></div></div>
+      <div class="mi"><div class="mico">???</div><div><div class="mtxt">Tags</div><div class="mdesc">Labels &amp; categories</div></div></div>
+      <div class="mi"><div class="mico">??</div><div><div class="mtxt">Lists</div><div class="mdesc">Saved contact groups</div></div></div>
+      <div class="mi"><div class="mico">??</div><div><div class="mtxt">Webhooks</div><div class="mdesc">API integrations</div></div></div>
+      <div class="mi"><div class="mico">??</div><div><div class="mtxt">Settings</div><div class="mdesc">Account &amp; API keys</div></div></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>API Overview</h3>
+    <p>All endpoints sit under <code>/api/</code>:</p>
+    <ul>
+      <li><strong>Public:</strong> <code>auth/login</code>, <code>auth/register</code>, <code>auth/forgot-password</code>, <code>auth/reset-password</code></li>
+      <li><strong>Protected:</strong> All others require <code>Authorization: Bearer &lt;token&gt;</code></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ======= 2. DASHBOARD ======= -->
+<section id="dashboard">
+  <h2 class="sec-title"><span class="sec-num">2</span> Dashboard</h2>
+  <div class="card">
+    <h3>Stats Cards</h3>
+    <p>At-a-glance CRM metrics for your own account, fetched via <code>GET /api/dashboard/stats</code>. Every counter is scoped to the account in the token.</p>
+    <div class="grid">
+      <div class="stat"><div class="ico">??</div><div class="val"></div><div class="lbl">Total Contacts</div></div>
+      <div class="stat"><div class="ico">??</div><div class="val"></div><div class="lbl">Companies</div></div>
+      <div class="stat"><div class="ico">??</div><div class="val"></div><div class="lbl">Opportunities</div></div>
+      <div class="stat"><div class="ico">?</div><div class="val">$</div><div class="lbl">Won Deal Value</div></div>
+    </div>
+    <pre>GET /api/dashboard/stats
+Authorization: Bearer &lt;token&gt;
+
+Response:
+{
+  "total_contacts": 42,
+  "total_companies": 15,
+  "total_opportunities": 28,
+  "total_revenue": 5000.00
+}</pre>
+    <p><code>total_contacts</code>, <code>total_companies</code> and <code>total_opportunities</code> are row counts for your account. <code>total_revenue</code> is money, not a count: it is the sum of <code>opportunities.value</code> over the opportunities you have marked won, and <code>0</code> when you have none. These four are the whole response — no other key is returned.</p>
+  </div>
+  <div class="card">
+    <h3>Pipeline Summary</h3>
+    <p>Below the stats cards, each active pipeline shows opportunity counts per stage, giving a visual funnel of where deals are concentrated. Default pipelines are highlighted.</p>
+  </div>
+  <div class="card">
+    <h3>Global Search</h3>
+    <p>Search all entities at once:</p>
+    <pre>GET /api/dashboard/search/query?q=david</pre>
+    <p>Matches across contacts (first name, last name, full name, email, phone), companies (name/email), and opportunities (name). Returns top 10 per type, and only from your own account.</p>
+    <pre>GET /api/dashboard/search/query?q=david
+Authorization: Bearer ***
+
+Response:
+{
+  "query": "david",
+  "total_contacts": 42,
+  "total_companies": 15,
+  "contacts": [
+    { "id": "1f0c...", "first_name": "David", "last_name": "Giraudy", "email": "david&#64;example.com", "phone": "+13055550100" }
+  ],
+  "companies": [
+    { "id": "9a24...", "name": "Acme Corp", "email": "info&#64;acme.example" }
+  ],
+  "opportunities": [
+    { "id": "77c1...", "name": "David renewal", "value": 12000.00, "is_won": false }
+  ]
+}</pre>
+    <p><code>total_contacts</code> and <code>total_companies</code> are your own row totals — the same numbers as <code>GET /api/dashboard/stats</code> — and not the number of matches; the matches are the three arrays. A request with no <code>q</code> (or a blank one) returns those totals with three empty arrays, and so does a query that matches nothing.</p>
+  </div>
+</section>
+
+<!-- ======= 3. CONTACTS ======= -->
+<section id="contacts">
+  <h2 class="sec-title"><span class="sec-num">3</span> Contacts</h2>
+  <div class="card">
+    <h3>Contact Fields</h3>
+    <div class="twrap">
+      <table>
+        <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>first_name</code></td><td>String</td><td>Required</td></tr>
+          <tr><td><code>last_name</code></td><td>String</td><td>Required</td></tr>
+          <tr><td><code>email</code></td><td>String (opt)</td><td>Email address</td></tr>
+          <tr><td><code>phone</code></td><td>String (opt)</td><td>Phone number</td></tr>
+          <tr><td><code>company</code></td><td>String (opt)</td><td>Free-text company</td></tr>
+          <tr><td><code>job_title</code></td><td>String (opt)</td><td>Job title</td></tr>
+          <tr><td><code>city/state/country</code></td><td>String (opt)</td><td>Location</td></tr>
+          <tr><td><code>source</code></td><td>String (opt)</td><td>Acquisition source</td></tr>
+          <tr><td><code>score</code></td><td>Integer</td><td>Auto-calculated lead score</td></tr>
+          <tr><td><code>metadata</code></td><td>JSON (opt)</td><td>Custom data</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Adding a Contact</h3>
+    <div class="steps">
+      <div class="step"><strong>Navigate to Contacts</strong><p>Click <strong>Contacts</strong> in the sidebar.</p></div>
+      <div class="step"><strong>Click "Add Contact"</strong><p>A form modal opens.</p></div>
+      <div class="step"><strong>Fill in details</strong><p>First / last name required. Email or phone recommended.</p></div>
+      <div class="step"><strong>Save</strong><p>Click <strong>Save</strong> in the dialog.</p></div>
+    </div>
+    <pre>POST /api/contacts
+Authorization: Bearer &lt;token&gt;
+Content-Type: application/json
+
+{
+  "first_name": "John",
+  "last_name": "Doe",
+  "email": "john&#64;example.com",
+  "phone": "+1234567890",
+  "company": "Acme Corp",
+  "source": "Website"
+}</pre>
+  </div>
+  <div class="card">
+    <h3>Edit, Delete &amp; Search</h3>
+    <ul>
+      <li><strong>Edit</strong>  The row's <strong>Edit</strong> button &rarr; <code>PATCH /api/contacts/:id</code></li>
+      <li><strong>Delete</strong>  Soft delete by API only (<code>DELETE /api/contacts/:id</code>) &mdash; a contact row has no delete control</li>
+      <li><strong>View / edit</strong>  Every row carries an <strong>Edit</strong> and a <strong>Tags</strong> button; there is no contact detail page</li>
+      <li><strong>Search</strong>  <code>GET /api/contacts/search?q=john</code> (name/email/phone)</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Assigning Tags</h3>
+    <div class="steps">
+      <div class="step"><strong>Open the tag panel</strong><p>Click <strong>Tags</strong> on the contact's row.</p></div>
+      <div class="step"><strong>Current tags</strong><p>Existing tags are shown as colored pills, each with an ✕ to unassign.</p></div>
+      <div class="step"><strong>Assign a tag</strong><p>Pick one of the remaining tags listed below the pills.</p></div>
+      <div class="step"><strong>Confirm</strong><p>Uses <code>POST /api/tags/assign</code>. Remove via <code>DELETE /api/tags/assign/:id</code>.</p></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Lead Scoring</h3>
+    <p>Score rules fire automatically:</p>
+    <div class="twrap">
+      <table>
+        <thead><tr><th>Rule</th><th>Points</th><th>Direction</th></tr></thead>
+        <tbody>
+          <tr><td>Email Opened</td><td>+5</td><td>Add</td></tr>
+          <tr><td>Email Clicked</td><td>+15</td><td>Add</td></tr>
+          <tr><td>Email Replied</td><td>+25</td><td>Add</td></tr>
+          <tr><td>Booked a Call</td><td>+50</td><td>Add</td></tr>
+          <tr><td>Proposal Requested</td><td>+75</td><td>Add</td></tr>
+          <tr><td>No Activity 30 Days</td><td>-20</td><td>Subtract</td></tr>
+          <tr><td>Unsubscribed</td><td>-100</td><td>Subtract</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Finding Duplicate Contacts</h3>
+    <p>Over time the same person can end up in your workspace more than once — imported from a
+    spreadsheet on Monday, added by hand on Friday. The <strong>Duplicates</strong> screen (in the
+    sidebar, directly under <strong>Contacts</strong>) shows you every set of records that look like
+    the same person so you can decide what to keep.</p>
+    <p>It compares two things:</p>
+    <ul>
+      <li><strong>The same phone number</strong>, once punctuation and spacing are ignored —
+        <code>(561) 555-0143</code> and <code>5615550143</code> count as the same number.</li>
+      <li><strong>The same first and last name</strong>, once case and extra spaces are ignored.</li>
+    </ul>
+    <p>Email addresses are deliberately <em>not</em> compared: a workspace can never hold two active
+    contacts with the same email address, so a report on email could only ever come back empty.</p>
+    <p><strong>Nothing is merged automatically.</strong> Each row has an <strong>Edit</strong> button
+    that opens that contact in the normal editor, so you decide which record survives and what it
+    says. If a group names a record you cannot see in the list above it, the record is still there —
+    the name lookup stops after 500 contacts, and the screen says so rather than pretending the
+    contact is missing.</p>
+    <p>If you see <em>"Account matching is not available on your current plan"</em>, the report is
+    switched on for paid plans only. The screen tells you that instead of showing an empty list,
+    because "you have no duplicates" and "you are not allowed to look" are different answers.</p>
+    <pre>GET /api/account-match/duplicates?limit=25
+Authorization: Bearer ***
+
+{
+  "groups": [
+    { "kind": "phone", "key": "5615550143", "count": 2,
+      "contact_ids": ["6b5f8ccc-…", "cd67aebd-…"] }
+  ],
+  "total_groups": 1,
+  "contacts_in_groups": 2
+}</pre>
+  </div>
+</section>
+
+<!-- ======= 4. COMPANIES ======= -->
+<section id="companies">
+  <h2 class="sec-title"><span class="sec-num">4</span> Companies</h2>
+  <div class="card">
+    <h3>Company Fields</h3>
+    <div class="twrap">
+      <table>
+        <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>name</code></td><td>String</td><td>Required</td></tr>
+          <tr><td><code>website</code></td><td>String (opt)</td><td>Company URL</td></tr>
+          <tr><td><code>phone</code></td><td>String (opt)</td><td>Main phone</td></tr>
+          <tr><td><code>email</code></td><td>String (opt)</td><td>Contact email</td></tr>
+          <tr><td><code>industry</code></td><td>String (opt)</td><td>e.g. Technology, Healthcare</td></tr>
+          <tr><td><code>size</code></td><td>String (opt)</td><td>1-10, 11-50, 51-200, 201-1000, 1000+</td></tr>
+          <tr><td><code>city/state/country</code></td><td>String (opt)</td><td>HQ location</td></tr>
+          <tr><td><code>description</code></td><td>Text (opt)</td><td>Free text</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Managing Companies</h3>
+    <div class="steps">
+      <div class="step"><strong>Go to Companies</strong><p>Companies has no sidebar entry — press <strong>g</strong> then <strong>o</strong> to open it.</p></div>
+      <div class="step"><strong>Add a Company</strong><p>Name required. Optionally set industry/size.</p><pre>POST /api/companies
+Content-Type: application/json
+
+{ "name": "Acme Corp", "industry": "Technology", "size": "51-200" }</pre></div>
+      <div class="step"><strong>Link Contacts</strong><p>Companies have no detail page; a contact carries a free-text <code>company</code> field and the Companies list shows a per-company contact count.</p></div>
+      <div class="step"><strong>Edit or Delete</strong><p>Soft delete (<code>is_active = false</code>).</p></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Companies &amp; Opportunities</h3>
+    <p>Link a company to an opportunity via <code>company_id</code> to track all deals per organization.</p>
+    <div class="callout tip"><strong>Tip:</strong> Use <code>industry</code> and <code>size</code> for segmentation and reporting.</div>
+  </div>
+</section>
+
+<!-- ======= 5. PIPELINES ======= -->
+<section id="pipelines">
+  <h2 class="sec-title"><span class="sec-num">5</span> Pipelines</h2>
+  <div class="card">
+    <h3>Understanding Pipelines</h3>
+    <p>A Pipeline is a sales process composed of sequential Stages. Opportunities move through these stages toward close.</p>
+    <div class="callout info"><strong>Default Pipelines:</strong> Every new tenant gets <strong>Sales Pipeline</strong> (7 stages) and <strong>Client Onboarding</strong> (5 stages).</div>
+  </div>
+  <div class="card">
+    <h3>Sales Pipeline Stages</h3>
+    <div class="twrap">
+      <table>
+        <thead><tr><th>Stage</th><th>Color</th><th>Order</th><th>Probability</th></tr></thead>
+        <tbody>
+          <tr><td>New Lead</td><td><span class="tag tgray">Gray</span></td><td>0</td><td>5%</td></tr>
+          <tr><td>Contacted</td><td><span class="tag tblue">Blue</span></td><td>1</td><td>10%</td></tr>
+          <tr><td>Qualified</td><td><span class="tag tpurple">Purple</span></td><td>2</td><td>25%</td></tr>
+          <tr><td>Appointment Set</td><td><span class="tag tamber">Amber</span></td><td>3</td><td>40%</td></tr>
+          <tr><td>Proposal Sent</td><td><span class="tag tgreen">Green</span></td><td>4</td><td>60%</td></tr>
+          <tr><td>Won</td><td><span class="tag" style="background:#059669">Dark Green</span></td><td>5</td><td>100%</td></tr>
+          <tr><td>Lost</td><td><span class="tag tred">Red</span></td><td>6</td><td>0%</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Client Onboarding Stages</h3>
+    <div class="twrap">
+      <table>
+        <thead><tr><th>Stage</th><th>Color</th><th>Order</th><th>Probability</th></tr></thead>
+        <tbody>
+          <tr><td>New Client</td><td><span class="tag tgray">Gray</span></td><td>0</td><td>10%</td></tr>
+          <tr><td>Documents Received</td><td><span class="tag tblue">Blue</span></td><td>1</td><td>25%</td></tr>
+          <tr><td>Setup In Progress</td><td><span class="tag tpurple">Purple</span></td><td>2</td><td>50%</td></tr>
+          <tr><td>Active</td><td><span class="tag tgreen">Green</span></td><td>3</td><td>100%</td></tr>
+          <tr><td>Retention</td><td><span class="tag" style="background:#059669">Dark Green</span></td><td>4</td><td>100%</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Creating a Pipeline</h3>
+    <div class="steps">
+      <div class="step"><strong>Go to Pipelines</strong><p>Click <strong>Pipelines &amp; Deals</strong> under <strong>Sales</strong> in the sidebar.</p></div>
+      <div class="step"><strong>Click "New Pipeline"</strong><p>Enter a name and optional description.</p></div>
+      <div class="step"><strong>Add Stages</strong><p>Each stage needs name, color, sort order and probability.</p></div>
+      <div class="step"><strong>Save</strong><p>The pipeline appears on the <strong>Pipelines &amp; Deals</strong> screen and counts towards the dashboard <strong>Pipelines</strong> tile.</p></div>
+    </div>
+    <pre>POST /api/pipelines
+Authorization: Bearer &lt;token&gt;
+
+{ "name": "Support Pipeline", "description": "Support lifecycle", "is_default": false }</pre>
+  </div>
+  <div class="card">
+    <h3>Stage Configuration</h3>
+    <p>Each stage supports:</p>
+    <ul>
+      <li><strong>Name</strong>  Display label</li>
+      <li><strong>Color</strong>  Hex color (e.g. <code>#3B82F6</code>)</li>
+      <li><strong>Sort Order</strong>  Integer position</li>
+      <li><strong>Probability</strong>  Win % (0-100)</li>
+      <li><strong>is_won</strong>  Mark as closed-won stage</li>
+      <li><strong>is_lost</strong>  Mark as closed-lost stage</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ======= 6. OPPORTUNITIES ======= -->
+<section id="opportunities">
+  <h2 class="sec-title"><span class="sec-num">6</span> Opportunities</h2>
+  <div class="card">
+    <h3>What is an Opportunity?</h3>
+    <p>An Opportunity (deal/tracker) represents a potential sale or business outcome progressing through a pipeline. Each opportunity is tied to a specific pipeline and stage.</p>
+    <div class="twrap">
+      <table>
+        <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>name</code></td><td>String</td><td>Required. Deal name</td></tr>
+          <tr><td><code>pipeline_id</code></td><td>UUID</td><td>Required. Which pipeline it belongs to</td></tr>
+          <tr><td><code>stage_id</code></td><td>UUID</td><td>Required. Current stage within the pipeline</td></tr>
+          <tr><td><code>value</code></td><td>Float (opt)</td><td>Deal value / amount</td></tr>
+          <tr><td><code>currency</code></td><td>String (opt)</td><td>e.g. USD, EUR</td></tr>
+          <tr><td><code>probability</code></td><td>Integer (opt)</td><td>Override win probability</td></tr>
+          <tr><td><code>expected_close_date</code></td><td>Date (opt)</td><td>Expected close date</td></tr>
+          <tr><td><code>contact_id</code></td><td>UUID (opt)</td><td>Associated contact</td></tr>
+          <tr><td><code>company_id</code></td><td>UUID (opt)</td><td>Associated company</td></tr>
+          <tr><td><code>source</code></td><td>String (opt)</td><td>e.g. Website, Referral</td></tr>
+          <tr><td><code>notes</code></td><td>Text (opt)</td><td>Internal notes</td></tr>
+          <tr><td><code>is_won</code></td><td>Boolean</td><td>Marked as won</td></tr>
+          <tr><td><code>is_lost</code></td><td>Boolean</td><td>Marked as lost</td></tr>
+          <tr><td><code>lost_reason</code></td><td>String (opt)</td><td>Why the deal was lost</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Creating an Opportunity</h3>
+    <div class="steps">
+      <div class="step"><strong>Go to the Pipeline</strong><p>Open the pipeline where you want to add a deal.</p></div>
+      <div class="step"><strong>Click "+ Deal"</strong><p>The <strong>New Deal</strong> dialog opens.</p></div>
+      <div class="step"><strong>Set deal details</strong><p>Name is required. Set value, stage, expected close date. Optionally link a contact and/or company.</p></div>
+      <div class="step"><strong>Save</strong><p>The opportunity appears in the correct stage column.</p></div>
+    </div>
+    <pre>POST /api/pipelines/:pipeline_id/opportunities
+Authorization: Bearer ***
+
+{
+  "stage_id": "uuid-of-stage",
+  "name": "Enterprise Deal - Acme Corp",
+  "value": 50000.0,
+  "currency": "USD",
+  "probability": 60,
+  "expected_close_date": "2026-08-15",
+  "contact_id": "uuid-of-contact",
+  "company_id": "uuid-of-company",
+  "source": "Referral",
+  "notes": "Initial call went well"
+}</pre>
+  </div>
+  <div class="card">
+    <h3>Moving Deals Through the Pipeline</h3>
+    <p>To advance an opportunity to the next stage:</p>
+    <ul>
+      <li><strong>Drag-and-drop</strong>  Drag an opportunity card from one stage column to another</li>
+      <li><strong>Change stage dropdown</strong>  Use the stage selector on the deal card in its stage column</li>
+    </ul>
+    <p>Both actions use:</p>
+    <pre>PATCH /api/pipelines/:pipeline_id/stages/:stage_id/move/:opportunity_id
+Authorization: Bearer ***
+
+{ "stage_id": "uuid-of-next-stage" }</pre>
+    <p>Value, probability, expected close date and notes are updated with <code>PATCH /api/pipelines/:pipeline_id/opportunities/:id</code>.</p>
+  </div>
+  <div class="card">
+    <h3>Winning &amp; Losing Deals</h3>
+    <p>When a deal reaches a <strong>Won</strong> or <strong>Lost</strong> stage, CoreSwift automatically sets the corresponding boolean flags:</p>
+    <ul>
+      <li><strong>Won:</strong> <code>is_won = true</code>  adds value to the "Won Deal Value" dashboard stat</li>
+      <li><strong>Lost:</strong> <code>is_lost = true</code>  optionally record a <code>lost_reason</code> for analysis</li>
+    </ul>
+    <div class="callout tip"><strong>Tip:</strong> Track lost reasons to analyze patterns and improve your sales process.</div>
+  </div>
+  <div class="card">
+    <h3>Opportunity Analytics</h3>
+    <p>The dashboard carries three of these tiles, each read from <code>GET /api/dashboard/stats</code>:</p>
+    <ul>
+      <li><strong>Opportunities</strong>  Opportunity count for the account</li>
+      <li><strong>Won Deal Value</strong>  Won opportunity value</li>
+      <li><strong>Pipelines</strong>  Number of pipelines</li>
+    </ul>
+    <p>Per-stage counts are not shown anywhere.</p>
+  </div>
+</section>
+
+<!-- ======= 7. SALES ======= -->
+<section id="sales">
+  <h2 class="sec-title"><span class="sec-num">7</span> Sales</h2>
+
+  <div class="card">
+    <h3>Sales Group Overview</h3>
+    <p>The sidebar's <strong>Sales</strong> group holds one screen, <strong>Pipelines &amp; Deals</strong> (each pipeline's cards are its deals/opportunities). <strong>Contacts</strong> is a top-level sidebar item of its own, and <strong>Companies</strong> has no sidebar entry &mdash; open it with <strong>g</strong> then <strong>o</strong>. The group is collapsed by default &mdash; click <strong>Sales</strong> to expand it.</p>
+    <div class="callout tip"><strong>Tip:</strong> Accordion menus keep your sidebar clean. Collapse groups you don't frequently use.</div>
+  </div>
+  <div class="card">
+    <h3>Contacts</h3>
+    <p>Contact management with search (<code>/api/contacts</code>, <code>GET /api/contacts/search</code>), pagination (50 rows per page by default) and add/edit dialogs. A contact has no status field and the list has no status column.</p>
+    <pre>GET /api/contacts
+POST /api/contacts
+PATCH /api/contacts/:id</pre>
+  </div>
+  <div class="card">
+    <h3>Companies</h3>
+    <p>Track organizations with name, domain, industry, and contact count. Searchable and paginated.</p>
+    <pre>GET /api/companies
+POST /api/companies
+PATCH /api/companies/:id</pre>
+  </div>
+  <div class="card">
+    <h3>Pipelines &amp; Deals</h3>
+    <p>Manage sales pipelines with custom stages. Track deals through pipeline stages with value, probability, and stage tracking.</p>
+    <pre>GET /api/pipelines
+POST /api/pipelines
+GET /api/pipelines/:pipeline_id/opportunities
+POST /api/pipelines/:pipeline_id/opportunities</pre>
+  </div>
+</section>
+
+<!-- ======= 8. MARKETING ======= -->
+<section id="marketing">
+  <h2 class="sec-title"><span class="sec-num">8</span> Marketing</h2>
+
+  <div class="card">
+    <h3>Marketing Group Overview</h3>
+    <p>Contains <strong>Campaigns</strong>, <strong>Lists</strong> and <strong>Analytics</strong>. Expand it by clicking <strong>Marketing</strong> in the sidebar.</p>
+  </div>
+
+  <div class="card">
+    <h3>Campaigns</h3>
+    <p>Create and manage marketing campaigns. Each campaign has a type (email, SMS, multi-channel), status (draft/active), and sent count. Activate campaigns from the list view.</p>
+    <pre>GET /api/campaigns
+POST /api/campaigns
+PATCH /api/campaigns/:id
+POST /api/campaigns/:id/activate
+POST /api/campaigns/:id/pause</pre>
+  </div>
+
+  <div class="card">
+    <h3>Email Sequences</h3>
+    <p>Build automated email sequences with multiple steps. Each sequence can have triggers, enrollments, and step-based delays. There is no separate Email Sequences screen &mdash; sequences are campaign records, managed under <strong>Marketing &gt; Campaigns</strong>.</p>
+    <pre>GET /api/campaigns
+GET /api/campaigns/:id               (includes steps)
+GET /api/campaigns/:id/enrollments   (view enrolled contacts)</pre>
+  </div>
+
+  <div class="card">
+    <h3>Automation Rules</h3>
+    <p>Create trigger-based automation rules. Configure triggers (tag added, score changes, list membership changes) and actions (add/remove tag, move stage, add/remove from list). Each rule has a trigger config and action config stored as JSON.</p>
+    <p><strong>Available triggers:</strong> <code>tag_added</code>, <code>score_change</code>, <code>list_added</code>, <code>deal_stage</code></p>
+    <p><strong>Available actions:</strong> <code>add_tag</code>, <code>remove_tag</code>, <code>move_stage</code>, <code>add_to_list</code>, <code>remove_from_list</code></p>
+    <pre>GET /api/automation/rules
+POST /api/automation/rules
+PATCH /api/automation/rules/:id
+DELETE /api/automation/rules/:id</pre>
+    <div class="callout info"><strong>Trigger Config Example:</strong> <code>{"tag_id": "uuid"}</code> for tag-based triggers, <code>{"category": "overall", "min_score": 70}</code> for score-based.</div>
+  </div>
+
+  <div class="card">
+    <h3>Checklists</h3>
+    <p>Define checklist templates with stages for onboarding and process management. Each stage has an order, title, optional message template reference, and delay in hours. View instances and track progress.</p>
+    <pre>GET /api/checklists/templates
+POST /api/checklists/templates
+PATCH /api/checklists/templates/:id
+DELETE /api/checklists/templates/:id
+GET /api/checklists/instances</pre>
+  </div>
+</section>
+
+<!-- ======= 9. EVENTS, PORTFOLIO & LISTS ======= -->
+<section id="operations">
+  <h2 class="sec-title"><span class="sec-num">9</span> Events, Portfolio &amp; Lists</h2>
+
+  <div class="card">
+    <h3>Where these live</h3>
+    <p>There is no <strong>Operations</strong> group in the sidebar. The recorded event feed is API-only; portfolio companies are managed in the platform console under <strong>Portfolio Companies</strong>; lists live under <strong>Marketing &gt; Lists</strong>.</p>
+  </div>
+
+  <div class="card">
+    <h3>Events</h3>
+    <p>Logged system events — each with its type, description, related entity and date — are read through the API. There is no Events screen in the console.</p>
+    <pre>GET /api/events</pre>
+  </div>
+
+  <div class="card">
+    <h3>Portfolio</h3>
+    <p>View all portfolio companies across your user ecosystem. Searchable by name, slug, or domain. Shows status, plan assignment, and active/inactive state.</p>
+    <pre>GET /api/portfolio</pre>
+  </div>
+
+  <div class="card">
+    <h3>Call Records</h3>
+    <p>Telnyx call records — caller, called number, duration, disposition, cost and timestamp — are stored for billing and audit. There is no Call Logs screen in the CRM and no endpoint that lists them, so they are not shown in the app today.</p>
+  </div>
+
+  <div class="card">
+    <h3>Lists</h3>
+    <p>Create and manage contact lists. Each list shows member count and can be used for campaign targeting. View members inline from the list detail.</p>
+    <pre>GET /api/lists
+POST /api/lists
+PATCH /api/lists/:id
+DELETE /api/lists/:id
+GET /api/lists/:id/members
+POST /api/lists/:id/members</pre>
+  </div>
+</section>
+
+
+<!-- ======= 9.5. CUSTOMER SUPPORT PORTAL ======= -->
+<section id="support-portal">
+  <h2 class="sec-title"><span class="sec-num">🆘</span> Customer Support Portal</h2>
+
+  <div class="card">
+    <h3>Your Help Desk — Built In</h3>
+    <p>CoreSwift CRM includes a complete customer support ticketing system. Replace Freshdesk, Zendesk, or your overloaded email inbox. Your customers submit requests. Your team manages them. Nothing leaves the platform.</p>
+    <p><strong>No API keys. No chatbot plugins. No external subscriptions.</strong> It just works.</p>
+  </div>
+
+  <div class="card">
+    <h3>How Tickets Come In</h3>
+    <p>Tickets can arrive through multiple channels — all tracked by source so you know where every request came from:</p>
+    <table style="width:100%;border-collapse:collapse;margin-top:0.5rem">
+      <thead><tr style="background:var(--g100)"><th style="text-align:left;padding:8px;border:1px solid var(--g200)">Channel</th><th style="text-align:left;padding:8px;border:1px solid var(--g200)">Source Code</th><th style="text-align:left;padding:8px;border:1px solid var(--g200)">How</th></tr></thead>
+      <tbody>
+        <tr><td style="padding:8px;border:1px solid var(--g200)"><strong>👤 Manual</strong></td><td style="padding:8px;border:1px solid var(--g200)"><code>manual</code></td><td style="padding:8px;border:1px solid var(--g200)">Your team creates tickets in the admin Support panel</td></tr>
+        <tr><td style="padding:8px;border:1px solid var(--g200)"><strong>🌐 Contact Form</strong></td><td style="padding:8px;border:1px solid var(--g200)"><code>form</code></td><td style="padding:8px;border:1px solid var(--g200)">Drop our embed widget on any website — visitors submit tickets without logging in. Anyone who writes from the contact page is handed a reference, and can come back to that page with the reference and their email address to read your team's answer — no sign-in needed.</td></tr>
+        <tr><td style="padding:8px;border:1px solid var(--g200)"><strong>📧 Email</strong></td><td style="padding:8px;border:1px solid var(--g200)"><code>email</code></td><td style="padding:8px;border:1px solid var(--g200)">Forward your support@ inbox to our parser — emails become tickets automatically</td></tr>
+        <tr><td style="padding:8px;border:1px solid var(--g200)"><strong>🤖 Chatbot</strong></td><td style="padding:8px;border:1px solid var(--g200)"><code>agent</code></td><td style="padding:8px;border:1px solid var(--g200)">Connect any chatbot or AI agent via our public API — tickets created programmatically</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:0.75rem;"><strong>None of these channels is privileged.</strong> A ticket created by your chatbot, your contact form, or your staff member is treated identically. No special routing, no hidden costs.</p>
+  </div>
+
+  <div class="card">
+    <h3>Embed Widget — One Line on Your Website</h3>
+    <p>Add a floating support button to any website with one script tag:</p>
+    <pre>&lt;script src="https://coreswiftcrm.com/s/YOUR_TENANT_ID/widget.js"&gt;&lt;/script&gt;</pre>
+    <p>That gives you:</p>
+    <ul>
+      <li><strong>Floating button</strong> — bottom-right corner, matches your brand</li>
+      <li><strong>Slide-out form</strong> — name, email, subject, description, priority</li>
+      <li><strong>Success confirmation</strong> — visitor knows their request was received</li>
+      <li><strong>No dependencies</strong> — vanilla JS, no framework, no CORS issues</li>
+      <li><strong>No login required</strong> — your visitors submit tickets without accounts</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>Admin Support Panel</h3>
+    <p>Your team manages everything from <strong>🎫 Support</strong> in the sidebar:</p>
+    <ul>
+      <li><strong>Full queue</strong> — all tickets, filterable by status and priority</li>
+      <li><strong>Create tickets</strong> — manually open tickets during phone calls</li>
+      <li><strong>Reply inline</strong> — threaded messages on every ticket</li>
+      <li><strong>Status workflow</strong> — open → in progress → resolved → closed</li>
+      <li><strong>Priority levels</strong> — low, medium, high, urgent</li>
+      <li><strong>Assignment</strong> — route tickets to team members</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>Customer Portal</h3>
+    <p>Your <em>end customers</em> open <strong>💬 My Support</strong> and see only their own requests. The portal lives at
+    <code>/s/&lt;your-tenant-id&gt;/support</code>, and your team can open it from <strong>Support Tickets → 💬 My Support</strong>.</p>
+    <p>There is no password to issue and no email needed to sign in: the customer enters <strong>their email address</strong>
+    plus the <strong>reference of a request they already have</strong> (the first 8 characters of the ticket id, shown on the
+    ticket in your console). That pair proves the address, and the server hands back an access grant that never travels in a URL.</p>
+    <ul>
+      <li><strong>Submit new requests</strong> — with priority selection</li>
+      <li><strong>View their history</strong> — all past tickets, statuses visible</li>
+      <li><strong>Reply to open tickets</strong> — threaded conversation with your team; replying to a resolved request reopens it</li>
+      <li><strong>Tenant-scoped</strong> — customers only see their own data, never another customer's and never another tenant's</li>
+    </ul>
+    <p>This is their personal help desk — not your admin panel. They manage their own support experience.</p>
+  </div>
+
+  <div class="card">
+    <h3>API for Integrations</h3>
+    <p>For programmatic access — connecting chatbots, Zapier, custom apps:</p>
+    <pre>POST /s/:tenant_id/ticket
+GET  /s/:tenant_id/widget.js
+POST /api/public/contact</pre>
+    <p>Set <code>source: "agent"</code> when creating tickets from chatbots or AI systems. The public endpoints require no authentication — designed for third-party consumption.</p>
+  </div>
+
+  <div class="card callout tip">
+    <h3>Pricing</h3>
+    <p><strong>Free tier:</strong> The help desk is not included — the ticket queue and the admin support panel refuse a Free workspace with <strong>402 Payment Required</strong> (<code>GET /api/tickets</code>: "Support tickets is not available on your current plan"), so <strong>Support Tickets → 💬 My Support</strong> is unavailable too.<br>
+    <strong>Paid tier:</strong> Support tickets (embed widget + admin support panel + customer portal) + custom domain (use your own <code>support.yourdomain.com</code>) + email-to-ticket parsing + priority support.</p>
+    <p>The public intake arms are <strong>not</strong> plan-gated, by decision: the embed widget script at <code>/s/&lt;tenant-id&gt;/widget.js</code> and the customer portal page are served on every plan, and a visitor's request is accepted and stored — a customer's request is never refused because of your plan, so nothing is lost either way. What a Free workspace gets instead of silence: the <strong>Dashboard</strong> shows a <strong>Customer requests you cannot open</strong> notice naming how many requests are waiting, the workspace dropdown flags them (<code>⚠ cannot open</code>), and <code>GET /api/auth/me/usage</code> carries the three fields the notice is built from (<code>tickets</code>, <code>tickets_readable</code>, <code>support_intake_unreadable</code>). Stored requests appear in <strong>Support Tickets</strong> the moment the plan includes it.</p>
+    <p>Chatbot integrations are API-only on all tiers — you connect your own chatbot, we handle the ticket routing.</p>
+  </div>
+</section>
+
+<!-- ======= 10. AUTOMATION FEATURES ======= -->
+<section id="automation-features">
+  <h2 class="sec-title"><span class="sec-num">10</span> Automation Features</h2>
+
+  <div class="card">
+    <h3>Automation Group Overview</h3>
+    <p>The <strong>Automation</strong> group (sidebar icon ⚡) contains <strong>Rules</strong>, <strong>Tags</strong> and <strong>Lead Scoring</strong>. The strategy-engine screens this section used to name are not in the console; each card below says what is API-only instead.</p>
+  </div>
+
+  <div class="card">
+    <h3>Agency Sequences</h3>
+    <p>There is no Agency Sequences screen. Rules are read through <code>GET /api/automation/rules</code>; the <strong>Rules</strong> screen under <strong>Automation</strong> is the rule UI.</p>
+    <pre>GET /api/automation/rules</pre>
+  </div>
+
+  <div class="card">
+    <h3>Directory Onboarding</h3>
+    <p>There is no Directory Onboarding screen. Checklist instances (entity, stage, progress, start date) are rendered on the <strong>Checklists</strong> screen under <strong>Workflow</strong> and read through <code>GET /api/checklists/instances</code>.</p>
+    <pre>GET /api/checklists/instances</pre>
+  </div>
+
+  <div class="card">
+    <h3>Health Monitor</h3>
+    <p>Account health is computed by the API: <code>POST /api/monitoring/account-health/check</code> runs an analysis and <code>GET /api/monitoring/health</code> reads it. In the console, the platform-admin <strong>Monitoring</strong> screen renders those endpoints; there is no "Run Health Check" button in the tenant workspace.</p>
+    <pre>POST /api/monitoring/account-health/check
+GET /api/monitoring/health</pre>
+  </div>
+
+  <div class="card">
+    <h3>Message Templates</h3>
+    <p>Create reusable message templates for email and SMS communications. Each template has a name, channel, subject and body. Manage them in the console under <strong>Communication &gt; Email Templates</strong>.</p>
+    <pre>GET /api/comms/templates
+POST /api/comms/templates
+PATCH /api/comms/templates/:id
+DELETE /api/comms/templates/:id</pre>
+  </div>
+
+  <div class="card">
+    <h3>Nurture Campaigns</h3>
+    <p>Contact enrollments are read through <code>GET /api/campaigns/:id/enrollments</code>. There is no Nurture Campaigns screen; the campaigns themselves are managed under <strong>Marketing &gt; Campaigns</strong>.</p>
+    <pre>GET /api/campaigns/:id/enrollments</pre>
+  </div>
+</section>
+
+<!-- ======= 11. SETTINGS & ADMIN ======= -->
+<section id="settings-admin">
+  <h2 class="sec-title"><span class="sec-num">11</span> Settings &amp; Administration</h2>
+
+  <div class="card">
+    <h3>Site Configuration (Platform Admin)</h3>
+    <p>General details, SEO/meta (title, description, keywords, Open Graph) and branding colours are edited in the
+       platform console under <strong>Admin Settings &gt; Configuration</strong> ("Site Configuration"), which reads and
+       writes <code>GET/PUT /api/admin/site</code> &mdash; server-side, not in the browser. The tenant workspace has no
+       Settings page of its own.</p>
+  </div>
+
+  <div class="card">
+    <h3>Platform Console (Platform Admin Only)</h3>
+    <p>Entries below the <strong>── ADMIN ──</strong> divider appear only for a user the server marks as a platform
+       admin (<code>users.is_platform_admin</code>, carried in the session as <code>platform_admin</code>). A tenant
+       <code>owner</code>/<code>admin</code> role is not platform authority. The entries are:</p>
+    <ul>
+      <li><strong>Users</strong> &mdash; Every user on the platform with the workspace they belong to (read-only list).</li>
+      <li><strong>Revenue &gt; Billing &amp; Plans</strong> &mdash; Subscription plans, pricing and limits.</li>
+      <li><strong>Platform &gt; Webhooks</strong> &mdash; a pointer to where outbound webhook endpoints are
+          configured: each workspace registers its own in the workspace console under
+          <strong>Settings &gt; Webhooks</strong> (Enterprise plans). The routes are workspace-scoped, so this
+          console has no editor for another workspace's endpoints. Also <strong>Widgets</strong>, <strong>Native Apps</strong>, <strong>Audit Log</strong>, <strong>Monitoring</strong>.</li>
+      <li><strong>Communication Admin &gt; Telnyx Admin</strong> and <strong>Private Email Admin</strong>.</li>
+      <li><strong>Modules &amp; Plans</strong> &mdash; the module registry: switch modules and individual features on or off per plan, and override a single workspace.</li>
+      <li><strong>Admin Settings &gt; Configuration</strong> &mdash; site configuration (SEO, legal pages, homepage).</li>
+    </ul>
+    <p>There is no Impersonate button in the console: the API can start and stop impersonation, but no screen calls it.</p>
+  </div>
+
+  <div class="card">
+    <h3>Admin: Users &amp; Workspaces</h3>
+    <p>People live on the <strong>Users</strong> screen &#8212; every workspace's users in one list with name, email, role and joined date.</p>
+    <pre>GET /api/admin/users
+GET /api/admin/tenants</pre>
+  </div>
+
+  <div class="card">
+    <h3>Admin: Plans &amp; Feature Overrides</h3>
+    <p><strong>Modules &amp; Plans</strong> is where each plan's modules and individual features are switched on, and where a single workspace can be granted or denied one feature without touching its plan. Enter a workspace id to load the features it effectively gets, then tick one to override it.</p>
+    <pre>GET /api/admin/modules
+POST /api/admin/plans/:slug/modules
+POST /api/admin/plans/:slug/features
+GET /api/admin/tenants/:id/entitlements
+POST /api/admin/tenants/:id/overrides</pre>
+  </div>
+
+  <div class="card">
+    <h3>Admin: Plans &amp; Features</h3>
+    <p>Plans control what features users can access. Each plan has:</p>
+    <ul>
+      <li><strong>Pricing:</strong> Monthly and yearly price, with optional payment link</li>
+      <li><strong>Limits:</strong> Max contacts, deals, and users (set to -1 for unlimited)</li>
+      <li><strong>Feature Toggles:</strong> the boolean flags of the module registry (<a href="#plans-features">the live list is here</a>)</li>
+    </ul>
+    <p><strong>Available features</strong> are not a fixed list: they are the boolean flags in the module registry (<code>modules</code> / <code>module_features</code>) &mdash; the same switches the <strong>Modules &amp; Plans</strong> panel renders. See <a href="#plans-features">Plans &amp; Feature Access</a> for the flags live today.</p>
+    <pre>GET /api/billing/plans
+POST /api/billing/plans
+PATCH /api/billing/plans/:id
+DELETE /api/billing/plans/:id
+GET /api/billing/features</pre>
+  </div>
+
+  <div class="card">
+    <h3>Admin: Telnyx Configuration (API only)</h3>
+    <p>Telnyx provider settings are read and written through the API: <code>GET /api/telnyx/config</code>,
+       <code>PUT /api/telnyx/config</code>, and <code>GET /api/telnyx/available</code> for the phone numbers on
+       the account. The console's <strong>Telnyx Admin</strong> entry (Communication Admin group) is a placeholder
+       screen today, so there is no form to paste the key into.</p>
+    <pre>GET /api/telnyx/config
+PUT /api/telnyx/config
+GET /api/telnyx/available</pre>
+  </div>
+
+  <div class="card">
+    <h3>Admin: Impersonation</h3>
+    <p>The platform-admin API can start and stop impersonation, but the admin console has no Impersonate button yet — no screen calls it.</p>
+    <div class="callout warn"><strong>Note:</strong> All actions taken while impersonating are logged with the admin's identity.</div>
+  </div>
+
+  <div class="card">
+    <h3>Free Access &amp; Upgrades</h3>
+    <p>CoreSwift CRM offers free access with a limited feature set. When your plan does not cover something, the console shows an upgrade banner whose <strong>Upgrade Now</strong> button opens the plan comparison. Each tier that is not your current one carries a <strong>Request this plan</strong> button: pressing it sends the request to our team (nothing is charged, and no plan changes by itself) and the request names your workspace and the address to answer. Putting the workspace on a plan is therefore still an operator action — self-service checkout is not open on this install — but asking is now one press inside the app instead of a support email you had to compose yourself. Feature availability is determined by your plan's feature flags.</p>
+    <div class="callout tip"><strong>Tip:</strong> The free plan includes the full core CRM — contacts, pipelines, automation, campaigns and SMS, calendar and bookings. Paid plans add AI scoring &amp; helpers, private mailboxes, support tickets, and higher limits on contacts, users, pipelines and integrations.</div>
+  </div>
+</section>
+
+<!-- ======= 12. TAGS & LISTS ======= -->
+<section id="tags-lists">
+  <h2 class="sec-title"><span class="sec-num">12</span> Tags &amp; Lists</h2>
+
+  <div class="card">
+    <h3>Tags Overview</h3>
+    <p>Tags are colored labels used to categorize contacts and companies. They support filtering, segmentation, and reporting.</p>
+    <div class="callout info"><strong>Default Tag Categories:</strong> Sources, Status, Behavior  each with pre-seeded tags.</div>
+    <div class="twrap">
+      <table>
+        <thead><tr><th>Category</th><th>Default Tags</th></tr></thead>
+        <tbody>
+          <tr><td>Sources</td><td><span class="tag tblue">Facebook</span> <span class="tag tblue">Google</span> <span class="tag tgray">TikTok</span></td></tr>
+          <tr><td>Status</td><td><span class="tag tred">Hot Lead</span> <span class="tag tgray">Cold Lead</span></td></tr>
+          <tr><td>Behavior</td><td><span class="tag tgreen">Engaged</span> <span class="tag tred">Unresponsive</span></td></tr>
+          <tr><td>Uncategorized</td><td><span class="tag tamber">Booked Call</span> <span class="tag tblue">Newsletter</span> <span class="tag tgreen">Client</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Managing Tags</h3>
+    <div class="steps">
+      <div class="step"><strong>Go to Tags</strong><p>Click <strong>Tags</strong> in the sidebar.</p></div>
+      <div class="step"><strong>Create a Tag</strong><p>Fill in name, select a category (or none), pick a color.</p><pre>POST /api/tags
+Content-Type: application/json
+
+{ "name": "VIP", "color": "#F59E0B", "category_id": "optional-uuid" }</pre></div>
+      <div class="step"><strong>Assign to Contacts</strong><p>Click <strong>Tags</strong> on a contact's row and pick the tag to assign.</p></div>
+      <div class="step"><strong>Filter by Tag</strong><p>Use the tag filter in the contacts and companies list views.</p></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Tag Categories</h3>
+    <p>Tag Categories group related tags together. Categories don't affect functionality but help organize large numbers of tags. Each tag can belong to one category or none.</p>
+  </div>
+
+  <div class="card">
+    <h3>Lists Overview</h3>
+    <p>Lists are saved groups of contacts for targeted campaigns, email sends, or segmentation.</p>
+    <div class="twrap">
+      <table>
+        <thead><tr><th>Type</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Static</strong></td><td>Manually add/remove contacts. You pick each member.</td></tr>
+          <tr><td><strong>Dynamic</strong></td><td>Rule-based. Contacts automatically join/leave based on criteria (score, tags, source, etc.).</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Default pre-seeded lists:</p>
+    <ul>
+      <li><strong>Newsletter Subscribers</strong> (static)</li>
+      <li><strong>Cold Leads</strong> (dynamic  low score)</li>
+      <li><strong>Hot Leads</strong> (dynamic  high score)</li>
+      <li><strong>Retargeting Audience</strong> (dynamic)</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Managing Lists</h3>
+    <div class="steps">
+      <div class="step"><strong>Go to Lists</strong><p>Click <strong>Lists</strong> under <strong>Marketing</strong> in the sidebar.</p></div>
+      <div class="step"><strong>Create a List</strong><p>Name, description, and choose <code>static</code> or <code>dynamic</code>. For dynamic, set rules.</p><pre>POST /api/lists
+Content-Type: application/json
+
+{ "name": "Q3 Campaign", "list_type": "static", "description": "Targets for Q3 email blast" }</pre></div>
+      <div class="step"><strong>Add Members (Static)</strong><p>Search for contacts and add them:</p><pre>POST /api/lists/:id/members
+{ "contact_id": "uuid-of-contact" }</pre></div>
+      <div class="step"><strong>Use the List</strong><p>Lists appear as filterable segments in contacts view and can be used for campaign targeting.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ======= 13. WEBHOOKS ======= -->
+<section id="webhooks">
+  <h2 class="sec-title"><span class="sec-num">13</span> Webhooks</h2>
+
+  <div class="card">
+    <h3>Webhook Overview</h3>
+    <p>CoreSwift CRM supports both incoming and outgoing webhooks for integration with satellite apps and external systems.</p>
+    <div class="callout info"><strong>Satellite Apps:</strong> FunnelSwift, IncentiveSwift, WorkflowSwift, and MissedCall Respondr can push data into CoreSwift via inbound webhooks.</div>
+  </div>
+
+  <div class="card">
+    <h3>Inbound Webhooks (Receiving Data)</h3>
+    <p>Other apps can send events to CoreSwift using authenticated webhook endpoints. The URL carries only the key <em>prefix</em>, which is a public index; the credential is the full key in the <code>X-Satellite-Key</code> header, and its SHA-256 digest must equal the digest stored for that prefix. A missing header or a wrong key is refused with <code>401</code>.</p>
+    <pre>POST /inbound/:key_prefix/:event_type
+X-Satellite-Key: &lt;full-api-key&gt;
+Content-Type: application/json
+
+{ "payload": "data" }</pre>
+    <p>Or the v2 endpoint:</p>
+    <pre>POST /inbound/v2/:key_prefix/:event_type
+X-Satellite-Key: &lt;full-api-key&gt;</pre>
+    <p>And the v3 contact-sync endpoint — <code>POST /inbound/v3/:key_prefix/contact-sync</code> (also <code>survey-complete</code> and <code>contact-upsert</code>) — with the same header.</p>
+    <div class="callout info">These three routes are served by the CoreSwift application itself. They are not under <code>/api/</code>, and the public web vhosts proxy only <code>/api/</code>, <code>/s/</code> and <code>/track/</code> to it, so on the shared host a satellite app calls CoreSwift directly rather than through the public site.</div>
+    <p><strong>Supported event types from satellite apps:</strong></p>
+    <div class="twrap">
+      <table>
+        <thead><tr><th>Source App</th><th>Event</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td>FunnelSwift</td><td><code>lead.created</code> / <code>lead.updated</code></td><td>Creates or updates a contact in CoreSwift</td></tr>
+          <tr><td>IncentiveSwift</td><td><code>entry.created</code></td><td>Creates contact from giveaway entry</td></tr>
+          <tr><td>IncentiveSwift</td><td><code>raffle.winner</code></td><td>Records raffle winner</td></tr>
+          <tr><td>IncentiveSwift</td><td><code>loyalty.reward</code></td><td>Records loyalty reward</td></tr>
+          <tr><td>WorkflowSwift</td><td><code>workflow.completed</code></td><td>Logs completed workflow</td></tr>
+          <tr><td>WorkflowSwift</td><td><code>instance.advanced</code></td><td>Logs workflow instance progression</td></tr>
+          <tr><td>MissedCall</td><td><code>call.missed</code></td><td>Creates contact from missed call</td></tr>
+          <tr><td>MissedCall</td><td><code>followup.created</code></td><td>Logs follow-up creation</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Outgoing Webhook Endpoints (Sending Data)</h3>
+    <p>You can register endpoints that CoreSwift will POST events to. CoreSwift delivers events to each
+       endpoint that is <strong>active</strong> and subscribes to that event type.
+       A workspace configures its own endpoints, signing secret and event subscriptions in the console
+       under <strong>Settings &rarr; Webhooks</strong>: that screen lists each endpoint's name, URL, events,
+       active state, last successful delivery and failure count, and can add, edit, pause, activate and
+       delete them. Outbound webhooks are sold on Enterprise/Agency &mdash; a workspace whose plan lacks the
+       <code>webhooks</code> module has its requests to the whole surface refused with
+       <strong>HTTP 402</strong> and the reason in the response body. The platform console
+       (admin.coreswiftcrm.com) has no editor: the endpoints are workspace-scoped, so it only points here.
+       These same calls remain available directly on the API:</p>
+    <pre>POST /api/integrations/webhooks
+Authorization: Bearer ***
+
+{
+  "name": "Slack Notifier",
+  "url": "https://hooks.slack.com/services/xxx",
+  "secret": "your-signing-secret",
+  "events": ["contact.created", "opportunity.won"],
+  "retry_count": 3,
+  "timeout_ms": 5000
+}</pre>
+    <p>List configured webhooks:</p>
+    <pre>GET /api/integrations/webhooks
+Authorization: Bearer ***
+
+Response: { "webhooks": [...] }</pre>
+    <p><strong>What arrives.</strong> Each delivery is a JSON POST:</p>
+    <pre>POST &lt;your url&gt;
+X-CoreSwift-Event: contact.created
+X-CoreSwift-Delivery: &lt;endpoint id&gt;
+X-CoreSwift-Delivery-Attempt: 1
+X-CoreSwift-Signature: t=1759512345,v1=&lt;hex&gt;
+
+{
+  "event": "contact.created",
+  "tenant_id": "...",
+  "webhook_id": "...",
+  "delivered_at": "2026-10-06T16:45:00+00:00",
+  "data": { ...the event payload... }
+}</pre>
+    <p><strong>Verifying the signature.</strong> When the endpoint has a signing secret the
+       <code>X-CoreSwift-Signature</code> header is <code>t=&lt;unix seconds&gt;,v1=&lt;hex&gt;</code>, where
+       <code>v1</code> is <code>HMAC-SHA256(secret, "&lt;t&gt;.&lt;raw request body&gt;")</code> &mdash; compute the
+       same value and reject a mismatch. An endpoint saved without a secret is sent unsigned.</p>
+    <p><strong>Which events, and retries.</strong> An endpoint whose <code>events</code> list is empty
+       receives <em>every</em> event; a non-empty list receives only those event types. An endpoint with
+       <code>is_active: false</code> receives nothing. A failed delivery (anything other than a 2xx) is
+       retried <code>retry_count</code> times with a growing backoff, each attempt bounded by
+       <code>timeout_ms</code>; redirects are never followed. The endpoint's
+       <code>last_triggered_at</code> shows its last successful delivery and <code>failure_count</code>
+       how many deliveries have failed since the last success.</p>
+  </div>
+
+  <div class="card">
+    <h3>Integration Targets</h3>
+    <p>For portfolio-level integrations, CoreSwift supports <strong>Integration Targets</strong>  named connections to external systems with webhook URLs and API keys:</p>
+    <pre>POST /api/portfolio/:id/targets
+Authorization: Bearer &lt;token&gt;
+
+{
+  "name": "Mailchimp Sync",
+  "provider": "mailchimp",
+  "webhook_url": "https://mailchimp.com/webhook",
+  "portfolio_company_id": "optional-uuid"
+}</pre>
+  </div>
+
+  <div class="card">
+    <h3>Testing a Webhook</h3>
+    <p>Use the simple test endpoint to verify connectivity:</p>
+    <pre>POST /simple-hook
+Content-Type: application/json
+
+{ "test": true }
+Response: { "ok": true }</pre>
+  </div>
+</section>
+
+<!-- ======= 14. ACCOUNT SETTINGS ======= -->
+<section id="settings">
+  <h2 class="sec-title"><span class="sec-num">14</span> Account Settings</h2>
+
+  <div class="card">
+    <h3>Account Settings</h3>
+    <p>Under <strong>Settings &gt; Profile</strong> you can view and update your profile:</p>
+    <ul>
+      <li><strong>Name</strong>  Your display name</li>
+      <li><strong>Email</strong>  Login email &mdash; you can move it to another address yourself: Profile &rarr; <strong>Sign-in email</strong> &rarr; enter the new address, and we email a confirmation link to it. Nothing changes until you open that link (the link works once and expires in 2 hours)</li>
+      <li><strong>Role</strong>  <code>admin</code> (full access) or <code>member</code> (limited)</li>
+    </ul>
+    <p>View your account:</p>
+    <pre>GET /api/auth/me
+Authorization: Bearer &lt;token&gt;</pre>
+  </div>
+
+  <div class="card">
+    <h3>Change Password</h3>
+    <div class="steps">
+      <div class="step"><strong>Go to Settings &gt; Profile</strong><p>Use the <strong>Change Password</strong> card &mdash; there is no separate password tab.</p></div>
+      <div class="step"><strong>Enter current password</strong><p>For security verification.</p></div>
+      <div class="step"><strong>Enter new password</strong><p>Must be at least 8 characters.</p></div>
+      <div class="step"><strong>Confirm and Save</strong><p>Your token remains valid. Next login uses the new password.</p></div>
+    </div>
+    <pre>PUT /api/profile/password
+Authorization: Bearer &lt;token&gt;
+
+{ "current_password": "&lt;your-current-password&gt;", "new_password": "NewSecurePass123!" }</pre>
+    <div class="callout warn"><strong>Forgot your password?</strong> Use the forgot-password flow on the login screen: <code>POST /api/auth/forgot-password</code> with your email. Check your inbox for a reset link.</div>
+  </div>
+
+  <div class="card">
+    <h3>Organization Settings</h3>
+    <p>Your organization has its own profile:</p>
+    <ul>
+      <li><strong>Name</strong>  Your company/org name</li>
+      <li><strong>Slug</strong>  URL-friendly identifier</li>
+    </ul>
+    <pre>GET /api/account/:id — View details
+PATCH /api/account/:id — Update name</pre>
+  </div>
+
+  <div class="card">
+    <h3>API Keys</h3>
+    <p>API keys allow satellite apps to authenticate when sending data to CoreSwift via webhooks. Each key has:</p>
+    <ul>
+      <li><strong>Key Prefix</strong>  The leading characters of the key, carried in the webhook URL to select the row. It is public and is <em>not</em> a secret.</li>
+      <li><strong>Full Key</strong>  The credential, sent in the <code>X-Satellite-Key</code> header. The server stores only its SHA-256 digest (<code>key_hash</code>), compares the two in constant time, and can never recover the full key from the row.</li>
+      <li><strong>Source App</strong>  Which app this key is for (funnelswift, incentiveswift, etc.)</li>
+      <li><strong>Status</strong>  Active or Disabled (a disabled key authenticates nothing)</li>
+      <li><strong>Last Used</strong>  Timestamp of most recent usage</li>
+    </ul>
+    <p>Satellite keys have no console screen: they are provisioned per tenant by the operator, who stores the prefix and the SHA-256 digest of the full key in the <code>satellite_api_keys</code> table (<code>key_prefix</code>, <code>key_hash</code>, source app, active flag, last used). The keys a workspace mints itself are the <strong>Lead-delivery keys</strong> (<code>csk_…</code>) in <strong>Settings &gt; Integration Center</strong>, backed by <code>POST /api/personal-api-keys</code> (list, rotate and revoke alongside).</p>
+  </div>
+
+  <div class="card">
+    <h3>Portal &amp; Portfolio Companies</h3>
+    <p>For agency-level accounts, CoreSwift supports:</p>
+    <ul>
+      <li><strong>Portfolio Companies</strong>  Track multi-tenant clients under your agency (<code>GET/POST /api/portfolio</code>)</li>
+      <li><strong>Cross-App Sync</strong>  Push data between apps: <code>POST /api/admin/portfolio-sync</code></li>
+      <li><strong>Impersonation</strong>  Admin can impersonate a user: <code>POST /api/admin/impersonate</code></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ======= 15. THEMES &amp; APPEARANCE ======= -->
+<section id="themes">
+  <h2 class="sec-title"><span class="sec-num">15</span> Themes &amp; Appearance</h2>
+  <div class="card">
+    <h3>One built-in look</h3>
+    <p>There is no preset-theme picker and no <strong>Appearance</strong> screen in the console today &mdash; the
+       workspace ships a single built-in look. (A widget's own form carries an accent colour for that widget.)</p>
+  </div>
+</section>
+
+<!-- ======= 16. DEAL REMINDERS & OVERDUES ======= -->
+<section id="reminders">
+  <h2 class="sec-title"><span class="sec-num">16</span> Deal Reminders</h2>
+  <div class="card">
+    <h3>Not in the console today</h3>
+    <p>There is no reminder control on a deal, no reminder panel on the dashboard and no Overdue count, and no
+       route that lists or creates reminders &mdash; so there is nothing to set up here yet.</p>
+  </div>
+</section>
+
+<!-- ======= 17. REVENUE FORECAST ======= -->
+<section id="forecast">
+  <h2 class="sec-title"><span class="sec-num">17</span> Revenue Forecast</h2>
+  <div class="card">
+    <h3>Not in the console today</h3>
+    <p>There is no Forecast screen and no forecast endpoint, so no weighted-pipeline view is shown anywhere.
+       Deal value by stage is visible on <strong>Sales &gt; Pipelines &amp; Deals</strong>, which lists each
+       pipeline's deals with its won / open / lost counts.</p>
+  </div>
+</section>
+
+<!-- ======= 18. ACTIVITY TIMELINE ======= -->
+<section id="timeline">
+  <h2 class="sec-title"><span class="sec-num">18</span> Deal History</h2>
+  <div class="card">
+    <h3>What is recorded</h3>
+    <p>Every stage move is written down as it happens — which stage it moved from and to, and who moved it — so a deal's progression is kept.</p>
+  </div>
+  <div class="card">
+    <h3>What the app shows</h3>
+    <p>The CRM has no Activity Timeline screen, and no endpoint that lists a deal's history, so that history is not visible in the app today. Platform-wide events (type, description, related entity, date) can be read through the API:</p>
+    <pre>GET /api/events</pre>
+  </div>
+</section>
+
+<!-- ======= 19. CSV IMPORT / EXPORT ======= -->
+<section id="csv">
+  <h2 class="sec-title"><span class="sec-num">19</span> CSV Import &amp; Export</h2>
+  <div class="card">
+    <h3>Import Contacts from CSV</h3>
+    <p>Migrate your existing contacts from any CRM or spreadsheet with a single CSV import:</p>
+    <ol>
+      <li><strong>Go to Contacts</strong> and click <strong>⬆ Import CSV</strong>.</li>
+      <li><strong>Upload your CSV</strong> via drag-and-drop or file browser.</li>
+      <li><strong>Preview</strong> — CoreSwift reads the header row and shows you a preview of how fields will be mapped.</li>
+      <li><strong>Batch Import</strong> — Click Import and the system creates contacts in bulk (up to 500 per batch).</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h3>Export to CSV</h3>
+    <p>Two tables export to CSV: your <strong>contacts</strong> and your <strong>deals</strong>.</p>
+    <ul>
+      <li><strong>From Contacts</strong> — Click <strong>⬇ Export CSV</strong> on the Contacts screen to download all contacts as CSV</li>
+      <li><strong>From Pipelines &amp; Deals</strong> — Click <strong>⬇ Export deals</strong> to download every deal in the workspace as CSV, with its contact, company, pipeline and stage names</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Import Deals from CSV</h3>
+    <p>The same header row the export writes can be loaded straight back in, so an export doubles as a backup you can restore:</p>
+    <ol>
+      <li><strong>Go to Pipelines &amp; Deals</strong> and click <strong>⬆ Import deals</strong>.</li>
+      <li><strong>Choose your file</strong> — the console shows every column it recognised and a few sample rows before anything is written.</li>
+      <li><strong>Click Import deals</strong> — the board refreshes with the new cards, and the toast reports how many landed and how many were skipped.</li>
+    </ol>
+    <p>Each row needs a <code>name</code>. <code>pipeline</code> and <code>stage</code> are used when the file names ones that exist; otherwise the row goes into your first pipeline. A contact is linked only when its email or full name matches an existing contact. A file with no <code>name</code> column is refused by the console instead of importing nothing.</p>
+  </div>
+  <div class="card">
+    <h3>Auto-Create Contact from Deal</h3>
+    <p>The <strong>New Deal</strong> dialog links the deal to one of your existing contacts from a dropdown; it has no inline name/email/phone fields, so create the contact first if it is missing.</p>
+    <blockquote>This pattern is also available in sister apps (FunnelSwift and IncentiveSwift) for seamless lead-to-deal creation.</blockquote>
+  </div>
+  <div class="card">
+    <h3>Supported CSV Columns</h3>
+    <table>
+      <thead><tr><th>Column Header</th><th>Maps To</th></tr></thead>
+      <tbody>
+        <tr><td><code>name</code></td><td>Contact Name (required)</td></tr>
+        <tr><td><code>email</code></td><td>Email Address</td></tr>
+        <tr><td><code>phone</code></td><td>Phone Number</td></tr>
+        <tr><td><code>company</code></td><td>Company Name</td></tr>
+        <tr><td><code>title</code></td><td>Job Title</td></tr>
+        <tr><td><code>notes</code></td><td>Notes / Description</td></tr>
+        <tr><td><code>tags</code></td><td>Comma-separated tag names (auto-created)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ======= FOOTER ======= -->
+<div class="foot">
+  <p><strong>CoreSwift CRM</strong> &mdash; v0.1.0</p>
+  <p>Built by <a href="https://swiftsoftware.net">SwiftSoftware</a> | <a href="https://coreswiftcrm.com">coreswiftcrm.com</a></p>
+  <p style="margin-top:0.5rem;font-size:0.8rem;opacity:0.7;">Customer Relationship Management Platform &middot; API /api/</p>
+</div>
+
+</div>
+      <hr style="border-color: var(--border); margin: 40px 0;">
+      <h2 id="affiliates">🤝 Affiliate Program</h2>
+      <div class="alert alert-success"><strong>Earn commissions!</strong> Refer other businesses to this service and earn a percentage of their subscription fees. The affiliate system is managed through FunnelSwift — ask your account manager to set up your affiliate account.</div>
+
+      <h3>How It Works</h3>
+      <ol class="step-list">
+        <li><strong>Get Your Affiliate Link</strong><p>Your affiliate manager provides a unique tracking link (or you can generate one in the FunnelSwift affiliate portal).</p></li>
+        <li><strong>Share It</strong><p>Post the link on your website, in emails, on social media, or wherever your audience is.</p></li>
+        <li><strong>They Sign Up &amp; Pay</strong><p>When someone clicks your link and later completes a paid purchase, the system tracks the conversion.</p></li>
+        <li><strong>You Earn Commission</strong><p>Commissions are calculated based on your affiliate rate and credited to your account automatically.</p></li>
+      </ol>
+
+      <h3>Products You Can Promote</h3>
+      <p>Commissionable products live in the affiliate portal (FunnelSwift &rarr; <strong>Affiliate
+         Products</strong>) and that list is the source of truth — a paid plan of any service can only
+         be promoted once an admin has added it there. Platform-wide entries are visible to every
+         affiliate; a workspace's own products are visible to its affiliates. Measured 2026-09-26, the
+         catalogue holds:</p>
+      <table>
+        <thead><tr><th>Scope</th><th>Product</th><th>Price</th></tr></thead>
+        <tbody>
+          <tr><td rowspan="5"><strong>All affiliates</strong></td><td>CoreSwift Free</td><td>$0</td></tr>
+          <tr><td>ADASwift Free</td><td>$0</td></tr>
+          <tr><td>IncentiveSwift Free</td><td>$0</td></tr>
+          <tr><td>MissedCall Respondr Free</td><td>$0</td></tr>
+          <tr><td>WorkflowSwift Free</td><td>$0</td></tr>
+          <tr><td rowspan="6"><strong>FunnelSwift workspace</strong></td><td>Capture Free</td><td>$0</td></tr>
+          <tr><td>Capture Starter</td><td>$9/mo</td></tr>
+          <tr><td>Kinetic Free</td><td>$0</td></tr>
+          <tr><td>Kinetic Pro</td><td>$9/mo</td></tr>
+          <tr><td>Suite</td><td>$29/mo</td></tr>
+          <tr><td>Agency / Scale</td><td>$79/mo</td></tr>
+        </tbody>
+      </table>
+      <p class="muted">The rate earned on a sale is <strong>your own affiliate rate</strong> — the one on
+         your affiliate account — not a per-product figure. Products, prices and rates are edited on the
+         product record in the portal, so the portal is always the current list.</p>
+
+      <h3>Conversion Tracking</h3>
+      <p>Attribution lives in FunnelSwift. The trigger is a <strong>plan change in this app</strong> — there is
+         no checkout session and no payment-provider webhook anywhere in the chain:</p>
+      <ol class="step-list">
+        <li><strong>The Referral Is Recorded</strong><p>When someone arrives through your affiliate link, FunnelSwift keeps them as a lead on your affiliate account. That lead is the attribution — it is permanent, with no cookie to expire or be lost.</p></li>
+        <li><strong>CoreSwift Reports the Plan Change</strong><p>When the referred business moves to a paid plan here (the CoreSwift platform admin assigns the plan to the workspace — <code>POST</code> / <code>PATCH /api/billing/subscription</code> are operator-only writes, with no customer self-service plan change), CoreSwift looks up the account owner's email address and posts it to FunnelSwift's internal affiliate endpoint, <code>POST /api/v1/internal/affiliate/upgrade-event</code>, together with the plan name and its price.</p></li>
+        <li><strong>Commission Recorded</strong><p>FunnelSwift matches that email back to the lead, applies the affiliate's rate to the plan price, and records the commission against the event. A repeat of the same upgrade event is ignored, so nothing is credited twice.</p></li>
+      </ol>
+      <p>This is fully automatic — nothing extra is needed as long as the customer reaches you through your affiliate link. Two details worth knowing: attribution is matched by the <strong>email address</strong> the referred business signed up with, and only a move onto a <strong>paid</strong> plan counts as an upgrade.</p>
+
+      <h3>Managing Affiliates</h3>
+      <p>Affiliates are managed through the <strong>FunnelSwift Admin</strong> portal:</p>
+      <ul>
+        <li><strong>Affiliate Admin</strong> — full CRUD for affiliate products, categories, links, and conversion history</li>
+        <li><strong>Affiliates</strong> — add, edit, and manage affiliate partners with commission rates</li>
+        <li><strong>Affiliate Products</strong> — configure which products can be promoted and at what commission rate</li>
+        <li><strong>Affiliate Links</strong> — create tracking links that pair an affiliate with a specific product</li>
+      </ul>
+      <p>To access, log in to FunnelSwift and navigate to <strong>Super Admin → Affiliate Admin</strong>.</p>
+
+<section id="plans-features">
+  <h2 class="sec-title"><span class="sec-num">21</span> Plans &amp; Feature Access</h2>
+  <div class="card">
+    <h3>Your admin decides what each plan includes</h3>
+    <p>Features are not hard-coded. Each plan carries a set of feature flags, and every flag can be
+       switched on or off per plan by an admin — so a Free tier can be a genuinely stripped-down
+       CRM while Enterprise unlocks everything. A single tenant can also be given a per-tenant
+       override without changing the plan itself.</p>
+    <p>When a feature is switched off for your plan, its API returns <strong>402 Payment Required</strong>
+       with a message naming the feature, and the corresponding area of the app is unavailable
+       until the plan is upgraded. Features you do have are untouched.</p>
+    <h3>Flags an admin controls</h3>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Flag</th><th>Feature</th><th>Module</th><th>Notes</th></tr></thead>
+        <tbody>
+      <tr><td><code>campaigns</code></td><td>Campaigns</td><td>campaigns</td><td>Sequenced email campaigns</td></tr>
+      <tr><td><code>automation</code></td><td>Automations</td><td>automation</td><td>Trigger/action engine</td></tr>
+      <tr><td><code>checklists</code></td><td>Checklists</td><td>checklists</td><td>Onboarding/process checklists</td></tr>
+      <tr><td><code>ai_enabled</code></td><td>AI scoring &amp; helpers</td><td>ai_enabled</td><td>Lead scoring and AI helpers</td></tr>
+      <tr><td><code>tickets</code></td><td>Support tickets</td><td>tickets</td><td>In-house ticketing + email-to-ticket</td></tr>
+      <tr><td><code>native_apps</code></td><td>Native app connectors</td><td>native_apps</td><td>FunnelSwift, ADASwift, MissedCall, WorkflowSwift, Multi-Directory</td></tr>
+      <tr><td><code>telnyx</code></td><td>SMS &amp; voice (Telnyx)</td><td>telnyx</td><td>SMS, number management, call tracking</td></tr>
+      <tr><td><code>round_robin</code></td><td>Round-robin routing</td><td>round_robin</td><td>Fair lead distribution across a team</td></tr>
+      <tr><td><code>events</code></td><td>Event system</td><td>events</td><td>Internal event bus</td></tr>
+      <tr><td><code>monitoring</code></td><td>Monitoring &amp; health</td><td>monitoring</td><td>Account health scoring and thresholds</td></tr>
+      <tr><td><code>bookings</code></td><td>Bookings &amp; scheduling</td><td>bookings</td><td>Calendar booking pages</td></tr>
+      <tr><td><code>google_calendar</code></td><td>Google Calendar sync</td><td>google_calendar</td><td>Two-way calendar sync</td></tr>
+      <tr><td><code>api_access</code></td><td>API access</td><td>api_access</td><td>Per-tenant API keys</td></tr>
+      <tr><td><code>webhooks</code></td><td>Webhooks</td><td>webhooks</td><td>Outbound webhook delivery</td></tr>
+      <tr><td><code>integrations</code></td><td>Integrations</td><td>integrations</td><td>n8n and third-party integrations</td></tr>
+      <tr><td><code>provider_keys</code></td><td>Provider keys</td><td>provider_keys</td><td>Bring-your-own provider credentials</td></tr>
+      <tr><td><code>support_widgets</code></td><td>Support widgets</td><td>support_widgets</td><td>Embeddable support surfaces</td></tr>
+      <tr><td><code>tracked_links</code></td><td>Tracked links</td><td>tracked_links</td><td>Click tracking links</td></tr>
+      <tr><td><code>private_email</code></td><td>Private mailbox</td><td>private_email</td><td>Own domain + mailboxes (also has its own limits)</td></tr>
+      <tr><td><code>portfolio</code></td><td>Portfolio sync</td><td>portfolio</td><td>Cross-tenant portfolio management</td></tr>
+      <tr><td><code>account_match</code></td><td>Account matching</td><td>account_match</td><td></td></tr>
+      <tr><td><code>notifications</code></td><td>Notifications</td><td>notifications</td><td></td></tr>
+      <tr><td><code>notifications_in_app</code></td><td>In-app notifications</td><td>notifications</td><td></td></tr>
+      <tr><td><code>notifications_email</code></td><td>Email notifications</td><td>notifications</td><td></td></tr>
+      <tr><td><code>notifications_sms</code></td><td>SMS notifications</td><td>notifications</td><td></td></tr>
+      <tr><td><code>notifications_whatsapp</code></td><td>WhatsApp notifications</td><td>notifications</td><td></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">Source of truth: the module registry in the API's database (<code>modules</code> /
+       <code>module_features</code>) — the same switches the admin panel renders, served by
+       <code>GET /api/admin/modules</code>. If a flag is registered there it appears here and in the
+       admin automatically.</p>
+  </div>
+</section>
+
+<section id="modules-connectors">
+  <h2 class="sec-title"><span class="sec-num">22</span> Modules &amp; Connectors</h2>
+  <div class="card">
+    <h3>Connections to your other apps</h3>
+    <p>CoreSwift is the CRM hub for the rest of the ecosystem. Each connector is a native integration —
+       no third-party middleware:</p>
+    <ul>
+      <li><strong>FunnelSwift</strong> — leads captured on funnels and cards land in CoreSwift</li>
+      <li><strong>ADAswift</strong> — accessibility scan reports tied to the client record</li>
+      <li><strong>MissedCall Responder</strong> — missed-call leads and call events</li>
+      <li><strong>WorkflowSwift</strong> — automation hand-offs and status callbacks</li>
+      <li><strong>Multi-Directory / ZaarHub</strong> — directory listings and city campaigns</li>
+    </ul>
+    <p>Each connector can be connected/disconnected and synced per tenant, and is gated by the
+       <code>native_apps</code> flag above.</p>
+    <h3>Private Email</h3>
+    <p>Bring your own domain (Mailgun, SMTP, SES or Postmark), provision mailboxes such as
+       <code>info&#64;yourcompany.com</code>, send through your provider's DKIM/SPF signing (the provider
+       signs each message — this app hands it over and never signs it itself), and have inbound replies
+       create contact activity on the CRM timeline. Domain and mailbox counts are plan limits; provider
+       credentials are encrypted at rest.</p>
+    <h3>Also included</h3>
+    <ul>
+      <li><strong>Bookings &amp; scheduling</strong> — public booking pages with calendar sync</li>
+      <li><strong>Google Calendar</strong> — two-way sync of bookings and events</li>
+      <li><strong>Support tickets</strong> — in-house help desk; inbound email to a support mailbox
+          opens a ticket, with a customer portal view</li>
+      <li><strong>Monitoring &amp; compliance</strong> — account health scoring, configurable alert
+          thresholds, full audit log</li>
+      <li><strong>Portfolio</strong> — cross-tenant management for groups of companies</li>
+      <li><strong>Analytics, tags, lists, tracked links, provider keys, rate limiting</strong></li>
+    </ul>
+    <p class="muted">Not in this app: spreadsheet import/export is <strong>CSV only</strong> (XLS/XLSX are
+       not supported), and there is no newsletter/mailing-list sender — campaigns and private email cover
+       outbound email.</p>
+  </div>
+</section>
+
+<!-- ======= 23. TAG TO FREE ACCOUNT ======= -->
+<section id="tag-to-free-account">
+  <h2 class="sec-title"><span class="sec-num">23</span> Tag to free account</h2>
+  <div class="card">
+    <p>When a lead is tagged in FunnelSwift with one of this app's tags &mdash; for example
+       <strong>CoreSwift &mdash; Free</strong> &mdash; CoreSwift is told to create a
+       <strong>free account</strong> for that lead, using the same name and email the lead was
+       captured with. CoreSwift emails the new user their login details automatically, so they can
+       sign in and upgrade here whenever they are ready.</p>
+    <h3>What happens when it is ON</h3>
+    <ul>
+      <li>A tagged lead gets a real account here on the free plan &mdash; not just a contact record</li>
+      <li>The new user is emailed their login details by CoreSwift</li>
+      <li>Tagging the same lead twice does <strong>not</strong> create a duplicate account &mdash;
+          the second attempt is recognised by email and ignored</li>
+    </ul>
+    <h3>What happens when it is OFF</h3>
+    <p>The tagged lead is still recorded here as a contact, so nothing is lost, but <strong>no
+       account is created and no login email is sent</strong>. Use this if you want to review leads
+       before accounts exist for them.</p>
+    <h3>Where the switch is</h3>
+    <p>Operators turn this on or off in the admin console, under <strong>Provisioning &rarr; Tag
+       Provisioning</strong>.</p>
+    <p class="muted">FunnelSwift is the hub where affiliates and leads live. Tagging is how a lead is
+       routed to the software they are interested in; the account is created here, in the destination
+       app, so the lead signs in at the app they actually want and upgrades on this app's own plans.</p>
+  </div>
+</section>
+
+
+<h2>Email branding</h2>
+<p><strong>Settings &rarr; Email Branding</strong> puts this workspace's own logo, display name and
+colour on every transactional email it sends — the welcome/credentials mail, password resets and
+purchase confirmations. The branding is this account's; nothing is shared with another workspace.</p>
+<ul>
+<li><strong>Brand display name</strong> — up to 60 characters. Printed above the message, and used as
+the logo's <code>alt</code> text so a blocked image still says whose mail it is.</li>
+<li><strong>Brand colour</strong> — a hex colour, painted as the rule under the logo. Default
+<code>#4f46e5</code>.</li>
+<li><strong>Logo</strong> — PNG, JPEG, GIF or WebP, up to 2 MB, with a live preview, <em>Upload logo</em>
+and <em>Remove logo</em>. Uploads are checked against the same size limit the server enforces.</li>
+</ul>
+<p>An account with neither a name nor a logo gets exactly the mail it got before this feature
+existed. Removing the logo keeps the name and the colour.</p>
+
+<h2>Workspaces</h2>
+<p><strong>Sidebar &rarr; Workspaces</strong> (in the Settings group) lists this account&rsquo;s workspaces. A workspace is a name &mdash; a label you give a part of the business, such as &ldquo;Miami office&rdquo; or &ldquo;Wholesale&rdquo; &mdash; and the one marked <em>Default</em> is the workspace a new session is meant to open.</p>
+<ul>
+<li><strong>Add</strong> &mdash; type a name and press <em>Add workspace</em>. The first workspace you add becomes the default automatically.</li>
+<li><strong>Rename</strong> &mdash; press <em>Rename</em>, edit the name, then <em>Save</em>. Two workspaces in one account cannot share a name, whatever the capitals.</li>
+<li><strong>Make default</strong> &mdash; moves the Default badge. An account always has exactly one default.</li>
+<li><strong>Delete</strong> &mdash; removes a workspace you no longer want. An account always keeps at least one, and deleting the default promotes the oldest remaining workspace.</li>
+</ul>
+<p>If your plan states a workspace limit, adding past it says so and points you at the plan screen; nothing is created and nothing is lost.</p>
+<h2>Team &amp; Invites</h2>
+<p><strong>Sidebar &rarr; Team &amp; Invites</strong> is how a second person gets into this workspace.
+Only the workspace owner and an admin can see it.</p>
+<ol>
+<li><strong>Choose the role</strong> — <em>Member</em> works inside the workspace; <em>Admin</em> can
+also invite people and manage the workspace.</li>
+<li><strong>Create invite link</strong>, then <strong>Copy</strong>. The link stays valid for 7 days
+and works once.</li>
+<li><strong>Send it to the person.</strong> They open it, type their name and email, and join
+<em>this</em> workspace — not a new one of their own. Their login details are emailed to them; if that
+address cannot receive mail, the page offers <em>Set your password now</em> so they choose a password
+on the spot and sign straight in.</li>
+</ol>
+<p>The list under the button shows every invite with its role, whether it is pending, accepted or
+expired, and when it was created.</p>
+<ul>
+<li><strong>Seats follow the plan.</strong> Each plan states its own user limit (Features &amp; Plans).
+At the limit an invite is refused, and the message names the count — for example
+&ldquo;User limit reached (1/1). Upgrade your plan for more users.&rdquo; Raising the plan raises the
+number of people who can join.</li>
+<li><strong>What a member sees</strong> — the workspace's contacts, pipeline and mail, exactly as the
+owner does, except owner-only screens such as Team &amp; Invites. A member never inherits owner
+powers.</li>
+</ul>
+
+<h2>Your inbox: bring your own domain</h2>
+<p><strong>CoreSwift does not give out an address on our domain.</strong> You keep the domain you already own (for example <code>yourbusiness.com</code>) and your own Mailgun account, and your mail is delivered straight to you. Open the <strong>Inbox</strong> tab in the console: the setup page is the onboarding, in three plain steps, with a copy button beside every value.</p>
+<ol>
+<li><strong>Add your domain.</strong> Type the domain and paste your Mailgun API key and your Mailgun webhook signing key. Both are stored sealed and are used only for your own mail.</li>
+<li><strong>Add the records at your own DNS host</strong> (Cloudflare, or your registrar). Three groups: <strong>MX</strong> &mdash; <code>mxa.mailgun.org</code> and <code>mxb.mailgun.org</code>, where mail is delivered; <strong>SPF and DKIM</strong> &mdash; <code>v=spf1 include:mailgun.org ~all</code> plus the DKIM value your own Mailgun mints, which prove the mail is really from you; and one <strong>CNAME</strong> &mdash; <code>inbox</code> &rarr; <code>inbox.coreswiftcrm.com</code>, which makes <code>inbox.yourbusiness.com</code> open your mail. Every row carries a copy button, one sentence saying what it does, and a live <strong>Active</strong> / <strong>Waiting</strong> / <strong>Needs attention</strong> badge. Press <strong>Check again</strong> after adding them.</li>
+<li><strong>Create your inbox.</strong> The button stays disabled until receiving and sending both verify, because an address that cannot receive is worse than no address at all. <strong>Nothing is charged and no mailbox exists until then.</strong></li>
+</ol>
+<p><strong>One difference on Cloudflare:</strong> the mail records must be <strong>DNS only (grey cloud)</strong> &mdash; the orange proxy breaks mail. The <code>inbox</code> CNAME is the one exception: it must be <strong>Proxied (orange cloud)</strong>, because Cloudflare then serves the padlock on your own address.</p>
+<p><strong>Logging in takes you to a mailbox chooser.</strong> Sign in and you see the mailboxes you created; pick one and it opens. The <strong>Inbox</strong> tab lists the same inboxes, each row with a <strong>LOG IN</strong> button on the right that opens your mail in a new window &mdash; at <code>inbox.yourbusiness.com</code> once that record is live, or at <code>inbox.coreswiftcrm.com</code> until it is &mdash; plus a <strong>Create new inbox</strong> button.</p>
+<p><strong>Your 30 free days start at your first verified inbox</strong>, not at signup: the days you spend waiting on DNS cost you nothing. During the trial, sending has a fair-use ceiling of <strong>200 messages a day</strong> to protect the address&rsquo;s deliverability.</p>
+<p><strong>When the 30 days end</strong> the address keeps working and keeps receiving. Nothing is deleted. What stops is <em>sending</em> &mdash; the mailbox becomes receive-only and the screen offers two buttons: <strong>Keep inbox &mdash; $1/mo</strong> (the mailbox alone) or <strong>Upgrade CRM</strong> (the whole platform). Either one restores sending immediately, and every message you already have stays where it is.</p>
+<p><strong>When your plan already includes every inbox you have</strong>, <strong>Create new inbox</strong> answers with the plan that unlocks more and what it costs, never a dead button. Keep just the inbox for <strong>$1/month</strong>, or move up the CRM plans for more addresses.</p>
+</body>
+</html>
+
