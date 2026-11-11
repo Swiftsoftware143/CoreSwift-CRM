@@ -6203,7 +6203,7 @@ window.appGuidePages = {
   configuration: { title: 'Configuration', desc: 'Platform settings for running the service.', actions: ['Change a setting and save'] }
 };
 </script>
-<script src="/inline-guide-widget.js"></script>
+<script src="/inline-guide-widget.js?v=20261110b"></script>
 <script>
 // The console script already ran its first switchTab() before this widget loaded, so on the very
 // first paint there was no window.inlineGuidePage to tell. Point the widget at the active tab as
@@ -6498,7 +6498,7 @@ function peiPaintSetup() {
       '<strong>Set up receiving.</strong> Mailgun must show the domain as Active first, or inbound mail is rejected before it reaches this app.' +
       '<div style="margin-top:10px"><strong>1. The domain you receive on</strong><br>' +
       '<input id="peiDom" placeholder="swiftsoftware.net" style="margin:4px 6px 0 0">' +
-      '<input id="peiKey" placeholder="Mailgun API key (optional)" style="width:220px;margin:4px 6px 0 0">' +
+      '<input id="peiKey" placeholder="Mailgun sending key" style="width:220px;margin:4px 6px 0 0">' +
       '<button class="btn btn-primary btn-sm" id="peiAddDom">Add domain</button> <span id="peiDomMsg"></span></div>' +
       '<div style="margin-top:10px"><strong>2. Addresses people write to</strong><br>' +
       '<input id="peiLocal" placeholder="info" style="width:130px;margin:4px 6px 0 0">' +
