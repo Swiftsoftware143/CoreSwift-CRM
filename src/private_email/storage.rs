@@ -99,24 +99,31 @@ impl Usage {
 }
 
 /// Bytes → the plain-English figure the banner and the email state.
+///
+/// PRECISION MATTERS AT SMALL QUOTAS: this used to round every MB to a whole number, so a mailbox
+/// at 81% printed "2 MB of 2 MB used" — a number that says "full" while the percent says 81. Under
+/// 10 of any unit it now keeps up to two decimals and trims the noise ("1.62 MB", "1.5 GB", "2 GB"),
+/// so the stated figure always agrees with the percent beside it.
 pub fn human_bytes(n: i64) -> String {
     let n = n.max(0) as f64;
     const GB: f64 = 1024.0 * 1024.0 * 1024.0;
     const MB: f64 = 1024.0 * 1024.0;
     const KB: f64 = 1024.0;
-    if n >= GB {
-        let v = n / GB;
-        // One decimal below 10 GB ("1.5 GB"), whole above ("25 GB"), and a whole number loses the
-        // trailing ".0" so the stated default reads "2 GB", exactly as the brief writes it.
-        if v < 10.0 && (v * 10.0).round() % 10.0 != 0.0 {
-            format!("{:.1} GB", v)
+    fn amount(v: f64) -> String {
+        if v >= 10.0 {
+            format!("{:.0}", v)
         } else {
-            format!("{:.0} GB", v)
+            let s = format!("{:.2}", v);
+            let s = s.trim_end_matches('0').trim_end_matches('.').to_string();
+            s
         }
+    }
+    if n >= GB {
+        format!("{} GB", amount(n / GB))
     } else if n >= MB {
-        format!("{:.0} MB", n / MB)
+        format!("{} MB", amount(n / MB))
     } else if n >= KB {
-        format!("{:.0} KB", n / KB)
+        format!("{} KB", amount(n / KB))
     } else {
         format!("{:.0} B", n)
     }
@@ -417,7 +424,10 @@ pub async fn evaluate_and_notify(db: &PgPool, tenant_id: Uuid) -> Vec<i32> {
             "mail_used": human_bytes(u.mail_bytes),
             "files_used": human_bytes(u.file_bytes),
             "inbox_url": crate::email::APP_URL_MAIL,
-            "plans_url": format!("{}/pricing", crate::email::APP_URL),
+            // The console's Billing & Plans screen is a TAB, not a route: `?tab=billing` is the deep
+            // link its boot honours, and it is the only address that opens the thing this mail is
+            // selling. `/pricing` does not exist and would be a dead door.
+            "plans_url": format!("{}/?tab=billing", crate::email::APP_URL),
             "retention": retention_sentence(&ret),
             "retention_days": ret.days,
         });

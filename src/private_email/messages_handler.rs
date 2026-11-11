@@ -1388,7 +1388,7 @@ pub async fn save_draft(
             let n = sqlx::query(
                 "UPDATE private_email_messages
                     SET mailbox_id = $3, address = $4, to_address = $5, subject = $6,
-                        body_plain = $7, snippet = $8, updated_at = NOW()
+                        body_plain = $7, snippet = $8, size_bytes = $9, updated_at = NOW()
                   WHERE id = $1 AND tenant_id = $2 AND folder = 'drafts'",
             )
             .bind(existing)
@@ -1399,6 +1399,10 @@ pub async fn save_draft(
             .bind(&subject)
             .bind(&body)
             .bind(&snippet)
+            // The storage meter reads `size_bytes`, so a resaved draft MUST carry its new size: the
+            // old statement left the first save's figure in place, so a draft that grew from a line
+            // to a long letter kept counting as a line and the meter could never see the growth.
+            .bind(body.len() as i32)
             .execute(&state.db)
             .await
             .map_err(AppError::Database)?
