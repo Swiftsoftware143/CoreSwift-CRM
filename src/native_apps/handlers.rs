@@ -1,6 +1,7 @@
 //! Native App Connectors — API handlers
 
 use super::connectors;
+use super::credentials;
 use super::models::*;
 use crate::auth::Claims;
 use crate::errors::{ApiResult, AppError};
@@ -66,7 +67,7 @@ pub async fn connect_app(
         }
     }
 
-    // Test the connection
+    // Test the connection — with the caller's own plaintext, before anything is stored.
     let (test_ok, test_msg, _latency) =
         connectors::test_connection(&app_slug, &r.credentials).await;
     if !test_ok {
@@ -75,6 +76,12 @@ pub async fn connect_app(
             test_msg
         )));
     }
+
+    // SEAL the secret fields before they touch the column (kanban t_a1ada5ef): a sister app's API
+    // key is a durable credential, so it is stored in the app-wide `enc:v1:` envelope, never in the
+    // clear. This fails closed when the master key is missing — no plaintext fallback, ever.
+    // `base_url` and any other config stay readable (the panel renders them).
+    let credentials = credentials::seal_for_storage(account_id, &r.credentials)?;
 
     // Upsert the connection
     // COUNT(*) is bigint; decoding it into i32 fails at runtime ("mismatched
@@ -98,7 +105,7 @@ pub async fn connect_app(
         sqlx::query(
             "UPDATE app_connections SET credentials = $1, config = $2, status = 'connected', last_test_at = NOW(), last_test_ok = $3, error_message = NULL, updated_at = NOW() WHERE tenant_id = $4 AND app_slug = $5"
         )
-        .bind(&r.credentials)
+        .bind(&credentials)
         .bind(&config)
         .bind(test_ok)
         .bind(account_id)
@@ -117,7 +124,7 @@ pub async fn connect_app(
         .bind(Uuid::new_v4())
         .bind(account_id)
         .bind(&app_slug)
-        .bind(&r.credentials)
+        .bind(&credentials)
         .bind(&config)
         .bind(test_ok)
         .execute(&s.db)
@@ -188,7 +195,7 @@ pub async fn app_status(
             "last_test_at": last_test,
             "error_message": error,
             "config": config,
-            "credentials_provided": !credentials.as_object().map(|o| o.is_empty()).unwrap_or(true),
+            "credentials_provided": credentials::has_secret(&credentials),
             "meta": app_meta,
         }))),
         None => Ok(Json(json!({
@@ -245,6 +252,11 @@ pub async fn pull_from_app(
     .await?
     .ok_or_else(|| AppError::NotFound(format!("No active connection for '{}'", app_slug)))?;
 
+    // Open the sealed credential before the connector sees it (kanban t_a1ada5ef). A stored value
+    // this deployment cannot open is a 422 here — never a connector call with an empty or envelope
+    // credential.
+    let credentials = credentials::open_for_use(account_id, &row.0)?;
+
     let sync_id = Uuid::new_v4();
 
     // Log start
@@ -260,7 +272,7 @@ pub async fn pull_from_app(
 
     // Execute pull
     let filters = r.filters.unwrap_or_default();
-    match connectors::pull_data(&app_slug, &row.0, &r.entity_type, &filters).await {
+    match connectors::pull_data(&app_slug, &credentials, &r.entity_type, &filters).await {
         Ok(data) => {
             // Mark sync as completed
             let records = data.as_array().map(|a| a.len() as i32).unwrap_or(1);
@@ -352,6 +364,9 @@ pub async fn push_to_app(
     .await?
     .ok_or_else(|| AppError::NotFound(format!("No active connection for '{}'", app_slug)))?;
 
+    // Same open-on-use rule as the pull arm (kanban t_a1ada5ef).
+    let credentials = credentials::open_for_use(account_id, &row.0)?;
+
     let sync_id = Uuid::new_v4();
 
     sqlx::query(
@@ -364,7 +379,7 @@ pub async fn push_to_app(
     .execute(&s.db)
     .await?;
 
-    match connectors::push_data(&app_slug, &row.0, &r.entity_type, &r.data).await {
+    match connectors::push_data(&app_slug, &credentials, &r.entity_type, &r.data).await {
         Ok(result) => {
             sqlx::query(
                 "UPDATE app_sync_logs SET status = 'completed', records_processed = 1, records_succeeded = 1, completed_at = NOW() WHERE id = $1"

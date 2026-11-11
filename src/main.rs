@@ -270,6 +270,26 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!(error = %e, "integration target storage guard not validated"),
     }
 
+    // t_a1ada5ef: `app_connections.credentials` holds a SISTER APP's API key — a durable credential
+    // that opens a whole other product. It is a JSONB object, so it needs its own seal/open pair
+    // (`native_apps::credentials`), its own boot backfill for the rows written before the fix, and
+    // its own boot validate for `migrations/131`'s guard. Same posture as the four halves above:
+    // best-effort, never fatal, and it never rewrites a row it cannot read.
+    match crate::native_apps::credentials::backfill_app_connection_credentials(&db).await {
+        Ok(n) => tracing::info!(
+            sealed = n,
+            "app connection credentials at rest are encrypted"
+        ),
+        Err(e) => tracing::warn!(error = %e, "app connection credential backfill skipped"),
+    }
+    match crate::native_apps::credentials::validate_app_connection_guard(&db).await {
+        Ok(true) => {
+            tracing::info!("app connection storage guard validated (every credential sealed)")
+        }
+        Ok(false) => tracing::warn!("app connection storage guard stays NOT VALID"),
+        Err(e) => tracing::warn!(error = %e, "app connection storage guard not validated"),
+    }
+
     // t_d1fcda7e: the platform MAIL credential in the `admin_settings.email` row is the one
     // credential path on this app that had no boot half. `seal_secrets` seals it on the panel's own
     // write path, but a row that arrived any other way (a dump taken before the envelope existed, a

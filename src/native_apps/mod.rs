@@ -14,6 +14,7 @@
 //! 2026-10-02 (kanban t_434b240b): nothing read the mapping, so it could never fire.
 
 pub mod connectors;
+pub mod credentials;
 pub mod handlers;
 pub mod models;
 

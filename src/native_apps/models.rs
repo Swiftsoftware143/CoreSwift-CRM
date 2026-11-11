@@ -28,7 +28,7 @@ pub struct AppConnection {
     pub id: Uuid,
     pub tenant_id: Uuid,
     pub app_id: Uuid,
-    pub credentials: serde_json::Value, // encrypted per-tenant API keys / tokens
+    pub credentials: serde_json::Value, // SEALED (`enc:v1:` envelope) via `native_apps::credentials::seal_for_storage`; open with `open_for_use` before use — never read the column directly (kanban t_a1ada5ef)
     pub config: serde_json::Value,      // per-tenant settings (e.g. which lists to sync)
     pub status: String,                 // "connected" | "disconnected" | "error"
     pub last_test_at: Option<DateTime<Utc>>,

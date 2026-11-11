@@ -1,0 +1,21 @@
+-- t_a1ada5ef: make the DATABASE refuse a plaintext sister-app credential in
+-- `app_connections.credentials`.
+--
+-- The column is JSONB and holds a durable API key that opens a WHOLE other product (adaswift,
+-- workflowswift, multi-directory, ...). Every write path now seals the secret field with the app's
+-- own `enc:v1:` envelope (`native_apps::credentials::seal_for_storage`), but application sealing is
+-- only half the guard - one manual UPDATE, one restore, or the next handler that forgets puts a live
+-- key back in the clear.
+--
+-- NOT VALID on purpose: rows written before the fix are exempt so this can be armed without a
+-- rewrite, while every NEW write is checked immediately. The boot halves
+-- (`backfill_app_connection_credentials` + `validate_app_connection_guard`) seal the legacy rows and
+-- then VALIDATE this constraint. `base_url` and other config keys are untouched - only `api_key`.
+--
+-- No semicolon anywhere in these comments - the in-app runner executes the whole file.
+-- Idempotent (DROP IF EXISTS then ADD): the deploy path pre-applies this file to LIVE so STEP 0b
+-- (from-zero) sees the object on both sides, and the app's own runner then re-applies the same
+-- bytes at boot. A re-add resets `convalidated` to false, which is exactly why the boot half
+-- `validate_app_connection_guard()` runs AFTER the migration runner in `main.rs`.
+ALTER TABLE app_connections DROP CONSTRAINT IF EXISTS app_connections_credentials_sealed;
+ALTER TABLE app_connections ADD CONSTRAINT app_connections_credentials_sealed CHECK (credentials->>'api_key' IS NULL OR credentials->>'api_key' = '' OR credentials->>'api_key' LIKE 'enc:v1:%') NOT VALID;

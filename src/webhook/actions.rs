@@ -473,6 +473,12 @@ pub async fn route_action(
                 .and_then(|v| v.as_str())
                 .ok_or("app_slug required")?;
             let credentials = body.get("credentials").ok_or("credentials required")?;
+            // SEAL before storing: this is the SECOND writer of `app_connections.credentials`
+            // (the other is `native_apps::handlers::connect_app`), and a credential at rest is
+            // sealed on EVERY door or the guard refuses the write (kanban t_a1ada5ef).
+            let credentials =
+                crate::native_apps::credentials::seal_for_storage(tenant_id, credentials)
+                    .map_err(|e| format!("credentials: {}", e))?;
             // Just store the connection intent; actual test happens in the connector
             sqlx::query(
                 "INSERT INTO app_connections (id, tenant_id, app_slug, credentials, status) VALUES ($1, $2, $3, $4, 'connected') ON CONFLICT (tenant_id, app_slug) DO UPDATE SET credentials = $4, status = 'connected', updated_at = NOW()"
