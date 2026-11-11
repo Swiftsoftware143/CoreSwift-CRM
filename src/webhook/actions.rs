@@ -466,27 +466,48 @@ pub async fn route_action(
         }
 
         // ── Native Apps ──
+        // DECISION (kanban t_2e9b14bd): this arm may only claim `connected` after a test it
+        // actually ran — the same rule `native_apps::handlers::connect_app` follows. It used
+        // to write `status = 'connected'` with no `last_test_*` at all ("just store the
+        // connection intent"), so an automation caller could make the Integration Center
+        // show an app as connected and never-tested at the same time, and because the row
+        // then existed the tenant's next real connect took the UPDATE arm (the claim was
+        // never corrected in between). The alternative — recording intent as a
+        // non-connected status — was rejected: `integration_center::overview` reports
+        // `connected: (ac.id IS NOT NULL)`, so an untested row would still paint as
+        // connected on the hub. Testing first is the only shape where the badge is earned.
         "native.connect" => {
             let body = data.ok_or("data required")?;
             let app_slug = body
                 .get("app_slug")
                 .and_then(|v| v.as_str())
                 .ok_or("app_slug required")?;
-            let credentials = body.get("credentials").ok_or("credentials required")?;
+            let plaintext = body.get("credentials").ok_or("credentials required")?;
+            // Test with the caller's own plaintext, BEFORE anything is stored, and refuse
+            // with the same sentence `connect_app` uses so both doors answer alike.
+            let (test_ok, test_msg, _latency) =
+                crate::native_apps::connectors::test_connection(app_slug, plaintext).await;
+            if !test_ok {
+                return Err(format!("Connection test failed: {}", test_msg));
+            }
             // SEAL before storing: this is the SECOND writer of `app_connections.credentials`
             // (the other is `native_apps::handlers::connect_app`), and a credential at rest is
             // sealed on EVERY door or the guard refuses the write (kanban t_a1ada5ef).
             let credentials =
-                crate::native_apps::credentials::seal_for_storage(tenant_id, credentials)
+                crate::native_apps::credentials::seal_for_storage(tenant_id, plaintext)
                     .map_err(|e| format!("credentials: {}", e))?;
-            // Just store the connection intent; actual test happens in the connector
+            // The verdict written here is the one the test just returned ($5), never a
+            // literal — `status = 'connected'` and `last_test_ok` therefore cannot disagree.
             sqlx::query(
-                "INSERT INTO app_connections (id, tenant_id, app_slug, credentials, status) VALUES ($1, $2, $3, $4, 'connected') ON CONFLICT (tenant_id, app_slug) DO UPDATE SET credentials = $4, status = 'connected', updated_at = NOW()"
+                "INSERT INTO app_connections (id, tenant_id, app_slug, credentials, status, last_test_at, last_test_ok, error_message) VALUES ($1, $2, $3, $4, 'connected', NOW(), $5, NULL) ON CONFLICT (tenant_id, app_slug) DO UPDATE SET credentials = $4, status = 'connected', last_test_at = NOW(), last_test_ok = $5, error_message = NULL, updated_at = NOW()"
             )
-            .bind(Uuid::new_v4()).bind(tenant_id).bind(app_slug).bind(credentials)
+            .bind(Uuid::new_v4()).bind(tenant_id).bind(app_slug).bind(credentials).bind(test_ok)
             .execute(db).await
             .map_err(|e| format!("DB error: {}", e))?;
-            Ok((200, json!({"connected": true, "app": app_slug})))
+            Ok((
+                200,
+                json!({"connected": true, "app": app_slug, "last_test_ok": test_ok, "test_result": test_msg}),
+            ))
         }
         "native.sync.push" => {
             let body = data.ok_or("data required")?;
