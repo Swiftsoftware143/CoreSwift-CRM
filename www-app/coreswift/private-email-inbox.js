@@ -29,7 +29,11 @@
   var S = {
     boxes: [], domains: [], messages: [], counts: {}, addresses: [],
     folders: { system: [], custom: [] },
-    miscTotal: 0, view: 'inbox', address: 'all', sel: null, err: null
+    miscTotal: 0, view: 'inbox', address: 'all', sel: null, err: null,
+    // The FREE mailbox's trial state (kanban t_2ef67217): read from the server, which computes it
+    // from the same registry rows the send path enforces — so a countdown here can never promise
+    // sending the send path would refuse.
+    status: null, claiming: false, claimErr: null
   };
 
   function esc(s) {
@@ -77,6 +81,20 @@
         + '<span id="peDomainMsg" style="margin-left:8px;opacity:.8"></span></div>';
     }
     if (!S.boxes.length) {
+      // The FREE plan has no domain and no provider, so "add a domain first" is a wall it cannot
+      // climb. Give it the CoreSwift address instead (the claim is normally automatic; this is the
+      // manual path, and the place a refusal — e.g. "that name is taken" — is shown).
+      var freePlan = S.status && !S.status.plan_sells_sending;
+      if (freePlan) {
+        return '<div class="empty-state" style="padding:16px;text-align:left">'
+          + '<h4 style="margin:0 0 6px">Your free inbox</h4>'
+          + '<p style="margin:0 0 8px">Your plan includes one mailbox on a CoreSwift address — no domain, no setup. ' + (S.claiming ? 'Setting it up…' : 'Name it below and it is ready to send and receive.') + '</p>'
+          + (S.claimErr ? '<p style="margin:0 0 8px;color:#b45309">' + esc(S.claimErr) + '</p>' : '')
+          + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'
+          + '<input id="peFreeLocal" placeholder="your name" style="flex:1">'
+          + '<span style="opacity:.75">@ ' + esc((S.status && S.status.free_inbox_domain) || 'coreswift') + '</span></div>'
+          + '<button class="btn btn-primary btn-sm" onclick="peClaimFree()">Create my free inbox</button></div>';
+      }
       return '<div class="empty-state" style="padding:16px;text-align:left">'
         + '<h4 style="margin:0 0 6px">No inboxes yet</h4>'
         + '<p style="margin:0 0 8px">An inbox is an address people can write to — <strong>info@</strong>, <strong>support@</strong>, or your own name. '
@@ -118,6 +136,38 @@
       opts.push('<option value="misc"' + (S.address === 'misc' ? ' selected' : '') + '>Everything else / MISC (' + S.miscTotal + ')</option>');
     }
     return '<select onchange="peSetAddress(this.value)" style="margin-right:8px">' + opts.join('') + '</select>';
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  // The FREE mailbox: trial countdown, and the receive-only state with BOTH upgrade doors.
+  //
+  // Every number comes from GET /private-email/mailbox-status, which the server computes from the
+  // registry rows the send path itself enforces (`trial::send_access`) — so this banner cannot
+  // promise "3 days left" over a send that would be refused, and it cannot say "receive-only" over a
+  // mailbox that still sends.
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  function trialBannerHtml() {
+    var s = S.status;
+    if (!s) return '';
+    var hasBox = (s.mailboxes || []).length > 0;
+    if (s.plan_sells_sending) return ''; // a paid plan: nothing to warn about
+    if (!hasBox) return '';
+    if (s.can_send) {
+      var left = (s.days_left == null) ? 'a few' : s.days_left;
+      var cap = s.send_cap_per_day ? (' Sending is capped at ' + s.send_cap_per_day + ' messages a day while you are on the free trial.') : '';
+      return '<div style="padding:10px 14px;border-radius:8px;background:rgba(59,130,246,.12);border:1px solid rgba(59,130,246,.45);margin-bottom:14px">'
+        + '<strong>Free inbox: ' + esc(left) + ' day' + (left === 1 ? '' : 's') + ' left</strong>'
+        + '<div style="font-size:13px;opacity:.85;margin-top:4px">Send and receive is included until then. When the trial ends this address keeps receiving — it only stops sending, and nothing is deleted.' + esc(cap) + '</div>'
+        + '<div style="margin-top:8px"><button class="btn btn-primary btn-sm" onclick="openUpgradeModal()">Keep the inbox — or upgrade the CRM</button></div></div>';
+    }
+    // Received-only: the brief's two doors. Both are real controls (the plan screen is where an
+    // upgrade happens); the sentence says plainly that nothing was lost.
+    return '<div style="padding:10px 14px;border-radius:8px;background:rgba(245,158,11,.14);border:1px solid rgba(245,158,11,.55);margin-bottom:14px">'
+      + '<strong>This inbox is receive-only.</strong>'
+      + '<div style="font-size:13px;opacity:.85;margin-top:4px">Mail is still arriving and nothing has been deleted — but sending has ended with the free trial. Keep just the inbox for $1/month, or upgrade the CRM; either one restores sending immediately.</div>'
+      + '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">'
+      + '<button class="btn btn-primary btn-sm" onclick="openUpgradeModal()">Keep inbox — $1/mo</button>'
+      + '<button class="btn btn-secondary btn-sm" onclick="openUpgradeModal()">Upgrade CRM</button></div></div>';
   }
 
   function messagesHtml() {
@@ -194,6 +244,7 @@
       + '</span></div>'
       + '<button class="btn btn-primary btn-sm" onclick="peCreateInbox()">+ Create new inbox</button></div>'
       + (S.err ? '<div style="padding:8px;margin-bottom:8px;border-radius:6px;background:rgba(220,80,80,.15)">' + esc(S.err) + '</div>' : '')
+      + trialBannerHtml()
       + '<div style="padding:14px;border:1px solid rgba(128,128,128,.3);border-radius:8px;margin-bottom:16px">'
       + '<h4 style="margin:0 0 10px">Your inboxes</h4>' + inboxesHtml() + '</div>'
       + '<div style="padding:14px;border:1px solid rgba(128,128,128,.3);border-radius:8px">'
@@ -201,7 +252,7 @@
       + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
       + '<h4 style="margin:0" data-view-label="' + esc(S.view) + '">' + esc(viewLabel()) + '</h4><div>' + addressFilterHtml()
       + '<button class="btn btn-ghost btn-xs" onclick="peLoad()">Refresh</button></div></div>'
-      + '<div style="font-size:12px;opacity:.7;margin-bottom:8px">Mail is kept while you have storage. Nothing is deleted on a clock.</div>'
+      + '<div style="font-size:12px;opacity:.7;margin-bottom:8px">Mail stays here. A plan can limit how far back the history goes, but the free trial ending never deletes a message — it only stops sending.</div>'
       + messagesHtml() + '</div>'
       + '<div id="peDetail"></div>'
       + '</div>';
@@ -225,7 +276,10 @@
         // subfolder. Reading it here is what lets this screen offer Spam/Trash/Favorites at all —
         // without it the tab could only ever show the inbox, while mail in every other store was
         // unreachable from the CRM.
-        api().get('/private-email/folders').catch(function () { return { system: [], custom: [] }; })
+        api().get('/private-email/folders').catch(function () { return { system: [], custom: [] }; }),
+        // The trial: countdown, whether sending is allowed, and the fair-use / storage meters. The
+        // server derives all of it from the registry rows the send path enforces.
+        api().get('/private-email/mailbox-status').catch(function () { return null; })
       ]);
       S.boxes = Array.isArray(results[0]) ? results[0] : (results[0].boxes || []);
       S.domains = Array.isArray(results[1]) ? results[1] : (results[1].domains || []);
@@ -238,6 +292,7 @@
         system: Array.isArray(rail.system) ? rail.system : [],
         custom: Array.isArray(rail.custom) ? rail.custom : []
       };
+      S.status = results[6] || null;
       S.err = null;
     } catch (e) {
       S.err = fail(e);
@@ -247,6 +302,24 @@
     Array.prototype.forEach.call(document.querySelectorAll('.pe-row'), function (r) {
       r.onclick = function () { window.peOpenMessage(r.getAttribute('data-id')); };
     });
+    // ── A FREE SIGNUP GETS A WORKING MAILBOX THE SAME MINUTE (brief §7.1) ────────────────────────
+    // No card, no domain, no button to find: the first time a free account opens this tab, claim the
+    // shared CoreSwift address on its behalf. Guarded by `claiming` + an empty mailbox list, so it
+    // cannot loop, and the POST is idempotent server-side (a double click returns the same box).
+    if (!S.boxes.length && S.status && !S.status.plan_sells_sending && !S.claiming && !S.claimErr) {
+      S.claiming = true;
+      try {
+        await api().post('/private-email/free-inbox', {});
+        S.claiming = false;
+        toastMsg('Your free inbox is ready', 'success');
+        load();
+        return;
+      } catch (e) {
+        S.claiming = false;
+        S.claimErr = fail(e);
+        el.innerHTML = render();
+      }
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -268,6 +341,27 @@
       if (r.verified) load();
     } catch (e) {
       if (m) m.textContent = fail(e);
+    }
+  };
+
+  // The manual door to the free address (the automatic claim in `load` is the normal path). The
+  // server owns the rules — name length, reserved words, and uniqueness across every tenant on the
+  // shared domain — and answers with a sentence, which is shown where the user is looking.
+  window.peClaimFree = async function () {
+    var inp = document.getElementById('peFreeLocal');
+    var local = ((inp && inp.value) || '').trim();
+    S.claimErr = null;
+    S.claiming = true;
+    load();
+    try {
+      await api().post('/private-email/free-inbox', local ? { local_part: local } : {});
+      S.claiming = false;
+      toastMsg('Your free inbox is ready', 'success');
+      load();
+    } catch (e) {
+      S.claiming = false;
+      S.claimErr = fail(e);
+      load();
     }
   };
 

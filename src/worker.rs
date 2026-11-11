@@ -113,8 +113,45 @@ pub async fn start_worker(db: PgPool) -> Result<(), Box<dyn std::error::Error + 
     })?;
     sched.add(job7).await?;
 
+    // Job 8: HOURLY at :07 — end free-mailbox trials whose window has closed (CEO spec 2026-11-11).
+    // Hourly rather than daily so the console's state cannot lag a whole day, and idempotent so the
+    // cadence costs nothing: the UPDATE only touches rows still in 'trial'. The SEND decision does
+    // not depend on this job (it derives from the plan + `trial_ends_at`), so a missed or delayed
+    // run can never let a closed window send or block an upgraded one.
+    let db8 = db.clone();
+    let job8 = Job::new_async("0 7 * * * *", move |_uuid, _lock| {
+        let db = db8.clone();
+        Box::pin(async move {
+            match crate::private_email::trial::expire_trials(&db).await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(
+                    flipped = n,
+                    "free mailbox trials ended — those mailboxes are receive-only now (mail kept)"
+                ),
+                Err(e) => tracing::error!(error = %e, "free-mailbox trial sweep failed"),
+            }
+        })
+    })?;
+    sched.add(job8).await?;
+
+    // A BOOT-TIME sweep as well: after a restart an overdue trial is flipped immediately instead of
+    // waiting up to an hour for the next tick. Idempotent (`WHERE access_mode = 'trial'`), so both
+    // paths can run without touching a mailbox twice or writing two audit rows.
+    {
+        let db0 = db.clone();
+        tokio::spawn(async move {
+            match crate::private_email::trial::expire_trials(&db0).await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(flipped = n, "boot sweep: free mailbox trials ended"),
+                Err(e) => {
+                    tracing::error!(error = %e, "boot sweep: free-mailbox trial sweep failed")
+                }
+            }
+        });
+    }
+
     sched.start().await?;
-    tracing::info!("Flawless Follow-up background worker started (7 cron jobs)");
+    tracing::info!("Flawless Follow-up background worker started (8 cron jobs)");
 
     Ok(())
 }

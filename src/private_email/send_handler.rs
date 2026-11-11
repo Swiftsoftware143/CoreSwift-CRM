@@ -36,6 +36,13 @@ pub async fn deliver(
     .map_err(AppError::Database)?
     .ok_or_else(|| AppError::NotFound("Sending mailbox not found or not active".into()))?;
 
+    // ── MAY THIS ACCOUNT SEND? (CEO spec 2026-11-11) ───────────────────────────────────────────
+    // The free PLAN sells receiving, not sending: a free mailbox sends freely for its trial window
+    // and then goes receive-only. Both callers (`POST /send` and the inbox's reply/forward arm) come
+    // through here, so the rule cannot be skipped by using the other door. Refusals are 402 with the
+    // sentence the console prints, or 429 for the fair-use daily ceiling — never a 500.
+    super::trial::enforce_send(db, tenant_id, &mailbox).await?;
+
     let provider_config = load_provider_config(db, mailbox.domain_id, tenant_id)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to load provider config: {}", e)))?;

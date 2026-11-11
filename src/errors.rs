@@ -55,6 +55,12 @@ pub enum AppError {
     #[error("{0}")]
     BadRequest(String),
 
+    /// 429 — A fair-use ceiling (not a plan limit) is reached, and the caller is owed the sentence
+    /// that says which one and when it resets. Distinct from [`UpgradeRequired`]: that one is bought
+    /// away, this one clears itself. The free mailbox's daily send cap is the only user today.
+    #[error("{0}")]
+    RateLimited(String),
+
     /// 503 — The deployment is missing OPERATOR configuration this request needs (a phone provider,
     /// an outbound transport), so nothing was attempted. Distinct from [`Internal`]: that means THIS
     /// service is faulty, and answering 500 puts an operator's setup gap in front of a buyer as a
@@ -100,6 +106,7 @@ impl IntoResponse for AppError {
                 "Insufficient permissions".to_string(),
             ),
             AppError::UpgradeRequired(msg) => (StatusCode::PAYMENT_REQUIRED, msg.clone()),
+            AppError::RateLimited(msg) => (StatusCode::TOO_MANY_REQUESTS, msg.clone()),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             AppError::Duplicate(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),

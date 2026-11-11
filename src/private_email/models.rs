@@ -108,6 +108,18 @@ pub struct PrivateEmailBox {
     /// the inbox either way; this is the routing decision on top of it, and the user can tick or
     /// untick any mailbox (B204).
     pub creates_ticket: bool,
+    /// The FREE-plan trial state of this mailbox (migration 136): `paid` — the account's plan sells
+    /// sending; `trial` — inside the full send+receive window; `receive_only` — the window ended and
+    /// the free plan no longer sends from this address (mail keeps arriving and nothing is deleted).
+    /// The daily sweep maintains it for the console's benefit; the SEND decision itself is derived
+    /// from the plan plus `trial_ends_at` (`trial::send_access`), so an upgrade restores sending on
+    /// the very next request without waiting for any job.
+    pub access_mode: String,
+    pub trial_started_at: Option<DateTime<Utc>>,
+    /// When the free trial's full function ends. NULL for a mailbox whose plan sells sending.
+    pub trial_ends_at: Option<DateTime<Utc>>,
+    /// When the sweep actually flipped this mailbox to receive-only (the audit stamp).
+    pub trial_expired_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

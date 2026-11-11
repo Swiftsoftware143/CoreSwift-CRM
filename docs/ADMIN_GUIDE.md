@@ -559,3 +559,65 @@ no template and resolves the GLOBAL transport, not a workspace's.</li>
 <li>**Deploy:** `bin/deploy-coreswift.sh` (backend) then
 `bin/deploy-coreswift-app.sh` (the app and admin consoles).</li>
 </ul>
+
+---
+
+## Private Email — the free mailbox and the $1 "Inbox" plan
+
+### What the free tier now includes
+
+Every `free` account gets **one mailbox** with full send + receive for **30 days**, then
+**receive-only**. Mail is never deleted at expiry, and the address keeps receiving. This is a trial
+of the *sending* permission, not of the mailbox, and it is not a history window.
+
+### Where the numbers live (no redeploy needed)
+
+All of it is registry data the admin panel already edits, on the `private_email` module:
+
+| `module_features.key` | free | paid plans | meaning |
+|---|---|---|---|
+| `email_mailboxes` | 1 | 1–50 / unlimited | mailboxes the plan may create |
+| `email_domains` | 1 | 1–unlimited | domains the plan may connect |
+| `email_sending` | **false** | true | does the PLAN sell sending (the trial grants it per mailbox on Free) |
+| `email_trial_days` | 30 | NULL | days of full function on a free mailbox |
+| `email_outbound_per_day` | 200 | NULL (unlimited) | fair-use ceiling that protects the sending domain |
+| `email_storage_mb` | 5120 | NULL (unlimited) | storage before sending stops (nothing is deleted) |
+
+### The mailbox states
+
+`private_email_boxes.access_mode` is `trial` → `receive_only` → `paid`:
+
+- **trial** — created by a plan that does not sell sending (Free). `trial_ends_at` is the deadline.
+- **receive_only** — the sweep ended it. Inbound still delivered; outbound answers **402** with a
+  sentence naming both doors ($1 inbox, or CRM upgrade).
+- **paid** — the plan sells sending; no clock.
+
+The **send gate reads the plan live** (`email_sending`) *and* the mailbox's `trial_ends_at`, so moving
+a workspace onto a paid plan restores sending on the very next request — no job, no redeploy — and a
+missed sweep can never leave an upgraded customer unable to send.
+
+### The sweep
+
+`private_email::trial::expire_trials` runs **hourly at :07** and **once at every boot**, idempotent
+(`WHERE access_mode = 'trial'`). One **audit row** per transition in `audit_logs`
+(`action = 'mailbox.trial_expired'`, entity `private_email_box`). Nothing else is written: no message,
+no mailbox, is touched.
+
+### The "Inbox" plan ($1/mo, $10/yr)
+
+`plans.slug = 'inbox'` exists with one mailbox, one domain, unlimited history and sending on — and
+**no CRM**: every other module is an explicit `false` row for it, so a CRM-gated route answers the
+normal plan refusal (e.g. `Pipeline limit reached (0/0)`).
+
+It ships **`is_active = false`** on purpose: this install has no working payment page on any plan
+(see "Giving a plan a working payment page"), so an active $1 plan would render a button that cannot
+take money. Paste a real payment link onto the plan, confirm it opens, then `is_active = true` in the
+admin panel or a one-line UPDATE — that is the whole launch step.
+
+### Free-tier address domain
+
+Free mailboxes live on **`mail.coreswiftcrm.com`** (operator config: `FREE_INBOX_DOMAIN`, plus
+`FREE_INBOX_WEBHOOK_SIGNING_KEY` for inbound authentication; the Mailgun key is `EMAIL_API_KEY`).
+Each free tenant gets its own `private_email_domains` row for that domain, carrying that tenant's
+sealed copy of the credentials, and addresses are unique **across tenants** on the shared domain —
+the inbound router matches on the address alone.

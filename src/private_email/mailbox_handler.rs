@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use super::feature_gate;
 use super::models::*;
+use super::trial;
 
 use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
@@ -106,8 +107,13 @@ pub async fn provision_mailbox(
 
     let row = sqlx::query_as::<_, PrivateEmailBox>(
         r#"
-        INSERT INTO private_email_boxes (tenant_id, domain_id, user_id, local_part, email_address)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO private_email_boxes
+            (tenant_id, domain_id, user_id, local_part, email_address,
+             access_mode, trial_started_at, trial_ends_at)
+        VALUES ($1, $2, $3, $4, $5,
+                CASE WHEN $6 THEN 'trial' ELSE 'paid' END,
+                CASE WHEN $6 THEN NOW() END,
+                CASE WHEN $6 THEN NOW() + ($7 || ' days')::interval END)
         RETURNING *
         "#,
     )
@@ -116,6 +122,11 @@ pub async fn provision_mailbox(
     .bind(req.user_id)
     .bind(&req.local_part)
     .bind(&email_address)
+    // A mailbox created by a plan that does NOT sell sending (the Free plan, on a domain of their
+    // own) starts the SAME trial as the free CoreSwift address — otherwise adding your own domain
+    // would silently produce a mailbox with no sending rights at all and no clock to explain it.
+    .bind(!trial::plan_sells_sending(&state.db, account_id).await?)
+    .bind(trial::trial_days(&state.db, account_id).await?.to_string())
     .fetch_one(&state.db)
     .await
     .map_err(AppError::Database)?;

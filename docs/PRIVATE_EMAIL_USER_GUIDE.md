@@ -277,3 +277,35 @@ Any team member assigned to the mailbox can send from it. Unassigned mailboxes a
 ### How do I upgrade my limits?
 
 Contact your account administrator or visit the billing section of your account to upgrade your plan. Agency admins can also set custom limits for any tenant.
+
+---
+
+## Your free inbox (Free plan)
+
+Every Free account gets **one private inbox**, ready the moment you sign in — no domain to buy, no
+provider account, no card. Open **Inbox** in the console and your address is already created for you,
+for example `yourname@mail.coreswiftcrm.com`. You can also name it yourself with the box on that
+screen.
+
+**It is fully working for 30 days.** You can send and receive like any other mailbox: replies land in
+the inbox, are matched to a contact, and appear on that contact's timeline.
+
+**The free inbox shows a countdown** at the top of the Inbox screen — "Free inbox: 12 days left" —
+so there is never a surprise.
+
+**What happens when the 30 days end:** the address keeps working and keeps receiving. Nothing is
+deleted, and no mail is lost. What stops is **sending** — the mailbox becomes *receive-only*, and the
+Inbox screen says so with two buttons:
+
+- **Keep inbox — $1/mo**: keep just the mailbox and carry on sending, without the rest of the CRM.
+- **Upgrade CRM**: move the whole account onto a paid plan.
+
+Either one restores sending immediately, and every message you already have stays exactly where it is.
+
+While you are on the free trial, sending is subject to a fair-use ceiling of **200 messages a day**.
+That ceiling protects the reputation of the address you send from — it is not a product limit, and a
+paid plan lifts it.
+
+**If you see "Your free mailbox is receive-only now" when you press send:** that is the end of the
+30-day sending trial, not a fault. Your mail is still arriving and nothing was thrown away — choose
+one of the two buttons at the top of the Inbox screen and send again.

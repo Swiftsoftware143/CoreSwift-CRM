@@ -7,12 +7,14 @@ pub mod auto_reply_handler;
 pub mod domain_handler;
 pub mod encryption;
 pub mod feature_gate;
+pub mod free_inbox;
 pub mod mailbox_handler;
 pub mod messages_handler;
 pub mod models;
 pub mod providers;
 pub mod purge;
 pub mod send_handler;
+pub mod trial;
 pub mod webhook_handler;
 
 pub fn router(state: AppState) -> Router<AppState> {
@@ -56,6 +58,19 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route(
             "/boxes/:id",
             axum::routing::delete(mailbox_handler::delete_mailbox),
+        )
+        // ── The FREE mailbox (CEO spec 2026-11-11) ──────────────────────────────────────────────
+        // A free account owns no domain and no provider, so the ordinary "add a domain, then a
+        // mailbox" path is a wall. `POST /free-inbox` gives it one address on CoreSwift's own
+        // domain with full function for the trial window; `GET /mailbox-status` is the console's
+        // countdown + fair-use meter, computed from the same registry rows the send path enforces.
+        .route(
+            "/free-inbox",
+            axum::routing::post(free_inbox::claim_free_inbox),
+        )
+        .route(
+            "/mailbox-status",
+            axum::routing::get(free_inbox::mailbox_status),
         )
         // ── Messages: the inbox's own records (B204/B205/B211) ──────────────────────────────────
         // Every received message, the address it arrived on, and whether it also became a ticket.
