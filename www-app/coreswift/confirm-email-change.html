@@ -74,7 +74,10 @@ a.btn{display:inline-block;margin-top:4px;background:#38bdf8;color:#0b1220;text-
   }).then(function (x) {
     if (!x.ok) throw new Error(msgOf(x.d, x.status, 'That confirmation link did not work'));
     lede.textContent = 'Done.';
-    show('ok', msgOf(x.d, 0, 'Your sign-in address has been changed.') + ' Use the new address the next time you sign in.');
+    // The server's own sentence already says what changed and what to do next; do not append a second
+    // copy of it (measured in Chromium: the box read "... Use it the next time you sign in. Use the new
+    // address the next time you sign in.").
+    show('ok', msgOf(x.d, 0, 'Your sign-in address has been changed.'));
     lk.innerHTML = '<a class="btn" href="/login">Go to sign in</a>';
   }).catch(function (err) {
     lede.textContent = 'That link did not work.';
