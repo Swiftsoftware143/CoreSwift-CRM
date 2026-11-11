@@ -16,6 +16,7 @@
 //!
 //! ```text
 //!   tenants row  +  tenant_plans row for the entry plan  +  the owner `users` row
+//!   +  the account's first (default) workspace
 //! ```
 //!
 //! ## The owner's role
@@ -195,6 +196,18 @@ pub async fn create_account(
         seat_entry_plan(&mut *conn, tenant_id, req.entry_plan_slug).await?;
         (tenant_id, row.0, row.1, row.2, None)
     };
+
+    // ── 1b. the account's first workspace (kanban t_6099a407) ────────────────────
+    // A brand-new account must ARRIVE in the documented state: one default workspace. Migration
+    // 124 created the table and backfilled every tenant that existed then ("every existing account
+    // gets its default workspace so nothing is blank"), but nothing kept the NEXT account from
+    // starting blank — a fresh signup answered `GET /api/workspaces` with `{"count":0}` and the
+    // console's Workspaces screen opened on "This account has no workspace row yet". The mint is
+    // the ONE place both doors pass through, so the row is written HERE, inside the caller's
+    // transaction: a refusal later rolls it back with the tenant, and a committed account always
+    // owns its default workspace. Guarded on the tenant having none, so an invite join into a
+    // tenant that already has workspaces (and an adoption of one that does) adds nothing.
+    ensure_first_workspace(&mut *conn, tenant_id, &tenant_name).await?;
 
     // ── 2. the other unique index on `users`: (tenant_id, email) ───────────────────────────────
     // This is the message that tells a team member they already belong to THIS workspace.
@@ -480,6 +493,45 @@ fn tenant_identity(req: &MintRequest<'_>, owner_name: &str) -> (String, String) 
     (name, slug)
 }
 
+/// The name a minted account's first workspace carries: the account's own name, clipped to
+/// `workspaces.name` (`VARCHAR(120)`). `tenants.name` allows 255, so an account named with more
+/// than 120 characters would otherwise fail the INSERT (`22001`, a 500 on signup); every existing
+/// writer normalises the label through this one function instead.
+fn workspace_name(tenant_name: &str) -> String {
+    let clipped: String = tenant_name.trim().chars().take(120).collect();
+    let clipped = clipped.trim_end();
+    if clipped.is_empty() {
+        "My Workspace".to_string()
+    } else {
+        clipped.to_string()
+    }
+}
+
+/// Give a tenant its first, DEFAULT workspace — the documented shape of a fresh account.
+///
+/// `WHERE NOT EXISTS` makes the call idempotent and keeps the invite/adoption arms honest (a tenant
+/// that already holds workspaces gets no second one, and its first is not re-flagged); the
+/// `ON CONFLICT DO NOTHING` covers two mints racing for the same tenant, where
+/// `ux_workspaces_one_default` (one default per tenant) would otherwise abort the loser.
+async fn ensure_first_workspace(
+    conn: &mut PgConnection,
+    tenant_id: Uuid,
+    tenant_name: &str,
+) -> Result<(), AppError> {
+    let name = workspace_name(tenant_name);
+    sqlx::query(
+        r#"INSERT INTO workspaces (tenant_id, name, is_default)
+           SELECT $1, $2, true
+            WHERE NOT EXISTS (SELECT 1 FROM workspaces WHERE tenant_id = $1)
+           ON CONFLICT DO NOTHING"#,
+    )
+    .bind(tenant_id)
+    .bind(&name)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 /// Read a workspace's display fields by id.
 async fn load_tenant(
     conn: &mut PgConnection,
@@ -595,6 +647,39 @@ mod tests {
         let (name, slug) = identity(None, Some("  acme "));
         assert_eq!(name, "Bob's Workspace");
         assert_eq!(slug, "acme");
+    }
+
+    /// The first workspace is named from the account and never overflows the column: a mint whose
+    /// account name is longer than `workspaces.name` allows must still CREATE the row (the defect
+    /// this covers is an account with no workspace at all, not a truncated label).
+    #[test]
+    fn the_first_workspace_is_named_from_the_account_and_fits_the_column() {
+        use super::workspace_name;
+
+        assert_eq!(
+            workspace_name("Bob's Workspace"),
+            "Bob's Workspace",
+            "an ordinary account name is the workspace name verbatim"
+        );
+        assert_eq!(
+            workspace_name("  Acme Ltd  "),
+            "Acme Ltd",
+            "the label is trimmed, like every other stored label"
+        );
+
+        // `tenants.name` is VARCHAR(255); `workspaces.name` is VARCHAR(120).
+        let long = "x".repeat(255);
+        let clipped = workspace_name(&long);
+        assert_eq!(clipped.chars().count(), 120);
+        assert_eq!(clipped, "x".repeat(120));
+
+        // Counted in CHARACTERS, not bytes: a 120-char accented name fits the column.
+        let accented = "\u{e9}".repeat(200);
+        assert_eq!(workspace_name(&accented).chars().count(), 120);
+
+        // A blank label can never be stored (the column is NOT NULL and a blank workspace name is
+        // what the console's own validator refuses).
+        assert_eq!(workspace_name("   "), "My Workspace");
     }
 
     /// One mint request, with only the two optional account fields varying.
