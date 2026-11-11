@@ -76,6 +76,11 @@ pub fn get_merge_fields(template_type: &str) -> Vec<&'static str> {
         "welcome" => vec!["name", "email", "password", "app_url", "app_name"],
         "purchase_confirmed" => vec!["name", "plan_name", "app_url", "app_name"],
         "password_reset" => vec!["name", "token", "app_url", "app_name"],
+        // The sign-in address change (kanban t_bd31809e). `link` is the whole point of the message —
+        // the customer clicks it — and `new_email` is printed back so a typo is visible before they
+        // act on it. Registry-authored rows can use these; the inline arm below is what is emitted
+        // while `email_templates` has no `email_change` row.
+        "email_change" => vec!["name", "new_email", "link", "token", "app_url", "app_name"],
         _ => vec![
             "name",
             "email",
@@ -395,6 +400,7 @@ fn get_default_subject(template_type: &str, app_name: &str) -> String {
         "welcome" => format!("Welcome to {}!", app_name),
         "purchase_confirmed" => "Payment Received — Thank You!".to_string(),
         "password_reset" => "Password Reset Request".to_string(),
+        "email_change" => "Confirm your new sign-in email".to_string(),
         _ => format!("{} Notification", app_name),
     }
 }
@@ -442,6 +448,29 @@ fn inline_bodies(
             let body = format!(
                 "Hi {},\n\nWe received a request to reset your password for {}.\n\nYour reset token is: {}\n\nReset URL: {}/auth/reset-password?token={}\n\nThis token expires in 1 hour.\n\nIf you did not request this, please ignore this email.\n\n- {} Team",
                 name, app_name, token, app_url, token, app_name
+            );
+            (subject, body, String::new(), false)
+        }
+        // The sign-in address change (kanban t_bd31809e). Plain text on purpose: the arm below is what
+        // is emitted while this workspace has no `email_change` row, and a merge field the customer
+        // typed (`new_email`) must never reach an HTML part unescaped. Two things the message has to
+        // say — the reset mail's history taught both: WHERE to click (a link, not a code) and that
+        // NOTHING HAS CHANGED YET (the old address keeps working until the link is opened).
+        "email_change" => {
+            let new_email_val = vars
+                .get("new_email")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(the new address)");
+            let link = vars.get("link").and_then(|v| v.as_str()).unwrap_or("");
+            let subject = "Confirm your new sign-in email".to_string();
+            let body = format!(
+                "Hi {name},\n\n\
+                 We received a request to change the email address you sign in to {app_name} with, to:\n\n    {new_email_val}\n\n\
+                 To confirm, open this link:\n\n    {link}\n\n\
+                 The link works once and expires in 2 hours. Until you open it, nothing changes: your \
+                 current address still works and your password stays the same. If you did not ask for \
+                 this, ignore this email and nothing will happen.\n\n\
+                 - The {app_name} Team"
             );
             (subject, body, String::new(), false)
         }

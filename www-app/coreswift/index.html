@@ -2948,9 +2948,18 @@ async function loadProfileTab() {
       '<div class="form-group"><label for="profileName">Name</label><input type="text" id="profileName" maxlength="100" value="' + escapeHtml(p.name || '') + '"></div>' +
       '<div class="form-group"><label for="profileCompany">Company</label><input type="text" id="profileCompany" maxlength="255" value="' + escapeHtml(p.company || '') + '"> <span class="form-hint">Optional — clear it to remove the company.</span></div>' +
       '<div class="form-group"><label for="profileUsername">Username</label><input type="text" id="profileUsername" maxlength="100" value="' + escapeHtml(p.username || '') + '"> <span class="form-hint">Optional &mdash; a short name the console can show next to your activity. Clear it to remove it.</span></div>' +
-      '<div class="form-group"><label for="profileEmail">Email</label><input type="email" id="profileEmail" value="' + escapeHtml(p.email) + '" disabled style="opacity:.6"> <span class="form-hint">Email cannot be changed</span></div>' +
+      '<div class="form-group"><label for="profileEmail">Email</label><input type="email" id="profileEmail" value="' + escapeHtml(p.email) + '" disabled style="opacity:.6"> <span class="form-hint">This is the address you sign in with &mdash; change it in <strong>Sign-in email</strong> directly below.</span></div>' +
       '<div class="form-group"><label for="profileLevel">Level</label><input type="text" id="profileLevel" value="' + escapeHtml(plan || '—') + '" disabled style="opacity:.6"> <span class="form-hint">Your plan</span></div>',
       '<button class="btn btn-primary" data-ops="profile-save" onclick="saveProfile()">Save Changes</button>') +
+    '<br>' +
+    // The sign-in address, changeable by the customer (kanban t_bd31809e). CoreSwift was the only app
+    // of the six that made this a support ticket. This card only ASKS: the app mails a confirmation
+    // link to the NEW address, and the address becomes the sign-in identity when that link is opened —
+    // which is what stops a typo, or someone else at an unlocked screen, locking the account out.
+    card('Sign-in email',
+      '<p style="color:var(--text-secondary);margin:0 0 10px">You sign in with <strong>' + escapeHtml(p.email) + '</strong>. To move it to another address we email a confirmation link to the <strong>new</strong> address. Nothing changes until you open that link &mdash; your current address keeps working, and so does your password.</p>' +
+      '<div class="form-group"><label for="newSignInEmail">New email address</label><input type="email" id="newSignInEmail" autocomplete="email" placeholder="you@yourcompany.com"> <span class="form-hint">The link works once and expires in 2 hours.</span></div>',
+      '<button class="btn btn-primary" data-ops="profile-email-change" onclick="requestEmailChange()">Send confirmation link</button>') +
     '<br>' +
     card('Change Password',
       '<div class="form-group"><label for="newPw">New Password</label><input type="password" id="newPw" autocomplete="new-password"></div>' +
@@ -3014,6 +3023,23 @@ async function saveProfile() {
     toast('Profile updated', 'success');
   } catch(e) {
     toast('Failed to update profile: ' + e.message, 'error');
+  }
+}
+
+// Ask to move the sign-in address (kanban t_bd31809e). This only REQUESTS the change: the app mails
+// a confirmation link to the NEW address and `users.email` does not move until that link is opened.
+// The console therefore says what will happen rather than what happened — the customer who typed a
+// wrong address finds out from an inbox that never receives anything, and their sign-in is untouched.
+async function requestEmailChange() {
+  const el = document.getElementById('newSignInEmail');
+  const next = el ? el.value.trim() : '';
+  if (!next) { toast('Enter the new email address', 'error'); return; }
+  try {
+    const r = await API.post('/auth/email-change', { new_email: next });
+    toast((r && r.message) || 'Check the new address for a confirmation link. Your sign-in email stays the same until you open it.', 'success');
+    if (el) el.value = '';
+  } catch(e) {
+    toast('Could not start the change: ' + e.message, 'error');
   }
 }
 

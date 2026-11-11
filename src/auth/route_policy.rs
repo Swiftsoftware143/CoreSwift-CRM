@@ -102,13 +102,21 @@
 //!        (389 = 377 /api + the 12 root-level mounts). The count is pinned by
 //!        `the_census_shape_is_what_the_docs_say`.
 //!
+//!   +2 mounts / +2 paths (2026-11-11, kanban t_bd31809e), the sign-in address change: the request
+//!        arm `POST /api/auth/email-change` on the auth router's GUARDED group (private by default, on
+//!        no allowlist, measured live with no credential: the boundary answers
+//!        `{"error":"Authentication required"}`) and its confirm twin
+//!        `POST /api/auth/email-change/confirm`, anonymous by necessity and named in
+//!        [`PUBLIC_ROUTES`] — the token in the mailed link IS the credential. Now 391 mounted
+//!        `.route(..)` calls, 379 mounts on /api/** (391 = 379 /api + the 12 root-level mounts).
+//!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
 //!        the per-module gate was doing its job. The two /api routes added since (kanban
 //!        t_e968e9ad: `/api/admin/provisioning-config` and
 //!        `/api/v1/internal/provision-free-account`) were measured the same way and each answered
 //!        401 anonymous; both are named in the lists below
-//!    26 deliberate anonymous entries  -> PUBLIC_ROUTES  (23 /api + 3 /inbound)
+//!    27 deliberate anonymous entries  -> PUBLIC_ROUTES  (24 /api + 3 /inbound)
 //!    16 service-to-service entries    -> INTERNAL_ROUTES (all /api, reached with the shared key)
 //!     2 issued-API-key entries        -> API_KEY_ROUTES  (/api/external/**)
 //!    11 served surfaces outside the boundary: the SPA mount, /track/:slug, the eight
@@ -209,6 +217,13 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/auth/refresh",
     "/api/auth/forgot-password",
     "/api/auth/reset-password",
+    // The SECOND arm of the sign-in address change (kanban t_bd31809e). The customer opens the mailed
+    // link in a browser and has NO session — the token in the query string IS the credential the
+    // message just delivered, exactly like the reset link above. It writes nothing but that token's
+    // own row (`users.email` of the user the token names, once). Its authenticated twin
+    // (`POST /api/auth/email-change`) is deliberately NOT here: asking to move an address is an act on
+    // the caller's own account and stays behind the session.
+    "/api/auth/email-change/confirm",
     // --- public catalogues ---------------------------------------------------------------------
     // The signup wizard populates its provider and industry pickers from these before a session
     // exists. Both read platform-level rows with no tenant column (`provider_keys` mounts
@@ -1061,12 +1076,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            389,
+            391,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 377,
+            api, 379,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

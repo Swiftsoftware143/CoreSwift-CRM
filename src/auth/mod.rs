@@ -47,6 +47,14 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/initial-password",
             axum::routing::post(handlers::set_initial_password),
         )
+        // Ask to move the caller's OWN sign-in address (kanban t_bd31809e). Authenticated like every
+        // other act on the caller's own account — the handler reads the user id from the SESSION, so
+        // there is no path id to spoof — and the address only moves when the link mailed to it is
+        // opened, which is the CONFIRM arm below.
+        .route(
+            "/email-change",
+            axum::routing::post(handlers::request_email_change),
+        )
         // INNERMOST, deliberately: `auth_middleware` is applied below (a later `.layer()` is
         // OUTERMOST in axum) so it stays outside the deadline. An unauthenticated request with a
         // declared body is answered 401 at once without its body ever being read, and a declared
@@ -102,5 +110,25 @@ pub fn router(state: AppState) -> Router<AppState> {
             crate::body_deadline::body_read_deadline_middleware,
         ));
 
-    Router::new().merge(public).merge(password).merge(protected)
+    // The sign-in address change's SECOND arm (kanban t_bd31809e). The customer opens the mailed link
+    // in a browser and carries NO session — the token in the address IS the credential — so this route
+    // must answer anonymously and is named in `route_policy::PUBLIC_ROUTES`. It gets the body deadline
+    // but deliberately NOT the credential-guessing limiter: the link is often opened from a shared
+    // office IP that has already spent its login allowance, there is nothing to guess (a 122-bit uuid
+    // token) and no mail to bomb, and a redeemed token is refused by the CLAIM itself, not a counter.
+    let email_confirm = Router::new()
+        .route(
+            "/email-change/confirm",
+            axum::routing::post(handlers::confirm_email_change),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            body_deadline,
+            crate::body_deadline::body_read_deadline_middleware,
+        ));
+
+    Router::new()
+        .merge(public)
+        .merge(password)
+        .merge(protected)
+        .merge(email_confirm)
 }
