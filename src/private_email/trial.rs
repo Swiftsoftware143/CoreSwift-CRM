@@ -22,13 +22,16 @@
 //! `email_outbound_per_day`, `email_storage_mb`), never from a constant in this file: the admin
 //! panel can change the trial length, the daily ceiling or the storage ceiling without a redeploy.
 
+use axum::{extract::State, Extension, Json};
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::models::PrivateEmailBox;
-use crate::errors::AppError;
+use crate::auth::models::Claims;
+use crate::errors::{ApiResult, AppError};
+use crate::AppState;
 
 /// The caller-facing sentence used when the plan sells no sending and the trial window is closed.
 /// It names BOTH doors the brief requires — the $1 inbox and the CRM upgrade — because "upgrade" with
@@ -359,10 +362,29 @@ pub async fn mailbox_status(pool: &PgPool, tenant_id: Uuid) -> Result<Value, App
         "storage_used_bytes": storage_used,
         "storage_limit_mb": limit_of(pool, tenant_id, "email_storage_mb").await?,
         "mailboxes": mailboxes,
-        // What the console prints after the @ on the free-address form. Read from the same env var
-        // the claim path uses, so the two can never name different domains.
-        "free_inbox_domain": super::free_inbox::free_domain(),
+        // The plan's mailbox allowance, resolved from the registry. A defined number (or null when
+        // the plan sells unlimited mailboxes); never "module on, limit missing", which is the
+        // inconsistency this screen used to have no way to see.
+        "mailbox_limit": limit_of(pool, tenant_id, "email_mailboxes").await?,
+        "domain_limit": limit_of(pool, tenant_id, "email_domains").await?,
     }))
+}
+
+/// GET /api/private-email/mailbox-status — the console's view of the trial and the fair-use meters.
+///
+/// Read-only and cheap; it is what lets the inbox say "Free inbox: 12 days left" and, after the
+/// window closes, show the receive-only state WITH the upgrade path instead of a dead composer.
+///
+/// BYOK (David, 2026-11-11): there is no CoreSwift-hosted trial address any more. A free account
+/// starts with NO mailbox and NO clock — the trial begins when the first mailbox is created on a
+/// domain the customer has verified with their own Mailgun account (see
+/// `mailbox_handler::provision_mailbox`), so DNS propagation never eats the free month.
+pub async fn mailbox_status_handler(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> ApiResult<Json<Value>> {
+    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    Ok(Json(mailbox_status(&state.db, tenant_id).await?))
 }
 
 #[cfg(test)]

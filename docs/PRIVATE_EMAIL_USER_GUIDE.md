@@ -282,13 +282,28 @@ Contact your account administrator or visit the billing section of your account 
 
 ## Your free inbox (Free plan)
 
-Every Free account gets **one private inbox**, ready the moment you sign in — no domain to buy, no
-provider account, no card. Open **Inbox** in the console and your address is already created for you,
-for example `yourname@mail.coreswiftcrm.com`. You can also name it yourself with the box on that
-screen.
+Every Free account includes **one private inbox on your own domain**, and it is free to run for 30
+days. Your mail runs through **your own Mailgun account** and your own DNS, so it never passes
+through anyone else's servers — which is also why there is no setup work to pay for.
 
-**It is fully working for 30 days.** You can send and receive like any other mailbox: replies land in
-the inbox, are matched to a contact, and appear on that contact's timeline.
+**Before your first inbox works you need:** a domain you own, and a Mailgun account (Mailgun has a
+free tier). There is nothing to buy from us to start.
+
+Open **Inbox** in the console and you will see a three-step checklist:
+
+1. **Tell us your domain** — paste the Mailgun API key and the webhook signing key from your Mailgun
+   account. They are stored sealed and never shown again.
+2. **Add the mail records** — the page lists exactly which MX and TXT records to create, each with a
+   Copy button, a plain sentence saying what it does, and a live status (Waiting / Active). Add them
+   at Cloudflare or wherever your domain's DNS lives, then press **Check again**.
+3. **Create your inbox** — choose the part before the @ (for example `info`) and press create.
+
+Nothing is charged and no inbox exists until your domain passes its check, so a failed check changes
+nothing. **Your free 30 days start when the inbox is created**, not when you signed up — time spent
+waiting on DNS costs you nothing.
+
+**It is fully working for those 30 days.** You send and receive like any other mailbox: replies land
+in the inbox, are matched to a contact, and appear on that contact's timeline.
 
 **The free inbox shows a countdown** at the top of the Inbox screen — "Free inbox: 12 days left" —
 so there is never a surprise.

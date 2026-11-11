@@ -1017,6 +1017,18 @@ async function openUpgradeModal() {
     // same envelope: without the unwrap `plans.forEach` did not exist and the modal could not list a
     // single plan (it painted an error instead of "No plans available")
     const plans = famList(await API.get('/billing/plans'), 'plans');
+    // The Inbox door ($1/mo, $10/yr): a STANDALONE plan, not a rung of the CRM ladder. It ships
+    // inactive until a payment page exists, so `GET /plans` (active only) never returns it — the
+    // console still has to SHOW it, with its own annual price and a request path, or the receive-only
+    // banner's "Keep inbox — $1/mo" would lead nowhere. Best-effort: if the read fails the modal
+    // simply lists the active plans.
+    try {
+      const inbox = await API.get('/billing/plans/slug/inbox');
+      const inboxPlan = inbox && (inbox.plan || inbox);
+      if (inboxPlan && inboxPlan.id && !plans.some(x => String(x.id) === String(inboxPlan.id))) {
+        plans.splice(Math.min(1, plans.length), 0, inboxPlan);
+      }
+    } catch (e) { /* the active ladder still renders */ }
     if (plans.length === 0) {
       document.querySelector('#modalContainer .modal-body').innerHTML = '<p class="empty-state">No plans available</p>';
       return;
@@ -1027,11 +1039,20 @@ async function openUpgradeModal() {
       // badge two rows, and the plans[0] fallback badged Free for every tenant
       const isCurrent = String(p.id) === String(STATE.planId);
       const price = p.price_monthly || p.price || 0;
-      const features = planFeatureList(p.features);
+      // The Inbox door is priced as a standalone door: monthly first, then the annual saving, and it
+      // must never be described as free (brief §5).
+      const isInbox = String(p.slug || '') === 'inbox';
+      const features = isInbox
+        ? ['One private inbox on your own domain', 'Send and receive with your own Mailgun account',
+           'Mailbox only — no CRM, calendar or campaigns']
+        : planFeatureList(p.features);
+      const priceLine = isInbox
+        ? `${price}<span>/mo</span><div style="font-size:12px;opacity:.75;margin-top:2px">$${p.price_yearly || 10}/yr — two months free</div>`
+        : `${price}<span>/mo</span>`;
       plansHtml += `<div class="plan-card${isCurrent?' current':''}">
         ${isCurrent ? '<span class="badge badge-primary plan-badge">Current</span>' : ''}
         <div class="plan-name">${escapeHtml(p.name)}</div>
-        <div class="plan-price">$${price}<span>/mo</span></div>
+        <div class="plan-price">$${priceLine}</div>
         <ul class="plan-features">
           ${features.map(f => `<li class="check">✓ ${escapeHtml(f)}</li>`).join('')}
         </ul>
@@ -8489,7 +8510,7 @@ window.appGuidePages = {
   telnyx:          { title: "Telnyx SMS/Voice", desc: "Send texts and place calls through your connected Telnyx number.", actions: ["Connect your Telnyx account", "Send a text", "Check the message log"] },
   "comm-log":      { title: "Communications Log", desc: "Every message in and out — email, text and calls — in one chronological history.", actions: ["Filter by contact or channel", "Open an entry to see its content"] },
   tickets:         { title: "Support Tickets", desc: "Support requests raised in your workspace and their status.", actions: ["Open a ticket", "Reply and change its status"] },
-  inbox:           { title: "Shared Inbox", desc: "Your mail in one place: every message that arrived at your workspace's addresses. On the Free plan you get one inbox on a CoreSwift address, fully working for 30 days — the screen shows a countdown, and when it ends the address keeps receiving while sending needs the $1 inbox or a CRM plan.", actions: ["Pick an address to narrow the list", "Open a message", "Mark one as a ticket", "Free plan: watch the \"Free inbox: N days left\" line", "Receive-only? Use Keep inbox — $1/mo or Upgrade CRM"] },
+  inbox:           { title: "Shared Inbox", desc: "Your mail in one place: every message that arrived at your workspace's addresses. On the Free plan you get one inbox on your own domain with your own Mailgun account — the Inbox screen walks you through it (domain and key, the mail records, then create), the 30-day clock starts when the inbox is created, and when it ends the address keeps receiving while sending needs the $1 inbox or a CRM plan.", actions: ["Pick an address to narrow the list", "Open a message", "Mark one as a ticket", "Free plan: follow the three setup steps and watch the \"Free inbox: N days left\" line", "Receive-only? Use Keep inbox — $1/mo or Upgrade CRM"] },
   "email-settings":{ title: "Email Domains & Sending", desc: "The sending half of your mail: the domains you send from, their catch-all switch, mailboxes, auto-replies and a form to send from a mailbox.", actions: ["Enable or disable catch-all on a domain", "Add a domain and check its verification", "Create a mailbox", "Catch-all is included in the plan, not the domain: if this workspace is moved to a plan that does not include it, the switch is remembered but mail to an address that does not exist on the domain is refused until you upgrade. The Catch-all cell says so, and never shows it as on."] },
   calendar:        { title: "Calendar", desc: "Events and appointments for you and your team.", actions: ["Create an event", "Open one to see its details"] },
   bookings:        { title: "Bookings", desc: "Appointment slots people can book with you, and the bookings they made.", actions: ["Set your availability", "Review upcoming bookings"] },
@@ -8560,7 +8581,7 @@ function auditExportCsv() {
 }
 </script>
 <script src="/inline-guide-widget.js?v=20261106a"></script>
-<script src="/private-email-inbox.js?v=20261111d"></script>
+<script src="/private-email-inbox.js?v=20261111e"></script>
 </body>
 </html>
 

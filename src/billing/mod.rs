@@ -24,6 +24,10 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/plans/registry",
             axum::routing::get(crate::plans::handlers::feature_registry),
         )
+        .route(
+            "/plans/slug/:slug",
+            axum::routing::get(handlers::get_plan_by_slug),
+        )
         .route("/plans/:id", axum::routing::get(handlers::get_plan))
         .route("/plans/:id", axum::routing::patch(handlers::update_plan))
         .route("/plans/:id", axum::routing::delete(handlers::delete_plan))

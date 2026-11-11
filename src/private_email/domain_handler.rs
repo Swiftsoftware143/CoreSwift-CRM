@@ -659,11 +659,64 @@ pub async fn domain_records(
         &mut records,
     );
 
+    // ── The two groups the setup page renders (David 2026-11-11, BYOK) ────────────────────────
+    // Mailgun returns two arrays; the page shows them as the customer's checklist, grouped by what
+    // each group BUYS them, plus the DMARC row Mailgun does not return. EVERY record here belongs to
+    // the customer's own provider (their Mailgun, their DNS) — nothing this app renders hands out our
+    // server's address or a CNAME to us: their domain never points at our infrastructure for mail,
+    // and there is no certificate of ours in the path.
+    let receiving: Vec<serde_json::Value> = records
+        .iter()
+        .filter(|r| r["section"] == "receiving")
+        .cloned()
+        .collect();
+    let mut sending: Vec<serde_json::Value> = records
+        .iter()
+        .filter(|r| r["section"] == "sending")
+        .cloned()
+        .collect();
+    let receiving_ok =
+        !receiving.is_empty() && receiving.iter().all(|r| r["valid"].as_bool() == Some(true));
+
+    // DMARC is not in Mailgun's DNS answer, and Gmail/Yahoo bulk-sender rules expect it. Without it
+    // a brand-new domain's first sends get filtered and the customer blames the inbox. It is
+    // reported with `valid: null` because Mailgun does not check it — the page must not claim a
+    // verdict it did not measure.
+    sending.push(json!({
+        "section": "sending",
+        "type": "TXT",
+        "name": format!("_dmarc.{}", domain),
+        "value": format!("v=DMARC1; p=none; rua=mailto:dmarc@{}", domain),
+        "priority": serde_json::Value::Null,
+        "valid": serde_json::Value::Null,
+        "checked_by_provider": false,
+        "purpose": "Tells receiving servers what to do with mail that fails your sending proof. Gmail and Yahoo expect this on a new domain.",
+    }));
+    let checked_sending: Vec<&serde_json::Value> = sending
+        .iter()
+        .filter(|r| r["checked_by_provider"] != json!(false))
+        .collect();
+    let sending_ok = !checked_sending.is_empty()
+        && checked_sending
+            .iter()
+            .all(|r| r["valid"].as_bool() == Some(true));
+
     Ok(Json(json!({
         "domain": domain,
+        "domain_id": domain_id,
         "verified": verified,
         "state": detail.get("state").and_then(|v| v.as_str()).unwrap_or("unknown"),
         "records": records,
+        // The setup page's checklist, in the order the customer must do it.
+        "groups": [
+            { "key": "receiving", "title": "Receiving — so your mail lands in CoreSwift", "records": receiving },
+            { "key": "sending", "title": "Sending proof — so your replies are not marked as spam", "records": sending },
+        ],
+        "receiving_ok": receiving_ok,
+        "sending_ok": sending_ok,
+        // The create-mailbox button is enabled by this, so a customer can never make an address that
+        // cannot receive. `provision_mailbox` refuses independently (a second door must not skip it).
+        "can_create_mailbox": verified && receiving_ok && sending_ok,
         "mailgun_state": detail.get("state").cloned().unwrap_or(serde_json::Value::Null),
     })))
 }

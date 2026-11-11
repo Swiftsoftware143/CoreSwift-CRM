@@ -138,6 +138,25 @@ pub async fn get_plan(
     Ok(Json(json!(plan)))
 }
 
+/// GET /api/billing/plans/slug/{slug} — one plan by slug, ACTIVE OR NOT.
+///
+/// The Inbox plan ($1/month, $10/year) ships `is_active = false` until a payment page exists, so
+/// `GET /plans` (which filters on `is_active`) cannot show it. This read is what lets the console
+/// display the standalone door honestly — its own annual price and a "Request this plan" path
+/// instead of a purchase button — without activating a plan nobody can pay for.
+pub async fn get_plan_by_slug(
+    State(s): State<AppState>,
+    Path(slug): Path<String>,
+) -> ApiResult<impl IntoResponse> {
+    let plan = sqlx::query_as::<_, Plan>("SELECT * FROM plans WHERE slug = $1")
+        .bind(&slug)
+        .fetch_optional(&s.db)
+        .await?
+        .ok_or(AppError::NotFound(format!("Plan {slug} not found")))?;
+
+    Ok(Json(json!(plan)))
+}
+
 /// PATCH /api/billing/plans/{id} — Update plan (admin only)
 pub async fn update_plan(
     State(s): State<AppState>,

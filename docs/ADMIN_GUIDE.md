@@ -566,9 +566,18 @@ no template and resolves the GLOBAL transport, not a workspace's.</li>
 
 ### What the free tier now includes
 
-Every `free` account gets **one mailbox** with full send + receive for **30 days**, then
+Every `free` account may create **one mailbox** on **their own domain** with **their own Mailgun
+account** (BYOK, David 2026-11-11). It is fully working — send + receive — for **30 days**, then
 **receive-only**. Mail is never deleted at expiry, and the address keeps receiving. This is a trial
 of the *sending* permission, not of the mailbox, and it is not a history window.
+
+**The 30-day clock starts when the first mailbox is created on a verified domain, never at signup.**
+A customer who spends five days waiting on DNS still gets their full month.
+
+There is deliberately **no CoreSwift-hosted trial address**: nothing is created on our domains and no
+mail of a free customer passes through our Mailgun account. A free signup opens the Inbox tab and
+gets a three-step setup checklist (add domain + Mailgun key → add the provider's records → create the
+inbox). Until step 3 succeeds there is no mailbox and no clock.
 
 ### Where the numbers live (no redeploy needed)
 
@@ -614,10 +623,31 @@ It ships **`is_active = false`** on purpose: this install has no working payment
 take money. Paste a real payment link onto the plan, confirm it opens, then `is_active = true` in the
 admin panel or a one-line UPDATE — that is the whole launch step.
 
-### Free-tier address domain
+### How a free account gets its mailbox (BYOK — the setup checklist)
 
-Free mailboxes live on **`mail.coreswiftcrm.com`** (operator config: `FREE_INBOX_DOMAIN`, plus
-`FREE_INBOX_WEBHOOK_SIGNING_KEY` for inbound authentication; the Mailgun key is `EMAIL_API_KEY`).
-Each free tenant gets its own `private_email_domains` row for that domain, carrying that tenant's
-sealed copy of the credentials, and addresses are unique **across tenants** on the shared domain —
-the inbound router matches on the address alone.
+`POST /api/private-email/free-inbox` no longer exists. The only path to a mailbox is the ordinary
+one every paid tier uses, driven by a checklist in the Inbox tab:
+
+1. **Domain + credential** — `POST /api/private-email/domains` with the customer's own Mailgun API
+   key and webhook signing key. Both are sealed (`secret_box`) and never echoed back.
+2. **Records** — `GET /api/private-email/domains/:id/records` returns Mailgun's own receiving and
+   sending arrays plus a DMARC row Mailgun does not return. Values are never hardcoded, and no value
+   is an IP address or a hostname of ours: every record belongs to the customer's provider.
+3. **Create the inbox** — `POST /api/private-email/boxes` on the verified domain. This is where
+   `access_mode = 'trial'` and `trial_started_at/trial_ends_at` are written.
+
+The response's `can_create_mailbox` (verified && receiving OK && sending-proof OK) drives the button;
+`provision_mailbox` refuses independently, so an API client cannot skip the readiness check.
+
+**DMARC:** the records page adds `TXT _dmarc v=DMARC1; p=none; rua=mailto:dmarc@<their-domain>`.
+Mailgun does not return it, and Gmail/Yahoo bulk-sender rules expect it on a new domain. It is
+reported with `valid: null` because Mailgun does not check it — the page never claims a verdict it
+did not measure.
+
+**Cloudflare traps the page states in plain words:** every mail record DNS-only (grey cloud, the
+orange proxy breaks mail), MX priority is its own field, the DKIM TXT is one long record, and one SPF
+per domain (merge `include:mailgun.org`, never add a second).
+
+Operator config that no longer applies to trials: `FREE_INBOX_DOMAIN` and
+`FREE_INBOX_WEBHOOK_SIGNING_KEY` were only used by the retired shared-address claim path. Existing
+rows created by it (e.g. the probe mailbox) keep working; no new one can be created.

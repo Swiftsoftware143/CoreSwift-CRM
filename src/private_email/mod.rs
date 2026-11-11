@@ -7,7 +7,6 @@ pub mod auto_reply_handler;
 pub mod domain_handler;
 pub mod encryption;
 pub mod feature_gate;
-pub mod free_inbox;
 pub mod mailbox_handler;
 pub mod messages_handler;
 pub mod models;
@@ -59,18 +58,14 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/boxes/:id",
             axum::routing::delete(mailbox_handler::delete_mailbox),
         )
-        // ── The FREE mailbox (CEO spec 2026-11-11) ──────────────────────────────────────────────
-        // A free account owns no domain and no provider, so the ordinary "add a domain, then a
-        // mailbox" path is a wall. `POST /free-inbox` gives it one address on CoreSwift's own
-        // domain with full function for the trial window; `GET /mailbox-status` is the console's
-        // countdown + fair-use meter, computed from the same registry rows the send path enforces.
-        .route(
-            "/free-inbox",
-            axum::routing::post(free_inbox::claim_free_inbox),
-        )
+        // ── The FREE mailbox's trial state (CEO spec / David 2026-11-11, BYOK) ───────────────────
+        // `GET /mailbox-status` is the console's countdown + fair-use meter, computed from the same
+        // registry rows the send path enforces. There is deliberately NO CoreSwift-hosted trial
+        // address: a free account brings its own domain and Mailgun account, verifies the domain,
+        // and only then does a mailbox (and the 30-day clock) exist.
         .route(
             "/mailbox-status",
-            axum::routing::get(free_inbox::mailbox_status),
+            axum::routing::get(trial::mailbox_status_handler),
         )
         // ── Messages: the inbox's own records (B204/B205/B211) ──────────────────────────────────
         // Every received message, the address it arrived on, and whether it also became a ticket.

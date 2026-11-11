@@ -33,7 +33,11 @@
     // The FREE mailbox's trial state (kanban t_2ef67217): read from the server, which computes it
     // from the same registry rows the send path enforces — so a countdown here can never promise
     // sending the send path would refuse.
-    status: null, claiming: false, claimErr: null
+    status: null,
+    // First-run setup (BYOK): the verified-domain records checklist, why it could not be read, the
+    // last refusal, and one busy flag shared by all three steps so a double click cannot add the
+    // domain twice.
+    records: null, recordsErr: null, setupErr: null, busy: false
   };
 
   function esc(s) {
@@ -69,38 +73,7 @@
   // ─────────────────────────────────────────────────────────────────────────────────────────────
 
   function inboxesHtml() {
-    if (!S.boxes.length && S.domains.length && !S.domains.some(function (d) { return d.verified; })) {
-      // Readiness rule (B211): an inbox cannot be CREATED until the domain's mail records are live.
-      // Existing inboxes are never hidden behind this notice — a working address that receives mail
-      // must stay visible and loggable even while another domain on the account is still waiting.
-      return '<div class="empty-state" style="padding:16px;text-align:left">'
-        + '<h4 style="margin:0 0 6px">Waiting for your mail records</h4>'
-        + '<p style="margin:0 0 8px">Your domain <strong>' + esc(S.domains[0].domain) + '</strong> is not receiving mail yet, so an inbox on it would not work. '
-        + 'Add the records at the company where your domain lives, wait until they show <strong>Active</strong>, then press <strong>Check again</strong>.</p>'
-        + '<button class="btn btn-secondary btn-sm" onclick="peCheckDomain(\'' + esc(S.domains[0].id) + '\')">Check again</button>'
-        + '<span id="peDomainMsg" style="margin-left:8px;opacity:.8"></span></div>';
-    }
-    if (!S.boxes.length) {
-      // The FREE plan has no domain and no provider, so "add a domain first" is a wall it cannot
-      // climb. Give it the CoreSwift address instead (the claim is normally automatic; this is the
-      // manual path, and the place a refusal — e.g. "that name is taken" — is shown).
-      var freePlan = S.status && !S.status.plan_sells_sending;
-      if (freePlan) {
-        return '<div class="empty-state" style="padding:16px;text-align:left">'
-          + '<h4 style="margin:0 0 6px">Your free inbox</h4>'
-          + '<p style="margin:0 0 8px">Your plan includes one mailbox on a CoreSwift address — no domain, no setup. ' + (S.claiming ? 'Setting it up…' : 'Name it below and it is ready to send and receive.') + '</p>'
-          + (S.claimErr ? '<p style="margin:0 0 8px;color:#b45309">' + esc(S.claimErr) + '</p>' : '')
-          + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'
-          + '<input id="peFreeLocal" placeholder="your name" style="flex:1">'
-          + '<span style="opacity:.75">@ ' + esc((S.status && S.status.free_inbox_domain) || 'coreswift') + '</span></div>'
-          + '<button class="btn btn-primary btn-sm" onclick="peClaimFree()">Create my free inbox</button></div>';
-      }
-      return '<div class="empty-state" style="padding:16px;text-align:left">'
-        + '<h4 style="margin:0 0 6px">No inboxes yet</h4>'
-        + '<p style="margin:0 0 8px">An inbox is an address people can write to — <strong>info@</strong>, <strong>support@</strong>, or your own name. '
-        + 'You need a domain that is already receiving mail before one can be created.</p>'
-        + '<button class="btn btn-primary btn-sm" onclick="peCreateInbox()">Create your first inbox</button></div>';
-    }
+    if (!S.boxes.length) return setupHtml();
     var rows = S.boxes.map(function (b) {
       var dom = S.domains.filter(function (d) { return d.id === b.domain_id; })[0] || {};
       var count = (S.addresses.filter(function (a) { return a.address === b.email_address; })[0] || {}).total || 0;
@@ -125,6 +98,123 @@
     return '<table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:left;opacity:.7">'
       + '<th style="padding:6px 8px">Inbox</th><th style="padding:6px 8px">Status</th><th style="padding:6px 8px">Messages</th><th></th>'
       + '</tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+  // First-run setup (David 2026-11-11 — BYOK from day one)
+  //
+  // There is NO CoreSwift-hosted trial address. The customer brings their own domain and their own
+  // Mailgun account, and this checklist IS the onboarding: add the domain and the Mailgun key, add
+  // the provider's records at their DNS host, then create the inbox. The 30-day free month starts
+  // when the mailbox is created on a VERIFIED domain, so a slow DNS change never eats the trial.
+  //
+  // Nothing here renders an IP address: every record value is the customer's own provider's name or
+  // one of our hostnames. The create button stays disabled until receiving AND sending proof verify,
+  // so nobody can make an address that cannot receive mail.
+  // ─────────────────────────────────────────────────────────────────────────────────────────────
+
+  function badgeFor(r) {
+    if (r.optional && r.valid == null) return '<span style="background:#e5e7eb;color:#374151;padding:1px 7px;border-radius:8px;font-size:11px">Optional</span>';
+    if (r.valid === true) return '<span style="background:#dcfce7;color:#166534;padding:1px 7px;border-radius:8px;font-size:11px">Active</span>';
+    if (r.valid === false) return '<span style="background:#fef3c7;color:#92400e;padding:1px 7px;border-radius:8px;font-size:11px">Waiting</span>';
+    return '<span style="background:#e0f2fe;color:#075985;padding:1px 7px;border-radius:8px;font-size:11px">Add this</span>';
+  }
+
+  function recordRowHtml(r) {
+    return '<tr>'
+      + '<td style="padding:6px 8px;white-space:nowrap"><strong>' + esc(r.type) + '</strong></td>'
+      + '<td style="padding:6px 8px;font-family:monospace;font-size:12px;word-break:break-all">' + esc(r.name) + '</td>'
+      + '<td style="padding:6px 8px;font-family:monospace;font-size:12px;word-break:break-all;max-width:420px">' + esc(r.value) + '</td>'
+      + '<td style="padding:6px 8px;text-align:center">' + (r.priority == null ? '' : esc(String(r.priority))) + '</td>'
+      + '<td style="padding:6px 8px;white-space:nowrap">' + badgeFor(r) + '</td>'
+      + '<td style="padding:6px 8px;text-align:right"><button class="btn btn-ghost btn-xs" data-copy="'
+      + esc(r.value) + '" onclick="peCopy(this)">Copy</button></td>'
+      + '</tr>';
+  }
+
+  function recordsHtml(rec) {
+    var out = '';
+    var groups = rec.groups || [];
+    groups.forEach(function (g) {
+      var rows = (g.records || []).map(recordRowHtml).join('');
+      if (!rows) return;
+      out += '<h5 style="margin:14px 0 4px">' + esc(g.title) + '</h5>'
+        + '<table style="width:100%;border-collapse:collapse;margin-bottom:4px"><thead><tr style="text-align:left;opacity:.6;font-size:11px">'
+        + '<th style="padding:4px 8px">Type</th><th style="padding:4px 8px">Name</th><th style="padding:4px 8px">Value</th>'
+        + '<th style="padding:4px 8px">Priority</th><th style="padding:4px 8px">Status</th><th></th>'
+        + '</tr></thead><tbody>' + rows + '</tbody></table>';
+    });
+    return out;
+  }
+
+  function trapsHtml() {
+    return '<div style="margin:12px 0;padding:10px 12px;border-left:3px solid #93c5fd;background:rgba(147,197,253,.12);font-size:13px">'
+      + '<strong>If your domain is on Cloudflare, five things save you a support ticket:</strong><ul style="margin:6px 0 0 18px;padding:0">'
+      + '<li>Every mail record must be <strong>DNS only (grey cloud)</strong> — the orange proxy breaks mail.</li>'
+      + '<li><strong>MX priority</strong> is its own field; it is not part of the value.</li>'
+      + '<li>The DKIM value is very long — add it as <strong>one</strong> record; Cloudflare splits long text itself.</li>'
+      + '<li><strong>One SPF record per domain.</strong> If you already have one, merge <code>include:mailgun.org</code> into it — do not add a second.</li>'
+      + '<li>Add the domain in <strong>your Mailgun account first</strong>, then paste these records, then press Check again.</li>'
+      + '</ul></div>';
+  }
+
+  function setupHtml() {
+    var d = (S.domains || [])[0];
+    var rec = (d && S.records && String(S.records.domain_id) === String(d.id)) ? S.records : null;
+    var busy = S.busy;
+    var err = S.setupErr ? '<p style="margin:0 0 8px;color:#b45309">' + esc(S.setupErr) + '</p>' : '';
+
+    // ── Step 1: the domain + the customer's own Mailgun key ──────────────────────────────────
+    var step1;
+    if (d) {
+      step1 = '<div style="margin:4px 0 0"><strong>' + esc(d.domain) + '</strong> — '
+        + (d.verified ? '<span style="color:#166534">verified</span>' : '<span style="color:#92400e">waiting for its records</span>')
+        + '</div>';
+    } else {
+      step1 = '<p style="margin:6px 0 10px;font-size:13px;opacity:.85">You need two things you already control: a domain (from Cloudflare or your registrar) and a Mailgun account. Your mail runs through your own accounts — it never passes through ours.</p>'
+        + '<div class="form-group"><label>Your domain</label><input id="peSetupDomain" placeholder="yourbusiness.com" autocomplete="off"></div>'
+        + '<div class="form-group"><label>Mailgun region</label><select id="peSetupRegion"><option value="us">United States (api.mailgun.net)</option><option value="eu">Europe (api.eu.mailgun.net)</option></select></div>'
+        + '<div class="form-group"><label>Mailgun API key</label><input id="peSetupKey" type="password" placeholder="key-…" autocomplete="off"><p style="font-size:12px;opacity:.7;margin:4px 0 0">In Mailgun: Settings → API keys. It is stored sealed and never shown again.</p></div>'
+        + '<div class="form-group"><label>Mailgun webhook signing key <span style="opacity:.7">(so incoming mail can be verified)</span></label><input id="peSetupHook" type="password" placeholder="from Mailgun → Settings → Webhooks" autocomplete="off"></div>'
+        + '<button class="btn btn-primary btn-sm" ' + (busy ? 'disabled' : '') + ' onclick="peSetupAddDomain()">' + (busy ? 'Adding…' : 'Add my domain') + '</button>'
+        + '<p style="font-size:12px;opacity:.7;margin:8px 0 0">Nothing is charged and no inbox exists until your domain passes its check.</p>';
+    }
+
+    // ── Step 2: the records ──────────────────────────────────────────────────────────────────
+    var step2;
+    if (!d) {
+      step2 = '<p style="margin:6px 0;opacity:.7">Your records appear here once the domain is added.</p>';
+    } else if (rec) {
+      step2 = recordsHtml(rec) + trapsHtml()
+        + '<div style="display:flex;align-items:center;gap:10px;margin-top:6px">'
+        + '<button class="btn btn-secondary btn-sm" ' + (busy ? 'disabled' : '') + ' onclick="peCheckAgain()">' + (busy ? 'Checking…' : 'Check again') + '</button>'
+        + '<span id="peDomainMsg" style="opacity:.8;font-size:13px">'
+        + (rec.can_create_mailbox ? 'Everything checks out — create your inbox below.' : 'Waiting for the records to go live. A failed check changes nothing.')
+        + '</span></div>'
+        + '<p style="font-size:12px;opacity:.7;margin:6px 0 0">Where do these go? Cloudflare: DNS → Records → Add record. Any other registrar: their DNS / “manage DNS” page. Use the Copy button on each row.</p>';
+    } else {
+      step2 = '<p style="margin:6px 0;opacity:.85">We could not read your records yet' + (S.recordsErr ? ': ' + esc(S.recordsErr) : '') + '.</p>'
+        + '<button class="btn btn-secondary btn-sm" onclick="peCheckAgain()">Check again</button>';
+    }
+
+    // ── Step 3: the mailbox (and the start of the free month) ────────────────────────────────
+    var ready = !!(d && rec && rec.can_create_mailbox);
+    var step3 = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'
+      + '<input id="peSetupLocal" placeholder="info" style="flex:1;max-width:260px" ' + (ready ? '' : 'disabled') + '>'
+      + '<span style="opacity:.75">@ ' + esc(d ? d.domain : 'your domain') + '</span></div>'
+      + '<button class="btn btn-primary btn-sm" ' + (ready && !busy ? '' : 'disabled') + ' onclick="peSetupCreateInbox()">'
+      + (ready ? 'Create my inbox' : 'Create my inbox — waiting for the records') + '</button>'
+      + '<p style="font-size:12px;opacity:.7;margin:8px 0 0">Your free month starts when the inbox is created, not before — so time spent waiting on DNS costs you nothing. It runs for 30 days with full send and receive; after that the address keeps receiving and only sending stops, unless you keep it for $1/month or upgrade the CRM. No mail is ever deleted.</p>';
+
+    return '<div style="padding:2px;text-align:left">'
+      + '<h4 style="margin:0 0 4px">Set up your inbox</h4>'
+      + '<p style="margin:0 0 12px;font-size:13px;opacity:.85">Your plan includes one private inbox, on your own domain, with your own Mailgun account. Three steps and it is live — this page stays here until it is done.</p>'
+      + err
+      + '<ol style="margin:0;padding-left:18px">'
+      + '<li style="margin-bottom:14px"><strong>Tell us your domain</strong>' + (d ? '' : ' and paste your Mailgun keys') + '<div style="margin-top:6px">' + step1 + '</div></li>'
+      + '<li style="margin-bottom:14px"><strong>Add the mail records at your DNS provider</strong><div style="margin-top:6px">' + step2 + '</div></li>'
+      + '<li style="margin-bottom:6px"><strong>Create your inbox</strong><div style="margin-top:6px">' + step3 + '</div></li>'
+      + '</ol></div>';
   }
 
   function addressFilterHtml() {
@@ -242,7 +332,7 @@
       + '<div><h3 style="margin:0">Mail</h3><span style="opacity:.7;font-size:13px">'
       + (c.unread || 0) + ' unread · ' + (c.tickets || 0) + ' turned into tickets · ' + fmtBytes(c.used_bytes) + ' of ' + fmtBytes(c.limit_bytes) + ' used'
       + '</span></div>'
-      + '<button class="btn btn-primary btn-sm" onclick="peCreateInbox()">+ Create new inbox</button></div>'
+      + '<button class="btn btn-primary btn-sm"' + (S.boxes.length ? '' : ' style="display:none"') + ' onclick="peCreateInbox()">+ Create new inbox</button></div>'
       + (S.err ? '<div style="padding:8px;margin-bottom:8px;border-radius:6px;background:rgba(220,80,80,.15)">' + esc(S.err) + '</div>' : '')
       + trialBannerHtml()
       + '<div style="padding:14px;border:1px solid rgba(128,128,128,.3);border-radius:8px;margin-bottom:16px">'
@@ -294,6 +384,23 @@
       };
       S.status = results[6] || null;
       S.err = null;
+      // First-run setup (BYOK): with no mailbox yet, the checklist needs the domain's records. Read
+      // them through the app's own endpoint — Mailgun's values, never a hardcoded DKIM — and keep a
+      // failure in `recordsErr` so the page can say so instead of rendering an empty checklist.
+      if (!S.boxes.length) {
+        if (S.domains.length) {
+          try {
+            S.records = await api().get('/private-email/domains/' + S.domains[0].id + '/records');
+            S.recordsErr = null;
+          } catch (e) {
+            S.records = null;
+            S.recordsErr = fail(e);
+          }
+        } else {
+          S.records = null;
+          S.recordsErr = null;
+        }
+      }
     } catch (e) {
       S.err = fail(e);
       S.messages = [];
@@ -302,24 +409,6 @@
     Array.prototype.forEach.call(document.querySelectorAll('.pe-row'), function (r) {
       r.onclick = function () { window.peOpenMessage(r.getAttribute('data-id')); };
     });
-    // ── A FREE SIGNUP GETS A WORKING MAILBOX THE SAME MINUTE (brief §7.1) ────────────────────────
-    // No card, no domain, no button to find: the first time a free account opens this tab, claim the
-    // shared CoreSwift address on its behalf. Guarded by `claiming` + an empty mailbox list, so it
-    // cannot loop, and the POST is idempotent server-side (a double click returns the same box).
-    if (!S.boxes.length && S.status && !S.status.plan_sells_sending && !S.claiming && !S.claimErr) {
-      S.claiming = true;
-      try {
-        await api().post('/private-email/free-inbox', {});
-        S.claiming = false;
-        toastMsg('Your free inbox is ready', 'success');
-        load();
-        return;
-      } catch (e) {
-        S.claiming = false;
-        S.claimErr = fail(e);
-        el.innerHTML = render();
-      }
-    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -332,36 +421,118 @@
     if (!w) toastMsg('Allow pop-ups for this site to open your mail client', 'error');
   };
 
+  // Re-ask Mailgun for this domain's state, then reload (which re-reads the records checklist).
+  // A failed check changes nothing — the row, the credential and any existing mailbox are untouched.
   window.peCheckDomain = async function (domainId) {
     var m = document.getElementById('peDomainMsg');
     if (m) m.textContent = 'Checking…';
     try {
       var r = await api().post('/private-email/domains/' + domainId + '/verify', {});
-      if (m) m.textContent = r.verified ? 'Active — you can create an inbox now' : ('Still ' + (r.mailgun_state || 'waiting') + ' — the records have not gone live yet');
-      if (r.verified) load();
+      if (m) m.textContent = r.verified
+        ? 'Active — the records are live.'
+        : ('Still ' + (r.mailgun_state || 'waiting') + ' — the records have not gone live yet. ');
+      load();
     } catch (e) {
       if (m) m.textContent = fail(e);
     }
   };
 
-  // The manual door to the free address (the automatic claim in `load` is the normal path). The
-  // server owns the rules — name length, reserved words, and uniqueness across every tenant on the
-  // shared domain — and answers with a sentence, which is shown where the user is looking.
-  window.peClaimFree = async function () {
-    var inp = document.getElementById('peFreeLocal');
-    var local = ((inp && inp.value) || '').trim();
-    S.claimErr = null;
-    S.claiming = true;
-    load();
+  // The three setup doors (David 2026-11-11, BYOK). The server owns every rule — plan ceiling, key
+  // validity, domain readiness — and answers with a sentence, which is shown where the user is
+  // looking rather than as a disappearing toast.
+  window.peCheckAgain = function () {
+    var d = (S.domains || [])[0];
+    if (!d) { load(); return; }
+    window.peCheckDomain(d.id);
+  };
+
+  window.peSetupAddDomain = async function () {
+    if (S.busy) return;
+    var nameEl = document.getElementById('peSetupDomain');
+    var keyEl = document.getElementById('peSetupKey');
+    var hookEl = document.getElementById('peSetupHook');
+    var regionEl = document.getElementById('peSetupRegion');
+    var domain = ((nameEl && nameEl.value) || '').trim().toLowerCase()
+      .replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    var key = ((keyEl && keyEl.value) || '').trim();
+    var hook = ((hookEl && hookEl.value) || '').trim();
+    S.setupErr = null;
+    if (!domain || domain.indexOf('.') < 0) {
+      S.setupErr = 'Enter the domain you own, for example yourbusiness.com.';
+      load(); return;
+    }
+    if (!key) {
+      S.setupErr = 'Paste the Mailgun API key for this domain — it is what lets us read its mail records.';
+      load(); return;
+    }
+    var payload = {
+      domain: domain,
+      provider_type: 'mailgun',
+      mailgun_api_key: key,
+      mailgun_region: (regionEl && regionEl.value) || 'us'
+    };
+    // Only sent when typed: without it the domain is send-only and inbound deliveries are refused,
+    // so the setup page asks for it rather than discovering the gap on the first reply.
+    if (hook) payload.webhook_signing_key = hook;
+    S.busy = true;
+    render();
     try {
-      await api().post('/private-email/free-inbox', local ? { local_part: local } : {});
-      S.claiming = false;
-      toastMsg('Your free inbox is ready', 'success');
+      await api().post('/private-email/domains', payload);
+      S.busy = false;
+      toastMsg('Domain added — now add the records it lists', 'success');
       load();
     } catch (e) {
-      S.claiming = false;
-      S.claimErr = fail(e);
+      S.busy = false;
+      S.setupErr = fail(e);
+      render();
+    }
+  };
+
+  window.peCopy = function (btn) {
+    var text = (btn && btn.getAttribute('data-copy')) || '';
+    function done() { var old = btn.textContent; btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = old; }, 1500); }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text, done); });
+    } else {
+      fallbackCopy(text, done);
+    }
+  };
+
+  function fallbackCopy(text, done) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) { toastMsg('Select the value and copy it by hand', 'error'); }
+    document.body.removeChild(ta);
+  }
+
+  window.peSetupCreateInbox = async function () {
+    if (S.busy) return;
+    var d = (S.domains || [])[0];
+    var inp = document.getElementById('peSetupLocal');
+    var local = ((inp && inp.value) || '').trim().replace(/@.*$/, '');
+    S.setupErr = null;
+    if (!d) { load(); return; }
+    if (!local) {
+      S.setupErr = 'Choose the part before the @ sign — for example info or your own name.';
+      load(); return;
+    }
+    S.busy = true;
+    render();
+    try {
+      // The server starts the 30-day clock HERE, on a verified domain (never at signup), so a slow
+      // DNS change costs the customer nothing.
+      await api().post('/private-email/boxes', { domain_id: d.id, local_part: local });
+      S.busy = false;
+      toastMsg('Your inbox is live — send and receive is on for 30 days', 'success');
       load();
+    } catch (e) {
+      S.busy = false;
+      S.setupErr = fail(e);
+      render();
     }
   };
 
