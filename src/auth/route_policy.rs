@@ -107,8 +107,13 @@
 //!        no allowlist, measured live with no credential: the boundary answers
 //!        `{"error":"Authentication required"}`) and its confirm twin
 //!        `POST /api/auth/email-change/confirm`, anonymous by necessity and named in
-//!        [`PUBLIC_ROUTES`] — the token in the mailed link IS the credential. Now 391 mounted
-//!        `.route(..)` calls, 379 mounts on /api/** (391 = 379 /api + the 12 root-level mounts).
+//!        [`PUBLIC_ROUTES`] — the token in the mailed link IS the credential.
+//!        RE-MEASURED from source, not incremented: this tree actually carried 391 mounted
+//!        `.route(..)` calls / 379 on /api** BEFORE this card, i.e. two mounts more than the 389/377
+//!        the census had pinned (the drift the paragraph above describes, repeated — the gate never
+//!        runs `cargo test`, so nothing caught it). With these two mounts the measured counts are
+//!        393 mounted `.route(..)` calls and 381 mounts on /api** (393 = 381 /api + the 12
+//!        root-level mounts), and those are what `the_census_shape_is_what_the_docs_say` pins.
 //!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
@@ -116,7 +121,9 @@
 //!        t_e968e9ad: `/api/admin/provisioning-config` and
 //!        `/api/v1/internal/provision-free-account`) were measured the same way and each answered
 //!        401 anonymous; both are named in the lists below
-//!    27 deliberate anonymous entries  -> PUBLIC_ROUTES  (24 /api + 3 /inbound)
+//!    28 deliberate anonymous entries  -> PUBLIC_ROUTES  (25 /api + 3 /inbound) — COUNTS ARRAY
+//!        ENTRIES: measured 27 (24 /api + 3 /inbound) before the confirm arm above was added,
+//!        i.e. one more than the 26 this line used to claim
 //!    16 service-to-service entries    -> INTERNAL_ROUTES (all /api, reached with the shared key)
 //!     2 issued-API-key entries        -> API_KEY_ROUTES  (/api/external/**)
 //!    11 served surfaces outside the boundary: the SPA mount, /track/:slug, the eight
@@ -1076,12 +1083,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            391,
+            393,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 379,
+            api, 381,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.
