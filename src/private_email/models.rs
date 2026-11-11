@@ -169,6 +169,10 @@ pub struct ProvisionMailboxRequest {
 pub struct SendEmailRequest {
     pub from_address: String,
     pub to: String,
+    #[serde(default)]
+    pub cc: Vec<String>,
+    #[serde(default)]
+    pub bcc: Vec<String>,
     pub subject: String,
     pub body: String,
     pub in_reply_to: Option<String>,

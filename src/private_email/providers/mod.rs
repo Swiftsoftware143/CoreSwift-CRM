@@ -64,11 +64,18 @@ pub trait EmailProvider: Send + Sync {
     fn name(&self) -> &'static str;
 
     /// Send an outbound email. Returns result with optional provider message ID.
+    ///
+    /// `cc` and `bcc` are separate from `to` on purpose: folding a blind copy into the visible
+    /// recipient list would publish the very addresses the sender hid. Both are honoured by every
+    /// provider this app ships (Mailgun's own `cc`/`bcc` fields, lettre's `.cc()`/`.bcc()`).
+    #[allow(clippy::too_many_arguments)]
     async fn send(
         &self,
         config: &ProviderConfig,
         from: &str,
         to: &str,
+        cc: &[String],
+        bcc: &[String],
         subject: &str,
         body_html: &str,
         in_reply_to: Option<&str>,

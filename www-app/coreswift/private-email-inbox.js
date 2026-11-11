@@ -52,7 +52,10 @@
     if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
     return n + ' B';
   }
-  function api() { return window.API; }
+  // The console declares `const API = {...}` at top level: a const does NOT become a window
+  // property, so `window.API` is undefined while the bare name resolves. Reading the bare name
+  // (with a window fallback for a build that does attach it) is what makes the tab work at all.
+  function api() { return (typeof API !== 'undefined') ? API : window.API; }
   function fail(e) { return (e && (e.message || e.error)) || String(e); }
   function toastMsg(m, t) { if (window.toast) window.toast(m, t || 'info'); }
 
@@ -61,8 +64,10 @@
   // ─────────────────────────────────────────────────────────────────────────────────────────────
 
   function inboxesHtml() {
-    if (S.domains.length && !S.domains.some(function (d) { return d.verified; })) {
-      // Readiness rule (B211): an inbox cannot exist until the domain's mail records are live.
+    if (!S.boxes.length && S.domains.length && !S.domains.some(function (d) { return d.verified; })) {
+      // Readiness rule (B211): an inbox cannot be CREATED until the domain's mail records are live.
+      // Existing inboxes are never hidden behind this notice — a working address that receives mail
+      // must stay visible and loggable even while another domain on the account is still waiting.
       return '<div class="empty-state" style="padding:16px;text-align:left">'
         + '<h4 style="margin:0 0 6px">Waiting for your mail records</h4>'
         + '<p style="margin:0 0 8px">Your domain <strong>' + esc(S.domains[0].domain) + '</strong> is not receiving mail yet, so an inbox on it would not work. '
@@ -79,8 +84,10 @@
     }
     var rows = S.boxes.map(function (b) {
       var dom = S.domains.filter(function (d) { return d.id === b.domain_id; })[0] || {};
-      var ready = !!dom.verified;
       var count = (S.addresses.filter(function (a) { return a.address === b.email_address; })[0] || {}).total || 0;
+      // An address that has actually RECEIVED mail is working, whatever a stale `verified` flag says
+      // — the flag is Mailgun's word at the last check, and mail in the inbox is proof.
+      var ready = !!dom.verified || count > 0;
       return '<tr>'
         + '<td style="padding:8px"><strong>' + esc(b.email_address) + '</strong>'
         + (b.creates_ticket ? ' <span style="background:#e0f2fe;color:#075985;padding:1px 6px;border-radius:8px;font-size:11px">tickets</span>' : '')

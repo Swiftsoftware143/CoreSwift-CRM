@@ -92,13 +92,15 @@
 //!        `ticket_id`) and a body with no content type answers 415 — i.e. the global layer lets it
 //!        through exactly as PUBLIC_ROUTES declares, and it is not a 401 by accident.
 //!
-//!   +10 routes / +10 mounts (2026-11-11, the inbox's own records — B204/B205/B211): the private
-//!        email router gained /messages, /messages/counts, /messages/:id (get/patch/delete),
-//!        /messages/:id/ticket, /messages/:id/reply, /addresses, /folders/action, /labels,
-//!        /labels/:id and /labels/:id/apply. Every one is a tenant data surface, so none is named in
-//!        PUBLIC_ROUTES: measured anonymous they answer 401. Re-counted from source now: 384
-//!        mounted `.route(..)` calls, 372 mounts on /api/** (384 = 372 /api + the 12 root-level
-//!        mounts). The count is pinned by `the_census_shape_is_what_the_docs_say`.
+//!   +15 routes / +15 mounts (2026-11-11, the inbox's own records — B204/B205/B211): the private
+//!        email router gained /messages, /messages/counts, /messages/drafts,
+//!        /messages/:id (get/patch/delete), /messages/:id/ticket, /messages/:id/reply,
+//!        /messages/:id/summarize, /members, /addresses, /folders, /folders/action, /labels,
+//!        /labels/:id, /labels/:id/apply and /domains/:id/records. Every one is a tenant data
+//!        surface, so none is named in PUBLIC_ROUTES: measured anonymous they answer 401.
+//!        Re-counted from source now: 389 mounted `.route(..)` calls, 377 mounts on /api/**
+//!        (389 = 377 /api + the 12 root-level mounts). The count is pinned by
+//!        `the_census_shape_is_what_the_docs_say`.
 //!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
@@ -1059,12 +1061,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            384,
+            389,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 372,
+            api, 377,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

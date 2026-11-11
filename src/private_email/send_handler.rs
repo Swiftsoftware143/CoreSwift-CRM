@@ -20,6 +20,8 @@ pub async fn deliver(
     tenant_id: Uuid,
     from_address: &str,
     to: &str,
+    cc: &[String],
+    bcc: &[String],
     subject: &str,
     body: &str,
     in_reply_to: Option<&str>,
@@ -50,6 +52,8 @@ pub async fn deliver(
             &provider_config,
             from_address,
             to,
+            cc,
+            bcc,
             subject,
             &body,
             in_reply_to,
@@ -82,6 +86,8 @@ pub async fn send_email(
         account_id,
         &req.from_address,
         &req.to,
+        &req.cc,
+        &req.bcc,
         &req.subject,
         &req.body,
         req.in_reply_to.as_deref(),
@@ -357,7 +363,16 @@ pub async fn send_via_provider(
     let config = load_provider_config(db, domain_id, tenant_id).await?;
     let provider = providers::provider_for(&config);
     let result = provider
-        .send(&config, from_address, to, subject, body_html, None)
+        .send(
+            &config,
+            from_address,
+            to,
+            &[],
+            &[],
+            subject,
+            body_html,
+            None,
+        )
         .await;
 
     if result.success {

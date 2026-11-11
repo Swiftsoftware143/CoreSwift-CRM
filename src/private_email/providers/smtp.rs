@@ -17,11 +17,14 @@ impl EmailProvider for SmtpProvider {
         "smtp"
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn send(
         &self,
         config: &ProviderConfig,
         from: &str,
         to: &str,
+        cc: &[String],
+        bcc: &[String],
         subject: &str,
         body_html: &str,
         in_reply_to: Option<&str>,
@@ -89,6 +92,16 @@ impl EmailProvider for SmtpProvider {
 
         if let Some(ref reply_to) = in_reply_to {
             msg_builder = msg_builder.in_reply_to(reply_to.to_string());
+        }
+        for addr in cc {
+            if let Ok(mailbox) = addr.parse() {
+                msg_builder = msg_builder.cc(mailbox);
+            }
+        }
+        for addr in bcc {
+            if let Ok(mailbox) = addr.parse() {
+                msg_builder = msg_builder.bcc(mailbox);
+            }
         }
 
         let msg = match msg_builder

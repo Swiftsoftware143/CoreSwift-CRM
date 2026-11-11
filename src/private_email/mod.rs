@@ -34,6 +34,12 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/domains/:id/verify",
             axum::routing::post(domain_handler::verify_domain),
         )
+        // The records the customer must add, in plain English (B205 setup page). Values come from
+        // Mailgun itself, never from a doc.
+        .route(
+            "/domains/:id/records",
+            axum::routing::get(domain_handler::domain_records),
+        )
         // Mailbox management
         .route(
             "/boxes",
@@ -64,6 +70,11 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/messages/counts",
             axum::routing::get(messages_handler::message_counts),
         )
+        // The composer's own store — Drafts has to be able to hold something (B205).
+        .route(
+            "/messages/drafts",
+            axum::routing::post(messages_handler::save_draft),
+        )
         .route(
             "/messages/:id",
             axum::routing::get(messages_handler::get_message)
@@ -78,10 +89,27 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/messages/:id/reply",
             axum::routing::post(messages_handler::reply_to_message),
         )
+        // One-click summary of a thread, using the account's own AI provider. Refuses with a plain
+        // sentence when no key is configured, so the client can hide the control.
+        .route(
+            "/messages/:id/summarize",
+            axum::routing::post(messages_handler::summarize_message),
+        )
+        // The people a message can be assigned to — this account's members only.
+        .route(
+            "/members",
+            axum::routing::get(messages_handler::list_members),
+        )
         // The address filter's source of truth: every address this account receives on, plus MISC.
         .route(
             "/addresses",
             axum::routing::get(messages_handler::list_addresses),
+        )
+        // The rail: system folders with live counts plus real subfolders.
+        .route(
+            "/folders",
+            axum::routing::get(messages_handler::list_folders)
+                .post(messages_handler::create_folder),
         )
         // Mark all read / unread, and empty Spam or Trash (destructive, always reports a count).
         .route(
@@ -91,8 +119,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         // Labels: name + colour, per account, applied to one or many messages.
         .route(
             "/labels",
-            axum::routing::get(messages_handler::list_labels)
-                .post(messages_handler::create_label),
+            axum::routing::get(messages_handler::list_labels).post(messages_handler::create_label),
         )
         .route(
             "/labels/:id",

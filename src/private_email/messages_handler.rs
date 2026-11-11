@@ -49,6 +49,10 @@ pub struct ListQuery {
     pub address: Option<String>,
     #[serde(default)]
     pub q: Option<String>,
+    /// A label id: only messages carrying that label. The sidebar's label rows are filters, and a
+    /// filter that does nothing would be a dead control.
+    #[serde(default)]
+    pub label: Option<String>,
     #[serde(default)]
     pub limit: Option<i64>,
     #[serde(default)]
@@ -142,6 +146,9 @@ pub async fn list_messages(
                  OR m.subject ILIKE '%' || $4 || '%'
                  OR m.from_address ILIKE '%' || $4 || '%'
                  OR m.snippet ILIKE '%' || $4 || '%' )
+           AND ( $7::text = ''
+                 OR EXISTS (SELECT 1 FROM private_email_message_labels ml
+                             WHERE ml.message_id = m.id AND ml.label_id::text = $7) )
          ORDER BY m.received_at DESC
          LIMIT $5 OFFSET $6
         "#,
@@ -152,6 +159,7 @@ pub async fn list_messages(
     .bind(&search)
     .bind(limit)
     .bind(offset)
+    .bind(q.label.as_deref().unwrap_or("").to_string())
     .fetch_all(&state.db)
     .await
     .map_err(AppError::Database)?;
@@ -220,6 +228,9 @@ pub async fn message_counts(
         "used_bytes": used,
         "limit_bytes": limit_bytes,
         "storage_gb": storage_gb,
+        // Whether the Summarise control can work at all. The client hides it when false rather
+        // than offering a button that can only fail (B205 "no dead ends").
+        "ai_summary": !ai_keys(&state, tenant_id).await.is_empty(),
     })))
 }
 
@@ -455,7 +466,10 @@ pub async fn delete_message(
         .ok_or_else(|| AppError::NotFound("Message not found".into()))?
         .0;
 
-    if folder == "trash" || folder == "spam" {
+    // A DRAFT is the user's own unsent text: discarding it is the only meaning "delete" can have,
+    // and parking it in Trash would leave the bits of an abandoned letter in a folder that claims to
+    // hold received mail.
+    if folder == "trash" || folder == "spam" || folder == "drafts" {
         // Ticket rows are the WORK RECORD and are not destroyed by a mailbox action; the message
         // row goes, the ticket it created stays where the team can still see it.
         sqlx::query("DELETE FROM private_email_messages WHERE id = $1 AND tenant_id = $2")
@@ -616,12 +630,32 @@ pub async fn reply_to_message(
         ));
     }
 
+    // Reply-all carries the original Cc back to everyone it reached, minus this account's own
+    // addresses (a person does not need a copy of their own reply). A plain reply and a forward
+    // send to one addressee.
+    let mut cc: Vec<String> = Vec::new();
+    if mode == "reply_all" {
+        if let Some(list) = original
+            .try_get::<Option<String>, _>("cc_address")
+            .unwrap_or(None)
+        {
+            for addr in list.split(',') {
+                let a = addr.trim().to_lowercase();
+                if !a.is_empty() && a != req.from_address.to_lowercase() && a != to.to_lowercase() {
+                    cc.push(a);
+                }
+            }
+        }
+    }
+
     // Reuse the one send path.
     crate::private_email::send_handler::deliver(
         &state.db,
         tenant_id,
         &req.from_address,
         &to,
+        &cc,
+        &[],
         &subject,
         &req.body,
         None,
@@ -681,6 +715,37 @@ pub async fn folder_action(
             .map_err(AppError::Database)?
             .rows_affected();
             Ok(Json(json!({ "updated": n, "is_read": want })))
+        }
+        // Archive's own two extra actions (B205). Both are MOVES, never destruction: "Move all to
+        // Inbox" puts the mail back where a human will see it, and "Delete all messages" puts it in
+        // Trash where it stays restorable. Only Spam and Trash destroy.
+        "to_inbox" | "trash_all" => {
+            if folder != "archive" {
+                return Err(AppError::BadRequest(
+                    "Those actions belong to Archive. Elsewhere the message actions are per message, \
+                     so nothing is moved in bulk by accident."
+                        .into(),
+                ));
+            }
+            let target = if req.action == "to_inbox" {
+                "inbox"
+            } else {
+                "trash"
+            };
+            let n = sqlx::query(
+                "UPDATE private_email_messages
+                    SET folder = $3, updated_at = NOW()
+                  WHERE tenant_id = $1
+                    AND (folder = $2 OR folder LIKE $2 || '/%')",
+            )
+            .bind(tenant_id)
+            .bind(&folder)
+            .bind(target)
+            .execute(&state.db)
+            .await
+            .map_err(AppError::Database)?
+            .rows_affected();
+            Ok(Json(json!({ "moved": n, "to": target })))
         }
         "empty" => {
             // Only a holding pen can be emptied. Emptying Inbox would be a bulk delete wearing a
@@ -930,6 +995,389 @@ pub async fn remove_label(
     .map_err(AppError::Database)?
     .rows_affected();
     Ok(Json(json!({ "unlabeled": removed })))
+}
+
+/// POST /api/private-email/messages/:id/summarize — condense a long thread into a few plain
+/// sentences, using the account's OWN AI provider keys (the same ones `POST /api/ai/message` uses).
+///
+/// Two rules David set for this button (B205):
+///   * it must never invent facts that are not in the thread — the prompt says so explicitly and the
+///     user's own text is the only input;
+///   * it must not be offered when it cannot work. With no provider key configured this answers 503
+///     with a plain sentence, and the counts read reports `ai_summary: false` so the client can hide
+///     the control instead of showing a button that always fails.
+pub async fn summarize_message(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(message_id): Path<Uuid>,
+) -> ApiResult<Json<Value>> {
+    let tenant_id = account_id(&claims)?;
+
+    let row = sqlx::query(
+        "SELECT subject, from_address, body_plain FROM private_email_messages
+          WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(message_id)
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(AppError::Database)?
+    .ok_or_else(|| AppError::NotFound("Message not found".into()))?;
+
+    let subject: String = row.try_get("subject").unwrap_or_default();
+    let from: String = row.try_get("from_address").unwrap_or_default();
+    let body: String = row.try_get("body_plain").unwrap_or_default();
+    if body.trim().is_empty() {
+        return Err(AppError::Validation(
+            "This message has no text to summarise.".into(),
+        ));
+    }
+
+    let keys = ai_keys(&state, tenant_id).await;
+    if keys.is_empty() {
+        return Err(AppError::ServiceUnavailable(
+            "AI summaries need an AI provider key on this account. Add one in Settings, then the \
+             Summarise button will work."
+                .into(),
+        ));
+    }
+
+    // Bounded: a summary is about the thread's meaning, not about posting a book to a model.
+    let cut: String = body.chars().take(6000).collect();
+    let system = "You summarise an email thread for a busy business owner. Use ONLY the facts in \
+                  the email below — never add names, numbers, dates, promises or opinions that are \
+                  not in it. Answer in at most four short sentences of plain English, starting with \
+                  what the sender wants.";
+    let user = format!("From: {}\nSubject: {}\n\n{}", from, subject, cut);
+
+    match crate::ai::router::route_to_llm("deepseek", &keys, system, &user).await {
+        Ok(summary) => Ok(Json(json!({ "summary": summary }))),
+        Err(e) => Err(AppError::ServiceUnavailable(format!(
+            "The AI provider did not answer, so there is no summary: {}",
+            e
+        ))),
+    }
+}
+
+/// GET /api/private-email/members — the people mail can be assigned to.
+///
+/// "Assign to a team member" is the same object as ticket assignment (B204), and a name that is not
+/// in this account must never be offered. Members see the account's people; nothing outside it.
+pub async fn list_members(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> ApiResult<Json<Value>> {
+    let tenant_id = account_id(&claims)?;
+    let rows = sqlx::query(
+        "SELECT id, first_name, last_name, email, role
+           FROM users WHERE tenant_id = $1 ORDER BY first_name, last_name",
+    )
+    .bind(tenant_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    let members: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            let first: String = r.try_get("first_name").unwrap_or_default();
+            let last: String = r.try_get("last_name").unwrap_or_default();
+            json!({
+                "id": r.try_get::<Uuid, _>("id").ok(),
+                "name": format!("{} {}", first, last).trim().to_string(),
+                "email": r.try_get::<Option<String>, _>("email").unwrap_or(None),
+                "role": r.try_get::<Option<String>, _>("role").unwrap_or(None),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({ "members": members })))
+}
+
+/// GET /api/private-email/folders — the rail: the eight surfaces with live counts, plus every
+/// subfolder the user created (with counts). Counts and folders come from the same tables the list
+/// reads, so a badge can never disagree with the folder it labels.
+pub async fn list_folders(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> ApiResult<Json<Value>> {
+    let tenant_id = account_id(&claims)?;
+
+    let row = sqlx::query(
+        r#"
+        SELECT
+          count(*) FILTER (WHERE folder = 'inbox' OR folder LIKE 'inbox/%')                      AS inbox,
+          count(*) FILTER (WHERE (folder = 'inbox' OR folder LIKE 'inbox/%') AND is_read = false) AS unread,
+          count(*) FILTER (WHERE is_starred AND folder <> 'trash')                               AS favorites,
+          count(*) FILTER (WHERE folder = 'drafts')                                              AS drafts,
+          count(*) FILTER (WHERE folder = 'sent')                                                AS sent,
+          count(*) FILTER (WHERE folder = 'archive')                                             AS archive,
+          count(*) FILTER (WHERE folder = 'spam')                                                AS spam,
+          count(*) FILTER (WHERE folder = 'trash')                                               AS trash
+        FROM private_email_messages WHERE tenant_id = $1
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    let system: Vec<Value> = [
+        ("inbox", "Inbox"),
+        ("unread", "Unread"),
+        ("favorites", "Favorites"),
+        ("drafts", "Drafts"),
+        ("sent", "Sent"),
+        ("archive", "Archive"),
+        ("spam", "Spam"),
+        ("trash", "Trash"),
+    ]
+    .iter()
+    .map(|(key, label)| {
+        json!({
+            "id": key,
+            "name": label,
+            "system": true,
+            "count": row.try_get::<i64, _>(key).unwrap_or(0),
+        })
+    })
+    .collect();
+
+    // Custom subfolders, with the count of mail actually sitting in each (and below it).
+    let custom = sqlx::query(
+        r#"
+        SELECT f.id, f.path, f.name, f.parent,
+               (SELECT count(*) FROM private_email_messages m
+                 WHERE m.tenant_id = f.tenant_id
+                   AND (m.folder = f.path OR m.folder LIKE f.path || '/%')
+                   AND m.folder <> 'trash') AS count
+          FROM private_email_folders f
+         WHERE f.tenant_id = $1
+         ORDER BY f.parent, lower(f.name)
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    let custom_json: Vec<Value> = custom
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.try_get::<Uuid, _>("id").ok(),
+                "path": r.try_get::<String, _>("path").unwrap_or_default(),
+                "name": r.try_get::<String, _>("name").unwrap_or_default(),
+                "parent": r.try_get::<String, _>("parent").unwrap_or_default(),
+                "system": false,
+                "count": r.try_get::<i64, _>("count").unwrap_or(0),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({ "system": system, "custom": custom_json })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateFolderRequest {
+    /// inbox | archive | sent | drafts | spam | trash — or an existing subfolder path to nest under.
+    pub parent: String,
+    pub name: String,
+}
+
+/// POST /api/private-email/folders — create a subfolder. Real server-side state, so it survives a
+/// new device and can be selected by any member of the account.
+pub async fn create_folder(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<CreateFolderRequest>,
+) -> ApiResult<Json<Value>> {
+    let tenant_id = account_id(&claims)?;
+    let name = req.name.trim();
+    if name.is_empty() || name.chars().count() > 64 {
+        return Err(AppError::Validation(
+            "A folder needs a name of 64 characters or fewer.".into(),
+        ));
+    }
+    // A separator in a name would silently create a deeper path than the user asked for.
+    if name.contains('/') {
+        return Err(AppError::Validation(
+            "A folder name cannot contain a slash — use Create subfolder to nest one inside another."
+                .into(),
+        ));
+    }
+
+    let parent = req.parent.trim().trim_matches('/').to_lowercase();
+    let parent_ok = SYSTEM_FOLDERS.contains(&parent.as_str())
+        || sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM private_email_folders WHERE tenant_id = $1 AND path = $2",
+        )
+        .bind(tenant_id)
+        .bind(&parent)
+        .fetch_one(&state.db)
+        .await
+        .map_err(AppError::Database)?
+            > 0;
+    if !parent_ok {
+        return Err(AppError::Validation(format!(
+            "'{}' is not a folder in this account, so nothing can be created inside it.",
+            req.parent
+        )));
+    }
+
+    let path = format!("{}/{}", parent, name);
+    let exists: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM private_email_folders WHERE tenant_id = $1 AND lower(path) = lower($2)",
+    )
+    .bind(tenant_id)
+    .bind(&path)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+    if exists.is_some() {
+        return Err(AppError::Duplicate(format!(
+            "'{}' already exists in {}.",
+            name, parent
+        )));
+    }
+
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO private_email_folders (tenant_id, path, name, parent)
+         VALUES ($1, $2, $3, $4) RETURNING id",
+    )
+    .bind(tenant_id)
+    .bind(&path)
+    .bind(name)
+    .bind(&parent)
+    .fetch_one(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    Ok(Json(
+        json!({ "id": id, "path": path, "name": name, "parent": parent }),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DraftRequest {
+    pub from_address: Option<String>,
+    #[serde(default)]
+    pub to: Option<String>,
+    #[serde(default)]
+    pub subject: Option<String>,
+    #[serde(default)]
+    pub body: Option<String>,
+    /// Present when an existing draft is being saved again (so it is updated, not duplicated).
+    #[serde(default)]
+    pub id: Option<Uuid>,
+}
+
+/// POST /api/private-email/messages/drafts — save what is in the composer.
+///
+/// The Drafts folder is listed in the client (B205: "saved compose drafts, resumable"), so it has to
+/// be able to hold something: a folder nobody can put mail into is a dead surface. Re-saving an
+/// opened draft updates that row instead of stacking copies.
+pub async fn save_draft(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<DraftRequest>,
+) -> ApiResult<Json<Value>> {
+    let tenant_id = account_id(&claims)?;
+    let from = req.from_address.unwrap_or_default();
+    let to = req.to.unwrap_or_default();
+    let subject = req.subject.unwrap_or_default();
+    let body = req.body.unwrap_or_default();
+
+    if body.trim().is_empty() && subject.trim().is_empty() && to.trim().is_empty() {
+        return Err(AppError::Validation(
+            "There is nothing to save yet — write a line first.".into(),
+        ));
+    }
+
+    let snippet: String = body.chars().take(500).collect();
+    let mailbox_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM private_email_boxes
+          WHERE tenant_id = $1 AND email_address = $2 AND status = 'active'",
+    )
+    .bind(tenant_id)
+    .bind(&from)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    let id = match req.id {
+        Some(existing) => {
+            let n = sqlx::query(
+                "UPDATE private_email_messages
+                    SET mailbox_id = $3, address = $4, to_address = $5, subject = $6,
+                        body_plain = $7, snippet = $8, updated_at = NOW()
+                  WHERE id = $1 AND tenant_id = $2 AND folder = 'drafts'",
+            )
+            .bind(existing)
+            .bind(tenant_id)
+            .bind(mailbox_id)
+            .bind(&from)
+            .bind(&to)
+            .bind(&subject)
+            .bind(&body)
+            .bind(&snippet)
+            .execute(&state.db)
+            .await
+            .map_err(AppError::Database)?
+            .rows_affected();
+            if n == 0 {
+                return Err(AppError::NotFound("Draft not found".into()));
+            }
+            existing
+        }
+        None => {
+            let new_id = sqlx::query_scalar(
+                r#"INSERT INTO private_email_messages (
+                      tenant_id, mailbox_id, address, folder, direction, from_address,
+                      to_address, subject, body_plain, snippet, size_bytes, is_read, received_at
+                   ) VALUES ($1, $2, $3, 'drafts', 'draft', $4, $5, $6, $7, $8, $9, true, NOW())
+                   RETURNING id"#,
+            )
+            .bind(tenant_id)
+            .bind(mailbox_id)
+            .bind(&from)
+            .bind(&from)
+            .bind(&to)
+            .bind(&subject)
+            .bind(&body)
+            .bind(&snippet)
+            .bind(body.len() as i32)
+            .fetch_one(&state.db)
+            .await
+            .map_err(AppError::Database)?;
+            new_id
+        }
+    };
+
+    Ok(Json(json!({ "id": id, "folder": "drafts" })))
+}
+
+/// The account's AI provider keys, as `{provider: key}`. An empty map means the feature cannot run.
+async fn ai_keys(state: &AppState, tenant_id: Uuid) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    let row: Option<Option<Value>> =
+        sqlx::query_scalar("SELECT settings->'ai'->'providers' FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+    if let Some(Some(Value::Object(obj))) = row {
+        for (k, v) in obj {
+            if let Some(s) = v.as_str() {
+                if !s.trim().is_empty() {
+                    map.insert(k, s.to_string());
+                }
+            }
+        }
+    }
+    map
 }
 
 // ────────────────────────────────────────────────────────────────────────────────────────────────

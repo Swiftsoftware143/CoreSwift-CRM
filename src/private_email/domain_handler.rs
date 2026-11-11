@@ -526,6 +526,158 @@ async fn mailgun_domain_state(api_key: &str, domain: &str, region: &str) -> Opti
         .map(|s| s.to_string())
 }
 
+/// GET /api/private-email/domains/:id/records — the records the customer must add, in plain English.
+///
+/// The setup page teaches a customer how to point their own domain at this service (B205 "customer
+/// setup page": CoreSwift does not host their DNS and does not send their mail — each customer keeps
+/// their domain where it lives and brings their own Mailgun account). The record VALUES therefore
+/// have to be Mailgun's own, read from the account with the stored key, never invented or copied from
+/// a doc that may be out of date.
+///
+/// Each row says, in one sentence, what the record does — MX = where mail is delivered, SPF = proves
+/// we may send for you, DKIM = signs your mail — because the page's rule is no jargon and no dead
+/// ends.
+pub async fn domain_records(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(domain_id): Path<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+
+    let row: Option<(String, String, String, Option<Uuid>, String, bool)> = sqlx::query_as(
+        r#"SELECT domain, mailgun_region, mailgun_api_key, api_key_id, provider_type, verified
+             FROM private_email_domains WHERE id = $1 AND tenant_id = $2"#,
+    )
+    .bind(domain_id)
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    let (domain, region, own_key, api_key_id, provider_type, verified) =
+        row.ok_or_else(|| AppError::NotFound("Domain not found".into()))?;
+
+    if provider_type != "mailgun" {
+        return Err(AppError::BadRequest(
+            "This domain sends over SMTP, so its records live with your own mail provider — \
+             nothing here needs adding."
+                .into(),
+        ));
+    }
+
+    let candidates = recheck_credentials(&state.db, account_id, &own_key, api_key_id).await?;
+    if candidates.is_empty() {
+        return Err(AppError::Validation(
+            "This domain's stored Mailgun key cannot be read — re-enter it, then check again."
+                .into(),
+        ));
+    }
+
+    let mut detail: Option<serde_json::Value> = None;
+    for key in &candidates {
+        if let Some(d) = mailgun_domain_detail(key, &domain, &region).await {
+            detail = Some(d);
+            break;
+        }
+    }
+    let detail = detail.ok_or_else(|| {
+        AppError::BadRequest(format!(
+            "Mailgun did not answer for {} with the stored credential, so its records cannot be \
+             shown. Nothing was changed.",
+            domain
+        ))
+    })?;
+
+    // Mailgun returns two arrays of {record_type, name, value, priority?, valid}. They are
+    // flattened into one list with a purpose sentence, because that is what the page renders.
+    let mut records = Vec::new();
+    flatten_records(
+        "receiving",
+        detail
+            .get("receiving_dns_records")
+            .and_then(|v| v.as_array()),
+        "Tells the internet where to deliver your mail.",
+        &mut records,
+    );
+    flatten_records(
+        "sending",
+        detail.get("sending_dns_records").and_then(|v| v.as_array()),
+        "Proves your mail really comes from you, so it is not marked as spam.",
+        &mut records,
+    );
+
+    Ok(Json(json!({
+        "domain": domain,
+        "verified": verified,
+        "state": detail.get("state").and_then(|v| v.as_str()).unwrap_or("unknown"),
+        "records": records,
+        "mailgun_state": detail.get("state").cloned().unwrap_or(serde_json::Value::Null),
+    })))
+}
+
+/// Mailgun's two record arrays, flattened into display rows.
+fn flatten_records(
+    section: &str,
+    list: Option<&Vec<serde_json::Value>>,
+    purpose: &str,
+    out: &mut Vec<serde_json::Value>,
+) {
+    let Some(items) = list else { return };
+    for r in items {
+        let kind = r
+            .get("record_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_uppercase();
+        let name = r.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let value = r.get("value").and_then(|v| v.as_str()).unwrap_or("");
+        if name.is_empty() || value.is_empty() {
+            continue;
+        }
+        out.push(json!({
+            "section": section,
+            "type": kind,
+            "name": name,
+            "value": value,
+            "priority": r.get("priority").cloned().unwrap_or(serde_json::Value::Null),
+            "valid": r.get("valid").and_then(|v| v.as_bool()).unwrap_or(false),
+            "purpose": purpose,
+        }));
+    }
+}
+
+/// Mailgun's full domain object (state, sending/receiving records). `None` when this credential
+/// cannot read the domain — an undetermined answer, never "no records".
+async fn mailgun_domain_detail(
+    api_key: &str,
+    domain: &str,
+    region: &str,
+) -> Option<serde_json::Value> {
+    let base_url = if region == "eu" {
+        "https://api.eu.mailgun.net"
+    } else {
+        "https://api.mailgun.net"
+    };
+    let resp = reqwest::Client::new()
+        .get(format!("{}/v3/domains/{}", base_url, domain))
+        .basic_auth("api", Some(api_key))
+        .send()
+        .await
+        .inspect_err(
+            |e| tracing::warn!(error = %e, domain = %domain, "Mailgun domain lookup failed"),
+        )
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .inspect_err(|e| tracing::warn!(error = %e, domain = %domain, "Mailgun domain payload did not parse"))
+        .ok()?
+        .get("domain")
+        .cloned()
+}
+
 async fn add_mailgun_domain(
     state: &AppState,
     account_id: Uuid,

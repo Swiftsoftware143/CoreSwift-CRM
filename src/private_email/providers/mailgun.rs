@@ -15,11 +15,14 @@ impl EmailProvider for MailgunProvider {
         "mailgun"
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn send(
         &self,
         config: &ProviderConfig,
         from: &str,
         to: &str,
+        cc: &[String],
+        bcc: &[String],
         subject: &str,
         body_html: &str,
         in_reply_to: Option<&str>,
@@ -67,6 +70,14 @@ impl EmailProvider for MailgunProvider {
 
         if let Some(ref reply_to) = in_reply_to {
             form.push(("h:In-Reply-To".into(), reply_to.to_string()));
+        }
+        // Cc is visible to everyone; Bcc is sent as Mailgun's own `bcc` field so those addresses
+        // never appear in the delivered headers.
+        if !cc.is_empty() {
+            form.push(("cc".into(), cc.join(",")));
+        }
+        if !bcc.is_empty() {
+            form.push(("bcc".into(), bcc.join(",")));
         }
 
         let client = reqwest::Client::new();
