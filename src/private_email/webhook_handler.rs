@@ -221,9 +221,24 @@ pub async fn inbound_webhook(
     };
 
     // ── Support Ticket Routing ─────────────────────────────────
-    // If the receiving mailbox is the tenant's designated support box,
-    // auto-create a ticket from this email.
-    let support_box_id: Option<Uuid> = sqlx::query_scalar(
+    // Mail ALWAYS arrives in the inbox and is tagged with the address it came to.
+    // This decides only which messages ALSO become a ticket automatically, per
+    // mailbox (private_email_boxes.creates_ticket, migration 125):
+    //   support@ ships ON  - it is the work queue people write to for help
+    //   the rest ship OFF  - they land in the inbox and can be converted by hand
+    // The user can tick or untick any mailbox. The legacy single designated
+    // support box is still honoured so an upgraded account keeps working.
+    let creates_ticket: Option<bool> = sqlx::query_scalar(
+        "SELECT creates_ticket FROM private_email_boxes WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(mailbox_id)
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    let legacy_support_box: Option<Uuid> = sqlx::query_scalar(
         "SELECT (settings->>'support_email_box_id')::uuid FROM tenants WHERE id = $1",
     )
     .bind(tenant_id)
@@ -232,8 +247,13 @@ pub async fn inbound_webhook(
     .ok()
     .flatten();
 
-    if let Some(support_id) = support_box_id {
-        if support_id == mailbox_id {
+    let should_ticket = creates_ticket.unwrap_or(false)
+        || legacy_support_box
+            .map(|id| id == mailbox_id)
+            .unwrap_or(false);
+
+    {
+        if should_ticket {
             let contact_name = inbound.from.split('@').next().unwrap_or(&inbound.from);
             let _ = sqlx::query_scalar::<_, Uuid>(
                 r#"INSERT INTO tickets (tenant_id, subject, description, status, priority, source, contact_email, contact_name)
