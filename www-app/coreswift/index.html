@@ -949,11 +949,16 @@ function dismissBanner() {
 // filed in the customer's own store would be a black hole: the operator's Support Tickets screen only
 // ever lists the OPERATOR's own workspace. CoreSwift's tickets are a tenant's support desk for ITS
 // customers, not a platform inbox.
-// POST /api/public/contact is the intake built for exactly this (no auth, no plan gate) and it writes
-// the ticket against whichever workspace the caller names — so the request is filed into the PLATFORM
-// workspace, which is the one the operator actually reads. Nothing is charged and no plan changes
-// here: the team reads it and makes the switch.
-const CS_PLATFORM_INBOX = '7c1f787c-6f10-4c4d-ac24-71b82c38934e';
+// WHICH INTAKE (measured 2026-11-11): /api/public/support-request, the same route the app's own
+// contact page uses. It writes the ticket with NO workspace (the queue labels it "Website visitor"
+// and the platform admin's list carries it — `tenant_id IS NULL` is one of the arms the operator's
+// read includes), and it QUEUES THE OPERATOR ALERT: "A support request needs an answer: ...".
+// The older /api/public/contact intake wrote the row and told nobody — measured live on a probe
+// identity: 201 with the ticket stored and the owner-alert row count unchanged, while the same
+// probe through /api/public/support-request queued exactly one alert. On an install with no payment
+// provider this request is the only way a customer can buy, so a silent ticket is a lost sale.
+// Nothing is charged and no plan changes here: the team reads the alert and makes the switch.
+const PLAN_REQUEST_INTAKE = '/api/public/support-request';
 async function requestPlanChange(idx, btn) {
   const p = (window.__csUpgradePlans || [])[idx];
   if (!p || !btn || btn.disabled) return;
@@ -964,11 +969,10 @@ async function requestPlanChange(idx, btn) {
   btn.disabled = true;
   btn.textContent = 'Sending…';
   try {
-    const res = await fetch('/api/public/contact', {
+    const res = await fetch(PLAN_REQUEST_INTAKE, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        tenant_id: CS_PLATFORM_INBOX,
         subject: 'Upgrade request: ' + name + ' plan',
         message: 'This workspace asked to move to the ' + name + ' plan ($' + price + '/month) from '
           + 'Plans & Billing. It is on ' + (STATE.planName || 'no plan') + ' today. Self-serve '
@@ -976,8 +980,8 @@ async function requestPlanChange(idx, btn) {
           + ' Workspace: ' + (user.company || user.account_name || '(unnamed)')
           + ' [' + user.account_id + ']. Requester: ' + (user.email || '(no address)') + '.',
         name: user.name || user.email || '',
-        email: user.email || '',
-        priority: 'medium'
+        // Required by this intake: the address the team replies to, and the one the queue shows.
+        email: user.email || ''
       })
     });
     const d = await res.json().catch(function () { return {}; });
@@ -989,8 +993,8 @@ async function requestPlanChange(idx, btn) {
     const note = document.querySelector('[data-plan-request-note]');
     if (note) {
       note.style.display = 'block';
-      note.textContent = 'Request sent — CoreSwift will review this workspace for the ' + name
-        + ' plan and email you. Nothing was charged.';
+      note.textContent = 'Request sent — CoreSwift has been notified and will review this workspace'
+        + ' for the ' + name + ' plan and email you. Nothing was charged.';
     }
   } catch (e) {
     btn.disabled = false;
