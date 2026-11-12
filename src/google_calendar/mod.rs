@@ -1065,9 +1065,11 @@ pub async fn calendar_status(
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let rows = sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
-        "SELECT id, name, slug, google_calendar_id FROM booking_calendars \
-         WHERE tenant_id = $1 ORDER BY name",
+    let rows = sqlx::query_as::<_, (Uuid, String, String, Option<String>, Option<String>)>(
+        "SELECT bc.id, bc.name, bc.slug, bc.google_calendar_id, cs.subdomain \
+         FROM booking_calendars bc \
+         LEFT JOIN calendar_subdomains cs ON cs.calendar_id = bc.id \
+         WHERE bc.tenant_id = $1 ORDER BY bc.name",
     )
     .bind(tid)
     .fetch_all(&s.db)
@@ -1076,13 +1078,14 @@ pub async fn calendar_status(
     let (client_id, _, _) = google_oauth_config(&s, tid).await;
     let items: Vec<Value> = rows
         .into_iter()
-        .map(|(id, name, slug, gcal)| {
+        .map(|(id, name, slug, gcal, subdomain)| {
             json!({
                 "id": id,
                 "name": name,
                 "slug": slug,
                 "connected": gcal.is_some(),
                 "google_calendar_id": gcal,
+                "subdomain": subdomain,
             })
         })
         .collect();

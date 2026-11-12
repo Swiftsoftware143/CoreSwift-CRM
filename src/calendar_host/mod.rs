@@ -395,6 +395,57 @@ pub async fn resolve_host(
     .await
 }
 
+/// A dedicated per-calendar subdomain resolves to exactly ONE calendar (kanban t_d4ac5433). The
+/// tenant comes from the calendar's owner, never from a field a caller could set.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ResolvedCalendar {
+    pub calendar_id: Uuid,
+    pub calendar_slug: String,
+    pub calendar_name: String,
+    pub subdomain: String,
+    pub tenant_id: Uuid,
+    pub tenant_name: String,
+    pub tenant_slug: String,
+    pub logo_url: Option<String>,
+    pub primary_color: Option<String>,
+    pub accent_color: Option<String>,
+    pub branding_name: Option<String>,
+}
+
+/// Resolve a Host that is a calendar's OWN subdomain (`<label>.<system>`) to that one calendar.
+/// A calendar subdomain is more specific than a workspace subdomain, so the public arms try it
+/// FIRST. `None` means the label is not a calendar subdomain (a workspace subdomain, a custom
+/// domain, or nothing at all).
+pub async fn resolve_calendar_subdomain(
+    db: &PgPool,
+    raw_host: &str,
+    system: &str,
+) -> Result<Option<ResolvedCalendar>, sqlx::Error> {
+    let host = host_only(raw_host);
+    let suffix = format!(".{system}");
+    let Some(label) = host.strip_suffix(&suffix) else {
+        return Ok(None);
+    };
+    let label = label.to_lowercase();
+    if label.is_empty() || label.contains('.') {
+        return Ok(None);
+    }
+    sqlx::query_as::<_, ResolvedCalendar>(
+        r#"SELECT bc.id AS calendar_id, bc.slug AS calendar_slug, bc.name AS calendar_name,
+                  cs.subdomain AS subdomain,
+                  t.id AS tenant_id, t.name AS tenant_name, t.slug AS tenant_slug,
+                  t.logo_url, t.primary_color, t.accent_color, t.branding_name
+           FROM calendar_subdomains cs
+           JOIN booking_calendars bc ON bc.id = cs.calendar_id
+           JOIN tenants t ON t.id = bc.tenant_id
+           WHERE lower(cs.subdomain) = $1 AND bc.is_active AND t.is_active
+           LIMIT 1"#,
+    )
+    .bind(label)
+    .fetch_optional(db)
+    .await
+}
+
 /// The `Host` header without its port, lowercased. An IPv6 literal keeps its brackets.
 pub fn host_only(raw: &str) -> String {
     let h = raw.trim().to_lowercase();
@@ -439,6 +490,7 @@ pub fn router(state: AppState) -> Router<AppState> {
 pub fn public_router() -> Router<AppState> {
     Router::new()
         .route("/site", get(handlers::public_site))
+        .route("/site/:slug", get(handlers::public_site_slug))
         .route("/book", post(handlers::public_book))
 }
 
@@ -456,6 +508,46 @@ pub fn map_unique(err: sqlx::Error, value: &str) -> AppError {
         }
     }
     AppError::Database(err)
+}
+
+/// True when a database error is a unique violation (SQLSTATE 23505) — the code the `calendar_hosts`
+/// and `calendar_subdomains` unique indexes raise. Handlers branch on this instead of string-matching
+/// a message, so the friendly answer stays in one place.
+pub fn is_unique_violation(err: &sqlx::Error) -> bool {
+    matches!(err, sqlx::Error::Database(ref d) if d.code().as_deref() == Some("23505"))
+}
+
+/// The duplicate answer WITH a suggested alternative (kanban t_d4ac5433). The suggestion is always a
+/// real, claimable value — the first free `-N` suffix for a subdomain — never a name that is itself
+/// taken. One string, so the console, the API and the guide all say the same thing.
+pub fn taken_message_with_suggestion(value: &str, suggestion: Option<&str>) -> String {
+    match suggestion {
+        Some(s) => format!("The calendar address '{value}' is already in use. Try '{s}' instead."),
+        None => taken_message(value),
+    }
+}
+
+/// First free `<requested>-N` suffix for a subdomain another workspace OR calendar already holds.
+/// `None` when no short suffix is available (the caller then answers the bare "already in use").
+pub async fn suggest_subdomain(db: &PgPool, requested: &str) -> Option<String> {
+    for n in 2..=99u32 {
+        let candidate = format!("{requested}-{n}");
+        if !valid_subdomain(&candidate) {
+            return None;
+        }
+        let taken: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM calendar_hosts WHERE lower(subdomain) = $1) \
+                  OR EXISTS(SELECT 1 FROM calendar_subdomains WHERE lower(subdomain) = $1)",
+        )
+        .bind(&candidate)
+        .fetch_one(db)
+        .await
+        .ok()?;
+        if !taken {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 #[cfg(test)]

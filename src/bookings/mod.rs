@@ -33,6 +33,14 @@ pub fn router(state: AppState) -> Router<AppState> {
             axum::routing::patch(handlers::update_calendar),
         )
         .route(
+            "/calendars/:slug/subdomain",
+            axum::routing::put(handlers::set_calendar_subdomain),
+        )
+        .route(
+            "/calendars/:slug/subdomain",
+            axum::routing::delete(handlers::clear_calendar_subdomain),
+        )
+        .route(
             "/calendars/:slug/slots",
             axum::routing::get(handlers::list_slots),
         )

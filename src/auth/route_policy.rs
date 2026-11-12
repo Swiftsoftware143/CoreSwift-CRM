@@ -158,8 +158,8 @@
 //!        router behind the same auth middleware as every sibling, so it joins no allowlist: it
 //!        resolves the file through the CALLER'S account AND the message, and is measured anonymous
 //!        answering 401. The two send routes that now accept base64 file parts keep their mounts and
-//!        only gain a scoped `DefaultBodyLimit`. The extractor resolves 410 mounted
-//!        `.route(..)` calls / 398 on /api** (410 = 398 /api + the 12 root-level mounts), which is
+//!        only gain a scoped `DefaultBodyLimit`. The extractor resolves 413 mounted
+//!        `.route(..)` calls / 401 on /api** (413 = 401 /api + the 12 root-level mounts), which is
 //!        what `the_census_shape_is_what_the_docs_say` pins.
 //!
 //!   live, with NO credential, against 127.0.0.1:8084:
@@ -171,7 +171,8 @@
 //!    30 deliberate anonymous entries  -> PUBLIC_ROUTES  (27 /api + 3 /inbound) — COUNTS ARRAY
 //!        ENTRIES: measured 27 (24 /api + 3 /inbound) before the confirm arm above was added,
 //!        i.e. one more than the 26 this line used to claim, and 30 after the hosted calendar
-//!        address added its two public arms (kanban t_8457bfef)
+//!        address added its two public arms (kanban t_8457bfef), and 31 after the per-calendar
+//!        path added `/api/public/calendar/site/:slug` (kanban t_d4ac5433)
 //!    16 service-to-service entries    -> INTERNAL_ROUTES (all /api, reached with the shared key)
 //!     2 issued-API-key entries        -> API_KEY_ROUTES  (/api/external/**)
 //!    11 served surfaces outside the boundary: the SPA mount, /track/:slug, the eight
@@ -299,6 +300,7 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // both resolve it from the request's `Host` header, so `GET` reads only calendars that are active
     // and `POST` writes a booking into the workspace the Host named.
     "/api/public/calendar/site",
+    "/api/public/calendar/site/:slug",
     "/api/public/calendar/book",
     // Public contact form on the marketing site.
     "/api/public/contact",
@@ -1178,12 +1180,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            410,
+            413,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 398,
+            api, 401,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

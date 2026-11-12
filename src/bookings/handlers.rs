@@ -28,7 +28,165 @@ pub async fn list_calendars(
     .bind(tid)
     .fetch_all(&s.db)
     .await?;
-    Ok(Json(json!(calendars)))
+
+    // Per-calendar subdomain (kanban t_d4ac5433) — one optional label per calendar, so the console
+    // can show each calendar's own address (or the account path fallback).
+    let mut out: Vec<serde_json::Value> = Vec::with_capacity(calendars.len());
+    if !calendars.is_empty() {
+        let ids: Vec<Uuid> = calendars.iter().map(|c| c.id).collect();
+        let subs: Vec<(Uuid, String)> = sqlx::query_as(
+            "SELECT calendar_id, subdomain FROM calendar_subdomains WHERE calendar_id = ANY($1)",
+        )
+        .bind(&ids)
+        .fetch_all(&s.db)
+        .await?;
+        let map: std::collections::HashMap<Uuid, String> = subs.into_iter().collect();
+        for cal in calendars {
+            let mut v = serde_json::to_value(&cal).unwrap_or(serde_json::Value::Null);
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("subdomain".into(), json!(map.get(&cal.id)));
+            }
+            out.push(v);
+        }
+    }
+    Ok(Json(json!(out)))
+}
+
+/// The account owner (or an admin) alone changes where a calendar answers — the same bar the
+/// calendar-host settings demand. A member can read the calendars; only an owner points one at its
+/// own subdomain.
+fn require_account_admin(c: &Claims) -> Result<(), AppError> {
+    if c.role != "owner"
+        && c.role != "account_owner"
+        && c.role != "admin"
+        && c.role != "agency_admin"
+    {
+        return Err(AppError::Forbidden);
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct SetCalendarSubdomainRequest {
+    pub subdomain: String,
+}
+
+/// `PUT /api/bookings/calendars/:slug/subdomain` — give ONE calendar its own address
+/// (`<subdomain>.<app-domain>/<account>/<calendar-name>`, kanban t_d4ac5433). Uniqueness is the
+/// database's call, and the cross-table rule — a calendar label must not collide with a workspace
+/// label — is refused here with the same plain sentence plus a suggestion.
+pub async fn set_calendar_subdomain(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path(slug): Path<String>,
+    Json(body): Json<SetCalendarSubdomainRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    require_account_admin(&c)?;
+
+    let requested = body.subdomain.trim().to_lowercase();
+    if requested.is_empty() {
+        return Err(AppError::Validation(
+            "Type the address you want to use".into(),
+        ));
+    }
+    if !crate::calendar_host::valid_subdomain(&requested) {
+        return Err(AppError::Validation(
+            "A calendar address uses 3 to 63 letters, numbers and hyphens, and starts and ends with a letter or number. Example: appointments"
+                .into(),
+        ));
+    }
+    if crate::calendar_host::is_reserved(&requested) {
+        return Err(AppError::Validation(format!(
+            "'{requested}' is reserved for the platform. Pick a different name."
+        )));
+    }
+
+    let system = crate::calendar_host::system_domain(&s);
+    let row: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT bc.id, t.slug FROM booking_calendars bc \
+         JOIN tenants t ON t.id = bc.tenant_id \
+         WHERE bc.tenant_id = $1 AND bc.slug = $2",
+    )
+    .bind(tid)
+    .bind(&slug)
+    .fetch_optional(&s.db)
+    .await?;
+    let Some((calendar_id, tenant_slug)) = row else {
+        return Err(AppError::NotFound("That calendar does not exist".into()));
+    };
+
+    // Cross-table: a calendar label must not collide with a workspace's address (kanban t_d4ac5433).
+    let workspace_owner: Option<Uuid> =
+        sqlx::query_scalar("SELECT tenant_id FROM calendar_hosts WHERE lower(subdomain) = $1")
+            .bind(&requested)
+            .fetch_optional(&s.db)
+            .await?;
+    if workspace_owner.is_some() {
+        let suggestion: Option<String> = crate::calendar_host::suggest_subdomain(&s.db, &requested)
+            .await
+            .map(|s| format!("{s}.{system}"));
+        return Err(AppError::Conflict(
+            crate::calendar_host::taken_message_with_suggestion(
+                &format!("{requested}.{system}"),
+                suggestion.as_deref(),
+            ),
+        ));
+    }
+
+    let result = sqlx::query(
+        r#"INSERT INTO calendar_subdomains (calendar_id, subdomain)
+           VALUES ($1, $2)
+           ON CONFLICT (calendar_id) DO UPDATE SET subdomain = EXCLUDED.subdomain, updated_at = now()"#,
+    )
+    .bind(calendar_id)
+    .bind(&requested)
+    .execute(&s.db)
+    .await;
+
+    if let Err(e) = result {
+        if crate::calendar_host::is_unique_violation(&e) {
+            let suggestion: Option<String> =
+                crate::calendar_host::suggest_subdomain(&s.db, &requested)
+                    .await
+                    .map(|s| format!("{s}.{system}"));
+            return Err(AppError::Conflict(
+                crate::calendar_host::taken_message_with_suggestion(
+                    &format!("{requested}.{system}"),
+                    suggestion.as_deref(),
+                ),
+            ));
+        }
+        return Err(AppError::Database(e));
+    }
+
+    Ok(Json(json!({
+        "slug": slug,
+        "subdomain": requested,
+        "url": format!("https://{requested}.{system}/{tenant_slug}/{slug}"),
+    })))
+}
+
+/// `DELETE /api/bookings/calendars/:slug/subdomain` — drop a calendar's own address; it answers
+/// again as a path under the account subdomain. Clearing nothing is not an error.
+pub async fn clear_calendar_subdomain(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path(slug): Path<String>,
+) -> ApiResult<impl IntoResponse> {
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    require_account_admin(&c)?;
+    let _ = sqlx::query(
+        "DELETE FROM calendar_subdomains cs USING booking_calendars bc \
+         WHERE cs.calendar_id = bc.id AND bc.tenant_id = $1 AND bc.slug = $2",
+    )
+    .bind(tid)
+    .bind(&slug)
+    .execute(&s.db)
+    .await?;
+    Ok(Json(
+        json!({ "slug": slug, "subdomain": serde_json::Value::Null }),
+    ))
 }
 
 pub async fn create_calendar(

@@ -263,7 +263,21 @@
     state.chosen = null;
   });
 
-  fetch('/api/public/calendar/site', { headers: { 'Accept': 'application/json' } })
+  // The calendar-name is the LAST path segment: <account-subdomain>/<calendar-name> (default) or
+  // <calendar-subdomain>/<account>/<calendar-name> (a calendar on its own subdomain). At the root
+  // the workspace's whole list is shown. (kanban t_d4ac5433)
+  function calendarSlugFromPath() {
+    var seg = location.pathname.split('/').filter(function (s) {
+      return s && s !== 'calendar.html';
+    });
+    return seg.length ? seg[seg.length - 1] : '';
+  }
+
+  var slug = calendarSlugFromPath();
+  var siteUrl = slug
+    ? '/api/public/calendar/site/' + encodeURIComponent(slug)
+    : '/api/public/calendar/site';
+  fetch(siteUrl, { headers: { 'Accept': 'application/json' } })
     .then(function (r) {
       if (r.status === 404) { el('loading').classList.add('hidden'); el('notFound').classList.remove('hidden'); return null; }
       return r.json().then(function (b) {

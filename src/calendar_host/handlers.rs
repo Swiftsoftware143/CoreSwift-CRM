@@ -7,7 +7,7 @@ use crate::bookings::models::CreateBookingRequest;
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
 use axum::{
-    extract::{Extension, Json, State},
+    extract::{Extension, Json, Path, State},
     http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -16,8 +16,9 @@ use serde_json::json;
 use uuid::Uuid;
 
 use super::{
-    ensure_for_tenant, host_only, is_reserved, is_system_domain, map_unique, normalise_domain,
-    public_url, resolve_host, system_domain, valid_domain, valid_subdomain, CalendarHost,
+    ensure_for_tenant, host_only, is_reserved, is_system_domain, is_unique_violation,
+    normalise_domain, public_url, resolve_calendar_subdomain, resolve_host, suggest_subdomain,
+    system_domain, taken_message_with_suggestion, valid_domain, valid_subdomain, CalendarHost,
 };
 
 /// Both `PATCH /api/calendar-host/subdomain` and the console's own save button are the ACCOUNT's
@@ -62,6 +63,10 @@ pub async fn get_host(
     let host = ensure_for_tenant(&s.db, tenant_id)
         .await?
         .ok_or_else(|| AppError::NotFound("This workspace no longer exists".into()))?;
+    let account_slug: Option<String> = sqlx::query_scalar("SELECT slug FROM tenants WHERE id = $1")
+        .bind(tenant_id)
+        .fetch_optional(&s.db)
+        .await?;
     let calendars: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM booking_calendars WHERE tenant_id = $1 AND is_active = true",
     )
@@ -78,6 +83,7 @@ pub async fn get_host(
     if let Some(map) = payload.as_object_mut() {
         map.insert("active_calendars".into(), json!(calendars));
         map.insert("active_bookings".into(), json!(bookings));
+        map.insert("account_slug".into(), json!(account_slug));
     }
     Ok(Json(payload))
 }
@@ -115,14 +121,46 @@ pub async fn set_subdomain(
     ensure_for_tenant(&s.db, tenant_id)
         .await?
         .ok_or_else(|| AppError::NotFound("This workspace no longer exists".into()))?;
-    sqlx::query(
+
+    // A workspace address must not collide with a calendar's own subdomain either (kanban
+    // t_d4ac5433) — the wildcard vhost serves both namespaces from the same address space.
+    let calendar_owner: Option<Uuid> = sqlx::query_scalar(
+        "SELECT cs.calendar_id FROM calendar_subdomains cs WHERE lower(cs.subdomain) = $1",
+    )
+    .bind(&requested)
+    .fetch_optional(&s.db)
+    .await?;
+    if calendar_owner.is_some() {
+        let suggestion: Option<String> = suggest_subdomain(&s.db, &requested)
+            .await
+            .map(|s| format!("{s}.{system}"));
+        return Err(AppError::Conflict(taken_message_with_suggestion(
+            &format!("{requested}.{system}"),
+            suggestion.as_deref(),
+        )));
+    }
+
+    let update = sqlx::query(
         "UPDATE calendar_hosts SET subdomain = $1, updated_at = now() WHERE tenant_id = $2",
     )
     .bind(&requested)
     .bind(tenant_id)
     .execute(&s.db)
-    .await
-    .map_err(|e| map_unique(e, &format!("{requested}.{system}")))?;
+    .await;
+
+    if let Err(e) = update {
+        if is_unique_violation(&e) {
+            let suggestion: Option<String> = suggest_subdomain(&s.db, &requested)
+                .await
+                .map(|s| format!("{s}.{system}"));
+            return Err(AppError::Conflict(taken_message_with_suggestion(
+                &format!("{requested}.{system}"),
+                suggestion.as_deref(),
+            )));
+        }
+        return Err(AppError::Database(e));
+    }
+
     let host = ensure_for_tenant(&s.db, tenant_id)
         .await?
         .ok_or_else(|| AppError::NotFound("This workspace no longer exists".into()))?;
@@ -166,7 +204,7 @@ pub async fn set_custom_domain(
     ensure_for_tenant(&s.db, tenant_id)
         .await?
         .ok_or_else(|| AppError::NotFound("This workspace no longer exists".into()))?;
-    sqlx::query(
+    let update = sqlx::query(
         r#"UPDATE calendar_hosts
            SET custom_domain = $1,
                custom_domain_status = 'pending',
@@ -178,8 +216,23 @@ pub async fn set_custom_domain(
     .bind(&domain)
     .bind(tenant_id)
     .execute(&s.db)
-    .await
-    .map_err(|e| map_unique(e, &domain))?;
+    .await;
+
+    if let Err(e) = update {
+        if is_unique_violation(&e) {
+            // A custom domain has no "-2" suffix to suggest; the honest alternative is the
+            // account's own system address, which keeps working no matter what DNS is pointed.
+            let current = ensure_for_tenant(&s.db, tenant_id)
+                .await?
+                .ok_or_else(|| AppError::NotFound("This workspace no longer exists".into()))?;
+            let fallback = public_url(&current.subdomain, None, &system);
+            return Err(AppError::Conflict(taken_message_with_suggestion(
+                &domain,
+                Some(&fallback),
+            )));
+        }
+        return Err(AppError::Database(e));
+    }
     let host = ensure_for_tenant(&s.db, tenant_id)
         .await?
         .ok_or_else(|| AppError::NotFound("This workspace no longer exists".into()))?;
@@ -350,16 +403,77 @@ async fn resolve_request_host(
 }
 
 /// `GET /api/public/calendar/site` — the hosted page's data for the address that was called. The
-/// visitor supplies nothing: the workspace comes from the Host. An address that names no workspace
-/// is a 404, never somebody else's calendar.
+/// visitor supplies nothing: the workspace (or calendar) comes from the Host. An address that names
+/// no calendar is a 404, never somebody else's calendar.
 pub async fn public_site(
     State(s): State<AppState>,
     headers: HeaderMap,
 ) -> ApiResult<impl IntoResponse> {
-    let Some(host) = resolve_request_host(&s, &headers).await? else {
+    Ok(Json(public_site_impl(&s, &headers, None).await?))
+}
+
+/// `GET /api/public/calendar/site/:slug` — the DEFAULT URL shape
+/// `<account-subdomain>.<app-domain>/<calendar-name>` (kanban t_d4ac5433): one specific calendar,
+/// named by its slug path segment. The workspace still comes from the Host, never from the URL.
+pub async fn public_site_slug(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(SiteSlug { slug }): Path<SiteSlug>,
+) -> ApiResult<impl IntoResponse> {
+    Ok(Json(public_site_impl(&s, &headers, Some(slug)).await?))
+}
+
+#[derive(Deserialize)]
+pub struct SiteSlug {
+    pub slug: String,
+}
+
+/// Shared body of the two public site readers. `requested_slug` is the calendar-name path segment
+/// (`/<calendar-name>`), or `None` for the workspace root that lists every active calendar.
+async fn public_site_impl(
+    s: &AppState,
+    headers: &HeaderMap,
+    requested_slug: Option<String>,
+) -> Result<serde_json::Value, AppError> {
+    let system = system_domain(s);
+    let raw_host = headers
+        .get("x-forwarded-host")
+        .or_else(|| headers.get(header::HOST))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    // 1. A dedicated per-calendar subdomain answers for that ONE calendar (kanban t_d4ac5433). The
+    //    calendar subdomain is more specific than a workspace subdomain, so it is tried first.
+    if let Some(cal) = resolve_calendar_subdomain(&s.db, &raw_host, &system).await? {
+        let listings = calendar_listings(s, cal.tenant_id, Some(&cal.calendar_slug)).await?;
+        let open_slots = open_slot_count(&listings);
+        return Ok(json!({
+            "tenant": {
+                "id": cal.tenant_id,
+                "name": cal.tenant_name,
+                "slug": cal.tenant_slug,
+                "branding_name": cal.branding_name,
+                "logo_url": cal.logo_url,
+                "primary_color": cal.primary_color,
+                "accent_color": cal.accent_color,
+            },
+            "host": {
+                "kind": "calendar",
+                "subdomain": cal.subdomain,
+                "system_domain": system,
+                "system_url": public_url(&cal.subdomain, None, &system),
+                "custom_domain": serde_json::Value::Null,
+            },
+            "calendars": listings,
+            "open_slots": open_slots,
+        }));
+    }
+
+    // 2. Workspace resolution (system subdomain or an owned custom domain).
+    let Some(host) = resolve_request_host(s, headers).await? else {
         return Err(AppError::NotFound("No calendar at this address".into()));
     };
-    let system = system_domain(&s);
 
     // A real request arriving on the custom domain IS the proof the record points here, so record
     // it: the console then reads "verified" without the owner having to press Check.
@@ -384,15 +498,65 @@ pub async fn public_site(
         }
     }
 
-    let calendars = sqlx::query_as::<_, CalendarListing>(
-        r#"SELECT id, slug, name, description, calendar_type
-           FROM booking_calendars
-           WHERE tenant_id = $1 AND is_active = true
-           ORDER BY name"#,
-    )
-    .bind(host.tenant_id)
-    .fetch_all(&s.db)
-    .await?;
+    let listings = calendar_listings(s, host.tenant_id, requested_slug.as_deref()).await?;
+    let open_slots = open_slot_count(&listings);
+
+    Ok(json!({
+        "tenant": {
+            "id": host.tenant_id,
+            "name": host.tenant_name,
+            "slug": host.tenant_slug,
+            "branding_name": host.branding_name,
+            "logo_url": host.logo_url,
+            "primary_color": host.primary_color,
+            "accent_color": host.accent_color,
+        },
+        "host": {
+            "kind": if host.custom_domain.is_some() && host.custom_domain_status == "verified" { "custom" } else { "system" },
+            "subdomain": host.subdomain,
+            "system_domain": system,
+            "system_url": public_url(&host.subdomain, None, &system),
+            "custom_domain": host.custom_domain,
+        },
+        "calendars": listings,
+        "open_slots": open_slots,
+    }))
+}
+
+/// One calendar's listing (or all of a workspace's), each with its open slot types. `only_slug`
+/// narrows the set to a single calendar for the `/site/:slug` arm; a slug that matches nothing
+/// answers an empty list, so a bad link shows the branded "nothing open" state, never another
+/// calendar.
+async fn calendar_listings(
+    s: &AppState,
+    tenant_id: Uuid,
+    only_slug: Option<&str>,
+) -> Result<Vec<serde_json::Value>, AppError> {
+    let calendars: Vec<CalendarListing> = match only_slug {
+        Some(slug) => {
+            sqlx::query_as::<_, CalendarListing>(
+                r#"SELECT id, slug, name, description, calendar_type
+               FROM booking_calendars
+               WHERE tenant_id = $1 AND is_active = true AND slug = $2
+               ORDER BY name"#,
+            )
+            .bind(tenant_id)
+            .bind(slug)
+            .fetch_all(&s.db)
+            .await?
+        }
+        None => {
+            sqlx::query_as::<_, CalendarListing>(
+                r#"SELECT id, slug, name, description, calendar_type
+               FROM booking_calendars
+               WHERE tenant_id = $1 AND is_active = true
+               ORDER BY name"#,
+            )
+            .bind(tenant_id)
+            .fetch_all(&s.db)
+            .await?
+        }
+    };
 
     let mut listings = Vec::with_capacity(calendars.len());
     for cal in calendars {
@@ -422,8 +586,11 @@ pub async fn public_site(
             })).collect::<Vec<_>>(),
         }));
     }
+    Ok(listings)
+}
 
-    let open_slots: usize = listings
+fn open_slot_count(listings: &[serde_json::Value]) -> usize {
+    listings
         .iter()
         .map(|l| {
             l.get("slots")
@@ -435,28 +602,7 @@ pub async fn public_site(
                 })
                 .unwrap_or(0)
         })
-        .sum();
-
-    Ok(Json(json!({
-        "tenant": {
-            "id": host.tenant_id,
-            "name": host.tenant_name,
-            "slug": host.tenant_slug,
-            "branding_name": host.branding_name,
-            "logo_url": host.logo_url,
-            "primary_color": host.primary_color,
-            "accent_color": host.accent_color,
-        },
-        "host": {
-            "kind": if host.custom_domain.is_some() && host.custom_domain_status == "verified" { "custom" } else { "system" },
-            "subdomain": host.subdomain,
-            "system_domain": system,
-            "system_url": public_url(&host.subdomain, None, &system),
-            "custom_domain": host.custom_domain,
-        },
-        "calendars": listings,
-        "open_slots": open_slots,
-    })))
+        .sum()
 }
 
 #[derive(Deserialize, sqlx::FromRow)]

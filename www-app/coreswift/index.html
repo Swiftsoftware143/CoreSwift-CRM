@@ -7108,7 +7108,13 @@ function gcRender() {
       actions += ' <button class="btn btn-secondary btn-xs" data-gc="sync" data-id="' +
         escapeHtmlAttr(c.id) + '">Sync now</button>';
     }
-    return [escapeHtml(c.name), '<code>' + escapeHtml(c.slug) + '</code>', badge, actions];
+    // Per-calendar own address (kanban t_d4ac5433): the owner may give one calendar its own
+    // subdomain; the account then becomes the first path segment of that calendar's URL.
+    const ownAddress = c.subdomain
+      ? '<code>' + escapeHtml(c.subdomain) + '</code>' +
+        ' <button class="btn btn-ghost btn-xs" data-gc="clearsub" data-id="' + escapeHtmlAttr(c.slug) + '">Remove</button>'
+      : '<button class="btn btn-secondary btn-xs" data-gc="setsub" data-id="' + escapeHtmlAttr(c.slug) + '">Give it its own address</button>';
+    return [escapeHtml(c.name), '<code>' + escapeHtml(c.slug) + '</code>', badge, ownAddress, actions];
   });
 
   el.innerHTML = card('📅 Booking calendars &rarr; Google Calendar',
@@ -7118,7 +7124,7 @@ function gcRender() {
         : '<strong>No Google OAuth client is stored on this account yet.</strong> Add your client ID and secret under <em>Provider keys</em> in the ' +
           'Integration Center — the connect button will then print the exact redirect URI to register on your Google client.') +
       '</p>') +
-    dataTable(['Calendar', 'Slug', 'Google Calendar', ''], rows,
+    dataTable(['Calendar', 'Slug', 'Google Calendar', 'Own address', ''], rows,
       'No booking calendars yet — use “+ New Calendar” to create one.');
   gcBind(el);
 }
@@ -7131,8 +7137,45 @@ function gcBind(root) {
       if (act === 'connect') gcConnect(id, b);
       else if (act === 'sync') gcSync(id, b);
       else if (act === 'edit') gcEditCalendar(id);
+      else if (act === 'setsub') gcSetSubdomain(id);
+      else if (act === 'clearsub') gcClearSubdomain(id);
     });
   });
+}
+
+// Per-calendar own address (kanban t_d4ac5433). The owner may give ONE calendar its own subdomain;
+// the account then becomes the first path segment: <subdomain>.<app-domain>/<account>/<calendar>.
+async function gcSetSubdomain(slug) {
+  const dom = (CALHOST && CALHOST.system_domain) || 'your-app-domain';
+  showModal('Give this calendar its own address',
+    '<div class="form-group"><label>Address name</label>' +
+    '<input type="text" id="gcSubName" placeholder="appointments" autocomplete="off">' +
+    '<span class="form-hint">Letters, numbers and hyphens. That calendar then answers at ' +
+    '<code>' + escapeHtml(dom) + '/&lt;your-account&gt;/' + escapeHtml(slug) + '</code>.</span></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="gcSubSave">Save address</button>');
+  const b = document.getElementById('gcSubSave');
+  if (!b) return;
+  b.addEventListener('click', async () => {
+    const v = (document.getElementById('gcSubName').value || '').trim().toLowerCase();
+    if (!v) { toast('Type the address name you want', 'error'); return; }
+    b.disabled = true;
+    try {
+      const r = await API.put('/bookings/calendars/' + encodeURIComponent(slug) + '/subdomain', { subdomain: v });
+      closeModal();
+      toast('Saved. That calendar is now at ' + (r && r.url ? r.url : v) + '.', 'success');
+      loadCalendarTab();
+    } catch (e) { toast(e.message, 'error'); b.disabled = false; }
+  });
+}
+
+async function gcClearSubdomain(slug) {
+  if (!confirm('Remove this calendar\u2019s own address? It answers again as a page under your account address.')) return;
+  try {
+    await API.del('/bookings/calendars/' + encodeURIComponent(slug) + '/subdomain');
+    toast('Removed. The calendar answers under your account address again.', 'success');
+    loadCalendarTab();
+  } catch (e) { toast('Could not remove: ' + e.message, 'error'); }
 }
 
 async function gcConnect(calendarId, btn) {
