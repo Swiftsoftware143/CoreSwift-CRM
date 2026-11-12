@@ -1,5 +1,7 @@
 use axum::{
-    extract::{Multipart, Path, State},
+    body::Bytes,
+    extract::{FromRequest, Multipart, Path, Request, State},
+    http::header::CONTENT_TYPE,
     Json,
 };
 use serde::Deserialize;
@@ -90,6 +92,10 @@ struct Delivery {
     inbound: InboundEmail,
     is_spam: bool,
     has_attachments: bool,
+    /// Bytes carried by the delivery's file parts. They are counted toward the account's storage
+    /// figure (the meter is what pauses new attachments at 100%) and then dropped: this receiver
+    /// stores the MESSAGE, not the files.
+    attachment_bytes: usize,
     provider: &'static str,
     from_display_name: Option<String>,
 }
@@ -117,16 +123,25 @@ struct Delivery {
 /// differ; now each route answers only for the domains that chose it.
 pub async fn inbound_webhook(
     State(state): State<AppState>,
-    body: String,
+    request: Request,
 ) -> ApiResult<Json<serde_json::Value>> {
     // ── Step 1: Extract sender + recipient ─────
-    let (sender_email, recipient_email, mailgun_payload) = try_parse_inbound(&body);
+    // The delivery arrives in ONE OF TWO SHAPES (kanban t_237e3005): a plain message as
+    // `application/x-www-form-urlencoded`, and ANY message carrying an attachment — including the
+    // workspace's own embedded logo — as `multipart/form-data` with binary parts. The body used to
+    // be extracted as a `String`, so axum answered the multipart shape with
+    // `400 Request body didn't contain valid UTF-8` BEFORE this handler ran: every attached email,
+    // and every branded message this app sends to one of its own inboxes, was destroyed at the door
+    // while the sender saw "Sent". Reading the request by CONTENT TYPE is what makes "incoming mail
+    // is never refused" true for attached mail as well as plain mail.
+    let delivery = read_delivery(request).await?;
 
-    if sender_email.is_empty() || recipient_email.is_empty() {
+    if delivery.sender.is_empty() || delivery.recipient.is_empty() {
         return Ok(Json(
             json!({"received": false, "error": "could not determine sender or recipient"}),
         ));
     }
+    let recipient_email = delivery.recipient.clone();
 
     // ── Step 2: who is this mail FOR? ───────────────────────────────────────────────────────────
     let Some((tenant_id, domain_id, mailbox_id)) =
@@ -180,7 +195,7 @@ pub async fn inbound_webhook(
         .as_deref()
         .map(|k| !k.is_empty())
         .unwrap_or(false);
-    let inbound = provider.accept_inbound(&provider_config, body.as_bytes());
+    let inbound = provider.accept_inbound(&provider_config, &delivery.auth_body);
 
     let inbound = match inbound {
         Some(i) => i,
@@ -215,12 +230,14 @@ pub async fn inbound_webhook(
         }
     };
 
-    let is_spam = mailgun_payload
+    let is_spam = delivery
+        .mailgun
         .as_ref()
         .map(|p| p.is_spam())
         .unwrap_or_else(|| {
             // Providers that do not speak Mailgun's fields still get the header check.
-            body.contains("X-Mailgun-Sflag") && body.contains("Yes")
+            let raw = String::from_utf8_lossy(&delivery.auth_body);
+            raw.contains("X-Mailgun-Sflag") && raw.contains("Yes")
         });
 
     ingest(
@@ -231,12 +248,18 @@ pub async fn inbound_webhook(
             recipient: recipient_email,
             inbound,
             is_spam,
-            has_attachments: mailgun_payload
+            // The field Mailgun posts AND the parts the parser actually counted: a delivery that
+            // carries a binary part is an attached delivery even when `attachment-count` is missing.
+            has_attachments: delivery
+                .mailgun
                 .as_ref()
                 .map(|p| p.has_attachments())
-                .unwrap_or(false),
+                .unwrap_or(false)
+                || delivery.attachment_parts > 0,
+            attachment_bytes: delivery.attachment_bytes,
             provider: "mailgun",
-            from_display_name: mailgun_payload
+            from_display_name: delivery
+                .mailgun
                 .as_ref()
                 .map(|p| p.sender.as_str())
                 .and_then(display_name)
@@ -336,6 +359,7 @@ pub async fn sendgrid_inbound(
     // message, and buffering an attachment we never store is how a receiver runs out of memory).
     let mut fields: Vec<(String, String)> = Vec::new();
     let mut attachment_parts: u32 = 0;
+    let mut attachment_bytes: usize = 0;
     loop {
         let field = match multipart.next_field().await {
             Ok(Some(f)) => f,
@@ -352,8 +376,13 @@ pub async fn sendgrid_inbound(
             }
         };
         let name = field.name().unwrap_or_default().to_string();
-        if field.file_name().is_some() {
+        if field.file_name().is_some() || is_numbered_attachment_part(&name) {
+            // Counted AND measured: the bytes count toward the account's storage figure even though
+            // the file itself is not stored (kanban t_237e3005, same rule as the Mailgun receiver).
             attachment_parts += 1;
+            if let Ok(data) = field.bytes().await {
+                attachment_bytes += data.len();
+            }
             continue;
         }
         match field.text().await {
@@ -412,6 +441,7 @@ pub async fn sendgrid_inbound(
             from_display_name: display_name(&inbound.from).map(str::to_string),
             is_spam: payload.is_spam(),
             has_attachments: payload.has_attachments(),
+            attachment_bytes,
             inbound,
             provider: "sendgrid",
         },
@@ -509,6 +539,7 @@ async fn ingest(state: &AppState, d: Delivery) -> ApiResult<Json<serde_json::Val
         inbound,
         is_spam,
         has_attachments,
+        attachment_bytes,
         provider,
         from_display_name,
     } = d;
@@ -545,6 +576,7 @@ async fn ingest(state: &AppState, d: Delivery) -> ApiResult<Json<serde_json::Val
                 .filter(|m| !m.trim().is_empty()),
             is_spam,
             has_attachments,
+            attachment_bytes,
         },
     )
     .await?;
@@ -857,6 +889,16 @@ fn display_name(raw: &str) -> Option<&str> {
     }
 }
 
+/// Is this multipart field name one of Mailgun's file parts (`attachment-1`, `attachment-2`, …)?
+///
+/// The digits are required: `attachment-count` is the TEXT field that says how many files there
+/// are, and treating it as a file would add a phantom attachment to every delivery.
+fn is_numbered_attachment_part(name: &str) -> bool {
+    name.strip_prefix("attachment-")
+        .map(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        .unwrap_or(false)
+}
+
 fn extract_email(raw: &str) -> String {
     if let Some(start) = raw.find('<') {
         if let Some(end) = raw[start..].find('>') {
@@ -864,6 +906,166 @@ fn extract_email(raw: &str) -> String {
         }
     }
     raw.trim().to_lowercase()
+}
+
+/// One inbound delivery, parsed from whichever shape it arrived in.
+///
+/// WHY THIS EXISTS (kanban t_237e3005): Mailgun posts a plain message as
+/// `application/x-www-form-urlencoded`, but a message that CARRIES ANY BINARY MIME PART — an
+/// invoice, a signed agreement, or this app's own embedded signature logo — is posted as
+/// `multipart/form-data`. The handler used to take `body: String`, so axum refused the multipart
+/// shape with `400 Request body didn't contain valid UTF-8` before any of our code ran: the mail
+/// was lost at the door, the sender was told "Sent", and nothing was logged.
+struct ParsedDelivery {
+    sender: String,
+    recipient: String,
+    /// The bytes the provider's signature verifier reads. For urlencoded/JSON this is the raw body
+    /// unchanged; for multipart it is a canonical urlencoded form rebuilt from the TEXT fields only.
+    /// Mailgun's HMAC covers `timestamp + token`, and both are fields in every shape, so the binary
+    /// parts never have to be UTF-8 for the delivery to authenticate.
+    auth_body: Vec<u8>,
+    /// Mailgun's own field set (spam verdict, attachment count, display name). `None` for the JSON
+    /// shapes other providers use, exactly as before.
+    mailgun: Option<MailgunInbound>,
+    /// File parts the parser actually counted, and the bytes they carried.
+    attachment_parts: u32,
+    attachment_bytes: usize,
+}
+
+/// Read the request into a [`ParsedDelivery`], choosing the parser by CONTENT TYPE.
+async fn read_delivery(request: Request) -> Result<ParsedDelivery, AppError> {
+    let is_multipart = request
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| {
+            v.trim_start()
+                .to_ascii_lowercase()
+                .starts_with("multipart/form-data")
+        })
+        .unwrap_or(false);
+
+    if is_multipart {
+        let (fields, attachment_parts, attachment_bytes) = multipart_text_fields(request).await?;
+        // Re-encode the TEXT fields as the urlencoded form that `accept_inbound` already speaks, so
+        // signature validation and field parsing stay in ONE place (`providers::mailgun`) instead of
+        // growing a second, weaker copy for the multipart shape.
+        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+        for (name, value) in &fields {
+            serializer.append_pair(name, value);
+        }
+        let auth_body = serializer.finish().into_bytes();
+        let text = String::from_utf8_lossy(&auth_body).to_string();
+        let mailgun = serde_urlencoded::from_str::<MailgunInbound>(&text).ok();
+        let (sender, recipient) = match &mailgun {
+            Some(p) => (extract_email(&p.sender), extract_email(&p.recipient)),
+            None => {
+                let (sender, recipient, _) = try_parse_inbound(&text);
+                (sender, recipient)
+            }
+        };
+        return Ok(ParsedDelivery {
+            sender,
+            recipient,
+            auth_body,
+            mailgun,
+            attachment_parts,
+            attachment_bytes,
+        });
+    }
+
+    // Everything else keeps the shape it has always had. Lossy UTF-8 rather than a refusal: a body
+    // that will not decode cannot authenticate, and it is answered with the same `received: false`
+    // as any other unreadable delivery instead of a 400 that a provider retries for hours.
+    let bytes = Bytes::from_request(request, &())
+        .await
+        .map_err(|rejection| {
+            tracing::warn!(
+                status = %rejection.status(),
+                "inbound webhook refused: the delivery body could not be read"
+            );
+            AppError::BadRequest(format!(
+                "the delivery body could not be read: {}",
+                rejection.body_text()
+            ))
+        })?;
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let (sender, recipient, mailgun) = try_parse_inbound(&text);
+    Ok(ParsedDelivery {
+        sender,
+        recipient,
+        auth_body: bytes.to_vec(),
+        mailgun,
+        attachment_parts: 0,
+        attachment_bytes: 0,
+    })
+}
+
+/// Walk a `multipart/form-data` delivery: keep the TEXT fields, count (and measure, then drop) the
+/// file parts. A field that cannot be read is logged and skipped — the rest of the delivery stands,
+/// which is how the SendGrid receiver behaves too.
+async fn multipart_text_fields(
+    request: Request,
+) -> Result<(Vec<(String, String)>, u32, usize), AppError> {
+    // `()` is the extractor state: neither extractor reads it (both take their body limit from the
+    // request's own `DefaultBodyLimit` extension), and naming the empty state is what lets this
+    // parser be unit-tested without an `AppState`.
+    let mut multipart = Multipart::from_request(request, &())
+        .await
+        .map_err(|rejection| {
+            tracing::warn!(
+                status = %rejection.status(),
+                "inbound webhook refused: the multipart delivery could not be parsed"
+            );
+            AppError::BadRequest(format!(
+                "this receiver expects Mailgun's multipart delivery: {}",
+                rejection.body_text()
+            ))
+        })?;
+
+    let mut fields: Vec<(String, String)> = Vec::new();
+    let mut attachment_parts: u32 = 0;
+    let mut attachment_bytes: usize = 0;
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "inbound webhook refused: the multipart delivery could not be read"
+                );
+                return Err(AppError::BadRequest(format!(
+                    "the multipart delivery could not be read: {}",
+                    e.body_text()
+                )));
+            }
+        };
+        let name = field.name().unwrap_or_default().to_string();
+        // Mailgun names file parts `attachment-1`, `attachment-2`, … and also fills them with a
+        // server-side filename; either signal means "this part is a file, not a field". The DIGITS
+        // matter: `attachment-count` is a TEXT field and counting it as a file would report one
+        // attachment too many on every delivery (caught by the unit test below).
+        let is_file = field.file_name().is_some() || is_numbered_attachment_part(&name);
+        match field.bytes().await {
+            Ok(data) => {
+                if is_file {
+                    attachment_parts += 1;
+                    attachment_bytes += data.len();
+                } else if !name.is_empty() {
+                    fields.push((name, String::from_utf8_lossy(&data).into_owned()));
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    field = %name,
+                    error = %e,
+                    "inbound webhook: one multipart field could not be read; the rest of the delivery stands"
+                );
+            }
+        }
+    }
+    Ok((fields, attachment_parts, attachment_bytes))
 }
 
 /// Attempt to parse the inbound webhook body from the JSON shapes other providers use.
@@ -946,5 +1148,142 @@ mod tests {
         assert!(!p.is_spam());
         p.message_headers = r#"[["X-Mailgun-Sflag","Yes"]]"#.into();
         assert!(p.is_spam());
+    }
+
+    // ── The shape that used to be destroyed at the door (kanban t_237e3005) ─────────────────────
+
+    fn multipart_field(out: &mut Vec<u8>, boundary: &str, name: &str, value: &str) {
+        out.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+
+    fn multipart_file(out: &mut Vec<u8>, boundary: &str, name: &str, filename: &str, bytes: &[u8]) {
+        out.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; \
+                 filename=\"{filename}\"\r\nContent-Type: image/png\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        out.extend_from_slice(bytes);
+        out.extend_from_slice(b"\r\n");
+    }
+
+    /// A genuine Mailgun multipart delivery: the text fields it posts plus one BINARY part whose
+    /// bytes are not valid UTF-8. Before the fix this request never reached the handler at all —
+    /// axum refused the `String` extractor with 400 and the mail was lost.
+    fn mailgun_multipart_body(boundary: &str, png: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        multipart_field(&mut out, boundary, "sender", "David <david@example.com>");
+        multipart_field(
+            &mut out,
+            boundary,
+            "recipient",
+            "Box <box@mail.example.com>",
+        );
+        multipart_field(&mut out, boundary, "subject", "Invoice attached");
+        multipart_field(&mut out, boundary, "body-plain", "hello with a logo");
+        multipart_field(&mut out, boundary, "body-html", "<p>hello with a logo</p>");
+        multipart_field(
+            &mut out,
+            boundary,
+            "message-headers",
+            r#"[["Message-Id","<m1@x>"]]"#,
+        );
+        multipart_field(&mut out, boundary, "attachment-count", "1");
+        multipart_field(&mut out, boundary, "timestamp", "1700000000");
+        multipart_field(&mut out, boundary, "token", "abc123");
+        multipart_field(&mut out, boundary, "signature", "deadbeef");
+        multipart_file(&mut out, boundary, "attachment-1", "logo.png", png);
+        out.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+        out
+    }
+
+    fn delivery_request(content_type: &str, body: Vec<u8>) -> Request {
+        Request::builder()
+            .method("POST")
+            .header(CONTENT_TYPE, content_type)
+            .body(axum::body::Body::from(body))
+            .expect("a hand-built request")
+    }
+
+    #[tokio::test]
+    async fn a_multipart_delivery_with_a_binary_part_parses_instead_of_being_refused() {
+        let boundary = "cs-probe-boundary";
+        let png: Vec<u8> = vec![
+            0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00, 0x7f,
+        ];
+        let request = delivery_request(
+            &format!("multipart/form-data; boundary={boundary}"),
+            mailgun_multipart_body(boundary, &png),
+        );
+
+        let parsed = read_delivery(request)
+            .await
+            .expect("a multipart delivery must be parsed, not refused");
+
+        assert_eq!(parsed.sender, "david@example.com");
+        assert_eq!(parsed.recipient, "box@mail.example.com");
+        assert_eq!(parsed.attachment_parts, 1);
+        assert_eq!(parsed.attachment_bytes, png.len());
+        let payload = parsed.mailgun.as_ref().expect("Mailgun's own fields");
+        // The signature covers timestamp+token, so both must survive the re-encoding untouched.
+        assert_eq!(payload.timestamp, "1700000000");
+        assert_eq!(payload.token, "abc123");
+        assert_eq!(payload.signature, "deadbeef");
+        assert_eq!(payload.body_plain, "hello with a logo");
+        assert_eq!(payload.subject, "Invoice attached");
+        assert!(payload.has_attachments());
+    }
+
+    #[tokio::test]
+    async fn a_multipart_delivery_with_no_file_still_parses_its_fields() {
+        let boundary = "cs-plain-boundary";
+        let mut body = Vec::new();
+        multipart_field(&mut body, boundary, "sender", "david@example.com");
+        multipart_field(&mut body, boundary, "recipient", "box@mail.example.com");
+        multipart_field(&mut body, boundary, "body-plain", "no attachment here");
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+        let parsed = read_delivery(delivery_request(
+            &format!("multipart/form-data; boundary={boundary}"),
+            body,
+        ))
+        .await
+        .expect("multipart without a file must parse");
+        assert_eq!(parsed.attachment_parts, 0);
+        assert_eq!(parsed.attachment_bytes, 0);
+        assert_eq!(
+            parsed.mailgun.as_ref().map(|p| p.body_plain.as_str()),
+            Some("no attachment here")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_urlencoded_delivery_is_handed_to_the_verifier_byte_for_byte() {
+        // The plain shape must be UNCHANGED: the provider's verifier reads the caller's own bytes,
+        // not a re-encoding of them.
+        let body = "sender=david%40example.com&recipient=box%40mail.example.com&subject=Hi\
+                    &body-plain=hello+there&timestamp=1&token=t&signature=s";
+        let parsed = read_delivery(delivery_request(
+            "application/x-www-form-urlencoded",
+            body.as_bytes().to_vec(),
+        ))
+        .await
+        .expect("the form shape must keep working");
+
+        assert_eq!(parsed.sender, "david@example.com");
+        assert_eq!(parsed.recipient, "box@mail.example.com");
+        assert_eq!(parsed.auth_body, body.as_bytes());
+        assert_eq!(parsed.attachment_parts, 0);
+        assert_eq!(parsed.attachment_bytes, 0);
+        assert_eq!(
+            parsed.mailgun.as_ref().map(|p| p.body_plain.as_str()),
+            Some("hello there")
+        );
     }
 }

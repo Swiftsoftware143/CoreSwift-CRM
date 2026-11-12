@@ -1552,6 +1552,10 @@ pub struct InboundMessage<'a> {
     pub provider_message_id: Option<&'a str>,
     pub is_spam: bool,
     pub has_attachments: bool,
+    /// Bytes carried by the delivery's file parts, added to `size_bytes` so an account's storage
+    /// figure includes what an attached message costs (kanban t_237e3005). The FILES themselves are
+    /// not stored by this receiver — only the message is.
+    pub attachment_bytes: usize,
 }
 
 /// Store one received message. Returns (message id, whether this call created it).
@@ -1563,7 +1567,9 @@ pub async fn store_inbound(
     msg: &InboundMessage<'_>,
 ) -> Result<(Uuid, bool), AppError> {
     let snippet: String = msg.body_plain.chars().take(500).collect();
-    let size = (msg.body_plain.len() + msg.body_html.map(str::len).unwrap_or(0)) as i32;
+    let size = (msg.body_plain.len()
+        + msg.body_html.map(str::len).unwrap_or(0)
+        + msg.attachment_bytes) as i32;
     let folder = if msg.is_spam { "spam" } else { "inbox" };
 
     let row = sqlx::query(

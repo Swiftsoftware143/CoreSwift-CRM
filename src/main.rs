@@ -645,15 +645,30 @@ async fn main() -> anyhow::Result<()> {
         // Public redirect for tracked links (no auth)
         .nest("/track", tracked_links::public_router())
         // Mailgun inbound webhook (no auth — called by Mailgun)
-        .route(
-            "/api/v1/webhooks/mailgun/inbound",
-            axum::routing::post(private_email::webhook_handler::inbound_webhook).layer(
-                axum::middleware::from_fn_with_state(
-                    body_read_deadline,
-                    body_deadline::body_read_deadline_middleware,
-                ),
-            ),
-        )
+        //
+        // THE 25 MB LIMIT SITS OUTSIDE THE DEADLINE ON PURPOSE (kanban t_237e3005): a delivery that
+        // carries an attachment is posted as multipart with the file's bytes in the body, and while
+        // this route took `body: String` axum's 2 MB default (and the UTF-8 check) refused it before
+        // the handler ran. The deadline middleware reads through the request's own
+        // `DefaultBodyLimit` extension, so a limit applied INSIDE it would be invisible and every
+        // attached message over 2 MB would be answered 413 at the door.
+        .route("/api/v1/webhooks/mailgun/inbound", {
+            // Both types are written out because each `MethodRouter::layer` call leaves axum's
+            // error parameter unconstrained at the call site (its bound is `Error: Into<NewError>`,
+            // which does not invert). A `MethodRouter` layer keeps both bounds scoped to this one
+            // route — a `Router` layer here would raise the body limit of every route mounted above
+            // it as a side effect (kanban t_237e3005).
+            let with_deadline: axum::routing::MethodRouter<AppState> = axum::routing::post(
+                private_email::webhook_handler::inbound_webhook,
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                body_read_deadline,
+                body_deadline::body_read_deadline_middleware,
+            ));
+            let inbound: axum::routing::MethodRouter<AppState> =
+                with_deadline.layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024));
+            inbound
+        })
         // SendGrid Inbound Parse (kanban t_04db9228). SendGrid signs nothing, so the per-domain
         // token in the path IS the credential: the handler resolves the domain BY it through a
         // unique index and refuses an unknown one before reading a field. The 25 MB body limit sits
