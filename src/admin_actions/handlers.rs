@@ -1000,17 +1000,26 @@ pub async fn cross_app_sync(
         .and_then(|v| Uuid::parse_str(v).ok());
     let derived_slug = company_slug(&name);
 
-    const ROW_SQL: &str = r#"-- The company row plus the account behind it, if any.
+    // The row-plus-account projection, written ONCE. It is a macro rather than a `const` so the two
+    // statements below can be assembled at COMPILE time (`concat!`), which is the fleet's sanctioned
+    // shape for a shared statement head (gate rule 5d: a query must not be BUILT at run time). The
+    // emitted SQL text is byte-identical to the previous `format!("{ROW_SQL} WHERE …")` — see
+    // /opt/swift/audits/t_8457bfef/static-sql-identity.py, which proves it.
+    macro_rules! row_sql {
+        () => {
+            r#"-- The company row plus the account behind it, if any.
            SELECT pc.id, pc.slug,
                   COALESCE(
                     (SELECT t.id FROM tenants t WHERE t.id::text = pc.settings->>'account_tenant_id'),
                     (SELECT t.id FROM tenants t WHERE t.slug = pc.slug)
                   ) AS account_tenant_id
-             FROM portfolio_companies pc"#;
+             FROM portfolio_companies pc"#
+        };
+    }
 
     let existing_row: Option<ExistingRow> = match requested_id {
         Some(id) => {
-            sqlx::query_as(&format!("{ROW_SQL} WHERE pc.id = $1"))
+            sqlx::query_as(concat!(row_sql!(), " WHERE pc.id = $1"))
                 .bind(id)
                 .fetch_optional(&s.db)
                 .await?
@@ -1018,8 +1027,9 @@ pub async fn cross_app_sync(
         // No id: the row this company already holds, by its slug or by its exact name (the latter
         // covers a row created with `POST /api/portfolio`'s own slug derivation).
         None => {
-            sqlx::query_as(&format!(
-                "{ROW_SQL} WHERE pc.slug = $1 OR lower(btrim(pc.name)) = lower(btrim($2)) \
+            sqlx::query_as(concat!(
+                row_sql!(),
+                " WHERE pc.slug = $1 OR lower(btrim(pc.name)) = lower(btrim($2)) \
              ORDER BY (pc.slug = $1) DESC, pc.created_at ASC LIMIT 1"
             ))
             .bind(&derived_slug)
