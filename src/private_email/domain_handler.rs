@@ -250,9 +250,27 @@ pub async fn list_domains(
     // reading "on" while every unmatched delivery is refused.
     let plan_sells_catch_all = feature_gate::catch_all_granted(&state.db, account_id).await?;
 
+    // The upgrade door is a catalogue read, so it is fetched ONCE for the list — and only when some
+    // row actually carries a switch the plan is refusing (kanban t_f2234ffa).
+    let catch_all_upgrade = if !plan_sells_catch_all && domains.iter().any(|d| d.catch_all_enabled)
+    {
+        Some(feature_gate::catch_all_upgrade_clause(&state.db).await)
+    } else {
+        None
+    };
+
     let out: Vec<serde_json::Value> = domains
         .iter()
-        .map(|d| with_credential_status(account_id, d, &keys, &provider_keys, plan_sells_catch_all))
+        .map(|d| {
+            with_credential_status(
+                account_id,
+                d,
+                &keys,
+                &provider_keys,
+                plan_sells_catch_all,
+                catch_all_upgrade.as_deref(),
+            )
+        })
         .collect();
 
     // Is each domain's BRANDED front door (`inbox.<domain>`) really serving the mail client? The
@@ -343,6 +361,7 @@ fn with_credential_status(
     keys: &std::collections::HashMap<Uuid, String>,
     provider_keys: &std::collections::HashMap<Uuid, String>,
     plan_sells_catch_all: bool,
+    catch_all_upgrade: Option<&str>,
 ) -> serde_json::Value {
     let status = domain_credential_status(tenant_id, d, keys, provider_keys);
     let mut v = serde_json::to_value(d).unwrap_or_else(|_| json!({}));
@@ -381,17 +400,48 @@ fn with_credential_status(
         );
         obj.insert("catch_all_off_plan".into(), json!(off_plan));
         if off_plan {
+            // The tier named here is READ from the plan catalogue by the caller
+            // (`feature_gate::catch_all_upgrade_clause`, kanban t_f2234ffa) — the same sentence the
+            // switch's own 400 uses. A hardcoded name is what made this hint and the refusal drift
+            // from `plans.features`; there is one clause now, so they cannot.
             obj.insert(
                 "catch_all_hint".into(),
-                json!(
+                json!(format!(
                     "Catch-all is off: your current plan does not include it, so mail to an \
-                     address that does not exist on this domain is refused. Upgrade to the \
-                     Professional plan or higher to restore it — this switch is remembered."
-                ),
+                     address that does not exist on this domain is refused. Upgrade to {} to \
+                     restore it — this switch is remembered.",
+                    catch_all_upgrade.unwrap_or("a higher plan")
+                )),
             );
         }
     }
     v
+}
+
+/// The response shape every domain surface returns, with the catch-all door built from the plan
+/// catalogue — but ONLY for a row whose stored switch is actually being refused. That is one extra
+/// query on the downgraded case and none on the ordinary one (kanban t_f2234ffa).
+async fn domain_json(
+    state: &AppState,
+    tenant_id: Uuid,
+    d: &PrivateEmailDomain,
+    keys: &HashMap<Uuid, String>,
+    provider_keys: &HashMap<Uuid, String>,
+    plan_sells_catch_all: bool,
+) -> serde_json::Value {
+    let clause = if d.catch_all_enabled && !plan_sells_catch_all {
+        Some(feature_gate::catch_all_upgrade_clause(&state.db).await)
+    } else {
+        None
+    };
+    with_credential_status(
+        tenant_id,
+        d,
+        keys,
+        provider_keys,
+        plan_sells_catch_all,
+        clause.as_deref(),
+    )
 }
 
 /// `usable | unreadable | missing` + the length of the DECRYPTED signing key (0 when there is none).
@@ -443,13 +493,16 @@ pub async fn update_domain(
         if catch_all {
             let allowed = feature_gate::can_enable_catch_all(&state.db, account_id).await?;
             if !allowed {
-                // Names a tier that is ON SALE. The previous wording ("Pro plan or higher") named
-                // `pro`, which is inactive: the tier that actually sells catch-all is
-                // `professional` (measured live 2026-11-11 — `professional`, `agency` and
-                // `enterprise` carry `features.catch_all = true`; `free` and `starter` do not), so
-                // a customer on a paid-but-excluded tier was sent to buy a plan they cannot find.
+                // The plan named here is READ from the catalogue (kanban t_f2234ffa), never typed.
+                // Two hardcoded versions of this sentence were both wrong on this install: "Pro plan
+                // or higher" named `pro` after it was deactivated (it is `is_active = false`), and
+                // "Professional plan or higher" is right only while Professional happens to be the
+                // cheapest active tier that sells catch-all. `catch_all_refusal` asks
+                // `plans`/`plan_modules` — active, priced cheapest-first, feature sold — so the
+                // sentence cannot drift from what a customer can actually buy, and it carries the
+                // price so the answer names the door instead of sending them to hunt for it.
                 return Err(AppError::BadRequest(
-                    "Catch-all requires the Professional plan or higher".into(),
+                    feature_gate::catch_all_refusal(&state.db).await,
                 ));
             }
         }
@@ -634,13 +687,17 @@ pub async fn update_domain(
             // stored value survives a plan change while the entitlement does not.
             let plan_sells_catch_all =
                 feature_gate::catch_all_granted(&state.db, account_id).await?;
-            Ok(Json(with_credential_status(
-                account_id,
-                &domain,
-                &keys,
-                &provider_keys,
-                plan_sells_catch_all,
-            )))
+            Ok(Json(
+                domain_json(
+                    &state,
+                    account_id,
+                    &domain,
+                    &keys,
+                    &provider_keys,
+                    plan_sells_catch_all,
+                )
+                .await,
+            ))
         }
         None => Err(AppError::NotFound("Domain not found".into())),
     }
@@ -771,13 +828,15 @@ pub async fn verify_domain(
 
         let (keys, provider_keys) = load_credential_maps(&state.db, account_id).await?;
         let plan_sells_catch_all = feature_gate::catch_all_granted(&state.db, account_id).await?;
-        let mut body = with_credential_status(
+        let mut body = domain_json(
+            &state,
             account_id,
             &row,
             &keys,
             &provider_keys,
             plan_sells_catch_all,
-        );
+        )
+        .await;
         if let Some(obj) = body.as_object_mut() {
             obj.insert("receiving_provider".into(), json!("sendgrid"));
             obj.insert("mx_points_at_sendgrid".into(), json!(mx_ready));
@@ -876,13 +935,15 @@ pub async fn verify_domain(
 
     let (keys, provider_keys) = load_credential_maps(&state.db, account_id).await?;
     let plan_sells_catch_all = feature_gate::catch_all_granted(&state.db, account_id).await?;
-    let mut body = with_credential_status(
+    let mut body = domain_json(
+        &state,
         account_id,
         &row,
         &keys,
         &provider_keys,
         plan_sells_catch_all,
-    );
+    )
+    .await;
     if let Some(obj) = body.as_object_mut() {
         obj.insert("mailgun_state".into(), json!(mailgun_state));
         obj.insert("verified_before".into(), json!(verified_before));
@@ -1633,13 +1694,17 @@ async fn add_mailgun_domain(
     // whether inbound mail can be authenticated yet.
     let (keys, provider_keys) = load_credential_maps(&state.db, account_id).await?;
     let plan_sells_catch_all = feature_gate::catch_all_granted(&state.db, account_id).await?;
-    Ok(Json(with_credential_status(
-        account_id,
-        &row,
-        &keys,
-        &provider_keys,
-        plan_sells_catch_all,
-    )))
+    Ok(Json(
+        domain_json(
+            &state,
+            account_id,
+            &row,
+            &keys,
+            &provider_keys,
+            plan_sells_catch_all,
+        )
+        .await,
+    ))
 }
 
 async fn add_smtp_domain(
@@ -1754,11 +1819,15 @@ async fn add_smtp_domain(
 
     let (keys, provider_keys) = load_credential_maps(&state.db, account_id).await?;
     let plan_sells_catch_all = feature_gate::catch_all_granted(&state.db, account_id).await?;
-    Ok(Json(with_credential_status(
-        account_id,
-        &row,
-        &keys,
-        &provider_keys,
-        plan_sells_catch_all,
-    )))
+    Ok(Json(
+        domain_json(
+            &state,
+            account_id,
+            &row,
+            &keys,
+            &provider_keys,
+            plan_sells_catch_all,
+        )
+        .await,
+    ))
 }

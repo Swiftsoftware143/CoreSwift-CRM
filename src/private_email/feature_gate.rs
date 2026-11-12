@@ -82,6 +82,83 @@ async fn limit_for(pool: &PgPool, tenant_id: Uuid, key: &str) -> Result<i32, App
 /// been written with).
 const CATCH_ALL_KEYS: &[&str] = &["catch_all", "catch_all_enabled"];
 
+/// The CHEAPEST ACTIVE plan that actually sells catch-all — name and monthly price — read from the
+/// plan catalogue, never a hardcoded tier name (kanban t_f2234ffa).
+///
+/// WHY THIS IS DATA, NOT COPY. The refusal that names this plan used to hardcode `Professional`.
+/// Before that it said `Pro`. Both are the same defect seen twice: a tier name in a sentence
+/// drifts from the catalogue the moment a plan is re-priced, renamed, given the feature or
+/// deactivated. Measured on this install 2026-11-11: `pro` still carries `features.catch_all =
+/// true` but its `plans.is_active` is **false** (deactivated 2026-11-10), so `Pro` is on no
+/// purchase screen while `Professional` ($79) is the cheapest plan a customer can actually buy
+/// that sells catch-all. Read here, the sentence follows `is_active`, the price and the feature
+/// flag together, so reactivating Pro makes the message say "Pro ($29)" with no redeploy.
+///
+/// The feature is read out of `plans.features` under BOTH spellings `json_bool` accepts, because
+/// that is exactly the blob `legacy_alias_features` — the gate this sentence describes — grants
+/// from. The plan must also carry the `private_email` module, or the switch would still be refused
+/// on it, and naming it would be a second lie.
+pub async fn catch_all_unlock_plan(pool: &PgPool) -> Result<Option<(String, f64)>, AppError> {
+    let rows: Vec<(String, f64, Value)> = sqlx::query_as(
+        r#"
+        SELECT p.name, p.price_monthly::float8, p.features
+          FROM plans p
+         WHERE p.is_active
+           AND EXISTS (
+                 SELECT 1 FROM plan_modules pm
+                   JOIN modules m ON m.id = pm.module_id
+                  WHERE pm.plan_id = p.id AND m.key = 'private_email' AND pm.enabled
+               )
+         ORDER BY p.price_monthly ASC, p.sort_order ASC NULLS LAST, p.name ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(AppError::Database)?;
+    Ok(cheapest_catch_all(&rows))
+}
+
+/// The pure half of `catch_all_unlock_plan`: first row — the caller orders cheapest-first — whose
+/// features blob SELLS catch-all. Separate so the choice is testable without a database, which is
+/// where every previous version of this string went wrong unobserved.
+fn cheapest_catch_all(rows: &[(String, f64, Value)]) -> Option<(String, f64)> {
+    rows.iter()
+        .find(|(_, _, features)| json_bool(features, CATCH_ALL_KEYS) == Some(true))
+        .map(|(name, price, _)| (name.clone(), *price))
+}
+
+/// `79` for a whole-dollar price, `29.50` when a tier is not — never `79.000000`.
+fn price_label(price: f64) -> String {
+    if (price - price.round()).abs() < 0.005 {
+        format!("{:.0}", price)
+    } else {
+        format!("{:.2}", price)
+    }
+}
+
+/// The door to catch-all, as an English clause that can be dropped into any sentence:
+/// `the Professional plan ($79/month)`. Built from the catalogue above so no surface can drift.
+///
+/// The two fallbacks are deliberately different facts: "no plan sells it" is a catalogue answer
+/// (an operator has withdrawn the feature), while a failed read is NOT an answer and must not be
+/// printed as one — it points at the upgrade screen, which lists every plan and its price.
+pub async fn catch_all_upgrade_clause(pool: &PgPool) -> String {
+    match catch_all_unlock_plan(pool).await {
+        Ok(Some((name, price))) => format!("the {} plan (${}/month)", name, price_label(price)),
+        Ok(None) => "a plan that includes it — contact support and we will enable it".to_string(),
+        Err(_) => "a higher plan — open Upgrade to see what each plan includes".to_string(),
+    }
+}
+
+/// The 400 a workspace sees when its plan does not sell catch-all. One sentence, built from the
+/// catalogue, so the switch's refusal, the guide and the plan data cannot disagree.
+pub async fn catch_all_refusal(pool: &PgPool) -> String {
+    format!(
+        "Catch-all requires {} or higher.",
+        catch_all_upgrade_clause(pool).await
+    )
+}
+
 /// Read a boolean out of a plan/override JSON blob under ANY of `keys`; the first name PRESENT
 /// wins, so an override blob and a plan blob are read by the same helper.
 ///
@@ -94,8 +171,8 @@ const CATCH_ALL_KEYS: &[&str] = &["catch_all", "catch_all_enabled"];
 /// (`professional`, `agency`, `enterprise`) carry `"catch_all": true`, while
 /// `PrivateEmailPlanFeatures::catch_all_enabled` only ever looked for `catch_all_enabled` — so the
 /// deserialise answered `false` for EVERY tenant and `PATCH /api/private-email/domains/<id>` was
-/// refused with 400 "Catch-all requires Pro plan or higher" (that copy named an inactive tier and
-/// has since been corrected to the Professional plan) for owners, agency admins and
+/// refused with 400 "Catch-all requires Pro plan or higher" (that copy named an inactive tier; the
+/// sentence is now read from the plan catalogue — see `catch_all_unlock_plan`) for owners, agency
 /// impersonated sessions alike. The three live domains only carried `catch_all_enabled = true`
 /// because that column had been written by direct SQL, i.e. no shipped surface could produce the
 /// state the rows were in.
@@ -235,6 +312,55 @@ mod plan_feature_key_tests {
         assert!(
             !pre_registry_features(&json!({"catch_all": true}), &json!({"catch_all": false})).0
         );
+    }
+
+    /// The refusal that names a plan is read from the catalogue, not typed (kanban t_f2234ffa).
+    /// Rows arrive cheapest-first; the FIRST row that sells catch-all is the one named, and a plan
+    /// whose blob does not sell it — however cheap — is skipped. Both JSON shapes count, because the
+    /// gate itself reads both. This is the defect's own regression test: hardcoding a tier name here
+    /// makes the test fail the moment the catalogue order or the active set changes.
+    #[test]
+    fn the_named_plan_is_the_cheapest_one_that_sells_it() {
+        use super::cheapest_catch_all;
+        use serde_json::json;
+        let rows = vec![
+            ("Free".to_string(), 0.0, json!({})),
+            ("Starter".to_string(), 29.0, json!({"max_users": 3})),
+            ("Professional".to_string(), 79.0, json!({"catch_all": true})),
+            (
+                "Enterprise".to_string(),
+                119.0,
+                json!({"catch_all": {"enabled": true}}),
+            ),
+        ];
+        assert_eq!(
+            cheapest_catch_all(&rows),
+            Some(("Professional".to_string(), 79.0))
+        );
+
+        // A cheaper plan that sells it WINS — this is what stops the sentence over-selling a tier.
+        let with_cheaper = vec![
+            ("Starter".to_string(), 29.0, json!({})),
+            ("Pro".to_string(), 29.0, json!({"catch_all": true})),
+            ("Professional".to_string(), 79.0, json!({"catch_all": true})),
+        ];
+        assert_eq!(
+            cheapest_catch_all(&with_cheaper),
+            Some(("Pro".to_string(), 29.0))
+        );
+
+        // A withdrawn feature is a catalogue answer, not a crash and not a guess.
+        let none = vec![("Starter".to_string(), 29.0, json!({"catch_all": false}))];
+        assert_eq!(cheapest_catch_all(&none), None);
+    }
+
+    /// Prices print as a customer reads them: `$79` and `$29.50`, never `$79.000000`.
+    #[test]
+    fn prices_are_printed_as_money() {
+        use super::price_label;
+        assert_eq!(price_label(79.0), "79");
+        assert_eq!(price_label(29.5), "29.50");
+        assert_eq!(price_label(0.0), "0");
     }
 
     /// `-1` is this schema's "unlimited"; it must survive the read (0 is "not included").
