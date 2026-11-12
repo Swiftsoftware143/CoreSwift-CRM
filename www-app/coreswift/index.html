@@ -6908,19 +6908,37 @@ function calHostBadge(status) {
   return '<span class="badge badge-muted">system address only</span>';
 }
 
+/// The address that WORKS RIGHT NOW. A custom domain is only the customer's address once a request
+/// to it has really reached this workspace ('verified'); until then the system address is the live
+/// one and the custom domain is a target they are still pointing DNS at. Showing an unpointed domain
+/// as "your calendar address … works right away" would hand the customer a broken address to print.
+function calHostShownUrl() {
+  if (!CALHOST) return '';
+  if (CALHOST.custom_domain && CALHOST.custom_domain_status === 'verified') {
+    return CALHOST.public_url || CALHOST.calendar_url;
+  }
+  return CALHOST.calendar_url;
+}
+
 function calHostRender() {
   const el = document.getElementById('calHost');
   if (!el || !CALHOST) return;
   const h = CALHOST;
-  const url = h.public_url || h.calendar_url;
+  const url = calHostShownUrl();
+  const verified = h.custom_domain && h.custom_domain_status === 'verified';
   const rows =
-    '<div class="form-group"><label>Your calendar address</label>' +
+    '<div class="form-group"><label>' + (verified ? 'Your calendar address' : 'Your calendar address (live now)') + '</label>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
         '<code id="calHostUrl" style="padding:8px 10px;border-radius:8px;background:rgba(127,127,127,.12)">' + escapeHtml(url) + '</code>' +
         '<button class="btn btn-secondary btn-sm" onclick="calHostCopy()">Copy</button>' +
         '<a class="btn btn-secondary btn-sm" href="' + escapeHtmlAttr(url) + '" target="_blank" rel="noopener">Open</a>' +
       '</div>' +
-      '<span class="form-hint">Anyone with this address sees your open booking calendars and can reserve a place. It works right away — no setup.</span></div>' +
+      '<span class="form-hint">' + (verified
+        ? 'Anyone with this address sees your open booking calendars and can reserve a place.'
+        : (h.custom_domain && h.custom_domain_status === 'pending'
+            ? 'This is the address that works today. Your own domain becomes your calendar address once it is verified below.'
+            : 'Anyone with this address sees your open booking calendars and can reserve a place. It works right away — no setup.')) +
+      '</span></div>' +
     '<div class="form-group"><label for="calHostSub">Calendar address name</label>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
         '<input type="text" id="calHostSub" value="' + escapeHtmlAttr(h.subdomain) + '" style="max-width:280px" ' +
@@ -6960,7 +6978,7 @@ function calHostSay(text, bad) {
 }
 
 function calHostCopy() {
-  const url = (CALHOST && (CALHOST.public_url || CALHOST.calendar_url)) || '';
+  const url = calHostShownUrl();
   if (!url) return;
   const done = function () { calHostSay('Address copied.'); };
   if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -6978,7 +6996,7 @@ async function calHostSaveSub() {
   try {
     CALHOST = await API.patch('/calendar-host/subdomain', { subdomain: value });
     calHostRender();
-    calHostSay('Saved. Your calendar is now at ' + (CALHOST.public_url || CALHOST.calendar_url) + '.');
+    calHostSay('Saved. Your calendar is now at ' + CALHOST.calendar_url + '.');
   } catch (e) {
     calHostSay(e.message, true);
   }
