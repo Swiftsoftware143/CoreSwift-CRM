@@ -46,7 +46,11 @@
     // First-run setup (BYOK): the verified-domain records checklist, why it could not be read, the
     // last refusal, and one busy flag shared by all three steps so a double click cannot add the
     // domain twice.
-    records: null, recordsErr: null, setupErr: null, busy: false
+    records: null, recordsErr: null, setupErr: null, busy: false,
+    // Per-domain records answers, keyed by domain id (kanban t_54b5d21b). ONE source for "can this
+    // domain carry an inbox": the setup sentence, the setup control, the Mail tab's button and the
+    // create modal all read it, so no surface can invite an action another one refuses.
+    ready: {}, readyErr: {}
   };
 
   function esc(s) {
@@ -239,9 +243,33 @@
     return 'Your plan includes ' + n + ' private inboxes on your own domain.';
   }
 
+  // The records answer for a domain, when it has been read.
+  function readyRec(d) {
+    return (d && S.ready && S.ready[String(d.id)]) || null;
+  }
+
+  // Is this domain receiving mail, per the LIVE measurement rather than the stored row flag?
+  function domainVerified(d) {
+    var rec = readyRec(d);
+    return rec ? !!rec.verified : !!(d && d.verified);
+  }
+
+  // May an inbox be created on this domain? True exactly when the server's write door accepts:
+  // the records answer's own can_create_mailbox, or a stored verification (the same fallback the
+  // write door uses when the records cannot be read at all).
+  function canCreateOn(d) {
+    if (!d) return false;
+    var rec = readyRec(d);
+    if (rec) return !!rec.can_create_mailbox || !!d.verified;
+    return !!d.verified;
+  }
+
   function setupHtml() {
     var d = (S.domains || [])[0];
     var rec = (d && S.records && String(S.records.domain_id) === String(d.id)) ? S.records : null;
+    // The control, the sentence and (below) the button all read this ONE value, so the page cannot
+    // tell a customer everything checks out while disabling the button that acts on it.
+    var canCreate = canCreateOn(d);
     var busy = S.busy;
     var err = S.setupErr ? '<p style="margin:0 0 8px;color:#b45309">' + esc(S.setupErr) + '</p>' : '';
 
@@ -256,7 +284,7 @@
       var recvLabel = d.inbound_provider === 'sendgrid' ? 'SendGrid'
         : (d.inbound_provider === 'none' ? 'nowhere (this domain only sends)' : 'Mailgun');
       step1 = '<div style="margin:4px 0 0"><strong>' + esc(d.domain) + '</strong> — '
-        + (d.verified ? '<span style="color:#166534">verified</span>' : '<span style="color:#92400e">waiting for its records</span>')
+        + (domainVerified(d) ? '<span style="color:#166534">verified</span>' : '<span style="color:#92400e">waiting for its records</span>')
         + '</div>'
         + '<p style="font-size:13px;margin:8px 0 0;opacity:.85">Sending: <strong>' + esc(sendLabel)
         + '</strong> &middot; Receiving: <strong>' + esc(recvLabel) + '</strong></p>'
@@ -310,7 +338,7 @@
         + '<div style="display:flex;align-items:center;gap:10px;margin-top:6px">'
         + '<button class="btn btn-secondary btn-sm" ' + (busy ? 'disabled' : '') + ' onclick="peCheckAgain()">' + (busy ? 'Checking…' : 'Check again') + '</button>'
         + '<span id="peDomainMsg" style="opacity:.8;font-size:13px">'
-        + (rec.can_create_mailbox ? 'Everything checks out — create your inbox below.' : 'Waiting for the records to go live. A failed check changes nothing.')
+        + (canCreate ? 'Everything checks out — create your inbox below.' : 'Waiting for the records to go live. A failed check changes nothing.')
         + '</span></div>'
         + '<p style="font-size:12px;opacity:.7;margin:6px 0 0">Where do these go? Cloudflare: DNS → Records → Add record. Any other registrar: their DNS / “manage DNS” page. Use the Copy button on each row.</p>';
     } else {
@@ -319,7 +347,7 @@
     }
 
     // ── Step 3: the mailbox (and the start of the free month) ────────────────────────────────
-    var ready = !!(d && rec && rec.can_create_mailbox);
+    var ready = canCreate;
     var step3 = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">'
       + '<input id="peSetupLocal" placeholder="info" style="flex:1;max-width:260px" ' + (ready ? '' : 'disabled') + '>'
       + '<span style="opacity:.75">@ ' + esc(d ? d.domain : 'your domain') + '</span></div>'
@@ -554,11 +582,11 @@
       + (c.unread || 0) + ' unread · ' + (c.tickets || 0) + ' turned into tickets · ' + fmtBytes(c.used_bytes) + ' of ' + fmtBytes(c.limit_bytes) + ' used'
       + '</span></div>'
       + '<button class="btn btn-primary btn-sm"' + (S.boxes.length ? '' : ' style="display:none"') + ' '
-      + ((S.domains || []).filter(function (d) { return d.verified; }).length
+      + ((S.domains || []).some(canCreateOn)
         ? 'onclick="peCreateInbox()"'
         : 'disabled title="Available once your mail records verify"')
       + '>+ Create new inbox</button>'
-      + ((S.boxes.length && !(S.domains || []).filter(function (d) { return d.verified; }).length)
+      + ((S.boxes.length && !(S.domains || []).some(canCreateOn))
         ? '<div style="font-size:12px;opacity:.75;margin-top:4px">New inboxes unlock once your mail records verify. Nothing is charged before then.</div>'
         : '')
       + '</div>'
@@ -635,23 +663,27 @@
       // an empty page: drop the filter when it names a label this account no longer has.
       if (S.label && !S.labels.some(function (l) { return l.id === S.label; })) S.label = '';
       S.err = null;
-      // First-run setup (BYOK): with no mailbox yet, the checklist needs the domain's records. Read
-      // them through the app's own endpoint — Mailgun's values, never a hardcoded DKIM — and keep a
-      // failure in `recordsErr` so the page can say so instead of rendering an empty checklist.
-      if (!S.boxes.length) {
-        if (S.domains.length) {
-          try {
-            S.records = await api().get('/private-email/domains/' + S.domains[0].id + '/records');
-            S.recordsErr = null;
-          } catch (e) {
-            S.records = null;
-            S.recordsErr = fail(e);
-          }
-        } else {
-          S.records = null;
-          S.recordsErr = null;
-        }
-      }
+      // The records answer for EVERY domain that can receive — read through the app's own endpoint
+      // (the provider's values, never a hardcoded DKIM) and kept per domain. Both halves need it:
+      // the first-run checklist renders it, and the Mail tab's "+ Create new inbox" gates on it, so
+      // the button and the sentence beside it can never be reading two different facts.
+      var recDomains = (S.domains || []).filter(function (d) {
+        return d.inbound_provider === 'mailgun' || d.inbound_provider === 'sendgrid';
+      });
+      var recResults = await Promise.all(recDomains.map(function (d) {
+        return api().get('/private-email/domains/' + d.id + '/records').then(
+          function (r) { return { id: String(d.id), rec: r }; },
+          function (e) { return { id: String(d.id), err: fail(e) }; }
+        );
+      }));
+      S.ready = {};
+      S.readyErr = {};
+      recResults.forEach(function (x) {
+        if (x.rec) S.ready[x.id] = x.rec; else S.readyErr[x.id] = x.err;
+      });
+      var firstId = S.domains.length ? String(S.domains[0].id) : null;
+      S.records = firstId ? (S.ready[firstId] || null) : null;
+      S.recordsErr = firstId ? (S.readyErr[firstId] || null) : null;
     } catch (e) {
       S.err = fail(e);
       S.messages = [];
@@ -844,7 +876,9 @@
   };
 
   window.peCreateInbox = function () {
-    var verified = S.domains.filter(function (d) { return d.verified; });
+    // The domains the button was enabled for, by the same rule — never a second definition of
+    // "ready", or the modal refuses a domain the page has just invited (kanban t_54b5d21b).
+    var verified = S.domains.filter(canCreateOn);
     if (!verified.length) {
       var waiting = S.domains.map(function (d) {
         return '<li>' + esc(d.domain) + ' — <button class="btn btn-ghost btn-xs" onclick="peCheckDomain(\'' + esc(d.id) + '\')">Check again</button></li>';

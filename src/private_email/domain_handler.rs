@@ -114,11 +114,18 @@ pub async fn domain_is_active(
     tenant_id: Uuid,
     domain: &PrivateEmailDomain,
 ) -> Option<bool> {
+    // SendGrid publishes no API that answers "is this domain pointed at me", so the honest
+    // measurement is the same DNS read the setup page and the re-check make: the domain's MX must
+    // name mx.sendgrid.net. Returning the STORED flag here made this door read the value it was
+    // supposed to refresh (kanban t_54b5d21b): a customer whose MX had just gone live was refused
+    // with "not receiving mail yet" until they pressed Check again, while the records endpoint —
+    // measuring the same DNS — had already told them everything checked out.
+    if domain.inbound_provider == "sendgrid" {
+        return sendgrid_mx_ready(&domain.domain).await;
+    }
     if domain.inbound_provider != "mailgun" {
-        // Only Mailgun can be asked "is this domain carrying mail for you right now". SendGrid is
-        // measured by DNS (`sendgrid_mx_ready`) on the setup page and on a re-check, and a
-        // sending-only domain has no receiver at all — for both, the stored flag is the only word
-        // there is, so it is returned as its own answer rather than invented here.
+        // A sending-only domain has no receiver at all, so there is nothing to measure and the
+        // stored flag is returned as its own answer rather than invented here.
         return Some(domain.verified);
     }
     let candidates =
@@ -1059,6 +1066,7 @@ async fn sendgrid_records(
     account_id: Uuid,
     domain_id: Uuid,
     domain: &str,
+    verified: bool,
     token: Option<&str>,
     sending_provider: &str,
     mailgun_region: &str,
@@ -1166,7 +1174,9 @@ async fn sendgrid_records(
     let sending_ok = checked_sending
         .iter()
         .all(|r| r["valid"].as_bool() == Some(true));
-    let receiving_ok = mx_ready != Some(false);
+    // `mx_checked: null` means DNS could not be read at all — an undetermined answer, not a
+    // verdict. It must not unlock the create control either: the write door refuses it too.
+    let receiving_ok = mx_ready == Some(true);
 
     let branded = branded_state(domain).await;
     let branded_row = json!({
@@ -1184,7 +1194,9 @@ async fn sendgrid_records(
         "note": "Set this record to Proxied (orange cloud). Cloudflare then serves the padlock for your address. Your mail records above stay grey (DNS only) — proxying those breaks mail.",
     });
 
-    let verified_live = mx_ready == Some(true);
+    // Promote only, exactly like the Mailgun arm: the stored column is what the last check saw,
+    // and one unreadable DNS answer must never take a working receiving identity away.
+    let verified_live = verified || mx_ready == Some(true);
     // The flat list the older panel renders, and the three groups the setup page renders, from the
     // same rows — one source, so the two surfaces cannot disagree.
     let all_records: Vec<serde_json::Value> = receiving
@@ -1199,7 +1211,7 @@ async fn sendgrid_records(
         "receiving_provider": "sendgrid",
         "sending_provider": sending_provider,
         "verified": verified_live,
-        "state": if mx_ready == Some(true) { "active" } else { "waiting" },
+        "state": if verified_live { "active" } else { "waiting" },
         "records": all_records,
         "groups": [
             { "key": "receiving", "title": "Receiving — so your mail lands in CoreSwift", "records": receiving },
@@ -1212,7 +1224,9 @@ async fn sendgrid_records(
         "branded_url": format!("https://inbox.{}", domain),
         "mail_client_url": format!("https://{}", MAIL_CLIENT_HOST),
         "inbound_parse_url": parse_url,
-        "can_create_mailbox": receiving_ok && sending_ok,
+        // The same answer `provision_mailbox` computes through `domain_is_active`, so the
+        // sentence the page shows and the write it invites cannot disagree (t_54b5d21b).
+        "can_create_mailbox": verified_live && sending_ok,
         "mailgun_state": serde_json::Value::Null,
         "mx_checked": mx_ready,
     })))
@@ -1277,6 +1291,7 @@ pub async fn domain_records(
                 account_id,
                 domain_id,
                 &domain,
+                verified,
                 inbound_token.as_deref(),
                 &provider_type,
                 &region,
