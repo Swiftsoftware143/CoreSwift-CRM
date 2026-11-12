@@ -159,9 +159,10 @@
 //!        t_e968e9ad: `/api/admin/provisioning-config` and
 //!        `/api/v1/internal/provision-free-account`) were measured the same way and each answered
 //!        401 anonymous; both are named in the lists below
-//!    28 deliberate anonymous entries  -> PUBLIC_ROUTES  (25 /api + 3 /inbound) — COUNTS ARRAY
+//!    30 deliberate anonymous entries  -> PUBLIC_ROUTES  (27 /api + 3 /inbound) — COUNTS ARRAY
 //!        ENTRIES: measured 27 (24 /api + 3 /inbound) before the confirm arm above was added,
-//!        i.e. one more than the 26 this line used to claim
+//!        i.e. one more than the 26 this line used to claim, and 30 after the hosted calendar
+//!        address added its two public arms (kanban t_8457bfef)
 //!    16 service-to-service entries    -> INTERNAL_ROUTES (all /api, reached with the shared key)
 //!     2 issued-API-key entries        -> API_KEY_ROUTES  (/api/external/**)
 //!    11 served surfaces outside the boundary: the SPA mount, /track/:slug, the eight
@@ -283,6 +284,13 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/public/bookings/public/checkout",
     "/api/public/bookings/public/slots/available/:tenant_id",
     "/api/public/bookings/public/slots/questions",
+    // The HOSTED CALENDAR ADDRESS (kanban t_8457bfef). A visitor reaches `<workspace>.coreswiftcrm.com`
+    // (or the workspace's own domain) with no session at all — that address IS the capability for
+    // "show me this workspace's public calendar". Neither arm accepts a workspace id from the caller:
+    // both resolve it from the request's `Host` header, so `GET` reads only calendars that are active
+    // and `POST` writes a booking into the workspace the Host named.
+    "/api/public/calendar/site",
+    "/api/public/calendar/book",
     // Public contact form on the marketing site.
     "/api/public/contact",
     // The served contact page's filing arm (2026-11-06). Every support address this app printed lived
@@ -769,6 +777,18 @@ mod tests {
             src: include_str!("../bookings/mod.rs"),
             func: "public_router",
         },
+        // The hosted calendar address (kanban t_8457bfef). One module, two mounts: the console's own
+        // address settings and the public page/book pair the hosted address serves.
+        Nest {
+            prefix: "/api/calendar-host",
+            src: include_str!("../calendar_host/mod.rs"),
+            func: "router",
+        },
+        Nest {
+            prefix: "/api/public/calendar",
+            src: include_str!("../calendar_host/mod.rs"),
+            func: "public_router",
+        },
     ];
 
     /// The body of `fn <func>`, assuming rustfmt puts the closing brace at column 0.
@@ -1149,12 +1169,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            403,
+            409,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 391,
+            api, 397,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

@@ -48,6 +48,10 @@ pub struct AppConfig {
     /// and its task, connection and partially-read body buffer are released (kanban t_59745689);
     /// the handler's own work is not bounded by it. `BODY_READ_DEADLINE_SECS`.
     pub body_read_deadline_secs: u64,
+    /// The apex every generated calendar address hangs off (`<subdomain>.<calendar_system_domain>`),
+    /// kanban t_8457bfef. `CALENDAR_SYSTEM_DOMAIN`; defaults to the deployment's own apex, so an
+    /// environment that does not set it is still correct.
+    pub calendar_system_domain: String,
 }
 
 impl AppConfig {
@@ -204,6 +208,16 @@ impl AppConfig {
             telnyx_public_key,
             telnyx_signature_tolerance_secs,
             body_read_deadline_secs,
+            calendar_system_domain: env::var("CALENDAR_SYSTEM_DOMAIN")
+                .ok()
+                .map(|v| {
+                    v.trim()
+                        .trim_start_matches('.')
+                        .trim_end_matches('.')
+                        .to_lowercase()
+                })
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| "coreswiftcrm.com".to_string()),
         })
     }
 }

@@ -61,6 +61,24 @@ pub async fn start_worker(db: PgPool) -> Result<(), Box<dyn std::error::Error + 
     })?;
     sched.add(job3).await?;
 
+    // Job 3b: Every 10 minutes — mint a hosted calendar address for every workspace that has none
+    // (kanban t_8457bfef). "Every workspace has one out of the box" is a property of the DATA, not of
+    // nine `INSERT INTO tenants` sites remembering to call a function: this sweep reads the misses and
+    // fills them, so a new signup door added tomorrow is covered without touching it. `ensure_for_tenant`
+    // reads before it writes, so a tick that overlaps another writer creates nothing twice.
+    let db3b = db.clone();
+    let job3b = Job::new_async("0 2/10 * * * *", move |_uuid, _lock| {
+        let db = db3b.clone();
+        Box::pin(async move {
+            match crate::calendar_host::ensure_all(&db).await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(created = n, "calendar hosts: minted missing addresses"),
+                Err(e) => tracing::error!(error = %e, "calendar hosts: sweep failed this tick"),
+            }
+        })
+    })?;
+    sched.add(job3b).await?;
+
     // Job 4: Every 5 minutes — check for abandoned directory sign-ups (Case A)
     let db4 = db.clone();
     let job4 = Job::new_async("0 */5 * * * *", move |_uuid, _lock| {

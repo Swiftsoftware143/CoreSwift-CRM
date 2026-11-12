@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Calendar</title>
+<meta name="robots" content="noindex">
+<!--
+  The HOSTED CALENDAR PAGE (kanban t_8457bfef).
+
+  Served by the wildcard calendar vhost on `<subdomain>.coreswiftcrm.com` and on any customer domain
+  pointed at it. The page knows NOTHING about the workspace it is showing: every byte of identity and
+  every calendar comes from GET /api/public/calendar/site, which resolves the workspace from the
+  request's Host header. That is deliberate — a page that took a workspace id in the URL could be
+  pointed at somebody else's calendar by editing it.
+
+  One file, inline CSS and JS on purpose: the wildcard host serves exactly this document, so there is
+  no bundle, no build step and nothing to cache-bust per workspace.
+-->
+<style>
+  :root{
+    --accent:#3b82f6; --accent2:#14b8a6; --ink:#101828; --muted:#667085;
+    --line:#e4e7ec; --bg:#f7f9fc; --card:#fff; --ok:#079455; --warn:#b54708;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  header{padding:26px 20px 18px;background:var(--card);border-bottom:1px solid var(--line)}
+  .wrap{max-width:960px;margin:0 auto}
+  .brand{display:flex;align-items:center;gap:12px}
+  .brand img{height:38px;width:auto;border-radius:8px}
+  .brand .mark{height:38px;width:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;
+               color:#fff;font-weight:700;font-size:18px;background:linear-gradient(135deg,var(--accent),var(--accent2))}
+  .brand h1{font-size:1.15rem;margin:0;font-weight:700}
+  .brand p{margin:2px 0 0;font-size:.8rem;color:var(--muted)}
+  main{padding:22px 20px 60px}
+  .intro{margin:0 0 18px;color:var(--muted);font-size:.92rem;line-height:1.55}
+  .grid{display:grid;gap:16px}
+  @media(min-width:760px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}
+  .card h2{margin:0 0 4px;font-size:1.02rem}
+  .card .desc{margin:0 0 14px;color:var(--muted);font-size:.85rem;line-height:1.5}
+  .slot{border-top:1px solid var(--line);padding:12px 0}
+  .slot:first-of-type{border-top:0;padding-top:0}
+  .slot-row{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .slot-name{font-weight:600;font-size:.92rem}
+  .price{font-weight:700;white-space:nowrap}
+  .meta{color:var(--muted);font-size:.78rem;margin-top:3px}
+  .pill{display:inline-block;font-size:.7rem;font-weight:700;letter-spacing:.02em;text-transform:uppercase;
+        border-radius:999px;padding:3px 9px}
+  .pill.open{background:#e7f6ee;color:var(--ok)}
+  .pill.full{background:#fef3e7;color:var(--warn)}
+  button{cursor:pointer;font:inherit}
+  .btn{background:var(--accent);color:#fff;border:0;border-radius:9px;padding:9px 16px;font-weight:600;font-size:.88rem}
+  .btn:hover{filter:brightness(.94)}
+  .btn[disabled]{opacity:.5;cursor:not-allowed}
+  .btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
+  form.book{margin-top:16px;display:grid;gap:10px}
+  form.book label{font-size:.78rem;font-weight:600;color:#344054}
+  form.book input,form.book textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;
+        font:inherit;font-size:.88rem;background:#fff;color:var(--ink)}
+  form.book textarea{min-height:76px;resize:vertical}
+  .row2{display:grid;gap:10px}
+  @media(min-width:520px){.row2{grid-template-columns:1fr 1fr}}
+  .msg{border-radius:10px;padding:11px 13px;font-size:.86rem;margin-top:12px}
+  .msg.ok{background:#e7f6ee;color:#05603a}
+  .msg.err{background:#fef3f2;color:#b42318}
+  .empty{background:var(--card);border:1px dashed var(--line);border-radius:14px;padding:26px;text-align:center;color:var(--muted)}
+  .empty strong{display:block;color:var(--ink);margin-bottom:6px;font-size:1rem}
+  footer{border-top:1px solid var(--line);padding:16px 20px;color:var(--muted);font-size:.78rem;background:var(--card)}
+  footer a{color:var(--accent);text-decoration:none}
+  .hidden{display:none !important}
+  .spinner{width:22px;height:22px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;
+           animation:spin .8s linear infinite;margin:0 auto}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap brand" id="brand">
+    <div class="mark" id="brandMark">C</div>
+    <div>
+      <h1 id="brandName">Calendar</h1>
+      <p id="brandLine">Loading this calendar…</p>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="loading"><div class="spinner"></div></div>
+  <div id="notFound" class="empty hidden">
+    <strong>No calendar at this address</strong>
+    This address is not a calendar. Check the link you were given, or ask the business for its calendar address.
+  </div>
+
+  <div id="content" class="hidden">
+    <p class="intro" id="intro"></p>
+    <div id="calendars" class="grid"></div>
+    <div id="bookingPanel" class="card hidden" style="margin-top:16px">
+      <h2 id="bookingTitle">Reserve your place</h2>
+      <p class="desc">Tell us who you are and when you would like to start. The owner sees your request straight away.</p>
+      <form class="book" id="bookForm" autocomplete="on">
+        <div class="row2">
+          <div><label for="business_name">Business name</label>
+            <input id="business_name" name="business_name" required></div>
+          <div><label for="contact_name">Your name</label>
+            <input id="contact_name" name="contact_name"></div>
+        </div>
+        <div class="row2">
+          <div><label for="contact_email">Email</label>
+            <input id="contact_email" name="contact_email" type="email" required></div>
+          <div><label for="contact_phone">Phone (optional)</label>
+            <input id="contact_phone" name="contact_phone" type="tel"></div>
+        </div>
+        <div class="row2">
+          <div><label for="start_date">Start date</label>
+            <input id="start_date" name="start_date" type="date" required></div>
+          <div><label for="website">Website (optional)</label>
+            <input id="website" name="website" type="url" placeholder="https://"></div>
+        </div>
+        <div><label for="description">What are you offering?</label>
+          <textarea id="description" name="description" placeholder="A short description for the owner"></textarea></div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn" type="submit" id="bookSubmit">Request this place</button>
+          <button class="btn btn-ghost" type="button" id="bookCancel">Cancel</button>
+        </div>
+      </form>
+      <div id="bookMsg"></div>
+    </div>
+  </div>
+</main>
+
+<footer class="wrap" id="foot"></footer>
+
+<script>
+(function () {
+  var state = { site: null, chosen: null };
+
+  function el(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+    });
+  }
+  function money(p) {
+    if (p == null || p === '') return 'Free';
+    var n = Number(p);
+    if (!isFinite(n)) return '';
+    return '$' + n.toFixed(n % 1 === 0 ? 0 : 2);
+  }
+
+  function paintBrand(site) {
+    var t = site.tenant || {};
+    if (t.primary_color) document.documentElement.style.setProperty('--accent', t.primary_color);
+    if (t.accent_color) document.documentElement.style.setProperty('--accent2', t.accent_color);
+    var name = t.branding_name || t.name || 'Calendar';
+    el('brandName').textContent = name;
+    document.title = name + ' — Calendar';
+    el('brandLine').textContent = site.calendars.length
+      ? (site.open_slots ? site.open_slots + ' place' + (site.open_slots === 1 ? '' : 's') + ' open right now' : 'Places are currently full')
+      : 'This calendar has no open places yet';
+    if (t.logo_url) {
+      var img = document.createElement('img');
+      img.src = t.logo_url;
+      img.alt = name;
+      el('brandMark').replaceWith(img);
+    } else {
+      el('brandMark').textContent = (name.charAt(0) || 'C').toUpperCase();
+    }
+    el('intro').textContent = 'Choose a place from ' + name + ', then tell us who you are. Booking takes a minute and needs no account.';
+    el('foot').innerHTML = 'Calendar hosted by <a href="https://coreswiftcrm.com">CoreSwift</a> for ' + esc(name) + '.';
+  }
+
+  function paintCalendars(site) {
+    var wrap = el('calendars');
+    if (!site.calendars.length) {
+      wrap.className = '';
+      wrap.innerHTML = '<div class="empty"><strong>Nothing is open yet</strong>' +
+        'The owner has not published any calendar places here. Check back soon, or contact the business directly.</div>';
+      return;
+    }
+    wrap.innerHTML = site.calendars.map(function (cal, ci) {
+      var slots = (cal.slots || []).map(function (sl, si) {
+        var full = !sl.open;
+        return '<div class="slot">' +
+          '<div class="slot-row"><span class="slot-name">' + esc(sl.name) + '</span>' +
+          '<span class="price">' + esc(money(sl.price)) + '</span></div>' +
+          '<div class="meta">' + (sl.duration_days ? sl.duration_days + ' day' + (sl.duration_days === 1 ? '' : 's') : '') +
+          (sl.total_slots < 0 ? ' · unlimited places' : ' · ' + Math.max(0, sl.total_slots - sl.filled_slots) + ' of ' + sl.total_slots + ' left') + '</div>' +
+          '<div style="margin-top:8px;display:flex;align-items:center;gap:10px">' +
+          '<span class="pill ' + (full ? 'full' : 'open') + '">' + (full ? 'full' : 'open') + '</span>' +
+          (full ? '' : '<button class="btn" type="button" data-cal="' + ci + '" data-slot="' + si + '">Reserve</button>') +
+          '</div></div>';
+      }).join('');
+      return '<div class="card"><h2>' + esc(cal.name) + '</h2>' +
+        (cal.description ? '<p class="desc">' + esc(cal.description) + '</p>' : '<p class="desc"></p>') +
+        (slots || '<div class="meta">No places configured for this calendar.</div>') + '</div>';
+    }).join('');
+
+    Array.prototype.forEach.call(wrap.querySelectorAll('button[data-cal]'), function (b) {
+      b.addEventListener('click', function () {
+        var cal = site.calendars[Number(b.getAttribute('data-cal'))];
+        var slot = cal.slots[Number(b.getAttribute('data-slot'))];
+        openBooking(cal, slot);
+      });
+    });
+  }
+
+  function openBooking(cal, slot) {
+    state.chosen = { cal: cal, slot: slot };
+    el('bookingTitle').textContent = 'Reserve “' + slot.name + '” in ' + cal.name;
+    el('bookingPanel').classList.remove('hidden');
+    el('bookMsg').innerHTML = '';
+    var d = new Date(); d.setDate(d.getDate() + 1);
+    el('start_date').value = d.toISOString().slice(0, 10);
+    el('bookingPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function show(kind, text) {
+    el('bookMsg').innerHTML = '<div class="msg ' + kind + '">' + esc(text) + '</div>';
+  }
+
+  function submitBook(ev) {
+    ev.preventDefault();
+    if (!state.chosen) return;
+    var btn = el('bookSubmit');
+    btn.disabled = true;
+    var payload = {
+      calendar_slug: state.chosen.cal.slug,
+      slot_id: state.chosen.slot.id,
+      business_name: el('business_name').value.trim(),
+      contact_name: el('contact_name').value.trim() || null,
+      contact_email: el('contact_email').value.trim(),
+      contact_phone: el('contact_phone').value.trim() || null,
+      website: el('website').value.trim() || null,
+      description: el('description').value.trim() || null,
+      start_date: el('start_date').value
+    };
+    fetch('/api/public/calendar/book', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (b) {
+        if (!r.ok) { throw new Error(b.message || b.error || ('Request failed (' + r.status + ')')); }
+        return b;
+      });
+    }).then(function (b) {
+      el('bookForm').classList.add('hidden');
+      show('ok', 'Booked. Your place is confirmed for ' + b.start_date + (b.end_date ? ' to ' + b.end_date : '') +
+        ' — the owner has been notified. Keep this page for your reference.');
+      btn.disabled = false;
+    }).catch(function (e) {
+      show('err', e.message || 'That booking could not be saved. Please try again.');
+      btn.disabled = false;
+    });
+  }
+
+  el('bookForm').addEventListener('submit', submitBook);
+  el('bookCancel').addEventListener('click', function () {
+    el('bookingPanel').classList.add('hidden');
+    state.chosen = null;
+  });
+
+  fetch('/api/public/calendar/site', { headers: { 'Accept': 'application/json' } })
+    .then(function (r) {
+      if (r.status === 404) { el('loading').classList.add('hidden'); el('notFound').classList.remove('hidden'); return null; }
+      return r.json().then(function (b) {
+        if (!r.ok) throw new Error(b.message || b.error || ('Could not load this calendar (' + r.status + ')'));
+        return b;
+      });
+    })
+    .then(function (site) {
+      if (!site) return;
+      state.site = site;
+      el('loading').classList.add('hidden');
+      el('content').classList.remove('hidden');
+      paintBrand(site);
+      paintCalendars(site);
+    })
+    .catch(function (e) {
+      el('loading').classList.add('hidden');
+      el('notFound').classList.remove('hidden');
+      el('notFound').innerHTML = '<strong>This calendar could not load</strong>' + esc(e.message || 'Please try again.');
+    });
+})();
+</script>
+</body>
+</html>

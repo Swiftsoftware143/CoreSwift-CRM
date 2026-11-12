@@ -18,6 +18,7 @@ pub mod billing;
 mod body_deadline;
 pub mod bookings;
 pub mod branding;
+pub mod calendar_host;
 pub mod campaigns;
 pub mod checklists;
 pub mod communications;
@@ -691,6 +692,18 @@ async fn main() -> anyhow::Result<()> {
         .nest(
             "/api/public/bookings",
             bookings::public_router().layer(axum::middleware::from_fn_with_state(
+                body_read_deadline,
+                body_deadline::body_read_deadline_middleware,
+            )),
+        )
+        // Hosted calendar address (kanban t_8457bfef). The console arm is this workspace's own
+        // address; the public arm resolves the WORKSPACE FROM THE `Host` HEADER, so the hosted page
+        // never accepts a workspace id from the visitor. Both are listed in
+        // `auth::route_policy::NESTS` so the route census sees them.
+        .nest("/api/calendar-host", calendar_host::router(state.clone()))
+        .nest(
+            "/api/public/calendar",
+            calendar_host::public_router().layer(axum::middleware::from_fn_with_state(
                 body_read_deadline,
                 body_deadline::body_read_deadline_middleware,
             )),

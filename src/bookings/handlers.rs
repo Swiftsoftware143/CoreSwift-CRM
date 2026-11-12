@@ -624,6 +624,12 @@ pub async fn public_create_booking(
     State(s): State<AppState>,
     Json(body): Json<CreateBookingRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    // LEGACY ARM — kept because the directory app (ZaarHub) posts here with a calendar slug and no
+    // workspace. It resolves the calendar by slug GLOBALLY, which is only unambiguous because slugs
+    // are unique per workspace, not fleet-wide; the hosted-calendar door below
+    // (`create_booking_for_tenant`) is the tenant-scoped one, resolved from the request's Host, and
+    // is what the hosted page uses. Moving this arm to a required workspace field would break that
+    // external caller, so it stays as it is and the scoped door is the one to extend.
     let cal = sqlx::query_as::<_, BookingCalendar>(
         "SELECT * FROM booking_calendars WHERE slug = $1 AND is_active = true",
     )
@@ -632,6 +638,49 @@ pub async fn public_create_booking(
     .await?
     .ok_or_else(|| AppError::NotFound("Calendar not found".into()))?;
 
+    let tenant_id = cal.tenant_id;
+    let (booking, slot_position, tag) = insert_booking(&s.db, tenant_id, cal, body).await?;
+
+    Ok(Json(json!({
+        "booking_id": booking.id,
+        "status": "active",
+        "slot_position": slot_position,
+        "start_date": booking.start_date.to_string(),
+        "end_date": booking.end_date.to_string(),
+        "tag": tag
+    })))
+}
+
+/// Book a slot on a calendar that belongs to an EXPLICITLY resolved workspace — the hosted calendar
+/// address arm (kanban t_8457bfef). The workspace comes from the request's `Host` header, so a
+/// booking can never be written into a workspace the caller did not reach by its own address, and
+/// the calendar is looked up by `(tenant_id, slug)` so two workspaces that happen to share a
+/// calendar slug cannot book into each other.
+pub async fn create_booking_for_tenant(
+    db: &sqlx::PgPool,
+    tenant_id: Uuid,
+    body: CreateBookingRequest,
+) -> Result<(SlotBooking, i32, Option<String>), AppError> {
+    let cal = sqlx::query_as::<_, BookingCalendar>(
+        "SELECT * FROM booking_calendars WHERE tenant_id = $1 AND slug = $2 AND is_active = true",
+    )
+    .bind(tenant_id)
+    .bind(&body.calendar_slug)
+    .fetch_optional(db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Calendar not found".into()))?;
+    insert_booking(db, tenant_id, cal, body).await
+}
+
+/// The one booking WRITER both public doors call: slot resolution, capacity check, the row, the
+/// capacity increment, the scoring event and the round-robin hand-off. Extracted so the two doors
+/// cannot drift into two different booking rules.
+async fn insert_booking(
+    db: &sqlx::PgPool,
+    tenant_id: Uuid,
+    cal: BookingCalendar,
+    body: CreateBookingRequest,
+) -> Result<(SlotBooking, i32, Option<String>), AppError> {
     // Look up slot — by ID if provided, otherwise use slot_name or default to listed
     let slot = if let Some(slot_id) = body.slot_id {
         sqlx::query_as::<_, CalendarSlot>(
@@ -639,7 +688,7 @@ pub async fn public_create_booking(
         )
         .bind(slot_id)
         .bind(cal.id)
-        .fetch_optional(&s.db)
+        .fetch_optional(db)
         .await?
         .ok_or_else(|| AppError::NotFound("Slot type not found".into()))?
     } else {
@@ -650,7 +699,7 @@ pub async fn public_create_booking(
         )
         .bind(slot_name)
         .bind(cal.id)
-        .fetch_optional(&s.db)
+        .fetch_optional(db)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Slot '{}' not available for this calendar", slot_name)))?
     };
@@ -669,7 +718,7 @@ pub async fn public_create_booking(
     )
     .bind(cal.id)
     .bind(slot.id)
-    .fetch_one(&s.db)
+    .fetch_one(db)
     .await?;
     let slot_position = max_pos.0.unwrap_or(0) + 1;
 
@@ -687,7 +736,7 @@ pub async fn public_create_booking(
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'active', $15)
            RETURNING *"#
     )
-    .bind(cal.tenant_id)
+    .bind(tenant_id)
     .bind(cal.id)
     .bind(slot.id)
     .bind(&body.business_name)
@@ -702,25 +751,25 @@ pub async fn public_create_booking(
     .bind(end_date)
     .bind(slot_position)
     .bind(serde_json::Value::Object(meta))
-    .fetch_one(&s.db)
+    .fetch_one(db)
     .await?;
 
     // Free booking — increment filled_slots immediately (no payment step)
     sqlx::query("UPDATE calendar_slots SET filled_slots = filled_slots + 1 WHERE id = $1")
         .bind(slot.id)
-        .execute(&s.db)
+        .execute(db)
         .await?;
 
     // Fire scoring event: booking completed → +50 points
     if let Some(cid) = booking.contact_id {
-        let _ = engine::calculate_score(&s.db, cal.tenant_id, cid, "booking_completed").await;
+        let _ = engine::calculate_score(db, tenant_id, cid, "booking_completed").await;
     }
 
     // Round-robin assignment: fire-and-forget so booking response is not delayed
     if let Some(team_id) =
-        crate::round_robin::engine::find_team_for_calendar(&s.db, booking.calendar_id).await
+        crate::round_robin::engine::find_team_for_calendar(db, booking.calendar_id).await
     {
-        let db = s.db.clone();
+        let db: sqlx::PgPool = (*db).clone();
         tokio::spawn(async move {
             if let Err(e) = crate::round_robin::engine::assign_lead(
                 &db,
@@ -735,15 +784,18 @@ pub async fn public_create_booking(
         });
     }
 
-    Ok(Json(json!({
-        "booking_id": booking.id,
-        "status": "active",
-        "slot_position": slot_position,
-        "start_date": start_date.to_string(),
-        "end_date": end_date.to_string(),
-        "tag": slot.coreswift_tag_template.as_ref().map(|t| t.replace("{city}", cal.metadata.as_ref()
-            .and_then(|m| m.get("city_slug")).and_then(|v| v.as_str()).unwrap_or("")))
-    })))
+    let tag = slot.coreswift_tag_template.as_ref().map(|t| {
+        t.replace(
+            "{city}",
+            cal.metadata
+                .as_ref()
+                .and_then(|m| m.get("city_slug"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+        )
+    });
+
+    Ok((booking, slot_position, tag))
 }
 
 // ── Payment / Checkout ───────────────────────────────────────────────────
