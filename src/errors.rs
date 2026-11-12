@@ -47,6 +47,11 @@ pub enum AppError {
     #[error("{0}")]
     Conflict(String),
 
+    /// 410 — The row exists (the message says it carried this file) but its bytes were never
+    /// kept, so there is nothing to download. The sentence says why, verbatim.
+    #[error("{0}")]
+    Gone(String),
+
     /// 422 — Input validation failed
     #[error("Validation error: {0}")]
     Validation(String),
@@ -110,6 +115,7 @@ impl IntoResponse for AppError {
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             AppError::Duplicate(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
+            AppError::Gone(msg) => (StatusCode::GONE, msg.clone()),
             AppError::Validation(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg.clone()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::ServiceUnavailable(msg) => {

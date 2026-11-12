@@ -156,6 +156,47 @@ pub async fn body_read_deadline_middleware(
     }
 }
 
+/// The same bound, for a router whose routes declare a body limit HIGHER than axum's 2 MB default.
+///
+/// WHY THIS EXISTS (kanban t_0b3f3165): a route-level `DefaultBodyLimit::max(26 MB)` sits INSIDE a
+/// router-level middleware, so a deadline middleware that reads with `Bytes::from_request` uses the
+/// 2 MB default and answers `413` before the route's own limit is ever in the request's extensions.
+/// That is what made the composer's "26 MB send route" a lie: a file over ~1.4 MB was refused with a
+/// raw `413 Failed to buffer the request body`, never the app's plain sentence. This arm reads with
+/// an EXPLICIT ceiling (`axum::body::to_bytes` takes the limit as an argument), so the router buffers
+/// up to the widest limit any of its routes declares; each handler's own extractor still enforces
+/// the route's real limit afterwards, which is why a sibling 2 MB route is unchanged in behaviour.
+pub async fn body_read_deadline_with_ceiling(
+    State((deadline, ceiling)): State<(BodyReadDeadline, usize)>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let deadline = deadline.duration();
+    if !declares_a_body(request.method(), request.headers()) {
+        return next.run(request).await;
+    }
+    let (parts, body) = request.into_parts();
+    match tokio::time::timeout(deadline, axum::body::to_bytes(body, ceiling)).await {
+        Ok(Ok(bytes)) => {
+            next.run(Request::from_parts(parts, Body::from(bytes)))
+                .await
+        }
+        // Over THIS router's ceiling: the same 413 shape axum's own extractor produces.
+        Ok(Err(_)) => (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "Failed to buffer the request body: length limit exceeded",
+        )
+            .into_response(),
+        Err(_elapsed) => {
+            warn!(
+                "request body not received within {:?} (stalled body) — answered 408 for {} {}",
+                deadline, parts.method, parts.uri
+            );
+            body_deadline_response(deadline)
+        }
+    }
+}
+
 /// Whether the request declares a body a handler could wait for: `Content-Length` greater than
 /// zero, or `Transfer-Encoding`, on a method that can carry a body.
 ///

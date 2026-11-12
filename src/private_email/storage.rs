@@ -311,6 +311,39 @@ pub fn banner(usage: &Usage) -> Option<Value> {
 /// REFUSE a NEW attachment/upload when the allowance is reached. The ONLY refusal a full mailbox
 /// makes: plain mail keeps arriving and nothing is deleted. The sentence names the real numbers and
 /// the two ways out, so it is never a dead end.
+/// May this account add `bytes` more? False when the bytes would take it PAST its allowance.
+///
+/// The old check only asked "is the mailbox already full", so at 1 MB of a 2 GB allowance one 10 MB
+/// file was accepted and the account landed over quota in a single attachment — the very thing a
+/// per-file ceiling is supposed to prevent. A file that does not FIT is refused with the numbers,
+/// so the meter can never be pushed past the allowance by one delivered file (kanban t_0b3f3165).
+pub async fn enforce_file_room(
+    db: &PgPool,
+    tenant_id: Uuid,
+    what: &str,
+    bytes: i64,
+) -> Result<(), AppError> {
+    let u = usage(db, tenant_id).await;
+    if u.quota_bytes <= 0 {
+        return Ok(());
+    }
+    let room = (u.quota_bytes - u.used_bytes).max(0);
+    if bytes <= 0 || bytes <= room {
+        return Ok(());
+    }
+    Err(AppError::UpgradeRequired(format!(
+        "Your storage has {} left of {} used, and this new {} is {}, so it was not added. \
+         Your mail keeps arriving and nothing has been deleted — delete or archive some mail \
+         (Trash and Spam count too), or upgrade for more storage, and new {}s work again \
+         immediately.",
+        human_bytes(room),
+        u.quota_human(),
+        what,
+        human_bytes(bytes),
+        what
+    )))
+}
+
 pub async fn enforce_new_file_room(
     db: &PgPool,
     tenant_id: Uuid,

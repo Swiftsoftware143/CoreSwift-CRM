@@ -1299,13 +1299,25 @@
   function peAttachmentsHtml(m) {
     var list = (m.attachments || []).filter(function (a) { return !a.is_inline; });
     if (!list.length) return '';
+    // A file the receiver could NOT keep is a reason, not a download: the API answers 410 for it,
+    // so a clickable chip would be a control that always fails.
     return '<div style="margin:10px 0 2px;display:flex;flex-wrap:wrap;gap:8px">'
       + list.map(function (a) {
+        if (a.not_stored_reason) {
+          return '<span class="btn btn-ghost btn-xs" title="' + esc(a.not_stored_reason) + '"'
+            + ' style="max-width:100%;cursor:help;opacity:.8">&#9888; '
+            + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(a.filename) + '</span>'
+            + ' <span style="opacity:.8;color:#991b1b">not saved</span></span>';
+        }
         return '<button type="button" class="btn btn-ghost btn-xs"'
           + ' onclick="peDownloadAttachment(\'' + esc(m.id) + '\',\'' + esc(a.id) + '\',\'' + esc(a.filename) + '\')"'
           + ' title="Download ' + esc(a.filename) + '" style="max-width:100%">&#128206; '
           + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(a.filename) + '</span>'
           + ' <span style="opacity:.6">' + esc(fmtBytes(a.size_bytes || 0)) + '</span></button>';
+      }).join('')
+      + list.filter(function (a) { return a.not_stored_reason; }).map(function (a) {
+        return '<div style="flex-basis:100%;font-size:11px;color:#991b1b">'
+          + esc(a.filename) + ': ' + esc(a.not_stored_reason) + '</div>';
       }).join('')
       + '</div>';
   }

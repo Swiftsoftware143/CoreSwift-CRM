@@ -583,6 +583,45 @@ async fn ingest(state: &AppState, d: Delivery) -> ApiResult<Json<serde_json::Val
         }
     }
 
+    // ── WHAT CAN BE KEPT? (kanban t_0b3f3165) ──────────────────────────────────────────────────
+    // Inbound MAIL is never refused and nothing is deleted. A file, though, must obey the ceilings
+    // and the account's own allowance: a part over 10 MB, past 20 files, past 20 MB in one message,
+    // or larger than the room the account has left is NOT stored. It leaves a notice row carrying
+    // the reason, and only the kept bytes are added to the message's storage figure — so the meter,
+    // the banner and the 100% refusal all read what is really stored.
+    let mut kept_attachment_bytes = attachment_bytes;
+    let mut skipped: Vec<attachments::SkippedFile> = Vec::new();
+    if !files.is_empty() {
+        let usage = crate::private_email::storage::usage(&state.db, tenant_id).await;
+        let plan = attachments::plan_inbound(
+            std::mem::take(&mut files),
+            usage.used_bytes,
+            usage.quota_bytes,
+        );
+        files = plan.keep;
+        kept_attachment_bytes = plan.kept_bytes;
+        skipped = plan.skipped;
+        for item in &skipped {
+            tracing::info!(
+                tenant = %tenant_id,
+                filename = %item.file.filename,
+                bytes = item.file.bytes.len(),
+                reason = %item.reason,
+                "an arriving file was not stored; the message says why"
+            );
+        }
+    } else if attachment_bytes > 0 {
+        // The provider declared file parts but sent no binary body this receiver can read. Counting
+        // bytes we do not store would inflate the meter, so the figure is zero and the delivery is
+        // logged — the honest counterpart of the old "counted then dropped" defect.
+        kept_attachment_bytes = 0;
+        tracing::warn!(
+            tenant = %tenant_id,
+            declared_bytes = attachment_bytes,
+            "inbound delivery declared attachments with no binary part; nothing stored or counted"
+        );
+    }
+
     // ── Step 3: store the message ITSELF ────────────────────────────────────────────────────────
     // One row per delivery, whatever the ticket toggle says. Idempotent on the sender's
     // Message-Id, so a provider retry cannot turn one email into two.
@@ -614,8 +653,9 @@ async fn ingest(state: &AppState, d: Delivery) -> ApiResult<Json<serde_json::Val
                 .filter(|m| !m.trim().is_empty()),
             is_spam,
             has_attachments,
-            attachment_bytes,
+            attachment_bytes: kept_attachment_bytes,
             files: &files,
+            skipped: &skipped,
         },
     )
     .await?;

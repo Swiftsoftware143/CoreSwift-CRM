@@ -50,7 +50,8 @@ pub async fn deliver(
     // never follows a message that has already left; the sentence names the numbers and both ways
     // out. Inbound is never refused on this axis — only a NEW file is.
     if !attachments.is_empty() {
-        super::storage::enforce_new_file_room(db, tenant_id, "attachment").await?;
+        let bytes: i64 = attachments.iter().map(|f| f.bytes.len() as i64).sum();
+        super::storage::enforce_file_room(db, tenant_id, "attachment", bytes).await?;
     }
 
     let provider_config = load_provider_config(db, mailbox.domain_id, tenant_id)

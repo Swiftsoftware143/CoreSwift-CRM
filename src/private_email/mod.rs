@@ -19,6 +19,12 @@ pub mod storage;
 pub mod trial;
 pub mod webhook_handler;
 
+/// The widest body any route on THIS router may read: 26 MB, the ceiling the two send routes
+/// declare (10 MB of file + base64's third + JSON). The router-level deadline middleware must read
+/// with this ceiling, or its own 2 MB default answers 413 before a route's raised limit is visible
+/// (kanban t_0b3f3165, measured live: a 5 MB attachment answered a raw 413).
+pub const MAX_PRIVATE_EMAIL_BODY_BYTES: usize = 26 * 1024 * 1024;
+
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
         // Domain management
@@ -236,8 +242,13 @@ pub fn router(state: AppState) -> Router<AppState> {
             axum::routing::get(admin_handler::get_support_box).put(admin_handler::set_support_box),
         )
         .layer(axum::middleware::from_fn_with_state(
-            crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
-            crate::body_deadline::body_read_deadline_middleware,
+            (
+                crate::body_deadline::BodyReadDeadline::from_secs(
+                    state.config.body_read_deadline_secs,
+                ),
+                MAX_PRIVATE_EMAIL_BODY_BYTES,
+            ),
+            crate::body_deadline::body_read_deadline_with_ceiling,
         ))
         .layer(middleware::from_fn_with_state(
             state.clone(),

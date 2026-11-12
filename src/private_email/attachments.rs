@@ -7,10 +7,13 @@
 //!
 //! Two directions, one model:
 //!
-//! * **Inbound** — a receiver parses the delivery's file parts into [`InboundFile`] and
-//!   [`store_for_message`] writes one row per file, keyed to the message and the account. Nothing
-//!   here can refuse a delivery: inbound mail is never refused (storage is what refuses NEW
-//!   outbound files, through `storage::enforce_new_file_room`).
+//! * **Inbound** — a receiver parses the delivery's file parts into [`InboundFile`], and
+//!   [`plan_inbound`] decides what can be KEPT before the message row is written: a part over the
+//!   per-file ceiling, past the per-message count/total ceiling, or with no room left in the
+//!   account is not stored (a notice row carries the reason instead, so the reader says so).
+//!   Inbound MAIL is still never refused and nothing is deleted — only the bytes that cannot be
+//!   kept are declined, which is the same rule the outbound door applies through
+//!   `storage::enforce_file_room`.
 //! * **Outbound** — the composer posts base64 parts ([`AttachmentUpload`]); [`decode_uploads`]
 //!   enforces the size ceiling and returns [`OutgoingAttachment`] values for the provider, and the
 //!   same rows are written against the "Sent" message so the sender can re-open what they sent.
@@ -53,6 +56,86 @@ pub struct OutgoingAttachment {
     pub bytes: Vec<u8>,
 }
 
+/// A part the receiver could NOT keep, with the plain sentence the reader shows on its chip.
+#[derive(Debug, Clone)]
+pub struct SkippedFile {
+    pub file: InboundFile,
+    pub reason: String,
+}
+
+/// What an arriving delivery will keep, and what it must decline, decided BEFORE the message row is
+/// written so `size_bytes` can count only the bytes that are really stored.
+pub struct InboundPlan {
+    pub keep: Vec<InboundFile>,
+    pub skipped: Vec<SkippedFile>,
+    /// Bytes of the kept parts — the figure the message's storage size adds.
+    pub kept_bytes: usize,
+}
+
+/// Decide, before anything is stored, which arriving parts this account can keep.
+///
+/// The rules are the customer-facing ones, in the order they are checked:
+///   1. at most [`MAX_FILES_PER_MESSAGE`] files on one message;
+///   2. one file at most [`MAX_INBOUND_FILE_BYTES`];
+///   3. all files on one message at most [`MAX_INBOUND_TOTAL_BYTES`];
+///   4. the file must FIT in the room the account has left — a single file can never take the
+///      account past its allowance, which is what "a cap so one 40 MB file cannot fill an account"
+///      means at a 1 MB trial quota as much as at 2 GB.
+///
+/// A declined part never refuses the message: it leaves a notice row ([`store_skipped`]), so the
+/// reader says "this file was not saved" with the reason instead of silently losing it.
+pub fn plan_inbound(files: Vec<InboundFile>, used_bytes: i64, quota_bytes: i64) -> InboundPlan {
+    let used = used_bytes.max(0);
+    let quota = quota_bytes.max(0);
+    let mut plan = InboundPlan {
+        keep: Vec::new(),
+        skipped: Vec::new(),
+        kept_bytes: 0,
+    };
+    for (index, file) in files.into_iter().enumerate() {
+        let size = file.bytes.len();
+        let reason = if index >= MAX_FILES_PER_MESSAGE {
+            Some(format!(
+                "This message carried more than {} files, so this one was not saved.",
+                MAX_FILES_PER_MESSAGE
+            ))
+        } else if size > MAX_INBOUND_FILE_BYTES {
+            Some(format!(
+                "This file is {} — one attachment may be up to {}.",
+                crate::private_email::storage::human_bytes(size as i64),
+                crate::private_email::storage::human_bytes(MAX_INBOUND_FILE_BYTES as i64)
+            ))
+        } else if plan.kept_bytes + size > MAX_INBOUND_TOTAL_BYTES {
+            Some(format!(
+                "The files on this message add up to more than {}, so this one was not saved.",
+                crate::private_email::storage::human_bytes(MAX_INBOUND_TOTAL_BYTES as i64)
+            ))
+        } else {
+            let room = (quota - used - plan.kept_bytes as i64).max(0);
+            if quota > 0 && size as i64 > room {
+                Some(format!(
+                    "Your storage has {} left of {} and this file is {}, so it was not saved. \
+                     The message still arrived and nothing was deleted — free some space or \
+                     upgrade for more storage, and new attachments are kept again.",
+                    crate::private_email::storage::human_bytes(room),
+                    crate::private_email::storage::human_bytes(quota),
+                    crate::private_email::storage::human_bytes(size as i64)
+                ))
+            } else {
+                None
+            }
+        };
+        match reason {
+            Some(reason) => plan.skipped.push(SkippedFile { file, reason }),
+            None => {
+                plan.kept_bytes += size;
+                plan.keep.push(file);
+            }
+        }
+    }
+    plan
+}
+
 /// A file the composer posts: base64 in JSON, because the console has no multipart client.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AttachmentUpload {
@@ -67,8 +150,20 @@ pub struct AttachmentUpload {
 /// other route's ceiling moved) and base64 inflates by a third, so 10 MB of file is a comfortable
 /// 13.4 MB request.
 pub const MAX_OUTBOUND_FILE_BYTES: usize = 10 * 1024 * 1024;
-/// The most a single message's attachments may add up to, before base64.
-pub const MAX_OUTBOUND_TOTAL_BYTES: usize = 20 * 1024 * 1024;
+/// The most a single message's attachments may add up to, before base64. 18 MB of raw bytes is
+/// 24 MB once base64-encoded, which fits the 26 MB request ceiling the send routes declare — a
+/// 20 MB total would have needed a 26.7 MB request and been answered 413 at the door before the
+/// app could say why (kanban t_0b3f3165).
+pub const MAX_OUTBOUND_TOTAL_BYTES: usize = 18 * 1024 * 1024;
+/// The most ONE arriving part may be. The receiver's envelope is 26 MB, so a part far larger than
+/// this could fill a small account in one delivery; the ceiling is the same 10 MB the composer
+/// allows, so the product has one number a customer can remember.
+pub const MAX_INBOUND_FILE_BYTES: usize = 10 * 1024 * 1024;
+/// The most one message's arriving files may add up to before the rest are declined.
+pub const MAX_INBOUND_TOTAL_BYTES: usize = 20 * 1024 * 1024;
+/// The most files one message may carry, in either direction, so a delivery cannot turn into a
+/// thousand rows the reader has to draw.
+pub const MAX_FILES_PER_MESSAGE: usize = 20;
 /// An inline image larger than this is NOT inlined into the message JSON; it stays a downloadable
 /// part instead, so opening a message can never ship a 10 MB base64 blob into the browser.
 pub const MAX_INLINE_EMBED_BYTES: usize = 1_500_000;
@@ -82,6 +177,12 @@ pub fn decode_uploads(items: &[AttachmentUpload]) -> Result<Vec<OutgoingAttachme
     let mut out: Vec<OutgoingAttachment> = Vec::with_capacity(items.len());
     let mut total = 0usize;
     for item in items {
+        if out.len() >= MAX_FILES_PER_MESSAGE {
+            return Err(AppError::Validation(format!(
+                "One message may carry up to {} files — send fewer, or send a second message.",
+                MAX_FILES_PER_MESSAGE
+            )));
+        }
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(item.data_base64.trim())
             .map_err(|_| {
@@ -123,6 +224,36 @@ pub fn decode_uploads(items: &[AttachmentUpload]) -> Result<Vec<OutgoingAttachme
     Ok(out)
 }
 
+/// Write the parts the receiver could NOT keep, as zero-byte rows that carry the reason.
+///
+/// Inbound mail is never refused, so this is how a full (or oversized) delivery stays honest: the
+/// message and its text are stored, the bytes are not, and the reader draws a chip that says why.
+pub async fn store_skipped(
+    db: &PgPool,
+    tenant_id: Uuid,
+    message_id: Uuid,
+    skipped: &[SkippedFile],
+) {
+    if skipped.is_empty() || message_id == Uuid::nil() {
+        return;
+    }
+    for item in skipped {
+        insert_row(
+            db,
+            tenant_id,
+            message_id,
+            &item.file.filename,
+            &item.file.content_type,
+            item.file.content_id.as_deref(),
+            // A part with no bytes can never be drawn in place; it is a chip with a reason.
+            false,
+            &[],
+            Some(&item.reason),
+        )
+        .await;
+    }
+}
+
 /// Write the files a delivery carried against the message it created.
 ///
 /// A failure here is LOGGED and swallowed: the message has already been accepted, and a provider
@@ -147,6 +278,7 @@ pub async fn store_for_message(
             file.content_id.as_deref(),
             file.is_inline || file.content_id.is_some(),
             &file.bytes,
+            None,
         )
         .await;
     }
@@ -173,6 +305,7 @@ pub async fn store_outgoing(
             None,
             false,
             &file.bytes,
+            None,
         )
         .await;
     }
@@ -188,12 +321,14 @@ async fn insert_row(
     content_id: Option<&str>,
     is_inline: bool,
     bytes: &[u8],
+    not_stored_reason: Option<&str>,
 ) {
     let result = sqlx::query(
         r#"
         INSERT INTO private_email_attachments
-            (tenant_id, message_id, filename, content_type, content_id, is_inline, size_bytes, data)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            (tenant_id, message_id, filename, content_type, content_id, is_inline, size_bytes, data,
+             not_stored_reason)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         "#,
     )
     .bind(tenant_id)
@@ -204,6 +339,7 @@ async fn insert_row(
     .bind(is_inline)
     .bind(bytes.len() as i32)
     .bind(bytes)
+    .bind(not_stored_reason)
     .execute(db)
     .await;
     if let Err(e) = result {
@@ -225,6 +361,9 @@ pub struct AttachmentMeta {
     pub content_type: String,
     pub size_bytes: i32,
     pub is_inline: bool,
+    /// None when the bytes are stored. Otherwise the plain sentence explaining why this file was
+    /// not saved; the reader shows it and offers no download.
+    pub not_stored_reason: Option<String>,
 }
 
 /// Every file attached to one message of this account, newest last.
@@ -235,7 +374,7 @@ pub async fn list_for_message(
 ) -> Result<Vec<AttachmentMeta>, AppError> {
     let rows = sqlx::query(
         r#"
-        SELECT id, filename, content_type, size_bytes, is_inline
+        SELECT id, filename, content_type, size_bytes, is_inline, not_stored_reason
           FROM private_email_attachments
          WHERE tenant_id = $1 AND message_id = $2
          ORDER BY created_at ASC, id ASC
@@ -257,8 +396,18 @@ pub async fn list_for_message(
                 .unwrap_or_else(|_| "application/octet-stream".into()),
             size_bytes: r.try_get("size_bytes").unwrap_or(0),
             is_inline: r.try_get("is_inline").unwrap_or(false),
+            not_stored_reason: r.try_get("not_stored_reason").unwrap_or(None),
         })
         .collect())
+}
+
+/// One stored file as the download route needs it.
+pub struct StoredFile {
+    pub filename: String,
+    pub content_type: String,
+    pub bytes: Vec<u8>,
+    /// Some when this row never held bytes (the part could not be kept); the route refuses it.
+    pub not_stored_reason: Option<String>,
 }
 
 /// The bytes of ONE file, resolved through the account AND the message it belongs to.
@@ -267,10 +416,10 @@ pub async fn load_bytes(
     tenant_id: Uuid,
     message_id: Uuid,
     attachment_id: Uuid,
-) -> Result<Option<(String, String, Vec<u8>)>, AppError> {
+) -> Result<Option<StoredFile>, AppError> {
     let row = sqlx::query(
         r#"
-        SELECT filename, content_type, data
+        SELECT filename, content_type, data, not_stored_reason
           FROM private_email_attachments
          WHERE id = $1 AND tenant_id = $2 AND message_id = $3
         "#,
@@ -282,13 +431,13 @@ pub async fn load_bytes(
     .await
     .map_err(AppError::Database)?;
 
-    Ok(row.map(|r| {
-        (
-            r.try_get::<String, _>("filename").unwrap_or_default(),
-            r.try_get::<String, _>("content_type")
-                .unwrap_or_else(|_| "application/octet-stream".into()),
-            r.try_get::<Vec<u8>, _>("data").unwrap_or_default(),
-        )
+    Ok(row.map(|r| StoredFile {
+        filename: r.try_get("filename").unwrap_or_default(),
+        content_type: r
+            .try_get("content_type")
+            .unwrap_or_else(|_| "application/octet-stream".into()),
+        bytes: r.try_get("data").unwrap_or_default(),
+        not_stored_reason: r.try_get("not_stored_reason").unwrap_or(None),
     }))
 }
 
@@ -307,6 +456,7 @@ pub async fn inline_parts_for_message(
           FROM private_email_attachments
          WHERE tenant_id = $1 AND message_id = $2
            AND is_inline = true
+           AND size_bytes > 0
            AND size_bytes <= $3
          ORDER BY created_at ASC, id ASC
         "#,
@@ -621,5 +771,63 @@ mod tests {
         assert_eq!(out[0].filename, "note.txt");
         assert_eq!(out[0].content_type, "text/plain");
         assert_eq!(out[0].bytes, b"hello");
+    }
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+
+    fn file(name: &str, size: usize) -> InboundFile {
+        InboundFile {
+            filename: name.to_string(),
+            content_type: "application/octet-stream".into(),
+            content_id: None,
+            is_inline: false,
+            bytes: vec![7u8; size],
+        }
+    }
+
+    #[test]
+    fn a_file_that_fits_the_room_is_kept_and_counted() {
+        let plan = plan_inbound(vec![file("a.bin", 400), file("b.bin", 500)], 100, 2000);
+        assert_eq!(plan.keep.len(), 2);
+        assert!(plan.skipped.is_empty());
+        assert_eq!(plan.kept_bytes, 900);
+    }
+
+    #[test]
+    fn a_file_over_the_accounts_remaining_room_is_declined_not_the_message() {
+        let plan = plan_inbound(vec![file("big.bin", 900), file("small.bin", 50)], 900, 1000);
+        assert_eq!(plan.keep.len(), 1);
+        assert_eq!(plan.keep[0].filename, "small.bin");
+        assert_eq!(plan.skipped.len(), 1);
+        assert!(plan.skipped[0].reason.contains("was not saved"));
+        assert_eq!(plan.kept_bytes, 50);
+    }
+
+    #[test]
+    fn one_file_over_the_per_file_ceiling_is_declined_even_with_room() {
+        let plan = plan_inbound(
+            vec![file("huge.bin", MAX_INBOUND_FILE_BYTES + 1)],
+            0,
+            10 * 1024 * 1024 * 1024,
+        );
+        assert!(plan.keep.is_empty());
+        assert_eq!(plan.skipped.len(), 1);
+        assert!(plan.skipped[0]
+            .reason
+            .contains("one attachment may be up to"));
+    }
+
+    #[test]
+    fn files_past_the_count_ceiling_are_declined_with_a_reason() {
+        let many: Vec<InboundFile> = (0..MAX_FILES_PER_MESSAGE + 2)
+            .map(|i| file(&format!("f{i}.bin"), 10))
+            .collect();
+        let plan = plan_inbound(many, 0, 10 * 1024 * 1024 * 1024);
+        assert_eq!(plan.keep.len(), MAX_FILES_PER_MESSAGE);
+        assert_eq!(plan.skipped.len(), 2);
+        assert!(plan.skipped[0].reason.contains("more than"));
     }
 }

@@ -461,9 +461,18 @@ pub async fn download_attachment(
         .unwrap_or(false);
 
     let found = attachments::load_bytes(&state.db, tenant_id, message_id, attachment_id).await?;
-    let Some((filename, content_type, bytes)) = found else {
+    let Some(file) = found else {
         return Err(AppError::NotFound("Attachment not found".into()));
     };
+    // A notice row never held bytes: answering 200 with an empty file would look like a successful
+    // download of a corrupt invoice. 410 with the same sentence the reader shows is the honest reply.
+    if let Some(reason) = file.not_stored_reason.as_deref() {
+        return Err(AppError::Gone(format!(
+            "This file was not saved when the message arrived. {}",
+            reason
+        )));
+    }
+    let (filename, content_type, bytes) = (file.filename, file.content_type, file.bytes);
 
     let disposition =
         attachments::content_disposition(if inline { "inline" } else { "attachment" }, &filename);
@@ -1629,6 +1638,10 @@ pub struct InboundMessage<'a> {
     /// The FILE parts themselves (kanban t_f919924f), written against the message row so the reader
     /// can draw an inline logo and offer a real download.
     pub files: &'a [InboundFile],
+    /// Parts the receiver could NOT keep (too large, too many, or no room left). They become
+    /// zero-byte notice rows so the reader says why instead of silently losing the file
+    /// (kanban t_0b3f3165).
+    pub skipped: &'a [attachments::SkippedFile],
 }
 
 /// Store one received message. Returns (message id, whether this call created it).
@@ -1686,6 +1699,7 @@ pub async fn store_inbound(
             // The files travel WITH the message row (kanban t_f919924f). A retry finds the row
             // already there and therefore writes no second copy of each file.
             attachments::store_for_message(db, msg.tenant_id, id, msg.files).await;
+            attachments::store_skipped(db, msg.tenant_id, id, msg.skipped).await;
             Ok((id, true))
         }
         None => {
