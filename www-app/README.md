@@ -26,6 +26,14 @@ They were the pre-SPA stubs of 2026-09-20 (`0d49e94`), superseded the same day b
 excluded them ever since the flat mapping was fixed (2026-09-20). They were **retired**
 (2026-10-06); `git show 0d49e94:www-app/index.html` recovers them if ever needed.
 
+**`www-app/index.html` must NOT be re-created.** It was resurrected on 2026-11-11 as a
+hand-mirrored second copy of the tenant shell: every commit until `a1a3039` edited both
+copies, then a shell-only change (the payment hand-off) landed in `coreswift/index.html`
+alone and the publisher's old twin-divergence check refused **every** publish — app, admin
+and the mail client — over a file that ships nothing. It was retired again on 2026-11-12 and
+the publisher now only prints a NOTE if it reappears, naming this file as the real one.
+Edit `coreswift/index.html`; there is exactly ONE tracked copy of the tenant shell.
+
 The fleet parity gate pairs `CoreSwift-CRM:www-app` as
 `apps/CoreSwift-CRM/www-app/coreswift` -> `nginx/www-app/coreswift`
 (`/opt/swift/fleet/marketing-www-parity.py`), i.e. that sub-directory is the authoring
