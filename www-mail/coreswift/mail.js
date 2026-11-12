@@ -158,6 +158,12 @@
 
   // ── Render ───────────────────────────────────────────────────────────────────────────────────
   function render() {
+    // The inline guide follows the screen. This host is ONE page — the path never changes as
+    // the client moves setup -> chooser -> mail — so the widget is told which view is open
+    // instead of guessing from the URL (window.inlineGuidePage is the widget's own hook).
+    if (typeof window.inlineGuidePage === 'function') {
+      window.inlineGuidePage(!S.token ? 'setup' : (S.view === 'choose' ? 'choose' : (S.view === 'setup' ? 'setup' : 'mail')));
+    }
     var app = $('app');
     if (!S.token) { app.innerHTML = setupPage(); bindSetup(); return; }
     if (S.view === 'setup') { app.innerHTML = setupPage(); bindSetup(); return; }
@@ -491,6 +497,7 @@
       + '<div class="brand">CoreSwift Mail</div>'
       + '<button class="btn btn-primary" id="mCompose" style="width:100%">Compose</button>'
       + '<button class="btn" id="mSignature" style="width:100%;margin-top:8px">Signature</button>'
+      + '<button class="btn" id="mMailboxes" style="width:100%;margin-top:8px">Mailboxes</button>'
       + '<div style="margin-top:12px">' + rows + '</div>'
       + '<h5>Folders you made</h5>' + (customRows || '<div style="color:var(--muted);font-size:12px;padding:0 9px">None yet — use a folder\'s menu.</div>')
       + '<h5>Labels <button class="btn-ghost" id="mNewLabel" title="Create label">+</button></h5>'
@@ -658,6 +665,10 @@
     if (c) c.onclick = function () { composeModal('new'); };
     var sg = $('mSignature');
     if (sg) sg.onclick = function () { signatureModal(); };
+    // Back to Choose a mailbox. The picker used to be reachable only on the way IN, so
+    // reading a second address meant signing out and back in.
+    var mb = $('mMailboxes');
+    if (mb) mb.onclick = function () { S.view = 'choose'; S.picked = false; render(); };
     var nl = $('mNewLabel');
     if (nl) nl.onclick = function () { labelModal(); };
     var ad = $('mAddress');

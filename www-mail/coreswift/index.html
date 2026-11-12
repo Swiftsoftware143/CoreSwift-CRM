@@ -80,6 +80,10 @@
   .sw.on{border-color:#111827}
   .err{color:var(--danger);font-size:13px}
   .ok{color:#166534;font-size:13px}
+  /* The user guide lives on this host too: /guide.html is the same text app.<domain>/guide.html
+     serves, so the help a customer reads in the mail client is the one the CRM links. */
+  #mailGuideLink{position:fixed;left:14px;bottom:14px;z-index:99998;font-size:12px;color:var(--muted);text-decoration:none;background:#fff;border:1px solid var(--line);border-radius:999px;padding:6px 12px;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+  #mailGuideLink:hover{color:var(--ink);background:#f3f4f6}
   @media (max-width:860px){
     .mail{grid-template-columns:1fr}
     .rail{flex-direction:row;overflow:auto;border-right:0;border-bottom:1px solid var(--line);align-items:center;gap:6px;padding:8px}
@@ -99,6 +103,45 @@
 </head>
 <body>
 <div id="app"><div class="empty">Loading CoreSwift Mail…</div></div>
-<script src="/mail.js?v=20261112b"></script>
+<a id="mailGuideLink" href="/guide.html" target="_blank" rel="noopener">📖 User guide</a>
+
+<script>
+/* The inline guide's CONTENT for this host (window.appGuidePages — the widget renders it as plain
+   text, so no markup belongs in these strings). Three screens live here: the setup page, the
+   mailbox chooser, and the mail client itself. */
+window.appGuidePages = {
+  setup: {
+    title: "Set up your inbox",
+    desc: "Six short steps that take you from a domain you already own to a mailbox that receives. Nothing here needs a technician and nothing is charged until a mailbox exists: add the domain and choose how it sends and how it receives, add the records your provider gives you (each with a Copy button), wait for Active, then create the addresses. Your 30 free days start at the first mailbox you create, not at signup — time spent waiting on DNS costs you nothing.",
+    actions: [
+      "Sending and receiving are two separate answers: your own Mailgun account or any SMTP service to send, Mailgun or SendGrid (or nowhere) to receive",
+      "Every mail record stays DNS only (grey cloud) at Cloudflare; the inbox CNAME is the one record set to Proxied (orange cloud)",
+      "Press Check again until the domain says Active, then create your mailboxes — the create button stays disabled until it is",
+      "Nothing is deleted when the free month ends: the address keeps receiving and only sending pauses"
+    ]
+  },
+  choose: {
+    title: "Choose a mailbox",
+    desc: "One card per address on this account, each showing the address and how many messages it holds. Nothing opens behind your back — you pick the address you want to read. The same login covers every mailbox, and the Mailboxes button in the rail brings you back here at any time.",
+    actions: [
+      "Pick the address you want to read",
+      "The count on each card is that address's own mail",
+      "Reading a second address later: press Mailboxes in the left rail"
+    ]
+  },
+  mail: {
+    title: "Mail",
+    desc: "Your mail in one place: the folder rail (Inbox, Unread, Favorites, Drafts, Sent, Archive, Spam, Trash) with live counts, an address filter that includes Everything else for catch-all arrivals, labels, and the storage meter. Incoming mail is never refused and nothing is deleted to make room for new mail.",
+    actions: [
+      "Open a message to read, reply, reply to all, forward, star, archive or assign it",
+      "Switch folder from the rail; the three-dot menu beside a folder marks all read or unread, and empties Spam or Trash after naming the count",
+      "Filter by address or by label to narrow the list, and press Refresh when new mail is due",
+      "Storage: the meter shows used of allowance; at 50, 75 and 99 per cent a banner and one email per rung tell you what to do"
+    ]
+  }
+};
+</script>
+<script src="/inline-guide-widget.js"></script>
+<script src="/mail.js?v=20261112c"></script>
 </body>
 </html>

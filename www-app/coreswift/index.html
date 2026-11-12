@@ -6874,14 +6874,160 @@ TAB_RENDERERS['widgets'] = widgetsShell;
 const GC = { configured: false, items: [], loaded: false };
 
 function calendarShell() {
-  return pageHeader('Calendar', 'Booking calendars, and the Google Calendar each one mirrors into',
+  return pageHeader('Calendar', 'Your public calendar address, the booking calendars it shows, and the Google Calendar each one mirrors into',
     '<button class="btn btn-secondary btn-sm" onclick="gcOpenNewCalendar()">+ New Calendar</button>' +
     '<button class="btn btn-secondary btn-sm" onclick="switchTab(\'integrations\')">🔑 Google credentials</button>') +
+    // THE PUBLIC ADDRESS (kanban t_8457bfef). Every workspace has one from the moment it exists, so
+    // this card is a statement of fact plus the two things an owner can change: the name in front of
+    // the system domain, and an owned domain pointed at the same calendar.
+    '<div id="calHost"><div class="loading-wrap"><div class="spinner"></div> Loading your calendar address...</div></div>' +
     '<div id="gcContent"><div class="loading-wrap"><div class="spinner"></div> Loading calendars...</div></div>' +
     '<div id="gcFlow"></div>';
 }
 
+// ── The hosted calendar address ────────────────────────────────────────────────────────────────
+// GET /api/calendar-host returns the address and its custom-domain state. Nothing here is invented:
+// every sentence reads a field the server sent, so "verified" on screen means a request to that
+// domain really reached this workspace.
+let CALHOST = null;
+
+async function loadCalendarHost() {
+  const el = document.getElementById('calHost');
+  if (!el) return;
+  try {
+    CALHOST = await API.get('/calendar-host');
+    calHostRender();
+  } catch (e) {
+    el.innerHTML = icErr('Could not read your calendar address', e.message);
+  }
+}
+
+function calHostBadge(status) {
+  if (status === 'verified') return '<span class="badge badge-success">domain verified</span>';
+  if (status === 'pending') return '<span class="badge badge-warning">waiting for DNS</span>';
+  return '<span class="badge badge-muted">system address only</span>';
+}
+
+function calHostRender() {
+  const el = document.getElementById('calHost');
+  if (!el || !CALHOST) return;
+  const h = CALHOST;
+  const url = h.public_url || h.calendar_url;
+  const rows =
+    '<div class="form-group"><label>Your calendar address</label>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
+        '<code id="calHostUrl" style="padding:8px 10px;border-radius:8px;background:rgba(127,127,127,.12)">' + escapeHtml(url) + '</code>' +
+        '<button class="btn btn-secondary btn-sm" onclick="calHostCopy()">Copy</button>' +
+        '<a class="btn btn-secondary btn-sm" href="' + escapeHtmlAttr(url) + '" target="_blank" rel="noopener">Open</a>' +
+      '</div>' +
+      '<span class="form-hint">Anyone with this address sees your open booking calendars and can reserve a place. It works right away — no setup.</span></div>' +
+    '<div class="form-group"><label for="calHostSub">Calendar address name</label>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
+        '<input type="text" id="calHostSub" value="' + escapeHtmlAttr(h.subdomain) + '" style="max-width:280px" ' +
+          'placeholder="your-business"> ' +
+        '<span style="color:var(--text-muted)">.' + escapeHtml(h.system_domain || '') + '</span>' +
+        '<button class="btn btn-primary btn-sm" onclick="calHostSaveSub()">Save name</button>' +
+      '</div>' +
+      '<span class="form-hint">Letters, numbers and hyphens. This is the address your customers keep, so pick the name you want them to remember.</span></div>' +
+    '<div class="form-group"><label for="calHostDomain">Use your own domain (optional)</label>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
+        '<input type="text" id="calHostDomain" value="' + escapeHtmlAttr(h.custom_domain || '') + '" style="max-width:320px" ' +
+          'placeholder="calendar.yourbusiness.com"> ' +
+        '<button class="btn btn-primary btn-sm" onclick="calHostSaveDomain()">Save domain</button>' +
+        (h.custom_domain ? '<button class="btn btn-secondary btn-sm" onclick="calHostCheckDomain()">Check now</button>' +
+          ' <button class="btn btn-ghost btn-sm" onclick="calHostRemoveDomain()">Remove</button>' : '') +
+      '</div>' +
+      '<span class="form-hint">Point a CNAME record for your domain at <code>' + escapeHtml(h.custom_domain_target || '') + '</code>, then press Check now. Your address above keeps working either way.</span></div>' +
+    '<div style="margin-top:4px">' + calHostBadge(h.custom_domain_status) +
+      (h.custom_domain && h.custom_domain_status === 'verified'
+        ? ' <span style="color:var(--text-muted);font-size:.85rem">Your customers reach this calendar at <strong>' + escapeHtml(h.custom_domain) + '</strong>.</span>'
+        : '') +
+      (h.custom_domain_last_error
+        ? '<div class="form-hint" style="color:#b42318;margin-top:6px">' + escapeHtml(h.custom_domain_last_error) + '</div>'
+        : '') +
+    '</div>' +
+    '<div id="calHostStatus" style="margin-top:10px;color:var(--text-muted)"></div>';
+
+  el.innerHTML = card('🔗 Your public calendar address', rows) +
+    '<div style="height:14px"></div>';
+}
+
+function calHostSay(text, bad) {
+  const st = document.getElementById('calHostStatus');
+  if (!st) return;
+  st.textContent = text || '';
+  st.style.color = bad ? '#b42318' : 'var(--text-muted)';
+}
+
+function calHostCopy() {
+  const url = (CALHOST && (CALHOST.public_url || CALHOST.calendar_url)) || '';
+  if (!url) return;
+  const done = function () { calHostSay('Address copied.'); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(done, function () { calHostSay(url); });
+  } else {
+    calHostSay(url);
+  }
+}
+
+async function calHostSaveSub() {
+  const inp = document.getElementById('calHostSub');
+  if (!inp) return;
+  const value = (inp.value || '').trim().toLowerCase();
+  if (!value) { calHostSay('Type the name you want, then press Save name.', true); return; }
+  try {
+    CALHOST = await API.patch('/calendar-host/subdomain', { subdomain: value });
+    calHostRender();
+    calHostSay('Saved. Your calendar is now at ' + (CALHOST.public_url || CALHOST.calendar_url) + '.');
+  } catch (e) {
+    calHostSay(e.message, true);
+  }
+}
+
+async function calHostSaveDomain() {
+  const inp = document.getElementById('calHostDomain');
+  if (!inp) return;
+  const value = (inp.value || '').trim();
+  if (!value) { calHostSay('Type your domain, for example calendar.yourbusiness.com', true); return; }
+  try {
+    CALHOST = await API.put('/calendar-host/custom-domain', { domain: value });
+    calHostRender();
+    if (CALHOST.custom_domain_status === 'pending') {
+      calHostSay('Saved. Point a CNAME at ' + CALHOST.custom_domain_target + ', then press Check now.');
+    } else {
+      calHostSay('Saved.');
+    }
+  } catch (e) {
+    calHostSay(e.message, true);
+  }
+}
+
+async function calHostCheckDomain() {
+  calHostSay('Checking that domain…');
+  try {
+    CALHOST = await API.post('/calendar-host/custom-domain/check', {});
+    calHostRender();
+    calHostSay(CALHOST.custom_domain_status === 'verified'
+      ? 'Verified — that domain reaches this calendar.'
+      : (CALHOST.custom_domain_last_error || 'Not reachable yet. Check the DNS record and try again.'),
+      CALHOST.custom_domain_status !== 'verified');
+  } catch (e) {
+    calHostSay(e.message, true);
+  }
+}
+
+async function calHostRemoveDomain() {
+  try {
+    CALHOST = await API.del('/calendar-host/custom-domain');
+    calHostRender();
+    calHostSay('Removed. Your calendar still answers at its system address.');
+  } catch (e) {
+    calHostSay(e.message, true);
+  }
+}
+
 async function loadCalendarTab() {
+  loadCalendarHost();
   const el = document.getElementById('gcContent');
   if (!el) return;
   let d;
@@ -9195,7 +9341,7 @@ window.appGuidePages = {
   branding:        { title: "Email Branding", desc: "One logo and one signature for every message this workspace sends. Upload the logo once — the app resizes it so it renders in Gmail, Outlook and Apple Mail on a phone or a desktop — then fill in the signature (name, title, company, phone and a short line) and press Save signature. Compose and every reply then open with both already in place; an individual address can use its own wording from the mail client's Signature button.", actions: ["Upload the company logo (PNG, JPEG, GIF or WebP — no size to choose)", "Fill in the signature and press Save signature", "Read the preview: it is the message the mailer really produces", "Send yourself a test email to see it in your own inbox"] },
   inbox:           { title: "Shared Inbox", desc: "Your mail in one place: every message that arrived at your workspace's addresses. CoreSwift does not host your mail \u2014 you bring your own domain, and sending and receiving are TWO separate choices: send through your own Mailgun account or any SMTP service (Amazon SES, SendGrid, Postmark, Google Workspace), and receive through Mailgun or SendGrid. The setup page is three steps: the domain plus the keys those choices need, the mail records (MX, SPF/DKIM) each with a Copy button and a live Active / Waiting / Needs attention badge, then the inbox itself. The API key is the sending key (Mailgun \u2192 Settings \u2192 API Keys \u2192 Private API key, it starts key-) and the webhook signing key is the receiving key (Mailgun \u2192 Send \u2192 Domains \u2192 your domain \u2192 Webhook signing key); without the second one the domain can only send. One extra CNAME makes inbox.yourbusiness.com open your mail, and it is the only record that must be Proxied (orange cloud) \u2014 the mail records stay grey. Nothing is charged and no mailbox exists until the records verify, and the 30-day clock starts at your first verified inbox. When it ends the address still receives and only sending pauses: Keep inbox \u2014 $1/mo or Upgrade CRM brings sending back on the spot, and nothing is ever deleted. The meter at the bottom of the left column is your storage, with a banner and one email at 50, 75 and 99 per cent.", actions: ["Pick an address to narrow the list", "Open a message, star it, or file it under a label", "Follow the three setup steps and press Check again when the records show Active", "LOG IN on an inbox row opens your branded address once it is live", "Receive-only? Use Keep inbox \u2014 $1/mo or Upgrade CRM to restore sending", "Catch-all is switched on Email Domains & Sending, not here", "Change how a domain RECEIVES (Mailgun, SendGrid, or nowhere) under the domain on the setup page \u2014 sending is untouched by it"] },
   "email-settings":{ title: "Email Domains & Sending", desc: "The sending half of your mail: the domains you send from with their Catch-all switch and their keys, the mailboxes on each domain, auto-replies and a form to send from a mailbox. The Catch-all column accepts mail for addresses that do not exist on the domain and files it under Everything else (MISC); it is sold by the plan \u2014 on this ladder from Professional ($79) upward \u2014 and the plan is checked when mail arrives, so a workspace moved down keeps the setting remembered while unmatched mail is refused: the cell then reads \u201coff \u2014 not on your plan\u201d with a Clear button. Mailboxes are counted per plan, and at the ceiling the answer names the plan that adds more and charges nothing.", actions: ["Enable or disable catch-all on a domain", "Add a domain, choose how it sends and how it receives, and paste only the keys those choices need; Check again after the records go Active", "DNS records shows the exact MX, SPF and DKIM values a domain needs, with a Copy button, for any domain \u2014 not just while the account has no inbox", "Remove this domain deletes a domain you no longer want (and the inboxes on it; mail already received stays) after you type its name to confirm", "Create a mailbox \u2014 the button stays disabled until receiving and sending both verify"] },
-  calendar:        { title: "Calendar", desc: "Events and appointments for you and your team.", actions: ["Create an event", "Open one to see its details"] },
+  calendar:        { title: "Calendar", desc: "Your public calendar address, the booking calendars it shows, and the Google Calendar each one mirrors into. The card at the top is your address \u2014 <your-workspace>.coreswiftcrm.com \u2014 and it works the moment your workspace exists: anyone with it sees your open booking calendars and can reserve a place without an account. Change the name in front of the domain, or point a domain you own at the same calendar; the system address keeps answering either way, so a DNS mistake can never take your calendar away. Below it are your booking calendars with the Google Calendar each one pushes bookings into.", actions: ["Copy your calendar address, or open it to see what a visitor sees", "Change the calendar address name and press Save name", "To use your own domain: type it, press Save domain, point a CNAME at the address shown, then press Check now", "Open or create a booking calendar below, and connect Google Calendar to push its bookings into"] },
   bookings:        { title: "Bookings", desc: "Appointment slots people can book with you, and the bookings they made.", actions: ["Set your availability", "Review upcoming bookings"] },
   "ai-assistant":  { title: "AI Assistant", desc: "Ask questions about your data, or have it draft content for you.", actions: ["Connect an AI provider in the Integration Center", "Ask it something"] },
   "tracked-links": { title: "Tracked Links", desc: "Links you can send that report back when someone clicks them.", actions: ["Create a tracked link", "Copy it into a message", "Check its clicks"] },
@@ -9205,11 +9351,11 @@ window.appGuidePages = {
   // for any key it has an entry for, which would cover the Profile form's Save button on a first
   // visit. With no entry, updateGuide() closes the panel and hides its "?" toggle on that screen.
   integrations:    { title: "Integration Center", desc: "Connect the outside services the CRM uses — email, texting, AI and payment providers.", actions: ["Add a provider's credentials", "Test the connection"] },
-  team:            { title: "Team & Invites", desc: "The people who share this workspace and what each of them can do. A seat is one person who can sign in, the owner included: on this ladder Free includes 1, Starter 3, Professional 15, Enterprise 20 and Agency 100 (Pro and the $1 Inbox line are not on sale), and the $1 Inbox line includes nobody beyond the owner. You type the address and a role; the app makes the password, emails it, and never shows it to you. Removing somebody ends their access at their next click, puts their inboxes and conversations back to the workspace, and deletes nothing.", actions: ["Invite someone by email and choose Member or Admin", "When every seat is used, the answer names the plan that adds more and its price \u2014 nothing is charged by itself", "Create invite link for a teammate who would rather choose their own password (7 days, one use)", "Watch the Inbox tab's Assigned to column to see who owns which address"] },
+  team:            { title: "Team & Invites", desc: "The people who share this workspace and what each of them can do. A seat is one person who can sign in, the owner included: on this ladder Free includes 1, Starter 3, Professional 15, Enterprise 20 and Agency 100 (Pro and the $1 Inbox line are not on sale), and the $1 Inbox line includes nobody beyond the owner. You type the address and a role; the app makes the password, emails it, and never shows it to you. Removing somebody ends their access at their next click, puts their inboxes and conversations back to the workspace, and deletes nothing.", actions: ["Invite someone by email and choose Member or Admin", "When every seat is used, the answer names the plan that adds more and its price \u2014 nothing is charged by itself", "Create invite link for a teammate who would rather choose their own password (7 days, one use)", "The teammate signs in with the address and password the email carries and lands on the Dashboard; their mail is in the Shared Inbox tab", "Watch the Shared Inbox tab's Assigned to column to see who owns which address"] },
   webhooks:        { title: "Webhooks", desc: "Send your workspace's events out to another system in real time.", actions: ["Add an endpoint", "Pick which events it receives"] },
   portfolio:       { title: "Portfolio Companies", desc: "Platform operator view: the businesses managed on this platform. Sync New Company gives a company its own workspace and owner login, emails the owner the login details, and converts a record that has no account behind it \u2014 pressing it again only refreshes the details.", actions: ["Open a company", "Change its plan", "Press \ud83d\udd04 Sync New Company to give a record its own account \u2014 the owner is emailed the login"] },
-  users:           { title: "Users", desc: "Platform operator view: every user account across the platform.", actions: ["Search for a user", "Open one to see their account"] },
-  billing:         { title: "Billing & Plans", desc: "Your subscription — the plan you are on and the plans you can move to.", actions: ["Compare plans", "Upgrade or change your plan"] },
+  users:           { title: "Users", desc: "Platform operator view: every user account across the platform with the workspace it belongs to. This list is read-only — no screen on it creates a person; people join a workspace through that workspace's own Team & Invites.", actions: ["Look up a person and the workspace they belong to", "Add somebody from the tenant console under Team & Invites"] },
+  billing:         { title: "Billing & Plans", desc: "Your bill, the plan this workspace is on, and every plan it could move to. Nothing on this screen changes the plan by itself. Your bill states the one amount due, says there is one subscription, names any plan that ended when the workspace last moved, and gives the next charge date. Each tier that is not yours carries Request this plan, which tells our team which workspace is asking and charges nothing; a tier that already has a payment page also shows Open payment page, and pressing it files the same request first. Cancel subscription drops the workspace to the Free plan as soon as you confirm.", actions: ["Read Your bill — the amount, the single subscription and the next charge date", "Press Request this plan on a tier you want — our team makes the change and nothing is charged here", "Open payment page where a tier shows one, then your request is already filed", "Cancel subscription to drop back to Free at once — it asks you to confirm first"] },
   widgets:         { title: "Widgets", desc: "Platform operator view: embeddable pieces you can add to a customer's site.", actions: ["Create a widget"] },
   "native-apps":   { title: "Native Apps", desc: "Platform operator view: the mobile and desktop apps offered to customers.", actions: ["Review the apps"] },
   "audit-log":     { title: "Audit Log", desc: "Platform operator view: a record of who changed what, for accountability.", actions: ["Filter by user or action"] },
