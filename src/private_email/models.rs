@@ -241,6 +241,10 @@ pub struct SendEmailRequest {
     /// the signature already in place, so the default has to match what the sender saw.
     #[serde(default)]
     pub include_signature: Option<bool>,
+    /// Files to send WITH this message (kanban t_f919924f): base64 parts, because the console has no
+    /// multipart client. Each one is stored against the Sent row after the mail leaves.
+    #[serde(default)]
+    pub attachments: Vec<super::attachments::AttachmentUpload>,
 }
 
 #[derive(Debug, Deserialize)]

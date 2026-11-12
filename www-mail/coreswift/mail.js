@@ -608,6 +608,66 @@
       + '</div>';
   }
 
+  // THE FILES A MESSAGE CARRIED (kanban t_f919924f). A real attachment is a chip that downloads
+  // it through the authenticated route; an inline image is not a chip at all — it is drawn where
+  // the body puts it, because the server has already rewritten its `cid:` reference to the bytes.
+  function attachmentsHtml(m) {
+    var list = (m.attachments || []).filter(function (a) { return !a.is_inline; });
+    if (!list.length) return '';
+    return '<div style="margin:10px 0 2px;display:flex;flex-wrap:wrap;gap:8px">'
+      + list.map(function (a) {
+        return '<button type="button" class="btn btn-ghost" data-att="' + esc(a.id) + '"'
+          + ' data-att-msg="' + esc(m.id) + '" data-name="' + esc(a.filename) + '"'
+          + ' title="Download ' + esc(a.filename) + '" style="max-width:100%">'
+          + '&#128206; <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(a.filename) + '</span>'
+          + ' <span style="color:var(--muted);font-size:11px">' + esc(fmtBytes(a.size_bytes || 0)) + '</span></button>';
+      }).join('')
+      + '</div>';
+  }
+
+  // THE BODY. A message that carries HTML is drawn in a SANDBOXED frame (no scripts, no same-origin
+  // access, no top navigation), so the sender's markup can never touch this console; its inline
+  // images are already `data:` URIs by the time it gets here, which is why a branded logo renders.
+  // A message with only text is drawn as text with its line breaks kept.
+  function bodyBlock(m) {
+    var html = (m.body_html || '').trim();
+    if (!html) return '<div class="body">' + esc(m.body_plain || '(no text)') + '</div>';
+    return '<iframe sandbox="" referrerpolicy="no-referrer" title="Message body"'
+      + ' srcdoc="' + esc(html) + '"'
+      + ' style="width:100%;height:440px;border:1px solid var(--line);border-radius:8px;background:#fff;margin:10px 0"></iframe>'
+      + (m.body_plain && m.body_plain.trim()
+        ? '<details style="margin:0 0 10px"><summary style="font-size:12px;color:var(--muted);cursor:pointer">Plain-text version</summary>'
+          + '<div class="body" style="white-space:pre-wrap">' + esc(m.body_plain) + '</div></details>'
+        : '');
+  }
+
+  // Download through the SESSION, never through a URL that carries a token: the file is fetched
+  // with the same Authorization header every other call uses, turned into a blob, and saved under
+  // the sender's filename. A refusal is the server's sentence, printed as a toast.
+  async function downloadAttachment(messageId, attachmentId, name) {
+    try {
+      var res = await fetch('/api/private-email/messages/' + messageId + '/attachments/' + attachmentId, {
+        headers: S.token ? { Authorization: 'Bearer ' + S.token } : {}
+      });
+      if (res.status === 401) { signOut(true); throw new Error('Your session ended. Sign in again.'); }
+      if (!res.ok) {
+        var text = await res.text();
+        var msg = text;
+        try { msg = (JSON.parse(text) || {}).message || text; } catch (e) { msg = text; }
+        throw new Error(msg || ('Download failed (' + res.status + ')'));
+      }
+      var blob = await res.blob();
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = name || 'attachment';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+    } catch (e) { toast(fail(e), 'error'); }
+  }
+
   function readerHtml() {
     if (!S.sel) return '<div class="empty">No mail selected</div>';
     var m = S.sel;
@@ -645,7 +705,8 @@
           + '<button class="btn" data-act="ticket">Turn into a ticket</button></div>')
       + '<div id="mSummary"></div>'
       + '<div style="margin:6px 0 10px"><div style="font-size:11px;color:var(--muted);margin-bottom:4px">Labels</div><div id="mLabelBox"></div></div>'
-      + '<div class="body">' + esc(m.body_plain || '(no text)') + '</div>'
+      + attachmentsHtml(m)
+      + bodyBlock(m)
       + '<div id="mReplyBox"></div>'
       + '</div>';
   }
@@ -733,6 +794,11 @@
     };
     Array.prototype.forEach.call(document.querySelectorAll('[data-act]'), function (b) {
       b.onclick = function () { messageAction(b.getAttribute('data-act')); };
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-att]'), function (b) {
+      b.onclick = function () {
+        downloadAttachment(b.getAttribute('data-att-msg'), b.getAttribute('data-att'), b.getAttribute('data-name'));
+      };
     });
     if (S.sel) applyLabelControl();
   }
@@ -861,6 +927,10 @@
       + '<div><label class="f">Bcc</label><input id="cBcc" placeholder="optional"></div></div>'
       + '<label class="f">Subject</label><input id="cSubject" value="' + esc(subject) + '">'
       + '<label class="f">Message</label><textarea id="cBody" rows="8">' + esc(body) + '</textarea>'
+      + '<label class="f">Attach files</label>'
+      + '<input type="file" id="cFiles" multiple style="width:100%;padding:6px 0">'
+      + '<div id="cFilesList" style="font-size:12px;color:var(--muted);margin:2px 0 0">'
+      + 'Up to 10 MB each, 20 MB in total. They count toward your storage.</div>'
       + '<label class="f">Signature</label>'
       + '<div id="cSigWrap" style="border:1px solid var(--line);border-radius:8px;padding:12px;background:#fff;max-height:200px;overflow:auto"></div>'
       + '<label id="cSigRow" style="display:flex;gap:8px;align-items:flex-start;margin:10px 0 0;font-size:13px;line-height:1.35">'
@@ -889,12 +959,48 @@
         var on = $('cSigOn');
         if (on) on.onchange = function () { sig.include = on.checked; paintSig(); };
         loadSig();
+        // Read the picked files as base64 parts, refusing over the ceiling BEFORE sending so the
+        // sentence the customer reads is about their file, not a gateway error.
+        function filesForUpload() {
+          var input = $('cFiles');
+          var picked = (input && input.files) ? Array.prototype.slice.call(input.files) : [];
+          var list = $('cFilesList');
+          if (!picked.length) return Promise.resolve([]);
+          var total = picked.reduce(function (n, f) { return n + f.size; }, 0);
+          var over = picked.filter(function (f) { return f.size > 10 * 1024 * 1024; })[0];
+          if (over) {
+            $('cErr').textContent = '"' + over.name + '" is larger than the 10 MB one attachment may be.';
+            return Promise.resolve(null);
+          }
+          if (total > 20 * 1024 * 1024) {
+            $('cErr').textContent = 'Those files add up to more than 20 MB - send fewer, or smaller, files.';
+            return Promise.resolve(null);
+          }
+          if (list) list.textContent = 'Attaching ' + picked.length + ' file' + (picked.length === 1 ? '' : 's') + '...';
+          return Promise.all(picked.map(function (f) {
+            return new Promise(function (resolve, reject) {
+              var reader = new FileReader();
+              reader.onload = function () {
+                resolve({
+                  filename: f.name,
+                  content_type: f.type || 'application/octet-stream',
+                  data_base64: String(reader.result || '').split(',').pop()
+                });
+              };
+              reader.onerror = function () { reject(new Error('"' + f.name + '" could not be read.')); };
+              reader.readAsDataURL(f);
+            });
+          }));
+        }
+
         $('cSend').onclick = async function () {
           var btn = this;
           var to2 = ($('cTo').value || '').trim();
           if (!to2) { $('cErr').textContent = 'Add who this goes to.'; return; }
           btn.disabled = true;
           try {
+            var files = await filesForUpload();
+            if (files === null) { btn.disabled = false; return; }
             var signed = sig.include && sig.has;
             // A reply, reply-all or forward goes through the REPLY route so it carries the thread and
             // the same one sender; a new message goes through /send. Both append the signature in the
@@ -906,7 +1012,8 @@
                 subject: $('cSubject').value || '',
                 body: $('cBody').value || '',
                 mode: mode,
-                include_signature: signed
+                include_signature: signed,
+                attachments: files
               });
             } else {
               await api('POST', '/private-email/send', {
@@ -916,7 +1023,8 @@
                 bcc: splitAddrs($('cBcc').value),
                 subject: $('cSubject').value || '',
                 body: $('cBody').value || '',
-                include_signature: signed
+                include_signature: signed,
+                attachments: files
               });
             }
             // A draft that has been sent is no longer a draft: the row goes with the send, so the

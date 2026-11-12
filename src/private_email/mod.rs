@@ -3,6 +3,7 @@ use axum::{middleware, Router};
 
 pub mod admin_handler;
 pub mod api_keys_handler;
+pub mod attachments;
 pub mod auto_reply_handler;
 pub mod domain_handler;
 pub mod encryption;
@@ -99,7 +100,18 @@ pub fn router(state: AppState) -> Router<AppState> {
         )
         .route(
             "/messages/:id/reply",
-            axum::routing::post(messages_handler::reply_to_message),
+            // A reply carries attachments through the same JSON shape as /send, so it takes the
+            // same raised body limit — scoped to this one verb, nothing else.
+            axum::routing::post(messages_handler::reply_to_message)
+                .layer(axum::extract::DefaultBodyLimit::max(26 * 1024 * 1024)),
+        )
+        // THE FILE A MESSAGE CARRIED (kanban t_f919924f). Authenticated and tenancy-scoped: the
+        // row is resolved through the caller's account AND the message, so an id from another
+        // workspace finds nothing. `?inline=1` answers `Content-Disposition: inline` for a reader
+        // that draws the part in place; the default is a download.
+        .route(
+            "/messages/:id/attachments/:attachment_id",
+            axum::routing::get(messages_handler::download_attachment),
         )
         // One-click summary of a thread, using the account's own AI provider. Refuses with a plain
         // sentence when no key is configured, so the client can hide the control.
@@ -144,7 +156,15 @@ pub fn router(state: AppState) -> Router<AppState> {
                 .delete(messages_handler::remove_label),
         )
         // Send email
-        .route("/send", axum::routing::post(send_handler::send_email))
+        // SENDING A FILE (kanban t_f919924f). The composer posts base64 parts in the JSON body, so
+        // this ONE route takes a larger body than axum's 2 MB default. The limit is scoped to the
+        // route (a `MethodRouter` layer), exactly as the two inbound receivers do, so no other
+        // private-email route's ceiling moves; the edge raises the same two routes only.
+        .route(
+            "/send",
+            axum::routing::post(send_handler::send_email)
+                .layer(axum::extract::DefaultBodyLimit::max(26 * 1024 * 1024)),
+        )
         // ── The company signature (kanban t_b671a0f7) ────────────────────────────────────────────
         // `GET /signature?mailbox=` is what Compose reads to show the block BEFORE sending (built by
         // the same renderer the sender uses, with the public logo URL instead of the cid: reference).

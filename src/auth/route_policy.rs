@@ -153,6 +153,15 @@
 //!        multipart body: 401 "inbound webhook refused", i.e. the allowlisted handler answered,
 //!        not a 404). These numbers are what `the_census_shape_is_what_the_docs_say` pins.
 //!
+//!   +1 mount (2026-11-12, kanban t_f919924f), THE FILE A MESSAGE CARRIED: `GET
+//!        /api/private-email/messages/:id/attachments/:attachment_id`. It sits on the private-email
+//!        router behind the same auth middleware as every sibling, so it joins no allowlist: it
+//!        resolves the file through the CALLER'S account AND the message, and is measured anonymous
+//!        answering 401. The two send routes that now accept base64 file parts keep their mounts and
+//!        only gain a scoped `DefaultBodyLimit`. The extractor resolves 410 mounted
+//!        `.route(..)` calls / 398 on /api** (410 = 398 /api + the 12 root-level mounts), which is
+//!        what `the_census_shape_is_what_the_docs_say` pins.
+//!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
 //!        the per-module gate was doing its job. The two /api routes added since (kanban
@@ -1169,12 +1178,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            409,
+            410,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 397,
+            api, 398,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

@@ -1294,6 +1294,66 @@
     }
   };
 
+  // THE FILES A MESSAGE CARRIED (kanban t_f919924f). A real attachment is a chip; an inline image is
+  // drawn where the body puts it (the API has already turned its `cid:` reference into bytes).
+  function peAttachmentsHtml(m) {
+    var list = (m.attachments || []).filter(function (a) { return !a.is_inline; });
+    if (!list.length) return '';
+    return '<div style="margin:10px 0 2px;display:flex;flex-wrap:wrap;gap:8px">'
+      + list.map(function (a) {
+        return '<button type="button" class="btn btn-ghost btn-xs"'
+          + ' onclick="peDownloadAttachment(\'' + esc(m.id) + '\',\'' + esc(a.id) + '\',\'' + esc(a.filename) + '\')"'
+          + ' title="Download ' + esc(a.filename) + '" style="max-width:100%">&#128206; '
+          + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(a.filename) + '</span>'
+          + ' <span style="opacity:.6">' + esc(fmtBytes(a.size_bytes || 0)) + '</span></button>';
+      }).join('')
+      + '</div>';
+  }
+
+  // The body: HTML in a SANDBOXED frame (no scripts, no same-origin access, no top navigation), so a
+  // sender's markup can never touch this console. Its inline images are already `data:` URIs, which
+  // is what makes a branded logo render instead of showing a broken image.
+  function peBodyBlock(m) {
+    var html = (m.body_html || '').trim();
+    if (!html) {
+      return '<div style="white-space:pre-wrap;margin:12px 0;max-height:420px;overflow:auto">'
+        + esc(m.body_plain || '(no text)') + '</div>';
+    }
+    return '<iframe sandbox="" referrerpolicy="no-referrer" title="Message body"'
+      + ' srcdoc="' + esc(html) + '"'
+      + ' style="width:100%;height:420px;border:1px solid rgba(128,128,128,.3);border-radius:8px;background:#fff;margin:12px 0"></iframe>'
+      + (m.body_plain && m.body_plain.trim()
+        ? '<details style="margin:0 0 10px"><summary style="font-size:12px;opacity:.7;cursor:pointer">Plain-text version</summary>'
+          + '<div style="white-space:pre-wrap;font-size:13px">' + esc(m.body_plain) + '</div></details>'
+        : '');
+  }
+
+  // Download through the SESSION (never a URL carrying a token): fetch with the same bearer header,
+  // save the blob under the sender's filename. A refusal is the server's sentence.
+  window.peDownloadAttachment = async function (messageId, attachmentId, name) {
+    try {
+      var token = (typeof STATE !== 'undefined' && STATE && STATE.token) ? STATE.token : '';
+      var res = await fetch('/api/private-email/messages/' + messageId + '/attachments/' + attachmentId, {
+        headers: token ? { Authorization: 'Bearer ' + token } : {}
+      });
+      if (!res.ok) {
+        var text = await res.text();
+        var msg = text;
+        try { msg = (JSON.parse(text) || {}).message || text; } catch (e) { msg = text; }
+        throw new Error(msg || ('Download failed (' + res.status + ')'));
+      }
+      var blob = await res.blob();
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = name || 'attachment';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+    } catch (e) { toastMsg(fail(e), 'error'); }
+  };
+
   window.peOpenMessage = async function (id) {
     var d = document.getElementById('peDetail');
     if (!d) return;
@@ -1339,7 +1399,8 @@
           ? '<div style="margin:10px 0"><button class="btn btn-secondary btn-sm" id="peSumBtn" onclick="peSummarize(\'' + esc(m.id) + '\')">Summarise this message</button>'
             + '<div id="peSummaryBox" style="margin-top:8px;font-size:13px"></div></div>'
           : '')
-        + '<div style="white-space:pre-wrap;margin:12px 0;max-height:420px;overflow:auto">' + esc(m.body_plain || '(no text)') + '</div>'
+        + peAttachmentsHtml(m)
+        + peBodyBlock(m)
         + '<label style="display:block;font-size:12px;opacity:.75;margin-bottom:4px">Reply as</label>'
         + '<select id="peFrom" style="margin-bottom:8px">' + fromOpts + '</select>'
         + '<textarea id="peText" rows="4" placeholder="Write your reply…" style="width:100%;margin-bottom:8px"></textarea>'

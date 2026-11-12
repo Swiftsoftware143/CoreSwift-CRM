@@ -26,6 +26,7 @@ pub async fn deliver(
     body: &str,
     in_reply_to: Option<&str>,
     include_signature: bool,
+    attachments: &[providers::OutgoingAttachment],
 ) -> Result<Option<String>, AppError> {
     let mailbox = sqlx::query_as::<_, PrivateEmailBox>(
         "SELECT * FROM private_email_boxes WHERE tenant_id = $1 AND email_address = $2 AND status = 'active'",
@@ -43,6 +44,14 @@ pub async fn deliver(
     // through here, so the rule cannot be skipped by using the other door. Refusals are 402 with the
     // sentence the console prints, or 429 for the fair-use daily ceiling — never a 500.
     super::trial::enforce_send(db, tenant_id, &mailbox).await?;
+
+    // ── MAY THIS ACCOUNT ADD THE FILE? (B206) ─────────────────────────────────────────────────
+    // The ONE thing a full mailbox refuses. Checked before the provider is called, so a refusal
+    // never follows a message that has already left; the sentence names the numbers and both ways
+    // out. Inbound is never refused on this axis — only a NEW file is.
+    if !attachments.is_empty() {
+        super::storage::enforce_new_file_room(db, tenant_id, "attachment").await?;
+    }
 
     let provider_config = load_provider_config(db, mailbox.domain_id, tenant_id)
         .await
@@ -110,6 +119,7 @@ pub async fn deliver(
             &body_text,
             &body_html,
             inline.as_ref(),
+            attachments,
             in_reply_to,
         )
         .await;
@@ -135,6 +145,11 @@ pub async fn send_email(
 ) -> ApiResult<Json<serde_json::Value>> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
+    // Decode and ceiling-check the files BEFORE a byte leaves: a refusal must never arrive after
+    // the mail is gone (kanban t_f919924f).
+    let outgoing = super::attachments::decode_uploads(&req.attachments)?;
+    let attachment_bytes: usize = outgoing.iter().map(|f| f.bytes.len()).sum();
+
     let provider_message_id = deliver(
         &state.db,
         account_id,
@@ -147,6 +162,7 @@ pub async fn send_email(
         req.in_reply_to.as_deref(),
         // Absent means "do what the composer showed": signed. Only an explicit false drops it.
         req.include_signature.unwrap_or(true),
+        &outgoing,
     )
     .await?;
     let provider = "account-provider";
@@ -166,12 +182,15 @@ pub async fn send_email(
     .ok()
     .flatten();
 
-    if let Err(e) = sqlx::query(
+    // The Sent row now carries the attachments' own bytes too, so the meter counts what the
+    // message really costs and the sender can re-open the file they sent.
+    let sent_row = sqlx::query_scalar::<_, Uuid>(
         r#"INSERT INTO private_email_messages (
               tenant_id, mailbox_id, address, folder, direction, from_address, to_address,
               subject, body_plain, snippet, in_reply_to, provider, provider_message_id,
-              size_bytes, is_read, received_at
-           ) VALUES ($1,$2,$3,'sent','outbound',$4,$5,$6,$7,$8,$9,$10,$11,$12,true,NOW())"#,
+              size_bytes, is_read, received_at, has_attachments
+           ) VALUES ($1,$2,$3,'sent','outbound',$4,$5,$6,$7,$8,$9,$10,$11,$12,true,NOW(),$13)
+           RETURNING id"#,
     )
     .bind(account_id)
     .bind(mailbox_id)
@@ -184,11 +203,20 @@ pub async fn send_email(
     .bind(req.in_reply_to.as_deref())
     .bind(provider)
     .bind(provider_message_id.as_deref())
-    .bind(req.body.len() as i32)
-    .execute(&state.db)
-    .await
-    {
-        tracing::warn!(error = %e, "mail was sent, but recording it in Sent failed");
+    .bind((req.body.len() + attachment_bytes) as i32)
+    .bind(!outgoing.is_empty())
+    .fetch_optional(&state.db)
+    .await;
+
+    match sent_row {
+        Ok(Some(sent_id)) => {
+            super::attachments::store_outgoing(&state.db, account_id, sent_id, &outgoing).await;
+        }
+        Ok(None) => {}
+        Err(e) => {
+            // The mail HAS left. Answering 500 here would invite the caller to send it twice.
+            tracing::warn!(error = %e, "mail was sent, but recording it in Sent failed");
+        }
     }
 
     // Try to match recipient to a contact and log as event
@@ -442,6 +470,8 @@ pub async fn send_via_provider(
             &body_text,
             body_html,
             None,
+            // A preview carries no attachment: it proves the renderer, not a customer's file.
+            &[],
             None,
         )
         .await;

@@ -1,7 +1,7 @@
 //! Mailgun email provider — send via REST API, receive via webhook.
 
 use crate::private_email::providers::{
-    EmailProvider, InboundEmail, InlineImage, ProviderConfig, SendResult,
+    EmailProvider, InboundEmail, InlineImage, OutgoingAttachment, ProviderConfig, SendResult,
 };
 use async_trait::async_trait;
 use hmac::{Hmac, Mac};
@@ -17,7 +17,12 @@ pub struct MailgunProvider;
 /// Hand-built rather than via reqwest's `multipart` feature so the part NAME (`inline`), the FILENAME
 /// (which becomes the Content-ID) and the `Content-Type` are exactly the three things Mailgun's API
 /// documents for an inline image — and so no extra crate feature is compiled in for one call site.
-fn multipart_body(fields: &[(String, String)], image: &InlineImage, boundary: &str) -> Vec<u8> {
+fn multipart_body(
+    fields: &[(String, String)],
+    image: Option<&InlineImage>,
+    attachments: &[OutgoingAttachment],
+    boundary: &str,
+) -> Vec<u8> {
     let mut out = Vec::new();
     for (name, value) in fields {
         out.extend_from_slice(
@@ -27,18 +32,51 @@ fn multipart_body(fields: &[(String, String)], image: &InlineImage, boundary: &s
         out.extend_from_slice(value.as_bytes());
         out.extend_from_slice(b"\r\n");
     }
-    out.extend_from_slice(
-        format!(
-            "--{boundary}\r\nContent-Disposition: form-data; name=\"inline\"; filename=\"{}\"\r\n\
-             Content-Type: {}\r\n\r\n",
-            image.content_id, image.content_type
-        )
-        .as_bytes(),
-    );
-    out.extend_from_slice(&image.bytes);
-    out.extend_from_slice(b"\r\n");
+    if let Some(image) = image {
+        out.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"inline\"; filename=\"{}\"\r\n\
+                 Content-Type: {}\r\n\r\n",
+                header_filename(&image.content_id),
+                header_filename(&image.content_type)
+            )
+            .as_bytes(),
+        );
+        out.extend_from_slice(&image.bytes);
+        out.extend_from_slice(b"\r\n");
+    }
+    // A real attachment is Mailgun's `attachment` part: the recipient's client offers it as a file,
+    // never drawn in the body. The filename/type go in the part headers, so two files with the same
+    // bytes but different names stay distinct (kanban t_f919924f).
+    for file in attachments {
+        out.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"attachment\"; filename=\"{}\"\r\n\
+                 Content-Type: {}\r\n\r\n",
+                header_filename(&file.filename),
+                header_filename(&file.content_type)
+            )
+            .as_bytes(),
+        );
+        out.extend_from_slice(&file.bytes);
+        out.extend_from_slice(b"\r\n");
+    }
     out.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
     out
+}
+
+/// A value placed inside a MIME part header: no CR/LF (header injection), no quote that would end
+/// the filename early, and never empty.
+fn header_filename(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| !c.is_control() && !matches!(c, '"' | '\\'))
+        .collect();
+    if cleaned.trim().is_empty() {
+        "attachment".to_string()
+    } else {
+        cleaned
+    }
 }
 
 #[async_trait]
@@ -59,6 +97,7 @@ impl EmailProvider for MailgunProvider {
         body_text: &str,
         body_html: &str,
         inline: Option<&InlineImage>,
+        attachments: &[OutgoingAttachment],
         in_reply_to: Option<&str>,
     ) -> SendResult {
         let api_key = match &config.encrypted_api_key {
@@ -124,23 +163,24 @@ impl EmailProvider for MailgunProvider {
         // `cid:` reference and this part's filename are the same string. The body is assembled by
         // hand instead of via reqwest's `multipart` feature: it is 20 lines, needs no extra crate
         // feature, and pins the exact part name, filename and Content-Type Mailgun documents.
-        let request = match inline {
-            None => client
+        // NO inline image and NO attachments: the form-urlencoded body is what this provider has
+        // always taken. Otherwise a multipart body is required (kanban t_b671a0f7 / t_f919924f).
+        let request = if inline.is_none() && attachments.is_empty() {
+            client
                 .post(&url)
                 .basic_auth("api", Some(&api_key))
-                .form(&form),
-            Some(img) => {
-                let boundary = format!("cs-{}", Uuid::new_v4().simple());
-                let body = multipart_body(&form, img, &boundary);
-                client
-                    .post(&url)
-                    .basic_auth("api", Some(&api_key))
-                    .header(
-                        reqwest::header::CONTENT_TYPE,
-                        format!("multipart/form-data; boundary={boundary}"),
-                    )
-                    .body(body)
-            }
+                .form(&form)
+        } else {
+            let boundary = format!("cs-{}", Uuid::new_v4().simple());
+            let body = multipart_body(&form, inline, attachments, &boundary);
+            client
+                .post(&url)
+                .basic_auth("api", Some(&api_key))
+                .header(
+                    reqwest::header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(body)
         };
 
         match request
@@ -294,12 +334,45 @@ mod tests {
     }
 
     #[test]
+    fn a_real_attachment_is_its_own_named_part() {
+        // kanban t_f919924f: the file the customer attached must not be sent as an inline image.
+        let fields = vec![("html".to_string(), "<p>invoice attached</p>".into())];
+        let files = vec![OutgoingAttachment {
+            filename: "march invoice.pdf".into(),
+            content_type: "application/pdf".into(),
+            bytes: b"%PDF-1.4 fake".to_vec(),
+        }];
+        let body = multipart_body(&fields, None, &files, "cs-boundary");
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("name=\"attachment\"; filename=\"march invoice.pdf\""));
+        assert!(text.contains("Content-Type: application/pdf"));
+        assert!(body
+            .windows(b"%PDF-1.4 fake".len())
+            .any(|w| w == b"%PDF-1.4 fake"));
+        assert!(!text.contains("name=\"inline\""));
+    }
+
+    #[test]
+    fn a_filename_cannot_inject_a_header() {
+        let files = vec![OutgoingAttachment {
+            filename: "a\"b\r\nBcc: x@example.com".into(),
+            content_type: "text/plain".into(),
+            bytes: b"x".to_vec(),
+        }];
+        let body = multipart_body(&[], None, &files, "cs-boundary");
+        let text = String::from_utf8_lossy(&body);
+        // The dangerous shape is a NEW header line; inside the quoted filename the text is inert.
+        assert!(!text.contains("\r\nBcc:"), "{text}");
+        assert!(!text.contains('\n') || text.matches('\n').count() == text.matches("\r\n").count());
+    }
+
+    #[test]
     fn the_inline_part_carries_the_filename_that_becomes_the_content_id() {
         let fields = vec![(
             "html".to_string(),
             "<img src=\"cid:coreswift-logo.png\">".into(),
         )];
-        let body = multipart_body(&fields, &image(), "cs-boundary");
+        let body = multipart_body(&fields, Some(&image()), &[], "cs-boundary");
         let text = String::from_utf8_lossy(&body);
         assert!(text.contains("name=\"inline\"; filename=\"coreswift-logo.png\""));
         assert!(text.contains("Content-Type: image/png"));

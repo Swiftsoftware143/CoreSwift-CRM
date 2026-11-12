@@ -16,6 +16,10 @@
 //!   Inbound Parse has no signature mechanism at all — so the per-domain token in the URL path is
 //!   the credential (`providers::sendgrid`).
 
+/// A file that travels WITH the message as a real MIME part (kanban t_f919924f). Defined beside the
+/// storage model (`attachments`) and re-exported here so a provider does not depend on the database.
+pub use super::attachments::OutgoingAttachment;
+
 pub mod mailgun;
 pub mod sendgrid;
 pub mod smtp;
@@ -125,6 +129,7 @@ pub trait EmailProvider: Send + Sync {
         body_text: &str,
         body_html: &str,
         inline: Option<&InlineImage>,
+        attachments: &[OutgoingAttachment],
         in_reply_to: Option<&str>,
     ) -> SendResult;
 

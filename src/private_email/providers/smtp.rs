@@ -3,7 +3,7 @@
 //! Inbound for SMTP domains would use IMAP polling (not yet implemented).
 
 use crate::private_email::providers::{
-    EmailProvider, InboundEmail, InlineImage, ProviderConfig, SendResult,
+    EmailProvider, InboundEmail, InlineImage, OutgoingAttachment, ProviderConfig, SendResult,
 };
 use async_trait::async_trait;
 use lettre::{
@@ -35,6 +35,7 @@ impl EmailProvider for SmtpProvider {
         body_text: &str,
         body_html: &str,
         inline: Option<&InlineImage>,
+        attachments: &[OutgoingAttachment],
         in_reply_to: Option<&str>,
     ) -> SendResult {
         let host = match &config.smtp_host {
@@ -140,7 +141,25 @@ impl EmailProvider for SmtpProvider {
             }
         };
 
-        let msg = match msg_builder.multipart(alternative) {
+        // Files ride OUTSIDE the alternative: `multipart/mixed` holding the text/HTML body plus one
+        // part per attachment, so a client offers them as files instead of drawing them (kanban
+        // t_f919924f). Each part carries its own Content-Type and the sender's filename.
+        let msg = if attachments.is_empty() {
+            msg_builder.multipart(alternative)
+        } else {
+            let mut mixed = MultiPart::mixed().multipart(alternative);
+            for file in attachments {
+                let part = SinglePart::builder()
+                    .header(
+                        ContentType::parse(&file.content_type).unwrap_or(ContentType::TEXT_PLAIN),
+                    )
+                    .header(ContentDisposition::attachment(&file.filename))
+                    .body(file.bytes.clone());
+                mixed = mixed.singlepart(part);
+            }
+            msg_builder.multipart(mixed)
+        };
+        let msg = match msg {
             Ok(m) => m,
             Err(e) => {
                 return SendResult {
