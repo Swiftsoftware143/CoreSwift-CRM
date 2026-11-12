@@ -131,6 +131,28 @@
 //!        router behind the same auth middleware as every sibling, so it joins no allowlist. The
 //!        extractor now resolves 399 mounted / 387 on /api**.
 //!
+//!   RE-MEASURED (2026-11-11, kanban t_f75da95f): no product change, the INSTRUMENTS were wrong.
+//!        The SendGrid receiver (kanban t_04db9228) was mounted as a nest of an INLINE
+//!        `axum::Router::new()`, which neither census can follow: its leaf `.route("/inbound/:token",
+//!        ..)` was read as a ROOT-level mount and the real path,
+//!        `POST /api/v1/webhooks/sendgrid/inbound/:token`, never appeared — so the allowlist check
+//!        failed on a route that DOES mount, and the root count carried a mount that does not exist.
+//!        Fixing that exposed the rest of the gap recorded two paragraphs above: `/api/workspaces`
+//!        has been mounted since c130701 but was missing from this module's `NESTS` table, which is
+//!        why the extractor resolved fewer routes than `scripts/route-census.py`. Both were fixed in
+//!        the instruments — the receiver is now the named `webhook_handler::sendgrid_router`, and
+//!        the workspaces nest is in `NESTS` — never by moving an assertion to fit. At the SendGrid
+//!        commit the extractor resolved 400 mounts (387 on /api**, 13 at the root, one of them the
+//!        phantom above); it now resolves 403 mounted `.route(..)` calls, 391 on /api**, 12 at the
+//!        root, 314 distinct paths, and the script agrees path for path (it prints one extra row:
+//!        the SPA `nest_service("/*")`). The three routes this measurement added to the count — and
+//!        the one it relocated from the root to its real path — all mount: `GET|POST
+//!        /api/workspaces`, `PATCH|DELETE /api/workspaces/:id` and
+//!        `POST /api/workspaces/:id/default` (anonymous: 401 "Authentication required" — mounted
+//!        and private by default, on no allowlist), and the SendGrid receiver (anonymous with a
+//!        multipart body: 401 "inbound webhook refused", i.e. the allowlisted handler answered,
+//!        not a 404). These numbers are what `the_census_shape_is_what_the_docs_say` pins.
+//!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
 //!        the per-module gate was doing its job. The two /api routes added since (kanban
@@ -453,8 +475,11 @@ mod tests {
 
     /// One `nest(prefix, module::func(..))` in main.rs, with that module's source embedded at
     /// compile time and the router function to scan. Every mount in this app happens either
-    /// directly in `main.rs` or through exactly one of these 52 nests (measured: the whole tree
-    /// contains 52 `.nest(` calls and main.rs holds all of them), so two levels is the whole shape.
+    /// directly in `main.rs` or through exactly one of these nests (measured 2026-11-11: the whole
+    /// tree contains 55 `.nest(` calls, main.rs holds all of them, and this table names all 55), so
+    /// two levels is the whole shape. A nest whose target is not a named function — an inline
+    /// `Router::new()` — cannot be resolved here and its leaf would be mis-read as a ROOT mount,
+    /// which is why `private_email::webhook_handler::sendgrid_router` exists as a function.
     struct Nest {
         prefix: &'static str,
         src: &'static str,
@@ -715,6 +740,23 @@ mod tests {
         Nest {
             prefix: "/api/private-email",
             src: include_str!("../private_email/mod.rs"),
+            func: "router",
+        },
+        // The SendGrid inbound receiver. A nest of a NAMED router on purpose: while it was an
+        // inline `Router::new()` at the mount this table could not see it, so the route count
+        // drifted and the allowlist entry below named a path the extractor never produced
+        // (kanban t_f75da95f).
+        Nest {
+            prefix: "/api/v1/webhooks/sendgrid",
+            src: include_str!("../private_email/webhook_handler.rs"),
+            func: "sendgrid_router",
+        },
+        // Workspaces. Mounted by main.rs since c130701 but absent from this table, which is why the
+        // extractor resolved four mounts fewer than `scripts/route-census.py` did for months — the
+        // gap the census paragraph above twice recorded as "the extractor cannot see four mounts".
+        Nest {
+            prefix: "/api/workspaces",
+            src: include_str!("../workspaces/mod.rs"),
             func: "router",
         },
         Nest {
@@ -1107,12 +1149,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            399,
+            403,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 387,
+            api, 391,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

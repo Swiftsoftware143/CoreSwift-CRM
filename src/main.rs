@@ -664,17 +664,7 @@ async fn main() -> anyhow::Result<()> {
         // fit through the door.
         .nest(
             "/api/v1/webhooks/sendgrid",
-            axum::Router::new()
-                .route(
-                    "/inbound/:token",
-                    axum::routing::post(private_email::webhook_handler::sendgrid_inbound).layer(
-                        axum::middleware::from_fn_with_state(
-                            body_read_deadline,
-                            body_deadline::body_read_deadline_middleware,
-                        ),
-                    ),
-                )
-                .layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024)),
+            private_email::webhook_handler::sendgrid_router(body_read_deadline),
         )
         // NOTE: POST /api/billing/webhooks/{stripe,paypal} were RETIRED 2026-09-25 (kanban
         // t_0fe500d4) together with POST /api/billing/checkout/create. They authenticated nothing

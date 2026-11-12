@@ -246,6 +246,27 @@ pub async fn inbound_webhook(
     .await
 }
 
+/// The SendGrid Inbound Parse receiver, mounted by `main.rs` at `/api/v1/webhooks/sendgrid`.
+///
+/// A NAMED router rather than an inline `Router::new()` at the mount because both route censuses
+/// (`scripts/route-census.py` and the `NESTS` table in `auth::route_policy`) follow
+/// `.nest(prefix, module::fn())`. An inline router is invisible to them: its leaf was read as a
+/// ROOT-level mount (`/inbound/:token`) and the real path never reached the allowlist check
+/// (kanban t_f75da95f). Moving the identical routes into a function changes no behaviour — the
+/// 25 MB `DefaultBodyLimit` still sits OUTSIDE the body-read deadline for the reason spelled out
+/// at the mount in `main.rs`.
+pub fn sendgrid_router(deadline: crate::body_deadline::BodyReadDeadline) -> axum::Router<AppState> {
+    axum::Router::new()
+        .route(
+            "/inbound/:token",
+            axum::routing::post(sendgrid_inbound).layer(axum::middleware::from_fn_with_state(
+                deadline,
+                crate::body_deadline::body_read_deadline_middleware,
+            )),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024))
+}
+
 /// Webhook handler for SendGrid Inbound Parse.
 /// POST /api/v1/webhooks/sendgrid/inbound/:token
 ///

@@ -20,7 +20,7 @@ WHY A TOKENIZER AND NOT A REGEX PER CALL
     occurrence is a token and the text between one token and the next belongs to it, so a call can
     span any number of lines.
 
-Every `.nest(..)` in this app lives in `src/main.rs` (52 of them, measured) and no module router
+Every `.nest(..)` in this app lives in `src/main.rs` (55 of them, measured 2026-11-11) and no module router
 nests another, so resolving `main.rs` + one level of `nest` targets is the whole tree. The script
 fails loudly (`UNRESOLVED-FILE` / `NOBODY`) rather than dropping a nest it cannot follow.
 """
