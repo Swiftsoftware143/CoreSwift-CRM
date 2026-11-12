@@ -635,11 +635,18 @@
             + '&#9888; <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(a.filename) + '</span>'
             + ' <span style="color:#991b1b;font-size:11px">not saved</span></span>';
         }
-        return '<button type="button" class="btn btn-ghost" data-att="' + esc(a.id) + '"'
+        var kind = attachmentKind(a.content_type);
+        return '<span style="display:inline-flex;align-items:center;gap:4px;max-width:100%">'
+          + '<button type="button" class="btn btn-ghost" data-att-open="' + esc(a.id) + '"'
           + ' data-att-msg="' + esc(m.id) + '" data-name="' + esc(a.filename) + '"'
-          + ' title="Download ' + esc(a.filename) + '" style="max-width:100%">'
+          + ' data-type="' + esc(a.content_type || '') + '"'
+          + ' title="' + (kind ? 'Open ' : 'Download ') + esc(a.filename) + '" style="max-width:100%">'
           + '&#128206; <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(a.filename) + '</span>'
-          + ' <span style="color:var(--muted);font-size:11px">' + esc(fmtBytes(a.size_bytes || 0)) + '</span></button>';
+          + ' <span style="color:var(--muted);font-size:11px">' + esc(fmtBytes(a.size_bytes || 0)) + '</span></button>'
+          + '<button type="button" class="btn btn-ghost" data-att-dl="' + esc(a.id) + '"'
+          + ' data-att-msg="' + esc(m.id) + '" data-name="' + esc(a.filename) + '"'
+          + ' title="Download ' + esc(a.filename) + '" style="padding:0 7px">&#8595;</button>'
+          + '</span>';
       }).join('')
       + list.filter(function (a) { return a.not_stored_reason; }).map(function (a) {
         return '<div style="flex-basis:100%;font-size:11px;color:#991b1b">'
@@ -688,6 +695,69 @@
       a.click();
       a.remove();
       setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+    } catch (e) { toast(fail(e), 'error'); }
+  }
+
+  // What "open" means for a stored file (kanban t_6f18ef8c): an image or a PDF draws in place, a
+  // text file prints its bytes, and anything else has no in-page reading so "open" is a download.
+  function attachmentKind(ct) {
+    ct = (ct || '').toLowerCase();
+    if (ct.indexOf('image/') === 0) return 'image';
+    if (ct === 'application/pdf') return 'pdf';
+    if (ct.indexOf('text/') === 0) return 'text';
+    return '';
+  }
+
+  // Open a stored file in a lightbox: fetch it through the SESSION (never a URL carrying a token),
+  // then draw an image, an embedded PDF, or the text, with Download and Close beside it. A type with
+  // no in-page reading falls back to a download. Esc, the backdrop and the ✕ all close it.
+  async function openAttachment(messageId, attachmentId, name, contentType) {
+    var kind = attachmentKind(contentType);
+    if (!kind) return downloadAttachment(messageId, attachmentId, name);
+    try {
+      var res = await fetch('/api/private-email/messages/' + messageId + '/attachments/' + attachmentId, {
+        headers: S.token ? { Authorization: 'Bearer ' + S.token } : {}
+      });
+      if (res.status === 401) { signOut(true); throw new Error('Your session ended. Sign in again.'); }
+      if (!res.ok) {
+        var text = await res.text();
+        var msg = text;
+        try { msg = (JSON.parse(text) || {}).message || text; } catch (e) { msg = text; }
+        throw new Error(msg || ('Open failed (' + res.status + ')'));
+      }
+      var overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(15,23,42,.72);display:flex;align-items:center;justify-content:center;padding:24px';
+      var inner;
+      if (kind === 'text') {
+        inner = '<pre style="margin:0;max-height:70vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.5;color:#111827">' + esc(await res.text()) + '</pre>';
+      } else {
+        var blob = await res.blob();
+        var url = URL.createObjectURL(blob);
+        inner = kind === 'image'
+          ? '<img src="' + url + '" alt="' + esc(name) + '" style="max-width:100%;max-height:70vh;object-fit:contain">'
+          : '<iframe src="' + url + '" title="' + esc(name) + '" style="width:min(900px,92vw);height:70vh;border:0;background:#fff"></iframe>';
+        setTimeout(function () { URL.revokeObjectURL(url); }, 120000);
+      }
+      overlay.innerHTML = '<div style="background:#fff;color:#111827;border-radius:12px;max-width:min(960px,94vw);max-height:90vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.5)">'
+        + '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid #e5e7eb">'
+        + '<strong style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(name) + '</strong>'
+        + '<span style="display:inline-flex;gap:8px;flex-shrink:0">'
+        + '<button type="button" class="att-lightbox-dl" style="background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;padding:6px 10px;font-size:13px;color:#111827;cursor:pointer">&#8595; Download</button>'
+        + '<button type="button" class="att-lightbox-close" title="Close" style="background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;padding:6px 9px;font-size:13px;color:#111827;cursor:pointer">&#10005;</button>'
+        + '</span></div>'
+        + '<div style="padding:16px">' + inner + '</div></div>';
+      document.body.appendChild(overlay);
+      function onKey(e) { if (e.key === 'Escape') remove(); }
+      function remove() {
+        document.removeEventListener('keydown', onKey);
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      }
+      document.addEventListener('keydown', onKey);
+      var dl = overlay.querySelector('.att-lightbox-dl');
+      if (dl) dl.onclick = function () { downloadAttachment(messageId, attachmentId, name); };
+      var close = overlay.querySelector('.att-lightbox-close');
+      if (close) close.onclick = remove;
+      overlay.addEventListener('click', function (e) { if (e.target === overlay) remove(); });
     } catch (e) { toast(fail(e), 'error'); }
   }
 
@@ -818,9 +888,14 @@
     Array.prototype.forEach.call(document.querySelectorAll('[data-act]'), function (b) {
       b.onclick = function () { messageAction(b.getAttribute('data-act')); };
     });
-    Array.prototype.forEach.call(document.querySelectorAll('[data-att]'), function (b) {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-att-open]'), function (b) {
       b.onclick = function () {
-        downloadAttachment(b.getAttribute('data-att-msg'), b.getAttribute('data-att'), b.getAttribute('data-name'));
+        openAttachment(b.getAttribute('data-att-msg'), b.getAttribute('data-att-open'), b.getAttribute('data-name'), b.getAttribute('data-type'));
+      };
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-att-dl]'), function (b) {
+      b.onclick = function () {
+        downloadAttachment(b.getAttribute('data-att-msg'), b.getAttribute('data-att-dl'), b.getAttribute('data-name'));
       };
     });
     if (S.sel) applyLabelControl();
