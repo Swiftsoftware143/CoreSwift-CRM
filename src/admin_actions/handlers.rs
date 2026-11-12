@@ -901,9 +901,46 @@ pub async fn list_all_users(
     })))
 }
 
-/// POST /api/admin/portfolio-sync — cross-app sync: create tenant + user + portfolio entry
+/// POST /api/admin/portfolio-sync — the console's "Sync New Company": give a company a REAL account.
+///
+/// Two defects lived in this door (kanban t_d4d15d4c), both measured live while Xride Drivers had to
+/// be converted through the public signup instead:
+///
+///   1. **The generated password was thrown away.** The handler argon2-hashed a password into
+///      `users.password_hash` and returned ids only, so nothing ever sent it: every account this
+///      door minted was a login nobody could use. It now sends the ONE credentials mail
+///      (`auth::signup::send_credentials_email`, the same call `register` and `team::mint_member`
+///      make) after the commit, latches `users.password_undelivered` when that send fails, and
+///      REPORTS `credentials_emailed` so the panel can stop promising an inbox that stays empty.
+///   2. **An existing portfolio RECORD could never become an account.** The old idempotency arm read
+///      "a row with this id exists" as "this company has an account" and only refreshed
+///      name/email/description — so the button on a row created through `POST /api/portfolio` minted
+///      nothing, ever. A row is account-less when neither `settings.account_tenant_id` names a live
+///      tenant NOR its slug names a `tenants.slug`; such a row is CONVERTED (mint + link), and a row
+///      that DOES have an account keeps the refresh arm (a repeat push from another app stays
+///      idempotent).
+///
+/// Three further drifts went with them, because a minted account has to be the account the rest of
+/// the app already recognises:
+///   * the owner is `role='owner'` — the role `auth::signup` writes for the first user of a
+///     workspace. `company_admin` is a legal `user_role`, but the tenant shell and the tenant routes
+///     test `owner | admin` (team invites, tenant settings, private-email admin), so a
+///     `company_admin` owner could sign in and then be refused on its own workspace's controls;
+///   * the portfolio row is written under the OPERATOR's tenant (`Claims.aid`) with the account named
+///     in `settings.account_tenant_id` — the shape the row set already has (Giraudy / SwiftImpact /
+///     ZaarHub / Xride all sit under the operator's portfolio page). The old arm wrote the NEW tenant
+///     into `tenant_id`, which put the company in its own portfolio page and then reported the
+///     operator's OWN tenant as the company's account id;
+///   * the workspace is flagged `is_portfolio`, so the panel's bulk retire and `tenant_purge` refuse
+///     it (a portfolio account is never deleted), and `plan_slug` lets the operator seat a chosen
+///     tier at mint instead of always getting the platform default (`free`).
+///
+/// Idempotency WITHOUT an id: the console's button posts no sync id, and a fresh uuid per press is
+/// what let two presses mint two accounts. The company's own slug (or its exact name) is the key —
+/// the same test the account arm uses — so a second press finds the row it made the first time.
 pub async fn cross_app_sync(
     State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let name = req
@@ -912,9 +949,9 @@ pub async fn cross_app_sync(
         .unwrap_or("Company")
         .to_string();
     // ── Address boundary (kanban t_9252c512) ────────────────────────────────────────────────
-    // Normalise + validate BEFORE the dup SELECT and the users INSERT below. This is the cross-app
-    // sync that mints a tenant owner; a value that is not an address must never become a login
-    // identity, whatever the caller sends.
+    // Normalise + validate BEFORE any SELECT or INSERT below. This is the cross-app sync that mints
+    // a tenant owner; a value that is not an address must never become a login identity, whatever
+    // the caller sends.
     let email = email_addr::normalize(req.get("email").and_then(|v| v.as_str()).unwrap_or(""))
         .map_err(AppError::Validation)?;
     let description = req
@@ -923,92 +960,166 @@ pub async fn cross_app_sync(
         .unwrap_or("")
         .to_string();
 
-    // ── Idempotency on the sync `id` (kanban t_c25dd7b5) ─────────────────────────────────────
-    // This door PROVISIONS ACCOUNTS: it mints a `tenants` row plus its plan row and an
-    // argon2-hashed `users` row BEFORE the `portfolio_companies` upsert, and that upsert used to
-    // be keyed on a RANDOM uuid rather than the caller's sync id — so a REPEAT push of one id
-    // re-ran the whole mint. Measured live pre-fix: push1 of a new id -> 200 synced; push2 of the
-    // SAME id with a different contact email -> 500 `Database error` (`tenants_slug_key`, the
-    // derived slug already exists) with nothing refreshed; a third push with the original email
-    // -> 409. The sync could not be re-run. The account is keyed on the COMPANY, so look the
-    // company up FIRST: an id we already hold is a REFRESH, never a re-provision. Only the
-    // descriptive columns move (name, email, description) — NOT `tenant_id` (the scoping key) and
-    // NOT `slug` (bound at mint; re-deriving it would manufacture drift). Same contract the fleet
-    // settled on for the twin door (missedcallrespondr, t_ff373bd1) and FunnelSwift (t_149639f7).
-    let sync_id = req
-        .get("id")
+    // ── The tier to seat at mint (optional) ─────────────────────────────────────────────────────
+    // Resolved BEFORE any write: an unknown or not-on-sale slug must refuse naming the plan, never
+    // mint a workspace first and then fail. `plan_for_write` is the app's ONE plan validator, so a
+    // tier this door can seat is exactly a tier `PUT /api/admin/tenants/:id/plan` can seat.
+    let requested_plan: Option<String> = req
+        .get("plan_slug")
         .and_then(|v| v.as_str())
-        .and_then(|v| Uuid::parse_str(v).ok())
-        .unwrap_or_else(Uuid::new_v4);
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let chosen_plan = match requested_plan.as_deref() {
+        Some(slug) => Some(crate::billing::lines::plan_for_write(&s.db, Some(slug), None).await?),
+        None => None,
+    };
+    let seated_plan_slug = chosen_plan
+        .as_ref()
+        .map(|p| p.slug.clone())
+        .unwrap_or_else(|| crate::billing::DEFAULT_PLAN_SLUG.to_string());
 
-    let owner_tenant_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT tenant_id FROM portfolio_companies WHERE id = $1")
-            .bind(sync_id)
-            .fetch_optional(&s.db)
-            .await?;
+    // The operator's own tenant — where the portfolio LISTING lives (see the doc above).
+    let portfolio_tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
-    if let Some(account_id) = owner_tenant_id {
-        sqlx::query(
-            "UPDATE portfolio_companies SET name = $2, email = $3, description = $4, updated_at = NOW() WHERE id = $1",
-        )
-        .bind(sync_id)
-        .bind(&name)
-        .bind(&email)
-        .bind(&description)
-        .execute(&s.db)
-        .await?;
-
-        // 200 `already_exists` (the fleet twin's idempotent answer): the account that already owns
-        // the company, and NO `user_id`/`password` — nothing was minted this time, so there is no
-        // credential to share and no credential mail is sent.
-        return Ok(Json(json!({
-            "status": "already_exists",
-            "id": sync_id.to_string(),
-            "name": name,
-            "email": email,
-            "account_id": account_id.to_string(),
-            "tenant_id": account_id.to_string(),
-            "note": "This company already has an account; its contact details were refreshed and no new credentials were created."
-        })));
+    // ── Which company is this push about? ───────────────────────────────────────────────────────
+    // A sister-app push carries its own sync `id`; the console's button carries none, so the company
+    // is resolved by slug/name. The account behind the row is `settings.account_tenant_id` when that
+    // names a live tenant, else the tenant whose slug the row carries — the same test the row set
+    // shows (giraudy-capital / swiftimpact-solutions / zaarhub each have a tenant).
+    #[derive(sqlx::FromRow)]
+    struct ExistingRow {
+        id: Uuid,
+        slug: String,
+        account_tenant_id: Option<Uuid>,
     }
 
-    let existing = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE email = $1")
+    let requested_id = req
+        .get("id")
+        .and_then(|v| v.as_str())
+        .and_then(|v| Uuid::parse_str(v).ok());
+    let derived_slug = company_slug(&name);
+
+    const ROW_SQL: &str = r#"-- The company row plus the account behind it, if any.
+           SELECT pc.id, pc.slug,
+                  COALESCE(
+                    (SELECT t.id FROM tenants t WHERE t.id::text = pc.settings->>'account_tenant_id'),
+                    (SELECT t.id FROM tenants t WHERE t.slug = pc.slug)
+                  ) AS account_tenant_id
+             FROM portfolio_companies pc"#;
+
+    let existing_row: Option<ExistingRow> = match requested_id {
+        Some(id) => {
+            sqlx::query_as(&format!("{ROW_SQL} WHERE pc.id = $1"))
+                .bind(id)
+                .fetch_optional(&s.db)
+                .await?
+        }
+        // No id: the row this company already holds, by its slug or by its exact name (the latter
+        // covers a row created with `POST /api/portfolio`'s own slug derivation).
+        None => {
+            sqlx::query_as(&format!(
+                "{ROW_SQL} WHERE pc.slug = $1 OR lower(btrim(pc.name)) = lower(btrim($2)) \
+             ORDER BY (pc.slug = $1) DESC, pc.created_at ASC LIMIT 1"
+            ))
+            .bind(&derived_slug)
+            .bind(&name)
+            .fetch_optional(&s.db)
+            .await?
+        }
+    };
+
+    // ── The account already exists: REFRESH, never re-provision ─────────────────────────────────
+    // Only the descriptive columns move. NOT `tenant_id` (the listing scope) and NOT `slug` (bound at
+    // mint; re-deriving it would manufacture drift). The resolved account is written into
+    // `settings.account_tenant_id` so the next push — and the panel — read the truth instead of
+    // re-deriving it from a slug.
+    if let Some(row) = existing_row.as_ref() {
+        if let Some(account_id) = row.account_tenant_id {
+            sqlx::query(
+                r#"UPDATE portfolio_companies
+                      SET name = $2, email = $3, description = $4,
+                          settings = jsonb_set(COALESCE(settings, '{}'::jsonb),
+                                               '{account_tenant_id}', to_jsonb($5::text), true),
+                          updated_at = NOW()
+                    WHERE id = $1"#,
+            )
+            .bind(row.id)
+            .bind(&name)
+            .bind(&email)
+            .bind(&description)
+            .bind(account_id.to_string())
+            .execute(&s.db)
+            .await?;
+
+            return Ok(Json(json!({
+                "status": "already_exists",
+                "id": row.id.to_string(),
+                "name": name,
+                "email": email,
+                "account_id": account_id.to_string(),
+                "tenant_id": account_id.to_string(),
+                "credentials_emailed": false,
+                "note": "This company already has an account. Its contact details were refreshed and no new login was created, so no credentials email was sent."
+            })));
+        }
+    }
+
+    // From here this is a MINT — a new company, or an existing record that never had an account.
+    // A person belongs to one workspace at a time, so an address that already signs in is refused
+    // (the users INSERT would 500 on `users_email_key` otherwise).
+    let already_a_user: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE email = $1")
         .bind(&email)
         .fetch_one(&s.db)
         .await
         .unwrap_or(0);
-
-    if existing > 0 {
+    if already_a_user > 0 {
         return Err(AppError::Duplicate(format!(
-            "A user with email {} already exists",
-            email
+            "{email} already signs in to a workspace on CoreSwift. A person can belong to one \
+             workspace at a time, so use a different contact address for this company's owner."
         )));
     }
 
+    let sync_id = existing_row
+        .as_ref()
+        .map(|r| r.id)
+        .or(requested_id)
+        .unwrap_or_else(Uuid::new_v4);
+    // Converting a record: derive the workspace slug from the row's OWN slug so `tenants.slug` keeps
+    // naming the company (the invariant the account test relies on).
+    let base_slug = existing_row
+        .as_ref()
+        .map(|r| r.slug.clone())
+        .unwrap_or(derived_slug);
+
+    let generated_password = Uuid::new_v4()
+        .to_string()
+        .replace("-", "")
+        .chars()
+        .take(12)
+        .collect::<String>();
+    use argon2::password_hash::rand_core::OsRng;
+    use argon2::password_hash::SaltString;
+    use argon2::{Argon2, PasswordHasher};
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    let password_hash = argon2
+        .hash_password(generated_password.as_bytes(), &salt)
+        .map_err(|e| AppError::Hash(e.to_string()))?
+        .to_string();
+
+    // ── One unit: workspace + its plan + its owner + the portfolio row ──────────────────────────
+    // All four commit together or not at all. Split, a failure past the tenant commit left an
+    // account with no row (a retry then minted a second one) or a row pointing at a workspace with
+    // no user (a retry took the `already_exists` arm and never created the owner).
     let tenant_id = Uuid::new_v4();
-    // The mint and its plan row commit TOGETHER (kanban t_6f225dd4): a tenant with no
-    // `tenant_plans` row resolves through `module_registry::resolve`'s `no_plan` arm — every
-    // registered module granted and NO numeric ceiling. This cross-app sync used to mint such a
-    // workspace; it now seats the platform default (`free`) a signup gets.
-    //
-    // Slug: derive from the company name, then take the first FREE one. `tenants.slug` carries
-    // UNIQUE `tenants_slug_key`, and this door used to insert the raw derived slug plainly, so a
-    // company whose name collided answered 500 straight from the index (measured live pre-fix).
-    // `ON CONFLICT (slug) DO NOTHING` + a bounded retry turns that into a real account.
-    let base_slug: String = {
-        let s: String = name
-            .to_lowercase()
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-            .collect();
-        let s = s.trim_matches('-').to_string();
-        if s.is_empty() {
-            "company".to_string()
-        } else {
-            s.chars().take(48).collect()
-        }
-    };
+    let user_id = Uuid::new_v4();
+    let now = chrono::Utc::now().naive_utc();
     let mut tx = s.db.begin().await?;
+
+    // Slug: derive from the company, then take the first FREE one. `tenants.slug` carries UNIQUE
+    // `tenants_slug_key`; `ON CONFLICT (slug) DO NOTHING` + a bounded retry turns a name collision
+    // into a real account instead of a 500 straight from the index.
     let mut tenant_slug: Option<String> = None;
     for attempt in 0..6 {
         let candidate = if attempt == 0 {
@@ -1017,7 +1128,8 @@ pub async fn cross_app_sync(
             format!("{}-{}", base_slug, attempt)
         };
         let inserted = sqlx::query(
-            "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3) ON CONFLICT (slug) DO NOTHING",
+            "INSERT INTO tenants (id, name, slug, is_portfolio) VALUES ($1, $2, $3, true) \
+             ON CONFLICT (slug) DO NOTHING",
         )
         .bind(tenant_id)
         .bind(&name)
@@ -1035,29 +1147,21 @@ pub async fn cross_app_sync(
             name
         ))
     })?;
-    crate::billing::seat_default_plan(&mut tx, tenant_id).await?;
-    tx.commit().await?;
 
-    let user_id = Uuid::new_v4();
-    let generated_password = Uuid::new_v4()
-        .to_string()
-        .replace("-", "")
-        .chars()
-        .take(12)
-        .collect::<String>();
-    use argon2::password_hash::rand_core::OsRng;
-    use argon2::password_hash::SaltString;
-    use argon2::{Argon2, PasswordHasher};
-    let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
-    let password_hash = argon2
-        .hash_password(generated_password.as_bytes(), &salt)
-        .map_err(|e| AppError::Hash(e.to_string()))?
-        .to_string();
+    // The mint and its plan row commit TOGETHER (kanban t_6f225dd4): a tenant with no `tenant_plans`
+    // row resolves through `module_registry::resolve`'s `no_plan` arm — every module granted and NO
+    // numeric ceiling. Omitted `plan_slug` seats the platform default a signup gets; a chosen tier is
+    // seated through the same one writer.
+    match chosen_plan.as_ref() {
+        Some(plan) => crate::billing::seat_plan(&mut tx, tenant_id, plan.id).await?,
+        None => crate::billing::seat_default_plan(&mut tx, tenant_id).await?,
+    }
 
-    let now = chrono::Utc::now().naive_utc();
+    // `role='owner'`: the role `auth::signup` writes for the first user of a workspace, and the one
+    // the tenant shell's own gates accept.
     sqlx::query(
-        "INSERT INTO users (id, email, password_hash, name, role, tenant_id, is_active, created_at, updated_at) VALUES ($1, $2, $3, $4, 'company_admin', $5, true, $6, $7)"
+        "INSERT INTO users (id, email, password_hash, name, role, tenant_id, is_active, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, 'owner', $5, true, $6, $7)",
     )
     .bind(user_id)
     .bind(&email)
@@ -1066,20 +1170,71 @@ pub async fn cross_app_sync(
     .bind(tenant_id)
     .bind(now)
     .bind(now)
-    .execute(&s.db)
+    .execute(&mut *tx)
     .await?;
 
+    // The row: a NEW company lands under the operator's tenant (the portfolio listing); a CONVERTED
+    // record keeps its own `tenant_id` and `slug` — the conflict arm deliberately does not touch them
+    // — and gains the account link.
     sqlx::query(
-        "INSERT INTO portfolio_companies (id, tenant_id, name, slug, email, description, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW()) ON CONFLICT (id) DO UPDATE SET name = $3, email = $5, description = $6, updated_at = NOW()"
+        r#"-- One statement, two arms: create the listing, or link the record that already exists.
+           INSERT INTO portfolio_companies
+               (id, tenant_id, name, slug, email, description, settings, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6,
+                   jsonb_build_object(
+                       'account_tenant_id', $7::text,
+                       'account_email', $5::text,
+                       'account_plan', $8::text,
+                       'account_login_created_at', to_jsonb(NOW()::text)
+                   ),
+                   NOW(), NOW())
+           ON CONFLICT (id) DO UPDATE SET
+               name = EXCLUDED.name,
+               email = EXCLUDED.email,
+               description = EXCLUDED.description,
+               settings = COALESCE(portfolio_companies.settings, '{}'::jsonb) || EXCLUDED.settings,
+               updated_at = NOW()"#,
     )
     .bind(sync_id)
-    .bind(tenant_id)
+    .bind(portfolio_tenant_id)
     .bind(&name)
     .bind(&tenant_slug)
     .bind(&email)
     .bind(&description)
-    .execute(&s.db)
+    .bind(tenant_id.to_string())
+    .bind(&seated_plan_slug)
+    .execute(&mut *tx)
     .await?;
+
+    tx.commit().await?;
+
+    // ── The credentials mail — the ONLY way the owner learns the password ───────────────────────
+    // Post-commit and AWAITED, exactly as `auth::handlers::register` and `auth::team::mint_member`
+    // do: the account is already real, so a slow or failing provider can never undo it — the worst
+    // case is this response saying the mail did not go out, which is true. A failed send latches
+    // `users.password_undelivered`, the state `POST /api/auth/initial-password` exists for.
+    let credentials_emailed = crate::auth::signup::send_credentials_email(
+        &s.db,
+        tenant_id,
+        &name,
+        &email,
+        &name,
+        &generated_password,
+    )
+    .await;
+    if !credentials_emailed {
+        if let Err(e) = sqlx::query("UPDATE users SET password_undelivered = true WHERE id = $1")
+            .bind(user_id)
+            .execute(&s.db)
+            .await
+        {
+            tracing::warn!(
+                error = %e,
+                user = %user_id,
+                "portfolio_sync: could not mark the undelivered credential"
+            );
+        }
+    }
 
     Ok(Json(json!({
         "status": "synced",
@@ -1088,8 +1243,34 @@ pub async fn cross_app_sync(
         "email": email,
         "tenant_id": tenant_id.to_string(),
         "user_id": user_id.to_string(),
-        "user_created": true
+        "user_created": true,
+        "plan": seated_plan_slug,
+        "credentials_emailed": credentials_emailed,
+        "note": if credentials_emailed {
+            "Account created and the login details were emailed to the owner."
+        } else {
+            "The account was created but the login email could not be sent, so the owner still has no password. Use \"Forgot password\" for that address, or send the details again once mail is working."
+        }
     })))
+}
+
+/// "Acme, Inc." -> "acme-inc": lowercase, every non-alphanumeric ASCII byte becomes `-`, trimmed,
+/// then clipped to 48 chars — the derivation `POST /api/portfolio` and this door already used for a
+/// company's slug, extracted so both the row lookup and the `tenants.slug` mint agree.
+fn company_slug(name: &str) -> String {
+    let s: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let s = s.trim_matches('-').to_string();
+    let s = s.replace("--", "-");
+    let s = s.trim_matches('-').to_string();
+    if s.is_empty() {
+        "company".to_string()
+    } else {
+        s.chars().take(48).collect()
+    }
 }
 
 /// The portfolio accounts are kept by rule (never deleted from any panel): SwiftImpact, ZaarHub

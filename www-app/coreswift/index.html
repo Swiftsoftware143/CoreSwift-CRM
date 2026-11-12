@@ -2246,24 +2246,68 @@ async function createPortfolioCompany() {
 }
 
 function showPortfolioSyncModal() {
-  showModal('Cross-App Portfolio Sync',
-    '<p style="color:var(--text-secondary);margin-bottom:12px">Creates a tenant + owner user + portfolio entry and broadcasts to every sister app (FunnelSwift, IncentiveSwift, WorkflowSwift, ADASwift, MissedCall). Use for a brand-new client company; the owner email must not already exist.</p>' +
-    '<div class="form-group"><label>Company Name *</label><input type="text" id="psName"></div>' +
-    '<div class="form-group"><label>Owner Email *</label><input type="email" id="psEmail"></div>' +
-    '<div class="form-group"><label>Description</label><textarea id="psDesc" rows="3"></textarea></div>',
+  showModal('Sync New Company — give a company its own account',
+    '<p style="color:var(--text-secondary);margin-bottom:12px">Creates a workspace, its owner login and the portfolio entry, then <strong>emails the login details and the password to the owner</strong>. ' +
+    'If this company is already a portfolio record with no account behind it, this gives that record the account instead of making a second one. ' +
+    'Running it again on a company that already has an account only refreshes its details — no second login is created and no email is sent.</p>' +
+    '<div class="form-group"><label for="psName">Company name *</label><input type="text" id="psName" data-ops="ps-name"></div>' +
+    '<div class="form-group"><label for="psEmail">Owner email *</label><input type="email" id="psEmail" data-ops="ps-email"><div class="form-hint">The login and its password are emailed here. An address that already signs in to a workspace cannot be used a second time.</div></div>' +
+    '<div class="form-group"><label for="psPlan">Plan</label><select id="psPlan" data-ops="ps-plan"><option value="">Loading plans…</option></select><div class="form-hint">The entry plan is the free plan every self-serve signup gets. Pick a tier to seat the account on it from the start.</div></div>' +
+    '<div class="form-group"><label for="psDesc">Description</label><textarea id="psDesc" rows="3"></textarea></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
     '<button class="btn btn-primary" data-ops="portfolio-sync" onclick="runPortfolioSync()">Run Sync</button>');
+  loadPortfolioSyncPlans();
+}
+
+// The picker reads the app's own ACTIVE tier list (GET /api/billing/plans) — the same list the
+// customer's plan screens use — so a tier offered here is a tier the app really sells. The empty
+// value means "seat the entry plan", which the server resolves to the platform default (free).
+async function loadPortfolioSyncPlans() {
+  const sel = document.getElementById('psPlan');
+  if (!sel) return;
+  try {
+    const plans = famList(await API.get('/billing/plans'), 'plans');
+    const free = plans.find(p => Number(p.price_monthly || 0) === 0);
+    sel.innerHTML = '<option value="">' + escapeHtml((free ? free.name : 'Entry plan') + ' — free') + '</option>' +
+      plans.map(p => {
+        const price = Number(p.price_monthly || 0);
+        const label = p.name + (price > 0 ? ' — $' + price.toFixed(0) + '/mo' : ' — free');
+        return '<option value="' + escapeHtmlAttr(p.slug) + '">' + escapeHtml(label) + '</option>';
+      }).join('');
+  } catch (e) {
+    sel.innerHTML = '<option value="">(plans could not be listed: ' + escapeHtml(e.message) + ')</option>';
+  }
 }
 
 async function runPortfolioSync() {
   const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
-  const name = g('psName'); const email = g('psEmail'); const desc = g('psDesc');
+  const name = g('psName'); const email = g('psEmail'); const desc = g('psDesc'); const plan = g('psPlan');
   if (!email) { toast('Owner email is required', 'error'); return; }
+  const body = { name: name || 'Company', email: email, description: desc };
+  if (plan) body.plan_slug = plan;
   try {
-    const res = await API.post('/admin/portfolio-sync', { name: name || 'Company', email: email, description: desc });
+    const res = await API.post('/admin/portfolio-sync', body);
     closeModal();
-    toast('Cross-app sync complete', 'success');
-    showModal('Sync Result', '<pre style="white-space:pre-wrap;font-size:.8rem">' + escapeHtml(JSON.stringify(res, null, 2)) + '</pre>',
+    const synced = !!(res && res.status === 'synced');
+    const emailed = !!(res && res.credentials_emailed);
+    const who = escapeHtml((res && res.name) || name);
+    let head;
+    if (!synced) {
+      head = '<p><strong>' + who + ' already has an account.</strong> Nothing new was created — only its contact details were refreshed, so no password email was sent.</p>';
+    } else if (emailed) {
+      head = '<p><strong>' + who + ' now has an account.</strong> The login details and the password were emailed to ' +
+        escapeHtml((res && res.email) || email) + '.</p>' +
+        '<p>Plan: <strong>' + escapeHtml((res && res.plan) || 'free') + '</strong>. They sign in at app.coreswiftcrm.com and can change the password in Settings.</p>';
+    } else {
+      head = '<p><strong>' + who + ' now has an account, but the email did not go out.</strong> The owner has no password yet — ' +
+        'they can set one with &ldquo;Forgot password?&rdquo; on the sign-in page, or run this again once mail is working.</p>';
+    }
+    toast(!synced ? 'Already has an account — details refreshed'
+      : (emailed ? 'Account created — login emailed' : 'Account created — email did NOT go out'),
+      synced && !emailed ? 'error' : 'success');
+    showModal('Sync Result', head +
+      '<details style="margin-top:12px"><summary style="cursor:pointer;color:var(--text-secondary)">Technical detail</summary>' +
+      '<pre style="white-space:pre-wrap;font-size:.8rem;margin-top:8px">' + escapeHtml(JSON.stringify(res, null, 2)) + '</pre></details>',
       '<button class="btn btn-primary" onclick="closeModal()">Close</button>');
     if (TAB_LOADERS['portfolio']) TAB_LOADERS['portfolio']();
   } catch(e) {
@@ -9163,7 +9207,7 @@ window.appGuidePages = {
   integrations:    { title: "Integration Center", desc: "Connect the outside services the CRM uses — email, texting, AI and payment providers.", actions: ["Add a provider's credentials", "Test the connection"] },
   team:            { title: "Team & Invites", desc: "The people who share this workspace and what each of them can do. A seat is one person who can sign in, the owner included: on this ladder Free includes 1, Starter 3, Professional 15, Enterprise 20 and Agency 100 (Pro and the $1 Inbox line are not on sale), and the $1 Inbox line includes nobody beyond the owner. You type the address and a role; the app makes the password, emails it, and never shows it to you. Removing somebody ends their access at their next click, puts their inboxes and conversations back to the workspace, and deletes nothing.", actions: ["Invite someone by email and choose Member or Admin", "When every seat is used, the answer names the plan that adds more and its price \u2014 nothing is charged by itself", "Create invite link for a teammate who would rather choose their own password (7 days, one use)", "Watch the Inbox tab's Assigned to column to see who owns which address"] },
   webhooks:        { title: "Webhooks", desc: "Send your workspace's events out to another system in real time.", actions: ["Add an endpoint", "Pick which events it receives"] },
-  portfolio:       { title: "Portfolio Companies", desc: "Platform operator view: the businesses managed on this platform.", actions: ["Open a company", "Change its plan"] },
+  portfolio:       { title: "Portfolio Companies", desc: "Platform operator view: the businesses managed on this platform. Sync New Company gives a company its own workspace and owner login, emails the owner the login details, and converts a record that has no account behind it \u2014 pressing it again only refreshes the details.", actions: ["Open a company", "Change its plan", "Press \ud83d\udd04 Sync New Company to give a record its own account \u2014 the owner is emailed the login"] },
   users:           { title: "Users", desc: "Platform operator view: every user account across the platform.", actions: ["Search for a user", "Open one to see their account"] },
   billing:         { title: "Billing & Plans", desc: "Your subscription — the plan you are on and the plans you can move to.", actions: ["Compare plans", "Upgrade or change your plan"] },
   widgets:         { title: "Widgets", desc: "Platform operator view: embeddable pieces you can add to a customer's site.", actions: ["Create a widget"] },

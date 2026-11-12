@@ -150,6 +150,23 @@ pub async fn seat_default_plan(
         )));
     };
 
+    seat_plan(conn, tenant_id, plan_id).await
+}
+
+/// Seat ONE plan on a tenant that was JUST created, on the caller's connection — pass `&mut *tx`
+/// from inside the transaction that inserts the tenant, so a workspace can never commit without its
+/// plan row.
+///
+/// The caller resolves and validates the plan (`billing::lines::plan_for_write` refuses a tier that
+/// is not on sale); this function owns the WRITE, so the signup seat, the operator's assign route and
+/// the admin portfolio-sync mint all produce one row shape. `ON CONFLICT (tenant_id) DO NOTHING`
+/// arbitrates on the real UNIQUE constraint `tenant_plans_tenant_id_key`, so an existing row is never
+/// overwritten.
+pub async fn seat_plan(
+    conn: &mut sqlx::PgConnection,
+    tenant_id: uuid::Uuid,
+    plan_id: uuid::Uuid,
+) -> Result<(), crate::errors::AppError> {
     sqlx::query(
         r#"INSERT INTO tenant_plans (tenant_id, plan_id, status, billing_cycle)
            VALUES ($1, $2, 'active', 'monthly')
