@@ -644,35 +644,32 @@ async fn ingest(state: &AppState, d: Delivery) -> ApiResult<Json<serde_json::Val
             .map(|id| Some(id) == mailbox_id)
             .unwrap_or(false);
 
+    // A provider RETRY must not mint a second ticket (kanban t_314db8c1).
+    //
+    // The message arm above already dedupes on the sender's Message-Id, so a retry stores nothing
+    // new — but this arm used to run on `should_ticket` alone, so three correctly-signed deliveries
+    // of ONE email produced 1 message row and 3 tickets in the work queue (live on 2026-11-11).
+    // Mailgun retries whenever it does not see a 2xx, so that is a customer email landing in the
+    // queue several times. `private_email_messages.ticket_id` is the record of "this email already
+    // has a ticket": it is read and written under a row lock so two deliveries in flight at once
+    // cannot both see NULL and both insert. The ticket that already exists is reused and reported.
+    // Both ticketing arms are untouched: `private_email_boxes.creates_ticket` OR the legacy
+    // `tenants.settings->>'support_email_box_id'` still decide `should_ticket`.
     let mut ticket_created: Option<Uuid> = None;
     if should_ticket {
-        let contact_name = inbound.from.split('@').next().unwrap_or(&inbound.from);
-        match sqlx::query_scalar::<_, Uuid>(
-            r#"INSERT INTO tickets (tenant_id, subject, description, status, priority, source, contact_email, contact_name)
-               VALUES ($1, $2, $3, 'open', 'medium', 'email', $4, $5)
-               RETURNING id"#,
-        )
-        .bind(tenant_id)
-        .bind(&inbound.subject)
-        .bind(&inbound.body_plain)
-        .bind(&inbound.from)
-        .bind(contact_name)
-        .fetch_one(&state.db)
-        .await
-        {
-            Ok(ticket_id) => {
-                ticket_created = Some(ticket_id);
-                if let Err(e) =
-                    messages_handler::link_ticket(&state.db, tenant_id, message_id, ticket_id).await
-                {
-                    tracing::warn!(error = %e, "message stored, but linking its ticket failed");
-                }
-            }
+        match open_ticket_for_message(&state.db, tenant_id, message_id, &inbound).await {
+            Ok(id) => ticket_created = id,
             Err(e) => tracing::warn!(error = %e, "message stored, but creating its ticket failed"),
         }
     }
 
-    // Create event for inbound email.
+    // Create event for inbound email — once per EMAIL, not once per DELIVERY (kanban t_314db8c1).
+    //
+    // Everything in this block is a side effect of a genuinely new message: the `email_received`
+    // event and the auto-reply rules. A provider retry re-delivers the same Message-Id, which
+    // `store_inbound` dedupes (and the ticket arm above now reuses), so this block keys off
+    // `message_created`. Without that, one customer email writes the same event several times and,
+    // worse, sends the CUSTOMER an auto-reply for every retry.
     //
     // `events.title` is NOT NULL and the insert below used to omit it, so the whole webhook
     // answered 500 *after* the ticket had already been created — the caller (Mailgun / any
@@ -682,49 +679,51 @@ async fn ingest(state: &AppState, d: Delivery) -> ApiResult<Json<serde_json::Val
     // Byte-safe preview: slicing a String at a byte index panics when the 500th byte lands inside
     // a multi-byte character (an accented name in the first paragraph is enough). `chars().take`
     // cannot.
-    let preview: String = inbound.body_plain.chars().take(500).collect();
-    let event_payload = serde_json::json!({
-        "from": inbound.from,
-        "to": inbound.to,
-        "subject": inbound.subject,
-        "body_preview": preview,
-        "message_id": inbound.message_id,
-        "in_reply_to": inbound.in_reply_to,
-        "provider_message_id": inbound.provider_message_id,
-        "provider": provider_name,
-        "message_row_id": message_id,
-        "ticket_id": ticket_created,
-    });
-    let event_title = if inbound.subject.trim().is_empty() {
-        "(no subject)".to_string()
-    } else {
-        inbound.subject.clone()
-    };
-    if let Err(e) = sqlx::query(
-        r#"
-        INSERT INTO events (id, tenant_id, title, source, event_type, entity_type, entity_id, payload, created_at)
-        VALUES (gen_random_uuid(), $1, $2, 'private_email', 'email_received', 'contact', $3, $4, NOW())
-        "#,
-    )
-    .bind(tenant_id)
-    .bind(&event_title)
-    .bind(contact_id)
-    .bind(&event_payload)
-    .execute(&state.db)
-    .await
-    {
-        tracing::warn!(error = %e, "inbound email processed, but recording the event failed");
-    }
+    if message_created {
+        let preview: String = inbound.body_plain.chars().take(500).collect();
+        let event_payload = serde_json::json!({
+            "from": inbound.from,
+            "to": inbound.to,
+            "subject": inbound.subject,
+            "body_preview": preview,
+            "message_id": inbound.message_id,
+            "in_reply_to": inbound.in_reply_to,
+            "provider_message_id": inbound.provider_message_id,
+            "provider": provider_name,
+            "message_row_id": message_id,
+            "ticket_id": ticket_created,
+        });
+        let event_title = if inbound.subject.trim().is_empty() {
+            "(no subject)".to_string()
+        } else {
+            inbound.subject.clone()
+        };
+        if let Err(e) = sqlx::query(
+            r#"
+            INSERT INTO events (id, tenant_id, title, source, event_type, entity_type, entity_id, payload, created_at)
+            VALUES (gen_random_uuid(), $1, $2, 'private_email', 'email_received', 'contact', $3, $4, NOW())
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(&event_title)
+        .bind(contact_id)
+        .bind(&event_payload)
+        .execute(&state.db)
+        .await
+        {
+            tracing::warn!(error = %e, "inbound email processed, but recording the event failed");
+        }
 
-    // Fire auto-reply rules
-    super::auto_reply_handler::maybe_fire_auto_reply(
-        &state.db,
-        tenant_id,
-        "always",
-        "",
-        &inbound.from,
-    )
-    .await;
+        // Fire auto-reply rules
+        super::auto_reply_handler::maybe_fire_auto_reply(
+            &state.db,
+            tenant_id,
+            "always",
+            "",
+            &inbound.from,
+        )
+        .await;
+    }
 
     Ok(Json(json!({
         "received": true,
@@ -737,6 +736,93 @@ async fn ingest(state: &AppState, d: Delivery) -> ApiResult<Json<serde_json::Val
         "from": inbound.from,
         "subject": inbound.subject,
     })))
+}
+
+/// Open ONE ticket for a stored inbound message, however many times the provider delivers it.
+///
+/// Returns the message's ticket id either way: the ticket that already existed on a retry, or the
+/// one opened on this delivery. The read and the write happen in one transaction with the message
+/// row locked (`FOR UPDATE`), so two simultaneous deliveries of the same Message-Id serialise on
+/// that row: the first opens the ticket and links it, the second sees a non-NULL `ticket_id` and
+/// reuses it. Checking without the lock would leave exactly the race that a provider's retry storm
+/// produces — both callers read NULL, both insert, and the duplicate comes back.
+///
+/// A delivery with no stored row at all (`message_id` nil: no Message-Id header, nothing matched)
+/// still opens its ticket — that is the pre-fix behaviour, there is simply nothing to link it to.
+async fn open_ticket_for_message(
+    db: &sqlx::PgPool,
+    tenant_id: Uuid,
+    message_id: Uuid,
+    inbound: &InboundEmail,
+) -> Result<Option<Uuid>, AppError> {
+    let contact_name = inbound
+        .from
+        .split('@')
+        .next()
+        .unwrap_or(&inbound.from)
+        .to_string();
+
+    let mut tx = db.begin().await.map_err(AppError::Database)?;
+
+    let stored_ticket: Option<Option<Uuid>> = if message_id == Uuid::nil() {
+        None
+    } else {
+        sqlx::query_scalar(
+            "SELECT ticket_id FROM private_email_messages
+              WHERE id = $1 AND tenant_id = $2
+                FOR UPDATE",
+        )
+        .bind(message_id)
+        .bind(tenant_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(AppError::Database)?
+    };
+
+    if let Some(Some(ticket_id)) = stored_ticket {
+        // A retry of an email that already opened a ticket. Nothing to write, nothing to link.
+        tx.rollback().await.map_err(AppError::Database)?;
+        tracing::info!(
+            tenant = %tenant_id,
+            message = %message_id,
+            ticket = %ticket_id,
+            "provider re-delivered an email that already has a ticket; reusing it"
+        );
+        return Ok(Some(ticket_id));
+    }
+
+    let ticket_id: Uuid = sqlx::query_scalar(
+        r#"INSERT INTO tickets (tenant_id, subject, description, status, priority, source, contact_email, contact_name)
+           VALUES ($1, $2, $3, 'open', 'medium', 'email', $4, $5)
+           RETURNING id"#,
+    )
+    .bind(tenant_id)
+    .bind(&inbound.subject)
+    .bind(&inbound.body_plain)
+    .bind(&inbound.from)
+    .bind(contact_name)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(AppError::Database)?;
+
+    if message_id != Uuid::nil() {
+        // Same statement as `messages_handler::link_ticket`, inside this transaction so the ticket,
+        // the link and the flag commit together or not at all.
+        sqlx::query(
+            "UPDATE private_email_messages
+                SET ticket_id = $3, is_ticket = true, updated_at = NOW()
+              WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(message_id)
+        .bind(tenant_id)
+        .bind(ticket_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(AppError::Database)?;
+    }
+
+    tx.commit().await.map_err(AppError::Database)?;
+    Ok(Some(ticket_id))
 }
 
 /// `"David Giraudy <david@x.com>"` -> `Some("David Giraudy")`.
