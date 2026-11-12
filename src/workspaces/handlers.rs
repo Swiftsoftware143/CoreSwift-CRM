@@ -2,6 +2,7 @@ use axum::{
     extract::{Path, State},
     Extension, Json,
 };
+use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::Row;
@@ -36,6 +37,14 @@ fn clean_name(raw: &str) -> Result<String, AppError> {
         ));
     }
     Ok(n.to_string())
+}
+
+/// May this session rename / delete / re-point the default workspace? The SAME rule the team roster
+/// uses (`auth::team::may_manage_team`): the account's own administrators plus the platform
+/// operator's impersonation session. A plain member may only switch and add — never rename, delete
+/// or change the default (a member must not inherit owner powers).
+fn may_manage(claims: &Claims) -> bool {
+    crate::auth::middleware::is_account_admin(&claims.role) || claims.role == "impersonated"
 }
 
 fn row_json(r: &sqlx::postgres::PgRow) -> serde_json::Value {
@@ -142,6 +151,9 @@ pub async fn rename_workspace(
     Json(req): Json<RenameWorkspace>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let tid = tenant(&claims)?;
+    if !may_manage(&claims) {
+        return Err(AppError::Forbidden);
+    }
     let name = clean_name(&req.name)?;
 
     let dup: Option<Uuid> = sqlx::query_scalar(
@@ -181,6 +193,9 @@ pub async fn set_default_workspace(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let tid = tenant(&claims)?;
+    if !may_manage(&claims) {
+        return Err(AppError::Forbidden);
+    }
 
     let exists: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM workspaces WHERE id = $1 AND tenant_id = $2")
@@ -217,6 +232,31 @@ pub async fn delete_workspace(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let tid = tenant(&claims)?;
+    if !may_manage(&claims) {
+        return Err(AppError::Forbidden);
+    }
+
+    // Portfolio businesses are never removed, whatever their workspace count (David's standing
+    // rule: the sister companies always keep their account). Matched on the account's own name and
+    // slug — the SAME marker set the tenant purge door uses — so a workspace inside ZaarHub,
+    // SwiftImpact, Giraudy Capital or SwiftSoftware cannot be deleted from here.
+    let (tname, tslug, tportfolio): (String, String, Option<bool>) =
+        sqlx::query_as("SELECT name, slug, is_portfolio FROM tenants WHERE id = $1")
+            .bind(tid)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(AppError::Database)?
+            .ok_or_else(|| AppError::NotFound("Workspace not found.".into()))?;
+    if let Some(marker) = crate::tenant_purge::protected_marker(&tname, &tslug) {
+        return Err(AppError::Conflict(format!(
+            "This is a portfolio business ('{marker}') and its workspaces cannot be deleted."
+        )));
+    }
+    if tportfolio.unwrap_or(false) {
+        return Err(AppError::Conflict(
+            "This is a portfolio business and its workspaces cannot be deleted.".into(),
+        ));
+    }
 
     let rows = sqlx::query("SELECT id, is_default FROM workspaces WHERE tenant_id = $1")
         .bind(tid)
@@ -235,6 +275,26 @@ pub async fn delete_workspace(
         .find(|r| r.get::<Uuid, _>("id") == id)
         .ok_or_else(|| AppError::NotFound("Workspace not found.".into()))?;
     let was_default = target.get::<bool, _>("is_default");
+
+    // Refuse deleting the workspace the caller is currently signed into: the session's `wsid`, or —
+    // for a token minted before the switcher shipped — the account's default. Deleting the floor
+    // you are standing on would strand the session; switching away first is the way out.
+    let signed_in = claims
+        .wsid
+        .as_deref()
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .filter(|w| rows.iter().any(|r| r.get::<Uuid, _>("id") == *w))
+        .or_else(|| {
+            rows.iter()
+                .find(|r| r.get::<bool, _>("is_default"))
+                .map(|r| r.get::<Uuid, _>("id"))
+        });
+    if signed_in == Some(id) {
+        return Err(AppError::Conflict(
+            "You are signed into this workspace. Switch to a different workspace before deleting it."
+                .into(),
+        ));
+    }
 
     let mut tx = state.db.begin().await.map_err(AppError::Database)?;
     sqlx::query("DELETE FROM workspaces WHERE id = $1 AND tenant_id = $2")
@@ -258,4 +318,63 @@ pub async fn delete_workspace(
     tx.commit().await.map_err(AppError::Database)?;
 
     Ok(Json(json!({ "ok": true, "deleted": id })))
+}
+
+/// POST /api/workspaces/:id/switch — move this session's active workspace.
+///
+/// The switcher re-mints the session with `wsid` set to the target workspace, reusing the SAME
+/// token-mint path the login handler uses (`auth::middleware::create_access_token`) — no second
+/// auth route. The caller may only switch to a workspace inside their OWN account (`aid`); any
+/// other id answers 404, so the door cannot leak which accounts exist. The session keeps its
+/// subject, role and account — only the workspace the console shows changes. Switching the
+/// workspace does NOT change the account, so settings, plan, branding and members stay put.
+pub async fn switch_workspace(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let tid = tenant(&claims)?;
+
+    let row =
+        sqlx::query("SELECT id, name, is_default FROM workspaces WHERE id = $1 AND tenant_id = $2")
+            .bind(id)
+            .bind(tid)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(AppError::Database)?
+            .ok_or_else(|| AppError::NotFound("Workspace not found.".into()))?;
+
+    let now = Utc::now().timestamp() as usize;
+    let access_claims = Claims {
+        sub: claims.sub.clone(),
+        aid: claims.aid.clone(),
+        role: claims.role.clone(),
+        exp: now + state.config.jwt_access_expiry as usize,
+        iat: now,
+        aud: Some("coreswift-api".to_string()),
+        iss: Some("coreswift".to_string()),
+        wsid: Some(id.to_string()),
+    };
+    let refresh_claims = Claims {
+        sub: claims.sub.clone(),
+        aid: claims.aid.clone(),
+        role: claims.role.clone(),
+        exp: now + state.config.jwt_refresh_expiry as usize,
+        iat: now,
+        aud: Some("coreswift-api".to_string()),
+        iss: Some("coreswift".to_string()),
+        wsid: Some(id.to_string()),
+    };
+    let access_token =
+        crate::auth::middleware::create_access_token(&access_claims, &state.config.jwt_secret)?;
+    let refresh_token =
+        crate::auth::middleware::create_access_token(&refresh_claims, &state.config.jwt_secret)?;
+
+    Ok(Json(json!({
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "Bearer",
+        "expires_in": state.config.jwt_access_expiry,
+        "workspace": row_json(&row),
+    })))
 }

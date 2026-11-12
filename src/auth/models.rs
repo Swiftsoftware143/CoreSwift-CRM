@@ -14,6 +14,13 @@ pub struct Claims {
     pub aid: String,
     /// Role within their account: account_owner | admin | member
     pub role: String,
+    /// The workspace this session is currently working in (`workspaces.id`). `None` on a token
+    /// minted before the switcher shipped, or on an impersonation token — such a session resolves
+    /// its workspace to the account's default at the door that needs it. This is what the switcher
+    /// changes: switching re-mints the session with this set, so the WORK the console shows follows
+    /// the workspace while the SETTINGS stay at the account (`aid`).
+    #[serde(default)]
+    pub wsid: Option<String>,
     /// Expiration timestamp (UTC epoch seconds)
     pub exp: usize,
     /// Issued at timestamp (UTC epoch seconds)

@@ -703,6 +703,7 @@ pub async fn impersonate(
         iat: now,
         aud: None,
         iss: None,
+        wsid: None,
     };
 
     let token = middleware::create_access_token(&imp_claims, &s.config.jwt_secret)?;

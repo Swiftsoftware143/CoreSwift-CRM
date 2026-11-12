@@ -593,6 +593,7 @@ mod tests {
             iat: 0,
             aud: None,
             iss: None,
+            wsid: None,
         }
     }
 

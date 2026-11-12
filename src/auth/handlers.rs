@@ -556,6 +556,7 @@ fn generate_tokens(user: &TeamMember, state: &AppState) -> Result<(String, Strin
         iat: now,
         aud: Some("coreswift-api".to_string()),
         iss: Some("coreswift".to_string()),
+        wsid: None,
     };
     let access_token = middleware::create_access_token(&access_claims, &state.config.jwt_secret)?;
 
@@ -567,6 +568,7 @@ fn generate_tokens(user: &TeamMember, state: &AppState) -> Result<(String, Strin
         iat: now,
         aud: Some("coreswift-api".to_string()),
         iss: Some("coreswift".to_string()),
+        wsid: None,
     };
     let refresh_token = middleware::create_access_token(&refresh_claims, &state.config.jwt_secret)?;
 

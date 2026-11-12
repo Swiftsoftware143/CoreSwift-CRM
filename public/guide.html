@@ -193,6 +193,7 @@
   <div class="nav-inner">
     <a href="#getting-started">Getting Started</a>
     <a href="#dashboard">Dashboard</a>
+    <a href="#workspaces">Workspaces</a>
     <a href="#sales">Sales</a>
     <a href="#marketing">Marketing</a>
     <a href="#operations">Events, Portfolio &amp; Lists</a>
@@ -298,6 +299,24 @@ Response:
   ]
 }</pre>
     <p><code>total_contacts</code> and <code>total_companies</code> are your own totals — the same numbers as <code>GET /api/dashboard/stats</code> — and not the number of matches; the matches are the three arrays. A request with no <code>q</code> (or a blank one) returns those totals with three empty arrays, and so does a query that matches nothing.</p>
+  </div>
+</section>
+
+<!-- ======= 2b. WORKSPACES & SWITCHING ======= -->
+<section id="workspaces">
+  <h2 class="sec-title"><span class="sec-num">🗂️</span> Workspaces &amp; switching</h2>
+  <div class="card">
+    <h3>One account, several workspaces</h3>
+    <p>Your account is the business. A <strong>workspace</strong> lives inside it and holds the work — contacts, companies, mail, calendars, pipelines and automations. Settings, your plan, branding and team members are shared across every workspace in the account. Every account starts with one workspace called <em>My Workspace</em>, so you never land on a blank screen.</p>
+    <p>The <strong>🗂️ menu in the top bar</strong>, next to your plan, is where workspaces are managed:</p>
+    <ul>
+      <li><strong>Switch</strong> — move between workspaces. The console reloads to show the chosen workspace's work, and your settings stay the same.</li>
+      <li><strong>Add workspace</strong> — create another. How many your plan allows decides the ceiling.</li>
+      <li><strong>Rename</strong> — change a workspace's name (owner or admin).</li>
+      <li><strong>Make default</strong> — mark which workspace a fresh sign-in opens. Exactly one is default at a time.</li>
+      <li><strong>Delete</strong> — remove a workspace you no longer need (owner or admin).</li>
+    </ul>
+    <p>A few rules are always enforced: an account always keeps at least one workspace; you cannot delete the workspace you are currently signed into (switch to another first); and two workspaces in one account cannot share a name. Team members can switch and add workspaces; only an owner or admin can rename, delete or change the default.</p>
   </div>
 </section>
 

@@ -162,6 +162,13 @@
 //!        `.route(..)` calls / 401 on /api** (413 = 401 /api + the 12 root-level mounts), which is
 //!        what `the_census_shape_is_what_the_docs_say` pins.
 //!
+//!   +1 mount (2026-11-12, kanban t_0b19a3cc, workspace switcher): `POST
+//!        /api/workspaces/:id/switch` — the session re-mint that moves the caller between the
+//!        account's workspaces. It sits on the workspaces router behind the same auth middleware,
+//!        joins no allowlist (a bearer token is required), and is measured anonymous answering 401.
+//!        The extractor resolves 414 mounted `.route(..)` calls / 402 on /api** (414 = 402 /api +
+//!        the 12 root-level mounts), which is what `the_census_shape_is_what_the_docs_say` pins.
+//!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
 //!        the per-module gate was doing its job. The two /api routes added since (kanban
@@ -1180,12 +1187,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            413,
+            414,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 401,
+            api, 402,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.
