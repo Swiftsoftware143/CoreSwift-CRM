@@ -514,7 +514,8 @@ async function loadPlanPaymentLinks() {
     return '<tr>' +
       '<td><strong>' + escapeHtml(p.name || p.slug || '') + '</strong>' +
         '<div style="font-size:11px;color:var(--text-muted)">' + planPriceHtml(p, true) + '</div></td>' +
-      '<td>' + state + '</td>' +
+      '<td>' + state +
+        '<div data-paystate="' + escapeHtml(String(p.id)) + '" style="margin-top:4px"></div></td>' +
       '<td><input class="input" data-pay="' + escapeHtml(String(p.id)) + '" value="' + escapeHtml(link) +
         '" placeholder="https://buy.stripe.com/…" style="min-width:320px"></td>' +
       '<td><button class="btn btn-primary btn-sm" data-save="' + escapeHtml(String(p.id)) + '">Save</button></td>' +
@@ -522,12 +523,36 @@ async function loadPlanPaymentLinks() {
   }).join('');
   wrap.innerHTML = '<div class="card"><div class="card-header"><h3 style="margin:0;font-size:16px">Plan payment links</h3></div>' +
     '<div class="card-body">' +
-    '<p style="font-size:13px;color:var(--text-muted);margin:0 0 12px">A hosted payment page for a plan — a Stripe Payment Link, a PayPal button, anything that takes the money. A plan carrying one can be sold while this installation holds no payment key: the buyer pays on that page and the workspace is switched on here once the money lands. Leave a plan empty to keep it request-only. Create a link in <a href="https://dashboard.stripe.com/payment-links" target="_blank" rel="noopener">Stripe &rsaquo; Products &rsaquo; Payment links</a> and paste its https://buy.stripe.com/&hellip; address here. The Dashboard opens every link and reports the dead ones, so an empty box is honest and a dead link is not.</p>' +
+    '<p style="font-size:13px;color:var(--text-muted);margin:0 0 12px">A hosted payment page for a plan — a Stripe Payment Link, a PayPal button, anything that takes the money. A plan carrying one can be sold while this installation holds no payment key: the buyer pays on that page and the workspace is switched on here once the money lands. Leave a plan empty to keep it request-only. Create a link in <a href="https://dashboard.stripe.com/payment-links" target="_blank" rel="noopener">Stripe &rsaquo; Products &rsaquo; Payment links</a> and paste its https://buy.stripe.com/&hellip; address here. The server opens EVERY paid plan&#39;s page: the badge under each link says whether the page answered, because a saved link that answers a dead page is worse than an empty box. Every plan has to open before buyers count as able to pay.</p>' +
     '<div class="table-wrap"><table class="table"><thead><tr><th>Plan</th><th>Link</th><th>Payment page</th><th></th></tr></thead><tbody>' +
     (rows || '<tr><td colspan="4">No plans found</td></tr>') + '</tbody></table></div></div></div>';
   wrap.querySelectorAll('[data-save]').forEach(b => {
     b.addEventListener('click', () => savePlanPaymentLink(b.getAttribute('data-save'), b));
   });
+  // `set` only says a value exists. The verdict under it is the server's real probe (the same read
+  // the Dashboard card uses), so a pasted link that answers 404 is visible HERE, on the plan it
+  // belongs to, instead of only after a buyer presses Upgrade. Cached for five minutes.
+  try {
+    // `fresh=1` bypasses the five-minute cache: the operator just saved a link and needs the
+    // verdict now. The Dashboard card keeps the cached read.
+    const r = await API.get('/billing/readiness?fresh=1');
+    const byslug = {};
+    (Array.isArray(r && r.plans) ? r.plans : []).forEach(v => { byslug[String(v.slug)] = v; });
+    FP_PLANS.forEach(p => {
+      const slot = wrap.querySelector('[data-paystate="' + String(p.id) + '"]');
+      const v = byslug[String(p.slug)];
+      if (!slot || !v) return;
+      slot.innerHTML = v.reason === 'ok'
+        ? '<span class="badge badge-success">page opens</span>'
+        : v.reason === 'dead'
+          ? '<span class="badge" style="background:#fee2e2;color:#991b1b">page answers a dead link</span>'
+          : v.reason === 'not_https'
+            ? '<span class="badge" style="background:#fee2e2;color:#991b1b">not a secure https link</span>'
+            : v.reason === 'unknown'
+              ? '<span class="badge" style="background:#fef3c7;color:#92400e">could not check just now</span>'
+              : '';
+    });
+  } catch (_) { /* platform-admin only; a tenant just sees no verdict */ }
 }
 
 async function savePlanPaymentLink(id, btn) {
@@ -3029,11 +3054,11 @@ async function runAccountMatch() {
 // the server (`src/billing/readiness.rs`, cached, platform-admin only) because a browser cannot
 // probe another origin.
 //
-// NON-VACUITY: painted ONLY from a SUCCESSFUL read that says `can_sell: false`, and never when the
-// probes came back "unknown" instead of "dead" — a slow payment host must not be reported as a shut
-// till. `plans_with_link === 0` needs no probe at all: with no link and no checkout arm, nothing can
-// be bought. A working payment page (or a live provider, once one exists) means `can_sell: true`
-// and NO card.
+// NON-VACUITY: painted ONLY from a SUCCESSFUL read, and never when the blockers are merely
+// "unknown" — a slow payment host must not be reported as a shut till. But ONE working page is NOT
+// "buyers can pay": every active paid plan needs a page that opens, because the buyer chooses a
+// plan and would otherwise meet a dead (or absent) button on the ones that do not. The read lists
+// the verdict per plan (`plans[]`, `unpayable_plans`) and this card names them.
 async function loadPaymentGap() {
   const box = document.getElementById('payCard');
   if (!box) return;
@@ -3042,18 +3067,35 @@ async function loadPaymentGap() {
   try { r = await API.get('/billing/readiness'); } catch (_) { return; }   // failed read -> no card
   if (!r || typeof r.can_sell !== 'boolean') return;
   if (r.can_sell === true) { box.innerHTML = ''; return; }
-  const checked = Number(r.links_checked) || 0;
-  const withLink = Number(r.plans_with_link) || 0;
+  const rows = Array.isArray(r.plans) ? r.plans : [];
   const paid = Number(r.paid_plans) || 0;
-  // "Could not tell" is not "cannot pay": when every link is still unknown, say nothing.
-  if (withLink > 0 && checked === 0) { box.innerHTML = ''; return; }
-  const why = withLink === 0
-    ? 'None of your ' + paid + ' paid plan' + (paid === 1 ? '' : 's') + ' carries a payment page, and this app has no card checkout of its own, so a buyer who presses Upgrade can only ask you to switch the plan by hand.'
-    : 'Every payment link your paid plans carry answered a dead page (not found), so a buyer who presses Upgrade lands on nothing and nothing is charged. Paste working payment links on each paid plan, or the press can only ask you.';
+  const label = (slug) => {
+    const hit = (Array.isArray(FP_PLANS) ? FP_PLANS : []).find(p => String(p.slug) === String(slug));
+    if (hit && hit.name) return String(hit.name);
+    const s = String(slug || '');
+    return s ? s.charAt(0).toUpperCase() + s.slice(1) : 'A plan';
+  };
+  const of = (reason) => rows.filter(p => p.reason === reason).map(p => label(p.slug));
+  const missing = of('no_link');
+  const unusable = of('not_https');
+  const dead = of('dead');
+  // Definitive blockers only. An unknown link is not proof of a dead till.
+  if (missing.length + unusable.length + dead.length === 0) { box.innerHTML = ''; return; }
+  const parts = [];
+  if (missing.length) {
+    parts.push('No payment page: ' + missing.join(', ') + '. A buyer who picks ' + (missing.length === 1 ? 'that plan' : 'one of those') + ' can only ask you to switch it by hand, so nothing is charged.');
+  }
+  if (unusable.length) {
+    parts.push('Not a secure https page: ' + unusable.join(', ') + '. The upgrade screen will not send a buyer there.');
+  }
+  if (dead.length) {
+    parts.push('These payment pages answer a dead page: ' + dead.join(', ') + '. A buyer who picks one lands on nothing and nothing is charged.');
+  }
+  const why = parts.join(' ');
   box.innerHTML = '<div class="card" data-console="payments-closed" data-payment-provider-missing="1" style="border-left:4px solid #dc2626">'
     + '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">'
-    + '<div><div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.04em">Checkout is switched off</div>'
-    + '<div style="font-size:20px;font-weight:800">Buyers cannot pay</div>'
+    + '<div><div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.04em">' + (dead.length || unusable.length || missing.length === paid ? 'Checkout is switched off' : 'Some plans cannot be bought yet') + '</div>'
+    + '<div style="font-size:20px;font-weight:800">' + (missing.length === paid ? 'Buyers cannot pay' : 'Not every plan can be bought') + '</div>'
     + '<div style="color:#475569;font-size:13px;margin-top:2px">' + escapeHtml(why) + '</div></div>'
     + '<button type="button" class="btn btn-primary" data-open-plans="1">Open Plans &amp; Billing</button></div></div>';
   const btn = box.querySelector('[data-open-plans]');

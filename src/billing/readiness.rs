@@ -16,7 +16,11 @@
 //! nobody could pay.
 //!
 //! NON-VACUITY RULES, all of them load-bearing:
-//! * `can_sell` is TRUE only when a plan link was really FETCHED and answered a 2xx.
+//! * `can_sell` is TRUE only when EVERY active paid plan carries a link that was really FETCHED and
+//!   answered a 2xx. One working page beside three missing or dead ones is NOT a sellable till:
+//!   that combination is exactly how a buyer ends up on a dead button after the dashboard went
+//!   quiet (kanban t_eb63f701). The per-plan verdicts ride in `plans`, and the blocking slugs in
+//!   `unpayable_plans`.
 //! * A probe that times out or fails to connect is NOT proof of a dead link: it answers `null` and
 //!   is excluded from `links_ok`, so a slow host can never be reported as "customers cannot pay"
 //!   unless every single link came back with a definitive non-2xx.
@@ -32,11 +36,26 @@ use crate::auth::models::Claims;
 use crate::auth::platform_admin::require_platform_admin;
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
-use axum::{extract::Extension, extract::State, Json};
+use axum::{extract::Extension, extract::Query, extract::State, Json};
+use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+
+/// `?fresh=1` — skip the five-minute cache. The operator pastes a payment link and wants the
+/// verdict NOW, not after a coffee; the console's plan panel asks fresh after every save. The
+/// dashboard keeps the cached read, so opening it repeatedly still costs nothing.
+#[derive(Debug, Default, Deserialize)]
+pub struct ReadinessQuery {
+    #[serde(default)]
+    pub fresh: Option<String>,
+}
+
+fn wants_fresh(q: &ReadinessQuery) -> bool {
+    matches!(q.fresh.as_deref(), Some("1" | "true" | "yes"))
+}
 
 /// How long one answer is reused. Plans change by human hand, so five minutes is well inside the
 /// window where a corrected link is still seen promptly, while a dashboard reload never pays for a
@@ -108,12 +127,15 @@ async fn probe(client: &reqwest::Client, url: &str) -> Option<bool> {
 pub async fn payment_readiness(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
+    Query(q): Query<ReadinessQuery>,
 ) -> ApiResult<Json<Value>> {
     require_platform_admin(&s.db, &c.sub).await?;
 
-    if let Some((at, v)) = cache().lock().await.as_ref() {
-        if at.elapsed() < CACHE_TTL {
-            return Ok(Json(v.clone()));
+    if !wants_fresh(&q) {
+        if let Some((at, v)) = cache().lock().await.as_ref() {
+            if at.elapsed() < CACHE_TTL {
+                return Ok(Json(v.clone()));
+            }
         }
     }
 
@@ -134,18 +156,20 @@ pub async fn payment_readiness(
         .map(|(slug, url, _)| (slug, url))
         .collect();
 
-    let mut targets: Vec<String> = Vec::new();
+    // One probe per DISTINCT url. A plan without a usable link is not probed at all: it is the
+    // "no page" case, not the "dead page" case, and it must not be hidden behind a sibling plan
+    // that happens to work. The order is kept so a probe result can be mapped back to its url.
+    let mut probed: Vec<String> = Vec::new();
     for (_, raw) in &paid {
-        let u = raw.as_deref().unwrap_or("").trim();
+        let u = raw.as_deref().map(str::trim).unwrap_or("");
         if u.is_empty() || !probeable(u) {
             continue;
         }
-        if !targets.iter().any(|t| t == u) {
-            targets.push(u.to_string());
+        if !probed.iter().any(|t| t == u) {
+            probed.push(u.to_string());
         }
     }
-    let planned = targets.len();
-    targets.truncate(MAX_PROBED);
+    probed.truncate(MAX_PROBED);
 
     // Concurrent, each bounded: the whole read costs one probe timeout, not one per link.
     let client = reqwest::Client::builder()
@@ -154,28 +178,105 @@ pub async fn payment_readiness(
         .user_agent("CoreSwift-readiness/1.0")
         .build()
         .map_err(|e| AppError::Internal(format!("readiness client: {e}")))?;
-    let mut handles = Vec::with_capacity(targets.len());
-    for u in targets {
+    let mut handles = Vec::with_capacity(probed.len());
+    for u in &probed {
         let cl = client.clone();
-        handles.push(tokio::spawn(async move { probe(&cl, &u).await }));
+        let url = u.clone();
+        handles.push(tokio::spawn(async move { probe(&cl, &url).await }));
     }
+    // url -> definitive verdict (`Some(true)` 2xx / `Some(false)` dead) or `None` (could not tell).
+    let mut verdict: HashMap<String, Option<bool>> = HashMap::new();
     let mut links_ok = 0usize;
     let mut links_dead = 0usize;
     let mut links_unknown = 0usize;
-    for h in handles {
-        match h.await {
-            Ok(Some(true)) => links_ok += 1,
-            Ok(Some(false)) => links_dead += 1,
-            _ => links_unknown += 1,
+    for (i, h) in handles.into_iter().enumerate() {
+        let answer = match h.await {
+            Ok(Some(true)) => Some(true),
+            Ok(Some(false)) => Some(false),
+            _ => None,
+        };
+        match answer {
+            Some(true) => links_ok += 1,
+            Some(false) => links_dead += 1,
+            None => links_unknown += 1,
+        }
+        if let Some(url) = probed.get(i) {
+            verdict.insert(url.clone(), answer);
         }
     }
 
+    // PER PLAN, not per install. This card exists because "one link works" was treated as "the
+    // till is open": a buyer then meets a dead (or absent) page on every OTHER plan while the
+    // dashboard claims buyers can pay. `can_sell` is therefore true only when EVERY active paid
+    // plan carries a page that answered 2xx.
+    let mut plans: Vec<Value> = Vec::with_capacity(paid.len());
+    let mut unpayable: Vec<String> = Vec::new();
+    let mut plans_with_link = 0usize;
+    let mut plans_ok = 0usize;
+    let mut plans_dead = 0usize;
+    let mut plans_missing = 0usize;
+    let mut plans_unusable = 0usize;
+    let mut plans_unknown = 0usize;
+    for (slug, raw) in &paid {
+        let url = raw.as_deref().map(str::trim).unwrap_or("");
+        let has_link = !url.is_empty();
+        if has_link {
+            plans_with_link += 1;
+        }
+        // `reason` is the operator sentence's source: no_link / not_https / dead / unknown / ok.
+        let (reason, link_ok) = if !has_link {
+            plans_missing += 1;
+            ("no_link", None)
+        } else if !probeable(url) {
+            // A link we would never open is not a payment page: it cannot be counted as one.
+            plans_unusable += 1;
+            ("not_https", None)
+        } else if !probed.iter().any(|t| t == url) {
+            // Over MAX_PROBED: not answered, so not proven.
+            plans_unknown += 1;
+            ("unknown", None)
+        } else {
+            match verdict.get(url).copied().flatten() {
+                Some(true) => {
+                    plans_ok += 1;
+                    ("ok", Some(true))
+                }
+                Some(false) => {
+                    plans_dead += 1;
+                    ("dead", Some(false))
+                }
+                None => {
+                    plans_unknown += 1;
+                    ("unknown", None)
+                }
+            }
+        };
+        if reason != "ok" {
+            unpayable.push(slug.clone());
+        }
+        plans.push(json!({
+            "slug": slug,
+            "has_link": has_link,
+            "probeable": has_link && probeable(url),
+            "link_ok": link_ok,
+            "reason": reason,
+        }));
+    }
+
     let body = json!({
-        "can_sell": links_ok > 0,
+        // Every paid plan, proven. A single dead or missing page keeps the till closed.
+        "can_sell": !paid.is_empty() && plans_ok == paid.len(),
         "paid_plans": paid.len(),
-        "plans_with_link": planned,
-        // `links_checked` is what actually got an answer (2xx or a definitive refusal); an unknown
-        // link is reported separately so the caller can tell "all dead" from "could not tell".
+        "plans_with_link": plans_with_link,
+        "plans_ok": plans_ok,
+        "plans_dead": plans_dead,
+        "plans_missing_link": plans_missing,
+        "plans_unusable_link": plans_unusable,
+        "plans_unknown": plans_unknown,
+        // The plans that block a sale, by slug — what the operator has to fix, named.
+        "unpayable_plans": unpayable,
+        "plans": plans,
+        // Unique-URL counters kept for the callers that already read them.
         "links_checked": links_ok + links_dead,
         "links_ok": links_ok,
         "links_dead": links_dead,

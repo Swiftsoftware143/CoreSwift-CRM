@@ -125,6 +125,12 @@
 //!        it cannot see four mounts the tokenizer does; both numbers are stated so the next reader
 //!        does not "fix" one into the other).
 //!
+//!   +1 mount (2026-11-11, kanban t_5d1d6d31, pinned here because the pin had gone stale): the
+//!        billing screen's one-read bill, `GET /api/billing/summary` (the single amount due, the
+//!        one open plan line, and the line that ended on the last change). It sits on the billing
+//!        router behind the same auth middleware as every sibling, so it joins no allowlist. The
+//!        extractor now resolves 399 mounted / 387 on /api**.
+//!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
 //!        the per-module gate was doing its job. The two /api routes added since (kanban
@@ -1093,12 +1099,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            398,
+            399,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 386,
+            api, 387,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.
