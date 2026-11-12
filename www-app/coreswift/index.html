@@ -7988,6 +7988,11 @@ function peOpenAddDomain() {
     try {
       await API.post('/private-email/domains', payload);
       closeModal(); toast('Domain added', 'success'); await loadInboxTab();
+      // The same nudge the row's own Receiving select gives: a SendGrid domain is not armed at
+      // SendGrid until the address ON THE ROW is pasted into their Inbound Parse settings.
+      if (recv === 'sendgrid') {
+        toast('Open DNS records on the new domain for the Inbound Parse address to paste into SendGrid.', 'info');
+      }
     } catch (e) {
       // A plan gate is a real answer, not a bug — show it where the user is standing.
       toast('Could not add the domain: ' + e.message, 'error');
