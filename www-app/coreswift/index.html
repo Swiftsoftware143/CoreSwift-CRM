@@ -991,7 +991,12 @@ async function requestPlanChange(idx, btn) {
       body: JSON.stringify({
         subject: 'Upgrade request: ' + name + ' plan',
         message: 'This workspace asked to move to the ' + name + ' plan ($' + price + '/month) from '
-          + 'Plans & Billing. It is on ' + (STATE.planName || 'no plan') + ' today. Self-serve '
+          + 'Plans & Billing. It is on ' + (STATE.planName || 'no plan') + ' today.'
+          + (String(STATE.planName || '').toLowerCase() === 'inbox'
+            ? ' IMPORTANT: this upgrade must cancel the $1 Inbox subscription in the same step — the '
+              + 'workspace must never be billed $1 on top of the new plan.'
+            : '')
+          + ' Self-serve '
           + 'checkout is not open on this install, so the switch has to be made by the CoreSwift team.'
           + ' Workspace: ' + (user.company || user.account_name || '(unnamed)')
           + ' [' + user.account_id + ']. Requester: ' + (user.email || '(no address)') + '.',
@@ -1066,8 +1071,11 @@ async function openUpgradeModal() {
           ${features.map(f => `<li class="check">✓ ${escapeHtml(f)}</li>`).join('')}
         </ul>
         ${isCurrent ? '' : `<button class="btn btn-primary btn-sm" data-request-plan="${i}" style="margin-top:10px">Request this plan</button>`}
-        ${(!isCurrent && /^https:\/\/[^\s"']+$/i.test(String(p.checkout_url || '').trim()))
+        ${(!isCurrent && p.is_active !== false && /^https:\/\/[^\s"']+$/i.test(String(p.checkout_url || '').trim()))
           ? `<a class="btn btn-secondary btn-sm" data-pay-link="${i}" href="${escapeHtml(String(p.checkout_url).trim())}" target="_blank" rel="noopener" style="margin-top:8px;display:inline-block">Open payment page</a>`
+          : ''}
+        ${(!isCurrent && p.is_active === false)
+          ? `<div data-plan-not-on-sale="1" style="font-size:12px;opacity:.8;margin-top:8px">Sales are not open for this plan yet — pressing Request reaches our team, and nothing is charged.</div>`
           : ''}
       </div>`;
     });
@@ -1081,6 +1089,21 @@ async function openUpgradeModal() {
     // shows that page as a second door. Nothing about it runs on this installation -- the buyer pays
     // on the operator's own page and the workspace is switched on by hand -- which is exactly why the
     // request button stays first and stays wired. If the page does not open, the request still works.
+    // THE STANDALONE $1 RULE (kanban t_5d1d6d31). A workspace on Inbox that upgrades must be told
+    // the $1 ENDS in the same step — never $30, no stacked subscriptions, no proration surprise.
+    // The server enforces it (one open plan line, closed by the plan write itself); this sentence
+    // is how the customer knows it BEFORE pressing anything.
+    var onInbox = plans.some(function (p) {
+      return String(p.slug || '').toLowerCase() === 'inbox' && String(p.id) === String(STATE.planId);
+    });
+    if (onInbox) {
+      plansHtml += '<p data-inbox-upgrade-note="1" style="color:var(--text-secondary);font-size:13px;'
+        + 'margin-top:14px;text-align:center;border:1px solid rgba(128,128,128,.3);border-radius:8px;padding:10px">'
+        + '<strong>Upgrading cancels your Inbox subscription in the same step.</strong> You pay only the '
+        + 'new plan’s price — never $1 on top of it — and the new period starts today, so there is no '
+        + 'proration. Moving back down to Inbox returns you to $1, and your mailbox and all its mail stay '
+        + 'exactly where they are.</p>';
+    }
     var anyPayLink = plans.some(p => /^https:\/\/[^\s"']+$/i.test(String(p.checkout_url || '').trim())
       && String(p.id) !== String(STATE.planId));
     plansHtml += '<p style="color:var(--text-secondary);font-size:13px;margin-top:14px;text-align:center">'
@@ -1335,6 +1358,7 @@ const TAB_RENDERERS = {
     // real tenant got 403. Fixed + proved live 2026-09-22 (owner -> 200, plan drops to Free).
     return pageHeader('Billing & Plans', 'Manage subscription plans and pricing',
       '<button class="btn btn-ghost btn-sm" id="cancelSubBtn" onclick="cancelSubscription()">Cancel subscription</button>') +
+    '<div id="billCard"><div class="loading-wrap"><div class="spinner"></div> Loading your bill...</div></div>' +
     '<div id="subscriptionCard"><div class="loading-wrap"><div class="spinner"></div> Loading subscription...</div></div>' +
     '<div id="creditsCard"><div class="loading-wrap"><div class="spinner"></div> Loading credits...</div></div>' +
     '<div id="plansContent"><div class="loading-wrap"><div class="spinner"></div> Loading plans...</div></div>';
@@ -1887,6 +1911,7 @@ const TAB_LOADERS = {
     const plansContentEl = document.getElementById('plansContent');
     if (!plansContentEl) return;
     await loadCredits();
+    await loadBillState();
     await loadSubscriptionState();
     try {
       // GET /api/billing/plans answers an ENVELOPE ({page,per_page,plans,total}) with the 6 real plans
@@ -4583,6 +4608,79 @@ async function markAllNotificationsRead() {
 }
 
 // ===== BILLING: SUBSCRIPTION =====
+// ===== BILLING: YOUR BILL (kanban t_5d1d6d31) =====
+// Inbox is a STANDALONE $1/mo door, not an add-on: upgrading to a CRM plan ENDS the $1 line in
+// the same action, so a customer is never billed $30 and never holds two subscriptions.
+// GET /api/billing/summary is the ONE read behind this card — the amount due comes from the plan
+// the workspace is on; "your $1 ended" comes from the append-only ledger the database keeps, where
+// a partial unique index makes more than one OPEN line physically impossible.
+function planLabel(slug) {
+  const s = String(slug || '');
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+}
+
+async function loadBillState() {
+  const el = document.getElementById('billCard');
+  if (!el) return;
+  try {
+    const b = await API.get('/billing/summary');
+    const p = b && b.plan;
+    const amount = Number((b && b.amount_due) || 0);
+    const period = (b && b.amount_due_period) || 'month';
+    const money = function (n) { return '$' + Number(n || 0).toFixed(2); };
+    const when = function (iso) {
+      try { return iso ? new Date(iso).toLocaleDateString() : ''; } catch (e) { return ''; }
+    };
+    const prev = b && b.previous_line;
+    let prevHtml = '';
+    if (prev && amount > 0) {
+      const line = money(prev.price_monthly) + ' ' + planLabel(prev.plan_slug);
+      if (prev.move === 'upgrade') {
+        prevHtml = '<p class="config-desc" data-bill-previous="upgrade"><strong>' + escapeHtml(line)
+          + ' subscription ended the moment you upgraded'
+          + (prev.ended_at ? ' (' + escapeHtml(when(prev.ended_at)) + ')' : '')
+          + '.</strong> It is gone from the bill — you pay ' + escapeHtml(money(amount)) + ' a '
+          + escapeHtml(period) + ', never both.</p>';
+      } else if (prev.move === 'downgrade') {
+        prevHtml = '<p class="config-desc" data-bill-previous="downgrade"><strong>You moved down from '
+          + escapeHtml(line) + ' on ' + escapeHtml(when(prev.ended_at)) + '.</strong> You pay '
+          + escapeHtml(money(amount)) + ' a ' + escapeHtml(period)
+          + ', and your mailbox and every message stay exactly where they are.</p>';
+      } else if (prev.move === 'canceled') {
+        prevHtml = '<p class="config-desc" data-bill-previous="canceled">Your ' + escapeHtml(line)
+          + ' subscription ended on ' + escapeHtml(when(prev.ended_at)) + '.</p>';
+      }
+    }
+    if (!p || amount === 0) {
+      el.innerHTML = card('Your bill',
+        '<div class="stat-card accent" data-bill-amount="0"><div class="stat-value">$0.00</div>'
+        + '<div class="stat-label">Free plan — nothing is billed</div></div>'
+        + '<p class="config-desc" style="margin-top:10px">No subscription is charged to this workspace. '
+        + 'One plan at a time, always.</p>' + prevHtml);
+      return;
+    }
+    const next = b.current_period_ends_at
+      ? ' The next charge is on ' + when(b.current_period_ends_at) + '.'
+      : '';
+    el.innerHTML = card('Your bill',
+      '<div class="stats-grid">'
+      + '<div class="stat-card accent" data-bill-amount="' + escapeHtml(String(amount)) + '">'
+      + '<div class="stat-value">' + escapeHtml(money(amount))
+      + '<span style="font-size:14px">/' + escapeHtml(period) + '</span></div>'
+      + '<div class="stat-label">You pay — ' + escapeHtml(p.name || planLabel(p.slug)) + '</div></div>'
+      + '<div class="stat-card" data-bill-lines="' + escapeHtml(String(b.open_lines || 0)) + '">'
+      + '<div class="stat-value">' + escapeHtml(String(b.one_subscription === false ? (b.open_lines || 0) : 1)) + '</div>'
+      + '<div class="stat-label">Subscription' + (b.one_subscription === false ? 's' : '') + '</div></div>'
+      + '</div>'
+      + '<p class="config-desc" style="margin-top:10px"><strong>One subscription.</strong> A workspace holds '
+      + 'one plan at a time, so nothing is ever charged on top of this amount.' + escapeHtml(next) + '</p>'
+      + prevHtml);
+  } catch (e) {
+    el.innerHTML = card('Your bill',
+      '<p class="config-desc">' + escapeHtml(e.message || String(e)) + '</p>');
+  }
+}
+
 // GET /api/billing/subscription and POST /api/billing/subscription/cancel exist and are live;
 // neither had a caller, so a tenant had no way to see or cancel its plan.
 // Fields shown are the ones the API actually returns (captured live 2026-09-22): id, tenant_id,

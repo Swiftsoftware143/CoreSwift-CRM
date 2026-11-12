@@ -5,6 +5,7 @@
 
 pub mod credits;
 pub mod handlers;
+pub mod lines;
 pub mod models;
 pub mod readiness;
 
@@ -48,6 +49,11 @@ pub fn router(state: AppState) -> Router<AppState> {
             axum::routing::post(handlers::cancel_subscription),
         )
         .route("/features", axum::routing::get(handlers::get_features))
+        // WHAT DOES THIS WORKSPACE PAY? (kanban t_5d1d6d31). One read for the billing screen:
+        // the single amount due, the fact that there is exactly one open line, and the plan line
+        // that ended when the workspace last moved. Inbox is a standalone $1 door — upgrading
+        // cancels it in the same action, so the console must be able to show ONE bill, never two.
+        .route("/summary", axum::routing::get(lines::summary))
         // CAN ANYBODY PAY? (kanban t_f11f71fb, 2026-11-11). This app's only money arm is a plan's
         // own hosted payment page, so the operator's dashboard needs to know whether any of them
         // actually OPENS — not whether a row exists. Read-only, platform-admin only, cached

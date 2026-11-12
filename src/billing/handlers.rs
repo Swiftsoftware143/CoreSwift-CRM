@@ -9,6 +9,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -474,6 +475,15 @@ pub async fn update_subscription(
         validate_billing_cycle(cycle)?;
     }
 
+    // The plan this arm can move the workspace ONTO must exist and be ON SALE (kanban
+    // t_5d1d6d31). Before this, `plan_id` was bound straight into the column: a caller could park
+    // a workspace on a plan whose only door is a dead checkout — the Inbox plan ships
+    // `is_active = false` for exactly that reason. The refusal names the plan and changes nothing.
+    let target_plan = match r.plan_id {
+        Some(pid) => Some(crate::billing::lines::plan_for_write(&s.db, None, Some(pid)).await?),
+        None => None,
+    };
+
     let existing =
         sqlx::query_as::<_, TenantPlan>("SELECT * FROM tenant_plans WHERE tenant_id = $1")
             .bind(tid)
@@ -482,14 +492,25 @@ pub async fn update_subscription(
             .ok_or(AppError::NotFound("No subscription found".to_string()))?;
 
     let sub = sqlx::query_as::<_, TenantPlan>(
-        r#"UPDATE tenant_plans SET
+        r#"-- A plan change RESETS the period: the new line starts now, so a $29 plan after a $1 plan
+           -- is one full period at $29 from this moment — never a partial charge on top of the $1
+           -- (kanban t_5d1d6d31, "no proration surprise"). `plan_lines` closes the old line in the
+           -- same statement (trigger, migration 144), so the two can never both be open.
+           UPDATE tenant_plans SET
             plan_id = COALESCE($1, plan_id),
             billing_cycle = COALESCE($2, billing_cycle),
             feature_overrides = COALESCE($3, feature_overrides),
+            status = CASE WHEN $1 IS NULL THEN status ELSE 'active' END,
+            canceled_at = CASE WHEN $1 IS NULL THEN canceled_at ELSE NULL END,
+            trial_ends_at = CASE WHEN $1 IS NULL THEN trial_ends_at ELSE NULL END,
+            current_period_starts_at = CASE WHEN $1 IS NULL THEN current_period_starts_at ELSE NOW() END,
+            current_period_ends_at = CASE WHEN $1 IS NULL THEN current_period_ends_at
+                                          WHEN COALESCE($2, billing_cycle) = 'yearly' THEN NOW() + INTERVAL '1 year'
+                                          ELSE NOW() + INTERVAL '1 month' END,
             updated_at = NOW()
            WHERE id = $4 RETURNING *"#,
     )
-    .bind(r.plan_id)
+    .bind(target_plan.as_ref().map(|p| p.id))
     .bind(&r.billing_cycle)
     .bind(&r.feature_overrides)
     .bind(existing.id)
@@ -506,6 +527,14 @@ pub async fn update_subscription(
         );
     }
 
+    // The money trail: the plan it left (with its price) and the plan it is on now. The $1 line's
+    // ending is the ledger's job; this row is what an operator reads in the audit log.
+    let previous_money = crate::billing::lines::plan_money(&s.db, existing.plan_id).await?;
+    let new_price = target_plan
+        .as_ref()
+        .and_then(|p| p.price_monthly.to_f64())
+        .unwrap_or_else(|| previous_money.as_ref().map(|m| m.1).unwrap_or(0.0));
+
     crate::audit::logger::log_event(
         &s.db,
         tid,
@@ -513,7 +542,14 @@ pub async fn update_subscription(
         "subscription.updated",
         "subscription",
         Some(sub.id),
-        Some(json!({"plan_id_old": existing.plan_id, "plan_id_new": sub.plan_id})),
+        Some(json!({
+            "plan_id_old": existing.plan_id,
+            "plan_id_new": sub.plan_id,
+            "previous_plan_slug": previous_money.as_ref().map(|m| m.0.clone()),
+            "previous_price_monthly": previous_money.as_ref().map(|m| m.1),
+            "price_monthly": new_price,
+            "previous_line_ended": existing.plan_id != sub.plan_id,
+        })),
         None,
     )
     .await;
@@ -581,35 +617,19 @@ pub async fn assign_tenant_plan(
     };
 
     // Resolve the requested plan through the app's own plan vocabulary. A slug is unique in
-    // `plans`; both handles are validated against `is_active` so an assignment can never seat a
-    // tenant on a retired tier.
+    // `plans`. EVERY plan write asks `plan_for_write`, which refuses a plan that is not ON SALE
+    // (kanban t_5d1d6d31): the Inbox plan ships `is_active = false` until a buyer can really pay,
+    // and seating a workspace on it would hand a customer a plan whose only door is a dead
+    // checkout. The refusal names the plan and changes nothing.
     let slug = r
         .plan_slug
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let (plan_id, plan_slug, plan_name): (Uuid, String, String) = match (slug, r.plan_id) {
-        (Some(slug), _) => {
-            sqlx::query_as("SELECT id, slug, name FROM plans WHERE slug = $1 AND is_active = true")
-                .bind(&slug)
-                .fetch_optional(&s.db)
-                .await?
-                .ok_or_else(|| AppError::Validation(format!("No active plan with slug '{slug}'")))?
-        }
-        (None, Some(pid)) => {
-            sqlx::query_as("SELECT id, slug, name FROM plans WHERE id = $1 AND is_active = true")
-                .bind(pid)
-                .fetch_optional(&s.db)
-                .await?
-                .ok_or_else(|| AppError::Validation(format!("No active plan with id '{pid}'")))?
-        }
-        (None, None) => {
-            return Err(AppError::Validation(
-                "plan_slug or plan_id is required".to_string(),
-            ))
-        }
-    };
+    let plan = crate::billing::lines::plan_for_write(&s.db, slug.as_deref(), r.plan_id).await?;
+    let (plan_id, plan_slug, plan_name) = (plan.id, plan.slug, plan.name);
+    let price_monthly = plan.price_monthly;
 
     // Cycle: an explicit value must be in the schema's vocabulary, otherwise an existing row
     // keeps its own cycle and a first-time assignment gets the first of the declared pair.
@@ -630,6 +650,21 @@ pub async fn assign_tenant_plan(
     };
 
     let created_row = existing.is_none();
+
+    // The plan the workspace is leaving, with its price: the audit row has to say that the OLD
+    // line ended and what it cost, or "the $1 was cancelled" is unreadable afterwards
+    // (kanban t_5d1d6d31).
+    let previous_plan: Option<(String, Option<f64>)> = match existing.as_ref() {
+        Some(t) => {
+            sqlx::query_as(
+                "SELECT slug, CAST(price_monthly AS double precision) FROM plans WHERE id = $1",
+            )
+            .bind(t.plan_id)
+            .fetch_optional(&s.db)
+            .await?
+        }
+        None => None,
+    };
 
     let sub = sqlx::query_as::<_, TenantPlan>(
         r#"-- One statement, two arms. The conflict arbiter is the real unique constraint
@@ -681,6 +716,16 @@ pub async fn assign_tenant_plan(
             "billing_cycle": cycle,
             "created_row": created_row,
             "assigned_by": c.sub,
+            // The money trail (kanban t_5d1d6d31): what the workspace was on, what it cost, and
+            // what it is on now. A plan change ENDS the previous line in this same statement —
+            // `plan_lines` carries the closed line with its own price and end time.
+            "previous_plan_slug": previous_plan.as_ref().map(|p| p.0.clone()),
+            "previous_price_monthly": previous_plan.as_ref().and_then(|p| p.1),
+            "price_monthly": price_monthly.to_f64(),
+            "previous_line_ended": previous_plan
+                .as_ref()
+                .map(|p| p.0 != plan_slug)
+                .unwrap_or(false),
         })),
         None,
     )
