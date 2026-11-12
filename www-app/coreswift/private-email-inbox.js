@@ -666,12 +666,15 @@
       // an empty page: drop the filter when it names a label this account no longer has.
       if (S.label && !S.labels.some(function (l) { return l.id === S.label; })) S.label = '';
       S.err = null;
-      // The records answer for EVERY domain that can receive — read through the app's own endpoint
-      // (the provider's values, never a hardcoded DKIM) and kept per domain. Both halves need it:
-      // the first-run checklist renders it, and the Mail tab's "+ Create new inbox" gates on it, so
-      // the button and the sentence beside it can never be reading two different facts.
-      var recDomains = (S.domains || []).filter(function (d) {
-        return d.inbound_provider === 'mailgun' || d.inbound_provider === 'sendgrid';
+      // The records answer for the domains that need one — read through the app's own endpoint (the
+      // provider's values, never a hardcoded DKIM) and kept per domain. Both halves need it: the
+      // first-run checklist renders the FIRST domain's answer, and the create controls need the live
+      // word for any domain a stored flag has not verified yet. A domain that is already verified
+      // needs no read (its stored answer already unlocks the control), which keeps this to one call
+      // on an account with one domain instead of one per domain.
+      var recDomains = (S.domains || []).filter(function (d, i) {
+        if (d.inbound_provider !== 'mailgun' && d.inbound_provider !== 'sendgrid') return false;
+        return i === 0 || !d.verified;
       });
       var recResults = await Promise.all(recDomains.map(function (d) {
         return api().get('/private-email/domains/' + d.id + '/records').then(
