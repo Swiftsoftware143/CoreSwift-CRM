@@ -7832,14 +7832,18 @@ async function peSend() {
 //   smtp    -> "smtp_host is required for SMTP provider"
 // Add-domain is the front door of the whole Private Email feature (domains ->
 // mailboxes -> send/inbound), so the feature could not be entered at all.
-// The provider list also offered SendGrid, which this deployment does not
-// implement: add_domain() routes everything that is not "smtp" to
-// add_mailgun_domain(), which stores provider_type='mailgun' — picking SendGrid
-// silently created a Mailgun domain that then demanded a Mailgun key.
-// Mailgun needs the key of the account that ALREADY carries the domain
-// (validate_mailgun_domain does GET /v3/domains/<domain> with that key), so a
-// platform-wide key is not an option for a customer's own domain; the key field
-// is required and the copy says why.
+// SENDING and RECEIVING are two separate choices (kanban t_04db9228 / t_422cf04d), and the
+// provider list reflects only what the send path really does: Mailgun, or SMTP — which is how this
+// deployment carries Amazon SES, SendGrid, Postmark, Google Workspace and a customer's own server.
+// WHAT RECEIVES is its own select below it (Mailgun, SendGrid Inbound Parse, or nowhere); it is a
+// separate column (inbound_provider), so choosing SMTP sending never takes inbound mail away and
+// choosing SendGrid receiving never moves the customer's outbound mail. Do not merge the two lists
+// back into one "provider": that is the shape that used to make a SendGrid choice create a Mailgun
+// domain, and the shape that left an SMTP domain unable to receive at all.
+// Mailgun sending needs the key of the account that ALREADY carries the domain
+// (validate_mailgun_domain does GET /v3/domains/<domain> with that key), so a platform-wide key is
+// not an option for a customer's own domain; when Mailgun RECEIVES only, the same key is used to
+// show and re-check the domain's records — the copy under the field says which of the two it is.
 function peProviderFields() {
   const p = document.getElementById('peNewProvider');
   if (!p) return;
@@ -7874,6 +7878,16 @@ function peReceivingFields() {
   if (kf) kf.style.display = (v === 'mailgun' ? '' : 'none');
   const sg = document.getElementById('peRecvSgFields');
   if (sg) sg.style.display = (v === 'sendgrid' ? '' : 'none');
+  // The Mailgun API key means two different things, so the sentence under it must not promise the
+  // wrong one (kanban t_422cf04d): when Mailgun SENDS, the key is verified against Mailgun before
+  // the domain is saved; when Mailgun only RECEIVES, the same key is what makes this domain's
+  // records readable, and the SMTP credentials above are what actually send. Until this was split,
+  // the receiving-only combination told the customer their domain would be "verified against that
+  // account before it is saved", which the SMTP create path never does.
+  const kh = document.getElementById('peMailgunKeyHint');
+  if (kh) kh.innerHTML = (send === 'mailgun')
+    ? 'Required. Use the key of the Mailgun account that already carries this domain: the domain is verified against that account before it is saved, so a shared platform key cannot add your domain. Stored encrypted with the domain, never echoed back.'
+    : 'Required because Mailgun is the RECEIVER here: CoreSwift uses this key to show and re-check this domain&rsquo;s mail records. Your sending stays on the server above, so this key never sends your mail. Stored encrypted with the domain, never echoed back.';
   const hint = document.getElementById('peNewReceivingHint');
   if (hint) hint.innerHTML = v === 'sendgrid'
     ? 'SendGrid receives this domain through its Inbound Parse webhook. No key to paste here: the address for SendGrid is issued on the domain row after saving.'
@@ -7918,7 +7932,7 @@ function peOpenAddDomain() {
     '<div id="peMailgunFields">' +
     '<div class="form-group"><label>Mailgun API key</label>' +
     '<input type="password" id="peNewKey" autocomplete="new-password" placeholder="key-...">' +
-    '<span class="form-hint">Required. Use the key of the Mailgun account that already carries this domain: the domain is verified against that account before it is saved, so a shared platform key cannot add your domain. Stored encrypted with the domain, never echoed back.</span></div>' +
+    '<span class="form-hint" id="peMailgunKeyHint">Required. Use the key of the Mailgun account that already carries this domain: the domain is verified against that account before it is saved, so a shared platform key cannot add your domain. Stored encrypted with the domain, never echoed back.</span></div>' +
     (keyOpts
       ? '<div class="form-group"><label>or use a saved key</label>' +
         '<select id="peNewSavedKey"><option value="">(paste a new key above)</option>' + keyOpts + '</select>' +

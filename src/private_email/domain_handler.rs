@@ -1804,6 +1804,19 @@ async fn add_smtp_domain(
         String::new()
     };
 
+    // The REGION is not decorative. A domain that RECEIVES through Mailgun is checked against
+    // Mailgun's own API (the records page and every re-check), and an EU account answered from
+    // api.mailgun.net reads as a credential failure on every call. This used to be the literal 'us',
+    // so an EU customer who chose Mailgun as the RECEIVER — the combination the receiving select
+    // exists for — silently got a domain whose records could never be read. Anything that is not
+    // "eu" is stored as "us" (the request's own default), so an unrecognised value can never become
+    // a URL segment.
+    let mailgun_region = if req.mailgun_region.trim().eq_ignore_ascii_case("eu") {
+        "eu"
+    } else {
+        "us"
+    };
+
     let row = sqlx::query_as::<_, PrivateEmailDomain>(
         r#"
         INSERT INTO private_email_domains (
@@ -1811,7 +1824,7 @@ async fn add_smtp_domain(
             provider_type, smtp_host, smtp_port, smtp_username, smtp_password_encrypted, smtp_tls,
             inbound_mode, inbound_provider, webhook_signing_key_encrypted, inbound_token
         )
-        VALUES ($1, $2, $3, 'us', $4, 'smtp', $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        VALUES ($1, $2, $3, $14, $4, 'smtp', $5, $6, $7, $8, $9, $10, $11, $12, $13)
         RETURNING *
         "#,
     )
@@ -1828,6 +1841,7 @@ async fn add_smtp_domain(
     .bind(&choices.receiving)
     .bind(sealed_webhook)
     .bind(new_inbound_token())
+    .bind(mailgun_region)
     .fetch_one(&state.db)
     .await
     .map_err(AppError::Database)?;
