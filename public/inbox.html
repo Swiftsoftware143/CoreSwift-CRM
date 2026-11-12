@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+ <meta charset="UTF-8">
+ <meta name="viewport" content="width=device-width, initial-scale=1.0">
+ <title>CoreSwift Inbox | One Private Mailbox On Your Own Domain, $1 a Month</title>
+ <meta name="description" content="One private inbox on a domain you own, for one dollar a month. Send and receive, 5 GB of mail storage, no CRM bundled in. Start free for 30 days with no card.">
+ <meta name="robots" content="index, follow">
+ <link rel="canonical" href="https://coreswiftcrm.com/inbox">
+ <meta property="og:type" content="website">
+ <meta property="og:url" content="https://coreswiftcrm.com/inbox">
+ <meta property="og:title" content="CoreSwift Inbox | One Private Mailbox, $1 a Month">
+ <meta property="og:description" content="One private inbox on your own domain for $1 a month, or $10 a year. Start free for 30 days — no card, no CRM bundle.">
+ <meta property="og:image" content="https://coreswiftcrm.com/assets/og-coreswift.png">
+ <meta name="twitter:card" content="summary_large_image">
+ <meta name="twitter:title" content="CoreSwift Inbox | One Private Mailbox, $1 a Month">
+ <meta name="twitter:description" content="One private inbox on your own domain for $1 a month. Start free for 30 days, no card.">
+ <meta name="twitter:image" content="https://coreswiftcrm.com/assets/og-coreswift.png">
+ <!--
+   THE OFFER ON THIS PAGE IS THE LIVE `plans` ROW, not a copy of it. The row and its gates were read
+   on 2026-11-12 from the live database before this page was written:
+
+     select slug, price_monthly, price_yearly, is_active from plans where slug = 'inbox';
+       inbox | 1.00 | 10.00 | f          <- is_active is FALSE on purpose (see below)
+
+     plan_modules          -> inbox : private_email only (no CRM module granted at all)
+     plan_module_features  -> inbox : email_mailboxes = 1, email_domains = 1,
+                                     email_storage_mb = 5120 (5 GB), email_sending = on,
+                                     email_history_days = NULL
+
+   WHY THE PAGE SAYS THE PLAN IS NOT ON SALE YET: `plans.checkout_url` is empty for every plan on
+   this install, so no plan can take money. A page that pressed a buyer into a dead button is the
+   exact defect the fleet spent cards removing, so this page sells the one door that really works
+   today (the 30-day free mailbox) and states plainly that the $1 charge opens inside the workspace.
+   Nothing here invents a payment link.
+
+   WHEN CHECKOUT IS PROVEN: paste the Inbox plan's hosted payment page on Plans & Billing, prove it
+   opens, then run /opt/swift/bin/cs-inbox-plan.sh activate — that script refuses while the link is
+   missing or dead, flips `is_active` in one UPDATE when it opens, and then this page's availability
+   paragraph (searched for by `data-inbox-availability`) must be replaced to match. cs-inbox-plan.sh
+   check names this page and its availability sentence, so the two cannot silently disagree.
+ -->
+ <link rel="preconnect" href="https://fonts.googleapis.com">
+ <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+ <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+ <style>
+ :root {
+ --bg-dark: #0a0c10; --card-bg: #121620; --border-color: #21283b;
+ --accent-blue: #3b82f6; --accent-teal: #14b8a6;
+ --text-main: #f3f4f6; --text-muted: #9ca3af;
+ }
+ * { box-sizing: border-box; margin: 0; padding: 0; }
+ body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: var(--bg-dark);
+        color: var(--text-main); line-height: 1.6; }
+ .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+ header { padding: 32px 0; display: flex; justify-content: space-between; align-items: center; }
+ .logo { font-weight: 800; font-size: 1.5rem; color: #fff; text-decoration: none; }
+ .logo span { color: var(--accent-blue); }
+ .nav-btns { display: flex; gap: 12px; align-items: center; }
+ .nav-link { color: var(--text-muted); text-decoration: none; font-weight: 600; font-size: .9rem; }
+ .nav-link:hover { color: #fff; }
+ .btn-outline { padding: 8px 20px; border: 1px solid var(--border-color); color: var(--text-main);
+                border-radius: 8px; text-decoration: none; font-size: .875rem; }
+ .cta-button { display: inline-block; padding: 10px 20px; font-size: .875rem;
+   background: linear-gradient(135deg, var(--accent-blue), var(--accent-teal)); color: #fff;
+   font-weight: 700; text-decoration: none; border-radius: 8px; }
+ .cta-button:hover { opacity: .95; }
+ .hero { display: grid; grid-template-columns: 1.25fr .85fr; gap: 36px; align-items: start;
+         padding: 32px 0 8px; }
+ .hero h1 { font-size: clamp(2rem, 4vw, 2.6rem); font-weight: 800; letter-spacing: -.02em;
+            line-height: 1.15; }
+ .hero .lede { color: var(--text-muted); margin-top: 14px; font-size: 1.02rem; max-width: 560px; }
+ .hero .cta-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 24px; align-items: center; }
+ .cta-primary { padding: 14px 26px; font-size: 1rem; font-weight: 800; border-radius: 10px;
+   background: linear-gradient(135deg, var(--accent-blue), var(--accent-teal)); color: #fff;
+   text-decoration: none; }
+ .cta-primary:hover { opacity: .95; }
+ .cta-note { font-size: .82rem; color: var(--text-muted); }
+ .card { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 14px;
+         padding: 26px 22px; }
+ .card .price { font-size: 2.6rem; font-weight: 800; letter-spacing: -.02em; }
+ .card .per { font-size: .95rem; font-weight: 600; color: var(--text-muted); margin-left: 6px; }
+ .card .annual { font-size: .84rem; color: var(--accent-teal); margin-top: 4px; }
+ .card .plan-name { font-size: .78rem; text-transform: uppercase; letter-spacing: .12em;
+                    color: var(--accent-blue); font-weight: 700; }
+ .card ul { list-style: none; display: grid; gap: 7px; font-size: .9rem; margin: 18px 0 0; }
+ .card li { padding-left: 20px; position: relative; }
+ .card li:before { content: "\2713"; position: absolute; left: 0; color: var(--accent-teal);
+                   font-weight: 700; }
+ .card .card-cta { margin-top: 20px; display: block; text-align: center; padding: 12px 16px;
+   border-radius: 10px; border: 1px solid var(--border-color); color: var(--text-main);
+   text-decoration: none; font-weight: 700; font-size: .92rem; }
+ .card .card-cta:hover { border-color: var(--accent-blue); }
+ section { padding: 34px 0; }
+ section h2 { font-size: 1.35rem; font-weight: 800; letter-spacing: -.01em; }
+ section h2 + p.sub { color: var(--text-muted); margin-top: 8px; max-width: 720px; }
+ .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px;
+         margin-top: 20px; }
+ .panel { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 14px;
+          padding: 22px 20px; }
+ .panel h3 { font-size: 1rem; font-weight: 700; margin-bottom: 10px; }
+ .panel ul { list-style: none; display: grid; gap: 7px; font-size: .9rem; color: var(--text-muted); }
+ .panel li { padding-left: 20px; position: relative; }
+ .panel.includes li:before { content: "\2713"; position: absolute; left: 0;
+                             color: var(--accent-teal); font-weight: 700; }
+ .panel.excludes li:before { content: "\2014"; position: absolute; left: 0; color: #6b7280; }
+ .steps { display: grid; gap: 16px; margin-top: 20px; }
+ .step { display: grid; grid-template-columns: 42px 1fr; gap: 16px; align-items: start;
+         background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 14px;
+         padding: 20px; }
+ .step .n { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
+            font-weight: 800; background: rgba(59,130,246,.16); color: #93c5fd; }
+ .step h3 { font-size: .98rem; font-weight: 700; }
+ .step p { color: var(--text-muted); font-size: .9rem; margin-top: 4px; }
+ .availability { margin-top: 22px; background: rgba(20,184,166,.08);
+   border: 1px solid rgba(20,184,166,.35); border-radius: 14px; padding: 20px 22px; }
+ .availability h2 { font-size: 1.05rem; }
+ .availability p { color: var(--text-muted); font-size: .92rem; margin-top: 8px; }
+ .availability strong { color: var(--text-main); }
+ .faq { display: grid; gap: 12px; margin-top: 18px; }
+ .faq details { background: var(--card-bg); border: 1px solid var(--border-color);
+                border-radius: 12px; padding: 16px 18px; }
+ .faq summary { font-weight: 700; cursor: pointer; font-size: .95rem; }
+ .faq p { color: var(--text-muted); font-size: .9rem; margin-top: 8px; }
+ .foot-note { color: var(--text-muted); font-size: .82rem; text-align: center; padding: 8px 0 40px; }
+ footer { border-top: 1px solid var(--border-color); padding: 28px 0; }
+ footer .container { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+                     align-items: center; font-size: .8rem; color: var(--text-muted); }
+ .legal-links { display: flex; gap: 16px; flex-wrap: wrap; }
+ .legal-links a { color: var(--text-muted); text-decoration: none; }
+ .legal-links a:hover { color: #fff; }
+ @media (max-width: 820px) { .hero { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+ <header class="container">
+  <a href="/" class="logo" aria-label="CoreSwift CRM home">CoreSwift<span>CRM</span></a>
+  <div class="nav-btns">
+   <a href="/inbox" class="nav-link" aria-current="page">Inbox</a>
+   <a href="/pricing" class="nav-link">Pricing</a>
+   <a href="https://app.coreswiftcrm.com/login" class="btn-outline">Sign In</a>
+   <a href="https://app.coreswiftcrm.com/register/" class="cta-button">Get Started Free</a>
+  </div>
+ </header>
+<nav class="navx-crumb" aria-label="Breadcrumb"><a href="/">Home</a><span class="navx-sep" aria-hidden="true">&rsaquo;</span><span aria-current="page">Inbox</span></nav><script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://coreswiftcrm.com/"},{"@type":"ListItem","position":2,"name":"Inbox","item":"https://coreswiftcrm.com/inbox"}]}</script><style id="navx-style">.navx-crumb{display:flex;flex-wrap:wrap;gap:.45rem;align-items:center;font-size:.82rem;max-width:1100px;margin:0 auto;padding:14px 18px 0;line-height:1.4}.navx-crumb a{text-decoration:underline;text-underline-offset:2px}.navx-crumb .navx-sep{opacity:.55}.navx-crumb [aria-current]{opacity:.75}.navx-rel{max-width:1100px;margin:34px auto 18px;padding:16px 18px;border:1px solid rgba(128,128,128,.45);border-radius:10px;background:rgba(128,128,128,.08);color:inherit}.navx-rel h2{font-size:1rem;margin:0 0 .6rem;letter-spacing:.01em}.navx-rel ul{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.45rem 1.4rem}.navx-rel a{text-decoration:underline;text-underline-offset:2px;font-size:.93rem}</style>
+
+ <main class="container">
+
+  <section class="hero">
+   <div>
+    <h1>Your own mailbox.<br>One dollar a month.</h1>
+    <p class="lede">One private inbox on a domain you own &mdash; sending and receiving, on your own
+       mail account, with nothing else bundled in and no seats to buy. Free for your first 30 days,
+       no card.</p>
+    <div class="cta-row">
+     <a class="cta-primary" href="https://app.coreswiftcrm.com/register/">Start free &mdash; 30 days, no card</a>
+     <span class="cta-note">One mailbox. One domain. Nothing else charged.</span>
+    </div>
+   </div>
+   <div class="card" aria-labelledby="inbox-plan-name">
+    <p class="plan-name" id="inbox-plan-name">The Inbox plan</p>
+    <p><span class="price">$1</span><span class="per">/ month</span></p>
+    <p class="annual">or $10 a year &mdash; two months free</p>
+    <ul>
+     <li>One private mailbox</li>
+     <li>One domain &mdash; the one you own</li>
+     <li>Sending and receiving</li>
+     <li>5 GB of mail storage</li>
+     <li>Read it in the browser, on any device</li>
+    </ul>
+    <a class="card-cta" href="https://app.coreswiftcrm.com/register/">Start free for 30 days</a>
+   </div>
+  </section>
+
+  <section>
+   <h2>What $1 buys, and what it does not</h2>
+   <p class="sub">The Inbox plan is a door of its own, not a cut-down CRM. If all you want is a real
+      mailbox on your own domain, this is the whole of it.</p>
+   <div class="cols">
+    <div class="panel includes">
+     <h3>Included</h3>
+     <ul>
+      <li>One mailbox on your own domain, e.g. hello&#64;yourcompany.com</li>
+      <li>Send and receive from it &mdash; your reputation stays yours</li>
+      <li>5 GB of mail storage</li>
+      <li>Private inbox in the browser: read, reply, search, attachments</li>
+      <li>One domain to verify, one set of DNS records to add</li>
+     </ul>
+    </div>
+    <div class="panel excludes">
+     <h3>Not included (and not charged for)</h3>
+     <ul>
+      <li>Contacts, companies and pipelines</li>
+      <li>Deals, tasks and the sales dashboard</li>
+      <li>Email campaigns and support tickets</li>
+      <li>Calendar, booking pages and automation</li>
+      <li>Extra mailboxes or extra domains</li>
+     </ul>
+    </div>
+   </div>
+  </section>
+
+  <section>
+   <h2>How it works</h2>
+   <p class="sub">Your mail runs on your own mail account, which is why a mailbox can cost a dollar
+      instead of thirty. Setup is three steps and you can stop between any of them and come back.</p>
+   <div class="steps">
+    <div class="step">
+     <div class="n">1</div>
+     <div>
+      <h3>Create your free workspace</h3>
+      <p>Name, email address, done &mdash; no card. Your mailbox is free for 30 days from the moment
+         your domain verifies, not from the day you signed up.</p>
+     </div>
+    </div>
+    <div class="step">
+     <div class="n">2</div>
+     <div>
+      <h3>Point your domain at your own mail account</h3>
+      <p>You will need a domain, a Cloudflare account for its DNS, and a Mailgun account. The setup
+         screen shows every record to paste, what each one does, and a copy button &mdash; then a
+         single press verifies them. If a record is wrong it tells you which one.</p>
+     </div>
+    </div>
+    <div class="step">
+     <div class="n">3</div>
+     <div>
+      <h3>Use it</h3>
+      <p>Mail arrives in your private inbox within seconds. Send, reply, search, keep everything.
+         Nothing is ever deleted for being on a free account.</p>
+     </div>
+    </div>
+   </div>
+  </section>
+
+  <section>
+   <h2>What happens at day 30</h2>
+   <p class="sub">Nothing is deleted and your address keeps working. A free mailbox stops
+      <em>sending</em>; it still receives. You then choose one of two doors:</p>
+   <div class="cols">
+    <div class="panel">
+     <h3>Keep the inbox for $1 a month</h3>
+     <ul>
+      <li>Sending comes back immediately</li>
+      <li>Everything you already have stays exactly where it is</li>
+      <li>$10 a year instead of $12 if you prefer to pay once</li>
+     </ul>
+    </div>
+    <div class="panel">
+     <h3>Or take the full CRM</h3>
+     <ul>
+      <li>Your mailbox is included, not charged twice</li>
+      <li>Moving up cancels the $1 in the same action</li>
+      <li>One bill, one plan &mdash; never a stack of charges</li>
+     </ul>
+    </div>
+   </div>
+  </section>
+
+  <section class="availability" data-inbox-availability="not-on-sale">
+   <h2>Buying the $1 plan</h2>
+   <p><strong>Card payments for the Inbox plan are still being connected.</strong> No card is taken
+      on this page today, and nothing here charges you. The way in right now is the free door:
+      create a workspace and your mailbox is free for 30 days, on your own domain, with no card.
+      The $1 option appears inside your workspace &mdash; and here &mdash; the day card payments open.</p>
+   <p>Rather be told when it opens? <a href="https://app.coreswiftcrm.com/contact.html"
+      style="color:#5eead4">Send us a line</a> and we will open it for your workspace by hand.</p>
+  </section>
+
+  <section>
+   <h2>Questions people actually ask</h2>
+   <div class="faq">
+    <details>
+     <summary>Is my mail deleted if I stay on the free plan?</summary>
+     <p>No. At day 30 a free mailbox stops sending and keeps receiving. Every message you already
+        have stays readable, and nothing is removed for being unpaid.</p>
+    </details>
+    <details>
+     <summary>Do I need my own domain and mail account?</summary>
+     <p>Yes, and that is the point: your mail is delivered by your own Mailgun account on your own
+        domain, so your sending reputation is yours and a mailbox costs us almost nothing to host.
+        The setup screen walks you through it and tells you exactly which record is wrong if
+        verification fails.</p>
+    </details>
+    <details>
+     <summary>Can I move to the full CRM later?</summary>
+     <p>Yes, at any time. Your mailbox comes with you &mdash; it is the same inbox, with the rest of
+        the CRM switched on around it &mdash; and the $1 charge stops in the same action that starts
+        the new plan.</p>
+    </details>
+    <details>
+     <summary>How many addresses do I get for $1?</summary>
+     <p>One mailbox on one domain. If you need more addresses, or a second domain, the full CRM
+        plans carry more.</p>
+    </details>
+    <details>
+     <summary>Can I stop whenever I want?</summary>
+     <p>Yes. Cancel and the mailbox drops back to the free behaviour &mdash; it keeps receiving, you
+        keep your mail, and you can come back to the $1 plan later.</p>
+    </details>
+   </div>
+  </section>
+
+  <p class="foot-note">The Inbox plan is a standalone door: it is not a discounted CRM tier, and
+     taking it never unlocks contacts, pipelines, campaigns or tickets.</p>
+ </main>
+
+<section class="navx-rel" aria-labelledby="navx-rel-h"><h2 id="navx-rel-h">Keep exploring CoreSwift-CRM</h2><ul><li><a href="/pricing">Plans</a></li><li><a href="/">Home</a></li><li><a href="/guide.html">Guide</a></li><li><a href="/terms.html">Terms of Service</a></li></ul></section>
+<footer>
+  <div class="container">
+   <p>&copy; 2026 CoreSwift CRM / SwiftSoftware. All rights reserved.</p>
+   <nav class="legal-links" aria-label="Legal">
+    <a href="/inbox">Inbox</a>
+    <a href="/pricing">Pricing</a>
+    <a href="/privacy.html">Privacy Policy</a>
+    <a href="/terms.html">Terms of Service</a>
+    <a href="/refunds.html">Refund &amp; Cancellation Policy</a>
+    <a href="https://app.coreswiftcrm.com/contact.html">Contact</a>
+   </nav>
+  </div>
+ </footer>
+
+<!-- Cookie Consent Banner -->
+<div id="cookie-banner" style="position:fixed;bottom:0;left:0;right:0;background:#0f172a;color:#e2e8f0;z-index:99999;padding:16px 24px;font-family:system-ui,sans-serif;font-size:13px;box-shadow:0 -4px 20px rgba(0,0,0,.4);display:none">
+  <div style="max-width:1100px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+    <div style="flex:1;min-width:250px">
+      <strong style="font-size:14px">&#127850; Cookie Consent</strong>
+      <p style="margin:4px 0 0;color:#94a3b8;line-height:1.5">We use cookies for analytics, security, and to improve your experience. By continuing, you agree to our <a href="/privacy.html" style="color:#38bdf8">Privacy Policy</a> and <a href="/terms.html" style="color:#38bdf8">Terms of Service</a>.</p>
+    </div>
+    <div style="display:flex;gap:8px;flex-shrink:0">
+      <button onclick="acceptCookies()" style="background:#2563eb;color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px">Accept All</button>
+      <button onclick="declineCookies()" style="background:transparent;color:#94a3b8;border:1px solid #475569;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:13px">Decline</button>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var choice = localStorage.getItem('cookie_consent');
+  if (!choice) {
+    document.getElementById('cookie-banner').style.display = 'block';
+  }
+  window.acceptCookies = function(){
+    localStorage.setItem('cookie_consent','accepted');
+    document.getElementById('cookie-banner').style.display = 'none';
+  };
+  window.declineCookies = function(){
+    localStorage.setItem('cookie_consent','declined');
+    document.getElementById('cookie-banner').style.display = 'none';
+    if (typeof gtag === 'function') { window['ga-disable-all'] = true; }
+    var scripts = document.querySelectorAll('script[src*="googletagmanager"],script[src*="analytics"]');
+    scripts.forEach(function(s){ s.remove(); });
+  };
+})();
+</script>
+
+</body>
+</html>
