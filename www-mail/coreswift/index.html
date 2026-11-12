@@ -86,11 +86,18 @@
     .main{grid-template-columns:1fr}
     .list{max-height:44vh}
     .reader{border-top:1px solid var(--line)}
+    /* On a phone the compose form plus the signature preview is taller than the screen, so the
+       panel scrolls (the Send button is reached by scrolling inside it, which is what a phone
+       composer does). Trim the preview and the message box so it is a short scroll, not a hunt. */
+    .modal{padding:14px}
+    .modal-foot{position:sticky;bottom:0;background:#fff;padding-top:8px}
+    #cSigWrap,#sPreview{max-height:150px}
+    #cBody{min-height:110px}
   }
 </style>
 </head>
 <body>
 <div id="app"><div class="empty">Loading CoreSwift Mail…</div></div>
-<script src="/mail.js?v=20261111h"></script>
+<script src="/mail.js?v=20261111j"></script>
 </body>
 </html>
