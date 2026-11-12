@@ -191,9 +191,9 @@ pub fn decode_uploads(items: &[AttachmentUpload]) -> Result<Vec<OutgoingAttachme
                     item.filename
                 ))
             })?;
-        if bytes.is_empty() {
-            continue;
-        }
+        // A ZERO-BYTE file is still a file the customer attached. Keeping it (a 0 B chip) is the
+        // honest arm: the one thing this path may never do is drop a named part and still answer
+        // "sent" (kanban t_41f04fd9).
         if bytes.len() > MAX_OUTBOUND_FILE_BYTES {
             return Err(AppError::Validation(format!(
                 "'{}' is {} — one attachment may be up to {}.",
@@ -757,6 +757,21 @@ mod tests {
         };
         let err = decode_uploads(&[big]).unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[test]
+    fn a_zero_byte_upload_is_kept_not_dropped() {
+        // A named part with no bytes is still a part the customer attached. Dropping it here would
+        // answer "sent" over a file that never left (kanban t_41f04fd9).
+        let items = vec![AttachmentUpload {
+            filename: "empty.txt".into(),
+            content_type: Some("text/plain".into()),
+            data_base64: String::new(),
+        }];
+        let out = decode_uploads(&items).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].filename, "empty.txt");
+        assert!(out[0].bytes.is_empty());
     }
 
     #[test]

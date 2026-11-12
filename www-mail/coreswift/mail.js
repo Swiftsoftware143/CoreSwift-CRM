@@ -953,7 +953,7 @@
       + '<label class="f">Attach files</label>'
       + '<input type="file" id="cFiles" multiple style="width:100%;padding:6px 0">'
       + '<div id="cFilesList" style="font-size:12px;color:var(--muted);margin:2px 0 0">'
-      + 'Up to 10 MB each, 20 MB in total. They count toward your storage.</div>'
+      + 'Up to 10 MB each, 18 MB in total, 20 files at most. They count toward your storage.</div>'
       + '<label class="f">Signature</label>'
       + '<div id="cSigWrap" style="border:1px solid var(--line);border-radius:8px;padding:12px;background:#fff;max-height:200px;overflow:auto"></div>'
       + '<label id="cSigRow" style="display:flex;gap:8px;align-items:flex-start;margin:10px 0 0;font-size:13px;line-height:1.35">'
@@ -966,6 +966,14 @@
       function () {
         var db = $('cDraft');
         if (db) db.onclick = async function () {
+          // A DRAFT KEEPS THE TEXT, NOT THE FILES (kanban t_41f04fd9). Saving one here would answer
+          // "Draft saved" while the attached file vanished — a silent drop. Refuse with the two ways
+          // forward instead, and keep everything the customer typed in the box.
+          var picked = ($('cFiles') && $('cFiles').files) ? $('cFiles').files.length : 0;
+          if (picked) {
+            $('cErr').textContent = 'A draft keeps the text, not the files - send this one now, or remove the file to save it as a draft.';
+            return;
+          }
           try {
             await api('POST', '/private-email/messages/drafts', {
               id: (m && m.folder === 'drafts') ? m.id : undefined,
@@ -983,20 +991,30 @@
         if (on) on.onchange = function () { sig.include = on.checked; paintSig(); };
         loadSig();
         // Read the picked files as base64 parts, refusing over the ceiling BEFORE sending so the
-        // sentence the customer reads is about their file, not a gateway error.
+        // sentence the customer reads is about their file, not a gateway error. The three numbers are
+        // the ones the server enforces (private_email/attachments.rs): 10 MB per file, 18 MB of raw
+        // bytes per message, 20 files. They used to disagree here (the hint said 20 MB while the
+        // server refused past 18), so a legal-looking selection was answered by the server instead.
+        var MAX_ONE = 10 * 1024 * 1024;
+        var MAX_TOTAL = 18 * 1024 * 1024;
+        var MAX_FILES = 20;
         function filesForUpload() {
           var input = $('cFiles');
           var picked = (input && input.files) ? Array.prototype.slice.call(input.files) : [];
           var list = $('cFilesList');
           if (!picked.length) return Promise.resolve([]);
+          if (picked.length > MAX_FILES) {
+            $('cErr').textContent = 'One message may carry up to ' + MAX_FILES + ' files - send fewer, or send a second message.';
+            return Promise.resolve(null);
+          }
           var total = picked.reduce(function (n, f) { return n + f.size; }, 0);
-          var over = picked.filter(function (f) { return f.size > 10 * 1024 * 1024; })[0];
+          var over = picked.filter(function (f) { return f.size > MAX_ONE; })[0];
           if (over) {
             $('cErr').textContent = '"' + over.name + '" is larger than the 10 MB one attachment may be.';
             return Promise.resolve(null);
           }
-          if (total > 20 * 1024 * 1024) {
-            $('cErr').textContent = 'Those files add up to more than 20 MB - send fewer, or smaller, files.';
+          if (total > MAX_TOTAL) {
+            $('cErr').textContent = 'Those files add up to more than 18 MB - send fewer, or smaller, files.';
             return Promise.resolve(null);
           }
           if (list) list.textContent = 'Attaching ' + picked.length + ' file' + (picked.length === 1 ? '' : 's') + '...';
@@ -1020,16 +1038,20 @@
           var btn = this;
           var to2 = ($('cTo').value || '').trim();
           if (!to2) { $('cErr').textContent = 'Add who this goes to.'; return; }
+          // A sentence from the previous attempt (an over-cap file, say) must not sit under a send
+          // that has since been fixed.
+          $('cErr').textContent = '';
           btn.disabled = true;
           try {
             var files = await filesForUpload();
             if (files === null) { btn.disabled = false; return; }
             var signed = sig.include && sig.has;
+            var resp;
             // A reply, reply-all or forward goes through the REPLY route so it carries the thread and
             // the same one sender; a new message goes through /send. Both append the signature in the
             // same server function, so the toggle means the same thing either way.
             if (m && (mode === 'reply' || mode === 'reply_all' || mode === 'forward')) {
-              await api('POST', '/private-email/messages/' + m.id + '/reply', {
+              resp = await api('POST', '/private-email/messages/' + m.id + '/reply', {
                 from_address: $('cFrom').value,
                 to: to2,
                 subject: $('cSubject').value || '',
@@ -1039,7 +1061,7 @@
                 attachments: files
               });
             } else {
-              await api('POST', '/private-email/send', {
+              resp = await api('POST', '/private-email/send', {
                 from_address: $('cFrom').value,
                 to: to2,
                 cc: splitAddrs($('cCc').value),
@@ -1055,7 +1077,13 @@
             if (m && m.folder === 'drafts') {
               try { await api('DELETE', '/private-email/messages/' + m.id); } catch (e) {}
             }
-            closeModal(); toast('Sent'); S.sel = null; await boot();
+            // Name what the provider took (kanban t_41f04fd9): "Sent" alone cannot be checked, while
+            // "Sent with march-invoice.pdf" is the confirmation the customer needs and the one this
+            // route's answer now supports.
+            var n = (resp && resp.attachment_count) || 0;
+            var single = (n === 1 && resp.attachments && resp.attachments[0]) ? resp.attachments[0].filename : '';
+            var note = n ? ('Sent with ' + (n === 1 ? single : n + ' files')) : 'Sent';
+            closeModal(); toast(note); S.sel = null; await boot();
           } catch (e) { $('cErr').textContent = fail(e); btn.disabled = false; }
         };
       });

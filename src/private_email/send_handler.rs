@@ -250,6 +250,21 @@ pub async fn send_email(
         .await;
     }
 
+    // ── THE ANSWER NAMES THE FILES (kanban t_41f04fd9) ─────────────────────────────────────────
+    // A 2xx means the provider ACCEPTED the message — but the composer must be able to say what left
+    // with it. The names and byte counts come from the same decoded parts the provider was handed, so
+    // "Sent with 2 files" can never be printed over a file that was quietly dropped on the way.
+    let attachments: Vec<serde_json::Value> = outgoing
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "filename": f.filename,
+                "size_bytes": f.bytes.len(),
+                "size_human": super::storage::human_bytes(f.bytes.len() as i64),
+            })
+        })
+        .collect();
+
     Ok(Json(serde_json::json!({
         "sent": true,
         "provider": provider,
@@ -257,6 +272,8 @@ pub async fn send_email(
         "from": req.from_address,
         "to": req.to,
         "subject": req.subject,
+        "attachment_count": attachments.len(),
+        "attachments": attachments,
     })))
 }
 

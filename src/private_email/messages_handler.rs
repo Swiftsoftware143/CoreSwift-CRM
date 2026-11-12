@@ -832,7 +832,25 @@ pub async fn reply_to_message(
     // received (and the bytes are already inside this row's size_bytes — counted once).
     attachments::store_outgoing(&state.db, tenant_id, sent_id, &outgoing).await;
 
-    Ok(Json(json!({ "sent": true, "message_id": sent_id })))
+    // The answer names the files the provider accepted (kanban t_41f04fd9), so the composer can say
+    // "Sent with 1 file" instead of a blanket "Sent" over a part that never left.
+    let attachments: Vec<Value> = outgoing
+        .iter()
+        .map(|f| {
+            json!({
+                "filename": f.filename,
+                "size_bytes": f.bytes.len(),
+                "size_human": super::storage::human_bytes(f.bytes.len() as i64),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "sent": true,
+        "message_id": sent_id,
+        "attachment_count": attachments.len(),
+        "attachments": attachments,
+    })))
 }
 
 /// POST /api/private-email/folders/action — mark all read / unread, or empty a folder.
