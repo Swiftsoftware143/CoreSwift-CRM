@@ -23,11 +23,12 @@ pub async fn stats(
     // Every counter propagates a DB error with `?`. The old `.unwrap_or(0)` folded a failed query
     // into a fabricated 0, which is indistinguishable — to any consumer — from "this tenant has
     // no rows of that kind".
-    let total_contacts: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE tenant_id = $1")
-            .bind(tenant_id)
-            .fetch_one(&s.db)
-            .await?;
+    let total_contacts: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM contacts WHERE tenant_id = $1 AND is_active = true",
+    )
+    .bind(tenant_id)
+    .fetch_one(&s.db)
+    .await?;
 
     let total_companies: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM companies WHERE tenant_id = $1")
@@ -80,8 +81,9 @@ const SEARCH_LIMIT: i64 = 10;
 /// fleet-wide grep for `search/query` found the guide text and nothing else, i.e. no caller).
 ///
 /// `total_contacts` / `total_companies` are KEPT because they are the only shape this route ever
-/// returned, and the guide now says what they are: the tenant's own row totals — the same numbers
-/// `GET /api/dashboard/stats` reports — and NOT the number of matches. The matches are the three
+/// returned, and the guide now says what they are: the tenant's own totals — the same numbers
+/// `GET /api/dashboard/stats` reports (so `total_contacts` counts active contacts only, matching
+/// the list and search surfaces) — and NOT the number of matches. The matches are the three
 /// arrays. A blank or absent `q` answers `200` with three empty arrays (a search with no term
 /// matches nothing); that keeps the route's historical "answered 200 without q" behaviour.
 ///
@@ -173,12 +175,15 @@ pub async fn search_query(
         .collect()
     };
 
-    // Legacy keys — the tenant's own totals, unchanged in meaning, scoped by the same tenant_id.
-    let total_contacts: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE tenant_id = $1")
-            .bind(tenant_id)
-            .fetch_one(&s.db)
-            .await?;
+    // Legacy keys — the tenant's own totals, scoped by the same tenant_id. `total_contacts`
+    // counts active contacts only (matching the list/search surfaces); `total_companies` is the
+    // full row count. Both mirror `GET /api/dashboard/stats`.
+    let total_contacts: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM contacts WHERE tenant_id = $1 AND is_active = true",
+    )
+    .bind(tenant_id)
+    .fetch_one(&s.db)
+    .await?;
 
     let total_companies: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM companies WHERE tenant_id = $1")

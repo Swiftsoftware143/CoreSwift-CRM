@@ -268,7 +268,7 @@ Response:
   "total_opportunities": 28,
   "total_revenue": 5000.00
 }</pre>
-    <p><code>total_contacts</code>, <code>total_companies</code> and <code>total_opportunities</code> are row counts for your account. <code>total_revenue</code> is money, not a count: it is the sum of <code>opportunities.value</code> over the opportunities you have marked won, and <code>0</code> when you have none. These four are the whole response — no other key is returned.</p>
+    <p><code>total_contacts</code> is a count of your active contacts — the ones shown in the contact list. <code>total_companies</code> and <code>total_opportunities</code> are row counts for your account. <code>total_revenue</code> is money, not a count: it is the sum of <code>opportunities.value</code> over the opportunities you have marked won, and <code>0</code> when you have none. These four are the whole response — no other key is returned.</p>
   </div>
   <div class="card">
     <h3>Pipeline Summary</h3>
@@ -297,7 +297,7 @@ Response:
     { "id": "77c1...", "name": "David renewal", "value": 12000.00, "is_won": false }
   ]
 }</pre>
-    <p><code>total_contacts</code> and <code>total_companies</code> are your own row totals — the same numbers as <code>GET /api/dashboard/stats</code> — and not the number of matches; the matches are the three arrays. A request with no <code>q</code> (or a blank one) returns those totals with three empty arrays, and so does a query that matches nothing.</p>
+    <p><code>total_contacts</code> and <code>total_companies</code> are your own totals — the same numbers as <code>GET /api/dashboard/stats</code> — and not the number of matches; the matches are the three arrays. A request with no <code>q</code> (or a blank one) returns those totals with three empty arrays, and so does a query that matches nothing.</p>
   </div>
 </section>
 
