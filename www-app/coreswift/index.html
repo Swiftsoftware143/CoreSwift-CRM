@@ -1861,7 +1861,7 @@ const TAB_LOADERS = {
           // replaced with `is_active`: this loader's endpoint (and /api/contacts/search) filter
           // `WHERE is_active = true`, so a rendered row is active by construction and the badge
           // still could not vary. Removing the column is the honest arm (kanban t_df4e34aa).
-          `<button class="btn btn-ghost btn-xs" onclick="editContact('${c.id}')">Edit</button> <button class="btn btn-ghost btn-xs" onclick="ctOpenTags('${c.id}')">Tags</button>`
+          `<button class="btn btn-ghost btn-xs" onclick="editContact('${c.id}')">Edit</button> <button class="btn btn-ghost btn-xs" onclick="ctOpenTags('${c.id}')">Tags</button> <button class="btn btn-ghost btn-xs" data-ops="contact-delete" onclick="deleteContact('${c.id}')">Delete</button>`
         ]);
       }
       contactsTableEl.innerHTML = dataTable(
@@ -3379,6 +3379,7 @@ async function editContact(id) {
     '<div class="form-group"><label>Phone</label><input type="text" id="ctEditPhone" value="' + escapeHtmlAttr(c.phone || '') + '"></div>' +
     '<div class="form-group"><label>Company</label><input type="text" id="ctEditCompany" value="' + escapeHtmlAttr(c.company || '') + '"></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-danger btn-sm" data-ops="contact-delete-from-editor" onclick="deleteContactFromEditor()">Delete</button>' +
     '<button class="btn btn-primary btn-sm" data-ops="contact-update" onclick="saveContactEdit()">Save</button>');
 }
 
@@ -3400,6 +3401,36 @@ async function saveContactEdit() {
     toast('Update failed: ' + e.message, 'error');
   }
 }
+// Delete a contact — DELETE /api/contacts/{id}, tenant-scoped and permanent. The console had no
+// caller for the endpoint, so a duplicate or a leftover test row could not be removed from the
+// product while the Duplicates screen tells the operator to "delete the others on the Contacts
+// screen". Same code as the served tree (/opt/swift/nginx/www-app/coreswift).
+function deleteContact(id) {
+  confirmThen('Delete this contact? This removes the record for good.', function () {
+    API.del('/contacts/' + encodeURIComponent(id))
+      .then(function () {
+        toast('Contact deleted', 'success');
+        if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['contacts']) TAB_LOADERS['contacts']();
+      })
+      .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+  });
+}
+
+function deleteContactFromEditor() {
+  const id = CT_EDIT_ID;
+  if (!id) { toast('No contact selected', 'error'); return; }
+  confirmThen('Delete this contact? This removes the record for good.', function () {
+    API.del('/contacts/' + encodeURIComponent(id))
+      .then(function () {
+        closeModal();
+        CT_EDIT_ID = null;
+        toast('Contact deleted', 'success');
+        if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['contacts']) TAB_LOADERS['contacts']();
+      })
+      .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+  });
+}
+
 // Company create + editor — POST /api/companies and GET/PATCH /api/companies/{id} (kanban
 // t_f582ff76). Both controls were toast-only: "+ Add Company" rendered three id-less inputs and
 // its Save was closeModal();toast('Company added') — no request, no row — and the per-row Edit

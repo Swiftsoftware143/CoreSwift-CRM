@@ -623,9 +623,11 @@ Authorization: Bearer ***
   <div class="card">
     <h3>Contacts</h3>
     <p>Contact management with search (<code>/api/contacts</code>, <code>GET /api/contacts/search</code>), pagination (50 rows per page by default) and add/edit dialogs. A contact has no status field and the list has no status column.</p>
+    <p>To remove a record, press <strong>Delete</strong> on its row (or <strong>Delete</strong> inside the edit window) and confirm. The contact is removed permanently, so a duplicate is deleted here while the record you are keeping is left untouched. Deleting a contact never deletes the company it was filed under.</p>
     <pre>GET /api/contacts
 POST /api/contacts
-PATCH /api/contacts/:id</pre>
+PATCH /api/contacts/:id
+DELETE /api/contacts/:id</pre>
   </div>
   <div class="card">
     <h3>Companies</h3>
