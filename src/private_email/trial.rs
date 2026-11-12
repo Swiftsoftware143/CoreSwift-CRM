@@ -217,13 +217,110 @@ pub async fn enforce_send(
     Ok(())
 }
 
+/// The states, recomputed for one tenant, and persisted so the row never disagrees with the send
+/// decision: `paid` when the plan sells sending, else `trial` while the window is open, else
+/// `receive_only`.
+///
+/// WHY THIS EXISTS (kanban t_9207d95b). `access_mode` is written at creation (`trial` on a free
+/// plan, `paid` on a paid one) and by the sweep (`trial` → `receive_only`). Nothing moved a mailbox
+/// the other way, so a free mailbox upgraded mid-trial — or long after it expired — kept the word
+/// `receive_only` on its row for ever even though `send_access` had already granted sending (the
+/// send decision is derived, so mail flowed; the ROW was the liar). That also meant the sweep could
+/// later stamp `mailbox.trial_expired` on a paying customer's audit trail.
+///
+/// The plan writers call this in the SAME request that changes the plan, so the console, the audit
+/// trail and the send path agree the moment the upgrade answers. It is idempotent twice over: a
+/// row already in the wanted state is skipped, and the UPDATE is guarded on the old value it read,
+/// so two passes (or two instances) cannot write a second audit row.
+pub async fn reconcile_access_modes(pool: &PgPool, tenant_id: Uuid) -> Result<u64, AppError> {
+    let sells = plan_sells_sending(pool, tenant_id).await?;
+
+    let boxes: Vec<(Uuid, String, Option<DateTime<Utc>>)> = sqlx::query_as(
+        r#"
+        SELECT id, access_mode, trial_ends_at
+          FROM private_email_boxes
+         WHERE tenant_id = $1 AND status = 'active'
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+    .map_err(AppError::Database)?;
+
+    let now = Utc::now();
+    let mut changed = 0u64;
+    for (box_id, mode, ends) in boxes {
+        let (desired, reason) = if sells {
+            ("paid", "the plan sells sending")
+        } else if ends.map(|e| e > now).unwrap_or(false) {
+            (
+                "trial",
+                "the plan sells no sending, but this mailbox is still inside its trial window",
+            )
+        } else {
+            (
+                "receive_only",
+                "the plan sells no sending and the trial window has closed",
+            )
+        };
+        if desired == mode {
+            continue;
+        }
+
+        let affected = sqlx::query(
+            r#"
+            UPDATE private_email_boxes
+               SET access_mode = $1, updated_at = NOW()
+             WHERE id = $2 AND access_mode = $3
+            "#,
+        )
+        .bind(desired)
+        .bind(box_id)
+        .bind(&mode)
+        .execute(pool)
+        .await
+        .map_err(AppError::Database)?
+        .rows_affected();
+        if affected == 0 {
+            continue; // another pass won the race — no second audit row
+        }
+        changed += 1;
+
+        crate::audit::logger::log_event(
+            pool,
+            tenant_id,
+            None,
+            "mailbox.access_mode_changed",
+            "private_email_box",
+            Some(box_id),
+            Some(json!({"from": mode, "to": desired, "reason": reason})),
+            None,
+        )
+        .await;
+
+        tracing::info!(
+            mailbox = %box_id,
+            tenant = %tenant_id,
+            from = %mode,
+            to = %desired,
+            reason,
+            "mailbox state settled to match the plan"
+        );
+    }
+    Ok(changed)
+}
+
 /// The daily sweep: `trial` → `receive_only` for every mailbox whose window has closed.
 ///
 /// Idempotent by construction (`WHERE access_mode = 'trial'` on both the read and the write), so
 /// running it hourly, twice at boot, or from two instances cannot flip a mailbox twice or write two
 /// audit rows. RECEIVE is untouched: this changes permission to SEND, never a message, never a
 /// mailbox row.
-pub async fn expire_trials(pool: &PgPool) -> Result<u64, sqlx::Error> {
+///
+/// A tenant whose plan SELLS sending is settled to `paid` instead of being expired: the window is a
+/// fact about the plan, not about the calendar, and a paying customer must never receive a "trial
+/// expired" audit row (see `reconcile_access_modes`).
+pub async fn expire_trials(pool: &PgPool) -> Result<u64, AppError> {
     let due: Vec<(Uuid, Uuid, Option<DateTime<Utc>>)> = sqlx::query_as(
         r#"
         SELECT id, tenant_id, trial_ends_at
@@ -234,10 +331,19 @@ pub async fn expire_trials(pool: &PgPool) -> Result<u64, sqlx::Error> {
         "#,
     )
     .fetch_all(pool)
-    .await?;
+    .await
+    .map_err(AppError::Database)?;
 
     let mut flipped = 0u64;
     for (box_id, tenant_id, ends_at) in due {
+        if plan_sells_sending(pool, tenant_id).await? {
+            // The plan was upgraded through a writer that does not settle mailboxes (an operator
+            // feature override, a cross-app seat). Sending is already allowed; make the row say so
+            // rather than expiring a paying customer.
+            reconcile_access_modes(pool, tenant_id).await?;
+            continue;
+        }
+
         let changed = sqlx::query(
             r#"
             UPDATE private_email_boxes

@@ -427,6 +427,18 @@ pub async fn create_subscription(
     .bind(Uuid::new_v4()).bind(tid).bind(r.plan_id).bind(&r.billing_cycle)
     .fetch_one(&s.db).await?;
 
+    // The mailbox states are settled in the SAME request that changed the plan (kanban
+    // t_9207d95b): a `trial`/`receive_only` mailbox becomes `paid` the moment this answers, so the
+    // console, the audit trail and the send path cannot disagree. Sending itself never waited for
+    // this (it reads the plan), so a failure here is a bookkeeping warning, not a lost upgrade.
+    if let Err(e) = crate::private_email::trial::reconcile_access_modes(&s.db, tid).await {
+        tracing::warn!(
+            error = %e,
+            tenant = %tid,
+            "could not settle mailbox states after a plan change"
+        );
+    }
+
     crate::audit::logger::log_event(
         &s.db,
         tid,
@@ -483,6 +495,16 @@ pub async fn update_subscription(
     .bind(existing.id)
     .fetch_one(&s.db)
     .await?;
+
+    // Same rule as `create_subscription`: the plan change and the mailbox's stored state settle
+    // together, in this request (kanban t_9207d95b).
+    if let Err(e) = crate::private_email::trial::reconcile_access_modes(&s.db, tid).await {
+        tracing::warn!(
+            error = %e,
+            tenant = %tid,
+            "could not settle mailbox states after a plan change"
+        );
+    }
 
     crate::audit::logger::log_event(
         &s.db,
@@ -635,6 +657,16 @@ pub async fn assign_tenant_plan(
     .fetch_one(&s.db)
     .await?;
 
+    // Settle the mailbox states in the same request as the plan move (kanban t_9207d95b). This is
+    // the writer the console's upgrade path uses, so `receive_only` must not survive it.
+    if let Err(e) = crate::private_email::trial::reconcile_access_modes(&s.db, tenant_id).await {
+        tracing::warn!(
+            error = %e,
+            tenant = %tenant_id,
+            "could not settle mailbox states after a plan change"
+        );
+    }
+
     crate::audit::logger::log_event(
         &s.db,
         tenant_id,
@@ -730,6 +762,17 @@ pub async fn cancel_subscription(
         )
         .bind(Uuid::new_v4()).bind(tid).bind(fp).bind(FREE_PLAN_BILLING_CYCLE)
         .execute(&s.db).await;
+    }
+
+    // Cancel lands the tenant on Free, and its mailbox states must say what that means in the same
+    // request (kanban t_9207d95b): still inside the trial window → `trial`; the window is over →
+    // `receive_only`; a mailbox that was `paid` is not left claiming to be paid.
+    if let Err(e) = crate::private_email::trial::reconcile_access_modes(&s.db, tid).await {
+        tracing::warn!(
+            error = %e,
+            tenant = %tid,
+            "could not settle mailbox states after a cancellation"
+        );
     }
 
     crate::audit::logger::log_event(
