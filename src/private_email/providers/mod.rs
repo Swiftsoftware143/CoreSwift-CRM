@@ -56,6 +56,21 @@ pub struct ProviderConfig {
     pub encrypted_webhook_key: Option<String>,
 }
 
+/// One image that belongs INSIDE the message body (kanban t_b671a0f7).
+///
+/// The company logo travels with the message instead of being fetched from a URL: the HTML points at
+/// `cid:<content_id>` and this part carries the bytes. That is what makes "deleting or updating the
+/// logo never breaks already-sent mail" true — a mailbox holding last month's message still draws
+/// last month's bytes — and it renders even where remote images are blocked until the reader allows
+/// them. `content_id` is also the part's FILENAME because Mailgun derives the Content-ID it publishes
+/// from the filename, so both providers resolve the same `cid:` reference.
+#[derive(Debug, Clone)]
+pub struct InlineImage {
+    pub content_id: String,
+    pub content_type: String,
+    pub bytes: Vec<u8>,
+}
+
 /// The unified email provider trait. All providers implement this.
 #[async_trait]
 #[async_trait::async_trait]
@@ -68,6 +83,10 @@ pub trait EmailProvider: Send + Sync {
     /// `cc` and `bcc` are separate from `to` on purpose: folding a blind copy into the visible
     /// recipient list would publish the very addresses the sender hid. Both are honoured by every
     /// provider this app ships (Mailgun's own `cc`/`bcc` fields, lettre's `.cc()`/`.bcc()`).
+    ///
+    /// `body_text` is the plain-text alternative. It is not optional decoration: a message with only
+    /// an `html` part scores worse with spam filters and is unreadable in a text-only client, and the
+    /// old code passed the typed plain text AS the html part.
     #[allow(clippy::too_many_arguments)]
     async fn send(
         &self,
@@ -77,7 +96,9 @@ pub trait EmailProvider: Send + Sync {
         cc: &[String],
         bcc: &[String],
         subject: &str,
+        body_text: &str,
         body_html: &str,
+        inline: Option<&InlineImage>,
         in_reply_to: Option<&str>,
     ) -> SendResult;
 

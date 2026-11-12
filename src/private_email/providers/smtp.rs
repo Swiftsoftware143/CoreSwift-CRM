@@ -2,11 +2,17 @@
 //! No inbound webhook support (SMTP is send-only via this provider).
 //! Inbound for SMTP domains would use IMAP polling (not yet implemented).
 
-use crate::private_email::providers::{EmailProvider, InboundEmail, ProviderConfig, SendResult};
+use crate::private_email::providers::{
+    EmailProvider, InboundEmail, InlineImage, ProviderConfig, SendResult,
+};
 use async_trait::async_trait;
 use lettre::{
-    transport::smtp::authentication::Credentials, AsyncSmtpTransport, AsyncTransport, Message,
-    Tokio1Executor,
+    message::{
+        header::{ContentDisposition, ContentId, ContentType},
+        MultiPart, SinglePart,
+    },
+    transport::smtp::authentication::Credentials,
+    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
 
 pub struct SmtpProvider;
@@ -26,7 +32,9 @@ impl EmailProvider for SmtpProvider {
         cc: &[String],
         bcc: &[String],
         subject: &str,
+        body_text: &str,
         body_html: &str,
+        inline: Option<&InlineImage>,
         in_reply_to: Option<&str>,
     ) -> SendResult {
         let host = match &config.smtp_host {
@@ -104,10 +112,35 @@ impl EmailProvider for SmtpProvider {
             }
         }
 
-        let msg = match msg_builder
-            .header(lettre::message::header::ContentType::TEXT_HTML)
-            .body(body_html.to_string())
-        {
+        // The body is multipart/alternative (a plain-text part and the HTML part) and, when a logo
+        // travels with the message, the HTML alternative is itself multipart/related with the image
+        // as an inline part addressed by Content-ID. That is what makes the signature logo render
+        // without a remote fetch and keep rendering in mail that was already sent.
+        let text_part = SinglePart::plain(body_text.to_string());
+        let html_part = SinglePart::builder()
+            .header(ContentType::TEXT_HTML)
+            .body(body_html.to_string());
+        let alternative = match inline {
+            None => MultiPart::alternative()
+                .singlepart(text_part)
+                .singlepart(html_part),
+            Some(img) => {
+                let image_part = SinglePart::builder()
+                    .header(
+                        ContentType::parse(&img.content_type).unwrap_or(ContentType::TEXT_PLAIN),
+                    )
+                    .header(ContentDisposition::inline())
+                    .header(ContentId::from(format!("<{}>", img.content_id)))
+                    .body(img.bytes.clone());
+                MultiPart::alternative().singlepart(text_part).multipart(
+                    MultiPart::related()
+                        .singlepart(html_part)
+                        .singlepart(image_part),
+                )
+            }
+        };
+
+        let msg = match msg_builder.multipart(alternative) {
             Ok(m) => m,
             Err(e) => {
                 return SendResult {

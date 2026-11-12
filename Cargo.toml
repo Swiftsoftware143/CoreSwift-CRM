@@ -71,6 +71,11 @@ async-trait = "0.1"
 hmac = "0.12"
 hex = "0.4"
 lettre = { version = "0.11", default-features = false, features = ["tokio1-native-tls", "builder", "smtp-transport"] }
+# Logo resizing at upload (src/image_store.rs, kanban t_b671a0f7). The logo the customer uploads is
+# decoded ONCE, fitted to a mail-safe size at 2x for sharpness, and re-encoded as PNG — the one format
+# Gmail, Outlook and Apple Mail all render without a fallback. Without this the app would forward
+# whatever a camera produced (4 MB JPEG, WebP that Outlook cannot draw) into every signature.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 serde_urlencoded = "0.7"
 url = "2"
 calamine = "0.36.1"

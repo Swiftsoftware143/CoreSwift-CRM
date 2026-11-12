@@ -1,13 +1,45 @@
 //! Mailgun email provider — send via REST API, receive via webhook.
 
-use crate::private_email::providers::{EmailProvider, InboundEmail, ProviderConfig, SendResult};
+use crate::private_email::providers::{
+    EmailProvider, InboundEmail, InlineImage, ProviderConfig, SendResult,
+};
 use async_trait::async_trait;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
 pub struct MailgunProvider;
+
+/// Assemble a `multipart/form-data` body carrying the text fields plus ONE inline image.
+///
+/// Hand-built rather than via reqwest's `multipart` feature so the part NAME (`inline`), the FILENAME
+/// (which becomes the Content-ID) and the `Content-Type` are exactly the three things Mailgun's API
+/// documents for an inline image — and so no extra crate feature is compiled in for one call site.
+fn multipart_body(fields: &[(String, String)], image: &InlineImage, boundary: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (name, value) in fields {
+        out.extend_from_slice(
+            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n")
+                .as_bytes(),
+        );
+        out.extend_from_slice(value.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"inline\"; filename=\"{}\"\r\n\
+             Content-Type: {}\r\n\r\n",
+            image.content_id, image.content_type
+        )
+        .as_bytes(),
+    );
+    out.extend_from_slice(&image.bytes);
+    out.extend_from_slice(b"\r\n");
+    out.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    out
+}
 
 #[async_trait]
 impl EmailProvider for MailgunProvider {
@@ -24,7 +56,9 @@ impl EmailProvider for MailgunProvider {
         cc: &[String],
         bcc: &[String],
         subject: &str,
+        body_text: &str,
         body_html: &str,
+        inline: Option<&InlineImage>,
         in_reply_to: Option<&str>,
     ) -> SendResult {
         let api_key = match &config.encrypted_api_key {
@@ -65,6 +99,7 @@ impl EmailProvider for MailgunProvider {
             ("from".into(), from.to_string()),
             ("to".into(), to.to_string()),
             ("subject".into(), subject.to_string()),
+            ("text".into(), body_text.to_string()),
             ("html".into(), body_html.to_string()),
         ];
 
@@ -81,10 +116,34 @@ impl EmailProvider for MailgunProvider {
         }
 
         let client = reqwest::Client::new();
-        match client
-            .post(format!("{}/v3/{}/messages", base_url, config.domain))
-            .basic_auth("api", Some(&api_key))
-            .form(&form)
+        let url = format!("{}/v3/{}/messages", base_url, config.domain);
+
+        // NO inline image: the form-urlencoded body is what this provider has always taken.
+        // WITH one: a multipart body is required, and Mailgun publishes the part under
+        // `inline` with the Content-ID derived from the FILENAME — which is why the HTML's
+        // `cid:` reference and this part's filename are the same string. The body is assembled by
+        // hand instead of via reqwest's `multipart` feature: it is 20 lines, needs no extra crate
+        // feature, and pins the exact part name, filename and Content-Type Mailgun documents.
+        let request = match inline {
+            None => client
+                .post(&url)
+                .basic_auth("api", Some(&api_key))
+                .form(&form),
+            Some(img) => {
+                let boundary = format!("cs-{}", Uuid::new_v4().simple());
+                let body = multipart_body(&form, img, &boundary);
+                client
+                    .post(&url)
+                    .basic_auth("api", Some(&api_key))
+                    .header(
+                        reqwest::header::CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(body)
+            }
+        };
+
+        match request
             .timeout(std::time::Duration::from_secs(30))
             .send()
             .await
@@ -220,4 +279,36 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         return false;
     }
     a.iter().zip(b.iter()).fold(0, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn image() -> InlineImage {
+        InlineImage {
+            content_id: "coreswift-logo.png".into(),
+            content_type: "image/png".into(),
+            bytes: vec![0x89, b'P', b'N', b'G', 1, 2, 3],
+        }
+    }
+
+    #[test]
+    fn the_inline_part_carries_the_filename_that_becomes_the_content_id() {
+        let fields = vec![(
+            "html".to_string(),
+            "<img src=\"cid:coreswift-logo.png\">".into(),
+        )];
+        let body = multipart_body(&fields, &image(), "cs-boundary");
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("name=\"inline\"; filename=\"coreswift-logo.png\""));
+        assert!(text.contains("Content-Type: image/png"));
+        // The bytes are carried verbatim, after the part headers.
+        assert!(body
+            .windows(7)
+            .any(|w| w == [0x89, b'P', b'N', b'G', 1, 2, 3]));
+        // The text fields are present and the body is terminated.
+        assert!(text.contains("name=\"html\""));
+        assert!(text.trim_end().ends_with("--cs-boundary--"));
+    }
 }

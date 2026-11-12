@@ -104,6 +104,82 @@ pub async fn read_uploaded_image(multipart: &mut Multipart) -> ApiResult<(String
     Err(AppError::BadRequest("No image was uploaded".into()))
 }
 
+// ── Auto-sizing (kanban t_b671a0f7) ────────────────────────────────────────────────────────────
+//
+// David's requirement: the customer uploads a logo and "never touches a setting" — the app handles
+// resizing and sharpness. So the ONE place a logo is stored does the work, at upload:
+//
+//   * fit inside [`LOGO_STORE_W`] x [`LOGO_STORE_H`] — that is 2x the size it is DISPLAYED at
+//     ([`LOGO_DISPLAY_W`] x [`LOGO_DISPLAY_H`]), so the image is still sharp on a retina phone and a
+//     4K monitor instead of being resampled up by the client;
+//   * never upscale (a 120px logo stays 120px — enlarging it would only blur it);
+//   * re-encode as PNG. This is the compatibility decision, not a preference: Outlook (Windows) does
+//     not render WebP at all and GIF is a poor fit for a still logo, while PNG has an alpha channel
+//     and is drawn by Gmail, Outlook and Apple Mail without a fallback. A JPEG logo becomes PNG too —
+//     a flat logo compresses smaller and keeps its edges crisp.
+//
+// A resized copy is what gets stored, so every mail path (signature, branded header) inherits it.
+
+/// The size the logo is drawn at in an email, in CSS pixels.
+pub const LOGO_DISPLAY_W: u32 = 220;
+pub const LOGO_DISPLAY_H: u32 = 88;
+
+/// The size actually STORED: 2x the display size, for sharpness on retina screens.
+pub const LOGO_STORE_W: u32 = LOGO_DISPLAY_W * 2;
+pub const LOGO_STORE_H: u32 = LOGO_DISPLAY_H * 2;
+
+/// A decompression ceiling. A 2 MB PNG can decode to hundreds of megabytes; without a limit one
+/// upload could exhaust the container. 64 MB covers a 4000x4000 RGBA image, far more than any logo.
+const LOGO_MAX_ALLOC: u64 = 64 * 1024 * 1024;
+
+/// Decode an uploaded image, fit it to the mail-safe stored size, and return `(png_bytes, w, h)`.
+///
+/// CPU-bound on purpose: callers run it inside `spawn_blocking` so a big decode cannot stall the
+/// async reactor that is also serving mail for every other account.
+pub fn process_logo_for_email(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32), String> {
+    use image::{ImageFormat, ImageReader};
+    use std::io::Cursor;
+
+    let mut reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| format!("could not read that image: {e}"))?;
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(LOGO_MAX_ALLOC);
+    reader.limits(limits);
+
+    let img = reader
+        .decode()
+        .map_err(|e| format!("could not read that image: {e}"))?;
+    let (w, h) = (img.width(), img.height());
+    if w == 0 || h == 0 {
+        return Err("that image has no pixels".into());
+    }
+
+    // Fit inside the box, preserving aspect ratio, and never upscale.
+    let scale = f64::min(
+        LOGO_STORE_W as f64 / w as f64,
+        LOGO_STORE_H as f64 / h as f64,
+    );
+    let out_img = if scale < 1.0 {
+        let nw = ((w as f64) * scale).round().max(1.0) as u32;
+        let nh = ((h as f64) * scale).round().max(1.0) as u32;
+        img.resize_exact(nw, nh, image::imageops::FilterType::Lanczos3)
+    } else {
+        img
+    };
+    let (out_w, out_h) = (out_img.width(), out_img.height());
+
+    let mut png = Vec::new();
+    out_img
+        .to_rgba8()
+        .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+        .map_err(|e| format!("could not re-encode that image: {e}"))?;
+    if png.is_empty() {
+        return Err("could not re-encode that image".into());
+    }
+    Ok((png, out_w, out_h))
+}
+
 /// Serve stored image bytes back.
 ///
 /// `private, max-age=300`: the browser may reuse it for the session; no shared cache is invited to

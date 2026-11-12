@@ -95,6 +95,10 @@ pub struct ReplyRequest {
     pub mode: Option<String>,
     #[serde(default)]
     pub to: Option<String>,
+    /// Whether the signature goes on this reply. Absent means yes (kanban t_b671a0f7): replies open
+    /// with the signature in place exactly like a new message, and the toggle drops it for one reply.
+    #[serde(default)]
+    pub include_signature: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -722,6 +726,7 @@ pub async fn reply_to_message(
         &subject,
         &req.body,
         None,
+        req.include_signature.unwrap_or(true),
     )
     .await?;
 

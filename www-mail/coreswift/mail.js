@@ -424,6 +424,7 @@
     return '<div class="rail">'
       + '<div class="brand">CoreSwift Mail</div>'
       + '<button class="btn btn-primary" id="mCompose" style="width:100%">Compose</button>'
+      + '<button class="btn" id="mSignature" style="width:100%;margin-top:8px">Signature</button>'
       + '<div style="margin-top:12px">' + rows + '</div>'
       + '<h5>Folders you made</h5>' + (customRows || '<div style="color:var(--muted);font-size:12px;padding:0 9px">None yet — use a folder\'s menu.</div>')
       + '<h5>Labels <button class="btn-ghost" id="mNewLabel" title="Create label">+</button></h5>'
@@ -564,6 +565,8 @@
     // Called with the CLICK EVENT if passed directly, which made `mode` an Event and silently
     // suppressed the draft button; name the mode explicitly.
     if (c) c.onclick = function () { composeModal('new'); };
+    var sg = $('mSignature');
+    if (sg) sg.onclick = function () { signatureModal(); };
     var nl = $('mNewLabel');
     if (nl) nl.onclick = function () { labelModal(); };
     var ad = $('mAddress');
@@ -664,6 +667,12 @@
   }
 
   // ── Compose ─────────────────────────────────────────────────────────────────────────────────
+  // THE SIGNATURE IS PART OF COMPOSE (kanban t_b671a0f7). The block under the message is rendered by
+  // the SERVER (GET /private-email/signature?mailbox=) with the same renderer the sender uses, so the
+  // writer sees exactly what leaves. It starts ticked — the owner's rule is "compose opens with both
+  // already in place, the user types subject and body only" — and unticking it drops the signature for
+  // this one message. Picking a different From reloads the block, because the signature is per
+  // mailbox with a workspace default.
   function composeModal(mode) {
     mode = mode || 'new';
     var m = S.sel;
@@ -685,6 +694,45 @@
       body = '\n\n— forwarded —\nFrom: ' + ((m && m.from_address) || '') + '\n' + ((m && m.body_plain) || '');
     }
 
+    // What the SERVER says this mailbox's signature is. `include` starts at `has` so a mailbox set to
+    // send without one never shows a ticked box that does nothing.
+    var sig = { html: '', has: false, include: true, detail: '', loading: true };
+
+    function paintSig() {
+      var wrap = $('cSigWrap'), row = $('cSigRow'), on = $('cSigOn');
+      if (!wrap) return;
+      if (sig.loading) {
+        wrap.innerHTML = '<span style="color:var(--muted);font-size:12px">Loading the signature…</span>';
+        return;
+      }
+      if (!sig.has) {
+        wrap.innerHTML = '<div style="color:var(--muted);font-size:12px">' + esc(sig.detail || 'No signature is set for this address.') + '</div>';
+        if (row) row.style.display = 'none';
+        return;
+      }
+      wrap.innerHTML = sig.html;
+      wrap.style.opacity = sig.include ? '1' : '.4';
+      if (row) row.style.display = 'flex';
+      if (on) on.checked = sig.include;
+    }
+
+    async function loadSig() {
+      var from = $('cFrom');
+      if (!from) return;
+      sig.loading = true; paintSig();
+      try {
+        var d = await api('GET', '/private-email/signature?mailbox=' + encodeURIComponent(from.value));
+        sig.html = (d && d.html) || '';
+        sig.has = !!(d && d.has_signature);
+        sig.detail = (d && d.detail) || '';
+        sig.include = sig.has;
+      } catch (e) {
+        sig.has = false;
+        sig.detail = 'Could not load the signature: ' + fail(e);
+      }
+      sig.loading = false; paintSig();
+    }
+
     modal(mode === 'new' ? 'New message' : (mode === 'forward' ? 'Forward' : 'Reply'),
       '<label class="f">From</label><select id="cFrom">' + fromOpts + '</select>'
       + '<label class="f">To</label><input id="cTo" value="' + esc(to) + '" placeholder="someone@example.com">'
@@ -692,7 +740,12 @@
       + '<div><label class="f">Cc</label><input id="cCc" placeholder="optional"></div>'
       + '<div><label class="f">Bcc</label><input id="cBcc" placeholder="optional"></div></div>'
       + '<label class="f">Subject</label><input id="cSubject" value="' + esc(subject) + '">'
-      + '<label class="f">Message</label><textarea id="cBody" rows="9">' + esc(body) + '</textarea>'
+      + '<label class="f">Message</label><textarea id="cBody" rows="8">' + esc(body) + '</textarea>'
+      + '<label class="f">Signature</label>'
+      + '<div id="cSigWrap" style="border:1px solid var(--line);border-radius:8px;padding:12px;background:#fff;max-height:200px;overflow:auto"></div>'
+      + '<label id="cSigRow" style="display:flex;gap:8px;align-items:flex-start;margin:10px 0 0;font-size:13px;line-height:1.35">'
+      + '<input type="checkbox" id="cSigOn" checked style="width:auto;margin:2px 0 0">'
+      + '<span>Include the signature on this message</span></label>'
       + '<div class="err" id="cErr"></div>',
       '<button class="btn" onclick="csmCloseModal()">Cancel</button>'
       + (mode === 'new' || (m && m.folder === 'drafts') ? '<button class="btn" id="cDraft">Save draft</button>' : '')
@@ -711,20 +764,41 @@
             closeModal(); toast('Draft saved'); await boot();
           } catch (e) { $('cErr').textContent = fail(e); }
         };
+        var fromSel = $('cFrom');
+        if (fromSel) fromSel.onchange = loadSig;
+        var on = $('cSigOn');
+        if (on) on.onchange = function () { sig.include = on.checked; paintSig(); };
+        loadSig();
         $('cSend').onclick = async function () {
           var btn = this;
           var to2 = ($('cTo').value || '').trim();
           if (!to2) { $('cErr').textContent = 'Add who this goes to.'; return; }
           btn.disabled = true;
           try {
-            await api('POST', '/private-email/send', {
-              from_address: $('cFrom').value,
-              to: to2,
-              cc: splitAddrs($('cCc').value),
-              bcc: splitAddrs($('cBcc').value),
-              subject: $('cSubject').value || '',
-              body: $('cBody').value || ''
-            });
+            var signed = sig.include && sig.has;
+            // A reply, reply-all or forward goes through the REPLY route so it carries the thread and
+            // the same one sender; a new message goes through /send. Both append the signature in the
+            // same server function, so the toggle means the same thing either way.
+            if (m && (mode === 'reply' || mode === 'reply_all' || mode === 'forward')) {
+              await api('POST', '/private-email/messages/' + m.id + '/reply', {
+                from_address: $('cFrom').value,
+                to: to2,
+                subject: $('cSubject').value || '',
+                body: $('cBody').value || '',
+                mode: mode,
+                include_signature: signed
+              });
+            } else {
+              await api('POST', '/private-email/send', {
+                from_address: $('cFrom').value,
+                to: to2,
+                cc: splitAddrs($('cCc').value),
+                bcc: splitAddrs($('cBcc').value),
+                subject: $('cSubject').value || '',
+                body: $('cBody').value || '',
+                include_signature: signed
+              });
+            }
             // A draft that has been sent is no longer a draft: the row goes with the send, so the
             // Drafts folder never accumulates unsent-looking copies of mail that already left.
             if (m && m.folder === 'drafts') {
@@ -735,6 +809,99 @@
         };
       });
   }
+
+  // ── Signature editor (kanban t_b671a0f7) ─────────────────────────────────────────────────────
+  // The LOGO and the workspace default are set in the CRM's Email Branding screen (one place in the
+  // workspace). This editor is the per-mailbox half: give one address its own wording, or turn the
+  // signature off for it. Everything shown here is read from the server's own answer, and the fields
+  // below are the address's own values — a blank field falls back to the workspace default, which the
+  // hint says in plain words so nobody wonders why a blank box still prints.
+  function signatureModal() {
+    if (!S.boxes || !S.boxes.length) { toast('Create an inbox first — a signature belongs to an address', 'error'); return; }
+    var opts = S.boxes.map(function (b) {
+      return '<option value="' + esc(b.email_address) + '"' + (S.address === b.email_address ? ' selected' : '') + '>' + esc(b.email_address) + '</option>';
+    }).join('');
+
+    function field(id, label, value, placeholder) {
+      return '<label class="f">' + label + '</label><input id="' + id + '" value="' + esc(value || '') + '" placeholder="' + esc(placeholder || '') + '">';
+    }
+
+    modal('Signature',
+      '<p style="margin:0 0 12px;font-size:13px;color:var(--muted)">Your company logo and the workspace signature are set in Email Branding in the CRM. Here you choose what one address does.</p>'
+      + '<label class="f">Address</label><select id="sMailbox">' + opts + '</select>'
+      + '<label class="f">This address sends</label><select id="sMode">'
+      + '<option value="inherit">With the workspace signature</option>'
+      + '<option value="custom">With its own signature below</option>'
+      + '<option value="off">Without a signature</option></select>'
+      + '<div id="sFields"></div>'
+      + '<div style="margin-top:10px;font-size:12px;color:var(--muted)" id="sHint"></div>'
+      + '<div id="sPreview" style="margin-top:10px"></div>'
+      + '<div class="err" id="sErr"></div>',
+      '<button class="btn" onclick="csmCloseModal()">Close</button>'
+      + '<button class="btn btn-primary" id="sSave">Save</button>',
+      function () {
+        var own = { full_name: '', job_title: '', company: '', phone: '', line: '' };
+        function fieldsHtml(v) {
+          return '<div style="margin-top:4px">'
+            + field('sName', 'Name', v.full_name, 'who the mail is from')
+            + field('sTitle', 'Title', v.job_title, 'e.g. Managing Partner')
+            + field('sCompany', 'Company', v.company, 'e.g. Giraudy Capital')
+            + field('sPhone', 'Phone', v.phone, 'e.g. +1 305 555 0100')
+            + field('sLine', 'Line', v.line, 'one short line under the details')
+            + '</div>';
+        }
+        function paint() {
+          var mode = $('sMode').value;
+          var f = $('sFields');
+          if (mode === 'custom') {
+            if (!f.innerHTML) f.innerHTML = fieldsHtml(own);
+            f.style.display = 'block';
+          } else {
+            f.style.display = 'none';
+          }
+        }
+        async function load() {
+          var err = $('sErr'); if (err) err.textContent = '';
+          try {
+            var d = await api('GET', '/private-email/signature?mailbox=' + encodeURIComponent($('sMailbox').value));
+            own = (d && d.mailbox && d.mailbox.own) || own;
+            $('sMode').value = (d && d.mode) || 'inherit';
+            $('sFields').innerHTML = fieldsHtml(own);
+            var hint = $('sHint');
+            hint.textContent = (d && d.mode === 'custom')
+              ? 'A blank field uses the workspace value for that field. The workspace signature is set in Email Branding in the CRM.'
+              : 'The workspace signature and logo are set in Email Branding in the CRM. This address does not have its own wording.';
+            var prev = $('sPreview');
+            prev.innerHTML = (d && d.html)
+              ? '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">What goes under the message today</div><div style="border:1px solid var(--line);border-radius:8px;padding:12px;background:#fff">' + d.html + '</div>'
+              : '<div style="font-size:12px;color:var(--muted)">' + esc((d && d.detail) || 'Nothing is added to messages from this address.') + '</div>';
+            paint();
+          } catch (e) { $('sErr').textContent = fail(e); }
+        }
+        $('sMailbox').onchange = load;
+        $('sMode').onchange = paint;
+        $('sSave').onclick = async function () {
+          var btn = this; btn.disabled = true;
+          var mode = $('sMode').value;
+          try {
+            var d = await api('PUT', '/private-email/signature', {
+              mailbox: $('sMailbox').value,
+              mode: mode,
+              full_name: mode === 'custom' ? ($('sName') || {}).value : '',
+              job_title: mode === 'custom' ? ($('sTitle') || {}).value : '',
+              company: mode === 'custom' ? ($('sCompany') || {}).value : '',
+              phone: mode === 'custom' ? ($('sPhone') || {}).value : '',
+              line: mode === 'custom' ? ($('sLine') || {}).value : ''
+            });
+            toast((d && d.detail) || 'Saved');
+            await load();
+          } catch (e) { $('sErr').textContent = fail(e); }
+          btn.disabled = false;
+        };
+        load();
+      });
+  }
+
   function splitAddrs(v) {
     return String(v || '').split(/[,;]/).map(function (s) { return s.trim(); }).filter(Boolean);
   }

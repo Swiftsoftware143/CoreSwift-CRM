@@ -26,11 +26,14 @@ use crate::AppState;
 /// INTERMEDIATE segment is `{email_branding}`, which [`SET_LOGO_URL`] creates when missing.
 const LOGO_PATH: &str = "{email_branding,logo_url}";
 
-const UPSERT_LOGO: &str = "INSERT INTO tenant_logos (tenant_id, content_type, bytes, updated_at) \
-     VALUES ($1, $2, $3, NOW()) \
+const UPSERT_LOGO: &str =
+    "INSERT INTO tenant_logos (tenant_id, content_type, bytes, width_px, height_px, updated_at) \
+     VALUES ($1, $2, $3, $4, $5, NOW()) \
      ON CONFLICT (tenant_id) DO UPDATE \
        SET content_type = EXCLUDED.content_type, \
            bytes        = EXCLUDED.bytes, \
+           width_px     = EXCLUDED.width_px, \
+           height_px    = EXCLUDED.height_px, \
            updated_at   = NOW()";
 
 // `jsonb_set` only sets a path whose INTERMEDIATE keys already exist: on a workspace whose settings
@@ -83,12 +86,24 @@ pub async fn upload_logo(
     // bytes are read/stored, with the real numbers in the sentence.
     crate::private_email::storage::enforce_new_file_room(&s.db, tenant_id, "logo").await?;
     let (content_type, bytes) = crate::image_store::read_uploaded_image(&mut multipart).await?;
+    let source_bytes = bytes.len();
+
+    // AUTO-SIZE (kanban t_b671a0f7): the customer uploads any PNG/JPEG/GIF/WebP and never touches a
+    // setting. Decoding and resampling are CPU-bound, so they run on the blocking pool — this handler
+    // shares the reactor that serves every other account's mail.
+    let (bytes, width_px, height_px) =
+        tokio::task::spawn_blocking(move || crate::image_store::process_logo_for_email(&bytes))
+            .await
+            .map_err(|e| AppError::Internal(format!("Could not process that image: {e}")))?
+            .map_err(AppError::BadRequest)?;
     let byte_len = bytes.len();
 
     sqlx::query(UPSERT_LOGO)
         .bind(tenant_id)
         .bind(&content_type)
         .bind(&bytes)
+        .bind(width_px as i32)
+        .bind(height_px as i32)
         .execute(&s.db)
         .await?;
 
@@ -111,6 +126,12 @@ pub async fn upload_logo(
         "logo_url": logo_url,
         "content_type": content_type,
         "bytes": byte_len,
+        "source_bytes": source_bytes,
+        "width_px": width_px,
+        "height_px": height_px,
+        "display_width": crate::image_store::LOGO_DISPLAY_W,
+        "display_height": crate::image_store::LOGO_DISPLAY_H,
+        "detail": "Logo saved. It is resized for email automatically, so it looks right in Gmail, Outlook and Apple Mail on a phone or a desktop.",
     })))
 }
 

@@ -6235,10 +6235,23 @@ TAB_RENDERERS['branding'] = () => {
   card('Logo', '' +
     '<div class="form-group"><label>Logo image</label>' +
       '<input type="file" id="brandLogoFile" accept="image/png,image/jpeg,image/gif,image/webp">' +
-      '<span class="form-hint">PNG, JPEG, GIF or WebP, up to 2 MB.</span></div>' +
+      '<span class="form-hint">PNG, JPEG, GIF or WebP, up to 2 MB. The app resizes it for email automatically \u2014 you do not choose a size, and it stays sharp on a phone and on a desktop.</span></div>' +
     '<div id="brandLogoPreviewWrap" style="margin-top:12px"></div>',
     '<button class="btn btn-secondary" data-ops="branding-upload" onclick="uploadBrandingLogo()">Upload logo</button> ' +
     '<button class="btn btn-ghost" data-ops="branding-remove" onclick="removeBrandingLogo()">Remove logo</button>') +
+  '<br>' +
+  // THE SIGNATURE (kanban t_b671a0f7). The workspace default: printed under the logo on every
+  // message, and each address can override it in the mail client. One writer per field — this card
+  // owns the default, the mail client owns the per-address choice.
+  card('Signature (workspace default)', '' +
+    '<p class="form-hint" style="margin-top:0">This sits under your logo on every message. An address can use its own wording instead, in the mail client\u2019s Signature button.</p>' +
+    '<div class="form-group"><label>Name</label><input type="text" id="sigName" maxlength="120" placeholder="e.g. David Giraudy"></div>' +
+    '<div class="form-group"><label>Title</label><input type="text" id="sigTitle" maxlength="120" placeholder="e.g. Managing Partner"></div>' +
+    '<div class="form-group"><label>Company</label><input type="text" id="sigCompany" maxlength="120" placeholder="e.g. Giraudy Capital"></div>' +
+    '<div class="form-group"><label>Phone</label><input type="text" id="sigPhone" maxlength="120" placeholder="e.g. +1 305 555 0100"></div>' +
+    '<div class="form-group"><label>Line</label><input type="text" id="sigLine" maxlength="160" placeholder="one short line under the details"></div>' +
+    '<div id="sigPreview" style="margin-top:12px"></div>',
+    '<button class="btn btn-primary" data-ops="signature-save" onclick="saveSignature()">Save signature</button>') +
   '<br>' +
   card('Preview', '' +
     '<p class="form-hint" style="margin-top:0">The message a new customer receives, rendered by the mailer itself &mdash; your logo, display name and colour included. It shows your <strong>saved</strong> branding: press <strong>Save branding</strong> to see a change here.</p>' +
@@ -6269,6 +6282,7 @@ async function loadBrandingTab() {
     if (nameIn) nameIn.oninput = markBrandingUnsaved;
     if (colourIn) colourIn.oninput = markBrandingUnsaved;
     loadBrandPreview();
+    loadSignatureFields();
     if (status) status.textContent = '';
   } catch (e) {
     if (status) status.textContent = 'Could not load branding: ' + e.message;
@@ -6346,6 +6360,57 @@ function renderBrandLogoPreview(logoPath) {
       '<img src="' + escapeHtml(logoPath) + '" alt="Logo preview" style="max-height:56px;max-width:240px;border:1px solid var(--border,#333);padding:6px;border-radius:6px;background:#fff">'
     : '<div style="color:var(--text-muted);font-size:12px">No logo uploaded.</div>';
   loadBrandPreview();
+}
+
+// ── Signature (workspace default, kanban t_b671a0f7) ────────────────────────────────────────
+// The panel renders what the SERVER stores (GET /private-email/signature/workspace) and its preview is
+// the SERVER's own rendered block, so it cannot describe a signature the mailer would not emit.
+async function loadSignatureFields() {
+  const box = document.getElementById('sigPreview');
+  try {
+    const d = await API.get('/private-email/signature/workspace');
+    const sig = (d && d.signature) || {};
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+    set('sigName', sig.full_name);
+    set('sigTitle', sig.job_title);
+    set('sigCompany', sig.company);
+    set('sigPhone', sig.phone);
+    set('sigLine', sig.line);
+    if (box) {
+      box.innerHTML = (d && d.html)
+        ? '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">What goes under every message</div>' +
+          '<div style="border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:14px;background:#fff;max-width:360px">' + d.html + '</div>'
+        : '<div style="font-size:12px;color:var(--text-muted)">No signature yet. Fill the fields and press Save signature \u2014 it appears under your logo on every message.</div>';
+    }
+  } catch (e) {
+    if (box) box.textContent = 'Could not load the signature: ' + ((e && e.message) || 'unknown error');
+  }
+}
+
+async function saveSignature() {
+  const box = document.getElementById('sigPreview');
+  const val = (id) => ((document.getElementById(id) || {}).value || '').trim();
+  const payload = {
+    full_name: val('sigName'),
+    job_title: val('sigTitle'),
+    company: val('sigCompany'),
+    phone: val('sigPhone'),
+    line: val('sigLine'),
+  };
+  if (box) box.textContent = 'Saving\u2026';
+  try {
+    const d = await API.put('/private-email/signature/workspace', payload);
+    await loadSignatureFields();
+    // The SERVER's sentence, printed verbatim: the console never composes a claim of its own.
+    if (box && d && d.detail) {
+      const note = document.createElement('div');
+      note.style.cssText = 'font-size:12px;color:var(--text-muted);margin-top:8px';
+      note.textContent = d.detail;
+      box.appendChild(note);
+    }
+  } catch (e) {
+    if (box) box.textContent = 'Could not save the signature: ' + ((e && e.message) || 'unknown error');
+  }
 }
 
 async function saveBranding() {
@@ -8695,7 +8760,8 @@ window.appGuidePages = {
   telnyx:          { title: "Telnyx SMS/Voice", desc: "Send texts and place calls through your connected Telnyx number.", actions: ["Connect your Telnyx account", "Send a text", "Check the message log"] },
   "comm-log":      { title: "Communications Log", desc: "Every message in and out — email, text and calls — in one chronological history.", actions: ["Filter by contact or channel", "Open an entry to see its content"] },
   tickets:         { title: "Support Tickets", desc: "Support requests raised in your workspace and their status.", actions: ["Open a ticket", "Reply and change its status"] },
-  inbox:           { title: "Shared Inbox", desc: "Your mail in one place: every message that arrived at your workspace's addresses. CoreSwift does not host your mail — you bring your own domain and your own Mailgun account, and the Inbox screen walks you through three steps: the domain plus your Mailgun keys, the mail records (MX, SPF/DKIM) with a Copy button and a live Active/Waiting/Needs attention badge, then create the inbox. One extra CNAME makes inbox.yourbusiness.com open your mail; it is the only record that must be Proxied (orange cloud) — the mail records stay grey. Nothing is charged and no mailbox exists until the records verify, and the 30-day clock starts at your first verified inbox. Logging in lists your mailboxes so you pick one, and each row's LOG IN button opens your mail in a new window.", actions: ["Pick an address to narrow the list", "Open a message", "Mark one as a ticket", "Follow the three setup steps and press Check again when the records show Active", "LOG IN on an inbox row opens your branded address once it is live", "Receive-only? Use Keep inbox — $1/mo or Upgrade CRM"] },
+  branding:        { title: "Email Branding", desc: "One logo and one signature for every message this workspace sends. Upload the logo once — the app resizes it so it renders in Gmail, Outlook and Apple Mail on a phone or a desktop — then fill in the signature (name, title, company, phone and a short line) and press Save signature. Compose and every reply then open with both already in place; an individual address can use its own wording from the mail client's Signature button.", actions: ["Upload the company logo (PNG, JPEG, GIF or WebP — no size to choose)", "Fill in the signature and press Save signature", "Read the preview: it is the message the mailer really produces", "Send yourself a test email to see it in your own inbox"] },
+  inbox:           { title: "Shared Inbox", desc: "Your mail in one place: every message that arrived at your workspace's addresses. CoreSwift does not host your mail — you bring your own domain and your own Mailgun account, and the Inbox screen walks you through three steps: the domain plus your Mailgun keys, the mail records (MX, SPF/DKIM) with a Copy button and a live Active/Waiting/Needs attention badge, then create the inbox. One extra CNAME makes inbox.yourbusiness.com open your mail; it is the only record that must be Proxied (orange cloud) — the mail records stay grey. Nothing is charged and no mailbox exists until the records verify, and the 30-day clock starts at your first verified inbox. Logging in lists your mailboxes so you pick one, and each row's LOG IN button opens your mail in a new window.", actions: ["Pick an address to narrow the list", "Open a message", "Mark one as a ticket", "Follow the three setup steps and press Check again when the records show Active", "LOG IN on an inbox row opens your branded address once it is live", "Receive-only? Use Keep inbox — $1/mo or Upgrade CRM", "Press Signature in the mail client to give one address its own wording or none"] },
   "email-settings":{ title: "Email Domains & Sending", desc: "The sending half of your mail: the domains you send from, their catch-all switch, mailboxes, auto-replies and a form to send from a mailbox.", actions: ["Enable or disable catch-all on a domain", "Add a domain and check its verification", "Create a mailbox", "Catch-all is included in the plan, not the domain: if this workspace is moved to a plan that does not include it, the switch is remembered but mail to an address that does not exist on the domain is refused until you upgrade. The Catch-all cell says so, and never shows it as on."] },
   calendar:        { title: "Calendar", desc: "Events and appointments for you and your team.", actions: ["Create an event", "Open one to see its details"] },
   bookings:        { title: "Bookings", desc: "Appointment slots people can book with you, and the bookings they made.", actions: ["Set your availability", "Review upcoming bookings"] },

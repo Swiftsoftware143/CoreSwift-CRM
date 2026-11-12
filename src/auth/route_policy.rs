@@ -115,6 +115,16 @@
 //!        393 mounted `.route(..)` calls and 381 mounts on /api** (393 = 381 /api + the 12
 //!        root-level mounts), and those are what `the_census_shape_is_what_the_docs_say` pins.
 //!
+//!   +2 mounts (2026-11-11, kanban t_b671a0f7), the company signature: `GET|PUT
+//!        /api/private-email/signature` (Compose's preview + one mailbox's own choice) and
+//!        `GET|PUT /api/private-email/signature/workspace` (the ONE writer of the workspace
+//!        default). Both sit on the private-email router, i.e. behind the same auth middleware as
+//!        every sibling there, so neither joins an allowlist. The census pin was RE-MEASURED
+//!        again rather than incremented: with a `+` on top of a pin that had already drifted, the
+//!        source holds 402 mounts / 389 on /api** (the test's own extractor resolves 398 / 386 —
+//!        it cannot see four mounts the tokenizer does; both numbers are stated so the next reader
+//!        does not "fix" one into the other).
+//!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
 //!        the per-module gate was doing its job. The two /api routes added since (kanban
@@ -1083,12 +1093,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            393,
+            398,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 381,
+            api, 386,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

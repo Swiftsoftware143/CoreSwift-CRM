@@ -13,6 +13,7 @@ pub mod models;
 pub mod providers;
 pub mod purge;
 pub mod send_handler;
+pub mod signature;
 pub mod storage;
 pub mod trial;
 pub mod webhook_handler;
@@ -144,6 +145,21 @@ pub fn router(state: AppState) -> Router<AppState> {
         )
         // Send email
         .route("/send", axum::routing::post(send_handler::send_email))
+        // ── The company signature (kanban t_b671a0f7) ────────────────────────────────────────────
+        // `GET /signature?mailbox=` is what Compose reads to show the block BEFORE sending (built by
+        // the same renderer the sender uses, with the public logo URL instead of the cid: reference).
+        // `PUT` saves that address's own choice; `/signature/workspace` is the ONE writer of the
+        // workspace default edited on the Email Branding screen. A static segment is matched before
+        // a capture in axum, so `/signature/workspace` can never be read as a mailbox name.
+        .route(
+            "/signature",
+            axum::routing::get(signature::get_signature).put(signature::put_signature),
+        )
+        .route(
+            "/signature/workspace",
+            axum::routing::get(signature::get_workspace_signature)
+                .put(signature::put_workspace_signature),
+        )
         // API Keys (named, reusable)
         .route("/keys", axum::routing::get(api_keys_handler::list_api_keys))
         .route("/keys", axum::routing::post(api_keys_handler::add_api_key))

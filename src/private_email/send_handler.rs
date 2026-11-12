@@ -25,6 +25,7 @@ pub async fn deliver(
     subject: &str,
     body: &str,
     in_reply_to: Option<&str>,
+    include_signature: bool,
 ) -> Result<Option<String>, AppError> {
     let mailbox = sqlx::query_as::<_, PrivateEmailBox>(
         "SELECT * FROM private_email_boxes WHERE tenant_id = $1 AND email_address = $2 AND status = 'active'",
@@ -47,11 +48,55 @@ pub async fn deliver(
         .await
         .map_err(|e| AppError::Internal(format!("Failed to load provider config: {}", e)))?;
 
-    // Build body with optional signature
-    let body = match mailbox.signature.as_deref() {
-        Some(sig) if !sig.trim().is_empty() => format!("{}\n\n--\n{}", body, sig),
-        _ => body.to_string(),
-    };
+    // ── THE MESSAGE BODY ───────────────────────────────────────────────────────────────────────
+    // The typed text is ESCAPED and its line breaks kept (it used to be forwarded as raw "html"),
+    // then the signature block is appended — logo above the five plain fields — as an inline MIME
+    // part so the bytes travel with the message.
+    let mut body_html = super::signature::body_to_html(body);
+    let mut body_text = body.to_string();
+    let mut inline: Option<providers::InlineImage> = None;
+
+    if include_signature {
+        let workspace = super::signature::load_workspace(db, tenant_id)
+            .await
+            .map_err(AppError::Database)?;
+        let own = super::signature::Signature {
+            full_name: mailbox.signature_full_name.clone().unwrap_or_default(),
+            job_title: mailbox.signature_job_title.clone().unwrap_or_default(),
+            company: mailbox.signature_company.clone().unwrap_or_default(),
+            phone: mailbox.signature_phone.clone().unwrap_or_default(),
+            line: mailbox.signature_line.clone().unwrap_or_default(),
+        };
+        let resolved = super::signature::resolve(
+            &mailbox.signature_mode,
+            &own,
+            mailbox.signature.as_deref(),
+            &workspace.signature,
+        );
+        if !resolved.is_empty() {
+            let (logo_src, logo_part) = match super::signature::send_logo(&workspace, &resolved) {
+                Some((src, logo)) => (Some(src), Some(logo.clone())),
+                None => (None, None),
+            };
+            body_html.push_str(&super::signature::html(
+                &resolved.signature,
+                resolved.legacy.as_deref(),
+                logo_src,
+                &workspace.rule_color,
+            ));
+            let lines = resolved.signature.text_lines(resolved.legacy.as_deref());
+            if !lines.is_empty() {
+                body_text = format!("{}\n\n--\n{}", body, lines.join("\n"));
+            }
+            if let Some(logo) = logo_part {
+                inline = Some(providers::InlineImage {
+                    content_id: super::signature::LOGO_FILENAME.to_string(),
+                    content_type: logo.content_type,
+                    bytes: logo.bytes,
+                });
+            }
+        }
+    }
 
     let provider = providers::provider_for(&provider_config);
     let result = provider
@@ -62,7 +107,9 @@ pub async fn deliver(
             cc,
             bcc,
             subject,
-            &body,
+            &body_text,
+            &body_html,
+            inline.as_ref(),
             in_reply_to,
         )
         .await;
@@ -98,6 +145,8 @@ pub async fn send_email(
         &req.subject,
         &req.body,
         req.in_reply_to.as_deref(),
+        // Absent means "do what the composer showed": signed. Only an explicit false drops it.
+        req.include_signature.unwrap_or(true),
     )
     .await?;
     let provider = "account-provider";
@@ -358,6 +407,9 @@ async fn resolve_api_key(
 }
 
 /// Low-level send via the domain's configured provider — used by auto-reply engine.
+///
+/// The auto-reply body is authored as HTML, so the plain-text alternative is derived from it here:
+/// a text-only client (and a spam filter) should still read the sentence, not a tag soup.
 pub async fn send_via_provider(
     db: &sqlx::PgPool,
     domain_id: Uuid,
@@ -369,6 +421,7 @@ pub async fn send_via_provider(
 ) -> Result<(), String> {
     let config = load_provider_config(db, domain_id, tenant_id).await?;
     let provider = providers::provider_for(&config);
+    let body_text = html_to_text(body_html);
     let result = provider
         .send(
             &config,
@@ -377,7 +430,9 @@ pub async fn send_via_provider(
             &[],
             &[],
             subject,
+            &body_text,
             body_html,
+            None,
             None,
         )
         .await;
@@ -403,4 +458,31 @@ pub async fn send_via_mailgun(
     // New code should call send_via_provider instead.
     // For now, forward to Mailgun provider directly.
     Err("send_via_mailgun is deprecated — use send_via_provider with db connection".into())
+}
+
+/// A crude HTML-to-text for the auto-reply arm: strip tags, unescape the four entities the templates
+/// use, and collapse the whitespace the markup leaves behind. The auto-reply body is short and
+/// authored by the customer, so this is enough to give a text-only reader the sentence.
+fn html_to_text(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                out.push(' ');
+            }
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    let out = out
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'");
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }

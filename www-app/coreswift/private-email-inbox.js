@@ -1188,6 +1188,12 @@
         + '<label style="display:block;font-size:12px;opacity:.75;margin-bottom:4px">Reply as</label>'
         + '<select id="peFrom" style="margin-bottom:8px">' + fromOpts + '</select>'
         + '<textarea id="peText" rows="4" placeholder="Write your reply…" style="width:100%;margin-bottom:8px"></textarea>'
+        // The signature is added by the server on every reply (kanban t_b671a0f7), exactly as Compose
+        // does. The box starts ticked so the writer sees the truth, and unticking it drops the
+        // signature for this one reply.
+        + '<label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;margin-bottom:8px;opacity:.9">'
+        + '<input type="checkbox" id="peSig" checked style="width:auto;margin-top:2px">'
+        + '<span>Add my signature <span style="opacity:.7">(your logo and details, set per address in the mail client)</span></span></label>'
         + '<button class="btn btn-primary" id="peSend">Send reply</button> <span id="peMsg" style="margin-left:8px"></span>'
         + '</div>';
       document.getElementById('peSend').onclick = function () { window.peReply(m.id); };
@@ -1204,8 +1210,13 @@
     if (!from) { if (m) m.textContent = 'Create an inbox first.'; return; }
     if (!body) { if (m) m.textContent = 'Write a reply first.'; return; }
     if (m) m.textContent = 'Sending…';
+    var sigOn = document.getElementById('peSig');
     try {
-      await api().post('/private-email/messages/' + id + '/reply', { from_address: from, body: body });
+      await api().post('/private-email/messages/' + id + '/reply', {
+        from_address: from,
+        body: body,
+        include_signature: sigOn ? !!sigOn.checked : true
+      });
       if (m) m.textContent = 'Sent';
       var t = document.getElementById('peText'); if (t) t.value = '';
     } catch (e) { if (m) m.textContent = fail(e); }

@@ -110,6 +110,15 @@ pub struct PrivateEmailBox {
     pub mailgun_mailbox_id: Option<String>,
     pub forwarding_enabled: bool,
     pub signature: Option<String>,
+    /// This address's signature choice (migration 143, kanban t_b671a0f7): `inherit` uses the
+    /// workspace default, `custom` uses the five columns below (blank fields fall back per field),
+    /// `off` adds no signature at all.
+    pub signature_mode: String,
+    pub signature_full_name: Option<String>,
+    pub signature_job_title: Option<String>,
+    pub signature_company: Option<String>,
+    pub signature_phone: Option<String>,
+    pub signature_line: Option<String>,
     pub status: String,
     /// Whether mail to this address ALSO creates a ticket (migration 125). Every message reaches
     /// the inbox either way; this is the routing decision on top of it, and the user can tick or
@@ -195,6 +204,10 @@ pub struct SendEmailRequest {
     pub subject: String,
     pub body: String,
     pub in_reply_to: Option<String>,
+    /// Whether the signature block goes on THIS message. Absent means yes — the composer opens with
+    /// the signature already in place, so the default has to match what the sender saw.
+    #[serde(default)]
+    pub include_signature: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
