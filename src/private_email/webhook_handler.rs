@@ -589,6 +589,8 @@ fn is_machine_sender(email: &str) -> bool {
         || local == "bounces"
         || local.starts_with("bounce-")
         || local.starts_with("bounces-")
+        || local.starts_with("bounce+")
+        || local.starts_with("bounces+")
 }
 
 /// One authenticated delivery → a stored message, a contact, maybe a ticket, an event.
@@ -1293,6 +1295,10 @@ mod tests {
         assert!(is_machine_sender("bounce@example.com"));
         assert!(is_machine_sender("bounces@example.com"));
         assert!(is_machine_sender("double-bounce@example.com"));
+        assert!(is_machine_sender(
+            "bounce+abc.def-news=city.com@mail.coreswiftcrm.com"
+        ));
+        assert!(is_machine_sender("bounces+abc@example.com"));
 
         // A real person still mints a contact — a domain that merely LOOKS machine-like is not enough.
         assert!(!is_machine_sender("david@example.com"));
