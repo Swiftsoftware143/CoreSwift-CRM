@@ -553,6 +553,44 @@ async fn route_recipient(
     }
 }
 
+/// A machine/system sender is not a person to contact back. These are bounce delivery-status
+/// notifications (whose envelope sender is a fresh `bounces-<…>@…` address per failure — hence the
+/// unbounded contact growth a naive mint produces), postmaster / mailer-daemon notices and
+/// `no-reply` robots. Their message is still stored so the bounce stays visible in the inbox, but
+/// no contact row is created for them (kanban t_162b4d57).
+fn is_machine_sender(email: &str) -> bool {
+    let (local, domain) = match email.rsplit_once('@') {
+        Some((l, d)) => (l.trim().to_ascii_lowercase(), d.trim().to_ascii_lowercase()),
+        None => (email.trim().to_ascii_lowercase(), String::new()),
+    };
+    // Brevo/Sendinblue (and other senders) deliver a bounce's DSN from an address on the
+    // `…sender-sib.com` Return-Path domain; treating that whole domain as machine is what keeps a
+    // single failure from minting one new contact for ever.
+    if domain == "sender-sib.com" || domain.ends_with(".sender-sib.com") {
+        return true;
+    }
+    matches!(
+        local.as_str(),
+        "postmaster"
+            | "mailer-daemon"
+            | "mailer_daemon"
+            | "mailerdaemon"
+            | "mailer.daemon"
+            | "double-bounce"
+            | "daemon"
+            | "abuse"
+            | "root"
+            | "hostmaster"
+            | "webmaster"
+            | "no-reply"
+            | "no_reply"
+            | "noreply"
+    ) || local == "bounce"
+        || local == "bounces"
+        || local.starts_with("bounce-")
+        || local.starts_with("bounces-")
+}
+
 /// One authenticated delivery → a stored message, a contact, maybe a ticket, an event.
 ///
 /// Shared by both receivers. The provider name is passed in, never guessed: it is written onto the
@@ -690,37 +728,45 @@ async fn ingest(state: &AppState, d: Delivery) -> ApiResult<Json<serde_json::Val
     }
 
     // ── Step 4: find or create the contact ─────────────────────────────────────────────────────
-    let contact_id = match sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM contacts WHERE tenant_id = $1 AND email = $2 LIMIT 1",
-    )
-    .bind(tenant_id)
-    .bind(&inbound.from)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(AppError::Database)?
-    {
-        Some((id,)) => id,
-        None => {
-            // Auto-create contact from inbound email.
-            //
-            // Two defects lived here and both made EVERY inbound email from an unknown sender a 500
-            // (the ticket never got created, which is why no ticket in this database had
-            // source='email'):
-            //   * `contacts` has no `name` column — the row is first_name/last_name;
-            //   * `ON CONFLICT (tenant_id, email)` cannot resolve against the REAL index, which is
-            //     partial (`idx_contacts_tenant_email ... WHERE email IS NOT NULL`), so it needs the
-            //     same predicate in the conflict target.
-            // `last_name` is NOT NULL without a default, so the empty string is deliberate.
-            // The id comes back via RETURNING: when two first-time sends from the same sender
-            // overlap, the loser's ON CONFLICT fires and its row is never inserted, so handing the
-            // minted uuid to the caller wrote an entity_id that exists in no contact row into
-            // `events` (proven live: 10 of 36 concurrent sends).
-            let local = inbound.from.split('@').next().unwrap_or(&inbound.from);
-            let mut parts = local.split_whitespace();
-            let first_name = parts.next().unwrap_or(local).to_string();
-            let last_name = parts.collect::<Vec<_>>().join(" ");
-            let new_id = Uuid::new_v4();
-            sqlx::query_scalar::<_, Uuid>(
+    // A machine/system sender (a bounce DSN, postmaster, a no-reply robot) is not a person to
+    // contact back, and a bounce's envelope sender is a fresh address per failure — so no contact
+    // row is minted for it (kanban t_162b4d57). The message is already stored above; only the
+    // contact (and the contact-keyed event below) is skipped.
+    let contact_id: Option<Uuid> = if is_machine_sender(&inbound.from) {
+        None
+    } else {
+        Some(
+            match sqlx::query_as::<_, (Uuid,)>(
+                "SELECT id FROM contacts WHERE tenant_id = $1 AND email = $2 LIMIT 1",
+            )
+            .bind(tenant_id)
+            .bind(&inbound.from)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(AppError::Database)?
+            {
+                Some((id,)) => id,
+                None => {
+                    // Auto-create contact from inbound email.
+                    //
+                    // Two defects lived here and both made EVERY inbound email from an unknown sender a 500
+                    // (the ticket never got created, which is why no ticket in this database had
+                    // source='email'):
+                    //   * `contacts` has no `name` column — the row is first_name/last_name;
+                    //   * `ON CONFLICT (tenant_id, email)` cannot resolve against the REAL index, which is
+                    //     partial (`idx_contacts_tenant_email ... WHERE email IS NOT NULL`), so it needs the
+                    //     same predicate in the conflict target.
+                    // `last_name` is NOT NULL without a default, so the empty string is deliberate.
+                    // The id comes back via RETURNING: when two first-time sends from the same sender
+                    // overlap, the loser's ON CONFLICT fires and its row is never inserted, so handing the
+                    // minted uuid to the caller wrote an entity_id that exists in no contact row into
+                    // `events` (proven live: 10 of 36 concurrent sends).
+                    let local = inbound.from.split('@').next().unwrap_or(&inbound.from);
+                    let mut parts = local.split_whitespace();
+                    let first_name = parts.next().unwrap_or(local).to_string();
+                    let last_name = parts.collect::<Vec<_>>().join(" ");
+                    let new_id = Uuid::new_v4();
+                    sqlx::query_scalar::<_, Uuid>(
                 r#"
                 INSERT INTO contacts (id, tenant_id, email, first_name, last_name, source, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5, 'inbound_email', NOW(), NOW())
@@ -737,7 +783,9 @@ async fn ingest(state: &AppState, d: Delivery) -> ApiResult<Json<serde_json::Val
             .fetch_one(&state.db)
             .await
             .map_err(AppError::Database)?
-        }
+                }
+            },
+        )
     };
 
     // ── Step 5: Support Ticket Routing ─────────────────────────────────
@@ -1228,6 +1276,28 @@ mod tests {
         );
         assert_eq!(display_name("david@x.com"), None);
         assert_eq!(display_name("<david@x.com>"), None);
+    }
+
+    #[test]
+    fn machine_senders_are_not_minted_as_contacts() {
+        // A bounce DSN's envelope sender, a postmaster notice and a no-reply robot are machine
+        // senders — skip the contact mint, or every bounce grows the contact list for ever.
+        assert!(is_machine_sender(
+            "bounces-180158782-3752652062@ha.d.sender-sib.com"
+        ));
+        assert!(is_machine_sender("postmaster@zaarhub.com"));
+        assert!(is_machine_sender("MAILER-DAEMON@example.com"));
+        assert!(is_machine_sender("no-reply@swiftsoftware.net"));
+        assert!(is_machine_sender("No-Reply@x.com"));
+        assert!(is_machine_sender("noreply@x.com"));
+        assert!(is_machine_sender("bounce@example.com"));
+        assert!(is_machine_sender("bounces@example.com"));
+        assert!(is_machine_sender("double-bounce@example.com"));
+
+        // A real person still mints a contact — a domain that merely LOOKS machine-like is not enough.
+        assert!(!is_machine_sender("david@example.com"));
+        assert!(!is_machine_sender("someone@swiftsoftware.net"));
+        assert!(!is_machine_sender("hello@bouncycastle.com"));
     }
 
     #[test]
