@@ -91,8 +91,11 @@
       var dom = S.domains.filter(function (d) { return d.id === b.domain_id; })[0] || {};
       var count = (S.addresses.filter(function (a) { return a.address === b.email_address; })[0] || {}).total || 0;
       // An address that has actually RECEIVED mail is working, whatever a stale `verified` flag says
-      // — the flag is Mailgun's word at the last check, and mail in the inbox is proof.
-      var ready = !!dom.verified || count > 0;
+      // — the flag is Mailgun's word at the last check, and mail in the inbox is proof. The records
+      // answer is the LIVE word for the same question, so it counts too: this row used to read only
+      // the stored flag, which made a live domain's own inbox say "Waiting for mail records"
+      // (kanban t_54b5d21b).
+      var ready = domainVerified(dom) || count > 0;
       // The LOG IN button opens the customer's OWN branded name when it really serves the mail
       // client, and the shared host while their CNAME is still spreading — a button that opens a
       // broken address is worse than one that opens a working one under our name.
