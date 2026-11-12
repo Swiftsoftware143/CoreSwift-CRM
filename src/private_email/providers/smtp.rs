@@ -153,22 +153,29 @@ impl EmailProvider for SmtpProvider {
 
         // Build transport
         let creds = Credentials::new(username, password);
-        let transport = if config.smtp_tls {
-            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&host)
-        } else {
-            AsyncSmtpTransport::<Tokio1Executor>::relay(&host)
-        };
-
-        let transport = match transport {
-            Ok(t) => t.port(port).credentials(creds).build(),
-            Err(e) => {
-                return SendResult {
-                    success: false,
-                    provider_message_id: None,
-                    error: Some(format!("Failed to build SMTP transport: {}", e)),
+        // `smtp_tls` is the customer's own choice on the domain form: on = STARTTLS, off = a plain
+        // relay (an internal mail server, or a local sink). The off-arm used to call lettre's
+        // `relay()`, which is NOT plain — it wraps the socket in TLS (SUBMISSIONS_PORT, 465) — so a
+        // domain saved as "no TLS" still opened a TLS handshake and died with
+        // `ssl3_get_record:wrong version number` against any plain server (measured 2026-11-11 on
+        // the proof sink). `builder_dangerous` is lettre's actual no-TLS builder; the port comes
+        // from the domain row either way.
+        let builder = if config.smtp_tls {
+            match AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&host) {
+                Ok(b) => b,
+                Err(e) => {
+                    return SendResult {
+                        success: false,
+                        provider_message_id: None,
+                        error: Some(format!("Failed to build SMTP transport: {}", e)),
+                    }
                 }
             }
+        } else {
+            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&host)
         };
+
+        let transport = builder.port(port).credentials(creds).build();
 
         match transport.send(msg).await {
             Ok(response) => {
