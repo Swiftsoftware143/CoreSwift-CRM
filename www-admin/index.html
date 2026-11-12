@@ -325,6 +325,15 @@ tr:hover td{background:var(--bg-hover)}
         <span class="nav-icon">📖</span>
         <span class="nav-text">Admin Guide</span>
       </a>
+      <!-- Public Updates + Roadmap (kanban B209, t_2b4e36f9): one canonical URL fleet-wide. -->
+      <a class="nav-item" href="https://swiftsoftware.net/updates" target="_blank" rel="noopener" style="text-decoration:none">
+        <span class="nav-icon">📣</span>
+        <span class="nav-text">Updates</span>
+      </a>
+      <a class="nav-item" href="https://swiftsoftware.net/roadmap" target="_blank" rel="noopener" style="text-decoration:none">
+        <span class="nav-icon">🗺️</span>
+        <span class="nav-text">Roadmap</span>
+      </a>
       <button class="collapse-btn" onclick="toggleSidebar()">
         <span id="collapseIcon">◀</span>
         <span class="nav-text">Collapse</span>
@@ -1161,7 +1170,10 @@ const ADMIN_MENU = [
   { id:'features-plans', icon:'🧩', label:'Modules & Plans' },
   { type:'group', icon:'⚙️', label:'Admin Settings', children:[
     { id:'configuration', icon:'⚙️', label:'Configuration' }
-  ]}
+  ]},
+  // Customer feedback queue (kanban B209, t_2b4e36f9): idea / bug / complaint from any signed-in
+  // user, read here by the platform operator. Platform-only — tenants never see it.
+  { id:'feedback', icon:'💬', label:'Feedback' }
 ];
 
 // ONE definition of "platform operator" for this console, at module scope so the sidebar and the
@@ -1366,7 +1378,7 @@ function renderTab(tabId) {
   // Platform-only screens: a tenant that reaches one by the keyboard shortcut, an old hash or a
   // stale session gets a named refusal instead of a request that can only answer 403. Same idiom
   // the FunnelSwift console adopted for its own operator-only Email Templates screen.
-  const PLATFORM_ONLY_TABS = ['email-templates'];
+  const PLATFORM_ONLY_TABS = ['email-templates', 'feedback'];
   if (PLATFORM_ONLY_TABS.indexOf(tabId) >= 0 && !isPlatformUser()) {
     container.innerHTML = placeholderPanel(getTabLabel(tabId),
       'This screen is for platform administrators. Your workspace administrator keeps the mail templates.', '🔒');
@@ -6841,6 +6853,101 @@ async function peiSendReply(id, t, to) {
 
 TAB_RENDERERS['inbox'] = renderPrivateEmailInbox;
 TAB_LOADERS['inbox'] = loadPrivateEmailTab;
+
+// ── Submit Feedback (kanban B209, t_2b4e36f9) ─────────────────────────────────────────────
+// A "Submit Feedback" button visible on every screen. It captures WHO (the signed-in session),
+// WHICH ACCOUNT (the session's aid), WHICH APP (CoreSwift, recorded server-side) and WHICH SCREEN
+// (STATE.activeTab) — so nothing arrives anonymous or untraceable. The team reads it on the
+// platform-only Feedback tab. Linked Updates + Roadmap open the one canonical URL fleet-wide.
+(function () {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.id = 'feedbackFab';
+  btn.setAttribute('aria-label', 'Submit feedback');
+  btn.style.cssText = 'position:fixed;right:20px;bottom:20px;z-index:9000;display:flex;align-items:center;gap:8px;background:var(--accent,#2563eb);color:#fff;border:none;border-radius:28px;padding:12px 18px;font-size:.9rem;font-weight:600;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.25);font-family:inherit';
+  btn.innerHTML = '💬 Feedback';
+  btn.onclick = openFeedbackModal;
+  document.body.appendChild(btn);
+})();
+
+function openFeedbackModal() {
+  if (!STATE.token) { toast('Sign in to send feedback', 'error'); return; }
+  const screen = String(STATE.activeTab || '');
+  const body = '<div class="feedback-form">'
+    + '<p style="color:var(--text-secondary);font-size:.85rem;margin:0 0 12px">Tell us what is on your mind — an idea, a bug, or a complaint. It is sent with your account and the screen you are on, so we can follow up.</p>'
+    + '<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">'
+    + '<button type="button" class="btn btn-secondary btn-sm" data-kind="idea" onclick="selectFeedbackKind(\'idea\', this)">💡 Idea</button>'
+    + '<button type="button" class="btn btn-secondary btn-sm" data-kind="bug" onclick="selectFeedbackKind(\'bug\', this)">🐞 Bug</button>'
+    + '<button type="button" class="btn btn-secondary btn-sm" data-kind="complaint" onclick="selectFeedbackKind(\'complaint\', this)">⚠️ Complaint</button>'
+    + '</div>'
+    + '<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:6px">Screen: ' + escapeHtml(screen) + '</div>'
+    + '<textarea id="feedbackMsg" rows="5" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-card);color:var(--text-primary);font-family:inherit" placeholder="What happened, or what should we build?"></textarea>'
+    + '</div>';
+  const footer = '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>'
+    + '<button class="btn btn-primary" id="feedbackSendBtn" onclick="submitFeedback()">Send feedback</button>';
+  showModal('Submit Feedback', body, footer, false);
+  window.__feedbackKind = 'idea';
+}
+
+function selectFeedbackKind(kind, el) {
+  window.__feedbackKind = kind;
+  document.querySelectorAll('[data-kind]').forEach(function (b) {
+    b.style.background = (b === el) ? 'var(--accent)' : '';
+    b.style.color = (b === el) ? '#fff' : '';
+    b.style.borderColor = (b === el) ? 'var(--accent)' : '';
+  });
+}
+
+async function submitFeedback() {
+  const msg = document.getElementById('feedbackMsg');
+  const btn = document.getElementById('feedbackSendBtn');
+  if (!msg || !msg.value.trim()) { toast('Please write a message', 'error'); return; }
+  const kind = window.__feedbackKind || 'idea';
+  if (btn) btn.disabled = true;
+  try {
+    await API.call('POST', '/feedback', { kind: kind, screen: String(STATE.activeTab || ''), message: msg.value.trim() });
+    closeModal();
+    toast('Thanks — your feedback was sent', 'success');
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    toast('Could not send: ' + (e.message || 'please try again'), 'error');
+  }
+}
+
+// ── Feedback tab (platform operator read) ────────────────────────────────────────────────
+TAB_RENDERERS['feedback'] = function () {
+  return pageHeader('Feedback', 'What customers told us — idea, bug or complaint, with the account, person, app and screen it came from.')
+    + '<div id="feedbackList"><div class="loading-wrap"><div class="spinner"></div> Loading feedback...</div></div>';
+};
+TAB_LOADERS['feedback'] = loadFeedbackTab;
+
+async function loadFeedbackTab() {
+  const wrap = document.getElementById('feedbackList');
+  if (!wrap) return;
+  try {
+    const data = await API.get('/feedback');
+    const items = (data && data.feedback) || [];
+    if (!items.length) {
+      wrap.innerHTML = '<div class="card" style="text-align:center;padding:40px;color:var(--text-muted)">No feedback yet.</div>';
+      return;
+    }
+    let h = '';
+    items.forEach(function (f) {
+      const who = [f.name, f.email].filter(Boolean).join(' · ') || 'unknown';
+      h += '<div class="card" style="margin-bottom:12px">'
+        + '<div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:6px;flex-wrap:wrap">'
+        + '<strong>' + escapeHtml(f.kind) + '</strong>'
+        + '<span style="color:var(--text-muted);font-size:.75rem">' + escapeHtml(f.app) + ' · ' + escapeHtml(f.screen) + ' · ' + escapeHtml(f.created_at) + '</span>'
+        + '</div>'
+        + '<p style="margin:0 0 6px;white-space:pre-wrap">' + escapeHtml(f.message) + '</p>'
+        + '<div style="color:var(--text-muted);font-size:.78rem">' + escapeHtml(who) + '</div>'
+        + '</div>';
+    });
+    wrap.innerHTML = h;
+  } catch (e) {
+    wrap.innerHTML = '<div class="card" style="text-align:center;padding:40px;color:var(--error)">Failed to load feedback: ' + escapeHtml(e.message) + '</div>';
+  }
+}
 
 </script>
 </body>

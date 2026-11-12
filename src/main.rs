@@ -35,6 +35,7 @@ mod errors;
 pub mod events;
 pub mod external_api;
 mod features;
+pub mod feedback;
 pub mod google_calendar;
 pub mod image_store;
 pub mod inbound;
@@ -643,6 +644,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/widgets", support_widgets::router(state.clone()))
         .nest("/api/private-email", private_email::router(state.clone()))
         .nest("/api/workspaces", workspaces::router(state.clone()))
+        .nest("/api/feedback", feedback::router(state.clone()))
         // Public redirect for tracked links (no auth)
         .nest("/track", tracked_links::public_router())
         // Mailgun inbound webhook (no auth — called by Mailgun)
