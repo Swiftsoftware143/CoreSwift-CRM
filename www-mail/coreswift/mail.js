@@ -184,6 +184,7 @@
         + '<div class="rec"><strong>MX</strong><span><code>mxb.mailgun.org</code><br><span style="color:var(--muted)">The second delivery server, used if the first is busy.</span></span><span></span></div>'
         + '<div class="rec"><strong>TXT</strong><span><code>SPF and DKIM values</code><br><span style="color:var(--muted)">SPF proves you are allowed to send; DKIM signs your mail so it is not marked as spam.</span></span><span></span></div>'
         + '<div class="rec"><strong>CNAME</strong><span><code>inbox &rarr; inbox.coreswiftcrm.com</code><br><span style="color:var(--muted)">Your branded address: this makes <strong>inbox.yourbusiness.com</strong> open your mail. Set this one to Proxied (orange cloud) — your Cloudflare then serves the padlock.</span></span><span></span></div>'
+        + '<p style="color:var(--muted);font-size:12px;margin:8px 0 0">Receiving through <strong>SendGrid</strong> instead of Mailgun? Then the delivery record is its own (<code>MX &rarr; mx.sendgrid.net</code>), and the exact Inbound Parse address to paste into SendGrid is shown once you sign in — nothing about your sending changes.</p>'
         + '<p style="color:var(--muted);font-size:12px;margin:8px 0 0">Nothing is charged and no mailbox exists until these records verify. Until then this page is the whole product.</p></div>';
     }
 
@@ -204,18 +205,42 @@
       + (signedIn
         ? (S.domains.length
           ? '<div>' + S.domains.map(function (d) {
+            // Which service receives mail for this domain is a real, separate answer — say it, so a
+            // customer who chose SendGrid is never told their Mailgun account is the thing to check.
+            var recv = d.inbound_provider === 'sendgrid' ? ' · receiving through SendGrid'
+              : (d.inbound_provider === 'none' ? ' · send only' : ' · receiving through Mailgun');
             return '<div class="rec"><strong>' + esc(d.domain) + '</strong><span>'
               + (d.verified ? '<span class="ok">Active — receiving mail</span>' : '<span style="color:var(--warn)">Waiting for its records</span>')
+              + '<span style="color:var(--muted);font-size:12px">' + esc(recv) + '</span>'
               + '</span><button class="btn btn-ghost" onclick="csmCheckDomain(\'' + esc(d.id) + '\')">Check again</button></div>';
           }).join('') + '</div>'
           : '<label class="f">Your domain</label><input id="smDomain" placeholder="yourbusiness.com">'
-            + '<label class="f">Your Mailgun key</label><input id="smKey" placeholder="key-…" type="password">'
+            + '<label class="f">How should your mail leave? (sending)</label>'
+            + '<select id="smSending" onchange="csmChoicesChanged()">'
+            + '<option value="mailgun">Mailgun — my own account</option>'
+            + '<option value="smtp">Any SMTP service — Amazon SES, SendGrid, Postmark, Google Workspace</option></select>'
+            + '<div id="smSmtpBox" style="display:none">'
+            + '<label class="f">Mail server</label><input id="smSmtpHost" placeholder="email-smtp.us-east-1.amazonaws.com">'
+            + '<label class="f">Port</label><input id="smSmtpPort" placeholder="587">'
+            + '<label class="f">Username</label><input id="smSmtpUser">'
+            + '<label class="f">Password</label><input id="smSmtpPass" type="password">'
+            + '</div>'
+            + '<label class="f">How should your mail arrive? (receiving)</label>'
+            + '<select id="smReceiving" onchange="csmChoicesChanged()">'
+            + '<option value="mailgun">Mailgun — my own account</option>'
+            + '<option value="sendgrid">SendGrid — Inbound Parse</option>'
+            + '<option value="none">Nowhere — this domain only sends</option></select>'
+            + '<p id="smRecvNote" style="color:var(--muted);font-size:12px;margin:4px 0"></p>'
+            + '<div id="smKeyBox">'
+            + '<label class="f">Your Mailgun key</label><input id="smKey" placeholder="key-…" type="password"></div>'
+            + '<div id="smHookBox">'
+            + '<label class="f">Your Mailgun webhook signing key</label><input id="smHook" placeholder="from Mailgun → Settings → Webhooks" type="password"></div>'
             + '<div style="margin-top:10px"><button class="btn btn-primary" id="smAddDomain">Add my domain</button> <span id="smDomMsg" class="ok"></span></div>'
-            + '<p style="color:var(--muted);font-size:12px">You will find the key in your Mailgun account under Settings → API keys. It is stored encrypted and used only to send and receive your own mail.</p>')
+            + '<p style="color:var(--muted);font-size:12px">Two separate choices: you can send through Amazon SES and receive through Mailgun, or the other way round. The Mailgun key is in Settings → API keys; it is stored encrypted and used only for your own mail.</p>')
         : '<p style="color:var(--muted)">Press <strong>Log In</strong> to connect your domain.</p>')
       + '</div>'
-      + '<div class="card"><h3>2. Paste your Mailgun key</h3>'
-      + '<p style="margin:0;color:var(--muted)">Mailgun is the mail service that carries your messages. Your key stays yours: sending is charged to your own Mailgun account and nothing here shares it.</p></div>'
+      + '<div class="card"><h3>2. Choose how you send and how you receive</h3>'
+      + '<p style="margin:0;color:var(--muted)">These are two separate choices. <strong>Sending</strong> can go through Mailgun or through any SMTP service — Amazon SES, SendGrid, Postmark, Google Workspace. <strong>Receiving</strong> comes through Mailgun or SendGrid. Mix them freely: sending through Amazon SES while receiving through Mailgun is a normal setup, and nothing you send has to move for that.</p></div>'
       + step3
       + '<div class="card"><h3>4. Wait until it shows Active, then press Check again</h3>'
       + '<p style="margin:0;color:var(--muted)">Records take a few minutes to spread. When your domain says <strong>Active</strong>, you can create mailboxes. Nothing is charged until then, and no mailbox exists until then.</p></div>'
@@ -248,7 +273,27 @@
       + '</div>';
   }
 
+  // Show only the fields the two choices need, and say what each receiving choice means.
+  window.csmChoicesChanged = function () {
+    var sEl = $('smSending'), rEl = $('smReceiving');
+    if (!sEl || !rEl) return;
+    var sending = sEl.value, receiving = rEl.value;
+    var show = function (id, on) { var el = $(id); if (el) el.style.display = on ? '' : 'none'; };
+    show('smSmtpBox', sending === 'smtp');
+    show('smKeyBox', sending === 'mailgun' || receiving === 'mailgun');
+    show('smHookBox', receiving === 'mailgun');
+    var n = $('smRecvNote');
+    if (n) {
+      n.textContent = receiving === 'sendgrid'
+        ? 'SendGrid posts each message to an address we give you after this step — paste that URL into SendGrid → Settings → Inbound Parse. No extra key is needed.'
+        : (receiving === 'none'
+          ? 'Mail addressed to this domain will not arrive in CoreSwift. Sending still works.'
+          : 'Mailgun delivers your mail to us, so we need its webhook signing key to prove each message really came from your account.');
+    }
+  };
+
   function bindSetup() {
+    if (typeof window.csmChoicesChanged === 'function') window.csmChoicesChanged();
     var lg = $('smLogin');
     if (lg) lg.onclick = loginModal;
     var so = $('smSignOut');
@@ -257,13 +302,34 @@
     if (op) op.onclick = function () { S.view = 'choose'; S.picked = false; render(); };
     var ad = $('smAddDomain');
     if (ad) ad.onclick = async function () {
-      var d = ($('smDomain') || {}).value || '';
+      var d = (($('smDomain') || {}).value || '').trim().toLowerCase();
       var k = ($('smKey') || {}).value || '';
+      var hook = ($('smHook') || {}).value || '';
+      var sending = ($('smSending') || {}).value || 'mailgun';
+      var receiving = ($('smReceiving') || {}).value || 'mailgun';
       var m = $('smDomMsg');
-      if (!d.trim()) { if (m) { m.className = 'err'; m.textContent = 'Type your domain first.'; } return; }
+      if (!d) { if (m) { m.className = 'err'; m.textContent = 'Type your domain first.'; } return; }
+      if ((sending === 'mailgun' || receiving === 'mailgun') && !k.trim()) {
+        if (m) { m.className = 'err'; m.textContent = 'Paste your Mailgun key — it is what lets us send and read this domain.'; } return;
+      }
+      if (receiving === 'mailgun' && !hook.trim()) {
+        if (m) { m.className = 'err'; m.textContent = 'Paste your Mailgun webhook signing key — without it incoming mail is refused.'; } return;
+      }
+      if (sending === 'smtp' && (!($('smSmtpHost') || {}).value || !($('smSmtpUser') || {}).value || !($('smSmtpPass') || {}).value)) {
+        if (m) { m.className = 'err'; m.textContent = 'Fill in your mail server, username and password.'; } return;
+      }
       if (m) { m.className = 'ok'; m.textContent = 'Adding…'; }
+      var payload = { domain: d, sending_provider: sending, receiving_provider: receiving };
+      if (sending === 'mailgun' || receiving === 'mailgun') payload.mailgun_api_key = k.trim();
+      if (receiving === 'mailgun') payload.webhook_signing_key = hook.trim();
+      if (sending === 'smtp') {
+        payload.smtp_host = (($('smSmtpHost') || {}).value || '').trim();
+        payload.smtp_port = parseInt((($('smSmtpPort') || {}).value || '587'), 10) || 587;
+        payload.smtp_username = (($('smSmtpUser') || {}).value || '').trim();
+        payload.smtp_password = ($('smSmtpPass') || {}).value || '';
+      }
       try {
-        await api('POST', '/private-email/domains', { domain: d.trim().toLowerCase(), mailgun_api_key: k.trim() });
+        await api('POST', '/private-email/domains', payload);
         await boot();
       } catch (e) { if (m) { m.className = 'err'; m.textContent = fail(e); } }
     };

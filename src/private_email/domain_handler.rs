@@ -114,9 +114,11 @@ pub async fn domain_is_active(
     tenant_id: Uuid,
     domain: &PrivateEmailDomain,
 ) -> Option<bool> {
-    if domain.provider_type != "mailgun" {
-        // An SMTP/SES domain has no provider state to read: its credential IS its mailbox, and the
-        // stored flag is the only word there is. Treat it as its stored answer.
+    if domain.inbound_provider != "mailgun" {
+        // Only Mailgun can be asked "is this domain carrying mail for you right now". SendGrid is
+        // measured by DNS (`sendgrid_mx_ready`) on the setup page and on a re-check, and a
+        // sending-only domain has no receiver at all — for both, the stored flag is the only word
+        // there is, so it is returned as its own answer rather than invented here.
         return Some(domain.verified);
     }
     let candidates =
@@ -136,6 +138,74 @@ use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
 
+/// The TWO independent choices a domain makes (kanban t_04db9228): how its mail LEAVES, and how it
+/// ARRIVES. They used to be one field, which meant a customer who wanted to keep their own sender
+/// was told to move their inbound mail — and vice versa.
+///
+/// `sending` maps to `provider_type`; `receiving` maps to `inbound_provider`. A combination such as
+/// sending through Amazon SES (over SMTP) while receiving through Mailgun is supported on purpose:
+/// it is the combination that removes the "move everything to Mailgun" objection.
+struct DomainChoices {
+    sending: String,
+    receiving: String,
+}
+
+impl DomainChoices {
+    fn resolve(req: &AddDomainRequest) -> ApiResult<Self> {
+        // `sending_provider` is the new name; `provider_type` is the field every existing caller
+        // (and the older panel) posts, so it is the fallback rather than a second meaning.
+        let sending = req
+            .sending_provider
+            .as_deref()
+            .unwrap_or(&req.provider_type)
+            .trim()
+            .to_ascii_lowercase();
+        if !matches!(sending.as_str(), "mailgun" | "smtp") {
+            return Err(AppError::BadRequest(format!(
+                "'{}' is not a way to send mail here. Choose Mailgun, or SMTP — that covers \
+                 Amazon SES, SendGrid, Postmark, Google Workspace and any other mail service.",
+                sending
+            )));
+        }
+
+        // Absent means "the same as before today": a Mailgun domain receives through Mailgun, an
+        // SMTP one has no receiver. Nothing that already exists changes behaviour.
+        let receiving = match req
+            .receiving_provider
+            .as_deref()
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+        {
+            Some(r) => r.to_ascii_lowercase(),
+            None if sending == "smtp" => "none".to_string(),
+            None => "mailgun".to_string(),
+        };
+        if !matches!(receiving.as_str(), "mailgun" | "sendgrid" | "none") {
+            return Err(AppError::BadRequest(format!(
+                "'{}' is not a way to receive mail here. Mail can arrive through Mailgun or \
+                 SendGrid, and 'none' means this domain only sends.",
+                receiving
+            )));
+        }
+
+        Ok(Self { sending, receiving })
+    }
+
+    fn inbound_mode(&self) -> &'static str {
+        if self.receiving == "none" {
+            "none"
+        } else {
+            "webhook"
+        }
+    }
+}
+
+/// A fresh 32-hex credential for the SendGrid Inbound Parse URL. Unguessable rather than random for
+/// its own sake: SendGrid signs nothing, so this string in the URL IS the authentication.
+fn new_inbound_token() -> String {
+    Uuid::new_v4().simple().to_string()
+}
+
 pub async fn add_domain(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -146,10 +216,11 @@ pub async fn add_domain(
     feature_gate::check_domain_limit(&state.db, account_id).await?;
 
     let label = req.label.clone().unwrap_or_else(|| req.domain.clone());
+    let choices = DomainChoices::resolve(&req)?;
 
-    match req.provider_type.as_str() {
-        "smtp" => add_smtp_domain(&state, account_id, &req, &label).await,
-        _ => add_mailgun_domain(&state, account_id, &req, &label).await,
+    match choices.sending.as_str() {
+        "smtp" => add_smtp_domain(&state, account_id, &req, &label, &choices).await,
+        _ => add_mailgun_domain(&state, account_id, &req, &label, &choices).await,
     }
 }
 
@@ -453,6 +524,73 @@ pub async fn update_domain(
         }
     }
 
+    // ── Switching HOW this domain RECEIVES (kanban t_04db9228) ────────────────────────────────
+    // Read the two receiving columns, decide the new three values in Rust, then write them: an SQL
+    // CASE that has to tell "absent" from "set to the same value" is the kind of expression that
+    // looks right and quietly clears a column. Sending is untouched by any of this.
+    let receiving = match req
+        .receiving_provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+    {
+        Some(r) => {
+            let r = r.to_ascii_lowercase();
+            if !matches!(r.as_str(), "mailgun" | "sendgrid" | "none") {
+                return Err(AppError::BadRequest(format!(
+                    "'{}' is not a way to receive mail here. Mail can arrive through Mailgun or \
+                     SendGrid, and 'none' means this domain only sends.",
+                    r
+                )));
+            }
+            Some(r)
+        }
+        None => None,
+    };
+    let current: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT inbound_provider, inbound_token, webhook_signing_key_encrypted \
+           FROM private_email_domains WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(domain_id)
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+    let (current_provider, current_token, current_hook_key) =
+        current.ok_or_else(|| AppError::NotFound("Domain not found".into()))?;
+    let next_provider = receiving.clone().unwrap_or(current_provider);
+
+    // THE SECOND DOOR (kanban t_04db9228): adding a Mailgun-receiving domain without its signing key
+    // is refused on the create path, so switching an existing domain TO Mailgun without one must be
+    // refused the same way — otherwise the switch succeeds, the panel says "receiving: Mailgun", and
+    // every delivery is then refused by the receiver with a message about a key nobody was asked for.
+    if next_provider == "mailgun" {
+        let stored_key_works = current_hook_key
+            .as_deref()
+            .filter(|k| !k.trim().is_empty())
+            .map(|k| !crate::secret_box::open(account_id, k).trim().is_empty())
+            .unwrap_or(false);
+        let supplying_now = webhook_touch && sealed_webhook.is_some();
+        if !stored_key_works && !supplying_now {
+            return Err(AppError::BadRequest(
+                "Receiving through Mailgun needs its webhook signing key (Mailgun → Send → \
+                 Domains → your domain → Webhook signing key). Send it in this same save, or the \
+                 switch would leave the domain receiving nothing."
+                    .into(),
+            ));
+        }
+    }
+    let next_token = if next_provider == "sendgrid" && current_token.is_none() {
+        Some(new_inbound_token())
+    } else {
+        current_token
+    };
+    let next_mode = if next_provider == "none" {
+        "none"
+    } else {
+        "webhook"
+    };
+
     let row = sqlx::query_as::<_, PrivateEmailDomain>(
         r#"
         UPDATE private_email_domains
@@ -463,6 +601,9 @@ pub async fn update_domain(
             verified = COALESCE($7, verified),
             webhook_signing_key_encrypted = CASE
                 WHEN $8 THEN $9::text ELSE webhook_signing_key_encrypted END,
+            inbound_provider = $10,
+            inbound_mode = $11,
+            inbound_token = $12,
             updated_at = NOW()
         WHERE id = $1 AND tenant_id = $2
         RETURNING *
@@ -477,6 +618,9 @@ pub async fn update_domain(
     .bind(reverified)
     .bind(webhook_touch)
     .bind(sealed_webhook)
+    .bind(&next_provider)
+    .bind(next_mode)
+    .bind(&next_token)
     .fetch_optional(&state.db)
     .await
     .map_err(AppError::Database)?;
@@ -564,8 +708,11 @@ pub async fn verify_domain(
 ) -> ApiResult<Json<serde_json::Value>> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let row: Option<(String, String, String, String, Option<Uuid>, bool)> = sqlx::query_as(
-        r#"SELECT domain, mailgun_region, provider_type, mailgun_api_key, api_key_id, verified
+    // Sending is deliberately NOT read here: a re-check answers for the RECEIVER, and asking the
+    // sending provider is the confusion this card exists to remove.
+    let row: Option<(String, String, String, Option<Uuid>, bool, String)> = sqlx::query_as(
+        r#"SELECT domain, mailgun_region, mailgun_api_key, api_key_id, verified,
+                  inbound_provider
              FROM private_email_domains
             WHERE id = $1 AND tenant_id = $2"#,
     )
@@ -575,15 +722,82 @@ pub async fn verify_domain(
     .await
     .map_err(AppError::Database)?;
 
-    let (domain, region, provider_type, own_key, api_key_id, verified_before) =
+    let (domain, region, own_key, api_key_id, verified_before, inbound_provider) =
         row.ok_or_else(|| AppError::NotFound("Domain not found".into()))?;
 
-    // An SMTP domain has no provider-side state to read: its credential is a mailbox, and a
-    // "re-check" there would be a lie dressed as a repair.
-    if provider_type != "mailgun" {
+    // ── The RECEIVING provider is what a re-check re-reads (kanban t_04db9228) ────────────────
+    // SendGrid has no API that answers "is this domain pointed at me", so the measurement is DNS:
+    // the domain's MX must name mx.sendgrid.net. Promotion only, exactly like the Mailgun arm — a
+    // re-check must never be able to take a working receiving identity away on one ambiguous read.
+    if inbound_provider == "sendgrid" {
+        let mx_ready = sendgrid_mx_ready(&domain).await;
+        let mx_ready = match mx_ready {
+            Some(v) => v,
+            None => {
+                return Err(AppError::BadRequest(format!(
+                    "Could not read the DNS for {} right now, so nothing was changed — this domain \
+                     is still marked {}.",
+                    domain, verified_before
+                )))
+            }
+        };
+        let verified_after = verified_before || mx_ready;
+        let changed = verified_after != verified_before;
+        let row = sqlx::query_as::<_, PrivateEmailDomain>(
+            r#"
+            UPDATE private_email_domains
+            SET verified = $3,
+                updated_at = CASE WHEN $4 THEN NOW() ELSE updated_at END
+            WHERE id = $1 AND tenant_id = $2
+            RETURNING *
+            "#,
+        )
+        .bind(domain_id)
+        .bind(account_id)
+        .bind(verified_after)
+        .bind(changed)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::Database)?
+        .ok_or_else(|| AppError::NotFound("Domain not found".into()))?;
+
+        tracing::info!(
+            tenant = %account_id,
+            domain = %domain,
+            mx_points_at_sendgrid = mx_ready,
+            verified = verified_after,
+            "SendGrid receiving re-checked through DNS"
+        );
+
+        let (keys, provider_keys) = load_credential_maps(&state.db, account_id).await?;
+        let plan_sells_catch_all = feature_gate::catch_all_granted(&state.db, account_id).await?;
+        let mut body = with_credential_status(
+            account_id,
+            &row,
+            &keys,
+            &provider_keys,
+            plan_sells_catch_all,
+        );
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("receiving_provider".into(), json!("sendgrid"));
+            obj.insert("mx_points_at_sendgrid".into(), json!(mx_ready));
+            obj.insert("verified_before".into(), json!(verified_before));
+            obj.insert("changed".into(), json!(changed));
+            obj.insert(
+                "mailgun_state".into(),
+                json!(if mx_ready { "active" } else { "waiting" }),
+            );
+        }
+        return Ok(Json(body));
+    }
+
+    // A sending-only domain has no receiver, so a "re-check" there would be a lie dressed as a
+    // repair. (An SMTP-SENDING domain whose receiver IS Mailgun is re-checked above like any other
+    // Mailgun receiver — sending and receiving are separate choices.)
+    if inbound_provider != "mailgun" {
         return Err(AppError::BadRequest(
-            "A re-check only applies to a Mailgun domain — this domain sends over SMTP, so there is \
-             no provider state to re-read."
+            "This domain only sends mail — no mail arrives through us on it, so there is no \
+             receiving state to re-read. Choose Mailgun or SendGrid for receiving first."
                 .into(),
         ));
     }
@@ -719,6 +933,230 @@ async fn mailgun_domain_state(api_key: &str, domain: &str, region: &str) -> Opti
         .map(|s| s.to_string())
 }
 
+/// Is SendGrid really the destination for this domain's mail right now?
+///
+/// SendGrid publishes no API that answers this for a domain the customer configured in THEIR
+/// account, so the honest measurement is DNS: the domain's MX must name `mx.sendgrid.net`. Asked
+/// over DNS-over-HTTPS because `dig` is not installed on this box, and an empty `dig` would read as
+/// "no records" when it is really "command not found".
+///
+/// `None` means DNS could not be read at all — an undetermined answer, which must never be reported
+/// as "not set up" (that sends a customer chasing a record that is already live).
+async fn sendgrid_mx_ready(domain: &str) -> Option<bool> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .ok()?;
+    for url in [
+        format!("https://dns.google/resolve?name={}&type=MX", domain),
+        format!(
+            "https://cloudflare-dns.com/dns-query?name={}&type=MX",
+            domain
+        ),
+    ] {
+        let resp = match client
+            .get(&url)
+            .header("Accept", "application/dns-json")
+            .header("User-Agent", "CoreSwift-setup-check")
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => r,
+            _ => continue,
+        };
+        let body: serde_json::Value = match resp.json().await {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let answers = match body.get("Answer").and_then(|a| a.as_array()) {
+            Some(a) => a,
+            // A NODATA answer (the name exists, no MX) is a real verdict: nothing points at SendGrid.
+            None if body.get("Status").and_then(|s| s.as_i64()) == Some(0) => return Some(false),
+            None => continue,
+        };
+        let ready = answers.iter().any(|a| {
+            a.get("data")
+                .and_then(|d| d.as_str())
+                .map(|d| d.to_ascii_lowercase().contains("sendgrid.net"))
+                .unwrap_or(false)
+        });
+        return Some(ready);
+    }
+    None
+}
+
+/// The setup checklist for a domain that RECEIVES through SendGrid (kanban t_04db9228).
+///
+/// Two rows are ours to give: the MX record that points the domain at SendGrid, and the exact URL
+/// SendGrid must post to (which carries this domain's own token — the credential). DKIM/SPF are
+/// NOT ours in this shape: they belong to whichever service SENDS the mail, so a customer sending
+/// through Amazon SES must not be handed a SendGrid SPF include they do not need. When the same
+/// domain also sends through Mailgun, Mailgun's sending records ARE shown, because they are the
+/// customer's real ones and we can read them.
+async fn sendgrid_records(
+    state: &AppState,
+    account_id: Uuid,
+    domain_id: Uuid,
+    domain: &str,
+    token: Option<&str>,
+    sending_provider: &str,
+    mailgun_region: &str,
+    own_key: &str,
+    api_key_id: Option<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let mx_ready = sendgrid_mx_ready(domain).await;
+
+    let mut receiving = vec![json!({
+        "section": "receiving",
+        "type": "MX",
+        "name": domain,
+        "value": "mx.sendgrid.net",
+        "priority": 10,
+        "valid": mx_ready,
+        "purpose": "Tells the internet to deliver your mail to SendGrid, which hands each message straight to this inbox.",
+        "note": "DNS only (grey cloud) if your domain is on Cloudflare — the orange proxy cannot carry mail.",
+    })];
+
+    // The destination URL is a CREDENTIAL, so it is only shown to the account that owns it, and only
+    // here. Without it the customer cannot arm receiving at all: SendGrid Inbound Parse is configured
+    // by pasting one URL, and nothing else identifies this inbox to SendGrid.
+    let parse_url = token.map(|t| {
+        format!(
+            "{}/api/v1/webhooks/sendgrid/inbound/{}",
+            crate::email::APP_URL,
+            t
+        )
+    });
+    if let Some(url) = parse_url.as_ref() {
+        receiving.push(json!({
+            "section": "receiving",
+            "type": "URL",
+            "name": format!("SendGrid Inbound Parse for {}", domain),
+            "value": url,
+            "priority": serde_json::Value::Null,
+            "valid": serde_json::Value::Null,
+            "purpose": "Paste this as the destination in SendGrid → Settings → Inbound Parse, tick \"POST the raw, full MIME message\" OFF, and point it at this domain. It is this inbox's own address — anyone holding it can post mail to you, so treat it like a password.",
+            "note": "This URL is the only credential SendGrid can carry: their Inbound Parse signs nothing. Do not share it.",
+        }));
+    }
+
+    // Sending side. Mailgun is readable from the account; anything else (SES, SendGrid, Postmark,
+    // Google) is a service we do not hold the credential for, and inventing its DKIM values would be
+    // worse than saying where they come from.
+    let mut sending: Vec<serde_json::Value> = Vec::new();
+    let mut sending_unknown_by_us = false;
+    if sending_provider == "mailgun" {
+        if let Ok(candidates) =
+            recheck_credentials(&state.db, account_id, own_key, api_key_id).await
+        {
+            let mut detail: Option<serde_json::Value> = None;
+            for key in &candidates {
+                if let Some(d) = mailgun_domain_detail(key, domain, mailgun_region).await {
+                    detail = Some(d);
+                    break;
+                }
+            }
+            if let Some(detail) = detail {
+                let mut rows = Vec::new();
+                flatten_records(
+                    "sending",
+                    detail.get("sending_dns_records").and_then(|v| v.as_array()),
+                    "Proves your mail really comes from you, so it is not marked as spam.",
+                    &mut rows,
+                );
+                sending = rows;
+            } else {
+                sending_unknown_by_us = true;
+            }
+        } else {
+            sending_unknown_by_us = true;
+        }
+    } else if sending_provider == "smtp" {
+        sending_unknown_by_us = true;
+    }
+    if sending_unknown_by_us {
+        // NO invented records: one honest row that says where the real ones live.
+        sending.push(json!({
+            "section": "sending",
+            "type": "INFO",
+            "name": "Your sending records",
+            "value": "Provided by the service that sends your mail (Amazon SES, SendGrid, Postmark, Google Workspace)",
+            "priority": serde_json::Value::Null,
+            "valid": serde_json::Value::Null,
+            "checked_by_provider": false,
+            "purpose": "Nothing to add here: those SPF and DKIM records are minted by your sending service and must stay exactly as it gave them. This inbox only receives.",
+        }));
+    }
+    sending.push(json!({
+        "section": "sending",
+        "type": "TXT",
+        "name": format!("_dmarc.{}", domain),
+        "value": format!("v=DMARC1; p=none; rua=mailto:dmarc@{}", domain),
+        "priority": serde_json::Value::Null,
+        "valid": serde_json::Value::Null,
+        "checked_by_provider": false,
+        "purpose": "Tells receiving servers what to do with mail that fails your sending proof. Gmail and Yahoo expect this on a new domain.",
+    }));
+
+    let checked_sending: Vec<&serde_json::Value> = sending
+        .iter()
+        .filter(|r| r["checked_by_provider"] != json!(false) && r["valid"] != json!(null))
+        .collect();
+    let sending_ok = checked_sending
+        .iter()
+        .all(|r| r["valid"].as_bool() == Some(true));
+    let receiving_ok = mx_ready != Some(false);
+
+    let branded = branded_state(domain).await;
+    let branded_row = json!({
+        "section": "branded",
+        "type": "CNAME",
+        "name": format!("inbox.{}", domain),
+        "value": MAIL_CLIENT_HOST,
+        "priority": serde_json::Value::Null,
+        "valid": branded == Branded::Active,
+        "attention": branded == Branded::Attention,
+        "checked_by_provider": false,
+        "measured": true,
+        "proxied_required": true,
+        "purpose": "Your branded front door: this one makes inbox.<your domain> open your mail, with the padlock on the address.",
+        "note": "Set this record to Proxied (orange cloud). Cloudflare then serves the padlock for your address. Your mail records above stay grey (DNS only) — proxying those breaks mail.",
+    });
+
+    let verified_live = mx_ready == Some(true);
+    // The flat list the older panel renders, and the three groups the setup page renders, from the
+    // same rows — one source, so the two surfaces cannot disagree.
+    let all_records: Vec<serde_json::Value> = receiving
+        .iter()
+        .chain(sending.iter())
+        .chain(std::iter::once(&branded_row))
+        .cloned()
+        .collect();
+    Ok(Json(json!({
+        "domain": domain,
+        "domain_id": domain_id,
+        "receiving_provider": "sendgrid",
+        "sending_provider": sending_provider,
+        "verified": verified_live,
+        "state": if mx_ready == Some(true) { "active" } else { "waiting" },
+        "records": all_records,
+        "groups": [
+            { "key": "receiving", "title": "Receiving — so your mail lands in CoreSwift", "records": receiving },
+            { "key": "sending", "title": "Sending proof — so your replies are not marked as spam", "records": sending },
+            { "key": "branded", "title": "Your branded address — the padlock on your own name", "records": [branded_row] },
+        ],
+        "receiving_ok": receiving_ok,
+        "sending_ok": sending_ok,
+        "branded": branded.as_str(),
+        "branded_url": format!("https://inbox.{}", domain),
+        "mail_client_url": format!("https://{}", MAIL_CLIENT_HOST),
+        "inbound_parse_url": parse_url,
+        "can_create_mailbox": receiving_ok && sending_ok,
+        "mailgun_state": serde_json::Value::Null,
+        "mx_checked": mx_ready,
+    })))
+}
+
 /// GET /api/private-email/domains/:id/records — the records the customer must add, in plain English.
 ///
 /// The setup page teaches a customer how to point their own domain at this service (B205 "customer
@@ -737,8 +1175,18 @@ pub async fn domain_records(
 ) -> ApiResult<Json<serde_json::Value>> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let row: Option<(String, String, String, Option<Uuid>, String, bool)> = sqlx::query_as(
-        r#"SELECT domain, mailgun_region, mailgun_api_key, api_key_id, provider_type, verified
+    let row: Option<(
+        String,
+        String,
+        String,
+        Option<Uuid>,
+        String,
+        bool,
+        String,
+        Option<String>,
+    )> = sqlx::query_as(
+        r#"SELECT domain, mailgun_region, mailgun_api_key, api_key_id, provider_type, verified,
+                      inbound_provider, inbound_token
              FROM private_email_domains WHERE id = $1 AND tenant_id = $2"#,
     )
     .bind(domain_id)
@@ -747,15 +1195,44 @@ pub async fn domain_records(
     .await
     .map_err(AppError::Database)?;
 
-    let (domain, region, own_key, api_key_id, provider_type, verified) =
-        row.ok_or_else(|| AppError::NotFound("Domain not found".into()))?;
+    let (
+        domain,
+        region,
+        own_key,
+        api_key_id,
+        provider_type,
+        verified,
+        inbound_provider,
+        inbound_token,
+    ) = row.ok_or_else(|| AppError::NotFound("Domain not found".into()))?;
 
-    if provider_type != "mailgun" {
-        return Err(AppError::BadRequest(
-            "This domain sends over SMTP, so its records live with your own mail provider — \
-             nothing here needs adding."
-                .into(),
-        ));
+    // RECEIVING is what decides which records a customer has to add (kanban t_04db9228). The old
+    // check asked the SENDING provider, which is why a domain sending over SMTP was told "nothing
+    // here needs adding" even when its mail arrived through us.
+    match inbound_provider.as_str() {
+        "sendgrid" => {
+            return sendgrid_records(
+                &state,
+                account_id,
+                domain_id,
+                &domain,
+                inbound_token.as_deref(),
+                &provider_type,
+                &region,
+                &own_key,
+                api_key_id,
+            )
+            .await
+        }
+        "mailgun" => {}
+        _ => {
+            return Err(AppError::BadRequest(
+                "This domain only sends mail — no mail arrives through us on it, so there are no \
+                 records to add here. Choose a receiving provider (Mailgun or SendGrid) on this \
+                 domain if you want an inbox on it."
+                    .into(),
+            ))
+        }
     }
 
     let candidates = recheck_credentials(&state.db, account_id, &own_key, api_key_id).await?;
@@ -1027,6 +1504,7 @@ async fn add_mailgun_domain(
     account_id: Uuid,
     req: &AddDomainRequest,
     label: &str,
+    choices: &DomainChoices,
 ) -> ApiResult<Json<serde_json::Value>> {
     let (encrypted_key, api_key_id): (String, Option<Uuid>) = if let Some(kid) = req.api_key_id {
         let row = sqlx::query_as::<_, (String,)>(
@@ -1098,18 +1576,40 @@ async fn add_mailgun_domain(
     // sending-only domain: the inbound receiver refuses every delivery for it (t_7f134e77), which
     // is exactly what this field exists to arm. An empty/absent value stores NULL — never a
     // ciphertext of nothing, so "no key" stays distinguishable from "a key is configured".
-    let sealed_webhook: Option<String> = match req.webhook_signing_key.as_deref() {
-        Some(k) if !k.trim().is_empty() => Some(crate::secret_box::seal(account_id, k)?),
-        _ => None,
+    // The signing key belongs to the MAILGUN receiver. A domain that receives through SendGrid has
+    // no use for it — SendGrid's Inbound Parse signs nothing, so the key's only effect would be to
+    // look armed while gating nothing. Refused rather than stored, and the panel never offers the
+    // field on that branch (kanban t_04db9228).
+    let wanted_webhook_key = req
+        .webhook_signing_key
+        .as_deref()
+        .filter(|k| !k.trim().is_empty());
+    if wanted_webhook_key.is_some() && choices.receiving != "mailgun" {
+        return Err(AppError::BadRequest(format!(
+            "A Mailgun webhook signing key only applies when this domain RECEIVES through Mailgun. \
+             You chose {} — so the key would never be used. Choose Mailgun for receiving to paste \
+             it, or leave it out and finish the {} setup instead.",
+            choices.receiving, choices.receiving
+        )));
+    }
+    let sealed_webhook: Option<String> = match wanted_webhook_key {
+        Some(k) => Some(crate::secret_box::seal(account_id, k)?),
+        None => None,
     };
+
+    // `verified` follows what ACTUALLY receives. Mailgun's own `active` state describes the domain
+    // in Mailgun's account: it is the receiving verdict only when Mailgun is the receiver. A domain
+    // that sends through Mailgun but receives through SendGrid is verified by ITS MX pointing at
+    // SendGrid (`POST /domains/:id/verify`), never by Mailgun's word about a different path.
+    let verified = verified && choices.receiving == "mailgun";
 
     let row = sqlx::query_as::<_, PrivateEmailDomain>(
         r#"
         INSERT INTO private_email_domains (
             tenant_id, domain, mailgun_api_key, mailgun_region, label, api_key_id, provider_type,
-            verified, webhook_signing_key_encrypted
+            verified, webhook_signing_key_encrypted, inbound_provider, inbound_mode, inbound_token
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'mailgun', $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, 'mailgun', $7, $8, $9, $10, $11)
         RETURNING *
         "#,
     )
@@ -1121,6 +1621,9 @@ async fn add_mailgun_domain(
     .bind(api_key_id)
     .bind(verified)
     .bind(sealed_webhook)
+    .bind(&choices.receiving)
+    .bind(choices.inbound_mode())
+    .bind(new_inbound_token())
     .fetch_one(&state.db)
     .await
     .map_err(AppError::Database)?;
@@ -1144,25 +1647,35 @@ async fn add_smtp_domain(
     account_id: Uuid,
     req: &AddDomainRequest,
     label: &str,
+    choices: &DomainChoices,
 ) -> ApiResult<Json<serde_json::Value>> {
-    // An SMTP domain cannot receive a webhook: `providers::smtp::accept_inbound` answers `None` for
-    // every payload (inbound over SMTP would be IMAP polling, which is not implemented). Storing a
-    // signing key on it would be an inert credential that LOOKS armed, so a non-empty one is
-    // refused here instead of saved and silently ignored (kanban t_fbd607a7). The panel never
-    // offers the field on the SMTP branch.
-    if let Some(k) = req
+    // A signing key belongs to the MAILGUN RECEIVER, and receiving is now its own choice (kanban
+    // t_04db9228): sending over SMTP while RECEIVING through Mailgun is a supported combination —
+    // that is the customer who keeps Amazon SES for outbound and lets Mailgun deliver inbound — so
+    // the key is required exactly when Mailgun is the receiver, and refused when it is not (where it
+    // would be an inert credential that only looks armed).
+    let wanted_webhook_key = req
         .webhook_signing_key
         .as_deref()
-        .filter(|k| !k.trim().is_empty())
-    {
+        .filter(|k| !k.trim().is_empty());
+    if wanted_webhook_key.is_some() && choices.receiving != "mailgun" {
         tracing::warn!(
             tenant = %account_id,
-            key_len = k.len(),
-            "rejected a webhook signing key on an SMTP domain — SMTP domains cannot receive webhooks"
+            key_len = wanted_webhook_key.map(str::len).unwrap_or(0),
+            receiving = %choices.receiving,
+            "rejected a webhook signing key — this domain does not receive through Mailgun"
         );
+        return Err(AppError::BadRequest(format!(
+            "An inbound webhook signing key applies to Mailgun's receiver only. You chose {} for \
+             receiving, so the key would never be used.",
+            choices.receiving
+        )));
+    }
+    if choices.receiving == "mailgun" && wanted_webhook_key.is_none() {
         return Err(AppError::BadRequest(
-            "An inbound webhook signing key applies to a Mailgun domain only — this domain sends \
-             over SMTP, which has no webhook receiver, so the key would never be used."
+            "Receiving through Mailgun needs its webhook signing key (Mailgun → Settings → API \
+             keys → HTTP webhook signing key). Without it every delivery is refused, so this \
+             domain is not stored until it is supplied."
                 .into(),
         ));
     }
@@ -1183,31 +1696,69 @@ async fn add_smtp_domain(
     // Store an EMPTY mailgun_api_key for backward compat (column is NOT NULL). This used to be
     // `encrypt_api_key(account_id, "")`, i.e. a 28-byte ciphertext of nothing, which made "no key
     // configured" indistinguishable from "a key is configured" for every reader (t_45772522).
-    let empty_key = String::new();
+    //
+    // The exception is a domain whose RECEIVER is Mailgun (kanban t_04db9228): the records page and
+    // the re-check read Mailgun's own API for this domain, so the customer's Mailgun key is sealed
+    // into this same column. Sending still goes over SMTP — `provider_type` is what the send path
+    // reads — so the two choices stay independent.
+    let sealed_webhook: Option<String> = match wanted_webhook_key {
+        Some(k) => Some(crate::secret_box::seal(account_id, k)?),
+        None => None,
+    };
+    let mailgun_key_for_receiving = if choices.receiving == "mailgun" {
+        let raw = req
+            .mailgun_api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+            .ok_or_else(|| {
+                AppError::BadRequest(
+                    "Receiving through Mailgun needs the Mailgun API key for this domain (Mailgun \
+                     → Settings → API keys) so its records can be shown and checked. Your sending \
+                     stays on SMTP; nothing else changes."
+                        .into(),
+                )
+            })?;
+        crate::secret_box::seal(account_id, raw)?
+    } else {
+        String::new()
+    };
 
     let row = sqlx::query_as::<_, PrivateEmailDomain>(
         r#"
         INSERT INTO private_email_domains (
             tenant_id, domain, mailgun_api_key, mailgun_region, label,
             provider_type, smtp_host, smtp_port, smtp_username, smtp_password_encrypted, smtp_tls,
-            inbound_mode
+            inbound_mode, inbound_provider, webhook_signing_key_encrypted, inbound_token
         )
-        VALUES ($1, $2, $3, 'us', $4, 'smtp', $5, $6, $7, $8, $9, 'none')
+        VALUES ($1, $2, $3, 'us', $4, 'smtp', $5, $6, $7, $8, $9, $10, $11, $12, $13)
         RETURNING *
         "#,
     )
     .bind(account_id)
     .bind(&req.domain)
-    .bind(&empty_key)
+    .bind(&mailgun_key_for_receiving)
     .bind(label)
     .bind(smtp_host)
     .bind(req.smtp_port.unwrap_or(587))
     .bind(smtp_username)
     .bind(&encrypted_smtp_password)
     .bind(req.smtp_tls)
+    .bind(choices.inbound_mode())
+    .bind(&choices.receiving)
+    .bind(sealed_webhook)
+    .bind(new_inbound_token())
     .fetch_one(&state.db)
     .await
     .map_err(AppError::Database)?;
 
-    Ok(Json(serde_json::to_value(&row).unwrap()))
+    let (keys, provider_keys) = load_credential_maps(&state.db, account_id).await?;
+    let plan_sells_catch_all = feature_gate::catch_all_granted(&state.db, account_id).await?;
+    Ok(Json(with_credential_status(
+        account_id,
+        &row,
+        &keys,
+        &provider_keys,
+        plan_sells_catch_all,
+    )))
 }

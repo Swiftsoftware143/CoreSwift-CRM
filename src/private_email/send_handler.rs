@@ -243,7 +243,7 @@ pub async fn load_provider_config(
             d.provider_type, d.domain, d.mailgun_region, d.mailgun_api_key,
             d.smtp_host, d.smtp_port, d.smtp_username, d.smtp_password_encrypted,
             d.smtp_tls, d.inbound_mode, d.webhook_signing_key_encrypted,
-            d.api_key_id
+            d.api_key_id, d.inbound_provider
         FROM private_email_domains d
         WHERE d.id = $1 AND d.tenant_id = $2
         "#,
@@ -345,6 +345,15 @@ pub async fn load_provider_config(
             })
             .ok()
             .flatten(),
+        // HOW THIS DOMAIN RECEIVES (kanban t_04db9228) — a decode failure falls back to "mailgun",
+        // which is what every row written before the column existed really is, and is logged rather
+        // than swallowed like every other fallback in this function.
+        inbound_provider: row
+            .try_get::<String, _>("inbound_provider")
+            .inspect_err(
+                |e| tracing::warn!(column = "inbound_provider", error = %e, "decode failed"),
+            )
+            .unwrap_or_else(|_| "mailgun".into()),
     })
 }
 

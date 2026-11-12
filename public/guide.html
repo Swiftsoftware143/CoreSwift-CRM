@@ -1510,7 +1510,7 @@ once.</p>
 <h2>Your inbox: bring your own domain</h2>
 <p><strong>CoreSwift does not give out an address on our domain.</strong> You keep the domain you already own (for example <code>yourbusiness.com</code>) and your own Mailgun account, and your mail is delivered straight to you. Open the <strong>Inbox</strong> tab in the console: the setup page is the onboarding, in three plain steps, with a copy button beside every value.</p>
 <ol>
-<li><strong>Add your domain.</strong> Type the domain and paste your Mailgun API key and your Mailgun webhook signing key. Both are stored sealed and are used only for your own mail.</li>
+<li><strong>Add your domain and make two choices.</strong> Type the domain, choose <strong>how it sends</strong> and <strong>how it receives</strong>, and paste only the keys those choices need. Both keys are stored sealed and used only for your own mail.</li>
 <li><strong>Add the records at your own DNS host</strong> (Cloudflare, or your registrar). Three groups: <strong>MX</strong> &mdash; <code>mxa.mailgun.org</code> and <code>mxb.mailgun.org</code>, where mail is delivered; <strong>SPF and DKIM</strong> &mdash; <code>v=spf1 include:mailgun.org ~all</code> plus the DKIM value your own Mailgun mints, which prove the mail is really from you; and one <strong>CNAME</strong> &mdash; <code>inbox</code> &rarr; <code>inbox.coreswiftcrm.com</code>, which makes <code>inbox.yourbusiness.com</code> open your mail. Every row carries a copy button, one sentence saying what it does, and a live <strong>Active</strong> / <strong>Waiting</strong> / <strong>Needs attention</strong> badge. Press <strong>Check again</strong> after adding them.</li>
 <li><strong>Create your inbox.</strong> The button stays disabled until receiving and sending both verify, because an address that cannot receive is worse than no address at all. <strong>Nothing is charged and no mailbox exists until then.</strong></li>
 </ol>
@@ -1521,6 +1521,24 @@ once.</p>
 <p><strong>One bill, never two.</strong> The $1 Inbox plan is a standalone door, not an add-on: moving up to a CRM plan ends the $1 subscription in the same step, so you pay the new plan&rsquo;s price only &mdash; never $1 on top of it &mdash; and the new period starts the day you move, so nothing is prorated. Moving back down to Inbox returns you to $1, and your mailbox and every message stay exactly where they are. <strong>Plans &amp; Billing</strong> opens with <strong>Your bill</strong>: the one amount you pay, that there is one subscription, and &mdash; if your plan changed &mdash; the line that ended and the day it ended.</p>
 <p><strong>When your plan already includes every inbox you have</strong>, <strong>Create new inbox</strong> answers with the plan that unlocks more and what it costs, never a dead button.</p>
 
+<h2>Sending and receiving are two separate choices</h2>
+<p><strong>You do not have to move your mail to one company.</strong> The inbox setup page asks two questions that stand on their own: <strong>how should your mail leave</strong> (sending) and <strong>how should your mail arrive</strong> (receiving). Every option in those two lists really works &mdash; there is no placeholder in either one.</p>
+<ul>
+<li><strong>Sending</strong> can go through <strong>your own Mailgun account</strong>, or through <strong>any SMTP service</strong> &mdash; Amazon SES, SendGrid, Postmark, Google Workspace, or a mail server you run yourself. For those you type the server name, port, username and password that the service gave you; that is the whole setup.</li>
+<li><strong>Receiving</strong> can come through <strong>Mailgun</strong> or <strong>SendGrid</strong>, or nowhere at all if the domain only sends.</li>
+</ul>
+<p><strong>Mixing them is normal.</strong> Sending through Amazon SES while receiving through Mailgun &mdash; or sending through Mailgun and receiving through SendGrid &mdash; is a supported setup, and it is the one that lets you keep whatever already sends your mail. Changing one never changes the other.</p>
+<h3>Receiving through SendGrid</h3>
+<ol>
+<li>Add the domain on the setup page and choose <strong>Receiving: SendGrid</strong>. No SendGrid key is needed: SendGrid posts each message to an address we give you.</li>
+<li>At your DNS host add one <strong>MX</strong> record pointing your domain at <code>mx.sendgrid.net</code> with priority <strong>10</strong>. If your domain is on Cloudflare, leave it <strong>DNS only (grey cloud)</strong>.</li>
+<li>Copy the <strong>SendGrid Inbound Parse</strong> address the setup page shows you &mdash; ours, ending in a long private code &mdash; then in SendGrid open <strong>Settings &rarr; Inbound Parse</strong>, add your domain and paste it as the destination.</li>
+<li>Press <strong>Check again</strong>. The receiving group turns <strong>Active</strong> once your domain&rsquo;s mail really points at SendGrid, and that is when the inbox can be created.</li>
+</ol>
+<p><strong>That address is a password.</strong> SendGrid&rsquo;s Inbound Parse signs nothing, so the address itself is the only thing proving a delivery is genuinely yours: anyone holding it can post mail into your inbox. Keep it out of tickets and screenshots, and never put it on a page.</p>
+<p><strong>Your sending records stay yours.</strong> When you receive through SendGrid, the SPF and DKIM records remain exactly as your sending service gave them &mdash; Amazon SES mints its own, SendGrid mints its own, Mailgun mints its own. The setup page says where they come from instead of inventing them. If the same domain also sends through Mailgun, Mailgun&rsquo;s own sending records are shown, because they are yours and we can read them.</p>
+<h3>Switching later</h3>
+<p><strong>Receiving can be changed without touching sending.</strong> The setup page shows <strong>Change how this domain receives</strong> under the domain; pick Mailgun, SendGrid or <em>Nowhere</em>. Nothing already received is deleted and your sending keys are untouched. Switching to SendGrid issues that domain&rsquo;s Inbound Parse address if it did not have one.</p>
 <h2>Your own Mailgun account: the two keys, and where to copy each one</h2>
 <p><strong>Two keys, two different jobs, and neither is a password you use to sign in here.</strong> You paste both once, on the inbox setup page; the app stores them sealed (encrypted) and uses them only for your own mail. Both are copied from your own Mailgun account.</p>
 <ul>

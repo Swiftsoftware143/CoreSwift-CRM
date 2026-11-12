@@ -654,6 +654,28 @@ async fn main() -> anyhow::Result<()> {
                 ),
             ),
         )
+        // SendGrid Inbound Parse (kanban t_04db9228). SendGrid signs nothing, so the per-domain
+        // token in the path IS the credential: the handler resolves the domain BY it through a
+        // unique index and refuses an unknown one before reading a field. The 25 MB body limit sits
+        // OUTSIDE the body-read deadline on purpose — the deadline reads with the request's own
+        // `DefaultBodyLimit` extension, so a limit applied inside it would be invisible and every
+        // delivery carrying an attachment over axum's 2 MB default would be answered 413 before the
+        // receiver ran. Attachments are counted and their bytes dropped, but they still have to
+        // fit through the door.
+        .nest(
+            "/api/v1/webhooks/sendgrid",
+            axum::Router::new()
+                .route(
+                    "/inbound/:token",
+                    axum::routing::post(private_email::webhook_handler::sendgrid_inbound).layer(
+                        axum::middleware::from_fn_with_state(
+                            body_read_deadline,
+                            body_deadline::body_read_deadline_middleware,
+                        ),
+                    ),
+                )
+                .layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024)),
+        )
         // NOTE: POST /api/billing/webhooks/{stripe,paypal} were RETIRED 2026-09-25 (kanban
         // t_0fe500d4) together with POST /api/billing/checkout/create. They authenticated nothing
         // (no signature, no shared secret) and their only effect was to complete a

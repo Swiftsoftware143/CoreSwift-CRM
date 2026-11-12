@@ -93,6 +93,20 @@ pub struct PrivateEmailDomain {
     pub smtp_password_encrypted: Option<String>,
     pub smtp_tls: bool,
     pub inbound_mode: String,
+    /// HOW THIS DOMAIN RECEIVES (kanban t_04db9228): `mailgun` | `sendgrid` | `none`.
+    ///
+    /// Deliberately separate from `provider_type`, which answers how it SENDS. A customer may send
+    /// through Amazon SES (over SMTP) and receive through Mailgun — or send through Mailgun and
+    /// receive through SendGrid — and neither choice may overwrite the other. `none` is a
+    /// sending-only domain: it has no receiver, and a delivery addressed to it cannot validate.
+    pub inbound_provider: String,
+    /// The SendGrid Inbound Parse receiver's credential: the unguessable path segment of
+    /// `/api/v1/webhooks/sendgrid/inbound/<token>`. NEVER serialized on the row — the setup surface
+    /// answers it as a complete URL (`inbound_parse_url`) and nowhere else, so it cannot leak into a
+    /// generic domain list.
+    #[serde(skip_serializing)]
+    pub inbound_token: Option<String>,
+
     #[serde(skip_serializing)]
     pub webhook_signing_key_encrypted: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -162,6 +176,25 @@ pub struct AddDomainRequest {
     pub smtp_password: Option<String>,
     #[serde(default = "default_true")]
     pub smtp_tls: bool,
+    /// HOW THIS DOMAIN SENDS (kanban t_04db9228). `mailgun` (their own Mailgun account, over its
+    /// API) or `smtp` (any SMTP service: Amazon SES, SendGrid, Postmark, Google Workspace, a
+    /// host's own mail server). Absent falls back to `provider_type` so every existing caller —
+    /// and the older panel that only ever posted `provider_type` — keeps working unchanged.
+    ///
+    /// Sending and receiving are asked separately on purpose: the customer is never told to move
+    /// their outbound mail in order to receive with us.
+    #[serde(default)]
+    pub sending_provider: Option<String>,
+    /// HOW THIS DOMAIN RECEIVES (kanban t_04db9228). `mailgun` or `sendgrid` — the only two
+    /// receivers that exist in this binary — or `none` for a sending-only domain. Anything else is
+    /// refused (400) rather than stored, because a stored value no receiver answers to is a
+    /// dropdown entry that does nothing.
+    ///
+    /// Absent means "the same as the sending provider": `mailgun` for a Mailgun domain, `none` for
+    /// an SMTP one — which is exactly what every domain added before today does.
+    #[serde(default)]
+    pub receiving_provider: Option<String>,
+
     /// The domain's Mailgun WEBHOOK signing key (kanban t_fbd607a7), the credential
     /// `POST /api/v1/webhooks/mailgun/inbound` authenticates a delivery with
     /// (`providers::mailgun::accept_inbound`). Mailgun presents no session and cannot carry an
@@ -222,6 +255,15 @@ pub struct UpdateDomainRequest {
     /// Re-enter a domain's SMTP password (`provider_type = "smtp"`), same contract as above.
     #[serde(default)]
     pub smtp_password: Option<String>,
+    /// Switch HOW this domain RECEIVES (kanban t_04db9228): `mailgun`, `sendgrid`, or `none`.
+    ///
+    /// This is a separate choice from sending, and switching it changes nothing about how the
+    /// domain sends. `sendgrid` mints this domain's inbound token if it does not have one yet, and
+    /// the setup page then shows the Inbound Parse URL to paste into SendGrid. An unrecognised value
+    /// is refused rather than stored: a receiving provider with no receiver behind it would leave
+    /// every delivery unanswered while the panel claimed the domain was set up.
+    #[serde(default)]
+    pub receiving_provider: Option<String>,
     /// Point the domain at a DIFFERENT saved key (from `GET /private-email/keys`).
     #[serde(default)]
     pub api_key_id: Option<Uuid>,

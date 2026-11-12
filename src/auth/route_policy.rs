@@ -297,6 +297,13 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // used to be processed anyway and made such a domain an anonymous writer of contacts/tickets/
     // events (kanban t_7f134e77, reproduced live 2026-10-11).
     "/api/v1/webhooks/mailgun/inbound",
+    // SendGrid's Inbound Parse receiver (kanban t_04db9228). SendGrid signs nothing — its inbound
+    // parse has no HMAC and no shared-secret header — so the credential is the per-domain token in
+    // the path: the handler resolves the domain BY that token (unique index) and refuses an unknown
+    // one before a field is read. Same shape as `/api/webhook/:token/:action` above, where the token
+    // identifies the tenant. It must stay anonymous because SendGrid presents no session and cannot
+    // carry our internal key.
+    "/api/v1/webhooks/sendgrid/inbound/:token",
     // --- provider push receivers (their own channel/signature is the credential) -----------------
     // Google Calendar push: the channel id and resource id are the credential, checked by the
     // handler (measured live: an anonymous post is answered 400 "Missing X-Goog-Channel-ID").
@@ -968,6 +975,7 @@ mod tests {
             "/api/avatars/canary-user",
             "/api/webhook/abc123/create",
             "/api/v1/webhooks/mailgun/inbound",
+            "/api/v1/webhooks/sendgrid/inbound/6f1c2d3e4b5a69788796a5b4c3d2e1f0",
             "/api/google-calendar/webhook",
             "/api/google-calendar/oauth-callback",
             "/api/telnyx/webhook",

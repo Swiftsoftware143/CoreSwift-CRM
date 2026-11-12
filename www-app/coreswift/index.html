@@ -7204,6 +7204,7 @@ async function loadInboxTab() {
       '<code>' + escapeHtml(d.domain || '') + '</code>',
       escapeHtml(d.label || '—'),
       escapeHtml(d.provider_type || 'mailgun'),
+      peReceivingCell(d),
       peVerifyCell(d),
       peCatchAllCell(d),
       peCredentialCell(d),
@@ -7212,7 +7213,7 @@ async function loadInboxTab() {
     el.innerHTML = card('🌐 Domains you send from',
       '<p style="color:var(--text-secondary);margin:0">Each domain is the provider-level identity CoreSwift sends and receives with. Credentials are per account, never a platform default.</p>',
       '<button class="btn btn-primary btn-sm" onclick="peOpenAddDomain()">+ Add domain</button>') +
-      dataTable(['Domain', 'Label', 'Provider', 'Verification', 'Catch-all', 'Credential', 'Inbound mail'], rows,
+      dataTable(['Domain', 'Label', 'Sending', 'Receiving', 'Verification', 'Catch-all', 'Credential', 'Inbound mail'], rows,
         'No domains on this account yet.') + peKeysCard();
   }
 
@@ -7371,7 +7372,51 @@ async function peToggleCatchAll(domainId, next) {
 // The server reports presence + LENGTH only (it opens the stored ciphertext to decide
 // `usable | unreadable | missing`); the value is sealed at rest and never echoed back here — the
 // same posture as the Mailgun API key field.
+// HOW THIS DOMAIN RECEIVES — a choice of its own, not a consequence of how it sends (kanban
+// t_04db9228). Only the receivers that exist in this build are offered: Mailgun, SendGrid, or
+// nowhere. Switching never touches sending and never deletes mail; the server refuses a switch to
+// Mailgun without its signing key, and its sentence is shown verbatim.
+function peReceivingCell(d) {
+  const cur = d.inbound_provider || 'mailgun';
+  const label = cur === 'sendgrid' ? 'SendGrid' : (cur === 'none' ? 'nowhere' : 'Mailgun');
+  const opts = [['mailgun', 'Mailgun'], ['sendgrid', 'SendGrid'], ['none', 'Nowhere (send only)']]
+    .map(function (o) {
+      return '<option value="' + o[0] + '"' + (o[0] === cur ? ' selected' : '') + '>' + o[1] + '</option>';
+    }).join('');
+  return '<span class="badge ' + (cur === 'none' ? 'badge-muted' : 'badge-success') + '">' + label + '</span> '
+    + '<select onchange="peSetReceiving(\'' + d.id + '\', this.value)" style="max-width:150px;margin-left:6px">'
+    + opts + '</select>';
+}
+
+async function peSetReceiving(domainId, value) {
+  const d = (PE.domains || []).filter(function (x) { return x.id === domainId; })[0] || {};
+  try {
+    const r = await API.patch('/private-email/domains/' + domainId, { receiving_provider: value });
+    toast(value === 'none'
+      ? 'Mail to ' + (d.domain || 'this domain') + ' will not arrive here any more. Sending is unchanged.'
+      : 'Receiving through ' + (value === 'sendgrid' ? 'SendGrid' : 'Mailgun') + ' — sending is unchanged.', 'success');
+    if (value === 'sendgrid') {
+      toast('Open DNS records on this domain for the MX row and the Inbound Parse address to paste into SendGrid.', 'info');
+    }
+    return r;
+  } catch (e) {
+    toast(e.message || 'Could not change the receiving provider', 'error');
+  } finally {
+    if (typeof loadInboxTab === 'function') loadInboxTab();
+  }
+}
+
 function peInboundCell(d) {
+  // A SendGrid receiver is armed in the customer's own SendGrid account, not by a key here, so the
+  // Mailgun signing-key verdict would be a lie on such a domain (and "inbound refused" would be
+  // false: mail is arriving).
+  if ((d.inbound_provider || 'mailgun') === 'sendgrid') {
+    return '<span class="badge badge-success">SendGrid Inbound Parse</span> '
+      + '<button class="btn btn-ghost btn-xs" onclick="peShowDomainRecords(\'' + d.id + '\')">DNS records</button>';
+  }
+  if ((d.inbound_provider || 'mailgun') === 'none') {
+    return '<span class="badge badge-muted">send only — nothing arrives</span>';
+  }
   const s = d.webhook_signing_key_status;
   const badge = s === 'usable'
     ? '<span class="badge badge-success">signing key set</span>'
@@ -8952,8 +8997,8 @@ window.appGuidePages = {
   "comm-log":      { title: "Communications Log", desc: "Every message in and out — email, text and calls — in one chronological history.", actions: ["Filter by contact or channel", "Open an entry to see its content"] },
   tickets:         { title: "Support Tickets", desc: "Support requests raised in your workspace and their status.", actions: ["Open a ticket", "Reply and change its status"] },
   branding:        { title: "Email Branding", desc: "One logo and one signature for every message this workspace sends. Upload the logo once — the app resizes it so it renders in Gmail, Outlook and Apple Mail on a phone or a desktop — then fill in the signature (name, title, company, phone and a short line) and press Save signature. Compose and every reply then open with both already in place; an individual address can use its own wording from the mail client's Signature button.", actions: ["Upload the company logo (PNG, JPEG, GIF or WebP — no size to choose)", "Fill in the signature and press Save signature", "Read the preview: it is the message the mailer really produces", "Send yourself a test email to see it in your own inbox"] },
-  inbox:           { title: "Shared Inbox", desc: "Your mail in one place: every message that arrived at your workspace's addresses. CoreSwift does not host your mail \u2014 you bring your own domain and your own Mailgun account. The setup page is three steps: the domain plus your two Mailgun keys, the mail records (MX, SPF/DKIM) each with a Copy button and a live Active / Waiting / Needs attention badge, then the inbox itself. The API key is the sending key (Mailgun \u2192 Settings \u2192 API Keys \u2192 Private API key, it starts key-) and the webhook signing key is the receiving key (Mailgun \u2192 Send \u2192 Domains \u2192 your domain \u2192 Webhook signing key); without the second one the domain can only send. One extra CNAME makes inbox.yourbusiness.com open your mail, and it is the only record that must be Proxied (orange cloud) \u2014 the mail records stay grey. Nothing is charged and no mailbox exists until the records verify, and the 30-day clock starts at your first verified inbox. When it ends the address still receives and only sending pauses: Keep inbox \u2014 $1/mo or Upgrade CRM brings sending back on the spot, and nothing is ever deleted. The meter at the bottom of the left column is your storage, with a banner and one email at 50, 75 and 99 per cent.", actions: ["Pick an address to narrow the list", "Open a message, star it, or file it under a label", "Follow the three setup steps and press Check again when the records show Active", "LOG IN on an inbox row opens your branded address once it is live", "Receive-only? Use Keep inbox \u2014 $1/mo or Upgrade CRM to restore sending", "Catch-all is switched on Email Domains & Sending, not here"] },
-  "email-settings":{ title: "Email Domains & Sending", desc: "The sending half of your mail: the domains you send from with their Catch-all switch and their keys, the mailboxes on each domain, auto-replies and a form to send from a mailbox. The Catch-all column accepts mail for addresses that do not exist on the domain and files it under Everything else (MISC); it is sold by the plan \u2014 on this ladder from Pro upward \u2014 and the plan is checked when mail arrives, so a workspace moved down keeps the setting remembered while unmatched mail is refused: the cell then reads \u201coff \u2014 not on your plan\u201d with a Clear button. Mailboxes are counted per plan, and at the ceiling the answer names the plan that adds more and charges nothing.", actions: ["Enable or disable catch-all on a domain", "Add a domain and paste its Mailgun API key and webhook signing key; Check again after the records go Active", "DNS records shows the exact MX, SPF and DKIM values a domain needs, with a Copy button, for any domain \u2014 not just while the account has no inbox", "Remove this domain deletes a domain you no longer want (and the inboxes on it; mail already received stays) after you type its name to confirm", "Create a mailbox \u2014 the button stays disabled until receiving and sending both verify"] },
+  inbox:           { title: "Shared Inbox", desc: "Your mail in one place: every message that arrived at your workspace's addresses. CoreSwift does not host your mail \u2014 you bring your own domain, and sending and receiving are TWO separate choices: send through your own Mailgun account or any SMTP service (Amazon SES, SendGrid, Postmark, Google Workspace), and receive through Mailgun or SendGrid. The setup page is three steps: the domain plus the keys those choices need, the mail records (MX, SPF/DKIM) each with a Copy button and a live Active / Waiting / Needs attention badge, then the inbox itself. The API key is the sending key (Mailgun \u2192 Settings \u2192 API Keys \u2192 Private API key, it starts key-) and the webhook signing key is the receiving key (Mailgun \u2192 Send \u2192 Domains \u2192 your domain \u2192 Webhook signing key); without the second one the domain can only send. One extra CNAME makes inbox.yourbusiness.com open your mail, and it is the only record that must be Proxied (orange cloud) \u2014 the mail records stay grey. Nothing is charged and no mailbox exists until the records verify, and the 30-day clock starts at your first verified inbox. When it ends the address still receives and only sending pauses: Keep inbox \u2014 $1/mo or Upgrade CRM brings sending back on the spot, and nothing is ever deleted. The meter at the bottom of the left column is your storage, with a banner and one email at 50, 75 and 99 per cent.", actions: ["Pick an address to narrow the list", "Open a message, star it, or file it under a label", "Follow the three setup steps and press Check again when the records show Active", "LOG IN on an inbox row opens your branded address once it is live", "Receive-only? Use Keep inbox \u2014 $1/mo or Upgrade CRM to restore sending", "Catch-all is switched on Email Domains & Sending, not here", "Change how a domain RECEIVES (Mailgun, SendGrid, or nowhere) under the domain on the setup page \u2014 sending is untouched by it"] },
+  "email-settings":{ title: "Email Domains & Sending", desc: "The sending half of your mail: the domains you send from with their Catch-all switch and their keys, the mailboxes on each domain, auto-replies and a form to send from a mailbox. The Catch-all column accepts mail for addresses that do not exist on the domain and files it under Everything else (MISC); it is sold by the plan \u2014 on this ladder from Pro upward \u2014 and the plan is checked when mail arrives, so a workspace moved down keeps the setting remembered while unmatched mail is refused: the cell then reads \u201coff \u2014 not on your plan\u201d with a Clear button. Mailboxes are counted per plan, and at the ceiling the answer names the plan that adds more and charges nothing.", actions: ["Enable or disable catch-all on a domain", "Add a domain, choose how it sends and how it receives, and paste only the keys those choices need; Check again after the records go Active", "DNS records shows the exact MX, SPF and DKIM values a domain needs, with a Copy button, for any domain \u2014 not just while the account has no inbox", "Remove this domain deletes a domain you no longer want (and the inboxes on it; mail already received stays) after you type its name to confirm", "Create a mailbox \u2014 the button stays disabled until receiving and sending both verify"] },
   calendar:        { title: "Calendar", desc: "Events and appointments for you and your team.", actions: ["Create an event", "Open one to see its details"] },
   bookings:        { title: "Bookings", desc: "Appointment slots people can book with you, and the bookings they made.", actions: ["Set your availability", "Review upcoming bookings"] },
   "ai-assistant":  { title: "AI Assistant", desc: "Ask questions about your data, or have it draft content for you.", actions: ["Connect an AI provider in the Integration Center", "Ask it something"] },
@@ -9023,7 +9068,7 @@ function auditExportCsv() {
 }
 </script>
 <script src="/inline-guide-widget.js?v=20261106a"></script>
-<script src="/private-email-inbox.js?v=20261111j"></script>
+<script src="/private-email-inbox.js?v=20261112b"></script>
 </body>
 </html>
 

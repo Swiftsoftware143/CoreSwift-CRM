@@ -231,15 +231,55 @@
     // ── Step 1: the domain + the customer's own Mailgun key ──────────────────────────────────
     var step1;
     if (d) {
+      // The two choices stay visible (and switchable) after the domain exists: a customer who picked
+      // "send only" by mistake otherwise has no way back that does not delete the domain and every
+      // mailbox on it. Sending is shown, not offered — changing it needs the other service's
+      // credentials, which is a different form.
+      var sendLabel = d.provider_type === 'smtp' ? 'your own SMTP service' : 'Mailgun';
+      var recvLabel = d.inbound_provider === 'sendgrid' ? 'SendGrid'
+        : (d.inbound_provider === 'none' ? 'nowhere (this domain only sends)' : 'Mailgun');
       step1 = '<div style="margin:4px 0 0"><strong>' + esc(d.domain) + '</strong> — '
         + (d.verified ? '<span style="color:#166534">verified</span>' : '<span style="color:#92400e">waiting for its records</span>')
-        + '</div>';
+        + '</div>'
+        + '<p style="font-size:13px;margin:8px 0 0;opacity:.85">Sending: <strong>' + esc(sendLabel)
+        + '</strong> &middot; Receiving: <strong>' + esc(recvLabel) + '</strong></p>'
+        + '<div class="form-group" style="margin-top:10px"><label>Change how this domain receives</label>'
+        + '<select id="peSetupReceiving2" onchange="peSetupChangeReceiving(this.value)">'
+        + '<option value="mailgun"' + (d.inbound_provider === 'mailgun' ? ' selected' : '') + '>Mailgun</option>'
+        + '<option value="sendgrid"' + (d.inbound_provider === 'sendgrid' ? ' selected' : '') + '>SendGrid — Inbound Parse</option>'
+        + '<option value="none"' + (d.inbound_provider === 'none' ? ' selected' : '') + '>Nowhere — this domain only sends</option>'
+        + '</select>'
+        + '<p style="font-size:12px;opacity:.7;margin:4px 0 0">Sending is unchanged by this. Switching to SendGrid gives you the exact Inbound Parse URL to paste into your SendGrid account; switching to Mailgun needs its webhook signing key, which you can paste on the Mailgun side of this page.</p></div>';
     } else {
-      step1 = '<p style="margin:6px 0 10px;font-size:13px;opacity:.85">You need two things you already control: a domain (from Cloudflare or your registrar) and a Mailgun account. Your mail runs through your own accounts — it never passes through ours.</p>'
+      // TWO separate choices (David 2026-11-11, providers beyond Mailgun): how mail LEAVES and how
+      // it ARRIVES. They are independent on purpose — sending through Amazon SES while receiving
+      // through Mailgun is a supported setup — so the page never implies one requires the other.
+      step1 = '<p style="margin:6px 0 10px;font-size:13px;opacity:.85">You need a domain you already control (from Cloudflare or your registrar) and a way to send and receive its mail. Those are two separate choices: you can send through Amazon SES and receive through Mailgun, or the other way round. Nothing passes through our accounts.</p>'
         + '<div class="form-group"><label>Your domain</label><input id="peSetupDomain" placeholder="yourbusiness.com" autocomplete="off"></div>'
+        + '<div class="form-group"><label>How should your mail leave? (sending)</label>'
+        + '<select id="peSetupSending" onchange="peSetupChoiceChanged()">'
+        + '<option value="mailgun">Mailgun — my own Mailgun account</option>'
+        + '<option value="smtp">Any SMTP service — Amazon SES, SendGrid, Postmark, Google Workspace</option>'
+        + '</select></div>'
+        + '<div id="peSetupSmtpBox" style="display:none">'
+        + '<div class="form-group"><label>Mail server (hostname)</label><input id="peSetupSmtpHost" placeholder="email-smtp.us-east-1.amazonaws.com" autocomplete="off"></div>'
+        + '<div class="form-group"><label>Port</label><input id="peSetupSmtpPort" placeholder="587" autocomplete="off"></div>'
+        + '<div class="form-group"><label>Username</label><input id="peSetupSmtpUser" autocomplete="off"></div>'
+        + '<div class="form-group"><label>Password</label><input id="peSetupSmtpPass" type="password" autocomplete="off"><p style="font-size:12px;opacity:.7;margin:4px 0 0">For Amazon SES this is the SMTP username and password it gives you for your sending credentials — not your console login.</p></div>'
+        + '<div class="form-group" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="peSetupSmtpTls" checked style="width:auto"><label style="margin:0">Use a secure connection (TLS) — leave this on unless your server says otherwise</label></div>'
+        + '</div>'
+        + '<div class="form-group"><label>How should your mail arrive? (receiving)</label>'
+        + '<select id="peSetupReceiving" onchange="peSetupChoiceChanged()">'
+        + '<option value="mailgun">Mailgun — my own Mailgun account</option>'
+        + '<option value="sendgrid">SendGrid — Inbound Parse</option>'
+        + '<option value="none">Nowhere — this domain only sends</option>'
+        + '</select>'
+        + '<p id="peSetupRecvNote" style="font-size:12px;opacity:.7;margin:4px 0 0"></p></div>'
+        + '<div id="peSetupMailgunBox">'
         + '<div class="form-group"><label>Mailgun region</label><select id="peSetupRegion"><option value="us">United States (api.mailgun.net)</option><option value="eu">Europe (api.eu.mailgun.net)</option></select></div>'
         + '<div class="form-group"><label>Mailgun API key</label><input id="peSetupKey" type="password" placeholder="key-…" autocomplete="off"><p style="font-size:12px;opacity:.7;margin:4px 0 0">In Mailgun: Settings → API keys. It is stored sealed and never shown again.</p></div>'
-        + '<div class="form-group"><label>Mailgun webhook signing key <span style="opacity:.7">(so incoming mail can be verified)</span></label><input id="peSetupHook" type="password" placeholder="from Mailgun → Settings → Webhooks" autocomplete="off"></div>'
+        + '</div>'
+        + '<div class="form-group" id="peSetupHookBox"><label>Mailgun webhook signing key <span style="opacity:.7">(so incoming mail can be verified)</span></label><input id="peSetupHook" type="password" placeholder="from Mailgun → Settings → Webhooks" autocomplete="off"></div>'
         + '<button class="btn btn-primary btn-sm" ' + (busy ? 'disabled' : '') + ' onclick="peSetupAddDomain()">' + (busy ? 'Adding…' : 'Add my domain') + '</button>'
         + '<p style="font-size:12px;opacity:.7;margin:8px 0 0">Nothing is charged and no inbox exists until your domain passes its check.</p>';
     }
@@ -272,10 +312,10 @@
 
     return '<div style="padding:2px;text-align:left">'
       + '<h4 style="margin:0 0 4px">Set up your inbox</h4>'
-      + '<p style="margin:0 0 12px;font-size:13px;opacity:.85">Your plan includes one private inbox, on your own domain, with your own Mailgun account. Three steps and it is live — this page stays here until it is done.</p>'
+      + '<p style="margin:0 0 12px;font-size:13px;opacity:.85">Your plan includes one private inbox on your own domain. You choose how it SENDS and how it RECEIVES — those are separate answers, so you can keep the service that already sends your mail. Three steps and it is live; this page stays here until it is done.</p>'
       + err
       + '<ol style="margin:0;padding-left:18px">'
-      + '<li style="margin-bottom:14px"><strong>Tell us your domain</strong>' + (d ? '' : ' and paste your Mailgun keys') + '<div style="margin-top:6px">' + step1 + '</div></li>'
+      + '<li style="margin-bottom:14px"><strong>Tell us your domain</strong>' + (d ? '' : ' and choose how it sends and receives') + '<div style="margin-top:6px">' + step1 + '</div></li>'
       + '<li style="margin-bottom:14px"><strong>Add the mail records at your DNS provider</strong><div style="margin-top:6px">' + step2 + '</div></li>'
       + '<li style="margin-bottom:6px"><strong>Create your inbox</strong><div style="margin-top:6px">' + step3 + '</div></li>'
       + '</ol></div>';
@@ -641,34 +681,89 @@
     window.peCheckDomain(d.id);
   };
 
+  // Show exactly the fields the two choices need, and say what the receiving choice means. A field
+  // that is on screen for a combination that cannot use it is how a setup page lies — so sending /
+  // receiving drive visibility here, and the server refuses a combination it cannot honour.
+  window.peSetupChoiceChanged = function () {
+    var sEl = document.getElementById('peSetupSending');
+    var rEl = document.getElementById('peSetupReceiving');
+    if (!sEl || !rEl) return; // the saved-domain view has no add form
+    var sending = sEl.value || 'mailgun';
+    var receiving = rEl.value || 'mailgun';
+    var show = function (id, on) { var el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; };
+    show('peSetupSmtpBox', sending === 'smtp');
+    show('peSetupMailgunBox', sending === 'mailgun' || receiving === 'mailgun');
+    show('peSetupHookBox', receiving === 'mailgun');
+    var note = document.getElementById('peSetupRecvNote');
+    if (note) {
+      if (receiving === 'sendgrid') note.textContent = 'SendGrid posts every message it receives for you to an address we give you on the next step. No extra key is needed — we show you the exact URL to paste into SendGrid → Settings → Inbound Parse.';
+      else if (receiving === 'none') note.textContent = 'Mail addressed to this domain will not arrive in CoreSwift — you keep receiving it wherever it goes today. Sending (and everything else) still works.';
+      else note.textContent = 'Mailgun delivers your mail to us. You will need its webhook signing key so we can prove each message really came from your account.';
+    }
+  };
+
+  // Switch an EXISTING domain's receiving provider. Sending is untouched: the two are separate
+  // choices, and this is the one the customer can change without re-entering their sending keys.
+  window.peSetupChangeReceiving = async function (value) {
+    var d = (S.domains || [])[0];
+    if (!d) return;
+    S.setupErr = null;
+    try {
+      await api().patch('/private-email/domains/' + d.id, { receiving_provider: value });
+      toastMsg('Receiving is now ' + (value === 'none' ? 'off for this domain' : value), 'success');
+      load();
+    } catch (e) {
+      S.setupErr = fail(e);
+      render();
+    }
+  };
+
   window.peSetupAddDomain = async function () {
     if (S.busy) return;
-    var nameEl = document.getElementById('peSetupDomain');
-    var keyEl = document.getElementById('peSetupKey');
-    var hookEl = document.getElementById('peSetupHook');
-    var regionEl = document.getElementById('peSetupRegion');
-    var domain = ((nameEl && nameEl.value) || '').trim().toLowerCase()
-      .replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-    var key = ((keyEl && keyEl.value) || '').trim();
-    var hook = ((hookEl && hookEl.value) || '').trim();
+    var val = function (id) { var el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; };
+    var domain = val('peSetupDomain').toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    var sending = val('peSetupSending') || 'mailgun';
+    var receiving = val('peSetupReceiving') || 'mailgun';
+    var key = val('peSetupKey');
+    var hook = val('peSetupHook');
     S.setupErr = null;
     if (!domain || domain.indexOf('.') < 0) {
       S.setupErr = 'Enter the domain you own, for example yourbusiness.com.';
       load(); return;
     }
-    if (!key) {
-      S.setupErr = 'Paste the Mailgun API key for this domain — it is what lets us read its mail records.';
+    var needsMailgunKey = (sending === 'mailgun' || receiving === 'mailgun');
+    if (needsMailgunKey && !key) {
+      S.setupErr = sending === 'mailgun'
+        ? 'Paste the Mailgun API key for this domain — it is what lets us send its mail.'
+        : 'Receiving through Mailgun needs the Mailgun API key for this domain — it is what lets us show its records and check them.';
+      load(); return;
+    }
+    if (sending === 'smtp' && (!val('peSetupSmtpHost') || !val('peSetupSmtpUser') || !val('peSetupSmtpPass'))) {
+      S.setupErr = 'Fill in your mail server, username and password so we can send through it.';
+      load(); return;
+    }
+    if (receiving === 'mailgun' && !hook) {
+      S.setupErr = 'Paste the Mailgun webhook signing key — without it every incoming message is refused.';
       load(); return;
     }
     var payload = {
       domain: domain,
-      provider_type: 'mailgun',
-      mailgun_api_key: key,
-      mailgun_region: (regionEl && regionEl.value) || 'us'
+      sending_provider: sending,
+      receiving_provider: receiving
     };
-    // Only sent when typed: without it the domain is send-only and inbound deliveries are refused,
-    // so the setup page asks for it rather than discovering the gap on the first reply.
-    if (hook) payload.webhook_signing_key = hook;
+    if (needsMailgunKey) {
+      payload.mailgun_api_key = key;
+      payload.mailgun_region = val('peSetupRegion') || 'us';
+    }
+    if (receiving === 'mailgun') payload.webhook_signing_key = hook;
+    if (sending === 'smtp') {
+      payload.smtp_host = val('peSetupSmtpHost');
+      payload.smtp_port = parseInt(val('peSetupSmtpPort') || '587', 10) || 587;
+      payload.smtp_username = val('peSetupSmtpUser');
+      payload.smtp_password = val('peSetupSmtpPass');
+      var tlsEl = document.getElementById('peSetupSmtpTls');
+      payload.smtp_tls = !tlsEl || !!tlsEl.checked;
+    }
     S.busy = true;
     render();
     try {
@@ -843,6 +938,9 @@
     var el = document.getElementById('peWrap');
     if (!el) return;
     el.innerHTML = render();
+    // Re-apply the two choices' field visibility after every paint: the selects are re-created by the
+    // markup above, so a hidden field must not reappear as a visible one on a re-render.
+    if (typeof window.peSetupChoiceChanged === 'function') window.peSetupChoiceChanged();
     Array.prototype.forEach.call(document.querySelectorAll('.pe-row'), function (r) {
       r.onclick = function () { window.peOpenMessage(r.getAttribute('data-id')); };
     });

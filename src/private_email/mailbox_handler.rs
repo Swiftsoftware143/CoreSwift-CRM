@@ -94,9 +94,16 @@ pub async fn provision_mailbox(
     // `POST /v3/<domain>/mailboxes` is closed to new customers, so there is nothing to call there
     // either; the route is the only real provider-side object.
     //
-    // For SMTP/SES/Postmark there is nothing to do at all: the user brings their own DNS and
-    // mailbox, and this app only keeps the local row.
-    if domain.provider_type == "mailgun" {
+    // The decision is the RECEIVER's, not the sender's (kanban t_04db9228): a Mailgun route only
+    // matters when Mailgun is what delivers this domain's mail. A domain that sends through Mailgun
+    // but receives through SendGrid must NOT get one — Mailgun's route quota is 5 for the whole
+    // account, and an inert route would spend a slot on mail that never arrives there, while an
+    // SMTP-sending domain that RECEIVES through Mailgun genuinely needs the route.
+    //
+    // For SendGrid receiving there is nothing to create at all: the customer points the domain's MX
+    // at SendGrid and pastes our Inbound Parse URL into their own account, and this app only keeps
+    // the local mailbox row.
+    if domain.inbound_provider == "mailgun" {
         // A stored key this tenant's secret cannot open is a CONFIGURATION problem the caller can act
         // on (re-add the domain with a valid key). It used to surface as a bare 500 "Internal server
         // error", which named neither the cause nor the fix.

@@ -1,15 +1,23 @@
-//! Email provider abstraction — Mailgun, SMTP, SES, Postmark.
+//! Email provider abstraction — Mailgun, SMTP, SendGrid (inbound), SES, Postmark.
 //!
-//! Each provider implements the `EmailProvider` trait. The send/receive layer
-//! calls the trait, never a specific provider. Adding a new provider means
-//! implementing the trait — no changes needed in the routing or handler code.
+//! Each provider implements the `EmailProvider` trait for SENDING. The send layer calls the trait,
+//! never a specific provider.
+//!
+//! ## Sending and receiving are TWO choices (kanban t_04db9228)
+//! `provider_type` answers how a domain SENDS (`mailgun` over its API, `smtp` for Amazon SES /
+//! SendGrid / Postmark / Google Workspace / any SMTP server). `inbound_provider` answers how it
+//! RECEIVES (`mailgun` or `sendgrid` — the two receivers that exist — or `none`). They are
+//! independent on purpose, so a customer never has to move their outbound mail in order to receive
+//! with us.
 //!
 //! ## Inbound model
-//! - **Push (webhook)**: Provider POSTs to our webhook endpoint. Used by Mailgun,
-//!   SES (SNS), Postmark. The `accept_inbound` method validates the webhook payload.
-//! - **None**: No inbound configured for this domain. Send-only.
+//! - **Push (webhook)**: the provider POSTs to one of our receivers. `mailgun` signs the delivery
+//!   (HMAC-SHA256 over timestamp+token, per-domain signing key). `sendgrid` signs nothing — its
+//!   Inbound Parse has no signature mechanism at all — so the per-domain token in the URL path is
+//!   the credential (`providers::sendgrid`).
 
 pub mod mailgun;
+pub mod sendgrid;
 pub mod smtp;
 
 use async_trait::async_trait;
@@ -54,6 +62,24 @@ pub struct ProviderConfig {
     // Inbound
     pub inbound_mode: String,
     pub encrypted_webhook_key: Option<String>,
+    /// HOW THIS DOMAIN RECEIVES: `mailgun` | `sendgrid` | `none` (kanban t_04db9228). The receiver
+    /// a delivery must be authenticated by, independent of how the domain SENDS.
+    pub inbound_provider: String,
+}
+
+impl ProviderConfig {
+    /// The receiver that answers for this domain, or `None` for a sending-only domain.
+    ///
+    /// `Some("mailgun")` / `Some("sendgrid")` name real receivers in this binary; `none` (and any
+    /// value a hand-edited row could carry) means no delivery can be authenticated for it, so both
+    /// receivers refuse rather than one of them silently accepting.
+    pub fn receiver(&self) -> Option<&'static str> {
+        match self.inbound_provider.trim().to_ascii_lowercase().as_str() {
+            "mailgun" => Some("mailgun"),
+            "sendgrid" => Some("sendgrid"),
+            _ => None,
+        }
+    }
 }
 
 /// One image that belongs INSIDE the message body (kanban t_b671a0f7).

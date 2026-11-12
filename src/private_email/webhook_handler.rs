@@ -1,11 +1,14 @@
-use axum::{extract::State, Json};
+use axum::{
+    extract::{Multipart, Path, State},
+    Json,
+};
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
 use super::feature_gate;
 use super::messages_handler::{self, InboundMessage};
-use super::providers;
+use super::providers::{self, InboundEmail};
 use super::send_handler::load_provider_config;
 
 use crate::errors::{ApiResult, AppError};
@@ -73,6 +76,24 @@ impl MailgunInbound {
     }
 }
 
+/// Everything one authenticated delivery needs to become a stored message.
+///
+/// The two receivers (Mailgun's signed form post, SendGrid's Inbound Parse multipart post) differ
+/// ONLY in how a delivery is authenticated and parsed. Everything after that — resolving the
+/// mailbox, storing the message, the catch-all rule, the ticket decision, the event, the storage
+/// meter and the auto-reply — must be the same code for both, or one receiver slowly grows rules
+/// the other does not have. This struct is that seam.
+struct Delivery {
+    tenant_id: Uuid,
+    mailbox_id: Option<Uuid>,
+    recipient: String,
+    inbound: InboundEmail,
+    is_spam: bool,
+    has_attachments: bool,
+    provider: &'static str,
+    from_display_name: Option<String>,
+}
+
 /// Webhook handler for inbound Mailgun emails.
 /// POST /api/v1/webhooks/mailgun/inbound
 ///
@@ -89,12 +110,16 @@ impl MailgunInbound {
 /// acknowledged and then invisible — accepted by the provider and stored nowhere a human could
 /// see it. The ticket decision is now a routing decision layered on top of a stored message,
 /// never a condition for storing it.
+///
+/// IT ALSO HONOURS THE RECEIVING CHOICE (kanban t_04db9228): a domain whose receiving provider is
+/// SendGrid is NOT receivable through this route, even if its outbound mail goes through Mailgun.
+/// Both receivers used to be implicit in `provider_type`, so a customer's two choices could not
+/// differ; now each route answers only for the domains that chose it.
 pub async fn inbound_webhook(
     State(state): State<AppState>,
     body: String,
 ) -> ApiResult<Json<serde_json::Value>> {
-    // ── Step 1: Extract sender + recipient (multi-provider) ─────
-    // Try Mailgun form-urlencoded first, then JSON (SES SNS, Postmark)
+    // ── Step 1: Extract sender + recipient ─────
     let (sender_email, recipient_email, mailgun_payload) = try_parse_inbound(&body);
 
     if sender_email.is_empty() || recipient_email.is_empty() {
@@ -104,86 +129,49 @@ pub async fn inbound_webhook(
     }
 
     // ── Step 2: who is this mail FOR? ───────────────────────────────────────────────────────────
-    // A created mailbox first; then the domain's catch-all, which accepts mail for addresses
-    // nobody created (the MISC bucket, B211). Both paths store the message: a catch-all arrival
-    // used to be answered "routed: catch_all" and then dropped, which is the same defect wearing
-    // a friendlier sentence.
-    let mailbox = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
-        r#"
-        SELECT id, tenant_id, domain_id
-        FROM private_email_boxes
-        WHERE lower(email_address) = lower($1) AND status = 'active'
-        LIMIT 1
-        "#,
-    )
-    .bind(&recipient_email)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(AppError::Database)?;
-
-    let (tenant_id, domain_id, mailbox_id) = match mailbox {
-        Some((box_id, tenant, domain)) => (tenant, domain, Some(box_id)),
-        None => {
-            let domain_part = recipient_email
-                .rsplit('@')
-                .next()
-                .unwrap_or("")
-                .to_lowercase();
-            let catch_all = sqlx::query_as::<_, (Uuid, Uuid)>(
-                r#"
-                SELECT id, tenant_id FROM private_email_domains
-                WHERE lower(domain) = $1 AND catch_all_enabled = true
-                LIMIT 1
-                "#,
-            )
-            .bind(&domain_part)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(AppError::Database)?;
-
-            match catch_all {
-                // Stored with no mailbox row, which is exactly what makes it MISC.
-                Some((domain, tenant)) => {
-                    // THE WITHDRAWAL ARM (kanban t_6b54961b). `catch_all_enabled` is the tenant's
-                    // stored PREFERENCE, not the entitlement. Reading it here as if it were
-                    // permission is why a workspace moved off a plan that sells catch-all (free,
-                    // starter, or a past-due downgrade) kept accepting mail for every unmatched
-                    // address, while a fresh PATCH on that same workspace was refused.
-                    // The plan is asked AT THE MOMENT OF USE through the same helper the PATCH arm
-                    // uses, so the two answers cannot disagree, and no plan writer (assign, update
-                    // or cancel) has to remember to withdraw anything — a new writer cannot open a
-                    // hole. The refusal is byte-identical to a domain with catch-all switched off,
-                    // because a sender is not owed our billing state.
-                    let plan_sells_catch_all =
-                        feature_gate::catch_all_granted(&state.db, tenant).await?;
-                    if feature_gate::catch_all_route(true, plan_sells_catch_all)
-                        != feature_gate::CatchAllRoute::Route
-                    {
-                        tracing::warn!(
-                            domain = %domain_part,
-                            tenant = %tenant,
-                            "catch-all delivery refused: this workspace's current plan does not \
-                             sell catch-all, so its stored switch is not in force"
-                        );
-                        return Ok(Json(
-                            json!({"received": false, "error": "no matching mailbox"}),
-                        ));
-                    }
-                    (tenant, domain, None)
-                }
-                None => {
-                    return Ok(Json(
-                        json!({"received": false, "error": "no matching mailbox"}),
-                    ));
-                }
-            }
-        }
+    let Some((tenant_id, domain_id, mailbox_id)) =
+        route_recipient(&state, &recipient_email).await?
+    else {
+        return Ok(Json(
+            json!({"received": false, "error": "no matching mailbox"}),
+        ));
     };
 
     // Load provider config to validate webhook signature
     let provider_config = load_provider_config(&state.db, domain_id, tenant_id)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to load provider config: {}", e)))?;
+
+    // ── Step 2b: does THIS receiver answer for this domain? (kanban t_04db9228) ────────────────
+    // Receiving is its own choice. A domain that receives through SendGrid must not accept a
+    // Mailgun post (it has no Mailgun signing key, and Mailgun is not its inbound path), and a
+    // sending-only domain has no receiver at all. Fail closed with a sentence that names the
+    // right door, instead of a generic "could not authenticate" that reads like a bug.
+    match provider_config.receiver() {
+        Some("mailgun") => {}
+        Some("sendgrid") => {
+            tracing::warn!(
+                recipient = %recipient_email,
+                "mailgun inbound refused: this domain receives through SendGrid"
+            );
+            return Err(AppError::UnauthorizedReason(
+                "this domain does not receive mail through Mailgun — its receiving provider is \
+                 SendGrid, so a real delivery goes to its SendGrid Inbound Parse address"
+                    .into(),
+            ));
+        }
+        _ => {
+            tracing::warn!(
+                recipient = %recipient_email,
+                "mailgun inbound refused: this domain has no receiving provider configured"
+            );
+            return Err(AppError::UnauthorizedReason(
+                "this domain has no inbound receiver configured, so this delivery cannot be \
+                 authenticated"
+                    .into(),
+            ));
+        }
+    }
 
     // Validate webhook — pass raw body to provider for signature check
     let provider = providers::provider_for(&provider_config);
@@ -235,20 +223,287 @@ pub async fn inbound_webhook(
             body.contains("X-Mailgun-Sflag") && body.contains("Yes")
         });
 
+    ingest(
+        &state,
+        Delivery {
+            tenant_id,
+            mailbox_id,
+            recipient: recipient_email,
+            inbound,
+            is_spam,
+            has_attachments: mailgun_payload
+                .as_ref()
+                .map(|p| p.has_attachments())
+                .unwrap_or(false),
+            provider: "mailgun",
+            from_display_name: mailgun_payload
+                .as_ref()
+                .map(|p| p.sender.as_str())
+                .and_then(display_name)
+                .map(str::to_string),
+        },
+    )
+    .await
+}
+
+/// Webhook handler for SendGrid Inbound Parse.
+/// POST /api/v1/webhooks/sendgrid/inbound/:token
+///
+/// THE CREDENTIAL IS THE URL. SendGrid Inbound Parse signs nothing — there is no HMAC, no shared
+/// secret and no signature header, so unlike Mailgun there is nothing to verify against a stored
+/// key. Each domain therefore carries its own unguessable `inbound_token` (32 hex characters) and
+/// the token in the path IS the authentication: the domain is resolved BY IT through a unique
+/// index, so a post to an unknown token finds no domain and writes nothing. This is the same shape
+/// the app already uses for `POST /api/webhook/{token}/{action}`, where the token identifies the
+/// tenant and the handler answers 401 for an unknown one (kanban t_04db9228).
+///
+/// WHAT IT REFUSES, and why each refusal is a refusal rather than a 200:
+///   * an unknown/empty token — there is no domain, so there is nothing this delivery can belong to;
+///   * a domain whose RECEIVING provider is not SendGrid — the customer may well send through
+///     SendGrid over SMTP, but receiving is a separate choice and this receiver answers only for
+///     the domains that chose it;
+///   * a delivery whose recipient belongs to a DIFFERENT domain — a valid token must not be a key
+///     into another workspace's inbox, so the routed domain has to be the token's own domain.
+pub async fn sendgrid_inbound(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+    mut multipart: Multipart,
+) -> ApiResult<Json<serde_json::Value>> {
+    let token = token.trim().to_string();
+    if token.len() < 16 {
+        tracing::warn!("sendgrid inbound refused: the token in the path is empty or too short");
+        return Err(AppError::UnauthorizedReason(
+            "inbound webhook refused: the delivery could not be authenticated".into(),
+        ));
+    }
+
+    // The token resolves the domain. A unique index backs this lookup, so it is one indexed read,
+    // not a scan over every tenant's rows.
+    let found: Option<(Uuid, Uuid, String)> = sqlx::query_as(
+        r#"SELECT id, tenant_id, domain FROM private_email_domains
+            WHERE inbound_token = $1 LIMIT 1"#,
+    )
+    .bind(&token)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    let Some((domain_id, tenant_id, domain)) = found else {
+        tracing::warn!("sendgrid inbound refused: no domain carries this token");
+        return Err(AppError::UnauthorizedReason(
+            "inbound webhook refused: the delivery could not be authenticated".into(),
+        ));
+    };
+
+    let provider_config = load_provider_config(&state.db, domain_id, tenant_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to load provider config: {}", e)))?;
+
+    if provider_config.receiver() != Some("sendgrid") {
+        tracing::warn!(
+            domain = %domain,
+            "sendgrid inbound refused: this domain's receiving provider is not SendGrid"
+        );
+        return Err(AppError::UnauthorizedReason(format!(
+            "{} does not receive mail through SendGrid — its receiving provider is {}",
+            domain, provider_config.inbound_provider
+        )));
+    }
+
+    // ── The multipart body ─────────────────────────────────────────────────────────────────────
+    // Text fields are kept; a file part is COUNTED and its bytes are dropped (the inbox renders the
+    // message, and buffering an attachment we never store is how a receiver runs out of memory).
+    let mut fields: Vec<(String, String)> = Vec::new();
+    let mut attachment_parts: u32 = 0;
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => {
+                tracing::warn!(
+                    domain = %domain,
+                    error = %e,
+                    "sendgrid inbound refused: the multipart body could not be read"
+                );
+                return Err(AppError::BadRequest(
+                    "this receiver expects SendGrid's Inbound Parse multipart post".into(),
+                ));
+            }
+        };
+        let name = field.name().unwrap_or_default().to_string();
+        if field.file_name().is_some() {
+            attachment_parts += 1;
+            continue;
+        }
+        match field.text().await {
+            Ok(value) => {
+                if !name.is_empty() {
+                    fields.push((name, value));
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    domain = %domain,
+                    field = %name,
+                    error = %e,
+                    "sendgrid inbound: one text field could not be read; the rest of the delivery stands"
+                );
+            }
+        }
+    }
+
+    let payload = providers::sendgrid::SendGridInbound::new(fields, attachment_parts);
+    let Some(inbound) = payload.accept(&provider_config) else {
+        return Ok(Json(json!({
+            "received": false,
+            "error": "could not determine sender or recipient",
+        })));
+    };
+
+    // ── Who is this mail FOR? ──────────────────────────────────────────────────────────────────
+    let Some((routed_tenant, routed_domain, mailbox_id)) =
+        route_recipient(&state, &inbound.to).await?
+    else {
+        return Ok(Json(
+            json!({"received": false, "error": "no matching mailbox"}),
+        ));
+    };
+    // A valid token must not be a key into ANOTHER workspace's inbox: the recipient has to belong to
+    // the very domain the token names.
+    if routed_domain != domain_id {
+        tracing::warn!(
+            domain = %domain,
+            recipient = %inbound.to,
+            "sendgrid inbound refused: the recipient does not belong to this token's domain"
+        );
+        return Ok(Json(json!({
+            "received": false,
+            "error": "no matching mailbox",
+        })));
+    }
+
+    ingest(
+        &state,
+        Delivery {
+            tenant_id: routed_tenant,
+            mailbox_id,
+            recipient: inbound.to.clone(),
+            from_display_name: display_name(&inbound.from).map(str::to_string),
+            is_spam: payload.is_spam(),
+            has_attachments: payload.has_attachments(),
+            inbound,
+            provider: "sendgrid",
+        },
+    )
+    .await
+}
+
+/// Which tenant/domain/mailbox does this address belong to?
+///
+/// A created mailbox first; then the domain's catch-all, which accepts mail for addresses nobody
+/// created (the MISC bucket, B211). Both paths store the message: a catch-all arrival used to be
+/// answered "routed: catch_all" and then dropped, which is the same defect wearing a friendlier
+/// sentence.
+async fn route_recipient(
+    state: &AppState,
+    recipient_email: &str,
+) -> Result<Option<(Uuid, Uuid, Option<Uuid>)>, AppError> {
+    let mailbox = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
+        r#"
+        SELECT id, tenant_id, domain_id
+        FROM private_email_boxes
+        WHERE lower(email_address) = lower($1) AND status = 'active'
+        LIMIT 1
+        "#,
+    )
+    .bind(recipient_email)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    match mailbox {
+        Some((box_id, tenant, domain)) => Ok(Some((tenant, domain, Some(box_id)))),
+        None => {
+            let domain_part = recipient_email
+                .rsplit('@')
+                .next()
+                .unwrap_or("")
+                .to_lowercase();
+            let catch_all = sqlx::query_as::<_, (Uuid, Uuid)>(
+                r#"
+                SELECT id, tenant_id FROM private_email_domains
+                WHERE lower(domain) = $1 AND catch_all_enabled = true
+                LIMIT 1
+                "#,
+            )
+            .bind(&domain_part)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(AppError::Database)?;
+
+            match catch_all {
+                // Stored with no mailbox row, which is exactly what makes it MISC.
+                Some((domain, tenant)) => {
+                    // THE WITHDRAWAL ARM (kanban t_6b54961b). `catch_all_enabled` is the tenant's
+                    // stored PREFERENCE, not the entitlement. Reading it here as if it were
+                    // permission is why a workspace moved off a plan that sells catch-all (free,
+                    // starter, or a past-due downgrade) kept accepting mail for every unmatched
+                    // address, while a fresh PATCH on that same workspace was refused.
+                    // The plan is asked AT THE MOMENT OF USE through the same helper the PATCH arm
+                    // uses, so the two answers cannot disagree, and no plan writer (assign, update
+                    // or cancel) has to remember to withdraw anything — a new writer cannot open a
+                    // hole. The refusal is byte-identical to a domain with catch-all switched off,
+                    // because a sender is not owed our billing state.
+                    let plan_sells_catch_all =
+                        feature_gate::catch_all_granted(&state.db, tenant).await?;
+                    if feature_gate::catch_all_route(true, plan_sells_catch_all)
+                        != feature_gate::CatchAllRoute::Route
+                    {
+                        tracing::warn!(
+                            domain = %domain_part,
+                            tenant = %tenant,
+                            "catch-all delivery refused: this workspace's current plan does not \
+                             sell catch-all, so its stored switch is not in force"
+                        );
+                        return Ok(None);
+                    }
+                    Ok(Some((tenant, domain, None)))
+                }
+                None => Ok(None),
+            }
+        }
+    }
+}
+
+/// One authenticated delivery → a stored message, a contact, maybe a ticket, an event.
+///
+/// Shared by both receivers. The provider name is passed in, never guessed: it is written onto the
+/// message row and into the event payload, so "which door did this arrive through" is answerable
+/// months later.
+async fn ingest(state: &AppState, d: Delivery) -> ApiResult<Json<serde_json::Value>> {
+    let Delivery {
+        tenant_id,
+        mailbox_id,
+        recipient,
+        inbound,
+        is_spam,
+        has_attachments,
+        provider,
+        from_display_name,
+    } = d;
+    let provider_name = provider;
+
     // ── Step 3: store the message ITSELF ────────────────────────────────────────────────────────
     // One row per delivery, whatever the ticket toggle says. Idempotent on the sender's
     // Message-Id, so a provider retry cannot turn one email into two.
-    let stored = messages_handler::store_inbound(
+    let (message_id, message_created) = messages_handler::store_inbound(
         &state.db,
         &InboundMessage {
             tenant_id,
             mailbox_id,
-            address: &recipient_email,
+            address: &recipient,
             from_address: &inbound.from,
-            from_name: mailgun_payload
-                .as_ref()
-                .map(|p| p.sender.as_str())
-                .and_then(display_name),
+            from_name: from_display_name.as_deref(),
             to_address: &inbound.to,
             cc_address: None,
             subject: &inbound.subject,
@@ -262,21 +517,16 @@ pub async fn inbound_webhook(
                 .in_reply_to
                 .as_deref()
                 .filter(|m| !m.trim().is_empty()),
-            provider: provider.name(),
+            provider: provider_name,
             provider_message_id: inbound
                 .provider_message_id
                 .as_deref()
                 .filter(|m| !m.trim().is_empty()),
             is_spam,
-            has_attachments: mailgun_payload
-                .as_ref()
-                .map(|p| p.has_attachments())
-                .unwrap_or(false),
+            has_attachments,
         },
     )
     .await?;
-
-    let (message_id, message_created) = stored;
 
     // ── STORAGE (B206, David 2026-11-11) ────────────────────────────────────────────────────────
     // A stored message is the only thing that moves the storage meter, so this is where a rung can
@@ -302,8 +552,8 @@ pub async fn inbound_webhook(
             "stored": message_created,
             "message_id": message_id,
             "folder": "spam",
-            "provider": provider.name(),
-            "to": recipient_email,
+            "provider": provider_name,
+            "to": recipient,
         })));
     }
 
@@ -441,7 +691,7 @@ pub async fn inbound_webhook(
         "message_id": inbound.message_id,
         "in_reply_to": inbound.in_reply_to,
         "provider_message_id": inbound.provider_message_id,
-        "provider": provider.name(),
+        "provider": provider_name,
         "message_row_id": message_id,
         "ticket_id": ticket_created,
     });
@@ -480,10 +730,10 @@ pub async fn inbound_webhook(
         "received": true,
         "stored": message_created,
         "message_id": message_id,
-        "to": recipient_email,
+        "to": recipient,
         "is_ticket": ticket_created.is_some(),
+        "provider": provider_name,
         "ticket_id": ticket_created,
-        "provider": provider.name(),
         "from": inbound.from,
         "subject": inbound.subject,
     })))
@@ -509,7 +759,7 @@ fn extract_email(raw: &str) -> String {
     raw.trim().to_lowercase()
 }
 
-/// Attempt to parse the inbound webhook body from multiple provider formats.
+/// Attempt to parse the inbound webhook body from the JSON shapes other providers use.
 /// Returns (sender, recipient, optional_mailgun_payload).
 fn try_parse_inbound(body: &str) -> (String, String, Option<MailgunInbound>) {
     // Attempt 1: Mailgun form-urlencoded
