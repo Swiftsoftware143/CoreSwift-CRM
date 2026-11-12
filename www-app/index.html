@@ -7358,7 +7358,100 @@ function peVerifyCell(d) {
   const badge = d.verified
     ? '<span class="badge badge-success">verified</span>'
     : '<span class="badge badge-warning">pending DNS</span>';
-  return badge + ' <button class="btn btn-ghost btn-xs" onclick="peRecheckDomain(\'' + d.id + '\')" title="Ask Mailgun again for this domain">Re-check</button>';
+  return badge
+    + ' <button class="btn btn-ghost btn-xs" onclick="peRecheckDomain(\'' + d.id + '\')" title="Ask Mailgun again for this domain">Re-check</button>'
+    // The records checklist (kanban t_2b371936). GET /api/private-email/domains/:id/records was
+    // reachable ONLY from the first-run setup page, which the Inbox tab renders while the workspace
+    // has no mailbox — so every established customer (the ones adding a SECOND domain) had no way to
+    // see the DNS values a new domain needs. This is that door, on the row that owns the domain.
+    + ' <button class="btn btn-ghost btn-xs" onclick="peShowDomainRecords(\'' + d.id + '\')" title="The DNS records this domain needs">DNS records</button>';
+}
+
+// GET /api/private-email/domains/:id/records, on demand, for ANY domain of the account.
+//
+// The values come from the customer's own mail provider (never a hardcoded DKIM), grouped the way
+// the provider reports them, each with a working Copy button and the same Active / Waiting / Needs
+// attention vocabulary the setup page uses. A provider that refuses is shown as its own sentence
+// where the list would be — never an empty table the customer reads as "nothing to add".
+async function peShowDomainRecords(domainId) {
+  const d = (PE.domains || []).filter(function (x) { return x.id === domainId; })[0] || {};
+  const name = d.domain || 'this domain';
+  window.showModal('DNS records for ' + escapeHtml(name),
+    '<div id="peRecBody"><div class="loading-wrap"><div class="spinner"></div> Reading from your mail provider...</div></div>',
+    '<button class="btn btn-ghost" onclick="peRemoveDomain(\'' + domainId + '\')" style="margin-right:auto;color:#b91c1c">Remove this domain</button>'
+    + '<button class="btn btn-secondary" onclick="closeModal()">Close</button>');
+  const body = document.getElementById('peRecBody');
+  if (!body) return;
+  const statusCell = function (x) {
+    if (x.valid === true) return '<span class="badge badge-success">Active</span>';
+    if (x.attention) return '<span class="badge badge-warning">Needs attention</span>';
+    if (x.valid === false) return '<span class="badge badge-warning">Waiting</span>';
+    return '<span class="badge badge-muted">Add this</span>';
+  };
+  try {
+    const r = await API.get('/private-email/domains/' + encodeURIComponent(domainId) + '/records');
+    const groups = (r && r.groups) || [];
+    const html = groups.map(function (g) {
+      const rows = (g.records || []).map(function (x) {
+        return '<tr>'
+          + '<td><strong>' + escapeHtml(x.type || '') + '</strong></td>'
+          + '<td><code style="word-break:break-all">' + escapeHtml(x.name || '') + '</code></td>'
+          + '<td><code style="word-break:break-all">' + escapeHtml(x.value || '') + '</code>'
+          + (x.purpose ? '<div style="font-size:11px;color:var(--text-secondary)">' + escapeHtml(x.purpose) + '</div>' : '')
+          + (x.note ? '<div style="font-size:11px;color:#92400e">' + escapeHtml(x.note) + '</div>' : '')
+          + '</td>'
+          + '<td>' + (x.priority == null ? '' : escapeHtml(String(x.priority))) + '</td>'
+          + '<td>' + statusCell(x) + '</td>'
+          + '<td><button class="btn btn-ghost btn-xs" data-copy="' + escapeHtml(x.value || '') + '">Copy</button></td>'
+          + '</tr>';
+      }).join('');
+      return '<h4 style="margin:14px 0 4px">' + escapeHtml(g.title || 'Records') + '</h4>'
+        + (rows
+          ? '<table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:left">'
+            + '<th>Type</th><th>Name</th><th>Value</th><th>Priority</th><th>Status</th><th></th>'
+            + '</tr></thead><tbody>' + rows + '</tbody></table>'
+          : '<p style="font-size:13px;color:var(--text-secondary)">Your provider reports no records for this group.</p>');
+    }).join('');
+    body.innerHTML = (html || '<p>Your mail provider returned no records for this domain.</p>')
+      + '<p style="font-size:12px;color:var(--text-secondary);margin-top:10px">Add these at your DNS host (Cloudflare: DNS &rarr; Records), then press <strong>Re-check</strong> on the domain row. Mail records stay DNS-only (grey cloud); the branded inbox CNAME is the one exception.</p>';
+    Array.prototype.forEach.call(body.querySelectorAll('[data-copy]'), function (b) {
+      b.onclick = function () {
+        const v = b.getAttribute('data-copy') || '';
+        const done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); };
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(v).then(done, done);
+        else done();
+      };
+    });
+  } catch (e) {
+    body.innerHTML = icErr('Could not read this domain\u2019s records', e.message || String(e));
+  }
+}
+
+// DELETE /api/private-email/domains/:id — the OTHER route that had no caller (kanban t_2b371936).
+//
+// Deleting a domain also deletes the inboxes ON it (the database cascades), and a customer who
+// mistypes a domain or hits the plan's domain ceiling had no way to take it back. A typed
+// confirmation names that consequence; mail already received stays (the message rows keep their own
+// copy and only lose the mailbox link).
+async function peRemoveDomain(domainId) {
+  const d = (PE.domains || []).filter(function (x) { return x.id === domainId; })[0] || {};
+  const name = d.domain || '';
+  const boxes = (PE.boxes || []).filter(function (b) { return b.domain_id === domainId; }).length;
+  const typed = window.prompt('Remove ' + name + '?\n\n'
+    + (boxes ? boxes + ' inbox' + (boxes === 1 ? '' : 'es') + ' on this domain will be removed too (mail already received stays).\n\n' : '')
+    + 'Type the domain name to confirm:');
+  if ((typed || '').trim().toLowerCase() !== name.toLowerCase()) {
+    toast('Nothing was removed \u2014 the name did not match', 'error');
+    return;
+  }
+  try {
+    await API.del('/private-email/domains/' + encodeURIComponent(domainId));
+    toast('Domain removed', 'success');
+    closeModal();
+    await loadInboxTab();
+  } catch (e) {
+    toast('Could not remove the domain: ' + (e.message || e), 'error');
+  }
 }
 
 // Asks the provider again for THIS domain only (POST /api/private-email/domains/:id/verify), then
@@ -8762,7 +8855,7 @@ window.appGuidePages = {
   tickets:         { title: "Support Tickets", desc: "Support requests raised in your workspace and their status.", actions: ["Open a ticket", "Reply and change its status"] },
   branding:        { title: "Email Branding", desc: "One logo and one signature for every message this workspace sends. Upload the logo once — the app resizes it so it renders in Gmail, Outlook and Apple Mail on a phone or a desktop — then fill in the signature (name, title, company, phone and a short line) and press Save signature. Compose and every reply then open with both already in place; an individual address can use its own wording from the mail client's Signature button.", actions: ["Upload the company logo (PNG, JPEG, GIF or WebP — no size to choose)", "Fill in the signature and press Save signature", "Read the preview: it is the message the mailer really produces", "Send yourself a test email to see it in your own inbox"] },
   inbox:           { title: "Shared Inbox", desc: "Your mail in one place: every message that arrived at your workspace's addresses. CoreSwift does not host your mail — you bring your own domain and your own Mailgun account, and the Inbox screen walks you through three steps: the domain plus your Mailgun keys, the mail records (MX, SPF/DKIM) with a Copy button and a live Active/Waiting/Needs attention badge, then create the inbox. One extra CNAME makes inbox.yourbusiness.com open your mail; it is the only record that must be Proxied (orange cloud) — the mail records stay grey. Nothing is charged and no mailbox exists until the records verify, and the 30-day clock starts at your first verified inbox. Logging in lists your mailboxes so you pick one, and each row's LOG IN button opens your mail in a new window.", actions: ["Pick an address to narrow the list", "Open a message", "Mark one as a ticket", "Follow the three setup steps and press Check again when the records show Active", "LOG IN on an inbox row opens your branded address once it is live", "Receive-only? Use Keep inbox — $1/mo or Upgrade CRM", "Press Signature in the mail client to give one address its own wording or none"] },
-  "email-settings":{ title: "Email Domains & Sending", desc: "The sending half of your mail: the domains you send from, their catch-all switch, mailboxes, auto-replies and a form to send from a mailbox.", actions: ["Enable or disable catch-all on a domain", "Add a domain and check its verification", "Create a mailbox", "Catch-all is included in the plan, not the domain: if this workspace is moved to a plan that does not include it, the switch is remembered but mail to an address that does not exist on the domain is refused until you upgrade. The Catch-all cell says so, and never shows it as on."] },
+  "email-settings":{ title: "Email Domains & Sending", desc: "The sending half of your mail: the domains you send from, their catch-all switch, mailboxes, auto-replies and a form to send from a mailbox.", actions: ["Enable or disable catch-all on a domain", "Add a domain and check its verification", "DNS records shows the exact MX, SPF and DKIM values a domain needs, with a Copy button, for any domain — not just while the account has no inbox", "Remove this domain deletes a domain you no longer want (and the inboxes on it; mail already received stays) after you type its name to confirm", "Create a mailbox", "Catch-all is included in the plan, not the domain: if this workspace is moved to a plan that does not include it, the switch is remembered but mail to an address that does not exist on the domain is refused until you upgrade. The Catch-all cell says so, and never shows it as on."] },
   calendar:        { title: "Calendar", desc: "Events and appointments for you and your team.", actions: ["Create an event", "Open one to see its details"] },
   bookings:        { title: "Bookings", desc: "Appointment slots people can book with you, and the bookings they made.", actions: ["Set your availability", "Review upcoming bookings"] },
   "ai-assistant":  { title: "AI Assistant", desc: "Ask questions about your data, or have it draft content for you.", actions: ["Connect an AI provider in the Integration Center", "Ask it something"] },
