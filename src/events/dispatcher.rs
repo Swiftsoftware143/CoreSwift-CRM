@@ -145,13 +145,25 @@ async fn execute_action(
                 action_config.get("subject").and_then(|v| v.as_str()),
                 action_config.get("body").and_then(|v| v.as_str()),
             ) {
-                // Queue email via communications module
+                // Queue via the AUTOMATION lane: the worker delivers it from the account's
+                // `mg.<domain>` subdomain, never the main domain (kanban t_044d5d62). The lane is
+                // derived at queue time, so the worker needs no second resolution.
+                let automation_domain =
+                    crate::communications::providers::account_main_domain(db, tenant_id)
+                        .await
+                        .map(|base| crate::communications::providers::automation_subdomain(&base));
                 let _ = sqlx::query(
-                    r#"INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status)
-                       VALUES ($1, $2, 'email', $3, $4, $5, 'queued')"#
+                    r#"INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status, automation_domain)
+                       VALUES ($1, $2, 'email', $3, $4, $5, 'queued', $6)"#,
                 )
-                .bind(Uuid::new_v4()).bind(tenant_id).bind(to).bind(subject).bind(body)
-                .execute(db).await;
+                .bind(Uuid::new_v4())
+                .bind(tenant_id)
+                .bind(to)
+                .bind(subject)
+                .bind(body)
+                .bind(automation_domain.as_deref())
+                .execute(db)
+                .await;
             }
         }
         "send_sms" => {

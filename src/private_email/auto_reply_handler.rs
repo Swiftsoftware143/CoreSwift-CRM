@@ -283,19 +283,20 @@ async fn fire_single_rule(pool: &sqlx::PgPool, rule: &AutoReplyRow, recipient: &
         None
     };
 
-    let from_address = match &mailbox {
+    let reply_to = match &mailbox {
         Some((addr, _)) => addr.clone(),
         None => return,
     };
 
     let domain_id = mailbox.as_ref().map(|(_, d)| *d).unwrap_or(rule.domain_id);
 
-    // Use provider-agnostic send
-    let _ = super::send_handler::send_via_provider(
+    // Auto-replies are AUTOMATION: they leave from the account's mg.<domain> lane, with replies
+    // routed back to the mailbox the person wrote to (kanban t_044d5d62).
+    let _ = super::send_handler::send_automation_reply(
         pool,
         domain_id,
         rule.tenant_id,
-        &from_address,
+        &reply_to,
         recipient,
         &subject,
         &rule.body_html,

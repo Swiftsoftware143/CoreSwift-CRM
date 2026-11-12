@@ -70,6 +70,10 @@ pub enum ByokSource {
     Settings,
     /// `private_email_domains` — the Private Email tab's own verified domain (t_d9d6120a).
     PrivateEmail,
+    /// The account's automation lane — `mg.<main-domain>` (kanban t_044d5d62). Automation mail
+    /// (auto-responders, sequences, campaigns, the send_email rule action) never shares the
+    /// main-domain identity that warm human replies leave from.
+    Automation,
 }
 
 impl ByokSource {
@@ -77,6 +81,7 @@ impl ByokSource {
         match self {
             ByokSource::Settings => "settings",
             ByokSource::PrivateEmail => "private_email_domains",
+            ByokSource::Automation => "automation",
         }
     }
 }
@@ -1073,6 +1078,193 @@ pub async fn load_delivery_config(
     }
 }
 
+/// The automation lane's sending subdomain for a main domain: `mg.<domain>` (kanban t_044d5d62).
+///
+/// Derived, never typed: every account's automation mail leaves from `mg.<its main domain>`, so an
+/// automated blast shares no reputation with the main domain a human's replies arrive on. The
+/// prefix is a DNS label glued to the LEFT of the base domain, so the base must not carry a scheme
+/// or trailing dot.
+pub fn automation_subdomain(base_domain: &str) -> String {
+    let base = base_domain
+        .trim()
+        .trim_start_matches('.')
+        .trim_end_matches('.');
+    format!("mg.{base}")
+}
+
+/// The account's MAIN domain: its earliest verified Mailgun `private_email_domains` row. Automation
+/// derives its subdomain (`mg.<main>`) from this, so the definition lives in ONE place and every
+/// automation sender resolves the same "main domain".
+pub async fn account_main_domain(db: &PgPool, tenant_id: Uuid) -> Option<String> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT domain FROM private_email_domains \
+          WHERE tenant_id = $1 AND provider_type = 'mailgun' AND verified \
+          ORDER BY created_at ASC LIMIT 1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(db)
+    .await
+    .inspect_err(|e| {
+        tracing::warn!(
+            tenant = %tenant_id,
+            error = %e,
+            "account_main_domain lookup failed — automation has no base domain to derive from"
+        )
+    })
+    .ok()
+    .flatten()
+}
+
+/// The account's Mailgun credential for a domain: `(api_key, region)`, opened with the app-wide
+/// reader. `None` when the domain has no stored key, or the key cannot be opened.
+async fn mailgun_key_for_domain(
+    db: &PgPool,
+    tenant_id: Uuid,
+    domain: &str,
+) -> Option<(String, String)> {
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT mailgun_api_key, mailgun_region FROM private_email_domains \
+          WHERE tenant_id = $1 AND domain = $2 AND provider_type = 'mailgun' \
+            AND mailgun_api_key <> '' LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(domain)
+    .fetch_optional(db)
+    .await
+    .inspect_err(|e| tracing::warn!(tenant = %tenant_id, domain = %domain, error = %e, "automation key lookup failed"))
+    .ok()
+    .flatten();
+    let (sealed, region) = row?;
+    let key = crate::secret_box::open(tenant_id, &sealed);
+    if key.trim().is_empty() {
+        return None;
+    }
+    Some((key, region))
+}
+
+/// The address replies to automation mail must land on: the account's private inbox on the main
+/// domain. `support@` first (the published help address), then the first active mailbox, so a reply
+/// to `noreply@mg.<domain>` is never answered by a mailbox that does not exist.
+pub async fn account_primary_inbox(
+    db: &PgPool,
+    tenant_id: Uuid,
+    base_domain: &str,
+) -> Option<String> {
+    if let Some(support) = sqlx::query_scalar::<_, String>(
+        "SELECT b.email_address FROM private_email_boxes b \
+           JOIN private_email_domains d ON d.id = b.domain_id \
+          WHERE b.tenant_id = $1 AND d.domain = $2 AND b.status = 'active' \
+            AND lower(b.local_part) = 'support' LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(base_domain)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()
+    {
+        return Some(support);
+    }
+    sqlx::query_scalar::<_, String>(
+        "SELECT b.email_address FROM private_email_boxes b \
+           JOIN private_email_domains d ON d.id = b.domain_id \
+          WHERE b.tenant_id = $1 AND d.domain = $2 AND b.status = 'active' \
+          ORDER BY b.created_at ASC LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(base_domain)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Load the delivery config for the AUTOMATION lane: the message leaves from `mg.<base-domain>`,
+/// sent with the account's own Mailgun credential, and a reply is redirected to the account's
+/// private inbox (`h:Reply-To`). This is the lane-split half of David's rule (kanban t_044d5d62):
+/// the ordinary `load_delivery_config` keeps the main-domain identity, this one never touches it.
+pub async fn load_automation_delivery_config(
+    db: &PgPool,
+    msg_id: Uuid,
+    tenant_id: Uuid,
+    automation_domain: &str,
+    to: &str,
+    subject: Option<String>,
+    body: &str,
+) -> DeliveryConfig {
+    let is_html: bool = sqlx::query_scalar("SELECT is_html FROM outbound_messages WHERE id = $1")
+        .bind(msg_id)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(false);
+
+    let base_domain = automation_domain
+        .strip_prefix("mg.")
+        .unwrap_or(automation_domain)
+        .to_string();
+
+    // The automation lane's credential is the account's own Mailgun key: the domain the account
+    // already sends its main domain through (the key is account-wide in Mailgun). The BASE domain's
+    // row is the first source; any verified Mailgun row is the fallback, so an account whose main
+    // domain was renamed still resolves.
+    let key = match mailgun_key_for_domain(db, tenant_id, &base_domain).await {
+        Some(k) => Some(k),
+        None => private_mailgun_byok(db, tenant_id)
+            .await
+            .map(|b| (b.api_key, b.region.unwrap_or_else(|| "us".to_string()))),
+    };
+
+    let reply_to = account_primary_inbox(db, tenant_id, &base_domain).await;
+
+    let (transport, url, api_key, byok_source) = match key {
+        Some((api_key, region)) => (
+            TransportSource::Tenant,
+            Some(mailgun_endpoint(automation_domain, Some(&region))),
+            Some(api_key),
+            Some(ByokSource::Automation.as_str()),
+        ),
+        // No credential: leave the endpoint URL set so the delivery arm names the automation domain
+        // in its permanent refusal, but carry no key — a lane with no credential must fail loudly,
+        // never silently fall back onto the platform's (or the main domain's) sending identity.
+        None => (
+            TransportSource::None,
+            Some(mailgun_endpoint(automation_domain, Some("us"))),
+            None,
+            None,
+        ),
+    };
+
+    DeliveryConfig {
+        tenant_id,
+        msg_id,
+        channel: "email".to_string(),
+        to: to.to_string(),
+        subject,
+        body: body.to_string(),
+        is_html,
+        html: None,
+        email_provider: "mailgun".to_string(),
+        sms_provider: "telnyx".to_string(),
+        transport,
+        byok_source,
+        mailgun_url: url,
+        reply_to,
+        mailgun_domain: Some(automation_domain.to_string()),
+        mailgun_api_key: api_key,
+        telnyx_api_key: None,
+        smtp_host: None,
+        smtp_port: None,
+        smtp_username: None,
+        smtp_password: None,
+        from_email: Some(format!("noreply@{automation_domain}")),
+        from_name: None,
+        whatsapp_phone_number_id: None,
+        whatsapp_api_token: None,
+    }
+}
+
 /// What recording one attempt did to the row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AttemptRecord {
@@ -1403,6 +1595,20 @@ mod tests {
         assert_eq!(backoff_minutes(6), 60);
         assert_eq!(backoff_minutes(9), 60);
         assert_eq!(backoff_minutes(0), 2);
+    }
+
+    /// The automation lane's name is a DECISION, not an accident: `mg.<domain>`. A change to the
+    /// prefix must be deliberate, because every guide and the live send path name it (t_044d5d62).
+    #[test]
+    fn the_automation_lane_is_mg_dot_the_main_domain() {
+        assert_eq!(automation_subdomain("acme.com"), "mg.acme.com");
+        assert_eq!(
+            automation_subdomain("swiftsoftware.net"),
+            "mg.swiftsoftware.net"
+        );
+        // The base is a bare DNS name: no scheme, no trailing dot, no surrounding whitespace.
+        assert_eq!(automation_subdomain("  acme.com  "), "mg.acme.com");
+        assert_eq!(automation_subdomain("acme.com."), "mg.acme.com");
     }
 
     #[test]

@@ -1602,6 +1602,7 @@ once.</p>
 <li><strong>Receiving</strong> can come through <strong>Mailgun</strong> or <strong>SendGrid</strong>, or nowhere at all if the domain only sends.</li>
 </ul>
 <p><strong>Mixing them is normal.</strong> Sending through Amazon SES while receiving through Mailgun &mdash; or sending through Mailgun and receiving through SendGrid &mdash; is a supported setup, and it is the one that lets you keep whatever already sends your mail. Changing one never changes the other.</p>
+<p><strong>Automated mail leaves from its own address, never your main one.</strong> Auto-responders, email sequences and automation-rule emails are sent from <code>mg.yourbusiness.com</code> &mdash; a subdomain CoreSwift derives automatically from the domain you added, so there is nothing extra to set up. That keeps a complaint about an automated blast away from the address your real conversations arrive on. Replies still reach you: every automated message is sent with your own inbox as the reply address, so a customer who answers lands back in your inbox.</p>
 <h3>Receiving through SendGrid</h3>
 <ol>
 <li>Add the domain on the setup page and choose <strong>Receiving: SendGrid</strong>. No SendGrid key is needed: SendGrid posts each message to an address we give you.</li>

@@ -556,3 +556,65 @@ fn html_to_text(html: &str) -> String {
         .replace("&#39;", "'");
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
+
+/// Send an AUTO-REPLY from the account's automation lane (`mg.<domain>`), never the main domain the
+/// person originally wrote to (kanban t_044d5d62). The reply address is the mailbox that received
+/// the message, so a follow-up lands back in the private inbox — while the From line is the
+/// automation subdomain, so an auto-responder never shares reputation with a human's replies.
+pub async fn send_automation_reply(
+    db: &sqlx::PgPool,
+    domain_id: Uuid,
+    tenant_id: Uuid,
+    reply_to: &str,
+    to: &str,
+    subject: &str,
+    body_html: &str,
+) -> Result<(), String> {
+    let config = load_provider_config(db, domain_id, tenant_id).await?;
+    let automation_domain = crate::communications::providers::automation_subdomain(&config.domain);
+
+    // The plain-text alternative is derived from the customer's HTML body, exactly as the ordinary
+    // send does, and the message is recorded on the outbound queue marked as the automation lane so
+    // the communications log shows which lane it left on.
+    let body_text = html_to_text(body_html);
+    let msg_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, status, automation_domain)
+         VALUES ($1, $2, 'email', $3, $4, $5, 'queued', $6)",
+    )
+    .bind(msg_id)
+    .bind(tenant_id)
+    .bind(to)
+    .bind(subject)
+    .bind(&body_text)
+    .bind(&automation_domain)
+    .execute(db)
+    .await
+    .map_err(|e| format!("Failed to queue auto-reply: {e}"))?;
+
+    let mut cfg = crate::communications::providers::load_automation_delivery_config(
+        db,
+        msg_id,
+        tenant_id,
+        &automation_domain,
+        to,
+        Some(subject.to_string()),
+        &body_text,
+    )
+    .await;
+    // The HTML half rides beside the derived text; the reply lands on the mailbox that was written
+    // to, not on the account's generic support address.
+    cfg.html = Some(body_html.to_string());
+    cfg.reply_to = Some(reply_to.to_string());
+
+    let outcome = crate::communications::providers::deliver(&cfg).await;
+    let _ = crate::communications::providers::record_attempt(db, msg_id, &outcome).await;
+
+    if outcome.ok {
+        Ok(())
+    } else {
+        Err(outcome
+            .error
+            .unwrap_or_else(|| "Unknown automation send error".into()))
+    }
+}

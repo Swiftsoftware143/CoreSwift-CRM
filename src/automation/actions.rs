@@ -334,35 +334,51 @@ async fn exec_send_email(
         "Automated message".to_string()
     };
 
-    // Insert into outbound_messages for delivery
+    // Insert into outbound_messages for delivery — marked as the AUTOMATION lane so it leaves from
+    // the account's `mg.<domain>` subdomain, never the main domain a human's replies arrive on
+    // (kanban t_044d5d62).
     let msg_id = Uuid::new_v4();
+    let automation_domain = crate::communications::providers::account_main_domain(db, tenant_id)
+        .await
+        .map(|base| crate::communications::providers::automation_subdomain(&base));
     let _ = sqlx::query(
-        "INSERT INTO outbound_messages(id, tenant_id, channel, to_address, subject, body, status)
-         VALUES($1, $2, 'email', $3, $4, $5, 'queued')",
+        "INSERT INTO outbound_messages(id, tenant_id, channel, to_address, subject, body, status, automation_domain)
+         VALUES($1, $2, 'email', $3, $4, $5, 'queued', $6)",
     )
     .bind(msg_id)
     .bind(tenant_id)
     .bind(&to)
     .bind(subject)
     .bind(&body_text)
+    .bind(automation_domain.as_deref())
     .execute(db)
     .await;
 
-    // Fire transport via comms providers
-    let cfg = crate::communications::providers::load_delivery_config(
-        db,
-        msg_id,
-        tenant_id,
-        "email",
-        &to,
-        Some(subject.to_string()),
-        &body_text,
-    )
-    .await;
+    // Fire transport via the automation lane. With no verified sending domain the account has no
+    // automation identity, which is a PERMANENT failure — recorded, never a silent fallback onto
+    // the main-domain (or platform) transport.
+    let outcome = match automation_domain.as_deref() {
+        Some(dom) => {
+            let cfg = crate::communications::providers::load_automation_delivery_config(
+                db,
+                msg_id,
+                tenant_id,
+                dom,
+                &to,
+                Some(subject.to_string()),
+                &body_text,
+            )
+            .await;
+            crate::communications::providers::deliver(&cfg).await
+        }
+        None => crate::communications::providers::DeliveryOutcome::permanent(
+            "this account has no verified sending domain, so its automation lane (mg.<domain>) \
+             has no identity to send from",
+        ),
+    };
     // Deliver once, and let the shared policy record the result. Discarding the outcome used to
     // leave the row 'queued' after an inline send, so the worker poll sent the same message a
     // second time.
-    let outcome = crate::communications::providers::deliver(&cfg).await;
     let _ = crate::communications::providers::record_attempt(db, msg_id, &outcome).await;
 
     let _ = sqlx::query(

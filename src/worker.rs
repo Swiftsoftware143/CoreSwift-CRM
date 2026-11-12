@@ -758,9 +758,10 @@ async fn deliver_queued_messages(db: &PgPool) {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
         ),
     >(
-        r#"SELECT id, tenant_id, to_address, body, subject
+        r#"SELECT id, tenant_id, to_address, body, subject, automation_domain
            FROM outbound_messages
            WHERE status = 'queued' AND channel = 'email'
              AND (scheduled_at IS NULL OR scheduled_at <= NOW())
@@ -783,7 +784,7 @@ async fn deliver_queued_messages(db: &PgPool) {
 
     tracing::info!("Processing {} due queued messages", messages.len());
 
-    for (msg_id, tenant_id, to_address, body, subject) in &messages {
+    for (msg_id, tenant_id, to_address, body, subject, automation_domain) in &messages {
         let (Some(tenant_id), Some(to_address), Some(body)) = (tenant_id, to_address, body) else {
             let missing = [
                 ("tenant_id", tenant_id.is_none()),
@@ -820,18 +821,36 @@ async fn deliver_queued_messages(db: &PgPool) {
             continue;
         }
 
-        // Load the delivery config — this is where the transport is resolved (workspace BYOK or
-        // the platform's own mail settings).
-        let cfg = crate::communications::providers::load_delivery_config(
-            db,
-            *msg_id,
-            *tenant_id,
-            "email",
-            to_address,
-            subject.clone(),
-            body,
-        )
-        .await;
+        // Load the delivery config — this is where the transport is resolved. A message queued on
+        // the AUTOMATION lane (automation_domain set) resolves to the account's mg.<domain>
+        // subdomain; an ordinary message keeps the workspace BYOK / platform resolution
+        // (kanban t_044d5d62).
+        let cfg = match automation_domain.as_deref() {
+            Some(dom) => {
+                crate::communications::providers::load_automation_delivery_config(
+                    db,
+                    *msg_id,
+                    *tenant_id,
+                    dom,
+                    to_address,
+                    subject.clone(),
+                    body,
+                )
+                .await
+            }
+            None => {
+                crate::communications::providers::load_delivery_config(
+                    db,
+                    *msg_id,
+                    *tenant_id,
+                    "email",
+                    to_address,
+                    subject.clone(),
+                    body,
+                )
+                .await
+            }
+        };
 
         let outcome = crate::communications::providers::deliver(&cfg).await;
 
