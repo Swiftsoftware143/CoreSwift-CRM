@@ -1024,6 +1024,58 @@ async function requestPlanChange(idx, btn) {
   }
 }
 
+// Pressing "Open payment page" is a HAND-OFF, and a hand-off this installation cannot see is a
+// purchase it can never fulfil. There is no card checkout here (retired 2026-09-25) and no provider
+// key, so the operator's own hosted page takes the money and nothing tells CoreSwift which workspace
+// paid. This files the same public support request the "Request this plan" button files — naming the
+// plan, its price and the workspace — so the payment and the plan switch meet. It runs before the new
+// tab opens, never blocks it, and its failure costs only the note.
+async function recordPaymentHandoff(idx) {
+  const p = (window.__csUpgradePlans || [])[idx];
+  if (!p) return;
+  const user = STATE.user || {};
+  const name = p.name || p.slug || 'this';
+  const price = p.price_monthly || p.price || 0;
+  const note = document.querySelector('#modalContainer [data-pay-note="' + idx + '"]');
+  if (note) {
+    note.style.display = 'block';
+    note.textContent = 'Opening ' + name + '’s payment page — CoreSwift is told you are paying for it.';
+  }
+  if (!user.email) return;   // no address means no way to reach this buyer; the page still opens
+  try {
+    const res = await fetch(PLAN_REQUEST_INTAKE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      keepalive: true,
+      body: JSON.stringify({
+        subject: 'Payment started: ' + name + ' plan',
+        message: 'This workspace pressed Open payment page for the ' + name + ' plan ($' + price
+          + '/month) from Plans & Billing, so payment is happening on CoreSwift’s own payment page.'
+          + ' The workspace is on ' + (STATE.planName || 'no plan') + ' today and must be switched onto '
+          + name + ' once the money lands — nothing about this is automatic.'
+          + (String(STATE.planName || '').toLowerCase() === 'inbox'
+            ? ' IMPORTANT: the $1 Inbox subscription must be cancelled in the same step, so the workspace is never billed $1 on top of the new plan.'
+            : '')
+          + ' Workspace: ' + (user.company || user.account_name || '(unnamed)')
+          + ' [' + (user.account_id || '') + ']. Payer: ' + (user.email || '') + '.',
+        name: user.name || user.email || '',
+        email: user.email || ''
+      })
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (note) {
+      note.textContent = 'Noted — CoreSwift will switch this workspace onto ' + name
+        + ' once your payment lands. Nothing is charged by this app.';
+    }
+  } catch (e) {
+    // The payment page is already opening; a failed note is not a failed purchase.
+    if (note) {
+      note.textContent = 'Your payment page is opening. If you pay, reply to our email so we can switch '
+        + 'your workspace onto ' + name + '.';
+    }
+  }
+}
+
 async function openUpgradeModal() {
   let plansHtml = '<div class="loading-wrap"><div class="spinner"></div> Loading plans...</div>';
   showModal('Compare Plans', plansHtml, '', true);
@@ -1074,6 +1126,7 @@ async function openUpgradeModal() {
         ${(!isCurrent && p.is_active !== false && /^https:\/\/[^\s"']+$/i.test(String(p.checkout_url || '').trim()))
           ? `<a class="btn btn-secondary btn-sm" data-pay-link="${i}" href="${escapeHtml(String(p.checkout_url).trim())}" target="_blank" rel="noopener" style="margin-top:8px;display:inline-block">Open payment page</a>`
           : ''}
+        <div data-pay-note="${i}" style="display:none;font-size:12px;color:var(--text-secondary);margin-top:6px"></div>
         ${(!isCurrent && p.is_active === false)
           ? `<div data-plan-not-on-sale="1" style="font-size:12px;opacity:.8;margin-top:8px">Sales are not open for this plan yet — pressing Request reaches our team, and nothing is charged.</div>`
           : ''}
@@ -1119,6 +1172,18 @@ async function openUpgradeModal() {
     window.__csUpgradePlans = plans;
     document.querySelectorAll('#modalContainer [data-request-plan]').forEach(b => {
       b.addEventListener('click', () => requestPlanChange(Number(b.getAttribute('data-request-plan')), b));
+    });
+    // THE PAYMENT PAGE IS A DOOR WITH NO POST-BOX unless the press is recorded. Measured 2026-11-12
+    // (kanban t_a27fd2a4): a plan carrying a hosted page rendered "Open payment page" and pressing it
+    // left NO record anywhere on this installation — no session row (the card checkout that used to
+    // write one was retired 2026-09-25), no ticket, nothing. A buyer who then paid was invisible: the
+    // workspace stayed on its old plan until an operator happened to recognise the payment. The press
+    // now files the same public support request "Request this plan" files, naming the plan, the price
+    // and the workspace, BEFORE the new tab opens. It can never block the purchase: the anchor is
+    // target=_blank so this page survives, the fetch carries keepalive so a slow reply cannot cancel
+    // it, and a failure only loses the note, never the navigation.
+    document.querySelectorAll('#modalContainer [data-pay-link]').forEach(a => {
+      a.addEventListener('click', () => recordPaymentHandoff(Number(a.getAttribute('data-pay-link'))));
     });
   } catch(e) {
     document.querySelector('#modalContainer .modal-body').innerHTML = `<p style="color:var(--error)">Failed to load plans: ${escapeHtml(e.message)}</p>`;
@@ -1390,7 +1455,12 @@ const TAB_RENDERERS = {
   // The former 'monitoring' panel was a hand-written fake (99.9% uptime, 34% disk, 2.1GB RAM
   // are not measured anywhere). It is replaced by monitoringShell() at the bottom of this file,
   // which renders GET /api/monitoring/health + /thresholds + the account-health routes.
-  'telnyx-admin': () => placeholderPanel('Telnyx Admin', 'Configure Telnyx provider settings for all tenants.', '☎️'),
+  // Telnyx Admin — the four routes this panel drives already exist and are wired:
+  // GET/PUT /api/telnyx/config and GET/DELETE /api/telnyx/numbers (+ GET /api/telnyx/available)
+  // in src/telnyx/mod.rs. Until now the entry rendered placeholderPanel("Configure Telnyx
+  // provider settings for all tenants.") and nothing else, so the platform operator could neither
+  // SEE nor SET the credential every SMS and voice call on this install is made with.
+  'telnyx-admin': () => telnyxShell(),
   'email-admin': () => {
     return pageHeader('Private Email Admin', 'Per-tenant email limits, data retention and purge controls',
       '<button class="btn btn-danger btn-sm" data-ops="pe-purge" onclick="showPurgeModal()">🧨 Run Purge</button>') +
@@ -8041,6 +8111,14 @@ TAB_RENDERERS['inbox'] = inboxShell;
 TAB_RENDERERS['email-settings'] = inboxShell;
 TAB_RENDERERS['calendar'] = calendarShell;
 TAB_LOADERS['telnyx'] = loadTelnyxTab;
+// The ADMIN_MENU entry `telnyx-admin` rendered a placeholder ("Configure Telnyx provider settings
+// for all tenants.") and nothing else, while this screen — config, numbers, send-a-text, search —
+// has been here and wired since the module shipped. Same shell, same loader: an operator reaching
+// the admin entry now gets the working screen instead of a dead end. (Nothing platform-wide is
+// writable through the API: /api/telnyx/config writes THIS account's BYOK row, exactly as the
+// Integration Center does, and the install-wide key is read-only from the environment.)
+TAB_RENDERERS['telnyx-admin'] = telnyxShell;
+TAB_LOADERS['telnyx-admin'] = loadTelnyxTab;
 TAB_LOADERS['inbox'] = loadInboxTab;
 TAB_LOADERS['email-settings'] = loadInboxTab;
 TAB_LOADERS['calendar'] = loadCalendarTab;

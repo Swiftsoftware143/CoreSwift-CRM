@@ -112,6 +112,129 @@ pub fn harness_domain(addr: &str) -> Option<&'static str> {
     })
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SYNTHETIC REQUESTERS — a harness must never page a human (kanban t_a27fd2a4)
+//
+// Fleet parity with the fix the five sibling apps took on 2026-11-10 (kanban
+// t_f17b5802): the support-request and plan-request doors notify the OPERATOR by
+// design, so the recipient is the operator whatever address the requester gave.
+// CoreSwift was the remaining app without this predicate, measured 2026-11-12:
+// a probe identity on a reserved address still paged the operator for every press.
+// The row is the record and is still filed; only the ALERT to a human is withheld,
+// the same treatment the credentials mail already gives an address that can only
+// bounce. The predicate is on the REQUESTER, never on the route: the same door
+// serves real customers, and a real customer's request must still reach a human.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Domains that can only belong to a harness. `x.com` / `test.com` are added on top of the
+/// RFC-reserved class because the fleet's own proof scripts address them and they are NOT
+/// mail-suppressed (they are real, registrable domains), so nothing else would stop the alert.
+pub const SYNTHETIC_REQUESTER_DOMAINS: &[&str] = &[
+    "example.invalid",
+    "example.test",
+    "example.com",
+    "x.com",
+    "test.com",
+];
+
+/// Local parts a harness mints. `bounce+` is the shape a deliverability probe uses.
+pub const SYNTHETIC_LOCAL_PREFIXES: &[&str] = &["probe-", "canary-", "bounce+", "verify"];
+
+/// Workspace/account name fragments that name fleet machinery in words.
+pub const SYNTHETIC_NAME_FRAGMENTS: &[&str] =
+    &["probe", "canary", "synthetic", "smoke test", "test farm"];
+
+/// Why `email`/`name` is a synthetic (harness) identity, or `None` for a real customer.
+///
+/// Returns the offending domain, local-part prefix or name fragment, so the caller can log a
+/// reason instead of a bare boolean. Matches on the label boundary (`x@notexample.com` is a
+/// customer), normalises case/whitespace/trailing root dot, and never treats an empty string
+/// as a match.
+pub fn synthetic_requester(email: &str, name: &str) -> Option<&'static str> {
+    let addr = email.trim();
+    // The fleet's own harness domains (swiftsoftware.dev/.net/.local) are already classified.
+    if let Some(domain) = harness_domain(addr) {
+        return Some(domain);
+    }
+    if let Some((local, domain)) = addr.rsplit_once('@') {
+        let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+        if !domain.is_empty() {
+            if let Some(d) = SYNTHETIC_REQUESTER_DOMAINS.iter().copied().find(|d| {
+                domain == *d || (domain.len() > d.len() + 1 && domain.ends_with(&format!(".{d}")))
+            }) {
+                return Some(d);
+            }
+        }
+        let local = local.trim().to_ascii_lowercase();
+        if let Some(p) = SYNTHETIC_LOCAL_PREFIXES
+            .iter()
+            .copied()
+            .find(|p| local.starts_with(p))
+        {
+            return Some(p);
+        }
+    }
+    let name = name.trim().to_ascii_lowercase();
+    if !name.is_empty() {
+        if let Some(f) = SYNTHETIC_NAME_FRAGMENTS
+            .iter()
+            .copied()
+            .find(|f| name.contains(f))
+        {
+            return Some(f);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod synthetic_requester_tests {
+    use super::*;
+
+    #[test]
+    fn harness_identities_are_named() {
+        // A probe on a reserved domain, and the shapes the fleet's walks actually mint.
+        assert_eq!(
+            synthetic_requester("probe-pay-1794477000@example.invalid", "Probe Walk"),
+            Some("example.invalid")
+        );
+        assert_eq!(synthetic_requester("p3-smoke@x.com", "x"), Some("x.com"));
+        assert_eq!(
+            synthetic_requester("csproof-1791578449@swiftsoftware.dev", "Walk"),
+            Some("swiftsoftware.dev")
+        );
+        // A local-part prefix alone is enough, even on a routable domain.
+        assert_eq!(
+            synthetic_requester("canary-abc@albert-tire.com", ""),
+            Some("canary-")
+        );
+        // A workspace whose NAME says it is machinery.
+        assert_eq!(
+            synthetic_requester("someone@gmail.com", "Probe Workspace"),
+            Some("probe")
+        );
+    }
+
+    #[test]
+    fn a_real_customer_is_never_silenced() {
+        // Measured real operators/customers on this install.
+        assert_eq!(synthetic_requester("swiftsoftware143@yahoo.com", ""), None);
+        assert_eq!(
+            synthetic_requester("owner@albert-tire.com", "Albert Tire"),
+            None
+        );
+        assert_eq!(
+            synthetic_requester("marcusjreed@uberip.com", "Marcus Reed"),
+            None
+        );
+        // Label boundary: a domain that merely CONTAINS a listed one is a customer.
+        assert_eq!(synthetic_requester("x@notexample.com", ""), None);
+        assert_eq!(synthetic_requester("x@x.com.evil.net", ""), None);
+        // Empty input is not a match.
+        assert_eq!(synthetic_requester("", ""), None);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

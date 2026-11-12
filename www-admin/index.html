@@ -517,13 +517,13 @@ async function loadPlanPaymentLinks() {
       '<td>' + state +
         '<div data-paystate="' + escapeHtml(String(p.id)) + '" style="margin-top:4px"></div></td>' +
       '<td><input class="input" data-pay="' + escapeHtml(String(p.id)) + '" value="' + escapeHtml(link) +
-        '" placeholder="https://buy.stripe.com/…" style="min-width:320px"></td>' +
+        '" placeholder="https://your-provider-payment-page" style="min-width:320px"></td>' +
       '<td><button class="btn btn-primary btn-sm" data-save="' + escapeHtml(String(p.id)) + '">Save</button></td>' +
       '</tr>';
   }).join('');
   wrap.innerHTML = '<div class="card"><div class="card-header"><h3 style="margin:0;font-size:16px">Plan payment links</h3></div>' +
     '<div class="card-body">' +
-    '<p style="font-size:13px;color:var(--text-muted);margin:0 0 12px">A hosted payment page for a plan — a Stripe Payment Link, a PayPal button, anything that takes the money. A plan carrying one can be sold while this installation holds no payment key: the buyer pays on that page and the workspace is switched on here once the money lands. Leave a plan empty to keep it request-only. Create a link in <a href="https://dashboard.stripe.com/payment-links" target="_blank" rel="noopener">Stripe &rsaquo; Products &rsaquo; Payment links</a> and paste its https://buy.stripe.com/&hellip; address here. The server opens EVERY paid plan&#39;s page: the badge under each link says whether the page answered, because a saved link that answers a dead page is worse than an empty box. Every plan has to open before buyers count as able to pay.</p>' +
+    '<p style="font-size:13px;color:var(--text-muted);margin:0 0 12px">A hosted payment page for a plan — an NMI or EPD hosted page, a PayPal button, a Stripe Payment Link, anything that takes the money. A plan carrying one can be sold while this installation holds no payment key: the buyer pays on that page and the workspace is switched on here once the money lands. Leave a plan empty to keep it request-only. Create the page in your provider&#39;s own dashboard and paste its https://&hellip; address here — every provider&#39;s page is accepted, and pressing the link in the app now files the buyer&#39;s plan request so the payment and the switch meet. The server opens EVERY paid plan&#39;s page: the badge under each link says whether the page answered, because a saved link that answers a dead page is worse than an empty box. Every plan has to open before buyers count as able to pay.</p>' +
     '<div class="table-wrap"><table class="table"><thead><tr><th>Plan</th><th>Link</th><th>Payment page</th><th></th></tr></thead><tbody>' +
     (rows || '<tr><td colspan="4">No plans found</td></tr>') + '</tbody></table></div></div></div>';
   wrap.querySelectorAll('[data-save]').forEach(b => {

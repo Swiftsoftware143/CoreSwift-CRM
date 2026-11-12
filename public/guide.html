@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CoreSwift CRM  User Guide</title>
+<title>CoreSwift CRM — User Guide</title>
 <style>
   :root {
     --primary: #1d4ed8; --primary-light: #3b82f6; --primary-dark: #1e3a8a; --primary-bg: #eff6ff;
@@ -189,10 +189,6 @@
     <span class="header-badge">v0.1.0 &middot; API /api/</span>
   </div>
 </header>
-<nav class="navx-crumb" aria-label="Breadcrumb"><a href="/">Home</a><span class="navx-sep" aria-hidden="true">&rsaquo;</span><span aria-current="page">Guide</span></nav><script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://coreswiftcrm.com/"},{"@type":"ListItem","position":2,"name":"Guide","item":"https://coreswiftcrm.com/guide.html"}]}</script><style id="navx-style">.navx-crumb{display:flex;flex-wrap:wrap;gap:.45rem;align-items:center;font-size:.82rem;max-width:1100px;margin:0 auto;padding:14px 18px 0;line-height:1.4}.navx-crumb a{text-decoration:underline;text-underline-offset:2px}.navx-crumb .navx-sep{opacity:.55}.navx-crumb [aria-current]{opacity:.75}.navx-rel{max-width:1100px;margin:34px auto 18px;padding:16px 18px;border:1px solid rgba(128,128,128,.45);border-radius:10px;background:rgba(128,128,128,.08);color:inherit}.navx-rel h2{font-size:1rem;margin:0 0 .6rem;letter-spacing:.01em}.navx-rel ul{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.45rem 1.4rem}.navx-rel a{text-decoration:underline;text-underline-offset:2px;font-size:.93rem}</style>
-
-
-
 <nav class="nav-bar">
   <div class="nav-inner">
     <a href="#getting-started">Getting Started</a>
@@ -384,6 +380,40 @@ Content-Type: application/json
         </tbody>
       </table>
     </div>
+  </div>
+  <div class="card">
+    <h3>Finding Duplicate Contacts</h3>
+    <p>Over time the same person can end up in your workspace more than once — imported from a
+    spreadsheet on Monday, added by hand on Friday. The <strong>Duplicates</strong> screen (in the
+    sidebar, directly under <strong>Contacts</strong>) shows you every set of records that look like
+    the same person so you can decide what to keep.</p>
+    <p>It compares two things:</p>
+    <ul>
+      <li><strong>The same phone number</strong>, once punctuation and spacing are ignored —
+        <code>(561) 555-0143</code> and <code>5615550143</code> count as the same number.</li>
+      <li><strong>The same first and last name</strong>, once case and extra spaces are ignored.</li>
+    </ul>
+    <p>Email addresses are deliberately <em>not</em> compared: a workspace can never hold two active
+    contacts with the same email address, so a report on email could only ever come back empty.</p>
+    <p><strong>Nothing is merged automatically.</strong> Each row has an <strong>Edit</strong> button
+    that opens that contact in the normal editor, so you decide which record survives and what it
+    says. If a group names a record you cannot see in the list above it, the record is still there —
+    the name lookup stops after 500 contacts, and the screen says so rather than pretending the
+    contact is missing.</p>
+    <p>If you see <em>"Account matching is not available on your current plan"</em>, the report is
+    switched on for paid plans only. The screen tells you that instead of showing an empty list,
+    because "you have no duplicates" and "you are not allowed to look" are different answers.</p>
+    <pre>GET /api/account-match/duplicates?limit=25
+Authorization: Bearer ***
+
+{
+  "groups": [
+    { "kind": "phone", "key": "5615550143", "count": 2,
+      "contact_ids": ["6b5f8ccc-…", "cd67aebd-…"] }
+  ],
+  "total_groups": 1,
+  "contacts_in_groups": 2
+}</pre>
   </div>
 </section>
 
@@ -720,7 +750,7 @@ POST /api/lists/:id/members</pre>
       <thead><tr style="background:var(--g100)"><th style="text-align:left;padding:8px;border:1px solid var(--g200)">Channel</th><th style="text-align:left;padding:8px;border:1px solid var(--g200)">Source Code</th><th style="text-align:left;padding:8px;border:1px solid var(--g200)">How</th></tr></thead>
       <tbody>
         <tr><td style="padding:8px;border:1px solid var(--g200)"><strong>👤 Manual</strong></td><td style="padding:8px;border:1px solid var(--g200)"><code>manual</code></td><td style="padding:8px;border:1px solid var(--g200)">Your team creates tickets in the admin Support panel</td></tr>
-        <tr><td style="padding:8px;border:1px solid var(--g200)"><strong>🌐 Contact Form</strong></td><td style="padding:8px;border:1px solid var(--g200)"><code>form</code></td><td style="padding:8px;border:1px solid var(--g200)">Drop our embed widget on any website — visitors submit tickets without logging in</td></tr>
+        <tr><td style="padding:8px;border:1px solid var(--g200)"><strong>🌐 Contact Form</strong></td><td style="padding:8px;border:1px solid var(--g200)"><code>form</code></td><td style="padding:8px;border:1px solid var(--g200)">Drop our embed widget on any website — visitors submit tickets without logging in. Anyone who writes from the contact page is handed a reference, and can come back to that page with the reference and their email address to read your team's answer — no sign-in needed.</td></tr>
         <tr><td style="padding:8px;border:1px solid var(--g200)"><strong>📧 Email</strong></td><td style="padding:8px;border:1px solid var(--g200)"><code>email</code></td><td style="padding:8px;border:1px solid var(--g200)">Forward your support@ inbox to our parser — emails become tickets automatically</td></tr>
         <tr><td style="padding:8px;border:1px solid var(--g200)"><strong>🤖 Chatbot</strong></td><td style="padding:8px;border:1px solid var(--g200)"><code>agent</code></td><td style="padding:8px;border:1px solid var(--g200)">Connect any chatbot or AI agent via our public API — tickets created programmatically</td></tr>
       </tbody>
@@ -916,7 +946,7 @@ GET /api/telnyx/available</pre>
 
   <div class="card">
     <h3>Free Access &amp; Upgrades</h3>
-    <p>CoreSwift CRM offers free access with a limited feature set. When your plan does not cover something, the console shows an upgrade banner whose <strong>Upgrade Now</strong> button opens the plan comparison. Each tier that is not your current one carries a <strong>Request this plan</strong> button: pressing it sends the request to our team (nothing is charged, and no plan changes by itself) and the request names your workspace and the address to answer. Putting the workspace on a plan is therefore still an operator action — self-service checkout is not open on this install — but asking is now one press inside the app instead of a support email you had to compose yourself. Feature availability is determined by your plan's feature flags.</p>
+    <p>CoreSwift CRM offers free access with a limited feature set. When your plan does not cover something, the console shows an upgrade banner whose <strong>Upgrade Now</strong> button opens the plan comparison. Each tier that is not your current one carries a <strong>Request this plan</strong> button: pressing it sends the request to our team (nothing is charged, and no plan changes by itself) and the request names your workspace and the address to answer. Putting the workspace on a plan is therefore still an operator action — self-service checkout is not open on this install — but asking is now one press inside the app instead of a support email you had to compose yourself. Feature availability is determined by your plan's feature flags. A tier that carries a payment page also shows <strong>Open payment page</strong>: it opens that page, and pressing it files the same request first, so our team knows which workspace is paying (nothing is charged by this app). </p>
     <div class="callout tip"><strong>Tip:</strong> The free plan includes the full core CRM — contacts, pipelines, automation, campaigns and SMS, calendar and bookings. Paid plans add AI scoring &amp; helpers, private mailboxes, support tickets, and higher limits on contacts, users, pipelines and integrations.</div>
   </div>
 </section>
@@ -1242,10 +1272,21 @@ PATCH /api/account/:id — Update name</pre>
   </div>
   <div class="card">
     <h3>Export to CSV</h3>
-    <p>The console exports contacts to CSV &mdash; no other table has an export control:</p>
+    <p>Two tables export to CSV: your <strong>contacts</strong> and your <strong>deals</strong>.</p>
     <ul>
       <li><strong>From Contacts</strong> — Click <strong>⬇ Export CSV</strong> on the Contacts screen to download all contacts as CSV</li>
+      <li><strong>From Pipelines &amp; Deals</strong> — Click <strong>⬇ Export deals</strong> to download every deal in the workspace as CSV, with its contact, company, pipeline and stage names</li>
     </ul>
+  </div>
+  <div class="card">
+    <h3>Import Deals from CSV</h3>
+    <p>The same header row the export writes can be loaded straight back in, so an export doubles as a backup you can restore:</p>
+    <ol>
+      <li><strong>Go to Pipelines &amp; Deals</strong> and click <strong>⬆ Import deals</strong>.</li>
+      <li><strong>Choose your file</strong> — the console shows every column it recognised and a few sample rows before anything is written.</li>
+      <li><strong>Click Import deals</strong> — the board refreshes with the new cards, and the toast reports how many landed and how many were skipped.</li>
+    </ol>
+    <p>Each row needs a <code>name</code>. <code>pipeline</code> and <code>stage</code> are used when the file names ones that exist; otherwise the row goes into your first pipeline. A contact is linked only when its email or full name matches an existing contact. A file with no <code>name</code> column is refused by the console instead of importing nothing.</p>
   </div>
   <div class="card">
     <h3>Auto-Create Contact from Deal</h3>
@@ -1470,9 +1511,15 @@ and <em>Remove logo</em>. Uploads are checked against the same size limit the se
 <p>An account with neither a name nor a logo gets exactly the mail it got before this feature
 existed. Removing the logo keeps the name and the colour.</p>
 
-
-
-<section class="navx-rel" aria-labelledby="navx-rel-h"><h2 id="navx-rel-h">Keep exploring CoreSwift-CRM</h2><ul><li><a href="/admin-guide.html">Admin guide</a></li><li><a href="/pricing.html">Pricing</a></li><li><a href="/">Home</a></li><li><a href="/terms.html">Terms of Service</a></li></ul></section>
+<h2>Workspaces</h2>
+<p><strong>Sidebar &rarr; Workspaces</strong> (in the Settings group) lists this account&rsquo;s workspaces. A workspace is a name &mdash; a label you give a part of the business, such as &ldquo;Miami office&rdquo; or &ldquo;Wholesale&rdquo; &mdash; and the one marked <em>Default</em> is the workspace a new session is meant to open.</p>
+<ul>
+<li><strong>Add</strong> &mdash; type a name and press <em>Add workspace</em>. The first workspace you add becomes the default automatically.</li>
+<li><strong>Rename</strong> &mdash; press <em>Rename</em>, edit the name, then <em>Save</em>. Two workspaces in one account cannot share a name, whatever the capitals.</li>
+<li><strong>Make default</strong> &mdash; moves the Default badge. An account always has exactly one default.</li>
+<li><strong>Delete</strong> &mdash; removes a workspace you no longer want. An account always keeps at least one, and deleting the default promotes the oldest remaining workspace.</li>
+</ul>
+<p>If your plan states a workspace limit, adding past it says so and points you at the plan screen; nothing is created and nothing is lost.</p>
 <h2>Team &amp; Invites</h2>
 <p><strong>Sidebar &rarr; Team &amp; Invites</strong> is how a second person gets a real login INTO this
 workspace. Only the workspace owner and an admin can see it.</p>
@@ -1516,10 +1563,11 @@ once.</p>
 </ol>
 <p><strong>One difference on Cloudflare:</strong> the mail records must be <strong>DNS only (grey cloud)</strong> &mdash; the orange proxy breaks mail. The <code>inbox</code> CNAME is the one exception: it must be <strong>Proxied (orange cloud)</strong>, because Cloudflare then serves the padlock on your own address.</p>
 <p><strong>Logging in takes you to a mailbox chooser.</strong> Sign in and you see the mailboxes you created; pick one and it opens. The <strong>Inbox</strong> tab lists the same inboxes, each row with a <strong>LOG IN</strong> button on the right that opens your mail in a new window &mdash; at <code>inbox.yourbusiness.com</code> once that record is live, or at <code>inbox.coreswiftcrm.com</code> until it is &mdash; plus a <strong>Create new inbox</strong> button.</p>
-<p><strong>Your 30 free days start at your first verified inbox</strong>, not at signup: the days you spend waiting on DNS cost you nothing. During the trial, sending has a fair-use ceiling of <strong>200 messages a day</strong> to protect the address&rsquo;s deliverability. When the 30 days end the address keeps receiving and only sending stops; <strong>Upgrade CRM</strong> restores sending immediately. The <strong>Keep inbox &mdash; $1/mo</strong> line is <strong>not on sale yet</strong> &mdash; pressing it reaches our team and charges nothing &mdash; and nothing is ever deleted.</p>
+<p><strong>Your 30 free days start at your first verified inbox</strong>, not at signup: the days you spend waiting on DNS cost you nothing. During the trial, sending has a fair-use ceiling of <strong>200 messages a day</strong> to protect the address&rsquo;s deliverability.</p>
+<p><strong>When the 30 days end</strong> the address keeps working and keeps receiving. Nothing is deleted. What stops is <em>sending</em> &mdash; the mailbox becomes receive-only and the screen offers two buttons: <strong>Keep inbox &mdash; $1/mo</strong> (the mailbox alone) and <strong>Upgrade CRM</strong> (the whole platform). <strong>Upgrade CRM</strong> restores sending immediately. The $1 mailbox line is <strong>not on sale yet</strong>: pressing it opens its plan with a note that sales are not open and reaches our team, and nothing is charged. Every message you already have stays where it is.</p>
 <p><strong>What &ldquo;receive-only&rdquo; means in plain words:</strong> mail keeps arriving and you keep every message you already have. Only <strong>Compose</strong> and <strong>Reply</strong> stop, and both answer with the two buttons above rather than an error. Nothing is deleted at expiry, by pressing the wrong button, or by waiting &mdash; there is no deadline after which mail disappears.</p>
-<p><strong>One bill, never two.</strong> The $1 mailbox line is a standalone door, not an add-on. It is <strong>not on sale yet</strong> &mdash; it is absent from Plans &amp; Billing, and pressing its card answers that sales are not open, without charging anything &mdash; so no workspace pays it today. If it does go on sale: moving up to a CRM plan ends the $1 subscription in the same step, so you pay the new plan&rsquo;s price only &mdash; never $1 on top of it &mdash; and the new period starts the day you move, so nothing is prorated. <strong>Plans &amp; Billing</strong> opens with <strong>Your bill</strong>: the one amount you pay, that there is one subscription, and &mdash; if your plan changed &mdash; the line that ended and the day it ended.</p>
-<p><strong>When your plan already includes every inbox you have</strong>, <strong>Create new inbox</strong> answers with the plan that unlocks more and what it costs, never a dead button.</p>
+<p><strong>One bill, never two.</strong> The $1 mailbox line is a standalone door, not an add-on. It is <strong>not on sale yet</strong> &mdash; it is absent from Plans &amp; Billing, and pressing its card answers that sales are not open, without charging anything &mdash; so no workspace pays it today. If it does go on sale: moving up to a CRM plan ends the $1 subscription in the same step, so you pay the new plan&rsquo;s price only &mdash; never $1 on top of it &mdash; and the new period starts the day you move, so nothing is prorated. <strong>Plans &amp; Billing</strong> opens with <strong>Your bill</strong>, which states the one amount you pay, that there is one subscription, and &mdash; if your plan changed &mdash; the line that ended and the day it ended.</p>
+<p><strong>When your plan already includes every inbox you have</strong>, <strong>Create new inbox</strong> answers with the plan that unlocks more and what it costs, never a dead button. The $1 single-inbox line is <strong>not on sale yet</strong> &mdash; its card reaches our team and charges nothing &mdash; so move up the CRM plans for more addresses.</p>
 
 <h2>Sending and receiving are two separate choices</h2>
 <p><strong>You do not have to move your mail to one company.</strong> The inbox setup page asks two questions that stand on their own: <strong>how should your mail leave</strong> (sending) and <strong>how should your mail arrive</strong> (receiving). Every option in those two lists really works &mdash; there is no placeholder in either one.</p>

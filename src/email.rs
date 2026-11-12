@@ -657,6 +657,22 @@ pub async fn send_support_request_operator_alert(
     subject_line: &str,
     message: &str,
 ) -> Result<(), String> {
+    // ── A HARNESS MUST NEVER PAGE A HUMAN (kanban t_a27fd2a4, fleet parity t_f17b5802) ────────
+    // The recipient of this alert is the OPERATOR whatever address the requester typed, so the
+    // requester is the only thing that can tell a customer from a proof run. Measured on the
+    // siblings 2026-11-10: one day of audit walks produced 49 operator alerts, every probe row on
+    // a reserved address. The ticket is still filed (it is the record and it stays in the queue);
+    // only the mail to a person is withheld — BEFORE any row is queued, so no `outbound_messages`
+    // row is written either.
+    if let Some(reason) = crate::security::probe_addr::synthetic_requester(reply_to, who) {
+        tracing::info!(
+            reason = reason,
+            requester = %reply_to,
+            "operator alert WITHHELD: the requester is a synthetic (harness) identity"
+        );
+        return Ok(());
+    }
+
     let Some(to) = crate::communications::platform_mail_config::operator_alert_email(db).await
     else {
         // Nothing configured is a normal state, not a failure: no mailbox is invented.
