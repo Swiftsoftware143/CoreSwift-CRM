@@ -499,12 +499,36 @@
       + '</div>';
   }
 
+  /// The address filter, built from the SERVER's own answer (GET /private-email/addresses): every
+  /// address this account actually received mail on, plus ALL and MISC. It used to be built from
+  /// the mailbox list, so an address that had mail but no active mailbox row (a deleted inbox)
+  /// could not be chosen at all. No figures are shown beside the names: the endpoint's counts are
+  /// account-wide (they include Sent and Drafts), so printing them beside a folder view would state
+  /// a number the list behind them does not match.
   function addressOptions() {
-    var opts = ['<option value="all"' + (S.address === 'all' ? ' selected' : '') + '>All addresses</option>'];
-    S.boxes.forEach(function (b) {
-      opts.push('<option value="' + esc(b.email_address) + '"' + (S.address === b.email_address ? ' selected' : '') + '>' + esc(b.email_address) + '</option>');
+    var seen = {}, rows = [];
+    (S.addresses || []).forEach(function (a) {
+      // An address nobody created is the catch-all case: it belongs under MISC, never as an
+      // address of its own, or the same mail would appear behind two options.
+      if (!a || !a.created || seen[a.address]) return;
+      seen[a.address] = 1;
+      rows.push(a);
     });
-    if (S.misc > 0) opts.push('<option value="misc"' + (S.address === 'misc' ? ' selected' : '') + '>Everything else (MISC)</option>');
+    (S.boxes || []).forEach(function (b) {
+      if (!b || seen[b.email_address]) return;
+      seen[b.email_address] = 1;
+      rows.push({ address: b.email_address, created: true });
+    });
+    rows.sort(function (a, b) { return String(a.address).localeCompare(String(b.address)); });
+
+    var opts = ['<option value="all"' + (S.address === 'all' ? ' selected' : '') + '>All addresses</option>'];
+    rows.forEach(function (a) {
+      opts.push('<option value="' + esc(a.address) + '"' + (S.address === a.address ? ' selected' : '') + '>'
+        + esc(a.address) + '</option>');
+    });
+    if (S.misc > 0) {
+      opts.push('<option value="misc"' + (S.address === 'misc' ? ' selected' : '') + '>Everything else (MISC)</option>');
+    }
     return opts.join('');
   }
 
@@ -517,7 +541,8 @@
       return head + '<div class="empty">No mail in this folder.<br><span style="font-size:12px">Every message that arrives appears here, including mail to addresses that do not open tickets.</span></div>';
     }
     var rows = msgs.map(function (m) {
-      var chips = (m.is_ticket ? '<span class="chip ticket">ticket</span>' : '');
+      var chips = (m.folder === 'drafts' ? '<span class="chip draft">draft</span>' : '')
+        + (m.is_ticket ? '<span class="chip ticket">ticket</span>' : '');
       return '<div class="row' + (m.is_read ? '' : ' unread') + (S.sel && S.sel.id === m.id ? ' sel' : '') + '" data-msg="' + esc(m.id) + '">'
         + '<span data-star="' + esc(m.id) + '" style="cursor:pointer;color:' + (m.is_starred ? '#b45309' : '#c7cbd1') + '">' + (m.is_starred ? '★' : '☆') + '</span>'
         + '<span style="min-width:0"><span class="subj">' + esc(m.subject || '(no subject)') + chips + '</span>'
@@ -636,7 +661,12 @@
     var nl = $('mNewLabel');
     if (nl) nl.onclick = function () { labelModal(); };
     var ad = $('mAddress');
-    if (ad) ad.onchange = async function () { S.address = this.value; await loadMessages(); render(); };
+    if (ad) ad.onchange = async function () {
+      // The open message may not belong to the address now being read, so it is cleared with the
+      // filter instead of sitting in the reader as if it matched.
+      S.address = this.value; S.sel = null;
+      await loadMessages(); render();
+    };
     var rf = $('mRefresh');
     if (rf) rf.onclick = async function () { await boot(); };
 
@@ -671,7 +701,13 @@
         e.stopPropagation();
         var id = el.getAttribute('data-star');
         var m = (S.messages.filter(function (x) { return x.id === id; })[0] || {});
-        try { await api('PATCH', '/private-email/messages/' + id, { is_starred: !m.is_starred }); await boot(); }
+        try {
+          await api('PATCH', '/private-email/messages/' + id, { is_starred: !m.is_starred });
+          // The open message, when it is this one, carries the new flag too — otherwise the
+          // reader keeps saying "☆ Star" after the row beside it says starred.
+          if (S.sel && S.sel.id === id) S.sel.is_starred = !m.is_starred;
+          await boot();
+        }
         catch (err) { toast(fail(err), 'error'); }
       };
     });
@@ -727,7 +763,7 @@
         } catch (e) { if (box) box.innerHTML = '<div class="badge open">' + esc(fail(e)) + '</div>'; }
         return;
       }
-      if (act === 'continue') { composeModal('new'); return; }
+      if (act === 'continue') { composeModal('draft'); return; }
       if (act === 'reply' || act === 'reply_all' || act === 'forward') { composeModal(act); return; }
     } catch (e) { toast(fail(e), 'error'); }
   }
@@ -750,6 +786,13 @@
 
     var to = '', subject = '', body = '';
     if (mode === 'new') { subject = ''; }
+    // Continuing a draft opens the SAME draft's own text. It used to open an empty message under a
+    // "Continue writing" button, so pressing it threw the letter away.
+    if (mode === 'draft' && m) {
+      to = m.to_address || '';
+      subject = m.subject || '';
+      body = m.body_plain || '';
+    }
     if (mode === 'reply' || mode === 'reply_all') {
       to = (m && m.from_address) || '';
       subject = /^re:/i.test((m && m.subject) || '') ? m.subject : 'Re: ' + ((m && m.subject) || '');
@@ -799,7 +842,7 @@
       sig.loading = false; paintSig();
     }
 
-    modal(mode === 'new' ? 'New message' : (mode === 'forward' ? 'Forward' : 'Reply'),
+    modal(mode === 'new' ? 'New message' : (mode === 'draft' ? 'Continue draft' : (mode === 'forward' ? 'Forward' : 'Reply')),
       '<label class="f">From</label><select id="cFrom">' + fromOpts + '</select>'
       + '<label class="f">To</label><input id="cTo" value="' + esc(to) + '" placeholder="someone@example.com">'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'
@@ -814,7 +857,7 @@
       + '<span>Include the signature on this message</span></label>'
       + '<div class="err" id="cErr"></div>',
       '<button class="btn" onclick="csmCloseModal()">Cancel</button>'
-      + (mode === 'new' || (m && m.folder === 'drafts') ? '<button class="btn" id="cDraft">Save draft</button>' : '')
+      + (mode === 'new' || mode === 'draft' || (m && m.folder === 'drafts') ? '<button class="btn" id="cDraft">Save draft</button>' : '')
       + '<button class="btn btn-primary" id="cSend">Send</button>',
       function () {
         var db = $('cDraft');
