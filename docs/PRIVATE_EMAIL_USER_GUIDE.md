@@ -286,6 +286,10 @@ Every Free account includes **one private inbox on your own domain**, and it is 
 days. Your mail runs through **your own Mailgun account** and your own DNS, so it never passes
 through anyone else's servers — which is also why there is no setup work to pay for.
 
+**The setup page states your plan's own number of inboxes** — read from the plan, so it can never
+promise more or fewer than the app will actually create: **Free 1, Starter 3, Professional 10,
+Enterprise 50, Agency 50.**
+
 **Before your first inbox works you need:** a domain you own, and a Mailgun account (Mailgun has a
 free tier). There is nothing to buy from us to start.
 
