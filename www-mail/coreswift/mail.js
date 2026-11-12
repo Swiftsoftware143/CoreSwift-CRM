@@ -611,6 +611,16 @@
   // THE FILES A MESSAGE CARRIED (kanban t_f919924f). A real attachment is a chip that downloads
   // it through the authenticated route; an inline image is not a chip at all — it is drawn where
   // the body puts it, because the server has already rewritten its `cid:` reference to the bytes.
+  // Sizes on the file chips. Missing until now: `attachmentsHtml` called `fmtBytes` without it, so
+  // opening ANY message that carried a file threw `ReferenceError: fmtBytes is not defined` and the
+  // reader stayed "No mail selected" — the file was stored but the message would not open.
+  function fmtBytes(n) {
+    n = Number(n || 0);
+    if (n >= 1073741824) return (n / 1073741824).toFixed(1) + ' GB';
+    if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+    if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
+    return n + ' B';
+  }
   function attachmentsHtml(m) {
     var list = (m.attachments || []).filter(function (a) { return !a.is_inline; });
     if (!list.length) return '';
