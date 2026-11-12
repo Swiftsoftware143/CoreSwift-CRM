@@ -74,6 +74,12 @@ pub enum AppError {
     #[error("{0}")]
     ServiceUnavailable(String),
 
+    /// 502 — An upstream provider (Mailgun, SMTP, …) refused or failed to send the message. The
+    /// caller is owed the provider's own status and a sentence naming the fix — never a 500, which
+    /// hides a credential/domain problem behind "Internal server error" (kanban t_173142cf).
+    #[error("{0}")]
+    ProviderRefused(String),
+
     /// 500 — Database error
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
@@ -130,6 +136,13 @@ impl IntoResponse for AppError {
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Password hashing error".to_string(),
                 )
+            }
+            AppError::ProviderRefused(msg) => {
+                // Not a fault in this service: the message reached a real provider and it said no.
+                // A warning (not an error) so a customer's mis-keyed domain does not page as a
+                // server crash, and the sentence is the caller's, verbatim.
+                tracing::warn!("Provider refused: {}", msg);
+                (StatusCode::BAD_GATEWAY, msg.clone())
             }
             AppError::Internal(msg) => {
                 tracing::error!("Internal error: {}", msg);

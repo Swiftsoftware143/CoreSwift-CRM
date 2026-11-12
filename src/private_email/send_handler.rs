@@ -127,11 +127,24 @@ pub async fn deliver(
 
     if !result.success {
         let err = result.error.unwrap_or_else(|| "Unknown send error".into());
-        return Err(AppError::Internal(format!(
-            "{} send failed: {}",
-            provider.name(),
-            err
-        )));
+        // A provider that answered with a status REFUSED the message (the credential is not
+        // authorized for this From domain, the domain is disabled, …). A status-less failure is a
+        // transport/config gap. Either way the customer reads a sentence that names the provider
+        // and the fix — never a bare 500 (kanban t_173142cf).
+        let msg = match result.provider_status {
+            Some(status) => format!(
+                "{} refused this message (HTTP {}): {}. This usually means the API key saved for \
+                 {} is not authorized to send from that domain — re-enter the key in your email \
+                 settings, or verify the domain at {}.",
+                provider.name(),
+                status,
+                err,
+                provider_config.domain,
+                provider.name(),
+            ),
+            None => format!("{} could not send this message: {}", provider.name(), err),
+        };
+        return Err(AppError::ProviderRefused(msg));
     }
 
     Ok(result.provider_message_id)

@@ -44,6 +44,7 @@ impl EmailProvider for SmtpProvider {
                 return SendResult {
                     success: false,
                     provider_message_id: None,
+                    provider_status: None,
                     error: Some("SMTP host not configured".into()),
                 }
             }
@@ -56,6 +57,7 @@ impl EmailProvider for SmtpProvider {
                 return SendResult {
                     success: false,
                     provider_message_id: None,
+                    provider_status: None,
                     error: Some("SMTP username not configured".into()),
                 }
             }
@@ -68,6 +70,7 @@ impl EmailProvider for SmtpProvider {
                     pw if pw.trim().is_empty() => return SendResult {
                         success: false,
                         provider_message_id: None,
+                        provider_status: None,
                         error: Some(
                             "Stored SMTP password cannot be read by this deployment — re-add the \
                              domain with a valid password"
@@ -80,6 +83,7 @@ impl EmailProvider for SmtpProvider {
                     return SendResult {
                         success: false,
                         provider_message_id: None,
+                        provider_status: None,
                         error: Some("SMTP password not configured".into()),
                     }
                 }
@@ -165,6 +169,7 @@ impl EmailProvider for SmtpProvider {
                 return SendResult {
                     success: false,
                     provider_message_id: None,
+                    provider_status: None,
                     error: Some(format!("Failed to build email: {}", e)),
                 }
             }
@@ -186,6 +191,7 @@ impl EmailProvider for SmtpProvider {
                     return SendResult {
                         success: false,
                         provider_message_id: None,
+                        provider_status: None,
                         error: Some(format!("Failed to build SMTP transport: {}", e)),
                     }
                 }
@@ -206,12 +212,14 @@ impl EmailProvider for SmtpProvider {
                     } else {
                         Some(msg_id)
                     },
+                    provider_status: None,
                     error: None,
                 }
             }
             Err(e) => SendResult {
                 success: false,
                 provider_message_id: None,
+                provider_status: None,
                 error: Some(format!("SMTP send failed: {}", e)),
             },
         }

@@ -33,6 +33,10 @@ pub struct SendResult {
     pub success: bool,
     pub provider_message_id: Option<String>,
     pub error: Option<String>,
+    /// The provider's own HTTP status on a refusal (Mailgun answers 401/403/400 when the credential
+    /// is not authorized to send from the From domain). `None` for a transport/config failure, or
+    /// for a provider (SMTP) that has no HTTP status to report (kanban t_173142cf).
+    pub provider_status: Option<u16>,
 }
 
 /// Parsed inbound email from any provider's webhook.

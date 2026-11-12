@@ -110,6 +110,7 @@ impl EmailProvider for MailgunProvider {
                     return SendResult {
                         success: false,
                         provider_message_id: None,
+                        provider_status: None,
                         error: Some(format!(
                             "Stored API key for domain {} cannot be read by this deployment — \
                              re-add the domain with a valid key",
@@ -123,6 +124,7 @@ impl EmailProvider for MailgunProvider {
                 return SendResult {
                     success: false,
                     provider_message_id: None,
+                    provider_status: None,
                     error: Some("Mailgun API key not configured".into()),
                 }
             }
@@ -202,20 +204,32 @@ impl EmailProvider for MailgunProvider {
                     SendResult {
                         success: true,
                         provider_message_id: msg_id,
+                        provider_status: None,
                         error: None,
                     }
                 } else {
+                    // A non-2xx is the provider REFUSING the message — the credential is not
+                    // authorized to send from this From domain, the domain is disabled, etc. The
+                    // status is kept so the caller can name it (never a bare 500, kanban t_173142cf).
+                    let status = resp.status();
                     let body = resp.text().await.unwrap_or_default();
+                    let detail = if body.trim().is_empty() {
+                        status.canonical_reason().unwrap_or("refused").to_string()
+                    } else {
+                        body.trim().to_string()
+                    };
                     SendResult {
                         success: false,
                         provider_message_id: None,
-                        error: Some(format!("Mailgun returned error: {}", body)),
+                        provider_status: Some(status.as_u16()),
+                        error: Some(detail),
                     }
                 }
             }
             Err(e) => SendResult {
                 success: false,
                 provider_message_id: None,
+                provider_status: None,
                 error: Some(format!("Mailgun request failed: {}", e)),
             },
         }
