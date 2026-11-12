@@ -222,6 +222,23 @@
       + '</ul></div>';
   }
 
+  // The plan's real inbox allowance (kanban t_c55b3bd5). This block used to tell EVERY customer
+  // "one private inbox", so a Starter workspace that bought three was told it had one. The number
+  // comes from GET /private-email/mailbox-status, whose `mailbox_limit` is the same registry figure
+  // the server's own ceiling refuses on (null there = the plan sells unlimited). Until that answer
+  // arrives we print no number at all rather than a default that could be wrong.
+  function mailboxAllowanceSentence() {
+    var s = S.status;
+    var n = (s && s.mailbox_limit !== undefined) ? s.mailbox_limit : undefined;
+    if (n === undefined) return 'Your plan includes a private inbox on your own domain.';
+    if (n === null) return 'Your plan includes unlimited private inboxes on your own domain.';
+    n = Number(n);
+    if (!isFinite(n)) return 'Your plan includes a private inbox on your own domain.';
+    if (n <= 0) return 'Your current plan does not include a private inbox.';
+    if (n === 1) return 'Your plan includes one private inbox on your own domain.';
+    return 'Your plan includes ' + n + ' private inboxes on your own domain.';
+  }
+
   function setupHtml() {
     var d = (S.domains || [])[0];
     var rec = (d && S.records && String(S.records.domain_id) === String(d.id)) ? S.records : null;
@@ -312,7 +329,7 @@
 
     return '<div style="padding:2px;text-align:left">'
       + '<h4 style="margin:0 0 4px">Set up your inbox</h4>'
-      + '<p style="margin:0 0 12px;font-size:13px;opacity:.85">Your plan includes one private inbox on your own domain. You choose how it SENDS and how it RECEIVES — those are separate answers, so you can keep the service that already sends your mail. Three steps and it is live; this page stays here until it is done.</p>'
+      + '<p style="margin:0 0 12px;font-size:13px;opacity:.85">' + mailboxAllowanceSentence() + ' You choose how it SENDS and how it RECEIVES — those are separate answers, so you can keep the service that already sends your mail. Three steps and it is live; this page stays here until it is done.</p>'
       + err
       + '<ol style="margin:0;padding-left:18px">'
       + '<li style="margin-bottom:14px"><strong>Tell us your domain</strong>' + (d ? '' : ' and choose how it sends and receives') + '<div style="margin-top:6px">' + step1 + '</div></li>'
@@ -844,7 +861,7 @@
       '<div class="form-group"><label>Which domain?</label><select id="peNewDomain">' + opts + '</select></div>'
       + '<div class="form-group"><label>The address</label>'
       + '<div style="display:flex;align-items:center;gap:6px"><input id="peNewLocal" placeholder="info" style="flex:1"><span style="opacity:.75">@ your domain</span></div>'
-      + '<p style="font-size:12px;opacity:.7;margin:6px 0 0">Common ones: <strong>info@</strong> for enquiries, <strong>support@</strong> for customers who need help, and your own name. Nothing is charged until your records verify, and no inbox exists before then.</p></div>'
+      + '<p style="font-size:12px;opacity:.7;margin:6px 0 0">Common ones: <strong>info@</strong> for enquiries, <strong>support@</strong> for customers who need help, and your own name. ' + mailboxAllowanceSentence() + '</p></div>'
       + '<div id="peNewMsg" style="font-size:13px"></div>',
       '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>'
       + '<button class="btn btn-primary" onclick="peSubmitInbox()">Create inbox</button>');
