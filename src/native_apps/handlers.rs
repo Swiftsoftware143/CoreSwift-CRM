@@ -353,65 +353,26 @@ fn ensure_declared(app_slug: &str, direction: &str, entity_type: &str) -> ApiRes
 }
 
 pub async fn push_to_app(
-    State(s): State<AppState>,
-    Extension(c): Extension<Claims>,
+    State(_s): State<AppState>,
+    Extension(_c): Extension<Claims>,
     Path(app_slug): Path<String>,
-    Json(r): Json<PushRequest>,
-) -> ApiResult<impl IntoResponse> {
-    let account_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    ensure_declared(&app_slug, "push", &r.entity_type)?;
-
-    let row = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT credentials FROM app_connections WHERE tenant_id = $1 AND app_slug = $2 AND status = 'connected'"
-    )
-    .bind(account_id)
-    .bind(&app_slug)
-    .fetch_optional(&s.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound(format!("No active connection for '{}'", app_slug)))?;
-
-    // Same open-on-use rule as the pull arm (kanban t_a1ada5ef).
-    let credentials = credentials::open_for_use(account_id, &row.0)?;
-
-    let sync_id = Uuid::new_v4();
-
-    sqlx::query(
-        "INSERT INTO app_sync_logs (id, tenant_id, app_slug, direction, entity_type, status, started_at) VALUES ($1, $2, $3, 'push', $4, 'running', NOW())"
-    )
-    .bind(sync_id)
-    .bind(account_id)
-    .bind(&app_slug)
-    .bind(&r.entity_type)
-    .execute(&s.db)
-    .await?;
-
-    match connectors::push_data(&app_slug, &credentials, &r.entity_type, &r.data).await {
-        Ok(result) => {
-            sqlx::query(
-                "UPDATE app_sync_logs SET status = 'completed', records_processed = 1, records_succeeded = 1, completed_at = NOW() WHERE id = $1"
-            )
-            .bind(sync_id)
-            .execute(&s.db)
-            .await?;
-
-            Ok(Json(json!({
-                "sync_id": sync_id,
-                "status": "completed",
-                "result": result,
-            })))
-        }
-        Err(e) => {
-            sqlx::query(
-                "UPDATE app_sync_logs SET status = 'failed', records_failed = 1, error_log = $1, completed_at = NOW() WHERE id = $2"
-            )
-            .bind(json!({"error": &e}))
-            .bind(sync_id)
-            .execute(&s.db)
-            .await?;
-
-            Err(AppError::Internal(format!("Push failed: {}", e)))
-        }
-    }
+    Json(_r): Json<PushRequest>,
+) -> Result<axum::Json<serde_json::Value>, AppError> {
+    // ONE-WAY BY DESIGN (David, 2026-11-13): *"data only flows from the sister apps. CoreSwift is the
+    // last destination. It never sends data through its own API — it only receives."*
+    //
+    // Contacts arrive on /api/external/contacts (and on the mapped intake); the ONLY thing CoreSwift
+    // sends out is the portfolio-company broadcast in src/portfolio/sync.rs, which is a control
+    // message, not contact data.
+    //
+    // Refused rather than deleted so the rule is visible and reversible; the connector modules stay
+    // for the PULL direction (reading a sibling's data in is still this CRM receiving).
+    let _ = app_slug;
+    Err::<axum::Json<serde_json::Value>, AppError>(AppError::BadRequest(
+        "CoreSwift does not send contacts out to sister apps — data flows one way, into this CRM. \
+         Have the app push to /api/external/contacts with this account's key instead."
+            .into(),
+    ))
 }
 
 // ── Sync history ──

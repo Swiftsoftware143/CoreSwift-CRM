@@ -27,11 +27,18 @@ pub async fn broadcast_portfolio_sync(
 
     let client = Client::new();
 
-    // All sister app ports running locally
+    // Where a portfolio company is mirrored.
+    //
+    // Owner's rule (David, 2026-11-13): one owner, several businesses — a portfolio company created
+    // here belongs in EVERY sibling app...
+    //
+    //   * MultiDirectory is deliberately ABSENT: a portfolio company is not a directory tenant, and
+    //     its tenants are the client businesses it serves.
+    //   * ADASwift is deliberately ABSENT too: it is a service SwiftImpact runs, not a place a
+    //     portfolio company exists as an account. Its connector is retired on the same reasoning.
     let targets: &[(&str, u16)] = &[
         ("FunnelSwift", 8080),
         ("WorkflowSwift", 8085),
-        ("ADASwift", 8087),
         ("IncentiveSwift", 8083),
         ("MissedCallRespondr", 8088),
     ];
