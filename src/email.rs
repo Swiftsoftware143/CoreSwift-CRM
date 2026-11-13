@@ -749,6 +749,132 @@ pub async fn send_support_request_operator_alert(
         .unwrap_or_else(|| "the provider refused the operator alert".to_string()))
 }
 
+/// The reply notice's text + html. Split out so the wording has one home and a unit test can pin it.
+fn support_reply_bodies(who: &str, ticket_subject: &str, reply: &str) -> (String, String) {
+    let esc = |s: &str| {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&#39;")
+    };
+    let text = format!(
+        "Hello {who},\n\n\
+         You asked us about: {ticket_subject}\n\n\
+         {reply}\n\n\
+         Reply to this email if you need anything else — it comes back to the same team.\n\n\
+         The {APP_NAME} team\n"
+    );
+    let html = format!(
+        "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
+         <p>Hello {},</p>\
+         <p>You asked us about: <strong>{}</strong></p>\
+         <pre style=\"white-space:pre-wrap;font-family:inherit\">{}</pre>\
+         <p>Reply to this email if you need anything else &mdash; it comes back to the same team.</p>\
+         <p>The {} team</p>\
+         </body></html>",
+        esc(who),
+        esc(ticket_subject),
+        esc(reply),
+        esc(APP_NAME),
+    );
+    (text, html)
+}
+
+/// Tell the ASKER that support answered (2026-11-13).
+///
+/// WHY THIS EXISTS. `POST /api/tickets/:id/messages` recorded the operator's reply on the thread and
+/// stopped there — while the operator alert that brings the ticket to their attention ends with "the
+/// asker is mailed your reply". That promise was false: a public requester (`tenant_id IS NULL`, the
+/// buyer who pressed "Request this plan" or the customer who cannot sign in) has no account and no
+/// portal login, so the answer existed only inside the console and the person who asked was never
+/// told. The five siblings all mail the reply (FunnelSwift `send_support_reply_email`,
+/// IncentiveSwift `send_public_support_reply_email`, WorkflowSwift `ticket_update`, MissedCall
+/// `ticket_reply`); this is CoreSwift's half.
+///
+/// Sent through the PLATFORM transport (never a workspace identity) because a public ticket belongs
+/// to no workspace, and recorded in `outbound_messages` (tenant NULL) so the Communications Log can
+/// answer "did the provider take it?". A synthetic (harness) requester is withheld BEFORE any row is
+/// queued, so a probe ticket can never mail a person.
+pub async fn send_support_reply_to_requester(
+    db: &PgPool,
+    to: &str,
+    who: &str,
+    ticket_subject: &str,
+    reply: &str,
+) -> Result<(), String> {
+    let to = to.trim();
+    if to.is_empty() {
+        return Ok(());
+    }
+    if let Some(reason) = crate::security::probe_addr::synthetic_requester(to, who) {
+        tracing::info!(
+            reason = reason,
+            requester = %to,
+            "support reply WITHHELD: the requester is a synthetic (harness) identity"
+        );
+        return Ok(());
+    }
+    let Some(transport) = crate::communications::platform_mail_config::resolved(db).await else {
+        return Err(
+            "the platform mail transport is not configured, so the reply was not sent".to_string(),
+        );
+    };
+    let who = if who.trim().is_empty() {
+        "there"
+    } else {
+        who.trim()
+    };
+    let subject = format!("We answered your request: {}", ticket_subject.trim());
+    let (text, html) = support_reply_bodies(who, ticket_subject, reply);
+
+    let msg_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO outbound_messages (id, tenant_id, channel, to_address, subject, body, is_html, status)
+         VALUES ($1, NULL, 'email', $2, $3, $4, false, 'queued')",
+    )
+    .bind(msg_id)
+    .bind(to)
+    .bind(&subject)
+    .bind(&text)
+    .execute(db)
+    .await
+    .map_err(|e| format!("could not record the support reply: {e}"))?;
+
+    let cfg = crate::communications::providers::platform_send_config(
+        Uuid::nil(),
+        msg_id,
+        to,
+        &subject,
+        &text,
+        Some(&html),
+        &transport.mail(),
+    );
+    let outcome = crate::communications::providers::deliver(&cfg).await;
+    if let Err(e) = crate::communications::providers::record_attempt(db, msg_id, &outcome).await {
+        tracing::error!(msg = %msg_id, error = %e, "failed to record the support reply");
+    }
+    if outcome.ok {
+        tracing::info!(msg = %msg_id, to = %to, "support reply accepted by the provider");
+        return Ok(());
+    }
+    // No workspace owns this row, so the queue can never retry it: close it out with the provider's
+    // own words rather than leave a retry that cannot run.
+    if let Err(e) = sqlx::query(
+        "UPDATE outbound_messages SET status = 'failed', scheduled_at = NULL \
+          WHERE id = $1 AND status = 'queued'",
+    )
+    .bind(msg_id)
+    .execute(db)
+    .await
+    {
+        tracing::error!(msg = %msg_id, error = %e, "failed to close out the support reply row");
+    }
+    Err(outcome
+        .error
+        .unwrap_or_else(|| "the provider refused the reply".to_string()))
+}
+
 // ---- Data types ----
 
 #[derive(Debug, sqlx::FromRow)]
@@ -771,6 +897,29 @@ mod tests {
     const SEEDED_SUBJECT: &str = "Welcome to {{app_name}}!";
     const SEEDED_BODY: &str = "Welcome to {{app_name}}, {{name}}!\n\nYour account has been created successfully.\n\nYour Login Credentials:\nEmail: {{email}}\nPassword: {{password}}\n\nLogin: {{app_url}}/login\n\nBest,\nThe {{app_name}} Team";
     const SEEDED_HTML: &str = "<h2>Welcome to {{app_name}}, {{name}}!</h2><p>Your account has been created successfully.</p><p><strong>Login Credentials:</strong><br>Email: {{email}}<br>Password: {{password}}</p><p><a href=\"{{app_url}}/login\">Log in here</a></p><p>Best,<br>The {{app_name}} Team</p>";
+
+    #[test]
+    fn support_reply_body_carries_the_answers_words_and_the_ticket_subject() {
+        let (text, html) = super::support_reply_bodies(
+            "Ada",
+            "Upgrade request: Starter plan",
+            "Yes - pay the link below and we switch you on today.",
+        );
+        assert!(text.contains("Hello Ada,"), "names the asker");
+        assert!(
+            text.contains("Upgrade request: Starter plan"),
+            "names the ask"
+        );
+        assert!(
+            text.contains("pay the link below"),
+            "carries the operator's words"
+        );
+        assert!(
+            html.contains("pay the link below"),
+            "html arm carries them too"
+        );
+        assert!(html.contains("Upgrade request: Starter plan"));
+    }
 
     #[test]
     fn render_template_substitutes_double_braces_only() {

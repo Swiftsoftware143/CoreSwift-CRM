@@ -312,6 +312,39 @@ pub async fn add_message(
         .execute(&s.db)
         .await?;
 
+    // TELL THE ASKER (2026-11-13). The rows above are the thread and the queue; this is the only
+    // thing the person who asked actually receives. A public requester (the buyer who pressed
+    // "Request this plan", the customer who cannot sign in) has no account and no portal login, so
+    // before this the operator's answer existed only inside the console. Best effort by design: the
+    // reply is already recorded, so a mail failure is logged and the 201 kept.
+    if sender == "agent" {
+        let row = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+            "SELECT subject, contact_email, contact_name FROM tickets WHERE id = $1",
+        )
+        .bind(ticket_id)
+        .fetch_optional(&s.db)
+        .await;
+        match row {
+            Ok(Some((subject, Some(email), name))) if !email.trim().is_empty() => {
+                if let Err(e) = crate::email::send_support_reply_to_requester(
+                    &s.db,
+                    &email,
+                    name.as_deref().unwrap_or(""),
+                    &subject,
+                    &body.message,
+                )
+                .await
+                {
+                    tracing::warn!(ticket = %ticket_id, "support reply notice was not sent: {e}");
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(ticket = %ticket_id, error = %e, "could not read the ticket for the reply notice");
+            }
+        }
+    }
+
     Ok((StatusCode::CREATED, Json(json!(msg))))
 }
 
