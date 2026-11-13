@@ -169,6 +169,16 @@
 //!        The extractor resolves 414 mounted `.route(..)` calls / 402 on /api** (414 = 402 /api +
 //!        the 12 root-level mounts), which is what `the_census_shape_is_what_the_docs_say` pins.
 //!
+//!   +2 mounts (2026-11-13, kanban t_ae02611a), CLOSE MY ACCOUNT: `POST /api/auth/close-account` on
+//!        the auth router's GUARDED group (the caller's own row, read from the SESSION, with the
+//!        password re-verified in the handler) and its fleet-contract alias `POST
+//!        /api/v1/auth/close-account`, mounted once in `main.rs` with the SAME handler and the same
+//!        `auth_middleware` because this app's customer auth lives under `/api/auth/*` and no
+//!        /api/v1 auth tree exists. Neither joins an allowlist: both are measured anonymous
+//!        answering 401 "Authentication required", i.e. the boundary refused before the handler ran.
+//!        The extractor now resolves 416 mounted `.route(..)` calls / 404 on /api** (416 = 404 /api
+//!        + the 12 root-level mounts), and those are what the census test pins.
+//!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
 //!        the per-module gate was doing its job. The two /api routes added since (kanban
@@ -1187,12 +1197,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            414,
+            416,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 402,
+            api, 404,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

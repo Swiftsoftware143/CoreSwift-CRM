@@ -448,6 +448,21 @@ async fn main() -> anyhow::Result<()> {
         .nest_service("/", ServeDir::new("public"))
         // Auth routes (public group + auth-middleware-guarded /invite & /me/usage)
         .nest("/api/auth", auth::router(state.clone()))
+        // FLEET-CONTRACT ALIAS for the close door (kanban t_ae02611a). Every sibling app serves
+        // `POST /api/v1/auth/close-account`; this app's customer auth lives at `/api/auth/*` (there
+        // is no /api/v1 auth tree), so ONE extra mount keeps the documented fleet path answering
+        // here. SAME handler and SAME middleware as the app-native `/api/auth/close-account`, which
+        // is what the console calls: private by default (it appears on no allowlist, so the
+        // credential boundary refuses an anonymous caller before the handler runs).
+        .route(
+            "/api/v1/auth/close-account",
+            axum::routing::post(crate::auth::handlers::close_account).layer(
+                axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::auth::middleware::auth_middleware,
+                ),
+            ),
+        )
         // Protected routes
         .nest("/api/account", account::router(state.clone()))
         // The signed-in user's OWN record — name + password. The workspace Profile tab has always

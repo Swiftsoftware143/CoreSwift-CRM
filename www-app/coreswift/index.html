@@ -3214,7 +3214,23 @@ async function loadProfileTab() {
     card('Need a hand?',
       '<p style="color:var(--text-secondary);margin:0 0 10px">Stuck on something, or need a change made to your workspace that this console does not offer yet? Our team reads every message sent here.</p>' +
       '<a class="btn btn-secondary" href="/contact.html">✉️ Contact us</a>' +
-      '<span class="form-hint" style="margin-left:10px">/contact.html</span>', '');
+      '<span class="form-hint" style="margin-left:10px">/contact.html</span>', '') +
+    '<br>' +
+    // CLOSE MY ACCOUNT (kanban t_ae02611a) — the exit door. CoreSwift was the last app of the six
+    // without one: until now the only way out was asking support to DELETE the user row, and the FK
+    // chain CASCADEs, so a privacy request took the contacts, deals and history with it. The server
+    // records a closure as a STATE (POST /api/auth/close-account) and re-checks the password and the
+    // word CLOSE itself. Two deliberate steps here: the first only REVEALS the form, the second is
+    // the red button — and it is LAST on the screen on purpose.
+    card('Close my account',
+      '<p style="color:var(--text-secondary);margin:0 0 10px">This ends your sign-in and every API key, and you will not be able to sign in again. Your contacts, deals and history are kept for our records and are not deleted, so support can help you if you close it by mistake.</p>' +
+      '<div id="closeAcctArm"><button type="button" class="btn btn-secondary" data-ops="profile-close-arm" onclick="closeAccountArm()" style="color:#b91c1c;border-color:#fca5a5">Close my account</button></div>' +
+      '<div id="closeAcctForm" style="display:none">' +
+        '<div class="form-group"><label for="closeAcctPw">Your password (proves it is you)</label><input type="password" id="closeAcctPw" autocomplete="current-password"></div>' +
+        '<div class="form-group"><label for="closeAcctWord">Type CLOSE to confirm</label><input type="text" id="closeAcctWord" autocomplete="off" placeholder="CLOSE"></div>' +
+        '<button type="button" class="btn btn-primary" data-ops="profile-close-do" onclick="closeAccountDo()" style="background:#b91c1c;border-color:#b91c1c">Close my account permanently</button>' +
+        '<p id="closeAcctMsg" role="status" style="margin:10px 0 0;font-size:13px"></p>' +
+      '</div>', '');
 }
 
 // Paint the header chip's picture (or the initial letter) from STATE.user.avatar_url, and keep the
@@ -3391,6 +3407,64 @@ async function changePassword() {
   } catch(e) {
     // The API's own sentence (e.g. "Current password is incorrect") is what the user acts on.
     toast(e.message, 'error');
+  }
+}
+
+// ── CLOSE MY ACCOUNT (kanban t_ae02611a) ────────────────────────────────────────────────────────
+// closeAccountArm only REVEALS the form — nothing is sent until closeAccountDo, which posts the
+// bearer token, the password and the word CLOSE. The SERVER owns every rule (the word, the
+// password, that a platform operator account cannot close itself); each refusal is printed in the
+// card's own message and never softened. Posted directly, not through API.call, for the same reason
+// changePassword is: API.call's 401 arm calls logout(), so a wrong password would look like an
+// expired session instead of the sentence the customer needs to read.
+function closeAccountArm() {
+  const arm = document.getElementById('closeAcctArm');
+  const form = document.getElementById('closeAcctForm');
+  if (arm) arm.style.display = 'none';
+  if (form) form.style.display = 'block';
+  const pw = document.getElementById('closeAcctPw');
+  if (pw) pw.focus();
+}
+
+function closeAcctMsg(text, colour) {
+  const el = document.getElementById('closeAcctMsg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = colour || 'var(--text-secondary)';
+}
+
+async function closeAccountDo() {
+  const pwEl = document.getElementById('closeAcctPw');
+  const wordEl = document.getElementById('closeAcctWord');
+  const pw = pwEl ? pwEl.value : '';
+  const word = wordEl ? wordEl.value.trim() : '';
+  if (!pw) { closeAcctMsg('Enter your password', '#dc2626'); return; }
+  if (word.toUpperCase() !== 'CLOSE') { closeAcctMsg('Type CLOSE in the box to confirm', '#dc2626'); return; }
+  if (!window.confirm('Close this account? You will be signed out and will not be able to sign in again.')) return;
+  closeAcctMsg('Closing your account…', 'var(--text-secondary)');
+  try {
+    const res = await fetch('/api/auth/close-account', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + STATE.token },
+      body: JSON.stringify({ password: pw, confirm: word })
+    });
+    let d = {};
+    try { d = await res.json(); } catch (_) {}
+    if (!res.ok) {
+      // Boolean `error` flag first renders as "true"; read strings only (same rule as doLogin).
+      const pick = d && [d.message, d.error].find(function (v) { return typeof v === 'string' && v.trim(); });
+      throw new Error(pick || ('HTTP ' + res.status));
+    }
+    // The server has already moved the session line, so this tab's bearer is dead. logout(true)
+    // drops the token, stops the notification poll and returns to the sign-in screen instead of
+    // letting the next API call bounce the customer with an "expired" message.
+    const done = (d && d.message) || 'Your account is closed.';
+    logout(true);
+    const errEl = document.getElementById('loginError');
+    if (errEl) { errEl.textContent = done + ' You can no longer sign in with this address.'; errEl.style.display = 'block'; }
+    toast(done, 'success');
+  } catch (e) {
+    closeAcctMsg((e && e.message) || 'Could not close the account', '#dc2626');
   }
 }
 
@@ -7537,6 +7611,8 @@ const PE = { domains: [], boxes: [], autoReplies: [], support: null, keys: [], k
 function inboxShell() {
   return pageHeader('Private Email', 'Send from your own domains, auto-reply, and turn forwarded mail into tickets',
     '<button class="btn btn-secondary btn-sm" onclick="switchTab(\'integrations\')">🔑 Mail provider keys</button>') +
+    '<div id="pePlan"><div class="loading-wrap"><div class="spinner"></div> Loading your plan and limits...</div></div>' +
+    '<br>' +
     '<div id="peTransport"><div class="loading-wrap"><div class="spinner"></div> Loading mail transport...</div></div>' +
     '<br>' +
     '<div id="peSupport"><div class="loading-wrap"><div class="spinner"></div> Loading support box...</div></div>' +
@@ -7572,6 +7648,68 @@ function peTransportCard(t) {
     'Nothing is configured to carry this workspace\u2019s mail, so any message queued now fails permanently. Add a provider domain in this tab before sending.');
 }
 
+// ── Plan and limits card (the console's view of mailbox-status) ────────────────
+// Every number here comes from GET /api/private-email/mailbox-status, the same read the send path
+// makes its own decisions from — so this card cannot promise a limit the server does not enforce.
+function pePlanMb(bytes) {
+  if (bytes == null) return '—';
+  var mb = bytes / (1024 * 1024);
+  if (mb >= 1024) return (mb / 1024).toFixed(mb >= 10240 ? 0 : 1) + ' GB';
+  return (mb < 10 ? mb.toFixed(1) : String(Math.round(mb))) + ' MB';
+}
+
+function pePlanCard(st, domainCount) {
+  if (!st) {
+    return icErr('Could not read your mailbox plan and limits',
+      'the mailbox status endpoint returned no answer, so the limits cannot be shown.');
+  }
+  var sendBadge = st.can_send
+    ? '<span class="badge badge-success">sending allowed</span>'
+    : '<span class="badge badge-error">sending blocked</span>';
+  var sendLine;
+  if (st.can_send) {
+    sendLine = 'This workspace can send mail.';
+  } else if (st.plan_sells_sending === false) {
+    sendLine = 'Your plan does not sell sending, so mail is receive-only. Upgrade to send from your own domain.';
+  } else {
+    sendLine = escapeHtml(st.send_blocked_reason || 'This workspace cannot send mail right now.');
+  }
+  var cap = st.send_cap_per_day;
+  var sendUse = String(st.sent_last_24h == null ? 0 : st.sent_last_24h) +
+    (cap ? ' of ' + escapeHtml(String(cap)) + ' sent in the last 24 hours'
+         : ' sent in the last 24 hours — your plan has no daily cap');
+  var pct = Math.max(0, Math.min(100, Number(st.storage_percent || 0)));
+  var colour = st.storage_level >= 100 ? 'var(--error,#dc2626)'
+    : (st.storage_level > 0 ? 'var(--warning,#d97706)' : 'var(--success,#16a34a)');
+  var storageLine = pePlanMb(st.storage_used_bytes) + ' of ' + pePlanMb(st.storage_quota_bytes) +
+    ' used (' + Math.round(pct) + '%)' +
+    '<div style="height:6px;background:var(--border,#e5e7eb);border-radius:3px;overflow:hidden;margin:6px 0 2px">' +
+    '<div style="height:100%;width:' + pct + '%;background:' + colour + '"></div></div>' +
+    (st.attachments_accepted === false
+      ? '<div style="color:var(--error,#dc2626);font-size:12px">Storage is full — new attachments are refused until space frees up.</div>'
+      : '');
+  var rows = [
+    ['Sending', sendBadge + ' <span style="color:var(--text-secondary)">' + sendLine + '</span>'],
+    ['Today', sendUse],
+    ['Storage', storageLine],
+    ['Mail kept', escapeHtml(st.retention_sentence || '—')],
+    ['Mailboxes', escapeHtml(String((st.mailboxes || []).length)) + ' of ' +
+      (st.mailbox_limit == null ? 'unlimited' : escapeHtml(String(st.mailbox_limit)))],
+    ['Domains', escapeHtml(String(domainCount == null ? 0 : domainCount)) + ' of ' +
+      (st.domain_limit == null ? 'unlimited' : escapeHtml(String(st.domain_limit)))]
+  ];
+  if (st.on_trial) {
+    var trial = st.days_left == null ? 'on trial' : escapeHtml(String(st.days_left)) + ' day(s) left';
+    if (st.trial_ends_at) trial += ' — ends ' + escapeHtml(String(st.trial_ends_at).slice(0, 10));
+    rows.splice(1, 0, ['Trial', trial]);
+  }
+  var table = '<table class="data-table" style="width:100%"><tbody>' + rows.map(function (r) {
+    return '<tr><th style="text-align:left;white-space:nowrap;vertical-align:top;padding:6px 12px 6px 0">' +
+      r[0] + '</th><td style="padding:6px 0">' + r[1] + '</td></tr>';
+  }).join('') + '</tbody></table>';
+  return card('📊 Your mailbox plan and limits', table);
+}
+
 async function loadInboxTab() {
   const el = document.getElementById('peDomains');
   if (!el) return;
@@ -7601,6 +7739,19 @@ async function loadInboxTab() {
   try { transport = await API.get('/comms/providers'); }
   catch (e) { transportErr = e.message; }
   PE.transport = (transport && transport.email_transport) ? transport.email_transport : null;
+  // The plan and the limits under it. /private-email/mailbox-status is the console's own read: the
+  // send path consults the same function for can_send / the daily cap, so the card below cannot
+  // show a limit the server does not enforce. A failed read paints an error, never a clean sheet.
+  const planEl = document.getElementById('pePlan');
+  if (planEl) {
+    let planStatus = null, planErr = null;
+    try { planStatus = await API.get('/private-email/mailbox-status'); }
+    catch (e) { planErr = e.message; }
+    planEl.innerHTML = planErr
+      ? icErr('Could not read your mailbox plan and limits', planErr)
+      : pePlanCard(planStatus, domains.length);
+  }
+
   const transportEl = document.getElementById('peTransport');
   if (transportEl) {
     transportEl.innerHTML = transportErr

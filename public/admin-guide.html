@@ -155,6 +155,25 @@ which the app vhost serves from its own page. Pending requests live in the
 harness domains) is refused <em>before</em> any row is written, because the mailer suppresses those
 destinations &mdash; so a mistyped test address can never retire a real pending request.</p>
 
+<h2>A customer closing their own account</h2>
+<p>Every workspace can leave without a support ticket: the last card on a customer's <strong>Profile</strong>
+screen is <strong>Close my account</strong>. It asks for their password and the word <code>CLOSE</code>, and
+only then posts <code>POST /api/auth/close-account</code> (the fleet path <code>/api/v1/auth/close-account</code>
+answers the same handler). Nothing is deleted: the row keeps a <code>closed_at</code> timestamp, so you still
+see the workspace, its contacts, deals and history in every operator read.</p>
+<p>What a closure ends: every token minted before it (the account's session line,
+<code>users.sessions_valid_from</code>, is moved one second past the moment of the close), every live API key
+on the account (the rows are kept and marked inactive, so the record is auditable), and every way back in
+&mdash; sign-in answers <strong>403</strong> with the closed sentence, <code>refresh</code> answers
+<strong>401</strong>, <code>forgot-password</code> sends no link, and <code>reset-password</code> refuses even a
+token minted before the closure. A platform operator account (this console) cannot close itself from its own
+Profile screen.</p>
+<p><strong>Reopening</strong> is an operator decision, not a button: clear <code>users.closed_at</code> for the
+account (and mark its API key active again if the customer needs it). Their password still works and their data
+never moved.</p>
+<p>Known limit, deliberately: a customer who owns the workspace and closes their own login does not close the
+workspace itself. The workspace, its people and its data stay, and another owner can still sign in.</p>
+
 <section class="navx-rel" aria-labelledby="navx-rel-h"><h2 id="navx-rel-h">Keep exploring CoreSwift-CRM</h2><ul><li><a href="/guide.html">Guide</a></li><li><a href="/pricing.html">Pricing</a></li><li><a href="/">Home</a></li><li><a href="/terms.html">Terms of Service</a></li></ul></section>
 
 <h2>Private Email — the free inbox (30-day trial) and the $1 Inbox line (not on sale yet)</h2>

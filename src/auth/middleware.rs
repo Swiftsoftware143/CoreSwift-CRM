@@ -163,13 +163,20 @@ pub async fn workspace_exists(db: &sqlx::PgPool, aid: &str) -> Result<bool, AppE
 /// while the account that signed in has been deleted or disabled (kanban t_53fcb666). `Ok(false)`
 /// for a `sub` that is not even a uuid — such a claim names no row. `Err(AppError::Database)` when
 /// the database cannot answer, so an outage is never reported as "your account is gone".
-/// What the `users` row named by a token's `sub` still grants: `(is_active, password_changed_at)`,
-/// or `None` when no such row exists.
+/// What the `users` row named by a token's `sub` still grants: `(is_active, <session line>)`, or
+/// `None` when no such row exists.
 ///
 /// The existence half is kanban t_53fcb666; the timestamp half is kanban t_80787a0f, which this
 /// app already had data for (`password_changed_at` is stamped by BOTH the change and the reset
-/// writer) but never read. `password_changed_at` arrives as a unix epoch (`None` = never changed,
-/// so no session is restricted).
+/// writer) but never read. The line arrives as a unix epoch (`None` = never moved, so no session is
+/// restricted).
+///
+/// TWO columns carry that line now (kanban t_ae02611a). `password_changed_at` is the line every
+/// credential rotation has always moved; `sessions_valid_from` is the fleet's name for it, added by
+/// migration 153 for a CLOSURE — closing an account is not a password change, so it moves the
+/// session line without touching the stored password. `GREATEST` picks whichever moved last, so a
+/// caller whose line is either column is refused with the same 401; NULLs are ignored by GREATEST,
+/// and the pair is NULL only while the account has never rotated anything.
 pub async fn user_session_state(
     db: &sqlx::PgPool,
     sub: &str,
@@ -179,7 +186,8 @@ pub async fn user_session_state(
     };
 
     let row: Option<(bool, Option<i64>)> = sqlx::query_as(
-        "SELECT is_active, floor(EXTRACT(EPOCH FROM password_changed_at))::bigint
+        "SELECT is_active, \
+                floor(EXTRACT(EPOCH FROM GREATEST(password_changed_at, sessions_valid_from)))::bigint \
            FROM users WHERE id = $1",
     )
     .bind(user_id)
@@ -189,13 +197,17 @@ pub async fn user_session_state(
     Ok(row)
 }
 
-/// Does a session minted at `jwt_iat` predate the instant its account last changed its password?
-/// (kanban t_80787a0f)
+/// Does a session minted at `jwt_iat` predate the instant its account's session line last moved?
+/// (kanban t_80787a0f, widened to both line columns by t_ae02611a)
 ///
-/// Pure, so both arms are unit-tested. `changed_at` is `users.password_changed_at` as a unix epoch
-/// (`None` = never changed, which is every account until it rotates its password, so every token
-/// already in the wild keeps working). A session with no `iat` cannot prove it is newer than the
-/// change, and the safe answer for a credential is "cannot prove → refuse". `iat` is second-granularity (and the change's own timestamp is floored to a second for this reason), so a session minted in the SAME second as the change cannot be told apart from a re-login and is allowed.
+/// Pure, so both arms are unit-tested. `changed_at` is the account's effective session line as a
+/// unix epoch (`None` = never moved, which is every account until it rotates or closes, so every
+/// token already in the wild keeps working). A session with no `iat` cannot prove it is newer than
+/// the line, and the safe answer for a credential is "cannot prove → refuse". `iat` is
+/// second-granularity (and the line's own timestamp is floored to a second for this reason), so a
+/// session minted in the SAME second as the line is allowed — which is deliberate for a password
+/// change (the tab that just changed its password keeps working) and is why a CLOSURE writes the
+/// line one second PAST now instead of stamping now (see `close_account`).
 pub fn session_predates_password_change(jwt_iat: Option<i64>, changed_at: Option<i64>) -> bool {
     match changed_at {
         None => false,

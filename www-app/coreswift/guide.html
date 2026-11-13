@@ -1214,6 +1214,17 @@ Authorization: Bearer &lt;token&gt;
   </div>
 
   <div class="card">
+    <h3>Close your account</h3>
+    <p>The exit door is the last card on <strong>Settings &gt; Profile</strong>: <strong>Close my account</strong>. Press it once to open the form, then enter your password and type <code>CLOSE</code> &mdash; nothing is sent before that, so an account cannot be closed by one careless click.</p>
+    <p>Closing ends your sign-in and every API key on the account, and the sign-in address will be refused from then on. It is <strong>not</strong> a delete: your contacts, deals and history stay on file for the operator, so support can reopen the account if you closed it by mistake.</p>
+    <pre>POST /api/auth/close-account
+Authorization: Bearer &lt;token&gt;
+
+{ "password": "&lt;your-password&gt;", "confirm": "CLOSE" }</pre>
+    <div class="callout info"><strong>What stays behind.</strong> A closed account keeps a <code>closed_at</code> timestamp instead of being deleted. Sign-in, the refresh route and password reset all refuse it by name, so nothing quietly reopens it.</div>
+  </div>
+
+  <div class="card">
     <h3>Organization Settings</h3>
     <p>Your organization has its own profile:</p>
     <ul>

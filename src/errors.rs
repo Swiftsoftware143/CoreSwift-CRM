@@ -31,6 +31,13 @@ pub enum AppError {
     #[error("Forbidden: insufficient permissions")]
     Forbidden,
 
+    /// 403 — The act is refused and the caller is owed the REASON (e.g. "this account was closed,
+    /// so it can no longer be signed in to"). The sibling of [`UnauthorizedReason`] one status up:
+    /// 401 means "your credential is bad", 403 means "we know exactly who you are and this account
+    /// cannot do that" (kanban t_ae02611a — the closed-account refusals).
+    #[error("{0}")]
+    ForbiddenReason(String),
+
     #[error("Upgrade required: {0}")]
     UpgradeRequired(String),
 
@@ -116,6 +123,7 @@ impl IntoResponse for AppError {
                 StatusCode::FORBIDDEN,
                 "Insufficient permissions".to_string(),
             ),
+            AppError::ForbiddenReason(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             AppError::UpgradeRequired(msg) => (StatusCode::PAYMENT_REQUIRED, msg.clone()),
             AppError::RateLimited(msg) => (StatusCode::TOO_MANY_REQUESTS, msg.clone()),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),

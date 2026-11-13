@@ -69,6 +69,14 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/email-change",
             axum::routing::post(handlers::request_email_change),
         )
+        // CLOSE MY ACCOUNT (kanban t_ae02611a, migration 153). Authenticated like every other act on
+        // the caller's own account — the handler reads the user id from the SESSION, so there is no
+        // path id to spoof — and the password in the body is re-verified server-side. A closure is a
+        // STATE, never a delete: the workspace keeps its contacts, deals and history.
+        .route(
+            "/close-account",
+            axum::routing::post(handlers::close_account),
+        )
         // INNERMOST, deliberately: `auth_middleware` is applied below (a later `.layer()` is
         // OUTERMOST in axum) so it stays outside the deadline. An unauthenticated request with a
         // declared body is answered 401 at once without its body ever being read, and a declared
