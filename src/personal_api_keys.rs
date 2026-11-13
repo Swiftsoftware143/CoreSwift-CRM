@@ -170,13 +170,19 @@ pub async fn list_keys(
 }
 
 /// DELETE /api/personal-api-keys/:id — revoke a key
+///
+/// Revocation KEEPS the row and clears `is_active`, matching the rest of the fleet (and the CEO's
+/// written contract: "is_active = false on revoke"): the key stops authenticating everywhere at once
+/// — `external_api::resolve_key`, this app's own reads and the fleet MCP server all filter on
+/// `is_active` — while the record of it stays for support and audit. Deleting the row instead would
+/// leave no trace that the key ever existed.
 pub async fn revoke_key(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    sqlx::query("DELETE FROM personal_api_keys WHERE id = $1 AND tenant_id = $2")
+    sqlx::query("UPDATE personal_api_keys SET is_active = false WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tenant_id)
         .execute(&s.db)
@@ -213,10 +219,10 @@ pub async fn rotate_key(
     let mut tx = s.db.begin().await.map_err(AppError::Database)?;
     // Retire the old key FIRST, in the same transaction as the mint. `migrations/152` adds a
     // partial unique index on (tenant_id) WHERE is_active, so insert-then-delete would raise a
-    // unique violation the instant two active rows existed for one account. Deleting first is
-    // still safe: a failure at either step rolls the whole transaction back, so the customer keeps
-    // the old key rather than ending up with none.
-    sqlx::query("DELETE FROM personal_api_keys WHERE id = $1 AND tenant_id = $2")
+    // unique violation the instant two active rows existed for one account. Clearing is_active
+    // (not deleting) keeps the record, matching revoke and the rest of the fleet; a failure at
+    // either step rolls the whole transaction back, so the customer keeps the old key.
+    sqlx::query("UPDATE personal_api_keys SET is_active = false WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tenant_id)
         .execute(&mut *tx)
