@@ -34,7 +34,7 @@ pub async fn broadcast_portfolio_sync(
     //
     //   * MultiDirectory is the ONE exclusion: a portfolio company is not a directory tenant, and
     //     its tenants are the client businesses it serves.
-    //   * ADASwift IS included (David, 2026-11-13): *"even my personal company's needs an ADA
+    //   * ADASwift IS included (David, 2026-11-13, corrected live): *"even my personal company's needs an ADA
     //     widget"* — every portfolio company needs its own ADA workspace, which is what this row
     //     becomes there. (Its CONTACT connector stays retired; this is the control message.)
     let targets: &[(&str, u16)] = &[
