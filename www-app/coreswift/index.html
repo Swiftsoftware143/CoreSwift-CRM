@@ -1260,6 +1260,55 @@ function dataTable(headers, rows, emptyMsg) {
 }
 
 // ========== SYNC TAB RENDERERS (no API calls needed) ==========
+// Fleet MCP slot (docs/fleet-mcp-nav-convention.md). The entity list below is the REAL set the MCP
+// server exposes for a CoreSwift workspace credential: /opt/swift/mcp/src/main.rs gives every
+// AppSpec key a <key>_summary and a <key>_search (the third, <key>_list_tenants, is ADMIN ONLY and
+// is never offered to a workspace token), and four bespoke read tools sit beside them. Verified
+// against the spec table on 2026-11-13 — the panel used to name only the three original tools, so a
+// customer reading it could not tell that companies, tickets, pipelines, calendar and the rest were
+// reachable at all.
+const MCP_ENTITY_SPECS = [
+  ['coreswift_companies', 'companies'],
+  ['coreswift_tags', 'tags'],
+  ['coreswift_tag_categories', 'tag categories'],
+  ['coreswift_tickets', 'tickets'],
+  ['coreswift_ticket_inboxes', 'ticket inboxes'],
+  ['coreswift_booking_calendars', 'booking calendars'],
+  ['coreswift_calendar_slots', 'calendar slots'],
+  ['coreswift_slot_bookings', 'slot bookings'],
+  ['coreswift_automation_rules', 'automation rules'],
+  ['coreswift_email_campaigns', 'email campaigns'],
+  ['coreswift_pipelines', 'pipelines'],
+  ['coreswift_pipeline_stages', 'pipeline stages'],
+  ['coreswift_opportunities', 'opportunities'],
+  ['coreswift_tracked_links', 'tracked links'],
+  ['coreswift_events', 'events'],
+  ['coreswift_score_rules', 'score rules'],
+  ['coreswift_team', 'team members'],
+  ['coreswift_business_profiles', 'business profiles'],
+  ['coreswift_portfolio_companies', 'portfolio companies'],
+  ['coreswift_notification_rules', 'notification rules'],
+  ['coreswift_calendar_hosts', 'calendar hosts'],
+  ['coreswift_credit_transactions', 'credit transactions'],
+  ['coreswift_plan_lines', 'plan lines'],
+  ['coreswift_feedback', 'feedback'],
+  ['coreswift_outbound_messages', 'outbound messages'],
+  ['coreswift_webhook_endpoints', 'webhook endpoints'],
+  ['coreswift_list_members', 'list members'],
+  ['coreswift_tag_assignments', 'tag assignments'],
+  ['coreswift_private_email_boxes', 'private mailboxes'],
+  ['coreswift_contact_custom_fields', 'contact custom fields'],
+  ['coreswift_workspaces', 'workspaces']
+];
+const MCP_CONFIG_TEXT = '{\n'
+  + '  "mcpServers": {\n'
+  + '    "coreswift": {\n'
+  + '      "url": "https://hooks.swiftsoftware.net/mcp",\n'
+  + '      "headers": { "Authorization": "Bearer YOUR_API_KEY" }\n'
+  + '    }\n'
+  + '  }\n'
+  + '}';
+
 const TAB_RENDERERS = {
   // Industry tabs — the shell half of the industries module. Every string here comes from the API:
   // GET /api/industries/available (catalogue), GET /api/industries (what is ACTIVE for this user),
@@ -1293,12 +1342,23 @@ const TAB_RENDERERS = {
         '<h3 style="font-weight:700;margin:14px 0 6px">Your token</h3>' +
         '<p style="color:var(--text-secondary);margin-bottom:14px">The API key above is what an MCP client uses to authenticate. Treat it like a password: anyone holding it can read this workspace.</p>' +
         '<h3 style="font-weight:700;margin:14px 0 6px">What it can read</h3>' +
-        '<ul style="list-style:disc;padding-left:20px;color:var(--text-secondary);margin-bottom:14px">' +
+        '<p style="color:var(--text-secondary);margin-bottom:8px">These are the read-only tools this app exposes to a workspace credential — the real tool names, every one scoped to this workspace.</p>' +
+        '<ul style="list-style:disc;padding-left:20px;color:var(--text-secondary);margin-bottom:8px">' +
           '<li><code>coreswift_search_contacts</code> — contacts by name, email or company</li>' +
-          '<li><code>coreswift_contact_count</code> — how many contacts this workspace holds</li>' +
+          '<li><code>coreswift_contact_count</code> — how many active contacts this workspace holds</li>' +
           '<li><code>coreswift_list_lists</code> — lists with their member counts</li>' +
+          '<li><code>coreswift_private_email_messages</code> — this workspace&#39;s private-email messages: sender, direction, subject and a body excerpt</li>' +
         '</ul>' +
-        '<p style="color:var(--text-muted);font-size:12px">Every tool is read-only and tenant-scoped: a workspace token can only ever return this workspace&#39;s rows. There is no write tool and no free-form SQL door.</p>');
+        '<ul style="list-style:disc;padding-left:20px;color:var(--text-secondary);margin-bottom:8px">' +
+          MCP_ENTITY_SPECS.map(function (s) {
+            return '<li><code>' + s[0] + '_summary</code> / <code>' + s[0] + '_search</code> — ' + s[1] + '</li>';
+          }).join('') +
+        '</ul>' +
+        '<p style="color:var(--text-muted);font-size:12px">Each row above is two tools: <code>&lt;name&gt;_summary</code> answers counts and an overview, <code>&lt;name&gt;_search</code> returns the searchable rows newest first, capped at 200. Every tool is a SELECT and tenant-scoped: a workspace token can only ever return this workspace&#39;s rows. There is no write tool and no free-form SQL door, and the operator-wide tools are refused for a workspace credential.</p>' +
+        '<h3 style="font-weight:700;margin:14px 0 6px">Connect</h3>' +
+        '<p style="color:var(--text-secondary);margin-bottom:8px">Paste this into your MCP client config (Claude Desktop, Cursor, or any other MCP client). Replace <code>YOUR_API_KEY</code> with this workspace&#39;s key.</p>' +
+        '<pre style="background:var(--bg-secondary);padding:12px;border-radius:var(--radius);font-size:12px;overflow-x:auto;margin:0">' + escapeHtml(MCP_CONFIG_TEXT) + '</pre>' +
+        '<button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="tlCopyUrl(MCP_CONFIG_TEXT, this)">Copy config</button>');
   },
 
   'contacts': () => {
