@@ -247,6 +247,19 @@
   </div>
 </section>
 
+<!-- ======= 1b. MCP ======= -->
+<section id="mcp">
+  <h2 class="sec-title"><span class="sec-num">1b</span> MCP — connect your AI tools</h2>
+  <div class="card">
+    <p>Your workspace has an API key you can hand to an MCP client — Claude Code, Cursor, Hermes, or your own agent — so it can read your CoreSwift data.</p>
+    <ul>
+      <li><strong>Endpoint:</strong> <code>https://hooks.swiftsoftware.net/mcp</code></li>
+      <li><strong>Token:</strong> your API key. Open <strong>MCP</strong> in the console, press <strong>View &amp; copy</strong>, and re-enter your password to see the full key.</li>
+      <li><strong>Read-only:</strong> every tool is scoped to your workspace and can only read. There is no write tool and no free-form SQL door.</li>
+    </ul>
+  </div>
+</section>
+
 <!-- ======= 2. DASHBOARD ======= -->
 <section id="dashboard">
   <h2 class="sec-title"><span class="sec-num">2</span> Dashboard</h2>
@@ -1213,15 +1226,15 @@ PATCH /api/account/:id — Update name</pre>
 
   <div class="card">
     <h3>API Keys</h3>
-    <p>API keys allow satellite apps to authenticate when sending data to CoreSwift via webhooks. Each key has:</p>
+    <p>Every account has <strong>one</strong> API key. That single key is the account&#39;s identity: the apps that work with CoreSwift (FunnelSwift, WorkflowSwift, IncentiveSwift, ADASwift, MissedCall Respondr) use it to send data in, and an AI client uses the same key for MCP. It has:</p>
     <ul>
-      <li><strong>Key Prefix</strong>  The leading characters of the key, carried in the webhook URL to select the row. It is public and is <em>not</em> a secret.</li>
-      <li><strong>Full Key</strong>  The credential, sent in the <code>X-Satellite-Key</code> header. The server stores only its SHA-256 digest (<code>key_hash</code>), compares the two in constant time, and can never recover the full key from the row.</li>
-      <li><strong>Source App</strong>  Which app this key is for (funnelswift, incentiveswift, etc.)</li>
-      <li><strong>Status</strong>  Active or Disabled (a disabled key authenticates nothing)</li>
-      <li><strong>Last Used</strong>  Timestamp of most recent usage</li>
+      <li><strong>Prefix</strong>  The leading characters, shown in the console. It is public and is <em>not</em> a secret.</li>
+      <li><strong>Full Key</strong>  The credential, sent as <code>Authorization: Bearer &lt;key&gt;</code>. The server stores only its SHA-256 digest (<code>key_hash</code>) and can never recover the key from the row; a sealed copy is kept so you can still view it.</li>
+      <li><strong>Status</strong>  Active, or gone once you revoke it (a revoked key authenticates nothing).</li>
+      <li><strong>Last Used</strong>  When it most recently authenticated something.</li>
     </ul>
-    <p>Satellite keys have no console screen: they are provisioned per tenant by the operator, who stores the prefix and the SHA-256 digest of the full key in the <code>satellite_api_keys</code> table (<code>key_prefix</code>, <code>key_hash</code>, source app, active flag, last used). The keys a workspace mints itself are the <strong>Lead-delivery keys</strong> (<code>csk_…</code>) in <strong>Settings &gt; Integration Center</strong>, backed by <code>POST /api/personal-api-keys</code> (list, rotate and revoke alongside).</p>
+    <p><strong>Exactly one per account.</strong> The database refuses a second active key. To replace it press <strong>Regenerate</strong>: the old key stops working the moment the new one exists, so update whatever was using it. The key is in <strong>Settings &gt; Integration Center</strong>, and it is mirrored on the <strong>MCP</strong> page where <strong>View &amp; copy</strong> shows it after you re-enter your password.</p>
+    <p><strong>Which way the keys point.</strong> Your satellite apps use <em>this</em> key to send data into CoreSwift  -  CoreSwift does not mint a separate key for each of them. Going the other way, CoreSwift holds each satellite app&#39;s own key under its connection settings, so it can reach out to them.</p>
   </div>
 
   <div class="card">
