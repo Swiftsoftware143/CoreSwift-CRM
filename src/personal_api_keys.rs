@@ -104,6 +104,22 @@ pub async fn create_key(
     let user_id = Uuid::parse_str(&c.sub).ok();
     let name = req.name.unwrap_or_else(|| "default".to_string());
 
+    // One active key per account (`migrations/152` adds a partial unique index on tenant_id WHERE
+    // is_active). A second "create" would raise a unique violation, so answer it plainly: replace
+    // the key you already hold with Regenerate rather than minting a second one.
+    let has_active: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM personal_api_keys WHERE tenant_id = $1 AND is_active = true LIMIT 1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&s.db)
+    .await
+    .map_err(AppError::Database)?;
+    if has_active.is_some() {
+        return Err(AppError::Conflict(
+            "This account already has an API key. Use Regenerate to replace it.".into(),
+        ));
+    }
+
     let mut tx = s.db.begin().await.map_err(AppError::Database)?;
     let minted = mint_on(&mut tx, tenant_id, user_id, &name).await?;
     tx.commit().await.map_err(AppError::Database)?;
@@ -195,17 +211,19 @@ pub async fn rotate_key(
     .ok_or_else(|| AppError::NotFound("API key not found".into()))?;
 
     let mut tx = s.db.begin().await.map_err(AppError::Database)?;
-    // Insert-then-delete inside ONE transaction: a failure at either step rolls back, so the
-    // customer can never be left with no key at all (the old one keeps working until the swap
-    // commits, and the new row is what survives it).
-    let minted = mint_on(&mut tx, tenant_id, user_id, &name).await?;
-
+    // Retire the old key FIRST, in the same transaction as the mint. `migrations/152` adds a
+    // partial unique index on (tenant_id) WHERE is_active, so insert-then-delete would raise a
+    // unique violation the instant two active rows existed for one account. Deleting first is
+    // still safe: a failure at either step rolls the whole transaction back, so the customer keeps
+    // the old key rather than ending up with none.
     sqlx::query("DELETE FROM personal_api_keys WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tenant_id)
         .execute(&mut *tx)
         .await
         .map_err(AppError::Database)?;
+
+    let minted = mint_on(&mut tx, tenant_id, user_id, &name).await?;
     tx.commit().await.map_err(AppError::Database)?;
 
     Ok(Json(json!({
