@@ -4562,11 +4562,14 @@ function icRenderKeys() {
     k.is_active ? '<span class="badge badge-success">active</span>' : '<span class="badge badge-muted">revoked</span>',
     escapeHtml(icFmtDate(k.last_used_at)),
     escapeHtml(icFmtDate(k.created_at)),
+    (k.is_active && k.recoverable !== false
+      ? '<button class="btn btn-ghost btn-xs" onclick="icViewKey(\'' + escapeHtmlAttr(k.id) + '\')">View</button> '
+      : '') +
     '<button class="btn btn-ghost btn-xs" onclick="icRotateKey(\'' + escapeHtmlAttr(k.id) + '\')">Rotate</button> ' +
     '<button class="btn btn-ghost btn-xs" onclick="icRevokeKey(\'' + escapeHtmlAttr(k.id) + '\')">Revoke</button>'
   ]);
   const body = '<p style="color:var(--text-secondary);margin:0 0 10px">Each key lets a capture app deliver leads into <strong>this account</strong>. ' +
-    'Only the prefix is ever displayed — the full key is shown once, at creation. <strong>' + active + '</strong> active of ' + items.length + ' total.</p>' +
+    'The page shows only the prefix; <strong>View</strong> asks for your password and then shows the full key so you can copy it again — every view is recorded, and nothing is consumed by looking. A row marked <strong>cannot be shown</strong> predates recoverable storage: Rotate it to get a key you can display. <strong>' + active + '</strong> active of ' + items.length + ' total.</p>' +
     dataTable(['Name', 'Prefix', 'Status', 'Last used', 'Created', ''], rows,
       'No keys yet — create one and paste it into a capture app\'s CoreSwift integration.');
   const footer = '<button class="btn btn-primary btn-sm" onclick="icCreateKey()">+ Create lead-delivery key</button>';
@@ -4603,9 +4606,60 @@ async function icRevokeKey(id) {
   }
 }
 
+// kanban t_e033b249 — View: `POST /api/personal-api-keys/:id/reveal` existed with NO caller in
+// this panel, and the panel's own copy claimed the secret was "shown once, at creation" — untrue:
+// the server keeps a sealed copy, re-issues it on demand and writes a personal_api_key_reveals row
+// (who, when, which prefix, from where). The call is made with fetch and NOT through API.post,
+// because API.call ends the session on ANY 401 and a mistyped password here IS a 401 from the
+// re-authentication arm — the operator must be told the password is wrong, not signed out.
+async function icViewKey(id) {
+  showModal('View this key',
+    '<p style="margin:0 0 8px">Confirm it is you before the key is shown. Enter your account password.</p>' +
+    '<div class="form-group"><label>Password</label><input type="password" id="icViewPassword" autocomplete="current-password"></div>',
+    '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="icDoViewKey(\'' + escapeHtmlAttr(id) + '\')">Show key</button>');
+  const inp = document.getElementById('icViewPassword');
+  if (inp) inp.focus();
+}
+
+async function icDoViewKey(id) {
+  const pw = (document.getElementById('icViewPassword') || {}).value || '';
+  if (!pw) { toast('Enter your password', 'error'); return; }
+  let res = null;
+  let d = {};
+  try {
+    res = await fetch('/api/personal-api-keys/' + encodeURIComponent(id) + '/reveal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + STATE.token },
+      body: JSON.stringify({ password: pw })
+    });
+    try { d = await res.json(); } catch (e) { d = {}; }
+  } catch (e) {
+    toast('Could not reach the server: ' + e.message, 'error');
+    return;
+  }
+  if (res.ok && d && d.key) {
+    showModal('Your API key',
+      '<p style="margin:0 0 8px">This is the same key as before — nothing was replaced, and this view is recorded.</p>' +
+      '<div class="form-group"><label>Key</label><input id="icRevealedKey" readonly value="' + escapeHtmlAttr(d.key) + '"></div>' +
+      '<div style="font-size:.75rem;color:var(--text-muted)">Prefix ' + escapeHtml(d.prefix || '') + '</div>',
+      '<button class="btn btn-secondary" onclick="closeModal()">Done</button>');
+    const shown = document.getElementById('icRevealedKey');
+    if (shown) { shown.focus(); shown.select(); }
+    return;
+  }
+  const serverMsg = (d && typeof d.message === 'string' && d.message) ? d.message : ('Error ' + res.status);
+  if (res.status === 401 && !/password/i.test(serverMsg)) {
+    toast('Your session ended — sign in again', 'error');
+    logout(true);
+    return;
+  }
+  toast('Could not show key: ' + serverMsg, 'error');
+}
+
 async function icShowKeyOnce(d, title) {
   showModal(escapeHtml(title),
-    '<p style="margin:0 0 8px">Paste this into the capture app now — it is shown <strong>once</strong> and can never be retrieved again.</p>' +
+    '<p style="margin:0 0 8px">Paste this into the capture app now. You can see it again later with <strong>View</strong> on its row — that asks for your password and records the view.</p>' +
     '<div class="form-group"><label>Key</label><input id="icNewKey" readonly value="' + escapeHtmlAttr(d && d.key || '') + '"></div>' +
     '<div style="font-size:.75rem;color:var(--text-muted)">Prefix ' + escapeHtml(d && d.prefix || '') + '</div>',
     '<button class="btn btn-secondary" onclick="closeModal()">Done</button>');
