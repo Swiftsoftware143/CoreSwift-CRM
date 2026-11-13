@@ -1274,10 +1274,12 @@ const TAB_RENDERERS = {
   },
 
   'mcp': () => {
-    // Fleet MCP panel — same slot above Settings, same panel in every app
-    // (docs/fleet-mcp-nav-convention.md). Read-only by construction: CoreSwift exposes SELECT-only
-    // tools, no write door and no free-form SQL tool. Static content, no backend call.
+    // Fleet MCP panel — same slot above Settings (docs/fleet-mcp-nav-convention.md). Read-only by
+    // construction: CoreSwift exposes SELECT-only tools, no write door, no free-form SQL door.
+    // The API-key card is first, so a user never has to leave this page to grab their token.
     return pageHeader('MCP', 'Connect your AI tools to read this workspace') +
+      card('🔑 Your API key',
+        '<div id="mcpKeyWrap"><div class="loading-wrap"><div class="spinner"></div> Loading your API key...</div></div>') +
       card('MCP — connect your AI tools',
         '<p style="color:var(--text-secondary);margin-bottom:14px">Point any MCP client (Claude Code, Cursor, Hermes, or your own agent) at the endpoint below and it can read this workspace&#39;s CoreSwift data. Read-only.</p>' +
         '<h3 style="font-weight:700;margin:14px 0 6px">Endpoint</h3>' +
@@ -1286,7 +1288,7 @@ const TAB_RENDERERS = {
           '<button class="btn btn-secondary btn-sm" onclick="tlCopyUrl(\'https://hooks.swiftsoftware.net/mcp\', this)">Copy</button>' +
         '</div>' +
         '<h3 style="font-weight:700;margin:14px 0 6px">Your token</h3>' +
-        '<p style="color:var(--text-secondary);margin-bottom:14px">The server accepts your workspace API key. Treat it like a password: anyone holding it can read this workspace. Keys are issued and rotated on the <strong>API Keys</strong> screen.</p>' +
+        '<p style="color:var(--text-secondary);margin-bottom:14px">The API key above is what an MCP client uses to authenticate. Treat it like a password: anyone holding it can read this workspace.</p>' +
         '<h3 style="font-weight:700;margin:14px 0 6px">What it can read</h3>' +
         '<ul style="list-style:disc;padding-left:20px;color:var(--text-secondary);margin-bottom:14px">' +
           '<li><code>coreswift_search_contacts</code> — contacts by name, email or company</li>' +
@@ -1751,6 +1753,7 @@ const TAB_LOADERS = {
   'industries': async () => { await loadIndustriesPanel(); },
   'team': async () => { await loadTeamMembers(); await loadInvites(); },
   'profile': async () => { await loadProfileTab(); },
+  'mcp': async () => { await mcpLoadKey(); },
   'rules': async () => { await loadRulesTab(); },
   'messages': async () => { await loadMessagesTab(); },
   'dashboard': async () => {
@@ -2966,6 +2969,36 @@ function icRenderLeadSources() {
   html += dataTable(['Capture app', 'Status', 'Leads 30d', 'Leads total', 'Last lead'], rows,
     'No capture app has delivered a lead yet — create a key below and paste it into the app.');
   el.innerHTML = html;
+}
+
+// MCP page: surface the account's API key inline so a user never has to leave the page to grab the
+// token an MCP client needs. Reveal/copy reuses the Integration Center flow (password-gated).
+async function mcpLoadKey() {
+  const el = document.getElementById('mcpKeyWrap');
+  if (!el) return;
+  try {
+    const d = await API.get('/personal-api-keys');
+    const keys = (d && d.keys) || [];
+    const active = keys.filter(k => k.is_active);
+    if (!active.length) {
+      el.innerHTML = '<p style="margin:0">No API key yet — an MCP client needs one to read this workspace. ' +
+        '<button class="btn btn-primary btn-sm" onclick="icCreateKey()">+ Create API key</button></p>';
+      return;
+    }
+    const k = active[0];
+    const action = k.recoverable
+      ? '<button class="btn btn-secondary btn-sm" onclick="icViewKey(\'' + escapeHtmlAttr(k.id) + '\')">View &amp; copy</button>'
+      : '<button class="btn btn-secondary btn-sm" onclick="icRotateKey(\'' + escapeHtmlAttr(k.id) + '\')">Regenerate to view</button>';
+    el.innerHTML =
+      '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+        '<code style="padding:6px 10px;background:var(--bg-secondary);border-radius:var(--radius)">' + escapeHtml(k.prefix || 'csk_') + '…</code>' +
+        action +
+      '</div>' +
+      '<p style="color:var(--text-muted);font-size:12px;margin:6px 0 0">This is the token an MCP client uses. Press View &amp; copy, re-enter your password, and the full key appears. It is also managed in the Integration Center.</p>';
+  } catch (e) {
+    el.innerHTML = '<p style="margin:0;color:var(--text-muted)">Could not load your API key. ' +
+      '<button class="btn btn-secondary btn-sm" onclick="switchTab(\'integrations\')">Open Integration Center</button></p>';
+  }
 }
 
 function icRenderKeys() {
@@ -9478,6 +9511,7 @@ async function wsSwitchBusiness(idx) {
    hash, so switchTab() tells the widget which screen is open via window.inlineGuidePage(tabId). */
 window.appGuidePages = {
   dashboard:       { title: "Dashboard", desc: "Your workspace at a glance — contacts, deals, activity and what needs attention today.", actions: ["Scan the counters and recent activity", "Jump to anything that needs a follow-up", "Use the workspace switcher (🗂️ top bar) to move between workspaces"] },
+  mcp:             { title: "MCP", desc: "Connect your AI tools to read this workspace. Point an MCP client (Claude Code, Cursor, Hermes, or your own agent) at https://hooks.swiftsoftware.net/mcp, using your API key as the token. Every tool is read-only and scoped to this workspace — there is no write tool and no free-form SQL door.", actions: ["Copy the endpoint", "View & copy your API key (re-enter your password)", "Paste both into your MCP client"] },
   contacts:        { title: "Contacts", desc: "The people and companies you do business with. Each contact carries its history, tags and deals.", actions: ["Add a contact", "Open one to see its full record", "Search by name or email"] },
   duplicates:      { title: "Duplicates", desc: "Contacts in this workspace that look like the same person — the same phone number, or the same first and last name. Nothing is merged for you.", actions: ["Scan the groups for two records of one person", "Edit the record you keep, then remove the other on Contacts"] },
   industries:      { title: "Industries", desc: "Group your contacts by the industry they belong to, so you can target and report on segments.", actions: ["Review the industries in use", "Assign a contact to one"] },
