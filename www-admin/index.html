@@ -6718,11 +6718,28 @@ function peiPaintSetup() {
     '</div>';
   if (!doms.length || !boxes.length) {
     html += '<div style="margin-top:10px;font-size:13px;line-height:1.6">' +
-      '<strong>Set up receiving.</strong> Mailgun must show the domain as Active first, or inbound mail is rejected before it reaches this app.' +
-      '<div style="margin-top:10px"><strong>1. The domain you receive on</strong><br>' +
+      '<strong>Set up a domain.</strong> Sending and receiving are two separate choices — a domain can send through Mailgun, or through any SMTP service (Amazon SES, SendGrid, Postmark, Google, your own server), and receive through Mailgun or SendGrid.' +
+      '<div style="margin-top:10px"><strong>1. The domain</strong><br>' +
       '<input id="peiDom" placeholder="swiftsoftware.net" style="margin:4px 6px 0 0">' +
-      '<input id="peiKey" placeholder="Mailgun sending key" style="width:220px;margin:4px 6px 0 0">' +
-      '<button class="btn btn-primary btn-sm" id="peiAddDom">Add domain</button> <span id="peiDomMsg"></span></div>' +
+      '<div style="margin-top:6px"><strong>How it sends</strong> ' +
+      '<select id="peiDomSend" onchange="peiSetupProviderFields()" style="margin:4px 6px 0 0">' +
+      '<option value="mailgun">Mailgun</option><option value="smtp">SMTP (SES / SendGrid / Postmark / Google / own server)</option></select></div>' +
+      '<div style="margin-top:6px"><strong>How it receives</strong> ' +
+      '<select id="peiDomRecv" onchange="peiSetupProviderFields()" style="margin:4px 6px 0 0">' +
+      '<option value="mailgun">Mailgun</option><option value="sendgrid">SendGrid (Inbound Parse)</option><option value="none">Nowhere &mdash; this domain only sends</option></select></div>' +
+      '<div id="peiMgWrap" style="margin-top:6px">' +
+      '<input id="peiKey" placeholder="Mailgun API key" style="width:240px;margin:4px 6px 0 0">' +
+      '<div style="opacity:.75">The key of the Mailgun account that carries this domain (for sending or receiving). Stored encrypted.</div></div>' +
+      '<div id="peiSmtpWrap" style="display:none;margin-top:6px">' +
+      '<input id="peiSmtpHost" placeholder="SMTP host" style="width:200px;margin:4px 6px 0 0">' +
+      '<input id="peiSmtpPort" placeholder="587" style="width:70px;margin:4px 6px 0 0">' +
+      '<input id="peiSmtpUser" placeholder="SMTP username" style="width:180px;margin:4px 6px 0 0">' +
+      '<input id="peiSmtpPass" type="password" placeholder="SMTP password" style="width:180px;margin:4px 6px 0 0">' +
+      '<label style="margin:4px 6px 0 0"><input type="checkbox" id="peiSmtpTls" checked> TLS</label></div>' +
+      '<div id="peiWhWrap" style="display:none;margin-top:6px">' +
+      '<input id="peiWhKey" type="password" placeholder="Mailgun webhook signing key (to receive)" style="width:260px;margin:4px 6px 0 0">' +
+      '<div style="opacity:.75">Mailgun signs each inbound delivery with this key; without it, inbound mail for this domain is refused.</div></div>' +
+      '<div style="margin-top:8px"><button class="btn btn-primary btn-sm" id="peiAddDom">Add domain</button> <span id="peiDomMsg"></span></div></div>' +
       '<div style="margin-top:10px"><strong>2. Addresses people write to</strong><br>' +
       '<input id="peiLocal" placeholder="info" style="width:130px;margin:4px 6px 0 0">' +
       '<button class="btn btn-primary btn-sm" id="peiAddBox">Add address</button> <span id="peiBoxMsg"></span>' +
@@ -6731,18 +6748,56 @@ function peiPaintSetup() {
   }
   html += '</div>';
   el.innerHTML = html;
+  peiSetupProviderFields();
   peiBindSetup();
+}
+
+function peiSetupProviderFields() {
+  var send = document.getElementById('peiDomSend');
+  var recv = document.getElementById('peiDomRecv');
+  if (!send || !recv) return;
+  var s = send.value, r = recv.value;
+  var mg = document.getElementById('peiMgWrap');
+  if (mg) mg.style.display = (s === 'mailgun' || r === 'mailgun') ? '' : 'none';
+  var sm = document.getElementById('peiSmtpWrap');
+  if (sm) sm.style.display = (s === 'smtp') ? '' : 'none';
+  var wh = document.getElementById('peiWhWrap');
+  if (wh) wh.style.display = (r === 'mailgun') ? '' : 'none';
 }
 
 function peiBindSetup() {
   var ad = document.getElementById('peiAddDom');
   if (ad) ad.onclick = async function () {
-    var dEl = document.getElementById('peiDom'), kEl = document.getElementById('peiKey'), m = document.getElementById('peiDomMsg');
+    var dEl = document.getElementById('peiDom'), m = document.getElementById('peiDomMsg');
     var dom = (dEl && dEl.value || '').trim();
     if (!dom) { m.textContent = 'Enter your domain'; return; }
+    var send = (document.getElementById('peiDomSend') && document.getElementById('peiDomSend').value) || 'mailgun';
+    var recv = (document.getElementById('peiDomRecv') && document.getElementById('peiDomRecv').value) || 'mailgun';
+    var payload = { domain: dom, sending_provider: send, receiving_provider: recv };
+    if (send === 'mailgun' || recv === 'mailgun') {
+      var key = (document.getElementById('peiKey') && document.getElementById('peiKey').value || '').trim();
+      if (!key) { m.textContent = 'Paste the Mailgun API key for this domain'; return; }
+      payload.mailgun_api_key = key;
+    }
+    if (send === 'smtp') {
+      var host = (document.getElementById('peiSmtpHost') && document.getElementById('peiSmtpHost').value || '').trim();
+      var user = (document.getElementById('peiSmtpUser') && document.getElementById('peiSmtpUser').value || '').trim();
+      var pass = (document.getElementById('peiSmtpPass') && document.getElementById('peiSmtpPass').value || '');
+      if (!host || !user || !pass) { m.textContent = 'SMTP needs a host, a username and a password'; return; }
+      payload.smtp_host = host;
+      payload.smtp_port = parseInt((document.getElementById('peiSmtpPort') && document.getElementById('peiSmtpPort').value) || '587', 10) || 587;
+      payload.smtp_username = user;
+      payload.smtp_password = pass;
+      payload.smtp_tls = !!(document.getElementById('peiSmtpTls') && document.getElementById('peiSmtpTls').checked);
+    }
+    if (recv === 'mailgun') {
+      var wh = (document.getElementById('peiWhKey') && document.getElementById('peiWhKey').value || '').trim();
+      if (send === 'smtp' && !wh) { m.textContent = 'Receiving through Mailgun needs its webhook signing key'; return; }
+      if (wh) payload.webhook_signing_key = wh;
+    }
     this.disabled = true; m.textContent = 'Adding…';
     try {
-      await API.post('/private-email/domains', { domain: dom, mailgun_api_key: (kEl && kEl.value || '').trim() || null });
+      await API.post('/private-email/domains', payload);
       m.textContent = 'Added'; await loadPrivateEmailTab();
     } catch (e) { m.textContent = 'Failed: ' + ((e && e.message) || e); }
     this.disabled = false;
