@@ -470,6 +470,8 @@ async fn main() -> anyhow::Result<()> {
         // called these two paths; until now neither was registered (both answered 405).
         .nest("/api/profile", profile::router(state.clone()))
         .nest("/api/contacts", contacts::router(state.clone()))
+        // Visual field mapper (docs/coreswift-data-mapping-spec-2026-11-13.md). Its console routes
+        // carry the same session middleware as every other /api module; /events is key-authenticated.
         .nest("/api/data-mapping", data_mapping::router(state.clone()))
         // CSV import/export — /api/csv/{preview,import/contacts,export/contacts,export/opportunities}
         .nest("/api/csv", csv_handler::router(state.clone()))

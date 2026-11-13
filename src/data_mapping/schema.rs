@@ -106,6 +106,31 @@ pub async fn destinations(state: &AppState, tenant: Uuid) -> Result<Value, AppEr
 ///
 /// Every failure is returned as a sentence the operator can act on — an empty field list with no
 /// reason is how a mapper ends up silently mapping nothing.
+/// The fleet's own admin credential for reading ONE app's field description.
+///
+/// `/api/v1/integration/schema` is admin-only on every source app by design, and a customer account
+/// must never hold an admin key on an app that is not its own. The read returns field NAMES, TYPES
+/// and MASKED samples — never a tenant's rows — so it is made with the operator credential from this
+/// deployment's environment: `FUNNELSWIFT_SCHEMA_KEY`, `INCENTIVESWIFT_SCHEMA_KEY`,
+/// `WORKFLOWSWIFT_SCHEMA_KEY`, `ADASWIFT_SCHEMA_KEY`, `MISSEDCALL_SCHEMA_KEY`.
+///
+/// Unset is not fatal: the account's own key is tried next, and when neither works the error names
+/// the exact environment variable to add.
+fn operator_schema_key(app_slug: &str) -> Option<String> {
+    let var = match app_slug {
+        "funnelswift" => "FUNNELSWIFT_SCHEMA_KEY",
+        "incentiveswift" => "INCENTIVESWIFT_SCHEMA_KEY",
+        "workflowswift" => "WORKFLOWSWIFT_SCHEMA_KEY",
+        "adaswift" => "ADASWIFT_SCHEMA_KEY",
+        "missedcall" | "missedcall-responder" => "MISSEDCALL_SCHEMA_KEY",
+        _ => return None,
+    };
+    std::env::var(var)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
 pub async fn source_schema(
     state: &AppState,
     tenant: Uuid,
@@ -156,42 +181,74 @@ pub async fn source_schema(
         .build()
         .map_err(|e| AppError::Internal(format!("http client: {e}")))?;
 
-    let resp = client
-        .get(&url)
-        .bearer_auth(&api_key)
-        .header("Accept", "application/json")
-        .send()
-        .await
-        .map_err(|e| {
-            AppError::BadRequest(format!(
-                "Could not reach {app_slug} at {base_url} to read its fields: {e}"
-            ))
-        })?;
+    // Two credentials are tried, in order: the fleet's operator schema key (the app's schema is
+    // admin-only, and a CUSTOMER account must never hold an admin key on someone else's app), then
+    // the account's own stored key (which works when it happens to be admin).
+    let mut candidates: Vec<(&str, String)> = Vec::new();
+    if let Some(k) = operator_schema_key(app_slug) {
+        candidates.push(("operator", k));
+    }
+    candidates.push(("account", api_key.clone()));
 
-    let code = resp.status().as_u16();
-    if code != 200 {
+    let mut last_error: Option<String> = None;
+    let mut body: Option<Value> = None;
+
+    for (source, key) in candidates {
+        let resp = client
+            .get(&url)
+            .bearer_auth(&key)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|e| {
+                AppError::BadRequest(format!(
+                    "Could not reach {app_slug} at {base_url} to read its fields: {e}"
+                ))
+            })?;
+
+        let code = resp.status().as_u16();
+        if code == 200 {
+            let parsed: Value = resp.json().await.map_err(|e| {
+                AppError::BadRequest(format!(
+                    "{app_slug} returned something that is not JSON: {e}"
+                ))
+            })?;
+            body = Some(parsed);
+            break;
+        }
+
         let detail = resp.text().await.unwrap_or_default();
-        let detail = detail.chars().take(200).collect::<String>();
+        let detail = detail.chars().take(160).collect::<String>();
+        let env_var = format!(
+            "{}_SCHEMA_KEY",
+            app_slug.to_ascii_uppercase().replace('-', "_")
+        );
         let sentence = match code {
             401 => format!(
-                "{app_slug} rejected this account's key. Regenerate it in {app_slug} and save it in Integrations."
+                "{app_slug} rejected the {source} key. Regenerate it and save it in Integrations."
             ),
-            403 => format!(
-                "{app_slug} says this key is not an admin key. Field discovery needs an admin key on that app."
-            ),
+            403 => {
+                if source == "operator" {
+                    format!("{app_slug} refused the operator schema key — it is not an admin key there. Fix {env_var}.")
+                } else {
+                    format!(
+                        "{app_slug} says this account's key is not an admin key, and field discovery needs one. No operator schema key is configured either, so add {env_var} to this deployment to list the fields."
+                    )
+                }
+            }
             404 => format!(
                 "{app_slug} does not describe its fields yet (no /api/v1/integration/schema). Nothing can be mapped from it until it does."
             ),
             _ => format!("{app_slug} answered {code} while listing its fields."),
         };
-        return Err(AppError::BadRequest(format!("{sentence} {detail}")));
+        last_error = Some(format!("{sentence} {detail}"));
     }
 
-    let body: Value = resp.json().await.map_err(|e| {
-        AppError::BadRequest(format!(
-            "{app_slug} returned something that is not JSON: {e}"
-        ))
-    })?;
+    let Some(body) = body else {
+        return Err(AppError::BadRequest(last_error.unwrap_or_else(|| {
+            format!("{app_slug} did not describe its fields.")
+        })));
+    };
 
     // The describe contract is `{app, version, entities:[{name,label,sample_count,fields:[…]}]}`.
     // Anything that does not carry entities is refused rather than shown as an empty list.

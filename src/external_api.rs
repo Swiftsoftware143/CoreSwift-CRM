@@ -553,7 +553,8 @@ pub async fn external_list_lists(
 ///   "list_id": "uuid",           // optional — target list
 ///   "tags": ["a", "b"],          // optional
 ///   "fields": { "budget": "5000", "preferred_product": "Pro" },  // custom data points
-///   "source_app": "incentiveswift"
+///   "source_app": "incentiveswift",
+///   "metadata": { "ada_workspace_id": "..." }   // optional; source_app/last_source_app are reserved
 /// }
 pub async fn external_push_contact(
     State(s): State<AppState>,
@@ -582,7 +583,7 @@ pub async fn external_push_contact(
         // `tenant_id` / `aid` are explicitly IGNORED: the key resolves the tenant, and a
         // body field must never be able to steer a lead into another account. Ignoring it
         // (rather than storing it as a custom field) keeps that visible in the contract.
-        if k == "list_id" || k == "tags" || k == "fields" || k == "source_app" {
+        if k == "list_id" || k == "tags" || k == "fields" || k == "source_app" || k == "metadata" {
             continue;
         }
         if k.eq_ignore_ascii_case("tenant_id") || k.eq_ignore_ascii_case("aid") {
@@ -620,6 +621,36 @@ pub async fn external_push_contact(
         .or_insert_with(|| source_app.clone());
 
     let contact_id = upsert_contact(&s, tenant_id, &builtin, &source_app, &source_raw).await?;
+
+    // Optional caller metadata — e.g. a client's own workspace id on the originating app. It is
+    // written as jsonb, one key at a time, so it can never clobber a sibling key.
+    //
+    // The hub OWNS attribution: `source_app` / `last_source_app` are stripped from whatever the
+    // caller sends, so a spoke cannot rewrite which app captured the lead.
+    if let Some(meta) = body.get("metadata").and_then(|v| v.as_object()) {
+        for (k, v) in meta.iter() {
+            let key = k.trim();
+            if key.is_empty() || key == "source_app" || key == "last_source_app" {
+                continue;
+            }
+            let Some(text) = value_to_string(v) else {
+                continue;
+            };
+            sqlx::query(
+                "UPDATE contacts
+                    SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), ARRAY[$2]::text[], to_jsonb($3::text), true),
+                        updated_at = NOW()
+                  WHERE id = $1 AND tenant_id = $4",
+            )
+            .bind(contact_id)
+            .bind(key)
+            .bind(text)
+            .bind(tenant_id)
+            .execute(&s.db)
+            .await
+            .map_err(AppError::Database)?;
+        }
+    }
 
     // Optional list assignment
     if let Some(list_id) = body.get("list_id").and_then(|v| v.as_str()) {
