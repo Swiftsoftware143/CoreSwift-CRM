@@ -32,13 +32,15 @@ pub async fn broadcast_portfolio_sync(
     // Owner's rule (David, 2026-11-13): one owner, several businesses — a portfolio company created
     // here belongs in EVERY sibling app...
     //
-    //   * MultiDirectory is deliberately ABSENT: a portfolio company is not a directory tenant, and
+    //   * MultiDirectory is the ONE exclusion: a portfolio company is not a directory tenant, and
     //     its tenants are the client businesses it serves.
-    //   * ADASwift is deliberately ABSENT too: it is a service SwiftImpact runs, not a place a
-    //     portfolio company exists as an account. Its connector is retired on the same reasoning.
+    //   * ADASwift IS included (David, 2026-11-13): *"even my personal company's needs an ADA
+    //     widget"* — every portfolio company needs its own ADA workspace, which is what this row
+    //     becomes there. (Its CONTACT connector stays retired; this is the control message.)
     let targets: &[(&str, u16)] = &[
         ("FunnelSwift", 8080),
         ("WorkflowSwift", 8085),
+        ("ADASwift", 8087),
         ("IncentiveSwift", 8083),
         ("MissedCallRespondr", 8088),
     ];
