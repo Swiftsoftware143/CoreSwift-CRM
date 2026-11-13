@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 
-pub mod adaswift;
 pub mod funnelswift;
 pub mod incentiveswift;
 pub mod missedcall_responder;
@@ -24,14 +23,6 @@ pub struct AppConnector {
 
 /// All known native apps
 pub static NATIVE_APPS: &[AppConnector] = &[
-    AppConnector {
-        slug: "adaswift",
-        name: "AdaSwift Console",
-        description: "Client viewing portal — clients see their scan reports and account status. Admin-only: connect with an AdaSwift admin bearer token to push clients and pull scan reports.",
-        auth_type: "api_key",
-        auth_fields: &["api_key", "base_url"],
-        access_level: "admin",
-    },
     AppConnector {
         slug: "funnelswift",
         name: "FunnelSwift",
@@ -91,7 +82,7 @@ pub static NATIVE_APPS: &[AppConnector] = &[
 ///   `webhook_token` and `allowed_actions` — never an author. A token therefore carries no role
 ///   and is treated as the tenant's least-privileged member (`is_person_admin = false`).
 ///
-/// DECISION: an `access_level = "admin"` connector (`adaswift`, `multi-directory`) is
+/// DECISION: an `access_level = "admin"` connector (`multi-directory`) is
 /// platform-operator tooling — it is driven with an AdaSwift admin bearer token, i.e. a
 /// credential the PLATFORM holds on the operator's behalf. Connecting one requires an admin
 /// PERSON, which only the SPA door can establish. A tenant-scoped automation token cannot, so
@@ -126,7 +117,6 @@ pub async fn test_connection(
     let start = std::time::Instant::now();
 
     let result = match slug {
-        "adaswift" => adaswift::test(credentials).await,
         "funnelswift" => funnelswift::test(credentials).await,
         "incentiveswift" => incentiveswift::test(credentials).await,
         "workflowswift" => workflowswift::test(credentials).await,
@@ -147,7 +137,6 @@ pub async fn push_data(
     data: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     match slug {
-        "adaswift" => adaswift::push_entity(credentials, entity_type, data).await,
         "funnelswift" => funnelswift::push_entity(credentials, entity_type, data).await,
         "incentiveswift" => incentiveswift::push_entity(credentials, entity_type, data).await,
         "workflowswift" => workflowswift::push_entity(credentials, entity_type, data).await,
@@ -167,7 +156,6 @@ pub async fn pull_data(
     filters: &HashMap<String, String>,
 ) -> Result<serde_json::Value, String> {
     match slug {
-        "adaswift" => adaswift::pull_entity(credentials, entity_type, filters).await,
         "funnelswift" => funnelswift::pull_entity(credentials, entity_type, filters).await,
         "incentiveswift" => incentiveswift::pull_entity(credentials, entity_type, filters).await,
         "workflowswift" => workflowswift::pull_entity(credentials, entity_type, filters).await,
@@ -182,7 +170,6 @@ pub async fn pull_data(
 /// Get app metadata (labels, available entities, etc.)
 pub fn get_app_meta(slug: &str) -> Option<serde_json::Value> {
     match slug {
-        "adaswift" => Some(adaswift::get_meta()),
         "funnelswift" => Some(funnelswift::get_meta()),
         "incentiveswift" => Some(incentiveswift::get_meta()),
         "workflowswift" => Some(workflowswift::get_meta()),
@@ -218,8 +205,7 @@ mod tests {
                 "refusal must name the app: {reason}"
             );
         }
-        // …and the two connectors the card names are in that set.
-        assert!(connect_refusal(app("adaswift"), false).is_some());
+        // …and the connector the card names is in that set.
         assert!(connect_refusal(app("multi-directory"), false).is_some());
     }
 
@@ -227,7 +213,6 @@ mod tests {
     /// intended difference between the doors, and it must not drift.
     #[test]
     fn account_admin_may_connect_admin_only_apps_from_the_console() {
-        assert!(connect_refusal(app("adaswift"), true).is_none());
         assert!(connect_refusal(app("multi-directory"), true).is_none());
     }
 

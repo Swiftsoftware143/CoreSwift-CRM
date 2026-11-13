@@ -60,14 +60,6 @@ pub const LEAD_SOURCES: &[LeadSource] = &[
         cta: "Run a giveaway and collect entries",
     },
     LeadSource {
-        key: "adaswift",
-        name: "ADASwift",
-        description: "ADA scan-report requests and proposal downloads.",
-        icon: "briefcase",
-        url: "https://adaswift.com",
-        cta: "Add an ADA scan report to your site",
-    },
-    LeadSource {
         key: "workflowswift",
         name: "WorkflowSwift",
         description: "n8n workflow automation that captures and routes leads.",
