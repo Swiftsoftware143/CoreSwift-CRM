@@ -185,7 +185,11 @@ fn normalize_key(label: &str) -> String {
     for ch in label.chars() {
         if ch.is_ascii_alphanumeric() {
             out.push(ch.to_ascii_lowercase());
-        } else if ch == ' ' || ch == '-' {
+        } else if ch == ' ' || ch == '-' || ch == '_' {
+            // Underscores are preserved: a caller identifies a data point by its own key
+            // (`visitor_intent`), and dropping the underscore turned that into `visitorintent`,
+            // so the stored key no longer matched the key the sender would send again — every
+            // re-push minted a duplicate field with the same label.
             out.push('_');
         }
     }
