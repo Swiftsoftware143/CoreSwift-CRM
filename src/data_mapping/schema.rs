@@ -106,6 +106,76 @@ pub async fn destinations(state: &AppState, tenant: Uuid) -> Result<Value, AppEr
 ///
 /// Every failure is returned as a sentence the operator can act on — an empty field list with no
 /// reason is how a mapper ends up silently mapping nothing.
+/// Build a describe-shaped field list from what this account has ALREADY received from the app.
+///
+/// This is the no-extra-credential path. A sibling app pushes into CoreSwift and nothing flows back
+/// up, so CoreSwift does not need a key on that app to know what it sends: whatever the app has
+/// already delivered is the field list. Every custom data point that arrived is stamped with the
+/// sending app (`contact_custom_fields.source_app`), and the built-in contact keys are the same for
+/// every sender, so the two together describe the source without asking it anything.
+///
+/// A field that has never arrived cannot be listed — the note says so rather than inventing one.
+async fn observed_schema(
+    state: &AppState,
+    tenant: Uuid,
+    app_slug: &str,
+) -> Result<Value, AppError> {
+    // App slugs and the stamps they leave do not always match ("multi-directory" stamps
+    // "multidirectory"), so compare on a form with hyphens and underscores removed.
+    let customs: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT key, COALESCE(label, key), COALESCE(field_type, 'text')
+           FROM contact_custom_fields
+          WHERE tenant_id = $1
+            AND replace(replace(lower(source_app), '-', ''), '_', '')
+                = replace(replace(lower($2), '-', ''), '_', '')
+          ORDER BY key",
+    )
+    .bind(tenant)
+    .bind(app_slug)
+    .fetch_all(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    let received: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM contacts WHERE tenant_id = $1
+           AND replace(replace(lower(COALESCE(source, '')), '-', ''), '_', '')
+               = replace(replace(lower($2), '-', ''), '_', '')",
+    )
+    .bind(tenant)
+    .bind(app_slug)
+    .fetch_one(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    let mut fields: Vec<Value> = CONTACT_FIELDS
+        .iter()
+        .map(|(path, label, ty)| {
+            json!({"path": path, "label": label, "type": ty, "required": false, "sample": null})
+        })
+        .collect();
+    for (key, label, ty) in &customs {
+        fields.push(json!({
+            "path": key, "label": label, "type": ty, "required": false, "sample": null
+        }));
+    }
+
+    Ok(json!({
+        "app": app_slug,
+        "version": 1,
+        "source": "observed",
+        "note": format!(
+            "Built from what this account has already received from {app_slug} ({received} row(s), {} extra field(s)). Nothing is asked of that app and no key on it is needed. A field that has never arrived cannot be listed — it appears after the first push that carries it.",
+            customs.len()
+        ),
+        "entities": [{
+            "name": "contacts",
+            "label": "Rows already received",
+            "sample_count": received,
+            "fields": fields
+        }]
+    }))
+}
+
 /// The fleet's own admin credential for reading ONE app's field description.
 ///
 /// `/api/v1/integration/schema` is admin-only on every source app by design, and a customer account
@@ -245,9 +315,17 @@ pub async fn source_schema(
     }
 
     let Some(body) = body else {
-        return Err(AppError::BadRequest(last_error.unwrap_or_else(|| {
-            format!("{app_slug} did not describe its fields.")
-        })));
+        // No credential of ours can read that app's describe endpoint — and it does not need to.
+        // Data flows one way (app -> CoreSwift), so the fields that matter are the ones the app has
+        // already delivered. Answer with those and say where they came from.
+        match observed_schema(state, tenant, app_slug).await {
+            Ok(observed) => return Ok(observed),
+            Err(e) => {
+                return Err(AppError::BadRequest(last_error.unwrap_or_else(|| {
+                    format!("{app_slug} did not describe its fields ({e}).")
+                })))
+            }
+        }
     };
 
     // The describe contract is `{app, version, entities:[{name,label,sample_count,fields:[…]}]}`.

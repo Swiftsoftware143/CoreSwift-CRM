@@ -9924,7 +9924,11 @@ function dmRenderAll() {
         '<div class="form-group" style="flex:2;min-width:220px"><label>Mapping name</label>' +
           '<input id="dmName" type="text" placeholder="FunnelSwift leads → Contacts" value="' + dmEsc(m.name || '') + '" oninput="DM.dirty=true"></div>' +
         '<div class="form-group"><label>Source app</label><select id="dmApp" onchange="dmChangeSource()">' + sourceOpts + '</select></div>' +
-        '<div class="form-group"><label>Source entity</label><select id="dmEntity" onchange="dmChangeEntity()">' + (entityOpts || '<option value="">—</option>') + '</select></div>' +
+        '<div class="form-group"><label>Source entity</label>' +
+          ((DM.schema && DM.schema.source === 'observed')
+            ? '<input id="dmEntity" type="text" value="' + dmEsc(DM.entity || 'contacts') + '" placeholder="what the app calls this row" oninput="DM.entity=this.value;DM.dirty=true" onchange="dmChangeEntity()">'
+            : '<select id="dmEntity" onchange="dmChangeEntity()">' + (entityOpts || '<option value="">—</option>') + '</select>') +
+        '</div>' +
         '<div class="form-group"><label>On match</label><select id="dmOnMatch" onchange="DM.dirty=true">' + onMatch + '</select></div>' +
         '<div class="form-group" style="flex:1;min-width:180px"><label>Add to list</label><select id="dmList" onchange="DM.dirty=true">' + listOpts + '</select></div>' +
         '<div class="form-group"><label>&nbsp;</label>' +
@@ -9972,16 +9976,18 @@ function dmChangeEntity() {
 function dmRenderSource() {
   const box = document.getElementById('dmSource');
   if (!box) return;
+  const note = (DM.schema && DM.schema.source === 'observed' && DM.schema.note)
+    ? '<p class="form-hint" style="margin-bottom:8px">' + dmEsc(DM.schema.note) + '</p>' : '';
   const q = (document.getElementById('dmSearch') || {}).value || '';
   const needle = q.trim().toLowerCase();
   const fields = dmSourceFields();
-  if (!fields.length) { box.innerHTML = '<p class="form-hint">No fields yet.</p>'; return; }
+  if (!fields.length) { box.innerHTML = note + '<p class="form-hint">No fields yet.</p>'; return; }
   const shown = fields.filter(function (f) {
     if (!needle) return true;
     return (f.path + ' ' + (f.label || '')).toLowerCase().indexOf(needle) >= 0;
   });
-  if (!shown.length) { box.innerHTML = '<p class="form-hint">Nothing matches “' + dmEsc(q) + '”.</p>'; return; }
-  box.innerHTML = shown.map(function (f) {
+  if (!shown.length) { box.innerHTML = note + '<p class="form-hint">Nothing matches “' + dmEsc(q) + '”.</p>'; return; }
+  box.innerHTML = note + shown.map(function (f) {
     const sample = f.sample === null || f.sample === undefined ? '<em style="opacity:.6">no sample</em>'
       : '<code style="font-size:11px">' + dmEsc(typeof f.sample === 'object' ? JSON.stringify(f.sample) : f.sample) + '</code>';
     return '<div class="dm-src-row" onclick="dmInsertPill(\'' + dmEsc(f.path) + '\')" ' +
