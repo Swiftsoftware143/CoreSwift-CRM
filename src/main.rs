@@ -28,6 +28,7 @@ pub mod contacts;
 pub mod contacts_internal;
 pub mod csv_handler;
 pub mod dashboard;
+pub mod data_mapping;
 mod db;
 pub mod email;
 pub mod email_templates;
@@ -469,6 +470,7 @@ async fn main() -> anyhow::Result<()> {
         // called these two paths; until now neither was registered (both answered 405).
         .nest("/api/profile", profile::router(state.clone()))
         .nest("/api/contacts", contacts::router(state.clone()))
+        .nest("/api/data-mapping", data_mapping::router(state.clone()))
         // CSV import/export — /api/csv/{preview,import/contacts,export/contacts,export/opportunities}
         .nest("/api/csv", csv_handler::router(state.clone()))
         .nest(

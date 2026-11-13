@@ -619,6 +619,7 @@ dependencies = [
  "password-hash",
  "rand",
  "redis",
+ "regex",
  "reqwest",
  "ring",
  "rust_decimal",

@@ -31,6 +31,9 @@ csv = "1"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "v1", "serde"] }
 
+# Deterministic `regex_extract(pattern)` transform in the data mapper (src/data_mapping/transforms.rs)
+regex = "1"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

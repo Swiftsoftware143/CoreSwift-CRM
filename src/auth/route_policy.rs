@@ -176,8 +176,9 @@
 //!        `auth_middleware` because this app's customer auth lives under `/api/auth/*` and no
 //!        /api/v1 auth tree exists. Neither joins an allowlist: both are measured anonymous
 //!        answering 401 "Authentication required", i.e. the boundary refused before the handler ran.
-//!        The extractor now resolves 416 mounted `.route(..)` calls / 404 on /api** (416 = 404 /api
-//!        + the 12 root-level mounts), and those are what the census test pins.
+//!        The extractor now resolves 424 mounted `.route(..)` calls / 412 on /api** (424 = 412 /api
+//!        + the 12 root-level mounts), and those are what the census test pins. The last +8 are the
+//!        data-mapping surface (`/api/data-mapping/*`, migration 155).
 //!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
@@ -448,7 +449,13 @@ pub const INTERNAL_ROUTES: &[&str] = &[
 /// The key is opaque; `external_api::resolve_key` hashes it and looks it up in `personal_api_keys`.
 /// The boundary therefore only requires that a non-empty bearer be presented — the decision stays
 /// where the credential lives, which is exactly the "never widen a caller's reach" rule.
-pub const API_KEY_ROUTES: &[&str] = &["/api/external/lists", "/api/external/contacts"];
+pub const API_KEY_ROUTES: &[&str] = &[
+    "/api/external/lists",
+    "/api/external/contacts",
+    // The data-mapping intake: a sibling app reports one event with the account's issued key. The
+    // tenant comes from the key, never from the payload, so a caller cannot name another tenant.
+    "/api/data-mapping/events",
+];
 
 /// Is `path` (a concrete request path) one of the committed public templates?
 pub fn is_public_route(path: &str) -> bool {
@@ -541,6 +548,11 @@ mod tests {
         Nest {
             prefix: "/api/contacts",
             src: include_str!("../contacts/mod.rs"),
+            func: "router",
+        },
+        Nest {
+            prefix: "/api/data-mapping",
+            src: include_str!("../data_mapping/mod.rs"),
             func: "router",
         },
         Nest {
@@ -1197,12 +1209,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            416,
+            424,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 404,
+            api, 412,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

@@ -781,6 +781,9 @@ const MENU = [
 const SETTINGS_MENU = [
   { id:'profile', icon:'👤', label:'Profile' },
   { id:'integrations', icon:'🔌', label:'Integration Center' },
+  // The visual field mapper (spec: docs/coreswift-data-mapping-spec-2026-11-13.md).
+  // It sits with the Integration Center because it consumes the same per-app connections.
+  { id:'data-mapping', icon:'🧩', label:'Data mapping' },
   // Tenant-side team management. roles[] hides the nav entry from a 'member': the API
   // answers 403 for any non-owner/admin token, so offering it would only dead-end.
   { id:'team', icon:'👥', label:'Team & Invites', roles:['owner','admin'] },
@@ -1893,6 +1896,7 @@ const TAB_LOADERS = {
           escapeHtml(c.email || '—'),
           escapeHtml(c.phone || '—'),
           escapeHtml(c.company || c.company_name || '—'),
+          escapeHtml(c.city || '—'),
           // The Status cell that used to sit here (a badge built from `c.status`) is gone:
           // GET /api/contacts has never returned a `status` key (`contacts` has no such column), so
           // the badge showed the same text on every row of every tenant. It is deliberately NOT
@@ -1903,7 +1907,7 @@ const TAB_LOADERS = {
         ]);
       }
       contactsTableEl.innerHTML = dataTable(
-        ['Name','Email','Phone','Company','Actions'], rows,
+        ['Name','Email','Phone','Company','City','Actions'], rows,
         'No contacts yet. Add your first contact to get started.'
       );
     } catch(e) {
@@ -3479,7 +3483,11 @@ function showAddContactModal() {
     '<div class="form-group"><label>Last name *</label><input type="text" id="ctAddLast"></div>' +
     '<div class="form-group"><label>Email</label><input type="email" id="ctAddEmail"></div>' +
     '<div class="form-group"><label>Phone</label><input type="text" id="ctAddPhone"></div>' +
-    '<div class="form-group"><label>Company</label><input type="text" id="ctAddCompany"></div>',
+    '<div class="form-group"><label>Company</label><input type="text" id="ctAddCompany"></div>' +
+    // City and State are carried by every imported lead and by the directory onboarding flows, so
+    // they belong on the form that creates a contact by hand (they were missing entirely).
+    '<div class="form-group"><label>City</label><input type="text" id="ctAddCity"></div>' +
+    '<div class="form-group"><label>State</label><input type="text" id="ctAddState" placeholder="FL"></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
     '<button class="btn btn-primary btn-sm" data-ops="contact-create" onclick="saveNewContact()">Save</button>');
 }
@@ -3494,6 +3502,9 @@ async function saveNewContact() {
   if (email) body.email = email;
   if (phone) body.phone = phone;
   if (company) body.company = company;
+  const city = ctModalValue('ctAddCity'), state = ctModalValue('ctAddState');
+  if (city) body.city = city;
+  if (state) body.state = state;
   try {
     await API.post('/contacts', body);
     closeModal();
@@ -3519,7 +3530,9 @@ async function editContact(id) {
     '<div class="form-group"><label>Last name *</label><input type="text" id="ctEditLast" value="' + escapeHtmlAttr(c.last_name || '') + '"></div>' +
     '<div class="form-group"><label>Email</label><input type="email" id="ctEditEmail" value="' + escapeHtmlAttr(c.email || '') + '"></div>' +
     '<div class="form-group"><label>Phone</label><input type="text" id="ctEditPhone" value="' + escapeHtmlAttr(c.phone || '') + '"></div>' +
-    '<div class="form-group"><label>Company</label><input type="text" id="ctEditCompany" value="' + escapeHtmlAttr(c.company || '') + '"></div>',
+    '<div class="form-group"><label>Company</label><input type="text" id="ctEditCompany" value="' + escapeHtmlAttr(c.company || '') + '"></div>' +
+    '<div class="form-group"><label>City</label><input type="text" id="ctEditCity" value="' + escapeHtmlAttr(c.city || '') + '"></div>' +
+    '<div class="form-group"><label>State</label><input type="text" id="ctEditState" value="' + escapeHtmlAttr(c.state || '') + '"></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
     '<button class="btn btn-danger btn-sm" data-ops="contact-delete-from-editor" onclick="deleteContactFromEditor()">Delete</button>' +
     '<button class="btn btn-primary btn-sm" data-ops="contact-update" onclick="saveContactEdit()">Save</button>');
@@ -3535,6 +3548,7 @@ async function saveContactEdit() {
       first_name: first, last_name: last,
       email: ctModalValue('ctEditEmail'), phone: ctModalValue('ctEditPhone'),
       company: ctModalValue('ctEditCompany'),
+      city: ctModalValue('ctEditCity'), state: ctModalValue('ctEditState'),
     });
     closeModal();
     toast('Contact updated', 'success');
@@ -9749,6 +9763,520 @@ function auditExportCsv() {
   document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   toast('Exported ' + AUDIT_ROWS.length + (AUDIT_ROWS.length === 1 ? ' entry' : ' entries'), 'success');
 }
+
+/* ============================================================================
+ * DATA MAPPING — the visual field mapper (spec: docs/coreswift-data-mapping-spec-2026-11-13.md)
+ *
+ * Three columns: source fields on the left (read from the source app's own describe endpoint),
+ * destination inputs in the middle (plain text + {{data pills}}), live preview on the right.
+ *
+ * The preview here is resolved client-side with exactly the same rules the server's resolver uses
+ * (single token keeps its value, mixed text concatenates, an unresolved token contributes nothing).
+ * "Test with this row" asks the server for the same resolution and shows both, so a drift between
+ * what the operator sees and what the runner does is visible rather than silent.
+ * ========================================================================== */
+
+const DM = {
+  mappings: [], dest: null, schema: null, sourceApp: '', entity: '',
+  current: null, fieldMap: {}, rows: [], dirty: false, runs: [], lastRun: null,
+  previewRow: null
+};
+
+async function dmCall(method, path, body) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (STATE.token) headers['Authorization'] = 'Bearer ' + STATE.token;
+  const opts = { method: method, headers: headers };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const res = await fetch('/api' + path, opts);
+  let data = null;
+  try { data = await res.json(); } catch (_) {}
+  if (res.status === 401) { logout(true); throw new Error('Session expired'); }
+  if (!res.ok) {
+    const pick = data ? [data.error, data.message, data.detail].find(function (v) {
+      return typeof v === 'string' && v.trim();
+    }) : null;
+    throw new Error(pick || ('Request failed (' + res.status + ')'));
+  }
+  return data || {};
+}
+
+TAB_RENDERERS['data-mapping'] = () => pageHeader(
+  'Data mapping',
+  'Map another app’s fields into this account’s contacts — add a new source by configuration, not code',
+  '<button class="btn btn-secondary btn-sm" data-ops="dm-refresh" onclick="dmInit()">↻ Reload fields</button>'
+) + '<div id="dmWrap"><div class="loading-wrap"><div class="spinner"></div> Loading mappings…</div></div>';
+
+TAB_LOADERS['data-mapping'] = async () => { await dmInit(); };
+
+async function dmInit() {
+  const wrap = document.getElementById('dmWrap');
+  if (wrap) wrap.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Loading mappings…</div>';
+  try {
+    DM.dest = await dmCall('GET', '/data-mapping/destinations');
+    const list = await dmCall('GET', '/data-mapping/mappings');
+    DM.mappings = list.mappings || [];
+    if (DM.mappings.length) {
+      dmLoadMapping(DM.mappings[0]);
+    } else {
+      DM.current = null;
+      DM.fieldMap = {};
+      DM.sourceApp = (DM.dest.sources && DM.dest.sources[0] && DM.dest.sources[0].app) || '';
+      DM.entity = '';
+      DM.schema = null;
+      DM.dirty = false;
+      dmRenderAll();
+      await dmLoadSchema();
+    }
+  } catch (e) {
+    if (wrap) wrap.innerHTML = card('Could not load the mapper',
+      '<p class="form-hint">' + dmEsc(e.message) + '</p>', '');
+  }
+}
+
+function dmEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+  });
+}
+
+function dmLoadMapping(m) {
+  DM.current = m;
+  DM.fieldMap = {};
+  (m.field_map || []).forEach(function (f) { DM.fieldMap[f.to] = f.template || ''; });
+  DM.sourceApp = (m.source && m.source.app) || '';
+  DM.entity = (m.source && m.source.entity) || '';
+  DM.dirty = false;
+  dmRenderAll();
+  dmLoadSchema();
+}
+
+/** Pull the source app's own field description. Never a hardcoded list. */
+async function dmLoadSchema() {
+  DM.schema = null;
+  const box = document.getElementById('dmSource');
+  if (box) box.innerHTML = '<p class="form-hint">Reading ' + dmEsc(DM.sourceApp || 'the source') + '’s fields…</p>';
+  if (!DM.sourceApp) { if (box) box.innerHTML = '<p class="form-hint">Pick a source app first.</p>'; return; }
+  try {
+    DM.schema = await dmCall('GET', '/data-mapping/schema?app=' + encodeURIComponent(DM.sourceApp));
+    if (!DM.entity && DM.schema.entities && DM.schema.entities[0]) DM.entity = DM.schema.entities[0].name;
+    dmRenderSource();
+    dmRenderPreview();
+  } catch (e) {
+    if (box) {
+      box.innerHTML = card('Fields unavailable',
+        '<p style="color:var(--warning,#b45309)">' + dmEsc(e.message) + '</p>' +
+        '<p class="form-hint">The mapper lists what the other app says it has. It will not invent field names — ' +
+        'a made-up name would resolve to nothing at run time.</p>', '');
+    }
+  }
+}
+
+function dmSourceFields() {
+  if (!DM.schema || !DM.schema.entities) return [];
+  const ent = DM.schema.entities.filter(function (e) { return e.name === DM.entity; })[0] ||
+              DM.schema.entities[0];
+  return (ent && ent.fields) || [];
+}
+
+function dmSample() {
+  const row = {};
+  dmSourceFields().forEach(function (f) {
+    if (f.sample !== null && f.sample !== undefined) dmSetPath(row, f.path, f.sample);
+  });
+  return row;
+}
+
+function dmSetPath(obj, path, value) {
+  const parts = String(path).split('.').filter(Boolean);
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (typeof cur[parts[i]] !== 'object' || cur[parts[i]] === null) cur[parts[i]] = {};
+    cur = cur[parts[i]];
+  }
+  if (parts.length) cur[parts[parts.length - 1]] = value;
+  return obj;
+}
+
+function dmRenderAll() {
+  const wrap = document.getElementById('dmWrap');
+  if (!wrap) return;
+  const m = DM.current || {};
+  const dest = m.destination || {};
+  const dedupe = m.dedupe || { keys: ['email'], on_match: 'update' };
+  const sourceOpts = (DM.dest.sources || []).map(function (s) {
+    return '<option value="' + dmEsc(s.app) + '"' + (s.app === DM.sourceApp ? ' selected' : '') + '>' + dmEsc(s.label) + '</option>';
+  }).join('');
+  const entityOpts = ((DM.schema && DM.schema.entities) || []).map(function (e) {
+    return '<option value="' + dmEsc(e.name) + '"' + (e.name === DM.entity ? ' selected' : '') + '>' +
+      dmEsc(e.label || e.name) + ' (' + (e.sample_count || 0) + ')</option>';
+  }).join('');
+  const listOpts = ['<option value="">No list</option>'].concat(
+    ((DM.dest.list_membership && DM.dest.list_membership.lists) || []).map(function (l) {
+      return '<option value="' + dmEsc(l.id) + '"' + (dest.list_id === l.id ? ' selected' : '') + '>' + dmEsc(l.name) + '</option>';
+    })).join('');
+  const onMatch = ['update', 'skip', 'create_new'].map(function (v) {
+    return '<option value="' + v + '"' + (dedupe.on_match === v ? ' selected' : '') + '>' + v + '</option>';
+  }).join('');
+
+  wrap.innerHTML =
+    '<div class="card"><div class="card-body">' +
+      '<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">' +
+        '<div class="form-group" style="flex:2;min-width:220px"><label>Mapping name</label>' +
+          '<input id="dmName" type="text" placeholder="FunnelSwift leads → Contacts" value="' + dmEsc(m.name || '') + '" oninput="DM.dirty=true"></div>' +
+        '<div class="form-group"><label>Source app</label><select id="dmApp" onchange="dmChangeSource()">' + sourceOpts + '</select></div>' +
+        '<div class="form-group"><label>Source entity</label><select id="dmEntity" onchange="dmChangeEntity()">' + (entityOpts || '<option value="">—</option>') + '</select></div>' +
+        '<div class="form-group"><label>On match</label><select id="dmOnMatch" onchange="DM.dirty=true">' + onMatch + '</select></div>' +
+        '<div class="form-group" style="flex:1;min-width:180px"><label>Add to list</label><select id="dmList" onchange="DM.dirty=true">' + listOpts + '</select></div>' +
+        '<div class="form-group"><label>&nbsp;</label>' +
+          '<button class="btn btn-primary" data-ops="dm-save" onclick="dmSave()">Save mapping</button></div>' +
+        '<div class="form-group"><label>&nbsp;</label>' +
+          '<button class="btn btn-secondary" data-ops="dm-test" onclick="dmTest()">Test with sample row</button></div>' +
+      '</div>' +
+      '<p class="form-hint" id="dmStatus"></p>' +
+    '</div></div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1.4fr 1fr;gap:14px;align-items:start;margin-top:14px">' +
+      '<div>' + card('Source fields',
+        '<input id="dmSearch" type="search" placeholder="Type to filter fields, Enter inserts the first match" ' +
+          'oninput="dmRenderSource()" onkeydown="dmSearchKey(event)" style="width:100%;margin-bottom:8px">' +
+        '<div id="dmSource" style="max-height:60vh;overflow:auto"></div>', '') + '</div>' +
+      '<div>' + card('Destination fields (type text + drop data pills)',
+        '<div id="dmDest" style="max-height:62vh;overflow:auto"></div>', '') + '</div>' +
+      '<div>' + card('What CoreSwift would receive', '<div id="dmPreview"></div>', '') + '</div>' +
+    '</div>' +
+    '<div style="margin-top:14px">' + card('Runs',
+      '<div id="dmRuns"><p class="form-hint">Save the mapping, then press “Load runs”.</p></div>',
+      '<button class="btn btn-secondary btn-sm" data-ops="dm-runs" onclick="dmLoadRuns()">Load runs</button>') + '</div>';
+
+  dmRenderSource();
+  dmRenderDest();
+  dmRenderPreview();
+  if (DM.current && DM.current.id) dmLoadRuns();
+}
+
+function dmChangeSource() {
+  const el = document.getElementById('dmApp');
+  DM.sourceApp = el ? el.value : '';
+  DM.entity = '';
+  DM.dirty = true;
+  dmLoadSchema();
+}
+
+function dmChangeEntity() {
+  const el = document.getElementById('dmEntity');
+  DM.entity = el ? el.value : '';
+  DM.dirty = true;
+  dmRenderSource();
+  dmRenderPreview();
+}
+
+function dmRenderSource() {
+  const box = document.getElementById('dmSource');
+  if (!box) return;
+  const q = (document.getElementById('dmSearch') || {}).value || '';
+  const needle = q.trim().toLowerCase();
+  const fields = dmSourceFields();
+  if (!fields.length) { box.innerHTML = '<p class="form-hint">No fields yet.</p>'; return; }
+  const shown = fields.filter(function (f) {
+    if (!needle) return true;
+    return (f.path + ' ' + (f.label || '')).toLowerCase().indexOf(needle) >= 0;
+  });
+  if (!shown.length) { box.innerHTML = '<p class="form-hint">Nothing matches “' + dmEsc(q) + '”.</p>'; return; }
+  box.innerHTML = shown.map(function (f) {
+    const sample = f.sample === null || f.sample === undefined ? '<em style="opacity:.6">no sample</em>'
+      : '<code style="font-size:11px">' + dmEsc(typeof f.sample === 'object' ? JSON.stringify(f.sample) : f.sample) + '</code>';
+    return '<div class="dm-src-row" onclick="dmInsertPill(\'' + dmEsc(f.path) + '\')" ' +
+      'style="padding:6px 8px;border-bottom:1px solid var(--border,#eee);cursor:pointer">' +
+      '<div style="display:flex;justify-content:space-between;gap:8px">' +
+        '<strong style="font-size:13px">' + dmEsc(f.label || f.path) + '</strong>' +
+        '<span style="font-size:11px;opacity:.7">' + dmEsc(f.type || '') + '</span></div>' +
+      '<div style="font-size:11px;opacity:.8">' + dmEsc(f.path) + ' · ' + sample + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function dmSearchKey(ev) {
+  if (ev.key !== 'Enter') return;
+  ev.preventDefault();
+  const first = document.querySelector('#dmSource .dm-src-row');
+  if (!first) return;
+  first.click();
+}
+
+function dmDestFields() {
+  const list = [];
+  ((DM.dest && DM.dest.entities) || []).forEach(function (e) {
+    if (e.entity === 'contact' && e.available) {
+      (e.fields || []).forEach(function (f) { list.push({ to: f.path, label: f.label, type: f.type }); });
+    }
+  });
+  // Anything already mapped that is not in the catalogue (metadata paths) still gets a row.
+  Object.keys(DM.fieldMap).forEach(function (to) {
+    if (!list.some(function (f) { return f.to === to; })) list.push({ to: to, label: to, type: 'auto' });
+  });
+  return list;
+}
+
+function dmRenderDest() {
+  const box = document.getElementById('dmDest');
+  if (!box) return;
+  DM.rows = [];
+  const fields = dmDestFields();
+  fields.forEach(function (f, i) {
+    DM.rows.push(f.to);
+    f.idx = i;
+  });
+  const openHint = (DM.dest && DM.dest.entities || []).filter(function (e) { return !e.available; })
+    .map(function (e) { return '<p class="form-hint" style="opacity:.75">🚫 ' + dmEsc(e.label) + ' — ' + dmEsc(e.reason) + '</p>'; }).join('');
+  box.innerHTML = openHint + fields.map(function (f) {
+    return '<div style="margin-bottom:10px">' +
+      '<label style="font-size:12px;display:flex;justify-content:space-between">' +
+        '<span>' + dmEsc(f.label) + '</span><span style="opacity:.6">' + dmEsc(f.to) + '</span></label>' +
+      '<div class="dm-token" id="dmTok-' + f.idx + '" contenteditable="true" data-to="' + dmEsc(f.to) + '" ' +
+        'oninput="dmSerialize(' + f.idx + ')" onkeyup="dmSerialize(' + f.idx + ')" ' +
+        'style="min-height:34px;border:1px solid var(--border,#ccc);border-radius:6px;padding:6px 8px;font-size:13px"></div>' +
+    '</div>';
+  }).join('') +
+  '<div style="margin-top:6px;display:flex;gap:6px">' +
+    '<input id="dmMetaPath" type="text" placeholder="metadata.path" style="flex:1">' +
+    '<button class="btn btn-secondary btn-sm" onclick="dmAddMetadata()">+ Map extra field</button>' +
+  '</div>';
+  // Paint the stored templates into the inputs as text + chips.
+  fields.forEach(function (f) { dmPaintTemplate(f.idx, DM.fieldMap[f.to] || ''); });
+}
+
+function dmPaintTemplate(idx, template) {
+  const el = document.getElementById('dmTok-' + idx);
+  if (!el) return;
+  el.innerHTML = '';
+  const re = /\{\{([^}]+)\}\}/g;
+  let last = 0, m;
+  while ((m = re.exec(template)) !== null) {
+    if (m.index > last) el.appendChild(document.createTextNode(template.slice(last, m.index)));
+    const chip = document.createElement('span');
+    chip.className = 'dm-chip';
+    chip.contentEditable = 'false';
+    chip.dataset.path = m[1].trim();
+    chip.textContent = m[1].trim();
+    chip.style.cssText = 'display:inline-block;background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;' +
+      'padding:1px 8px;margin:0 2px;font-size:12px;white-space:nowrap';
+    el.appendChild(chip);
+    last = m.index + m[0].length;
+  }
+  if (last < template.length) el.appendChild(document.createTextNode(template.slice(last)));
+}
+
+/** Read a token input back into a template string. A chip is one whole token, never half of one. */
+function dmSerialize(idx) {
+  const el = document.getElementById('dmTok-' + idx);
+  if (!el) return;
+  let out = '';
+  el.childNodes.forEach(function (n) {
+    if (n.nodeType === 3) out += n.textContent;
+    else if (n.nodeType === 1) {
+      if (n.dataset && n.dataset.path) out += '{{' + n.dataset.path + '}}';
+      else if (n.tagName === 'BR') out += '\n';
+      else out += n.textContent;
+    }
+  });
+  const to = (DM.rows || [])[idx];
+  if (to) DM.fieldMap[to] = out;
+  DM.dirty = true;
+  dmRenderPreview();
+}
+
+function dmInsertPill(path) {
+  const active = document.activeElement;
+  const target = (active && active.classList && active.classList.contains('dm-token')) ? active
+    : document.querySelector('.dm-token');
+  if (!target) { dmSetStatus('Click a destination field first, then the source field.', true); return; }
+  target.focus();
+  const chip = document.createElement('span');
+  chip.className = 'dm-chip';
+  chip.contentEditable = 'false';
+  chip.dataset.path = path;
+  chip.textContent = path;
+  chip.style.cssText = 'display:inline-block;background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;' +
+    'padding:1px 8px;margin:0 2px;font-size:12px;white-space:nowrap';
+  const sel = window.getSelection && window.getSelection();
+  if (sel && sel.rangeCount && target.contains(sel.anchorNode)) {
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    range.insertNode(chip);
+    range.setStartAfter(chip);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } else {
+    target.appendChild(chip);
+  }
+  const idx = parseInt(String(target.id).replace('dmTok-', ''), 10);
+  dmSerialize(idx);
+}
+
+function dmAddMetadata() {
+  const el = document.getElementById('dmMetaPath');
+  const path = (el && el.value || '').trim();
+  if (!/^metadata\.[A-Za-z0-9_.]+$/.test(path)) {
+    dmSetStatus('An extra field must be named metadata.<something>, e.g. metadata.utm_source.', true);
+    return;
+  }
+  if (DM.fieldMap[path] === undefined) DM.fieldMap[path] = '';
+  DM.dirty = true;
+  dmRenderDest();
+}
+
+function dmSetStatus(msg, bad) {
+  const el = document.getElementById('dmStatus');
+  if (el) { el.textContent = msg || ''; el.style.color = bad ? 'var(--danger,#b91c1c)' : 'var(--success,#166534)'; }
+}
+
+/* ---- client-side preview: identical rules to the server resolver ---- */
+function dmResolveTemplate(template, row) {
+  const re = /\{\{([^}]+)\}\}/g;
+  let out = '', last = 0, m, any = false;
+  const single = template.trim().match(/^\{\{([^}]+)\}\}$/);
+  if (single) {
+    const v = dmPathValue(row, single[1].trim());
+    return v === undefined || v === null || v === '' ? null : dmText(v);
+  }
+  while ((m = re.exec(template)) !== null) {
+    out += template.slice(last, m.index);
+    const v = dmPathValue(row, m[1].trim());
+    if (v !== undefined && v !== null && v !== '') { out += dmText(v); any = true; }
+    last = m.index + m[0].length;
+  }
+  out += template.slice(last);
+  if (!out.trim() && !any) return null;
+  return out;
+}
+
+function dmPathValue(row, path) {
+  let cur = row;
+  const parts = String(path).split('.').filter(Boolean);
+  for (let i = 0; i < parts.length; i++) {
+    if (cur === null || cur === undefined) return undefined;
+    cur = cur[parts[i]];
+  }
+  return cur;
+}
+
+function dmText(v) {
+  if (Array.isArray(v)) return v.filter(function (x) { return x !== null && x !== undefined && x !== ''; }).join(', ');
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
+
+function dmPreviewPayload() {
+  const row = DM.previewRow || dmSample();
+  const out = {};
+  Object.keys(DM.fieldMap).forEach(function (to) {
+    const tpl = DM.fieldMap[to];
+    if (!tpl || !tpl.trim()) return;
+    const v = dmResolveTemplate(tpl, row);
+    if (v === null) return;
+    if (to.indexOf('metadata.') === 0) dmSetPath(out, to, v);
+    else dmSetPath(out, to, v);
+  });
+  return out;
+}
+
+function dmRenderPreview() {
+  const box = document.getElementById('dmPreview');
+  if (!box) return;
+  const payload = dmPreviewPayload();
+  const n = Object.keys(payload).length;
+  box.innerHTML = '<pre style="font-size:11px;white-space:pre-wrap;margin:0;max-height:52vh;overflow:auto">' +
+    dmEsc(JSON.stringify(payload, null, 2)) + '</pre>' +
+    '<p class="form-hint" style="margin-top:6px">' + (n ? n + ' field(s) would be written' : 'Nothing mapped yet') + '</p>' +
+    (DM.lastRun ? '<div style="margin-top:8px;border-top:1px solid var(--border,#eee);padding-top:8px">' +
+      '<strong style="font-size:12px">Server said:</strong> ' + dmEsc(DM.lastRun.status || '') +
+      (DM.lastRun.reason ? ' — ' + dmEsc(DM.lastRun.reason) : '') + '</div>' : '');
+}
+
+function dmBody() {
+  const name = (document.getElementById('dmName') || {}).value || '';
+  const onMatch = (document.getElementById('dmOnMatch') || {}).value || 'update';
+  const listId = (document.getElementById('dmList') || {}).value || '';
+  const fieldMap = Object.keys(DM.fieldMap)
+    .filter(function (to) { return (DM.fieldMap[to] || '').trim(); })
+    .map(function (to) { return { to: to, template: DM.fieldMap[to] }; });
+  return {
+    name: name.trim(),
+    source: { app: DM.sourceApp, entity: DM.entity, schema_version: (DM.schema && DM.schema.version) || 1 },
+    destination: { entity: 'contact', list_id: listId || null },
+    field_map: fieldMap,
+    dedupe: { keys: ['email'], on_match: onMatch },
+    options: { skip_empty: true },
+    enabled: true
+  };
+}
+
+async function dmSave() {
+  const body = dmBody();
+  if (!body.name) { dmSetStatus('Give the mapping a name.', true); return; }
+  if (!body.field_map.length) { dmSetStatus('Map at least one destination field.', true); return; }
+  try {
+    let res;
+    if (DM.current && DM.current.id) res = await dmCall('PUT', '/data-mapping/mappings/' + DM.current.id, body);
+    else res = await dmCall('POST', '/data-mapping/mappings', body);
+    DM.current = res.mapping;
+    DM.dirty = false;
+    dmSetStatus('Saved.', false);
+    await dmInit();
+  } catch (e) {
+    dmSetStatus(e.message, true);
+  }
+}
+
+async function dmTest() {
+  if (!DM.current || !DM.current.id) { dmSetStatus('Save the mapping first, then test it.', true); return; }
+  DM.previewRow = dmSample();
+  try {
+    const res = await dmCall('POST', '/data-mapping/mappings/' + DM.current.id + '/run',
+      { row: DM.previewRow, dry_run: true });
+    DM.lastRun = res;
+    const client = JSON.stringify(dmPreviewPayload(), Object.keys(dmPreviewPayload()).sort());
+    const server = JSON.stringify(res.payload || {}, Object.keys(res.payload || {}).sort());
+    dmRenderPreview();
+    dmSetStatus(res.status === 'refused'
+      ? 'Server refused it: ' + (res.reason || '') 
+      : (client === server ? 'Preview matches the server exactly.' : 'Server resolved a different payload — see the preview panel.'),
+      res.status === 'refused');
+  } catch (e) {
+    dmSetStatus(e.message, true);
+  }
+}
+
+async function dmLoadRuns() {
+  const box = document.getElementById('dmRuns');
+  if (!box) return;
+  if (!DM.current || !DM.current.id) { box.innerHTML = '<p class="form-hint">Save the mapping first.</p>'; return; }
+  try {
+    const res = await dmCall('GET', '/data-mapping/mappings/' + DM.current.id + '/runs');
+    const runs = res.runs || [];
+    if (!runs.length) {
+      box.innerHTML = '<p class="form-hint">No runs yet. This mapping has never fired — that is a fact, not an error.</p>';
+      return;
+    }
+    box.innerHTML = '<table class="data-table" style="width:100%;font-size:12px"><thead><tr>' +
+      '<th>When</th><th>Event</th><th>Result</th><th>Detail</th><th>ms</th></tr></thead><tbody>' +
+      runs.map(function (r) {
+        return '<tr><td>' + dmEsc((r.created_at || '').replace('T', ' ').slice(0, 19)) + '</td>' +
+          '<td><code style="font-size:11px">' + dmEsc(r.event_id || '—') + '</code></td>' +
+          '<td>' + dmEsc(r.status) + '</td>' +
+          '<td>' + dmEsc(r.reason || (r.refused && r.refused.length ? JSON.stringify(r.refused) : '')) + '</td>' +
+          '<td>' + dmEsc(r.ms == null ? '' : r.ms) + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  } catch (e) {
+    box.innerHTML = '<p class="form-hint">' + dmEsc(e.message) + '</p>';
+  }
+}
+
+/* The fleet's known SPA draft trap: never let an unsaved mapping vanish on navigation. */
+window.addEventListener('beforeunload', function (ev) {
+  if (DM.dirty) { ev.preventDefault(); ev.returnValue = 'You have unsaved mapping changes.'; return ev.returnValue; }
+});
+
 </script>
 <script src="/inline-guide-widget.js?v=20261106a"></script>
 <script src="/private-email-inbox.js?v=20261112j"></script>

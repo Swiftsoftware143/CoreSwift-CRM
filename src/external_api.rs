@@ -96,7 +96,10 @@ fn value_to_string(v: &Value) -> Option<String> {
 
 /// Resolve a personal API key -> (tenant_id). Returns Unauthorized on failure, and **402** once the
 /// tenant's `limit_api_calls_per_day` ceiling has been reached for the current UTC day.
-async fn resolve_key(s: &AppState, headers: &HeaderMap) -> Result<(Uuid, Uuid), AppError> {
+pub(crate) async fn resolve_key(
+    s: &AppState,
+    headers: &HeaderMap,
+) -> Result<(Uuid, Uuid), AppError> {
     let key = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -201,7 +204,7 @@ fn normalize_key(label: &str) -> String {
 }
 
 /// Auto-provision a custom field for a tenant if it doesn't exist; return its id.
-async fn ensure_field(
+pub(crate) async fn ensure_field(
     s: &AppState,
     tenant_id: Uuid,
     key: &str,
@@ -252,7 +255,7 @@ async fn ensure_field(
     Ok(id)
 }
 
-async fn upsert_contact(
+pub(crate) async fn upsert_contact(
     s: &AppState,
     tenant_id: Uuid,
     builtin: &std::collections::HashMap<String, String>,
@@ -387,7 +390,7 @@ async fn upsert_contact(
     Ok(id)
 }
 
-async fn assign_list_membership(
+pub(crate) async fn assign_list_membership(
     s: &AppState,
     tenant_id: Uuid,
     contact_id: Uuid,
@@ -408,7 +411,7 @@ async fn assign_list_membership(
     Ok(())
 }
 
-async fn apply_tags(
+pub(crate) async fn apply_tags(
     s: &AppState,
     tenant_id: Uuid,
     contact_id: Uuid,
@@ -421,19 +424,39 @@ async fn apply_tags(
         // `tags.name` is varchar(100): an over-long pushed tag used to answer the caller the raw
         // 500 from this INSERT. Refuse it with the field named (kanban t_4be4ae4c).
         let name = crate::security::tag_name::normalize_or_validation(raw)?;
-        // Ensure tag exists
-        let tag_id: Uuid = sqlx::query_scalar(
-            "INSERT INTO tags (id, tenant_id, name)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (tenant_id, name) DO UPDATE SET name = EXCLUDED.name
-             RETURNING id",
+        // Reuse an existing tag that differs only in case or surrounding space.
+        //
+        // `idx_tags_name_tenant` is unique on the EXACT name, so without this lookup "Palm Bay",
+        // "palm bay" and "PALM BAY" become three different tags on the same account — the
+        // duplicate-tag failure mode a directory-driven flow invites, because the spelling comes
+        // from whatever form sent it. Matching case-insensitively keeps the FIRST spelling on
+        // record and never mints a second row for the same word.
+        let existing: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM tags
+              WHERE tenant_id = $1 AND lower(btrim(name)) = lower(btrim($2))
+              LIMIT 1",
         )
-        .bind(Uuid::new_v4())
         .bind(tenant_id)
-        .bind(name)
-        .fetch_one(&s.db)
+        .bind(&name)
+        .fetch_optional(&s.db)
         .await
         .map_err(AppError::Database)?;
+
+        let tag_id: Uuid = match existing {
+            Some(id) => id,
+            None => sqlx::query_scalar(
+                "INSERT INTO tags (id, tenant_id, name)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (tenant_id, name) DO UPDATE SET name = EXCLUDED.name
+                 RETURNING id",
+            )
+            .bind(Uuid::new_v4())
+            .bind(tenant_id)
+            .bind(&name)
+            .fetch_one(&s.db)
+            .await
+            .map_err(AppError::Database)?,
+        };
 
         // Assign to contact. The statement is `ON CONFLICT DO NOTHING`, so re-pushing the same
         // lead for an already-tagged contact writes no row. `TagAdded` means a row came into
@@ -465,7 +488,7 @@ async fn apply_tags(
     Ok(())
 }
 
-async fn set_field_value(
+pub(crate) async fn set_field_value(
     s: &AppState,
     contact_id: Uuid,
     field_id: Uuid,
