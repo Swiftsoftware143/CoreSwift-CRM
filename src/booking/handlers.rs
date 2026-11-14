@@ -228,9 +228,10 @@ pub async fn review_creative(
 /// the path), then `X-Booking-Workspace`, which the business's own booking address sets from nginx —
 /// the host already told us which business it is, so a link there needs no qualifier.
 ///
-/// The header can only ever select between PUBLIC calendars: every route that reads it is anonymous by
-/// design and returns the same data a public link would. It cannot reach a console route or another
-/// workspace's private data.
+/// The header can only ever select between PUBLIC calendars: every route that reads it is anonymous
+/// by design and returns the same data a public link would. It cannot reach a console route or
+/// another workspace's private data. (Content changed to force a real rebuild: a deploy reported the
+/// tree fresh while the shipped binary still lacked this code.)
 fn workspace_of(headers: &axum::http::HeaderMap, q: &WsQuery) -> Option<String> {
     if let Some(w) = q.w.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
         return Some(w.to_string());
