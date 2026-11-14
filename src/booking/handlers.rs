@@ -402,3 +402,46 @@ pub async fn manage_rebook(
         json!({ "ok": true, "order": res.order, "bookings": res.bookings }),
     ))
 }
+
+// ---------- the booking address's root ----------
+
+#[derive(Debug, serde::Deserialize)]
+pub struct HostSettingsBody {
+    #[serde(default)]
+    pub root_redirect_url: Option<String>,
+    #[serde(default)]
+    pub default_calendar_slug: Option<String>,
+}
+
+pub async fn get_host(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+) -> Result<Json<service::HostSettings>> {
+    Ok(Json(service::get_host_settings(&pool, t.0).await?))
+}
+
+pub async fn set_host(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Json(body): Json<HostSettingsBody>,
+) -> Result<Json<service::HostSettings>> {
+    Ok(Json(
+        service::set_host_settings(
+            &pool,
+            t.0,
+            body.root_redirect_url,
+            body.default_calendar_slug,
+        )
+        .await?,
+    ))
+}
+
+/// Public: what should happen when someone opens a booking address with nothing after it.
+pub async fn public_host(
+    State(pool): State<PgPool>,
+    Query(q): Query<WsQuery>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<service::PublicHost>> {
+    let ws = workspace_of(&headers, &q);
+    Ok(Json(service::public_host(&pool, ws.as_deref()).await?))
+}

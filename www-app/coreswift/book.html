@@ -258,12 +258,42 @@
     });
   }
 
+  // No calendar in the address: the ROOT of a booking host. This is never a dead page — the owner
+  // decides where a visitor goes (another calendar, their site, a campaign page), and if they have not
+  // decided, CoreSwift shows what this business can actually book.
+  function hostRoot() {
+    el('calName').textContent = '';
+    el('body').innerHTML = '<div class="skel"></div>';
+    api('/host' + (WSQ ? '?' + WSQ : '')).then(function (host) {
+      if (host.root_redirect_url) {
+        var target = host.root_redirect_url;
+        if (host.default_calendar_slug && target.indexOf('{calendar}') !== -1) {
+          target = target.replace('{calendar}', encodeURIComponent(host.default_calendar_slug));
+        }
+        window.location.replace(target);
+        return;
+      }
+      var list = host.calendars || [];
+      el('calName').textContent = host.workspace ? 'Book with ' + host.workspace.replace(/-/g, ' ') : 'Book';
+      if (!list.length) {
+        el('body').innerHTML = '<div class="empty">Nothing is open for booking yet. Please reply to the email that sent you here and a person will help.</div>';
+        return;
+      }
+      el('body').innerHTML = '<div class="grid">' + list.map(function (c) {
+        return '<a class="tile" style="text-decoration:none" href="/b/' + encodeURIComponent(c.slug) + '">' +
+          '<span class="placement">' + (c.kind === 'appointment' ? 'Appointment times'
+            : c.kind === 'inventory' ? 'Dated slots' : 'Date range') + '</span>' +
+          '<span class="when">' + esc(c.name) + '</span>' +
+          '<span class="meta">Open the calendar →</span></a>';
+      }).join('') + '</div>';
+    }).catch(function () {
+      el('calName').textContent = 'Book';
+      el('body').innerHTML = '<div class="empty">This address is not set up yet. Please reply to the email that sent you here and a person will help.</div>';
+    });
+  }
+
   function boot() {
-    if (!SLUG) {
-      el('body').innerHTML = '<div class="err">This page needs a calendar address, like /book/consultations.</div>';
-      el('calName').textContent = 'No calendar';
-      return;
-    }
+    if (!SLUG) { hostRoot(); return; }
     api('/c/' + encodeURIComponent(SLUG) + (WSQ ? '?' + WSQ : '')).then(function (payload) {
       // the endpoint answers {calendar, resources, bundles}; a bare calendar object is accepted too
       var cal = payload.calendar || payload;

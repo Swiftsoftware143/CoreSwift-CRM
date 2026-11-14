@@ -35,6 +35,8 @@ pub fn admin_router(pool: PgPool) -> Router {
             "/calendars",
             get(h::list_calendars).post(h::create_calendar),
         )
+        // what this booking address does at its root
+        .route("/host", get(h::get_host).put(h::set_host))
         .route(
             "/calendars/:id",
             get(h::get_calendar).patch(h::update_calendar),

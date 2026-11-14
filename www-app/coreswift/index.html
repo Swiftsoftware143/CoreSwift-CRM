@@ -10022,7 +10022,8 @@ function bkListPanel() {
       '<td class="muted">' + escapeHtml(c.timezone || '') + '</td>' +
       '<td style="text-align:right"><button class="btn btn-secondary btn-sm">Open</button></td></tr>';
   }).join('');
-  return '<div class="card"><table class="table"><thead><tr><th>Calendar</th><th>Type</th><th>Currency</th><th>Time zone</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+  return bkHostPanel() +
+    '<div class="card"><table class="table"><thead><tr><th>Calendar</th><th>Type</th><th>Currency</th><th>Time zone</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
 
 async function bkOpen(id) {
@@ -10276,6 +10277,42 @@ async function bkSaveNotify() {
     bkFlash('Saved.');
   } catch (e) { bkFlash(e.message, false); }
 }
+
+/* What the booking ADDRESS does at its root. Per workspace, because the address belongs to the
+ * business, not to one calendar: send visitors anywhere (including another calendar), or let
+ * CoreSwift list what this business can book. */
+function bkHostPanel() {
+  var h = BK.host || {};
+  return '<div class="card" style="margin-bottom:18px">' +
+    '<h3 style="margin-top:0">Your booking address</h3>' +
+    '<p class="muted" style="margin-top:-6px">What happens when someone opens your booking address with no calendar chosen. Leave the redirect empty and visitors see the calendars below.</p>' +
+    '<div class="bk-form">' +
+      '<label>Redirect to (optional)<input id="bkHostUrl" placeholder="https://your-site.com/book" value="' + escapeHtml(h.root_redirect_url || '') + '">' +
+      '<span class="muted" style="font-weight:400">https://, http:// or a path. Use {calendar} to send them to your default calendar instead of a fixed address.</span></label>' +
+      '<label>Default calendar<select id="bkHostDefault"><option value="">— none —</option>' +
+        (BK.list || []).map(function (c) {
+          return '<option value="' + escapeHtml(c.slug) + '"' + ((h.default_calendar_slug === c.slug) ? ' selected' : '') + '>' + escapeHtml(c.name) + '</option>';
+        }).join('') +
+      '</select></label>' +
+    '</div>' +
+    '<button class="btn btn-primary" onclick="bkSaveHost()">Save</button>' +
+    '</div>';
+}
+
+async function bkLoadHost() {
+  try { BK.host = await bkCall('GET', '/host'); } catch (e) { BK.host = {}; }
+}
+
+async function bkSaveHost() {
+  var body = {
+    root_redirect_url: (document.getElementById('bkHostUrl').value || '').trim(),
+    default_calendar_slug: document.getElementById('bkHostDefault').value
+  };
+  try {
+    BK.host = await bkCall('PUT', '/host', body);
+    bkFlash('Saved — your booking address follows this now.');
+  } catch (e) { bkFlash(e.message, false); }
+}
 function bkBack() { BK.current = null; BK.detail = null; bkRender(); }
 
 function bkResourcePanel(res, kind) {
@@ -10498,6 +10535,8 @@ TAB_RENDERERS['booking'] = () => pageHeader(
 
 TAB_LOADERS['booking'] = async () => {
   await bkInit();
+  await bkLoadHost();
+  bkRender();
   if (BK.current) { await bkLoadNotify(); await bkLoadOrders(); }
 };
 

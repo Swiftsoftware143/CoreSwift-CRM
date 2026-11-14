@@ -1622,3 +1622,117 @@ pub async fn set_notify_settings(
 
     get_notify_settings(pool, tenant, calendar_id).await
 }
+
+/// What a booking address does when it is opened with no calendar in the path.
+#[derive(Debug, serde::Serialize)]
+pub struct HostSettings {
+    pub root_redirect_url: Option<String>,
+    pub default_calendar_slug: Option<String>,
+}
+
+pub async fn get_host_settings(pool: &PgPool, tenant: Uuid) -> Result<HostSettings> {
+    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT root_redirect_url, default_calendar_slug FROM booking_host_settings WHERE tenant_id = $1",
+    )
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await?;
+    Ok(match row {
+        Some((url, slug)) => HostSettings {
+            root_redirect_url: url,
+            default_calendar_slug: slug,
+        },
+        None => HostSettings {
+            root_redirect_url: None,
+            default_calendar_slug: None,
+        },
+    })
+}
+
+/// Save the address-level behaviour. A redirect target is validated as a WEB address: `https://`,
+/// `http://` or a path starting `/`. Anything else — `javascript:`, `data:`, a bare word — is refused,
+/// because this value becomes a browser navigation for every visitor.
+pub async fn set_host_settings(
+    pool: &PgPool,
+    tenant: Uuid,
+    root_redirect_url: Option<String>,
+    default_calendar_slug: Option<String>,
+) -> Result<HostSettings> {
+    let url = root_redirect_url
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty());
+    if let Some(u) = &url {
+        let ok = u.starts_with("https://") || u.starts_with("http://") || u.starts_with('/');
+        if !ok {
+            return Err(BookingError::invalid(
+                "a redirect must start with https://, http:// or /",
+            ));
+        }
+        if u.starts_with("//") {
+            return Err(BookingError::invalid("a redirect cannot start with //"));
+        }
+    }
+    let slug = default_calendar_slug
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    sqlx::query(
+        "INSERT INTO booking_host_settings (tenant_id, root_redirect_url, default_calendar_slug, updated_at)
+         VALUES ($1, $2, $3, now())
+         ON CONFLICT (tenant_id) DO UPDATE
+            SET root_redirect_url = EXCLUDED.root_redirect_url,
+                default_calendar_slug = EXCLUDED.default_calendar_slug,
+                updated_at = now()",
+    )
+    .bind(tenant)
+    .bind(&url)
+    .bind(&slug)
+    .execute(pool)
+    .await?;
+
+    Ok(HostSettings {
+        root_redirect_url: url,
+        default_calendar_slug: slug,
+    })
+}
+
+/// The public answer for a booking address's root: where to send the visitor, and what this workspace
+/// actually sells. Never empty — a visitor who lands here always gets a way forward.
+#[derive(Debug, serde::Serialize)]
+pub struct PublicHost {
+    pub workspace: String,
+    pub root_redirect_url: Option<String>,
+    pub default_calendar_slug: Option<String>,
+    pub calendars: Vec<serde_json::Value>,
+}
+
+pub async fn public_host(pool: &PgPool, workspace: Option<&str>) -> Result<PublicHost> {
+    let Some(ws) = workspace.map(str::trim).filter(|w| !w.is_empty()) else {
+        return Err(BookingError::NotFound("workspace"));
+    };
+    let tenant: Uuid = sqlx::query_scalar(
+        "SELECT id FROM tenants WHERE (slug = $1 OR lower(name) = lower($1)) AND is_active LIMIT 1",
+    )
+    .bind(ws)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(BookingError::NotFound("workspace"))?;
+
+    let settings = get_host_settings(pool, tenant).await?;
+    let rows: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT slug, name, kind::text FROM booking_calendars WHERE tenant_id = $1 AND is_active ORDER BY name",
+    )
+    .bind(tenant)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(PublicHost {
+        workspace: ws.to_string(),
+        root_redirect_url: settings.root_redirect_url,
+        default_calendar_slug: settings.default_calendar_slug,
+        calendars: rows
+            .into_iter()
+            .map(|(slug, name, kind)| serde_json::json!({ "slug": slug, "name": name, "kind": kind }))
+            .collect(),
+    })
+}
