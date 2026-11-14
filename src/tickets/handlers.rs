@@ -48,6 +48,7 @@ pub async fn list_tickets(
              AND ($2::text IS NULL OR status = $2)
              AND ($3::text IS NULL OR priority = $3)
              AND ($4::uuid IS NULL OR contact_id = $4)
+             AND ($10::text IS NULL OR lower(contact_email) = lower($10))
              -- ── THE VIEWS AN AGENT ACTUALLY WORKS FROM (David, 2026-11-14) ────────────────
              -- One predicate list rather than a query per view, so every view is scoped by the same
              -- tenant clause above it: a new view cannot accidentally forget the account.
@@ -99,6 +100,7 @@ pub async fn list_tickets(
     .bind(is_platform)
     .bind(&q.view)
     .bind(assignee)
+    .bind(&q.contact_email)
     .fetch_all(&s.db)
     .await?;
 

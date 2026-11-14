@@ -862,6 +862,10 @@ POST /api/lists/:id/members</pre>
     priority. The ticket list shows the answer deadline as a countdown that turns amber inside the last hour and red once it has passed, and
     <strong>Due soon</strong> lists only what is unanswered and due within four hours &mdash; soonest deadline first, because that is the order the
     work has to be done in. A clock is only set when a policy exists: an account with no policy gets an empty deadline rather than a wrong one.</p>
+    <h3>Is this a new customer or the fifth time this month?</h3>
+    <p>Opening a ticket also shows what that customer sent before: how many earlier tickets, how many of them are still open, and the last five with
+    their status. One click moves to any of them. It reads only your own account, narrowed to the address that wrote in, so it is never somebody
+    else's history &mdash; an agent starts an answer knowing whether this is a first question or a repeat.</p>
     <h3>Files the customer sent</h3>
     <p>When someone emails a screenshot or a spreadsheet, the file appears on the ticket's timeline under the message that carried it, with its name
     and size, and one click downloads it. The ticket keeps the link rather than a copy of the bytes &mdash; one file, one place &mdash; and a file is

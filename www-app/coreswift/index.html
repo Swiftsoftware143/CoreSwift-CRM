@@ -4150,6 +4150,7 @@ async function openTicket(id) {
       '<p style="color:var(--text-muted);font-size:12px">Customer portal reference: <code>' +
         escapeHtml(String(t.id || id).slice(0, 8)) + '</code> — the customer opens My Support and signs in with their email address and this reference.</p>' +
       '</div></div>';
+    html += '<div id="tkHistory" style="margin-top:12px"></div>';
     html += '<div class="card" style="margin-top:12px"><div class="card-header">Thread</div><div class="card-body">';
     if (!msgs.length) {
       html += '<p style="color:var(--text-secondary)">No replies yet.</p>';
@@ -4199,6 +4200,7 @@ async function openTicket(id) {
         : '') +
       '<textarea rows="3" id="tkReplyBox"></textarea></div>';
     html += '</div></div>';
+    loadTicketHistory(id, (t.contact_email || ''), t.contact_id || null);
     showModal('🎫 ' + escapeHtml(t.subject || 'Ticket'), html,
       '<button class="btn btn-ghost" onclick="closeModal()">Close</button>' +
       '<button class="btn btn-ghost" onclick="mergeTicket(\'' + id + '\')">Merge into…</button>' +
@@ -4208,6 +4210,40 @@ async function openTicket(id) {
     toast('Could not open the ticket: ' + e.message, 'error');
   }
 }
+// ── What this customer has sent before (David, 2026-11-14) ──────────────────────────────────────
+// The single most useful thing an agent can know: is this a new person or the fifth time this month. The
+// history is read from the account's own queue, narrowed to this address, so it can never be another
+// customer's — the server applies the account scope, this only asks the question.
+async function loadTicketHistory(currentId, email, contactId) {
+  const el = document.getElementById('tkHistory');
+  if (!el) return;
+  if (!email && !contactId) return;
+  const q = email
+    ? 'contact_email=' + encodeURIComponent(email)
+    : 'contact_id=' + encodeURIComponent(contactId);
+  try {
+    const d = await API.get('/tickets?view=all&limit=50&' + q);
+    const all = ((d && d.tickets) || []).filter(x => String(x.id) !== String(currentId));
+    if (!all.length) return;
+    const open = all.filter(x => ['new', 'open', 'pending', 'on_hold'].includes(x.status)).length;
+    const rows = all.slice(0, 5).map(x =>
+      '<div style="display:flex;gap:8px;align-items:baseline;padding:4px 0;border-bottom:1px solid var(--border)">' +
+        '<span style="font-size:12px;color:var(--text-muted);min-width:64px">' +
+          (x.number ? '#' + escapeHtml(String(x.number)) : '—') + '</span>' +
+        '<a href="#" style="flex:1;font-size:13px" onclick="event.preventDefault();closeModal();openTicket(\'' +
+          escapeHtml(String(x.id)) + '\')">' + escapeHtml(x.subject || '') + '</a>' +
+        '<span class="badge ' + (['solved', 'closed'].includes(x.status) ? 'badge-success' : 'badge-warning') + '">' +
+          escapeHtml(x.status) + '</span>' +
+      '</div>').join('');
+    el.innerHTML = '<div class="card"><div class="card-body">' +
+      '<div style="font-size:13px;margin-bottom:6px"><strong>' + all.length + '</strong> earlier ticket(s) from this customer' +
+        (open ? ' — <span style="color:#b45309">' + open + ' still open</span>' : '') + '</div>' +
+      rows + '</div></div>';
+  } catch (e) {
+    el.innerHTML = '';
+  }
+}
+
 // ── Attachments (David, 2026-11-14) ──────────────────────────────────────────────────────────────
 // The file is fetched with the session token and handed to the browser as a blob: a plain link would be an
 // anonymous request, and the download route refuses those.

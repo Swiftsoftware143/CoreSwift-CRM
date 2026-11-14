@@ -95,6 +95,9 @@ pub struct TicketListQuery {
     /// Which saved view to show: all | mine | unassigned | waiting | open | due | ai. Unknown values fall
     /// through to `all` rather than erroring, because a stale bookmark is not a failure.
     pub view: Option<String>,
+    /// Everything from one address. Most tickets arrive with an email and no linked contact, so filtering on
+    /// the contact alone would show an agent an empty history for the customer who writes most often.
+    pub contact_email: Option<String>,
     pub contact_id: Option<uuid::Uuid>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
