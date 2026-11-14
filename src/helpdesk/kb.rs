@@ -277,10 +277,20 @@ pub async fn delete_article(
 
 // ── customer surface ───────────────────────────────────────────────────────────────────────────
 
-/// Resolve the account from the workspace slug a widget was configured with.
-async fn tenant_by_slug(s: &AppState, slug: &str) -> Result<Option<Uuid>, AppError> {
+/// Resolve the account a widget belongs to.
+///
+/// Accepts an account id (what the embed script already holds) or a workspace slug (what a person can
+/// type). An id is tried first because the widget path is the hot one and it is exact.
+async fn tenant_by_ref(s: &AppState, who: &str) -> Result<Option<Uuid>, AppError> {
+    if let Ok(id) = Uuid::parse_str(who.trim()) {
+        return sqlx::query_scalar::<_, Uuid>("SELECT id FROM tenants WHERE id = $1 AND is_active")
+            .bind(id)
+            .fetch_optional(&s.db)
+            .await
+            .map_err(AppError::Database);
+    }
     sqlx::query_scalar::<_, Uuid>("SELECT id FROM tenants WHERE slug = $1 AND is_active")
-        .bind(slug)
+        .bind(who.trim())
         .fetch_optional(&s.db)
         .await
         .map_err(AppError::Database)
@@ -301,7 +311,7 @@ pub async fn public_list(
             .ok_or_else(|| {
                 AppError::BadRequest("Which business is this for? `w` is required.".into())
             })?;
-    let Some(tid) = tenant_by_slug(&s, slug).await? else {
+    let Some(tid) = tenant_by_ref(&s, slug).await? else {
         return Ok(Json(serde_json::json!({ "articles": [], "count": 0 })));
     };
 

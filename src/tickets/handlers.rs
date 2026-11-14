@@ -877,7 +877,7 @@ pub async fn support_embed_script(
 
   // Styles
   var s=d.createElement('style');
-  s.textContent='.crm-support-btn{{position:fixed;bottom:20px;right:20px;z-index:9999;background:#0ea5e9;color:#fff;border:none;border-radius:50px;padding:14px 24px;font-size:15px;font-family:-apple-system,system-ui,sans-serif;cursor:pointer;box-shadow:0 4px 20px rgba(14,165,233,0.35);transition:transform .2s,box-shadow .2s}}.crm-support-btn:hover{{transform:scale(1.05);box-shadow:0 6px 28px rgba(14,165,233,0.5)}}.crm-support-panel{{position:fixed;bottom:90px;right:20px;z-index:9998;width:360px;max-width:calc(100vw-40px);background:#fff;border-radius:16px;box-shadow:0 8px 40px rgba(0,0,0,0.15);display:none;overflow:hidden;font-family:-apple-system,system-ui,sans-serif;color:#1e293b}}.crm-support-panel.open{{display:block}}.crm-support-header{{background:#0ea5e9;color:#fff;padding:20px;font-weight:600;font-size:16px}}.crm-support-body{{padding:20px}}.crm-support-field{{margin-bottom:14px}}.crm-support-field label{{display:block;font-size:13px;font-weight:500;margin-bottom:4px;color:#475569}}.crm-support-field input,.crm-support-field textarea,.crm-support-field select{{width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;font-family:inherit;box-sizing:border-box;outline:none;transition:border .2s}}.crm-support-field input:focus,.crm-support-field textarea:focus,.crm-support-field select:focus{{border-color:#0ea5e9;box-shadow:0 0 0 3px rgba(14,165,233,0.15)}}.crm-support-field textarea{{resize:vertical;min-height:90px}}.crm-support-submit{{width:100%;background:#0ea5e9;color:#fff;border:none;border-radius:8px;padding:12px;font-size:14px;font-weight:600;cursor:pointer;transition:background .2s}}.crm-support-submit:hover{{background:#0284c7}}.crm-support-submit:disabled{{opacity:0.6;cursor:default}}.crm-support-thanks{{display:none;text-align:center;padding:40px 20px}}.crm-support-thanks.show{{display:block}}.crm-support-thanks h3{{color:#0ea5e9;margin:0 0 8px}}';
+  s.textContent='.crm-support-btn{{position:fixed;bottom:20px;right:20px;z-index:9999;background:#0ea5e9;color:#fff;border:none;border-radius:50px;padding:14px 24px;font-size:15px;font-family:-apple-system,system-ui,sans-serif;cursor:pointer;box-shadow:0 4px 20px rgba(14,165,233,0.35);transition:transform .2s,box-shadow .2s}}.crm-support-btn:hover{{transform:scale(1.05);box-shadow:0 6px 28px rgba(14,165,233,0.5)}}.crm-support-panel{{position:fixed;bottom:90px;right:20px;z-index:9998;width:360px;max-width:calc(100vw-40px);background:#fff;border-radius:16px;box-shadow:0 8px 40px rgba(0,0,0,0.15);display:none;overflow:hidden;font-family:-apple-system,system-ui,sans-serif;color:#1e293b}}.crm-support-panel.open{{display:block}}.crm-support-header{{background:#0ea5e9;color:#fff;padding:20px;font-weight:600;font-size:16px}}.crm-support-body{{padding:20px}}.crm-support-field{{margin-bottom:14px}}.crm-support-field label{{display:block;font-size:13px;font-weight:500;margin-bottom:4px;color:#475569}}.crm-support-field input,.crm-support-field textarea,.crm-support-field select{{width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;font-family:inherit;box-sizing:border-box;outline:none;transition:border .2s}}.crm-support-field input:focus,.crm-support-field textarea:focus,.crm-support-field select:focus{{border-color:#0ea5e9;box-shadow:0 0 0 3px rgba(14,165,233,0.15)}}.crm-support-field textarea{{resize:vertical;min-height:90px}}.crm-support-submit{{width:100%;background:#0ea5e9;color:#fff;border:none;border-radius:8px;padding:12px;font-size:14px;font-weight:600;cursor:pointer;transition:background .2s}}.crm-support-submit:hover{{background:#0284c7}}.crm-support-submit:disabled{{opacity:0.6;cursor:default}}.crm-support-thanks{{display:none;text-align:center;padding:40px 20px}}.crm-support-thanks.show{{display:block}}.crm-support-thanks h3{{color:#0ea5e9;margin:0 0 8px}}.crm-support-kb{{padding:10px 14px 0}}.crm-support-kb input{{width:100%;padding:8px 10px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;font-family:inherit}}.crm-support-kb-hit{{padding:8px 10px;margin-top:6px;border:1px solid #e2e8f0;border-radius:8px;cursor:pointer;font-size:13px;color:#0f172a}}.crm-support-kb-hit:hover{{background:#f0f9ff;border-color:#bae6fd}}.crm-support-kb-article{{padding:10px;margin-top:6px;border:1px solid #bae6fd;border-radius:8px;background:#f8fbff;font-size:13px;line-height:1.5;color:#0f172a}}.crm-support-kb-article div{{margin-top:6px}}.crm-support-kb-back{{margin-top:8px;background:none;border:none;color:#0284c7;cursor:pointer;font-size:12px;padding:0}}.crm-support-kb-empty{{font-size:12px;color:#64748b;padding:8px 2px}}';
   d.head.appendChild(s);
 
   // Button
@@ -895,9 +895,47 @@ pub async fn support_embed_script(
     var p=d.createElement('div');
     p.id='crm-support-panel';
     p.className='crm-support-panel open';
-    p.innerHTML='<div class="crm-support-header">How can we help?</div><div class="crm-support-body" id="crm-support-form"><div class="crm-support-field"><label>Your name</label><input id="cs-name" placeholder="Jane Smith"></div><div class="crm-support-field"><label>Email</label><input id="cs-email" type="email" placeholder="you@example.com"></div><div class="crm-support-field"><label>What do you need help with?</label><input id="cs-subject" placeholder="Brief summary"></div><div class="crm-support-field"><label>Details</label><textarea id="cs-message" placeholder="Describe your issue or question..."></textarea></div><div class="crm-support-field"><label>Priority</label><select id="cs-priority"><option value="medium">Medium — normal response</option><option value="low">Low — not urgent</option><option value="high">High — need help soon</option><option value="urgent">Urgent — critical issue</option></select></div><button class="crm-support-submit" id="cs-submit" onclick="submitSupport()">Send</button></div><div class="crm-support-thanks" id="crm-support-thanks"><h3>✓ Received!</h3><p>We will get back to you shortly.</p></div>';
+    p.innerHTML='<div class="crm-support-header">How can we help?</div>' +
+      // Answers first (David, 2026-11-14): a customer who finds their answer never opens a ticket, and a
+      // ticket nobody opened costs nothing to answer. This reads the same published+public articles the
+      // console writes; the endpoint enforces who may see them, not this script.
+      '<div class="crm-support-kb"><input id="cs-kb-q" placeholder="Search the answers…" ' +
+        'oninput="csKbSearch()" autocomplete="off"><div id="cs-kb-results"></div></div>' +
+      '<div class="crm-support-body" id="crm-support-form"><div class="crm-support-field"><label>Your name</label><input id="cs-name" placeholder="Jane Smith"></div><div class="crm-support-field"><label>Email</label><input id="cs-email" type="email" placeholder="you@example.com"></div><div class="crm-support-field"><label>What do you need help with?</label><input id="cs-subject" placeholder="Brief summary"></div><div class="crm-support-field"><label>Details</label><textarea id="cs-message" placeholder="Describe your issue or question..."></textarea></div><div class="crm-support-field"><label>Priority</label><select id="cs-priority"><option value="medium">Medium — normal response</option><option value="low">Low — not urgent</option><option value="high">High — need help soon</option><option value="urgent">Urgent — critical issue</option></select></div><button class="crm-support-submit" id="cs-submit" onclick="submitSupport()">Send</button></div><div class="crm-support-thanks" id="crm-support-thanks"><h3>✓ Received!</h3><p>We will get back to you shortly.</p></div>';
     d.body.appendChild(p);
   }}
+
+  var kbTimer=null;
+  window.csKbSearch=function(){{
+    clearTimeout(kbTimer);
+    kbTimer=setTimeout(function(){{
+      var q=(d.getElementById('cs-kb-q')||{{}}).value||'';
+      var box=d.getElementById('cs-kb-results');
+      if(!box)return;
+      if(q.trim().length<2){{box.innerHTML='';return}}
+      fetch(BASE+'/api/public/helpdesk/kb?w='+encodeURIComponent(tid)+'&q='+encodeURIComponent(q))
+        .then(function(r){{return r.json()}})
+        .then(function(res){{
+          var list=(res&&res.articles)||[];
+          if(!list.length){{box.innerHTML='<div class="crm-support-kb-empty">No answer for that yet — send us a message below.</div>';return}}
+          window.__csKb=list;
+          box.innerHTML=list.map(function(a,i){{
+            return '<div class="crm-support-kb-hit" onclick="csKbOpen('+i+')">'+esc(a.title)+'</div>';
+          }}).join('');
+        }})
+        .catch(function(){{box.innerHTML=''}});
+    }},250);
+  }};
+  window.csKbOpen=function(i){{
+    var a=(window.__csKb||[])[i];
+    var box=d.getElementById('cs-kb-results');
+    if(!a||!box)return;
+    box.innerHTML='<div class="crm-support-kb-article"><strong>'+esc(a.title)+'</strong><div>'+
+      esc(a.body_md).replace(/\n/g,'<br>')+
+      '</div><button type="button" class="crm-support-kb-back" onclick="csKbSearch()">Back to results</button></div>';
+  }};
+  function esc(v){{return String(v==null?'':v).replace(/[&<>"']/g,function(c){{
+    return {{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]}})}}
 
   window.submitSupport=function(){{
     var btn=d.getElementById('cs-submit');
