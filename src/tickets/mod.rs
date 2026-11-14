@@ -46,6 +46,14 @@ pub fn router(state: AppState) -> Router<AppState> {
                 .delete(handlers::delete_ticket),
         )
         .route(
+            "/tickets/:id/merge",
+            axum::routing::post(handlers::merge_ticket),
+        )
+        .route(
+            "/tickets/:id/split",
+            axum::routing::post(handlers::split_ticket),
+        )
+        .route(
             "/tickets/:id/messages",
             axum::routing::post(handlers::add_message),
         )

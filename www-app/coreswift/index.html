@@ -4159,7 +4159,12 @@ async function openTicket(id) {
           (isNote ? ';background:rgba(217,119,6,.08);border-radius:0 6px 6px 0' : '') + '">' +
           '<div style="font-size:12px;color:' + (isNote ? '#b45309' : 'var(--text-muted)') + '">' +
           who + ' · ' + escapeHtml(m.created_at ? new Date(m.created_at).toLocaleString() : '') + '</div>' +
-          '<div style="white-space:pre-wrap">' + escapeHtml(m.message || '') + '</div></div>';
+          '<div style="white-space:pre-wrap">' + escapeHtml(m.message || '') + '</div>' +
+          // Only a reply can become its own ticket: a note and a system event are this ticket's history.
+          ((m.kind || 'reply') === 'reply' && m.id
+            ? '<button class="btn btn-ghost btn-xs" style="margin-top:4px" ' +
+              'onclick="splitTicket(\'' + id + '\', \'' + escapeHtml(String(m.id)) + '\')">Split out</button>'
+            : '') + '</div>';
       });
     }
     html += '<div class="form-group"><label>Write to the customer, or leave a note only your team sees</label>' +
@@ -4167,12 +4172,44 @@ async function openTicket(id) {
     html += '</div></div>';
     showModal('🎫 ' + escapeHtml(t.subject || 'Ticket'), html,
       '<button class="btn btn-ghost" onclick="closeModal()">Close</button>' +
+      '<button class="btn btn-ghost" onclick="mergeTicket(\'' + id + '\')">Merge into…</button>' +
       '<button class="btn btn-secondary" onclick="replyTicket(\'' + id + '\', true)">Add internal note</button>' +
       '<button class="btn btn-primary" onclick="replyTicket(\'' + id + '\')">Send reply</button>', true);
   } catch (e) {
     toast('Could not open the ticket: ' + e.message, 'error');
   }
 }
+// ── Merge and split (David, 2026-11-14) ─────────────────────────────────────────────────────────
+// Two tickets that are really one conversation, and one ticket that is really two. The customer's words
+// exist once at every moment: both operations MOVE messages inside a transaction, they never copy them.
+async function mergeTicket(id) {
+  const entered = (prompt('Merge this ticket INTO which ticket number?\n\nThe other ticket keeps its number; this one closes and points at it.') || '').replace('#', '').trim();
+  if (!entered) return;
+  if (!/^[0-9]+$/.test(entered)) { toast('That is not a ticket number', 'error'); return; }
+  try {
+    // the number is resolved against the account's own queue — never a free-typed id
+    const d = await API.get('/tickets?view=all&limit=100');
+    const all = (d && d.tickets) || [];
+    const target = all.find(t => String(t.number) === String(entered));
+    if (!target) { toast('No ticket #' + entered + ' in this account', 'error'); return; }
+    if (String(target.id) === String(id)) { toast('A ticket cannot be merged into itself', 'error'); return; }
+    const res = await API.post('/tickets/' + id + '/merge', { into: target.id });
+    toast('Merged into #' + res.survivor_number + ' — ' + res.messages_moved + ' message(s) moved', 'success');
+    closeModal();
+    openTicket(target.id);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function splitTicket(id, messageId) {
+  if (!confirm('Move this message into its own new ticket?')) return;
+  try {
+    const res = await API.post('/tickets/' + id + '/split', { message_id: messageId });
+    toast('Split into #' + res.number, 'success');
+    closeModal();
+    openTicket(id);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 async function replyTicket(id, isNote) {
   const el = document.getElementById('tkReplyBox');
   const message = el ? el.value.trim() : '';

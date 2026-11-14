@@ -292,6 +292,59 @@ pub async fn update_ticket(
     Ok(Json(json!(updated)))
 }
 
+/// POST /api/tickets/:id/merge — fold another ticket's conversation into this one.
+///
+/// The body names the SURVIVOR (`into`), so the caller is explicit about which number the customer keeps.
+#[derive(Debug, serde::Deserialize)]
+pub struct MergeBody {
+    pub into: uuid::Uuid,
+}
+
+pub async fn merge_ticket(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path(ticket_id): Path<Uuid>,
+    Json(body): Json<MergeBody>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    let outcome = crate::helpdesk::merge::merge_tickets(&s.db, tid, ticket_id, body.into).await?;
+    Ok(Json(serde_json::json!({
+        "survivor": outcome.survivor,
+        "survivor_number": outcome.survivor_number,
+        "merged": outcome.merged,
+        "merged_number": outcome.merged_number,
+        "messages_moved": outcome.messages_moved,
+    })))
+}
+
+/// POST /api/tickets/:id/split — pull one message out into a new ticket.
+#[derive(Debug, serde::Deserialize)]
+pub struct SplitBody {
+    pub message_id: uuid::Uuid,
+    pub subject: Option<String>,
+}
+
+pub async fn split_ticket(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path(ticket_id): Path<Uuid>,
+    Json(body): Json<SplitBody>,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    let outcome =
+        crate::helpdesk::merge::split_message(&s.db, tid, ticket_id, body.message_id, body.subject)
+            .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "ticket_id": outcome.ticket_id,
+            "number": outcome.number,
+            "from_number": outcome.from_number,
+            "moved_message": outcome.moved_message,
+        })),
+    ))
+}
+
 /// DELETE /api/tickets/:id
 pub async fn delete_ticket(
     State(s): State<AppState>,
