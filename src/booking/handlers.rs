@@ -161,7 +161,7 @@ pub async fn admin_availability(
     let mut c = pool.acquire().await?;
     let cal = service::calendar_for_tenant(&mut c, id, t.0).await?;
     Ok(Json(
-        service::availability(&mut c, &cal, q.from, q.to).await?,
+        service::availability(&mut c, &cal, q.from, q.to, false).await?,
     ))
 }
 
@@ -279,8 +279,9 @@ pub async fn public_availability(
     let mut c = pool.acquire().await?;
     let ws = workspace_of(&headers, &WsQuery { w: q.w.clone() });
     let cal = service::calendar_by_slug(&mut c, &slug, ws.as_deref()).await?;
+    // a buyer sees the owner's limits; the operator does not (see admin_availability)
     Ok(Json(
-        service::availability(&mut c, &cal, q.from, q.to).await?,
+        service::availability(&mut c, &cal, q.from, q.to, true).await?,
     ))
 }
 

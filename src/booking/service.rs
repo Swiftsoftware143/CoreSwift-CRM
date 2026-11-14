@@ -511,11 +511,69 @@ pub async fn create_bundle(
 
 // ---------- availability ----------
 
+/// How much choice a buyer is shown, and how far ahead they may look.
+///
+/// From `settings.limits`: `max_options` caps the whole page, `max_per_day` caps one day, and
+/// `max_advance_days` stops a visitor booking six months out. All optional, all enforced HERE rather
+/// than in the page — a limit that only exists in the browser is not a limit, it is a suggestion.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AvailabilityLimits {
+    pub max_options: Option<u32>,
+    pub max_per_day: Option<u32>,
+    pub max_advance_days: Option<i64>,
+}
+
+impl AvailabilityLimits {
+    fn of(cal: &Calendar) -> Self {
+        let l = cal.settings.get("limits");
+        let num = |k: &str| l.and_then(|v| v.get(k)).and_then(|v| v.as_u64());
+        Self {
+            max_options: num("max_options").map(|v| v as u32).filter(|v| *v > 0),
+            max_per_day: num("max_per_day").map(|v| v as u32).filter(|v| *v > 0),
+            max_advance_days: num("max_advance_days").map(|v| v as i64).filter(|v| *v > 0),
+        }
+    }
+}
+
+/// Cut the list down to what the owner allows a buyer to see: never past their horizon, never more
+/// than N a day, never more than N in total. Order is preserved, so the SOONEST positions survive.
+fn apply_limits(
+    mut out: Vec<Opening>,
+    limits: AvailabilityLimits,
+    tz: chrono_tz::Tz,
+) -> Vec<Opening> {
+    if let Some(days) = limits.max_advance_days {
+        let horizon = Utc::now() + Duration::days(days);
+        out.retain(|o| o.starts_at <= horizon);
+    }
+    let mut per_day: std::collections::HashMap<chrono::NaiveDate, u32> =
+        std::collections::HashMap::new();
+    let mut kept = Vec::with_capacity(out.len());
+    for o in out {
+        if let Some(cap) = limits.max_options {
+            if kept.len() as u32 >= cap {
+                break;
+            }
+        }
+        let day = o.starts_at.with_timezone(&tz).date_naive();
+        let used = per_day.entry(day).or_insert(0);
+        if let Some(cap) = limits.max_per_day {
+            if *used >= cap {
+                continue;
+            }
+        }
+        *used += 1;
+        kept.push(o);
+    }
+    kept
+}
+
 pub async fn availability(
     conn: &mut PgConnection,
     cal: &Calendar,
     from: NaiveDate,
     to: NaiveDate,
+    enforce_limits: bool,
 ) -> Result<Vec<Opening>> {
     if to < from || (to - from).num_days() > MAX_RANGE_DAYS {
         return Err(BookingError::invalid(
@@ -645,6 +703,9 @@ pub async fn availability(
             }
             out.sort_by_key(|o| o.starts_at);
         }
+    }
+    if enforce_limits {
+        out = apply_limits(out, AvailabilityLimits::of(cal), tz);
     }
     Ok(out)
 }

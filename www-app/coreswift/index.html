@@ -10064,6 +10064,7 @@ function bkDetailPanel() {
     bkEmbedPanel(cal.slug) + '</div>';
 
   html += bkThemePanel(cal);
+  html += bkRulesPanel(cal);
   html += bkResourcePanel(res, cal.kind);
   html += bkManualPanel(res);
   if (cal.kind === 'appointment') html += bkHoursPanel();
@@ -10378,6 +10379,44 @@ async function bkManualBook() {
     bkRender();
     await bkLoadOpenSlots();
     await bkLoadOrders();
+  } catch (e) { bkFlash(e.message, false); }
+}
+
+/* How much choice a buyer is shown. A calendar that offers everything at once reads as "there is no
+ * demand"; a handful of nearby options reads as "book now". Limits are enforced by the server, not the
+ * page, so the public API itself never hands out more. */
+function bkRulesPanel(cal) {
+  var l = (cal.settings && cal.settings.limits) || {};
+  return '<div class="card" style="margin-bottom:18px">' +
+    '<h3 style="margin-top:0">What buyers are shown</h3>' +
+    '<p class="muted" style="margin-top:-6px">Keep the choice tight so people book sooner. Leave a box empty for no limit.</p>' +
+    '<div class="bk-form">' +
+      '<label>Options in total<input id="bkLimTotal" type="number" min="1" placeholder="e.g. 5" value="' + escapeHtml(l.max_options || '') + '"></label>' +
+      '<label>Options per day<input id="bkLimDay" type="number" min="1" placeholder="e.g. 3" value="' + escapeHtml(l.max_per_day || '') + '"></label>' +
+      '<label>How far ahead (days)<input id="bkLimAhead" type="number" min="1" placeholder="e.g. 60" value="' + escapeHtml(l.max_advance_days || '') + '"></label>' +
+    '</div>' +
+    '<button class="btn btn-primary" onclick="bkSaveRules()">Save</button>' +
+    '<p class="muted" style="font-size:12px;margin:10px 0 0">Applies to the booking page and its embeds. You still see everything when filling a position by hand.</p>' +
+    '</div>';
+}
+
+async function bkSaveRules() {
+  function num(id) {
+    var v = (document.getElementById(id).value || '').trim();
+    if (!v) return null;
+    var n = parseInt(v, 10);
+    return isNaN(n) || n <= 0 ? null : n;
+  }
+  var limits = {
+    max_options: num('bkLimTotal'),
+    max_per_day: num('bkLimDay'),
+    max_advance_days: num('bkLimAhead')
+  };
+  try {
+    await bkCall('PATCH', '/calendars/' + BK.current, { settings: { limits: limits } });
+    await bkOpenDetail(BK.current, true);
+    bkRender();
+    bkFlash('Saved — buyers see that many options.');
   } catch (e) { bkFlash(e.message, false); }
 }
 function bkBack() { BK.current = null; BK.detail = null; bkRender(); }
