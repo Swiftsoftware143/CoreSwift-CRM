@@ -414,17 +414,30 @@
     // the filter bar belongs above the grid, inside the left column for alignment
     var gridCol = el('body').querySelector('.cols > div');
     if (gridCol) gridCol.insertAdjacentHTML('afterbegin', bar);
+    paintNote();
+  }
+
+  var PENDING_NOTE = null;
+
+  function paintNote() {
+    var box = document.getElementById('bookNote');
+    if (!box) return;
+    if (PENDING_NOTE && Date.now() < PENDING_NOTE.until) {
+      box.innerHTML = '<div class="note ' + (PENDING_NOTE.ok === false ? 'bad' : 'good') + '">' +
+        PENDING_NOTE.html + '</div>';
+    } else {
+      box.innerHTML = '';
+      PENDING_NOTE = null;
+    }
   }
 
   function setNote(html, ok) {
-    var box = document.getElementById('bookNote');
-    if (!box) return;
-    box.innerHTML = '<div class="note ' + (ok === false ? 'bad' : 'good') + '">' + html + '</div>';
+    // Survives the re-render that the refresh triggers - otherwise the message was painted and
+    // immediately wiped, which looked exactly like nothing happened.
+    PENDING_NOTE = { html: html, ok: ok, until: Date.now() + 9000 };
+    paintNote();
     clearTimeout(window.__bookNoteT);
-    window.__bookNoteT = setTimeout(function () {
-      var again = document.getElementById('bookNote');
-      if (again) again.innerHTML = '';
-    }, 9000);
+    window.__bookNoteT = setTimeout(paintNote, 9050);
   }
 
   function refreshQuote() {
