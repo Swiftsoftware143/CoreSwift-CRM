@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manage your booking</title>
+<style>
+  :root{ --ink:#0f172a; --ink-2:#475569; --muted:#64748b; --line:#e2e8f0; --card:#fff; --bg:#f8fafc;
+         --brand:#6366f1; --brand-soft:#eef2ff; --ok:#059669; --bad:#dc2626;
+         --shadow-sm:0 1px 2px rgba(15,23,42,.06); --shadow-md:0 6px 18px rgba(15,23,42,.08);
+         --shadow-lg:0 18px 40px rgba(15,23,42,.12); --r:14px; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.5 "Inter","Plus Jakarta Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:760px;margin:0 auto;padding:28px 20px 80px}
+  h1{margin:0 0 6px;font-size:24px;letter-spacing:-.02em}
+  .sub{margin:0 0 20px;color:var(--muted);font-size:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow-sm);
+        padding:20px;margin-bottom:16px}
+  .row{display:flex;justify-content:space-between;gap:12px;padding:7px 0;font-size:14px}
+  .row + .row{border-top:1px solid #f1f5f9}
+  .row b{font-weight:700}
+  .total{font-size:17px;font-weight:800;letter-spacing:-.01em}
+  .pill{display:inline-block;border-radius:999px;padding:4px 11px;font-size:11.5px;font-weight:700;letter-spacing:.03em;
+        background:var(--brand-soft);color:var(--brand);text-transform:uppercase}
+  .pill.ok{background:#ecfdf5;color:var(--ok)}
+  .pill.off{background:#f1f5f9;color:var(--muted)}
+  .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+  .btn{border:1px solid var(--line);background:#fff;color:var(--ink-2);border-radius:11px;padding:11px 16px;
+       font:inherit;font-size:14px;font-weight:700;cursor:pointer;transition:transform .12s ease,box-shadow .18s ease}
+  .btn:hover{box-shadow:var(--shadow-md)}
+  .btn:active{transform:scale(.98)}
+  .btn.primary{background:var(--brand);border-color:var(--brand);color:#fff;box-shadow:0 8px 20px rgba(99,102,241,.25)}
+  .btn.danger{color:var(--bad);border-color:#fecaca}
+  .btn[disabled]{opacity:.55;cursor:not-allowed}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;margin-top:14px}
+  .tile{text-align:left;background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;cursor:pointer;
+        font:inherit;color:inherit;display:flex;flex-direction:column;gap:6px;box-shadow:var(--shadow-sm);
+        transition:transform .14s ease,box-shadow .18s ease,border-color .18s ease,background .18s ease}
+  .tile:hover{transform:translateY(-2px);box-shadow:var(--shadow-md)}
+  .tile:active{transform:scale(.98)}
+  .tile.on{border-color:var(--brand);background:var(--brand-soft);box-shadow:0 0 0 2px var(--brand)}
+  .tile .when{font-weight:700;font-size:14px}
+  .tile .meta{font-size:12.5px;color:var(--muted)}
+  .muted{color:var(--muted);font-size:13px}
+  .err{background:#fef2f2;border:1px solid #fecaca;color:var(--bad);border-radius:var(--r);padding:22px}
+  .done{background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46;border-radius:var(--r);padding:16px;font-weight:600}
+  .hide{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="title">Loading your booking…</h1>
+  <p class="sub" id="sub"></p>
+  <div id="body"><div class="card"><span class="muted">One moment…</span></div></div>
+</div>
+<script>
+(function () {
+  'use strict';
+  var m = location.pathname.match(/\/book\/manage\/([A-Za-z0-9]+)/);
+  var TOKEN = m ? m[1] : '';
+  var S = { view: null, avail: [], picked: null, mode: 'view' };
+
+  function el(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+    });
+  }
+  function money(c) {
+    return '$' + ((c || 0) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function dayLabel(iso) {
+    var d = new Date(iso);
+    if (isNaN(d)) return iso || '';
+    return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) + ' · ' +
+      d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+  function api(path, opts) {
+    return fetch('/api/public/booking' + path, opts).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) throw new Error((j && (j.error || j.message)) || ('Request failed (' + r.status + ')'));
+        return j;
+      });
+    });
+  }
+  function post(path, body) {
+    return api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  }
+
+  function load() {
+    return api('/manage/' + encodeURIComponent(TOKEN)).then(function (res) {
+      S.view = res.booking;
+      document.title = S.view.calendar_name + ' — your booking';
+      render();
+    }).catch(function (e) {
+      el('title').textContent = 'We could not find that booking';
+      el('sub').textContent = '';
+      el('body').innerHTML = '<div class="err">' + esc(e.message) + ' — the link may have expired, or it was copied short.</div>';
+    });
+  }
+
+  function render() {
+    var v = S.view;
+    el('title').textContent = v.calendar_name;
+    el('sub').textContent = 'Reference ' + v.order_id + ' · booked by ' + v.customer_email;
+    var statusPill = v.status === 'confirmed' ? '<span class="pill ok">confirmed</span>'
+      : v.status === 'cancelled' ? '<span class="pill off">cancelled</span>'
+      : '<span class="pill">held — not paid yet</span>';
+
+    var live = v.status !== 'cancelled';
+    var rows = v.bookings.map(function (b) {
+      return '<div class="row"><span><b>' + esc(b.resource_name) + '</b><br>' +
+        '<span class="muted">' + esc(dayLabel(b.starts_at)) + (b.label ? ' · ' + esc(b.label) : '') + '</span></span>' +
+        '<span>' + money(b.price_cents) + '</span></div>';
+    }).join('');
+
+    el('body').innerHTML =
+      '<div class="card">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+          '<strong>What you booked</strong>' + statusPill +
+        '</div>' +
+        rows +
+        '<div class="row" style="border-top:1px solid var(--line);margin-top:8px">' +
+          '<span class="total">Total</span><span class="total">' + money(v.total_cents) + '</span></div>' +
+        (v.discount_cents ? '<p class="muted" style="margin:6px 0 0">A bulk saving of ' + money(v.discount_cents) + ' is already included.</p>' : '') +
+        (live ? '<div class="actions" style="margin-top:16px">' +
+          '<button class="btn primary" onclick="MGR.startReschedule()">Move to another date</button>' +
+          '<button class="btn" onclick="MGR.rebook()">Book it again</button>' +
+          '<button class="btn danger" onclick="MGR.cancel()">Cancel</button>' +
+        '</div>' : '<p class="muted" style="margin-top:14px">This booking is cancelled. Nothing further is owed.</p>') +
+      '</div>' +
+      '<div class="card hide" id="reschedCard">' +
+        '<strong>Pick a new date</strong>' +
+        '<p class="muted" style="margin:6px 0 0">Only what is genuinely still open appears here.</p>' +
+        '<div class="grid" id="reschedGrid"><span class="muted">Loading…</span></div>' +
+        '<div class="actions" style="margin-top:14px">' +
+          '<button class="btn primary" id="moveBtn" disabled onclick="MGR.confirmMove()">Move my booking</button>' +
+          '<button class="btn" onclick="MGR.closeReschedule()">Keep what I have</button>' +
+        '</div>' +
+      '</div>' +
+      '<div id="note"></div>';
+  }
+
+  function note(html, ok) {
+    el('note').innerHTML = '<div class="' + (ok === false ? 'err' : 'done') + '">' + html + '</div>';
+  }
+
+  window.MGR = {
+    startReschedule: function () {
+      var card = el('reschedCard');
+      card.classList.remove('hide');
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      var today = new Date().toISOString().slice(0, 10);
+      var later = new Date(Date.now() + 60 * 864e5).toISOString().slice(0, 10);
+      api('/c/' + encodeURIComponent(S.view.calendar_slug) + '/availability?from=' + today + '&to=' + later)
+        .then(function (rows) {
+          var list = Array.isArray(rows) ? rows : (rows.availability || []);
+          var currentIds = S.view.bookings.map(function (b) { return b.starts_at; });
+          list = list.filter(function (a) {
+            return a.remaining > 0 && currentIds.indexOf(a.starts_at) === -1;
+          });
+          var grid = el('reschedGrid');
+          if (!list.length) { grid.innerHTML = '<span class="muted">Nothing else is open in the next 60 days. Reply to your confirmation and we will find a time.</span>'; return; }
+          grid.innerHTML = list.slice(0, 40).map(function (a, i) {
+            return '<button type="button" class="tile" data-i="' + i + '" onclick="MGR.pick(this,' + i + ')">' +
+              '<span class="when">' + esc(dayLabel(a.starts_at)) + '</span>' +
+              '<span class="meta">' + esc(a.resource_name || a.label || '') + '</span>' +
+              '<span class="meta">' + money(a.price_cents) + '</span></button>';
+          }).join('');
+          S.avail = list;
+        });
+    },
+    pick: function (btn, i) {
+      document.querySelectorAll('#reschedGrid .tile.on').forEach(function (t) { t.classList.remove('on'); });
+      btn.classList.add('on');
+      S.picked = S.avail[i];
+      el('moveBtn').disabled = false;
+    },
+    closeReschedule: function () { el('reschedCard').classList.add('hide'); S.picked = null; },
+    confirmMove: function () {
+      if (!S.picked) return;
+      var booking = S.view.bookings[0];
+      var body = { booking_id: booking.id };
+      if (S.picked.slot_id) body.slot_id = S.picked.slot_id; else body.starts_at = S.picked.starts_at;
+      el('moveBtn').disabled = true;
+      el('moveBtn').textContent = 'Moving…';
+      post('/manage/' + encodeURIComponent(TOKEN) + '/reschedule', body).then(function () {
+        return load().then(function () {
+          note('Moved. Your confirmation email has the new date.');
+          el('reschedCard').classList.add('hide');
+        });
+      }).catch(function (e) {
+        el('moveBtn').disabled = false;
+        el('moveBtn').textContent = 'Move my booking';
+        note('That date could not take it — ' + esc(e.message) + '. Nothing was changed.', false);
+      });
+    },
+    cancel: function () {
+      if (!confirm('Cancel this booking? The date goes back on sale immediately.')) return;
+      post('/manage/' + encodeURIComponent(TOKEN) + '/cancel').then(function () {
+        return load().then(function () { note('Cancelled. Nothing further is owed.'); });
+      }).catch(function (e) { note(esc(e.message), false); });
+    },
+    rebook: function () {
+      post('/manage/' + encodeURIComponent(TOKEN) + '/rebook').then(function (res) {
+        var o = res.order || {};
+        note('Booked again — reference <b>' + esc(o.id || '') + '</b> for ' + money(o.total_cents) +
+             '. A fresh confirmation is on its way.');
+      }).catch(function (e) { note(esc(e.message), false); });
+    }
+  };
+
+  if (!TOKEN) {
+    el('title').textContent = 'This link is incomplete';
+    el('body').innerHTML = '<div class="err">Open the manage link from your confirmation email — it carries a long code we need to find your booking.</div>';
+  } else {
+    load();
+  }
+})();
+</script>
+</body>
+</html>
