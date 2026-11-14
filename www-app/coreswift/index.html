@@ -779,6 +779,7 @@ const MENU = [
     { id:'comm-log', icon:'📜', label:'Communications Log' }
   ]},
   { id:'tickets', icon:'🎫', label:'Support Tickets' },
+  { id:'knowledge', icon:'📚', label:'Knowledge Base' },
   { type:'group', icon:'📬', label:'Inbox', children:[
     { id:'inbox', icon:'📬', label:'Shared Inbox' },
     // The settings half of private email: the domains you send from (with their catch-all switch,
@@ -3980,6 +3981,98 @@ async function createTicket(){
 }
 
 // ── CS-22: the customer-facing ticket thread (GET /tickets/:id + POST /tickets/:id/messages) ──
+// ── Knowledge Base (David, 2026-11-14) ───────────────────────────────────────────────────────────
+// Articles are written once and read by two audiences: customers (through the widget's search) and the
+// team. The visibility switch is on every article and it is the server that enforces it — this page only
+// shows what the API returned, so there is no client-side filter to get the rule wrong.
+const KB = { articles: [] };
+
+async function loadKb() {
+  const el = document.getElementById('kbTable');
+  if (!el) return;
+  try {
+    const d = await API.get('/helpdesk/kb');
+    KB.articles = (d && d.articles) || [];
+    const rows = KB.articles.map(a => {
+      const badge = a.status === 'published'
+        ? '<span class="badge badge-success">published</span>'
+        : a.status === 'draft'
+          ? '<span class="badge badge-warning">draft</span>'
+          : '<span class="badge badge-muted">archived</span>';
+      const vis = a.visibility === 'internal'
+        ? '<span class="badge badge-muted">team only</span>'
+        : '<span class="badge badge-success">customers</span>';
+      return [
+        escapeHtml(a.title || '—'),
+        badge,
+        vis,
+        escapeHtml((a.body_md || '').slice(0, 70)) + ((a.body_md || '').length > 70 ? '…' : ''),
+        escapeHtml(a.updated_at ? new Date(a.updated_at).toLocaleDateString() : '—'),
+        '<button class="btn btn-ghost btn-xs" onclick="kbEdit(\'' + escapeHtml(String(a.id)) + '\')">Edit</button>' +
+        ' <button class="btn btn-ghost btn-xs" onclick="kbDelete(\'' + escapeHtml(String(a.id)) + '\')">Delete</button>'
+      ];
+    });
+    el.innerHTML = dataTable(['Title', 'Status', 'Who can read it', 'Starts', 'Updated', ''], rows,
+      'No articles yet. Write the answer to the question your customers ask most.');
+  } catch (e) {
+    el.innerHTML = '<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">' +
+      escapeHtml(e.message) + '</p></div></div>';
+  }
+}
+
+function kbNew() { kbEdit(null); }
+
+function kbEdit(id) {
+  const a = id ? KB.articles.find(x => String(x.id) === String(id)) : null;
+  const html =
+    '<div class="form-group"><label>Title (this becomes the page address)</label>' +
+    '<input type="text" id="kbTitle" value="' + escapeHtml(a ? a.title : '') + '"></div>' +
+    '<div class="form-group"><label>The answer</label>' +
+    '<textarea rows="10" id="kbBody" placeholder="Plain language. What to do, step by step.">' +
+    escapeHtml(a ? a.body_md : '') + '</textarea></div>' +
+    '<div class="form-group"><label>Status</label><select id="kbStatus">' +
+      ['draft', 'published', 'archived'].map(v =>
+        '<option value="' + v + '"' + ((a ? a.status : 'draft') === v ? ' selected' : '') + '>' + v + '</option>').join('') +
+    '</select></div>' +
+    '<div class="form-group"><label>Who can read it</label><select id="kbVis">' +
+      '<option value="public"' + ((a ? a.visibility : 'public') === 'public' ? ' selected' : '') +
+        '>Customers (shown in the widget&rsquo;s search)</option>' +
+      '<option value="internal"' + (a && a.visibility === 'internal' ? ' selected' : '') +
+        '>Team only (never shown to a customer)</option>' +
+    '</select></div>';
+  showModal(a ? '📚 Edit article' : '📚 New article', html,
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="kbSave(' + (id ? "'" + id + "'" : 'null') + ')">Save</button>', true);
+}
+
+async function kbSave(id) {
+  const title = (document.getElementById('kbTitle') || {}).value || '';
+  const body = (document.getElementById('kbBody') || {}).value || '';
+  const status = (document.getElementById('kbStatus') || {}).value || 'draft';
+  const visibility = (document.getElementById('kbVis') || {}).value || 'public';
+  if (!title.trim()) { toast('An article needs a title', 'error'); return; }
+  try {
+    if (id) {
+      await API.patch('/helpdesk/kb/' + id, { title: title, body_md: body, status: status, visibility: visibility });
+    } else {
+      await API.post('/helpdesk/kb', { title: title, body_md: body, status: status, visibility: visibility });
+    }
+    closeModal();
+    toast(status === 'published' ? 'Published' : 'Saved', 'success');
+    loadKb();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function kbDelete(id) {
+  const a = KB.articles.find(x => String(x.id) === String(id));
+  if (!confirm('Delete "' + ((a && a.title) || 'this article') + '"? This cannot be undone.')) return;
+  try {
+    await API.del('/helpdesk/kb/' + id);
+    toast('Deleted', 'success');
+    loadKb();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 // ── Ticket views (David, 2026-11-14) ─────────────────────────────────────────────────────────────
 // The queue is only usable if it can be narrowed to the work in front of you: mine, unassigned, waiting
 // on the customer, due soon, handed off by the AI. Each is a predicate the SERVER applies, so the list
@@ -10695,6 +10788,16 @@ async function bkCancelOrder(id) {
   try { await bkCall('POST', '/orders/' + id + '/cancel', {}); bkLoadOrders(); bkFlash('Order cancelled — the slots are free again.'); }
   catch (e) { bkFlash(e.message, false); }
 }
+
+TAB_RENDERERS['knowledge'] = () => pageHeader(
+  'Knowledge Base',
+  'Answers your team writes once — for customers, or for the team only',
+  '<button class="btn btn-primary btn-sm" onclick="kbNew()">+ New article</button>'
+) + '<div id="kbTable"><div class="loading-wrap"><div class="spinner"></div> Loading articles...</div></div>';
+
+TAB_LOADERS['knowledge'] = async () => {
+  await loadKb();
+};
 
 TAB_RENDERERS['booking'] = () => pageHeader(
   'Booking',

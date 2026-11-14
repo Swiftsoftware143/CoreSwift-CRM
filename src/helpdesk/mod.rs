@@ -6,6 +6,7 @@
 
 pub mod ingest;
 pub mod junk;
+pub mod kb;
 pub mod sla;
 
 pub use ingest::{ingest_inbound, IngestOutcome};

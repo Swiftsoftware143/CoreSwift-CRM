@@ -862,6 +862,12 @@ POST /api/lists/:id/members</pre>
     priority. The ticket list shows the answer deadline as a countdown that turns amber inside the last hour and red once it has passed, and
     <strong>Due soon</strong> lists only what is unanswered and due within four hours &mdash; soonest deadline first, because that is the order the
     work has to be done in. A clock is only set when a policy exists: an account with no policy gets an empty deadline rather than a wrong one.</p>
+    <h3>Knowledge Base — write the answer once</h3>
+    <p><strong>Knowledge Base</strong> holds the answers to the questions your customers keep asking. Each article has a title, which becomes its address,
+    and a plain-language answer. Two switches decide who can read it: <strong>Status</strong> (a draft is invisible to everyone but you) and
+    <strong>Who can read it</strong> &mdash; <em>Customers</em> means it appears in the widget's search, <em>Team only</em> means it never leaves the
+    console, at any status. A team-only article is knowledge for making a decision, not a page.</p>
+    <p>Search is built in and works on the words in the title and the answer, so you do not have to tag anything for an article to be findable.</p>
     <h3>The clock tells you, you don't have to watch it</h3>
     <p>A background check runs every minute. An hour before a deadline it writes a warning on the ticket's timeline, and when a deadline passes it
     writes the breach there too &mdash; so the clock finds you where you are already reading, once per deadline and never twice, however often the

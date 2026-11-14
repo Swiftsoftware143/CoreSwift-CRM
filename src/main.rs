@@ -697,6 +697,15 @@ async fn main() -> anyhow::Result<()> {
             email_templates::router(state.clone()),
         )
         // Private email boxes (Mailgun integration, plan-gated)
+        // The knowledge base: agents see everything in their account, customers see published public
+        // articles of the account their widget names. Both halves live in `helpdesk::kb`.
+        .nest(
+            "/api/helpdesk",
+            crate::helpdesk::kb::router(state.clone()).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::auth::middleware::auth_middleware,
+            )),
+        )
         .nest("/api", tickets::router(state.clone()))
         .nest("/api/widgets", support_widgets::router(state.clone()))
         .nest("/api/private-email", private_email::router(state.clone()))
@@ -806,6 +815,11 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/s/:tenant_id/widget.js",
             axum::routing::get(tickets::handlers::support_embed_script),
+        )
+        // What a customer is allowed to read: published, public, for the account their widget names.
+        .route(
+            "/api/public/helpdesk/kb",
+            axum::routing::get(crate::helpdesk::kb::public_list),
         )
         // CS-22 — the customer-facing "💬 My Support" portal (public, capability-scoped: the grant
         // travels in the X-Support-Token header, never in the URL). Reached through nginx's
