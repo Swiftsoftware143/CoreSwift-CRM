@@ -137,6 +137,11 @@ impl SendGridInbound {
             provider_message_id: message_id.clone(),
             message_id,
             in_reply_to,
+            // The brake on the auto-reply engine: a machine-written message (an out-of-office, a
+            // bounce report, a mailing list) is never answered by one of ours.
+            is_auto_generated: super::machine_generated_from_block(
+                self.get("headers").unwrap_or_default(),
+            ),
         })
     }
 

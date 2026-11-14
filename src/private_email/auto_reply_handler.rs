@@ -196,7 +196,54 @@ pub async fn maybe_fire_auto_reply(
     trigger_type: &str,
     trigger_value: &str, // tag name, list name, stage name, or ""
     recipient_email: &str,
+    // The delivery announced itself as machine-written (`Auto-Submitted` and friends); see
+    // `crate::private_email::providers::machine_generated_from_pairs`.
+    machine_generated: bool,
 ) {
+    // Three refusals before a single rule is read. Each is one of the ways an auto-responder
+    // misbehaves in the wild — answering another robot (a loop), answering a null sender (a bounce
+    // storm), or answering ourselves (two rules pointing at each other). They live HERE rather than
+    // at the call site so every future trigger inherits them.
+    if machine_generated {
+        tracing::debug!(tenant = %tenant_id, "auto-reply withheld: the message is machine-generated");
+        return;
+    }
+    if looks_automated_sender(recipient_email) {
+        tracing::debug!(
+            tenant = %tenant_id,
+            sender = %recipient_email,
+            "auto-reply withheld: the sender is an automated address"
+        );
+        return;
+    }
+    // Never answer one of this account's own addresses. A database that cannot answer is treated
+    // as "do not send": a missed automatic reply is cheaper than a loop.
+    match sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM private_email_boxes WHERE tenant_id = $1 AND lower(email_address) = lower($2))",
+    )
+    .bind(tenant_id)
+    .bind(recipient_email)
+    .fetch_one(pool)
+    .await
+    {
+        Ok(true) => {
+            tracing::debug!(
+                tenant = %tenant_id,
+                "auto-reply withheld: the sender is one of this account's own addresses"
+            );
+            return;
+        }
+        Ok(false) => {}
+        Err(e) => {
+            tracing::warn!(
+                tenant = %tenant_id,
+                error = %e,
+                "auto-reply withheld: could not tell whether the sender is one of this account's addresses"
+            );
+            return;
+        }
+    }
+
     // Find matching active rules
     let rules = sqlx::query_as::<_, AutoReplyRow>(
         r#"
@@ -237,12 +284,19 @@ pub async fn maybe_fire_auto_reply(
 
         // Fire always rules
         for rule in always_rules {
-            fire_single_rule(pool, &rule, recipient_email).await;
+            if claim_send_slot(pool, rule.id, recipient_email).await {
+                fire_single_rule(pool, &rule, recipient_email).await;
+            }
         }
         return;
     }
 
     for rule in rules {
+        // One reply per person per rule per 24 hours. The claim is an atomic conditional upsert, so
+        // two deliveries racing on the same sender answer once, not twice.
+        if !claim_send_slot(pool, rule.id, recipient_email).await {
+            continue;
+        }
         if rule.delay_minutes > 0 {
             // Delayed — insert into delayed queue
             let _ = sqlx::query(
@@ -263,6 +317,71 @@ pub async fn maybe_fire_auto_reply(
             .await;
         } else {
             fire_single_rule(pool, &rule, recipient_email).await;
+        }
+    }
+}
+
+// Local parts that belong to a machine, never to the person who just wrote to you.
+//
+// A reply to one of these is a reply to nobody: `mailer-daemon`/`postmaster` are the mail system
+// itself (answering a bounce is how a mail loop is born), and the rest are addresses a sender uses
+// precisely so that no human reads the answer.
+pub fn looks_automated_sender(from: &str) -> bool {
+    let local = from
+        .trim()
+        .split('@')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        local.as_str(),
+        "mailer-daemon"
+            | "postmaster"
+            | "no-reply"
+            | "noreply"
+            | "do-not-reply"
+            | "donotreply"
+            | "auto-reply"
+            | "autoreply"
+            | "bounces"
+            | "bounce"
+    ) || local.starts_with("bounce+")
+}
+
+/// Reserve the ONE automatic reply this rule may send this person in the next 24 hours.
+///
+/// `true` means the slot is yours and the caller should send. `false` means this person already had
+/// an automatic reply from this rule inside the window, or the claim itself failed — in which case
+/// stay silent: a missed reply is cheaper than a repeat.
+///
+/// The claim is a single conditional upsert. The row is inserted when absent and refreshed only
+/// when it is older than the window, and `RETURNING` yields a row exactly when one of those
+/// happened, so two deliveries racing on the same sender produce one reply — no transaction, no
+/// lock, no application-level clock.
+async fn claim_send_slot(pool: &sqlx::PgPool, rule_id: Uuid, recipient: &str) -> bool {
+    let recipient = recipient.trim().to_ascii_lowercase();
+    if recipient.is_empty() {
+        return false;
+    }
+    let claimed = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        INSERT INTO private_email_auto_reply_sent (rule_id, recipient, sent_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (rule_id, recipient) DO UPDATE SET sent_at = NOW()
+        WHERE private_email_auto_reply_sent.sent_at < NOW() - INTERVAL '24 hours'
+        RETURNING rule_id
+        "#,
+    )
+    .bind(rule_id)
+    .bind(&recipient)
+    .fetch_optional(pool)
+    .await;
+
+    match claimed {
+        Ok(row) => row.is_some(),
+        Err(e) => {
+            tracing::warn!(rule = %rule_id, error = %e, "auto-reply withheld: the throttle could not be claimed");
+            false
         }
     }
 }

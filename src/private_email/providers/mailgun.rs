@@ -313,6 +313,11 @@ impl EmailProvider for MailgunProvider {
             message_id,
             in_reply_to,
             provider_message_id: get("Message-Id"),
+            // The brake on the auto-reply engine: a machine-written message (an out-of-office, a
+            // bounce report, a mailing list) is never answered by one of ours.
+            is_auto_generated: super::machine_generated_from_json(
+                &get("message-headers").unwrap_or_default(),
+            ),
         })
     }
 }

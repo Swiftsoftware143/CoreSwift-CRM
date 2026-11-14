@@ -903,6 +903,7 @@ async fn ingest(state: &AppState, d: Delivery) -> ApiResult<Json<serde_json::Val
             "always",
             "",
             &inbound.from,
+            inbound.is_auto_generated,
         )
         .await;
     }

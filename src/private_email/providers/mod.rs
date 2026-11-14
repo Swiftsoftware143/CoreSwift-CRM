@@ -50,6 +50,58 @@ pub struct InboundEmail {
     pub message_id: Option<String>,
     pub in_reply_to: Option<String>,
     pub provider_message_id: Option<String>,
+    /// True when the message announces itself as machine-generated (`Auto-Submitted`,
+    /// `X-Autoreply`, `Precedence: bulk`, a delivery-status report, a mailing list). The
+    /// auto-reply engine must never answer one of these: two auto-responders pointing at each
+    /// other is a mail loop, and a reply to a bounce report goes to a null sender.
+    pub is_auto_generated: bool,
+}
+
+/// Headers that say "a machine wrote this, not a person" (`RFC 3834` and the older de-facto set).
+///
+/// The list is deliberately conservative: every entry here stops an automatic reply, so a header
+/// that legitimately appears on human mail would silently kill the feature for that sender.
+pub(crate) fn machine_generated_from_pairs(pairs: &[(String, String)]) -> bool {
+    pairs.iter().any(|(k, v)| {
+        let k = k.trim().to_ascii_lowercase();
+        let v = v.trim().to_ascii_lowercase();
+        match k.as_str() {
+            // RFC 3834: any value other than `no` means the sender is an automatic responder.
+            "auto-submitted" => v != "no",
+            "x-autoreply" | "x-autorespond" | "x-auto-reply" => true,
+            "precedence" => matches!(v.as_str(), "bulk" | "auto_reply" | "junk" | "list"),
+            "list-id" | "list-post" | "list-unsubscribe" => true,
+            // A delivery-status report (a bounce) has a null sender and no human behind it.
+            "content-type" => v.starts_with("multipart/report"),
+            _ => false,
+        }
+    })
+}
+
+/// The same verdict from a raw header block (SendGrid posts the whole block as one form field).
+pub(crate) fn machine_generated_from_block(block: &str) -> bool {
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for line in block.lines() {
+        if line.starts_with(' ') || line.starts_with('\t') {
+            if let Some(last) = pairs.last_mut() {
+                last.1.push(' ');
+                last.1.push_str(line.trim());
+            }
+            continue;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            pairs.push((k.trim().to_string(), v.trim().to_string()));
+        }
+    }
+    machine_generated_from_pairs(&pairs)
+}
+
+/// Mailgun forwards the header block as `message-headers`, a JSON array of [name, value] pairs.
+pub(crate) fn machine_generated_from_json(raw: &str) -> bool {
+    match serde_json::from_str::<Vec<(String, String)>>(raw) {
+        Ok(pairs) => machine_generated_from_pairs(&pairs),
+        Err(_) => false,
+    }
 }
 
 /// Configuration for a domain's email provider, loaded from the database.
