@@ -901,6 +901,9 @@ async fn main() -> anyhow::Result<()> {
     // second instance cannot repeat one.
     let db_for_reminders = state.db.clone();
     tokio::spawn(async move {
+        // It announces itself: a background task that dies silently is indistinguishable from one
+        // whose work is simply never due, and that ambiguity already cost a debugging round.
+        tracing::info!("booking reminder tick started");
         loop {
             crate::booking::notify::run_reminders(&db_for_reminders).await;
             tokio::time::sleep(crate::booking::notify::REMINDER_TICK).await;
