@@ -173,7 +173,11 @@
       el('calName').textContent = 'No calendar';
       return;
     }
-    api('/c/' + encodeURIComponent(SLUG)).then(function (cal) {
+    api('/c/' + encodeURIComponent(SLUG)).then(function (payload) {
+      // the endpoint answers {calendar, resources, bundles}; a bare calendar object is accepted too
+      var cal = payload.calendar || payload;
+      if (!cal.resources && payload.resources) cal.resources = payload.resources;
+      if (!cal.bundles && payload.bundles) cal.bundles = payload.bundles;
       STATE.cal = cal;
       el('calName').textContent = cal.name || 'Book';
       el('calBlurb').textContent = cal.description ||
@@ -280,7 +284,7 @@
       '<div class="mbar"><span><span class="m-total">' + money(q.total_cents) + '</span>' +
       '<div class="m-count">' + picked.length + ' selected</div></span>' +
       '<button class="cta" id="payBtnM"' + (picked.length ? '' : ' disabled') + ' onclick="BKUI.reserve()">Reserve & pay</button></div>' +
-      '<div id="filtersHolder" style="display:none">' + bar + '</div>';
+      '';
     // the filter bar belongs above the grid, inside the left column for alignment
     var gridCol = el('body').querySelector('.cols > div');
     if (gridCol) gridCol.insertAdjacentHTML('afterbegin', bar);
