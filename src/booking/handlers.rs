@@ -222,6 +222,26 @@ pub async fn review_creative(
 }
 
 // ---------- public (no auth; calendar found by slug, orders by unguessable id) ----------
+/// Which workspace a public request belongs to.
+///
+/// Two sources, in order: the `?w=` qualifier in the link (the shared address carries the workspace in
+/// the path), then `X-Booking-Workspace`, which the business's own booking address sets from nginx —
+/// the host already told us which business it is, so a link there needs no qualifier.
+///
+/// The header can only ever select between PUBLIC calendars: every route that reads it is anonymous by
+/// design and returns the same data a public link would. It cannot reach a console route or another
+/// workspace's private data.
+fn workspace_of(headers: &axum::http::HeaderMap, q: &WsQuery) -> Option<String> {
+    if let Some(w) = q.w.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
+        return Some(w.to_string());
+    }
+    headers
+        .get("x-booking-workspace")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
+}
 
 /// `?w=<workspace>` — only needed when the same calendar name exists in more than one workspace.
 #[derive(Debug, Default, serde::Deserialize)]
@@ -234,9 +254,11 @@ pub async fn public_calendar(
     State(pool): State<PgPool>,
     Path(slug): Path<String>,
     Query(q): Query<WsQuery>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<Value>> {
     let mut c = pool.acquire().await?;
-    let cal = service::calendar_by_slug(&mut c, &slug, q.w.as_deref()).await?;
+    let ws = workspace_of(&headers, &q);
+    let cal = service::calendar_by_slug(&mut c, &slug, ws.as_deref()).await?;
     let resources = service::list_resources(&mut c, cal.id, true).await?;
     let bundles = service::list_bundles(&mut c, cal.id, true).await?;
     Ok(Json(json!({
@@ -251,9 +273,11 @@ pub async fn public_availability(
     State(pool): State<PgPool>,
     Path(slug): Path<String>,
     Query(q): Query<RangeQuery>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<Vec<Opening>>> {
     let mut c = pool.acquire().await?;
-    let cal = service::calendar_by_slug(&mut c, &slug, q.w.as_deref()).await?;
+    let ws = workspace_of(&headers, &WsQuery { w: q.w.clone() });
+    let cal = service::calendar_by_slug(&mut c, &slug, ws.as_deref()).await?;
     Ok(Json(
         service::availability(&mut c, &cal, q.from, q.to).await?,
     ))
@@ -263,10 +287,12 @@ pub async fn public_quote(
     State(pool): State<PgPool>,
     Path(slug): Path<String>,
     Query(q): Query<WsQuery>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<QuoteRequest>,
 ) -> Result<Json<Quote>> {
     let mut c = pool.acquire().await?;
-    let cal = service::calendar_by_slug(&mut c, &slug, q.w.as_deref()).await?;
+    let ws = workspace_of(&headers, &q);
+    let cal = service::calendar_by_slug(&mut c, &slug, ws.as_deref()).await?;
     Ok(Json(service::quote(&mut c, &cal, &body.items).await?))
 }
 
@@ -274,10 +300,12 @@ pub async fn public_create_order(
     State(pool): State<PgPool>,
     Path(slug): Path<String>,
     Query(q): Query<WsQuery>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<NewOrder>,
 ) -> Result<(StatusCode, Json<OrderWithBookings>)> {
     let mut c = pool.acquire().await?;
-    let cal = service::calendar_by_slug(&mut c, &slug, q.w.as_deref()).await?;
+    let ws = workspace_of(&headers, &q);
+    let cal = service::calendar_by_slug(&mut c, &slug, ws.as_deref()).await?;
     drop(c);
     let created = service::create_order(&pool, &cal, body).await?;
     if created.order.status != "confirmed" && created.order.total_cents == 0 {
