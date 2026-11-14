@@ -74,6 +74,8 @@ pub fn public_router(pool: PgPool) -> Router {
         )
         // The manage link: the customer reschedules, cancels or rebooks with no account. The token
         // IS the credential and it is scoped to one order.
+        // the root of a booking address: redirect where the owner said, or list what is bookable
+        .route("/host", get(h::public_host))
         .route("/manage/:token", get(h::manage_view))
         .route("/manage/:token/cancel", post(h::manage_cancel))
         .route("/manage/:token/reschedule", post(h::manage_reschedule))
