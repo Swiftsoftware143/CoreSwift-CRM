@@ -10382,9 +10382,8 @@ async function bkManualBook() {
   } catch (e) { bkFlash(e.message, false); }
 }
 
-/* How much choice a buyer is shown. A calendar that offers everything at once reads as "there is no
- * demand"; a handful of nearby options reads as "book now". Limits are enforced by the server, not the
- * page, so the public API itself never hands out more. */
+/* How much choice a buyer is shown: the three optional caps the owner sets. Enforced by the server,
+ * not the page, so the API itself never hands out more than the owner allows. */
 function bkRulesPanel(cal) {
   var l = (cal.settings && cal.settings.limits) || {};
   return '<div class="card" style="margin-bottom:18px">' +
