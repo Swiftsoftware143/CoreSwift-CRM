@@ -862,6 +862,12 @@ POST /api/lists/:id/members</pre>
     priority. The ticket list shows the answer deadline as a countdown that turns amber inside the last hour and red once it has passed, and
     <strong>Due soon</strong> lists only what is unanswered and due within four hours &mdash; soonest deadline first, because that is the order the
     work has to be done in. A clock is only set when a policy exists: an account with no policy gets an empty deadline rather than a wrong one.</p>
+    <h3>The numbers at the top of the queue</h3>
+    <p>Above the ticket list is a strip that answers four questions about the last thirty days: how many were raised, how many were solved, what is
+    open now, and what is waiting on you rather than on the customer. Two of them are times &mdash; your median first reply and the reply time that
+    nine out of ten tickets beat &mdash; so a bad week shows up as a number rather than a feeling. Everything past its promised deadline is counted in
+    red, and those tickets are exactly what the <strong>Due soon</strong> view holds.</p>
+    <p>A median with nothing behind it shows a dash, never a zero: a desk nobody has asked anything yet should not look perfect.</p>
     <h3>Saved answers — the same question, answered once</h3>
     <p>The same question fifty times should cost one answer. <strong>Saved answers</strong> live on the Knowledge Base page: a title, the text, and an
     optional shortcut such as <code>/refund</code>. In a ticket, pick one from the list above the reply box and the text is inserted already filled in

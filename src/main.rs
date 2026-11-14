@@ -703,6 +703,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/helpdesk",
             crate::helpdesk::kb::router(state.clone())
                 .merge(crate::helpdesk::canned::router(state.clone()))
+                .merge(crate::helpdesk::reports::router(state.clone()))
                 .layer(axum::middleware::from_fn_with_state(
                     state.clone(),
                     crate::auth::middleware::auth_middleware,

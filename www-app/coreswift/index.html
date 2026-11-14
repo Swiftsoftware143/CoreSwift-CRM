@@ -1455,6 +1455,7 @@ const TAB_RENDERERS = {
       // list itself is locked), so this navigation control survives a plan-locked pane.
       '<button class="btn btn-secondary btn-sm" data-keep-on-lock="1" onclick="openMySupportPortal()">💬 My Support</button>' +
       '<button class="btn btn-primary btn-sm" onclick="showAddTicketModal()">+ New Ticket</button>') +
+    '<div id="tkReport" style="margin-bottom:10px"></div>' +
     '<div id="tkViews" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>' +
     '<div id="ticketsTable"><div class="loading-wrap"><div class="spinner"></div> Loading tickets...</div></div>';
   },
@@ -2064,6 +2065,7 @@ const TAB_LOADERS = {
       // The view is a saved predicate on the server (GET /api/tickets?view=...), not a client-side
       // filter: "due soon" and "mine" depend on clocks and on who is asking, and neither belongs in
       // the browser where it can disagree with the queue.
+      loadDeskReport();
       const resp = await API.get('/tickets?view=' + encodeURIComponent(STATE.ticketView || 'open'));
       if (resp && resp.portal_url) STATE.portalUrl = resp.portal_url;   // CS-22
       const tickets = Array.isArray(resp) ? resp : ((resp && resp.tickets) || []);
@@ -4186,6 +4188,40 @@ async function openTicket(id) {
     toast('Could not open the ticket: ' + e.message, 'error');
   }
 }
+// ── The report strip (David, 2026-11-14) ─────────────────────────────────────────────────────────
+// Four questions: how fast did we answer, how fast did we finish, what is open, what is late. A median of
+// nothing is shown as a dash, never as "0 min" — a desk nobody has asked anything would otherwise look
+// perfect.
+async function loadDeskReport() {
+  const el = document.getElementById('tkReport');
+  if (!el) return;
+  try {
+    const r = await API.get('/helpdesk/reports?days=30');
+    const mins = v => (v == null ? '—' : (v < 90 ? Math.round(v) + ' min' : (v / 60).toFixed(1) + ' h'));
+    const chip = (label, value, tone) =>
+      '<div style="flex:1 1 130px;min-width:120px;border:1px solid var(--border);border-radius:10px;padding:10px 12px">' +
+        '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted)">' + label + '</div>' +
+        '<div style="font-size:18px;font-weight:600;' + (tone ? 'color:' + tone : '') + '">' + value + '</div></div>';
+    el.innerHTML =
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+        chip('New (30 days)', r.created) +
+        chip('Solved (30 days)', r.solved) +
+        chip('Open now', r.open_now) +
+        chip('Waiting on us', r.unanswered_now, r.unanswered_now ? '#b45309' : '') +
+        chip('Late now', r.breached_now, r.breached_now ? '#dc2626' : '') +
+        chip('First reply', mins(r.first_response_median_mins)) +
+        chip('First reply (9 in 10)', mins(r.first_response_p90_mins)) +
+        chip('Resolution', mins(r.resolution_median_mins)) +
+      '</div>' +
+      (r.breached_now
+        ? '<p style="font-size:12px;color:#dc2626;margin-top:6px">' + r.breached_now +
+          ' ticket(s) are past the deadline somebody promised. They are in “Due soon”.</p>'
+        : '');
+  } catch (e) {
+    el.innerHTML = '';
+  }
+}
+
 // ── Saved answers (David, 2026-11-14) ────────────────────────────────────────────────────────────
 // The same question fifty times should cost one answer. The placeholders are filled by the SERVER at the
 // moment of insertion (POST /helpdesk/canned/:id/render), so what an agent sees in the box is exactly what

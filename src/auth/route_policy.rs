@@ -812,6 +812,11 @@ mod tests {
             func: "router",
         },
         Nest {
+            prefix: "/api/helpdesk",
+            src: include_str!("../helpdesk/reports.rs"),
+            func: "router",
+        },
+        Nest {
             prefix: "/api/booking",
             src: include_str!("../booking/mod.rs"),
             func: "admin_router",
@@ -1254,7 +1259,8 @@ mod tests {
     /// booking routers visible; the second added the knowledge base (3 routes: list/create, get/update/
     /// delete, and the customer-facing search); the third added merge and split (+2), which live on the
     /// tickets router so they inherit its account scoping and its auth; the fourth added saved answers
-    /// (+3: list/create, update/delete, and the render that fills an answer's placeholders). Nothing was added to the tree: the
+    /// (+3: list/create, update/delete, and the render that fills an answer's placeholders); the fifth added
+    /// the desk report (+1), which is a read that asks four questions of the ticket rows. Nothing was added to the tree: the
     /// booking engine's two routers (`.nest_service("/api/booking")` and `/api/public/booking`) joined
     /// `NESTS`, which is what made `"/api/public/booking/c/:slug"` checkable on the public allowlist at
     /// all. The instrument saw more routes because the product has more routes; the root-level count is
@@ -1265,12 +1271,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            459,
+            460,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 447,
+            api, 448,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.
