@@ -911,6 +911,22 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Helpdesk response clocks: a fixed tick that records a warning before a deadline and a breach after
+    // it, once each, on the ticket's own timeline. Same posture as the booking reminders above — it
+    // announces itself, because a background task that dies silently is indistinguishable from one whose
+    // work is simply never due.
+    let db_for_sla = state.db.clone();
+    tokio::spawn(async move {
+        tracing::info!(
+            every_secs = crate::helpdesk::sla::tick_interval().as_secs(),
+            "helpdesk SLA tick started"
+        );
+        loop {
+            crate::helpdesk::sla::run_once(&db_for_sla).await;
+            tokio::time::sleep(crate::helpdesk::sla::tick_interval()).await;
+        }
+    });
+
     let addr = format!("{}:{}", config.host, config.port);
     tracing::info!("Starting CRM Swift server on {}", addr);
 

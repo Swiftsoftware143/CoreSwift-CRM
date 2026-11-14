@@ -765,7 +765,7 @@ pub async fn public_support_answer(
         // public_support_answer is reachable with a ticket id and an email address: it is the
         // customer's own view, so an internal note must not be in it.
         "SELECT sender_type, message, created_at::text FROM ticket_messages \
-          WHERE ticket_id = $1 AND kind <> 'note' ORDER BY created_at ASC",
+          WHERE ticket_id = $1 AND kind NOT IN ('note', 'event') ORDER BY created_at ASC",
     )
     .bind(id)
     .fetch_all(&s.db)

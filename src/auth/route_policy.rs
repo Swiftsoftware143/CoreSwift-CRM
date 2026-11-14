@@ -794,6 +794,21 @@ mod tests {
             src: include_str!("../email_templates.rs"),
             func: "router",
         },
+        // The booking engine mounts through `nest_service` (its routers carry their own middleware and
+        // state), so its routes were invisible to this census — which is how "/api/public/booking/c/:slug"
+        // came to sit on the public allowlist with nothing behind it as far as the extractor could see.
+        // Listing them here keeps the allowlist checkable: the spelling in the list must match the
+        // spelling in the router, and the customer-facing booking pages really are public.
+        Nest {
+            prefix: "/api/booking",
+            src: include_str!("../booking/mod.rs"),
+            func: "admin_router",
+        },
+        Nest {
+            prefix: "/api/public/booking",
+            src: include_str!("../booking/mod.rs"),
+            func: "public_router",
+        },
         Nest {
             prefix: "/api",
             src: include_str!("../tickets/mod.rs"),
@@ -1222,18 +1237,24 @@ mod tests {
     /// The census shape the module docs quote. If a route is added or removed anywhere in the
     /// tree the documented numbers move, so the doc gets re-read — and the allowlist's coverage
     /// claim gets re-checked against the new mount.
+    ///
+    /// 2026-11-14: 424 → 451 mounted (412 → 439 on /api**). Nothing was added to the tree: the
+    /// booking engine's two routers (`.nest_service("/api/booking")` and `/api/public/booking`) joined
+    /// `NESTS`, which is what made `"/api/public/booking/c/:slug"` checkable on the public allowlist at
+    /// all. The instrument saw more routes because the product has more routes; the root-level count is
+    /// unchanged at 12, which is the tell that no new surface was mounted outside /api**.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
         let mounted = mounted_routes();
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            424,
+            451,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 412,
+            api, 439,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

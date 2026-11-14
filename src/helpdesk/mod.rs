@@ -6,5 +6,7 @@
 
 pub mod ingest;
 pub mod junk;
+pub mod sla;
 
 pub use ingest::{ingest_inbound, IngestOutcome};
+pub use sla::SlaPass;
