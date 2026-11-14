@@ -31,10 +31,14 @@ pub async fn list_tickets(
     // platform admin's queue therefore ALSO carries those rows; a tenant still sees strictly its own,
     // so nothing widens across workspaces.
     let is_platform = crate::auth::platform_admin::is_platform_admin(&s.db, &c.sub).await?;
+    // who "mine" means: the caller, from the session rather than from a query parameter, so a request
+    // cannot ask for somebody else's view by naming them.
+    let assignee = Uuid::parse_str(&c.sub).ok();
 
     let tickets = sqlx::query_as::<_, Ticket>(
         r#"SELECT id, tenant_id, subject, description, status, priority, assigned_to, contact_id,
-                  number, created_at, updated_at, source, contact_email,
+                  number, ai_state, first_response_due, first_responded_at, resolution_due, solved_at,
+                  created_at, updated_at, source, contact_email,
                   CASE
                     WHEN tenant_id IS NULL THEN COALESCE(NULLIF(contact_name, ''), 'Website visitor')
                     ELSE contact_name
@@ -44,7 +48,39 @@ pub async fn list_tickets(
              AND ($2::text IS NULL OR status = $2)
              AND ($3::text IS NULL OR priority = $3)
              AND ($4::uuid IS NULL OR contact_id = $4)
+             -- ── THE VIEWS AN AGENT ACTUALLY WORKS FROM (David, 2026-11-14) ────────────────
+             -- One predicate list rather than a query per view, so every view is scoped by the same
+             -- tenant clause above it: a new view cannot accidentally forget the account.
+             AND (
+               $8::text IS NULL OR $8::text = 'all'
+               -- WHO OWNS THIS is one question with two places to answer it: the ticket's own owner
+               -- (the only place a hand-raised ticket can hold one) and the shared inbox's assignment
+               -- on the conversation behind it, which is where assignment actually happens today. Read
+               -- through both, or "My open" would be empty for every ticket assigned in the inbox —
+               -- the exact drift the one-conversation-two-views rule exists to prevent.
+               OR ($8::text = 'mine' AND (
+                     assigned_to = $9::uuid
+                     OR EXISTS (SELECT 1 FROM private_email_messages m
+                                 WHERE m.ticket_id = tickets.id AND m.assigned_user_id = $9::uuid)
+                   ))
+               OR ($8::text = 'unassigned' AND assigned_to IS NULL AND NOT EXISTS (
+                     SELECT 1 FROM private_email_messages m
+                      WHERE m.ticket_id = tickets.id AND m.assigned_user_id IS NOT NULL
+                   ))
+               OR ($8::text = 'waiting'    AND status = 'pending')
+               OR ($8::text = 'open'       AND status IN ('new', 'open', 'on_hold'))
+               OR ($8::text = 'ai'         AND ai_state = 'handed_off')
+               -- "Due soon" is the first-response clock: unanswered, still in the queue, and inside the
+               -- next four hours. A ticket already breached is included, because work does not stop
+               -- being late the moment it is late.
+               OR ($8::text = 'due'        AND first_responded_at IS NULL
+                                           AND first_response_due IS NOT NULL
+                                           AND status IN ('new', 'open', 'pending', 'on_hold')
+                                           AND first_response_due <= NOW() + INTERVAL '4 hours')
+             )
            ORDER BY
+             -- the due view is a work queue: the deadline decides the order, not the priority word
+             CASE WHEN $8::text = 'due' THEN first_response_due END ASC NULLS LAST,
              CASE priority
                WHEN 'urgent' THEN 0
                WHEN 'high' THEN 1
@@ -61,6 +97,8 @@ pub async fn list_tickets(
     .bind(limit)
     .bind(offset)
     .bind(is_platform)
+    .bind(&q.view)
+    .bind(assignee)
     .fetch_all(&s.db)
     .await?;
 

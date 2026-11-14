@@ -411,6 +411,7 @@ const STATE = {
   user: null,
   activeTab: 'dashboard',
   portalUrl: '',   // CS-22: the customer "My Support" URL, filled from GET /api/tickets
+  ticketView: 'open',   // which saved view the ticket list is showing (server-side predicate)
   sidebarCollapsed: false,
   planName: '',    // set by checkPlan() from the tenant's OWN plan row; '' = not known, never a guess
   planId: null,    // that plan's id — the upgrade modal's Current badge keys off this, not off a name
@@ -1453,6 +1454,7 @@ const TAB_RENDERERS = {
       // list itself is locked), so this navigation control survives a plan-locked pane.
       '<button class="btn btn-secondary btn-sm" data-keep-on-lock="1" onclick="openMySupportPortal()">💬 My Support</button>' +
       '<button class="btn btn-primary btn-sm" onclick="showAddTicketModal()">+ New Ticket</button>') +
+    '<div id="tkViews" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>' +
     '<div id="ticketsTable"><div class="loading-wrap"><div class="spinner"></div> Loading tickets...</div></div>';
   },
 
@@ -2058,26 +2060,34 @@ const TAB_LOADERS = {
     try {
       // CS-22: the API answers {tickets, count} — `Array.isArray` on that is false, which is why
       // this tab always said "No support tickets" no matter what the customer had raised.
-      const resp = await API.get('/tickets');
+      // The view is a saved predicate on the server (GET /api/tickets?view=...), not a client-side
+      // filter: "due soon" and "mine" depend on clocks and on who is asking, and neither belongs in
+      // the browser where it can disagree with the queue.
+      const resp = await API.get('/tickets?view=' + encodeURIComponent(STATE.ticketView || 'open'));
       if (resp && resp.portal_url) STATE.portalUrl = resp.portal_url;   // CS-22
       const tickets = Array.isArray(resp) ? resp : ((resp && resp.tickets) || []);
       let rows = [];
       if (Array.isArray(tickets)) {
         rows = tickets.slice(0, 50).map(t => [
-          escapeHtml(t.subject || t.title || '—'),
+          (t.number ? '<code style="opacity:.7">#' + escapeHtml(String(t.number)) + '</code> ' : '') +
+            escapeHtml(t.subject || t.title || '—'),
           `<span class="badge ${t.status==='open'?'badge-error':t.status==='in_progress'?'badge-warning':'badge-success'}">${escapeHtml(t.status||'open')}</span>`,
           escapeHtml(t.priority || 'normal'),
           escapeHtml(t.contact_name || t.contact_email || t.requester || '—'),
           // The SAME assignment the shared inbox writes (kanban t_5f314e9a): one conversation, two
           // views. A ticket raised by hand has no conversation behind it, so it shows nobody.
           escapeHtml((t.assigned_member && (t.assigned_member.name || t.assigned_member.email)) || '—'),
+          ticketDueCell(t),
           escapeHtml(t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'),
           `<button class="btn btn-ghost btn-xs" onclick="openTicket('${t.id}')">View</button>`
         ]);
       }
+      renderTicketViews();
       ticketsTableEl.innerHTML = dataTable(
-        ['Subject','Status','Priority','Contact','Assigned to','Created',''], rows,
-        'No support tickets. Great job keeping customers happy!'
+        ['Subject','Status','Priority','Contact','Assigned to','Due','Created',''], rows,
+        STATE.ticketView === 'due'
+          ? 'Nothing is due in the next four hours.'
+          : 'No tickets in this view.'
       );
     } catch(e) {
       ticketsTableEl.innerHTML = (e && e.planGate)
@@ -3970,6 +3980,53 @@ async function createTicket(){
 }
 
 // ── CS-22: the customer-facing ticket thread (GET /tickets/:id + POST /tickets/:id/messages) ──
+// ── Ticket views (David, 2026-11-14) ─────────────────────────────────────────────────────────────
+// The queue is only usable if it can be narrowed to the work in front of you: mine, unassigned, waiting
+// on the customer, due soon, handed off by the AI. Each is a predicate the SERVER applies, so the list
+// and the counts can never disagree with what the database holds.
+const TICKET_VIEWS = [
+  ['open',       'Open'],
+  ['mine',       'My open'],
+  ['unassigned', 'Unassigned'],
+  ['waiting',    'Waiting on customer'],
+  ['due',        'Due soon'],
+  ['ai',         'AI handed off'],
+  ['all',        'All']
+];
+
+function renderTicketViews() {
+  const el = document.getElementById('tkViews');
+  if (!el) return;
+  const current = STATE.ticketView || 'open';
+  el.innerHTML = TICKET_VIEWS.map(([key, label]) => {
+    const on = key === current;
+    return '<button class="btn btn-xs ' + (on ? 'btn-primary' : 'btn-secondary') + '" ' +
+      'onclick="setTicketView(\'' + key + '\')">' + label + '</button>';
+  }).join('');
+}
+
+function setTicketView(view) {
+  STATE.ticketView = view;
+  switchTab('tickets');
+}
+
+// What was promised, and how much of it is left. Colour is the whole point: amber means the deadline is
+// close enough to act on, red means it has already passed.
+function ticketDueCell(t) {
+  if (t.solved_at) return '<span style="color:var(--text-muted)">solved</span>';
+  if (t.first_responded_at) return '<span style="color:var(--text-muted)">answered</span>';
+  if (!t.first_response_due) return '<span style="color:var(--text-muted)">—</span>';
+  const due = new Date(t.first_response_due).getTime();
+  const mins = Math.round((due - Date.now()) / 60000);
+  let colour = 'var(--text-muted)';
+  if (mins < 0) colour = '#dc2626';
+  else if (mins <= 60) colour = '#d97706';
+  const label = mins < 0
+    ? 'breached ' + Math.abs(mins) + 'm ago'
+    : (mins < 60 ? 'in ' + mins + 'm' : 'in ' + Math.round(mins / 60) + 'h');
+  return '<span style="color:' + colour + ';font-weight:600">' + label + '</span>';
+}
+
 async function openTicket(id) {
   try {
     const data = await API.get('/tickets/' + id);

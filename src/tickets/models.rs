@@ -21,6 +21,19 @@ pub struct Ticket {
     /// a row written before migration 162 — or by a path that predates it — may not carry one yet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub number: Option<i32>,
+    /// `none` | `ai_active` | `handed_off` | `ai_resolved`
+    #[serde(default)]
+    pub ai_state: String,
+    /// What was promised: the deadlines a breach is judged against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_response_due: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution_due: Option<chrono::DateTime<chrono::Utc>>,
+    /// What happened: when a person first answered, and when it was solved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_responded_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solved_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -75,6 +88,9 @@ pub struct AddMessageRequest {
 pub struct TicketListQuery {
     pub status: Option<String>,
     pub priority: Option<String>,
+    /// Which saved view to show: all | mine | unassigned | waiting | open | due | ai. Unknown values fall
+    /// through to `all` rather than erroring, because a stale bookmark is not a failure.
+    pub view: Option<String>,
     pub contact_id: Option<uuid::Uuid>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,

@@ -854,6 +854,14 @@ POST /api/lists/:id/members</pre>
     for seven days; after that it counts as a fresh question.</p>
     <p>Mail a machine wrote never reaches your queue: auto-replies, bounce reports, read receipts and the automated reports servers send each other are
     stored as mail and nothing more. That is what keeps the queue worth reading.</p>
+    <h3>The queue, narrowed to the work in front of you</h3>
+    <p>The ticket list has saved views across the top: <strong>Open</strong>, <strong>My open</strong>, <strong>Unassigned</strong>,
+    <strong>Waiting on customer</strong>, <strong>Due soon</strong>, <strong>AI handed off</strong> and <strong>All</strong>. Each one is applied by the
+    server, so what you see is always what the database holds &mdash; there is no separate copy of the list in the page that can drift.</p>
+    <p>Every account starts with a <strong>Standard</strong> response promise: eight working hours to answer and two days to resolve, per ticket
+    priority. The ticket list shows the answer deadline as a countdown that turns amber inside the last hour and red once it has passed, and
+    <strong>Due soon</strong> lists only what is unanswered and due within four hours &mdash; soonest deadline first, because that is the order the
+    work has to be done in. A clock is only set when a policy exists: an account with no policy gets an empty deadline rather than a wrong one.</p>
     <h3>Replies and notes</h3>
     <p>Every ticket has two ways to write, and they are deliberately different things. <strong>Send reply</strong> answers the customer by email.
     <strong>Add internal note</strong> records what your team knows &mdash; &ldquo;rang them, invoice already paid&rdquo;, &ldquo;third time he has asked&rdquo; &mdash;
