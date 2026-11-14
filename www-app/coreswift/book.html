@@ -367,7 +367,7 @@
         // whether the site is broken or the slot is gone.
         (sold ? ' onclick="BKUI.taken(this)"' : ' onclick="BKUI.toggle(\'' + keyOf(a) + '\')"') + '>' +
         '<span class="tick">✓</span>' +
-        (sold ? '<span class="sold">Sold</span>' : '') +
+        (sold ? '<span class="sold">Booked</span>' : '') +
         '<span class="placement">' + esc(placement) + '</span>' +
         '<span class="when">' + esc(dayLabel(a.starts_at)) + '</span>' +
         (sub ? '<span class="meta" style="font-size:12px">' + esc(sub) + '</span>' : '') +
@@ -444,7 +444,7 @@
   window.BKUI = {
     taken: function (btn) {
       var when = btn ? (btn.querySelector('.when') || {}).innerText || 'That time' : 'That time';
-      setNote('<b>' + when + '</b> has just been taken. The calendar has been refreshed — pick another time, or reply to your confirmation and we will find one for you.');
+      setNote('<b>' + when + '</b> is already booked. The calendar has been refreshed — pick another position, or reply to your confirmation and we will find one for you.');
       loadAvailability();
     },
     toggle: function (key) {
