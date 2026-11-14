@@ -61,5 +61,11 @@ pub fn public_router(pool: PgPool) -> Router {
             "/orders/:order_id/bookings/:booking_id/creative",
             put(h::public_submit_creative),
         )
+        // The manage link: the customer reschedules, cancels or rebooks with no account. The token
+        // IS the credential and it is scoped to one order.
+        .route("/manage/:token", get(h::manage_view))
+        .route("/manage/:token/cancel", post(h::manage_cancel))
+        .route("/manage/:token/reschedule", post(h::manage_reschedule))
+        .route("/manage/:token/rebook", post(h::manage_rebook))
         .with_state(pool)
 }

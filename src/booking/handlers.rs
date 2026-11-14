@@ -247,3 +247,60 @@ pub async fn public_submit_creative(
         service::submit_creative(&mut c, order_id, booking_id, body).await?,
     ))
 }
+
+// ---------- manage link (public: the token in the URL is the authority) ----------
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RescheduleBody {
+    pub booking_id: Uuid,
+    pub slot_id: Option<Uuid>,
+    pub starts_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub end_date: Option<chrono::NaiveDate>,
+}
+
+pub async fn manage_view(
+    State(pool): State<PgPool>,
+    Path(token): Path<String>,
+) -> Result<Json<Value>> {
+    let view = service::manage_view(&pool, &token).await?;
+    Ok(Json(json!({ "ok": true, "booking": view })))
+}
+
+pub async fn manage_cancel(
+    State(pool): State<PgPool>,
+    Path(token): Path<String>,
+) -> Result<Json<Value>> {
+    let res = service::manage_cancel(&pool, &token).await?;
+    Ok(Json(
+        json!({ "ok": true, "order": res.order, "bookings": res.bookings }),
+    ))
+}
+
+pub async fn manage_reschedule(
+    State(pool): State<PgPool>,
+    Path(token): Path<String>,
+    Json(body): Json<RescheduleBody>,
+) -> Result<Json<Value>> {
+    let res = service::manage_reschedule(
+        &pool,
+        &token,
+        body.booking_id,
+        body.slot_id,
+        body.starts_at,
+        body.end_date,
+    )
+    .await?;
+    Ok(Json(
+        json!({ "ok": true, "order": res.order, "bookings": res.bookings }),
+    ))
+}
+
+pub async fn manage_rebook(
+    State(pool): State<PgPool>,
+    Path(token): Path<String>,
+) -> Result<Json<Value>> {
+    let res = service::manage_rebook(&pool, &token).await?;
+    Ok(Json(
+        json!({ "ok": true, "order": res.order, "bookings": res.bookings }),
+    ))
+}

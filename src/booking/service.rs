@@ -944,3 +944,331 @@ pub async fn review_creative(
     .await?
     .ok_or(BookingError::NotFound("booking"))
 }
+
+// ============================================================================================
+// Manage link — the customer reschedules, cancels or rebooks without an account
+// --------------------------------------------------------------------------------------------
+// The token in the URL IS the authority, so every function here starts by resolving the order from
+// that token and never from a caller-supplied id. A booking is moved inside a transaction that first
+// frees its own capacity, so the capacity check sees the world as it would be AFTER the move — which
+// is the only way "can I have this slot instead?" can be answered honestly.
+// ============================================================================================
+
+/// A booking plus the names a customer needs to recognise it.
+#[derive(Debug, serde::Serialize)]
+pub struct ManageBooking {
+    pub id: Uuid,
+    pub resource_name: String,
+    pub label: String,
+    pub starts_at: DateTime<Utc>,
+    pub ends_at: DateTime<Utc>,
+    pub quantity: i32,
+    pub price_cents: i64,
+    pub status: String,
+    pub creative_status: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ManageView {
+    pub order_id: Uuid,
+    pub calendar_name: String,
+    pub calendar_slug: String,
+    pub kind: String,
+    pub timezone: String,
+    pub currency: String,
+    pub customer_name: String,
+    pub customer_email: String,
+    pub status: String,
+    pub subtotal_cents: i64,
+    pub discount_cents: i64,
+    pub total_cents: i64,
+    pub notes: String,
+    pub created_at: DateTime<Utc>,
+    pub hold_expires_at: DateTime<Utc>,
+    pub bookings: Vec<ManageBooking>,
+}
+
+async fn order_by_token(conn: &mut PgConnection, token: &str) -> Result<Order> {
+    sqlx::query_as::<_, Order>("SELECT * FROM booking_orders WHERE manage_token = $1")
+        .bind(token)
+        .fetch_optional(conn)
+        .await?
+        .ok_or(BookingError::NotFound("booking"))
+}
+
+pub async fn manage_view(pool: &PgPool, token: &str) -> Result<ManageView> {
+    let mut conn = pool.acquire().await?;
+    let order = order_by_token(&mut conn, token).await?;
+    let cal = calendar_by_id(&mut conn, order.calendar_id).await?;
+    let rows = sqlx::query_as::<_, (Uuid, String, String, DateTime<Utc>, DateTime<Utc>, i32, i64, String, Option<String>)>(
+        "SELECT b.id, r.name, COALESCE(s.label, ''), b.starts_at, b.ends_at, b.quantity, b.price_cents,
+                b.status, b.meta->>'creative_status'
+           FROM booking_bookings b
+           JOIN booking_resources r ON r.id = b.resource_id
+           LEFT JOIN booking_slots s ON s.id = b.slot_id
+          WHERE b.order_id = $1
+          ORDER BY b.starts_at",
+    )
+    .bind(order.id)
+    .fetch_all(&mut *conn)
+    .await?;
+    let bookings = rows
+        .into_iter()
+        .map(
+            |(
+                id,
+                resource_name,
+                label,
+                starts_at,
+                ends_at,
+                quantity,
+                price_cents,
+                status,
+                creative_status,
+            )| {
+                ManageBooking {
+                    id,
+                    resource_name,
+                    label,
+                    starts_at,
+                    ends_at,
+                    quantity,
+                    price_cents,
+                    status,
+                    creative_status,
+                }
+            },
+        )
+        .collect();
+    Ok(ManageView {
+        order_id: order.id,
+        calendar_name: cal.name,
+        calendar_slug: cal.slug,
+        kind: serde_json::to_value(&cal.kind)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default(),
+        timezone: cal.timezone,
+        currency: cal.currency,
+        customer_name: order.customer_name,
+        customer_email: order.customer_email,
+        status: order.status,
+        subtotal_cents: order.subtotal_cents,
+        discount_cents: order.discount_cents,
+        total_cents: order.total_cents,
+        notes: order.notes,
+        created_at: order.created_at,
+        hold_expires_at: order.hold_expires_at,
+        bookings,
+    })
+}
+
+/// Cancel by token. Frees every position the order holds.
+pub async fn manage_cancel(pool: &PgPool, token: &str) -> Result<OrderWithBookings> {
+    let mut conn = pool.acquire().await?;
+    let order = order_by_token(&mut conn, token).await?;
+    drop(conn);
+    cancel_order(pool, order.id, None).await
+}
+
+/// Move ONE booking of a token's order to another position.
+///
+/// `slot_id` moves an inventory/date_range booking onto a dated slot; `starts_at` moves an
+/// appointment (or a range, with `end_date`) to a new time. The move is refused with a conflict if
+/// the target cannot take it, and nothing is changed in that case.
+pub async fn manage_reschedule(
+    pool: &PgPool,
+    token: &str,
+    booking_id: Uuid,
+    slot_id: Option<Uuid>,
+    starts_at: Option<DateTime<Utc>>,
+    end_date: Option<chrono::NaiveDate>,
+) -> Result<OrderWithBookings> {
+    let mut tx = pool.begin().await?;
+    let order = order_by_token(&mut tx, token).await?;
+    if order.status == "cancelled" {
+        return Err(BookingError::conflict("this booking was cancelled"));
+    }
+    let cal = calendar_by_id(&mut tx, order.calendar_id).await?;
+    let tz = tz_of(&cal)?;
+
+    let booking = sqlx::query_as::<_, Booking>(
+        "SELECT * FROM booking_bookings WHERE id = $1 AND order_id = $2",
+    )
+    .bind(booking_id)
+    .bind(order.id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(BookingError::NotFound("booking"))?;
+    if booking.status == "cancelled" {
+        return Err(BookingError::conflict("this booking was cancelled"));
+    }
+
+    let resource = sqlx::query_as::<_, Resource>("SELECT * FROM booking_resources WHERE id = $1")
+        .bind(booking.resource_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(BookingError::NotFound("resource"))?;
+
+    // Resolve the target position.
+    let (new_slot, new_start, new_end) = if let Some(sid) = slot_id {
+        let (starts, ends): (DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
+            "SELECT starts_at, ends_at FROM booking_slots WHERE id = $1 AND resource_id = $2 AND status = 'open'",
+        )
+        .bind(sid)
+        .bind(booking.resource_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| BookingError::conflict("that slot is no longer available"))?;
+        (Some(sid), starts, ends)
+    } else if let Some(s) = starts_at {
+        let duration = booking.ends_at - booking.starts_at;
+        (None, s, s + duration)
+    } else if let Some(day) = end_date {
+        let start = booking.starts_at;
+        let end = chrono::DateTime::<Utc>::from_naive_utc_and_offset(
+            day.and_hms_opt(0, 0, 0).unwrap_or_default(),
+            Utc,
+        );
+        if end <= start {
+            return Err(BookingError::invalid(
+                "the end date must be after the start",
+            ));
+        }
+        (None, start, end)
+    } else {
+        return Err(BookingError::invalid("nothing to move it to"));
+    };
+
+    // Free this booking's own capacity first, so the check below judges the world AFTER the move.
+    sqlx::query("UPDATE booking_bookings SET status = 'cancelled' WHERE id = $1")
+        .bind(booking.id)
+        .execute(&mut *tx)
+        .await?;
+
+    lock_resources(&mut tx, vec![resource.id]).await?;
+    if let Err(e) = check_capacity(
+        &mut tx,
+        cal.kind.clone(),
+        tz,
+        &resource,
+        new_slot,
+        new_start,
+        new_end,
+        booking.quantity,
+    )
+    .await
+    {
+        // rollback leaves the booking exactly as it was
+        return Err(e);
+    }
+
+    let updated = sqlx::query_as::<_, Booking>(
+        "UPDATE booking_bookings
+            SET slot_id = $2, starts_at = $3, ends_at = $4, status = $5,
+                hold_expires_at = GREATEST(hold_expires_at, now() + ($6::int * interval '1 minute'))
+          WHERE id = $1
+          RETURNING *",
+    )
+    .bind(booking.id)
+    .bind(new_slot)
+    .bind(new_start)
+    .bind(new_end)
+    .bind(&booking.status)
+    .bind(cal.hold_minutes)
+    .fetch_one(&mut *tx)
+    .await?;
+    let _ = updated;
+
+    let bookings = bookings_of(&mut tx, order.id).await?;
+    tx.commit().await?;
+    Ok(OrderWithBookings { order, bookings })
+}
+
+/// Rebook: the same placement on the next position still open, as a NEW order so the original
+/// record stays intact. This is the one-click "yes, I want that again" a newsletter advertiser asks
+/// for by email otherwise.
+pub async fn manage_rebook(pool: &PgPool, token: &str) -> Result<OrderWithBookings> {
+    let mut conn = pool.acquire().await?;
+    let order = order_by_token(&mut conn, token).await?;
+    let cal = calendar_by_id(&mut conn, order.calendar_id).await?;
+    let bookings = bookings_of(&mut conn, order.id).await?;
+    let first = bookings
+        .first()
+        .ok_or(BookingError::NotFound("booking"))?
+        .clone();
+
+    // the next open position on the same resource, strictly after the one just booked
+    let next = sqlx::query_as::<_, (Uuid, DateTime<Utc>, DateTime<Utc>, i64)>(
+        "SELECT s.id, s.starts_at, s.ends_at, s.price_cents
+           FROM booking_slots s
+          WHERE s.resource_id = $1 AND s.status = 'open' AND s.starts_at > $2
+            AND s.capacity > COALESCE((SELECT SUM(b.quantity) FROM booking_bookings b
+                                        WHERE b.slot_id = s.id
+                                          AND (b.status = 'confirmed'
+                                               OR (b.status = 'held' AND b.hold_expires_at > now()))), 0)
+          ORDER BY s.starts_at LIMIT 1",
+    )
+    .bind(first.resource_id)
+    .bind(first.starts_at)
+    .fetch_optional(&mut *conn)
+    .await?;
+
+    let (slot_id, starts, ends, price) = match next {
+        Some((sid, st, en, pr)) => (Some(sid), st, en, pr),
+        None => {
+            // appointment/date_range resources have no slot rows: offer the same length one week on
+            let start = first.starts_at + chrono::Duration::days(7);
+            (
+                None,
+                start,
+                start + (first.ends_at - first.starts_at),
+                first.price_cents,
+            )
+        }
+    };
+    drop(conn);
+
+    let hold = cal.hold_minutes;
+    let mut tx = pool.begin().await?;
+    let new_order = sqlx::query_as::<_, Order>(
+        "INSERT INTO booking_orders
+            (tenant_id, calendar_id, customer_name, customer_email, status, subtotal_cents,
+             discount_cents, total_cents, hold_expires_at, notes)
+         VALUES ($1, $2, $3, $4, 'pending', $5, 0, $5, now() + ($6::int * interval '1 minute'), $7)
+         RETURNING *",
+    )
+    .bind(order.tenant_id)
+    .bind(order.calendar_id)
+    .bind(&order.customer_name)
+    .bind(&order.customer_email)
+    .bind(price)
+    .bind(hold)
+    .bind("Rebooked from ".to_string() + &order.id.to_string())
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let booking = sqlx::query_as::<_, Booking>(
+        "INSERT INTO booking_bookings
+            (order_id, resource_id, slot_id, starts_at, ends_at, quantity, price_cents, status,
+             hold_expires_at, meta)
+         VALUES ($1, $2, $3, $4, $5, 1, $6, 'held', now() + ($7::int * interval '1 minute'), $8)
+         RETURNING *",
+    )
+    .bind(new_order.id)
+    .bind(first.resource_id)
+    .bind(slot_id)
+    .bind(starts)
+    .bind(ends)
+    .bind(price)
+    .bind(hold)
+    .bind(serde_json::json!({ "rebooked_from": order.id }))
+    .fetch_one(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(OrderWithBookings {
+        order: new_order,
+        bookings: vec![booking],
+    })
+}

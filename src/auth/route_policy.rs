@@ -186,7 +186,7 @@
 //!        t_e968e9ad: `/api/admin/provisioning-config` and
 //!        `/api/v1/internal/provision-free-account`) were measured the same way and each answered
 //!        401 anonymous; both are named in the lists below
-//!    38 deliberate anonymous entries  -> PUBLIC_ROUTES  (35 /api + 3 /inbound) — COUNTS ARRAY
+//!    42 deliberate anonymous entries  -> PUBLIC_ROUTES  (39 /api + 3 /inbound) — COUNTS ARRAY
 //!        ENTRIES: measured 27 (24 /api + 3 /inbound) before the confirm arm above was added,
 //!        i.e. one more than the 26 this line used to claim, and 30 after the hosted calendar
 //!        address added its two public arms (kanban t_8457bfef), and 31 after the per-calendar
@@ -410,6 +410,12 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/public/booking/c/:slug/orders",
     "/api/public/booking/orders/:id",
     "/api/public/booking/orders/:order_id/bookings/:booking_id/creative",
+    // The manage link a confirmation carries. The 64-character token IS the credential, so these
+    // are anonymous by design and scoped to one order - a caller cannot reach anyone else's.
+    "/api/public/booking/manage/:token",
+    "/api/public/booking/manage/:token/cancel",
+    "/api/public/booking/manage/:token/reschedule",
+    "/api/public/booking/manage/:token/rebook",
     "/inbound/v3/:key_prefix/:event_type",
 ];
 
