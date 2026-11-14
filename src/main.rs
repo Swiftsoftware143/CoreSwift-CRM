@@ -609,11 +609,21 @@ async fn main() -> anyhow::Result<()> {
         // as a service strips the prefix and forwards it; a `fallback_service` inside a `nest` does
         // not (a fallback sees the ORIGINAL path), which is why this answered 404/405 when it was
         // written the other way.
+        // The boundary outside this stack only REFUSES anonymous callers; it does not put the
+        // signed-in `Claims` on the request. So this router carries `auth_middleware` itself (as
+        // every other module does) and the adapter runs after it, turning `Claims.aid` into the
+        // `TenantId` the engine's handlers require. Layer order matters: the last `.layer` runs
+        // first, so auth is outermost and the adapter sees its result.
         .nest_service(
             "/api/booking",
-            booking::admin_router(state.db.clone()).layer(axum::middleware::from_fn(
-                booking::tenant::accept_tenant_from_claims,
-            )),
+            booking::admin_router(state.db.clone())
+                .layer(axum::middleware::from_fn(
+                    booking::tenant::accept_tenant_from_claims,
+                ))
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::auth::middleware::auth_middleware,
+                )),
         )
         // The buyer-facing pages sit INSIDE /api so a single proxy rule carries them, and each of
         // their six paths is named in `auth::route_policy::PUBLIC_ROUTES` — anonymity here is
