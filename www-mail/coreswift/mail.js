@@ -502,6 +502,7 @@
       + '<div class="brand">CoreSwift Mail</div>'
       + '<button class="btn btn-primary" id="mCompose" style="width:100%">Compose</button>'
       + '<button class="btn" id="mSignature" style="width:100%;margin-top:8px">Signature</button>'
+      + '<button class="btn" id="mAutoReply" style="width:100%;margin-top:8px">Auto-replies</button>'
       + '<button class="btn" id="mMailboxes" style="width:100%;margin-top:8px">Mailboxes</button>'
       + '<div style="margin-top:12px">' + rows + '</div>'
       + '<h5>Folders you made</h5>' + (customRows || '<div style="color:var(--muted);font-size:12px;padding:0 9px">None yet — use a folder\'s menu.</div>')
@@ -833,6 +834,8 @@
     if (c) c.onclick = function () { composeModal('new'); };
     var sg = $('mSignature');
     if (sg) sg.onclick = function () { signatureModal(); };
+    var ar = $('mAutoReply');
+    if (ar) ar.onclick = function () { autoReplyModal(); };
     // Back to Choose a mailbox. The picker used to be reachable only on the way IN, so
     // reading a second address meant signing out and back in.
     var mb = $('mMailboxes');
@@ -1298,6 +1301,127 @@
             toast((d && d.detail) || 'Saved');
             await load();
           } catch (e) { $('sErr').textContent = fail(e); }
+          btn.disabled = false;
+        };
+        load();
+      });
+  }
+
+  // ── Auto-replies ──────────────────────────────────────────────────────────────────────────────
+  // The engine has existed since the mail module landed: four routes, and the inbound webhook fires
+  // them. What was missing was a DOOR, so a customer could not switch it on at all — and with no
+  // brake on the engine, switching it on would have meant one reply per message. Both halves are
+  // closed together: this screen, and (in the app) a 24-hour-per-person throttle plus a guard that
+  // never answers a machine-written message or another address on the same account.
+  function bodyHtmlOf(text) {
+    var e = String(text || '').replace(/\r/g, '').trim();
+    if (!e) return '';
+    return '<p>' + e.split(/\n{2,}/).map(function (p) {
+      return esc(p).replace(/\n/g, '<br>');
+    }).join('</p><p>') + '</p>';
+  }
+
+  function autoReplyModal() {
+    if (!S.boxes || !S.boxes.length) {
+      toast('Create an inbox first — an automatic reply belongs to an address', 'error');
+      return;
+    }
+    var byId = {};
+    S.boxes.forEach(function (b) { byId[b.id] = b; });
+
+    function addressOf(r) {
+      var b = byId[r.mailbox_id];
+      return b ? b.email_address : 'an address that no longer exists (this rule never sends)';
+    }
+
+    var addrOpts = S.boxes.map(function (b) {
+      return '<option value="' + esc(b.id) + '">' + esc(b.email_address) + '</option>';
+    }).join('');
+
+    modal('Auto-replies',
+      '<p style="margin:0 0 10px;font-size:13px;color:var(--muted)">'
+      + 'One automatic reply to anyone who writes to the address you choose — answered once per person '
+      + 'every 24 hours, sent from the address they wrote to, so they can simply write back. A '
+      + 'machine-written message (another out-of-office, a bounce, a mailing list) is never answered, '
+      + 'and neither is another address on this account.</p>'
+      + '<div id="arList"><div style="font-size:12px;color:var(--muted)">Loading…</div></div>'
+      + '<h4 style="margin:16px 0 0">Add a rule</h4>'
+      + '<label class="f">Address that answers</label><select id="arBox">' + addrOpts + '</select>'
+      + '<label class="f">Subject</label><input id="arSubject" placeholder="Away until Monday">'
+      + '<label class="f">Message</label><textarea id="arBody" rows="5" placeholder="Thanks for writing — I am away until Monday and will answer as soon as I am back."></textarea>'
+      + '<label class="f">Send after (minutes)</label><input id="arDelay" type="number" min="0" value="0">'
+      + '<div class="err" id="arErr"></div>',
+      '<button class="btn" onclick="csmCloseModal()">Close</button>'
+      + '<button class="btn btn-primary" id="arAdd">Add rule</button>',
+      function () {
+        async function load() {
+          var box = $('arList');
+          try {
+            var rows = (await api('GET', '/private-email/auto-replies')) || [];
+            if (!rows.length) {
+              box.innerHTML = '<div style="font-size:12px;color:var(--muted)">No rule yet — an address with no rule never answers automatically.</div>';
+              return;
+            }
+            box.innerHTML = rows.map(function (r) {
+              return '<div style="border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:8px">'
+                + '<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">'
+                + '<div><strong>' + esc(r.subject || '(no subject)') + '</strong>'
+                + '<div style="font-size:12px;color:var(--muted)">' + esc(addressOf(r)) + ' &middot; '
+                + (r.is_active ? 'on' : 'off')
+                + (Number(r.delay_minutes) > 0 ? ' &middot; after ' + Number(r.delay_minutes) + ' minutes' : ' &middot; straight away')
+                + '</div></div>'
+                + '<div style="display:flex;gap:6px">'
+                + '<button class="btn btn-ghost" data-ar-toggle="' + esc(r.id) + '" data-on="' + (r.is_active ? '0' : '1') + '">' + (r.is_active ? 'Turn off' : 'Turn on') + '</button>'
+                + '<button class="btn btn-ghost" data-ar-del="' + esc(r.id) + '" title="Remove this rule">Remove</button>'
+                + '</div></div></div>';
+            }).join('');
+            Array.prototype.forEach.call(box.querySelectorAll('[data-ar-toggle]'), function (btn) {
+              btn.onclick = async function () {
+                btn.disabled = true;
+                try {
+                  await api('PATCH', '/private-email/auto-replies/' + encodeURIComponent(btn.getAttribute('data-ar-toggle')),
+                    { is_active: btn.getAttribute('data-on') === '1' });
+                  await load();
+                } catch (e) { $('arErr').textContent = fail(e); btn.disabled = false; }
+              };
+            });
+            Array.prototype.forEach.call(box.querySelectorAll('[data-ar-del]'), function (btn) {
+              btn.onclick = async function () {
+                btn.disabled = true;
+                try {
+                  await api('DELETE', '/private-email/auto-replies/' + encodeURIComponent(btn.getAttribute('data-ar-del')));
+                  toast('Rule removed');
+                  await load();
+                } catch (e) { $('arErr').textContent = fail(e); btn.disabled = false; }
+              };
+            });
+          } catch (e) {
+            box.innerHTML = '<div class="err">' + esc(fail(e)) + '</div>';
+          }
+        }
+
+        $('arAdd').onclick = async function () {
+          var btn = this; btn.disabled = true;
+          var err = $('arErr'); err.textContent = '';
+          var b = byId[$('arBox').value];
+          var body = $('arBody').value.trim();
+          if (!b) { err.textContent = 'Choose the address that answers.'; btn.disabled = false; return; }
+          if (!body) { err.textContent = 'Write the message people should receive.'; btn.disabled = false; return; }
+          try {
+            await api('POST', '/private-email/auto-replies', {
+              domain_id: b.domain_id,
+              mailbox_id: b.id,
+              name: 'Automatic reply — ' + b.email_address,
+              trigger_type: 'always',
+              trigger_value: null,
+              subject: $('arSubject').value.trim() || 'Automatic reply',
+              body_html: bodyHtmlOf(body),
+              delay_minutes: Math.max(0, parseInt($('arDelay').value, 10) || 0)
+            });
+            $('arSubject').value = ''; $('arBody').value = ''; $('arDelay').value = '0';
+            toast('Rule added — it answers the next message that arrives');
+            await load();
+          } catch (e) { err.textContent = fail(e); }
           btn.disabled = false;
         };
         load();

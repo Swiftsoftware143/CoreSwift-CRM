@@ -272,6 +272,27 @@ tr:hover td{background:var(--bg-hover)}
 .loading-wrap{display:flex;align-items:center;justify-content:center;padding:40px;gap:12px;color:var(--text-secondary)}
 
 .hidden{display:none!important}
+
+    /* ---- booking engine page ------------------------------------------------------------ */
+    .bk-types { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; margin:14px 0; }
+    .bk-type { position:relative; text-align:left; background:#fff; border:1px solid #e2e8f0; border-radius:12px;
+               padding:14px 14px 16px; cursor:pointer; transition:transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+               display:flex; flex-direction:column; gap:6px; font:inherit; color:inherit; }
+    .bk-type:hover { transform:translateY(-2px); box-shadow:0 6px 18px rgba(15,23,42,.08); }
+    .bk-type:active { transform:scale(.98); }
+    .bk-type.on { border-color:#6366f1; box-shadow:0 0 0 2px #6366f1, 0 6px 18px rgba(99,102,241,.18); background:#eef2ff; }
+    .bk-type-ico { font-size:20px; }
+    .bk-type-title { font-weight:700; font-size:14px; }
+    .bk-type-blurb { font-size:12.5px; color:#64748b; line-height:1.45; }
+    .bk-tick { position:absolute; top:10px; right:10px; background:#6366f1; color:#fff; width:20px; height:20px;
+               border-radius:50%; display:grid; place-items:center; font-size:12px; }
+    .bk-form { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; margin:12px 0; }
+    .bk-form label { display:flex; flex-direction:column; gap:4px; font-size:12.5px; color:#475569; font-weight:600; }
+    .bk-form input, .bk-form select { padding:8px 10px; border:1px solid #e2e8f0; border-radius:8px; font:inherit; font-size:13px; font-weight:400; color:#0f172a; background:#fff; }
+    .bk-form input:focus, .bk-form select:focus { outline:none; border-color:#6366f1; box-shadow:0 0 0 3px rgba(99,102,241,.15); }
+    .bk-flash { margin-left:10px; font-size:13px; font-weight:600; }
+    .bk-flash.good { color:#059669; }
+    .bk-flash.bad { color:#dc2626; }
 </style>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/favicon.svg"></head>
 <body>
@@ -784,6 +805,9 @@ const SETTINGS_MENU = [
   // The visual field mapper (spec: docs/coreswift-data-mapping-spec-2026-11-13.md).
   // It sits with the Integration Center because it consumes the same per-app connections.
   { id:'data-mapping', icon:'🧩', label:'Data mapping' },
+  // Booking engine (one model, three calendar types). Sits under Settings because it is
+  // workspace configuration, not something a member touches.
+  { id:'booking', icon:'📅', label:'Booking' },
   // Tenant-side team management. roles[] hides the nav entry from a 'member': the API
   // answers 403 for any non-owner/admin token, so offering it would only dead-end.
   { id:'team', icon:'👥', label:'Team & Invites', roles:['owner','admin'] },
@@ -9737,6 +9761,7 @@ async function wsSwitchBusiness(idx) {
 window.appGuidePages = {
   dashboard:       { title: "Dashboard", desc: "Your workspace at a glance — contacts, deals, activity and what needs attention today.", actions: ["Scan the counters and recent activity", "Jump to anything that needs a follow-up", "Use the workspace switcher (🗂️ top bar) to move between workspaces"] },
   mcp:             { title: "MCP", desc: "Connect your AI tools to read this workspace. Point an MCP client (Claude Code, Cursor, Hermes, or your own agent) at https://hooks.swiftsoftware.net/mcp, using your API key as the token. Every tool is read-only and scoped to this workspace — there is no write tool and no free-form SQL door.", actions: ["Copy the endpoint", "View & copy your API key (re-enter your password)", "Paste both into your MCP client"] },
+  "booking":       { title: "Booking", desc: "One booking engine, three kinds of calendar. Pick the type when you create it: appointment times (a Calendly replacement), dated slots you sell (newsletter placements, ad spots), or a date range (a featured listing or a rental). You choose your open hours once and use the shortcuts to fill a whole week; slots can be generated for a whole quarter in one run, with a different price per weekday.", actions: ["Create a calendar and pick its type", "Add what customers can book, with a price and a length", "Set open hours, or generate dated slots", "Add a bulk-pricing rule", "Hand out the public link"] },
   "data-mapping":  { title: "Data mapping", desc: "Bring another SwiftSoftware app's leads into this CRM without code. Pick the source app, then drop its fields into your contact fields as data pills — the preview shows exactly what CoreSwift would receive before anything is saved. If the app has already sent you data, the field list is built from what actually arrived.", actions: ["Pick the source app and the kind of row", "Click a source field to drop it into a destination", "Test with a sample row, then Save", "Check Runs to see what was refused and why"] },
   contacts:        { title: "Contacts", desc: "The people and companies you do business with. Each contact carries its history, tags and deals.", actions: ["Add a contact", "Open one to see its full record", "Search by name or email"] },
   duplicates:      { title: "Duplicates", desc: "Contacts in this workspace that look like the same person — the same phone number, or the same first and last name. Nothing is merged for you.", actions: ["Scan the groups for two records of one person", "Edit the record you keep, then remove the other on Contacts"] },
@@ -9868,6 +9893,385 @@ TAB_RENDERERS['data-mapping'] = () => pageHeader(
 ) + '<div id="dmWrap"><div class="loading-wrap"><div class="spinner"></div> Loading mappings…</div></div>';
 
 TAB_LOADERS['data-mapping'] = async () => { await dmInit(); };
+
+/* ==========================================================================================
+ * BOOKING ENGINE console page
+ * ------------------------------------------------------------------------------------------
+ * One engine, three calendar types. The type is chosen at creation, in plain words, because not
+ * every workspace sells newsletter slots. Everything below talks to /api/booking (operator) and
+ * shows the /api/public/booking/<slug> link the workspace can hand to customers.
+ * ========================================================================================== */
+
+window.BK = { list: [], current: null, detail: null, type: 'appointment' };
+
+const BK_TYPES = [
+  { id: 'appointment', icon: '🗓️', title: 'Appointment times',
+    blurb: 'One-to-one meetings from your open hours. A Calendly replacement — you set the hours, the length and the padding.' },
+  { id: 'inventory', icon: '📰', title: 'Dated slots for sale',
+    blurb: 'Individually priced positions for fixed dates — newsletter placements, ad spots. Generate a whole quarter at once.' },
+  { id: 'date_range', icon: '🏷️', title: 'A date range',
+    blurb: 'A span of days at a day rate — a featured listing, a rental, equipment on hire.' }
+];
+
+function bkMoney(cents) {
+  const n = (cents || 0) / 100;
+  return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function bkSlug(v) {
+  return (v || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+}
+
+function bkTypeWords(kind) {
+  return ({ appointment: 'Appointment times', inventory: 'Dated slots', date_range: 'Date range' })[kind] || kind;
+}
+
+async function bkCall(method, path, body) {
+  return dmCall(method, '/booking' + path, body);
+}
+
+function bkFlash(msg, ok) {
+  const el = document.getElementById('bkFlash');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'bk-flash ' + (ok === false ? 'bad' : 'good');
+  setTimeout(function () { el.textContent = ''; }, 6000);
+}
+
+async function bkInit() {
+  try {
+    const res = await bkCall('GET', '/calendars');
+    BK.list = (res && res.calendars) ? res.calendars : (Array.isArray(res) ? res : []);
+    if (BK.current) {
+      const still = BK.list.find(function (c) { return c.id === BK.current; });
+      if (still) await bkOpenDetail(BK.current, true); else BK.current = null;
+    }
+  } catch (e) {
+    document.getElementById('bkWrap').innerHTML =
+      '<div class="empty-state"><p class="muted">Could not load calendars — ' + escapeHtml(e.message) + '</p></div>';
+    return;
+  }
+  bkRender();
+}
+
+function bkRender() {
+  const wrap = document.getElementById('bkWrap');
+  if (!wrap) return;
+  wrap.innerHTML = bkCreatePanel() + (BK.current ? bkDetailPanel() : bkListPanel());
+}
+
+function bkCreatePanel() {
+  const cards = BK_TYPES.map(function (t) {
+    const on = BK.type === t.id;
+    return '<button type="button" class="bk-type' + (on ? ' on' : '') + '" onclick="bkPickType(\'' + t.id + '\')">' +
+      '<span class="bk-type-ico">' + t.icon + '</span>' +
+      '<span class="bk-type-title">' + t.title + '</span>' +
+      '<span class="bk-type-blurb">' + t.blurb + '</span>' +
+      (on ? '<span class="bk-tick">✓</span>' : '') +
+      '</button>';
+  }).join('');
+  return '' +
+    '<div class="card" style="margin-bottom:18px">' +
+      '<h3 style="margin-top:0">New calendar</h3>' +
+      '<p class="muted" style="margin-top:-6px">Pick what this calendar is. The type decides how openings appear — you can add another calendar of a different type any time.</p>' +
+      '<div class="bk-types">' + cards + '</div>' +
+      '<div class="bk-form">' +
+        '<label>Name<input id="bkName" placeholder="Consultations" oninput="document.getElementById(\'bkSlug\').value=bkSlug(this.value)"></label>' +
+        '<label>Web address<input id="bkSlug" placeholder="consultations"><span class="muted" id="bkSlugHint">used in the public link</span></label>' +
+        '<label>Time zone<input id="bkTz" value="America/New_York"></label>' +
+        '<label>Hold for (minutes)<input id="bkHold" type="number" value="30" min="1" max="240"></label>' +
+      '</div>' +
+      '<button class="btn btn-primary" onclick="bkCreate()">Create calendar</button>' +
+      '<span class="bk-flash" id="bkFlash"></span>' +
+    '</div>';
+}
+
+function bkPickType(id) { BK.type = id; bkRender(); }
+
+async function bkCreate() {
+  const name = (document.getElementById('bkName').value || '').trim();
+  const slug = (document.getElementById('bkSlug').value || '').trim();
+  if (!name || !slug) { bkFlash('A name and a web address are both needed.', false); return; }
+  try {
+    const cal = await bkCall('POST', '/calendars', {
+      name: name, slug: slug, kind: BK.type,
+      timezone: (document.getElementById('bkTz').value || 'America/New_York').trim(),
+      hold_minutes: parseInt(document.getElementById('bkHold').value, 10) || 30
+    });
+    BK.current = cal.id;
+    await bkInit();
+    bkFlash('Calendar created.');
+  } catch (e) { bkFlash(e.message, false); }
+}
+
+function bkListPanel() {
+  if (!BK.list.length) {
+    return '<div class="card"><div class="empty-state"><p class="muted">No calendars yet. Create one above — customers see nothing until you do.</p></div></div>';
+  }
+  const rows = BK.list.map(function (c) {
+    return '<tr onclick="bkOpen(\'' + c.id + '\')" style="cursor:pointer">' +
+      '<td><strong>' + escapeHtml(c.name) + '</strong><div class="muted" style="font-size:12px">/' + escapeHtml(c.slug) + '</div></td>' +
+      '<td><span class="badge">' + bkTypeWords(c.kind) + '</span></td>' +
+      '<td>' + escapeHtml(c.currency || 'usd').toUpperCase() + '</td>' +
+      '<td class="muted">' + escapeHtml(c.timezone || '') + '</td>' +
+      '<td style="text-align:right"><button class="btn btn-secondary btn-sm">Open</button></td></tr>';
+  }).join('');
+  return '<div class="card"><table class="table"><thead><tr><th>Calendar</th><th>Type</th><th>Currency</th><th>Time zone</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+}
+
+async function bkOpen(id) { BK.current = id; await bkOpenDetail(id, true); bkRender(); }
+
+async function bkOpenDetail(id, quiet) {
+  try {
+    BK.detail = await bkCall('GET', '/calendars/' + id);
+    if (!quiet) bkRender();
+  } catch (e) { bkFlash(e.message, false); }
+}
+
+function bkDetailPanel() {
+  const d = BK.detail || {};
+  const cal = d.calendar || d;
+  const res = d.resources || [];
+  const bundles = d.bundles || [];
+  const pub = '/api/public/booking/c/' + cal.slug;
+
+  let html = '<div class="card" style="margin-bottom:18px">' +
+    '<button class="btn btn-secondary btn-sm" onclick="bkBack()">← All calendars</button>' +
+    '<h3 style="margin:12px 0 4px">' + escapeHtml(cal.name) + '</h3>' +
+    '<p class="muted" style="margin:0">' + bkTypeWords(cal.kind) + ' · ' + escapeHtml(cal.timezone || '') + ' · holds ' + (cal.hold_minutes || 30) + ' min</p>' +
+    '<p style="margin:10px 0 0"><strong>Public link:</strong> <a href="' + pub + '" target="_blank" rel="noopener">' + pub + '</a></p>' +
+    '<span class="bk-flash" id="bkFlash"></span></div>';
+
+  html += bkResourcePanel(res, cal.kind);
+  if (cal.kind === 'appointment') html += bkHoursPanel();
+  if (cal.kind !== 'appointment') html += bkSlotsPanel(res);
+  html += bkBundlePanel(bundles);
+  html += bkOrdersPanel();
+  return html;
+}
+
+function bkBack() { BK.current = null; BK.detail = null; bkRender(); }
+
+function bkResourcePanel(res, kind) {
+  const priceLabel = kind === 'date_range' ? 'Price per day (cents)' : 'Price (cents)';
+  const rows = res.map(function (r) {
+    return '<tr><td><strong>' + escapeHtml(r.name) + '</strong></td>' +
+      '<td>' + bkMoney(r.price_cents) + '</td>' +
+      '<td>' + (r.duration_min || 0) + ' min</td>' +
+      '<td>' + (r.capacity || 1) + '</td>' +
+      '<td><button class="btn btn-secondary btn-sm" onclick="bkEditSlotPrices(\'' + r.id + '\')">Slots</button></td></tr>';
+  }).join('');
+  return '<div class="card" style="margin-bottom:18px"><h3 style="margin-top:0">What customers can book</h3>' +
+    (res.length ? '<table class="table"><thead><tr><th>Name</th><th>' + priceLabel + '</th><th>Length</th><th>Places</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+                : '<p class="muted">Nothing bookable yet. Add the first one below.</p>') +
+    '<div class="bk-form" style="margin-top:12px">' +
+      '<label>Name<input id="bkResName" placeholder="' + (kind === 'inventory' ? 'Top sponsor' : kind === 'date_range' ? 'Featured listing 30 days' : 'Discovery call') + '"></label>' +
+      '<label>' + priceLabel + '<input id="bkResPrice" type="number" value="' + (kind === 'appointment' ? 0 : 20000) + '"></label>' +
+      '<label>Length (min)<input id="bkResDur" type="number" value="' + (kind === 'appointment' ? 30 : 60) + '"></label>' +
+      '<label>Places<input id="bkResCap" type="number" value="1" min="1"></label>' +
+      '<label>Padding after (min)<input id="bkResBuf" type="number" value="0" min="0"></label>' +
+      '<label>Spacing (min)<input id="bkResInterval" type="number" value="' + (kind === 'appointment' ? 30 : 60) + '"></label>' +
+    '</div>' +
+    '<button class="btn btn-primary" onclick="bkAddResource()">Add</button></div>';
+}
+
+async function bkAddResource() {
+  const name = (document.getElementById('bkResName').value || '').trim();
+  if (!name) { bkFlash('Give it a name.', false); return; }
+  try {
+    await bkCall('POST', '/calendars/' + BK.current + '/resources', {
+      name: name,
+      price_cents: parseInt(document.getElementById('bkResPrice').value, 10) || 0,
+      duration_min: parseInt(document.getElementById('bkResDur').value, 10) || 30,
+      capacity: parseInt(document.getElementById('bkResCap').value, 10) || 1,
+      buffer_min: parseInt(document.getElementById('bkResBuf').value, 10) || 0,
+      slot_interval_min: parseInt(document.getElementById('bkResInterval').value, 10) || 30
+    });
+    await bkOpenDetail(BK.current, true); bkRender(); bkFlash('Added.');
+  } catch (e) { bkFlash(e.message, false); }
+}
+
+/* ---- open hours (appointment) ----------------------------------------------------------------- */
+const BK_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+function bkHoursPanel() {
+  const rows = BK_DAYS.map(function (d, i) {
+    return '<tr><td>' + d + '</td>' +
+      '<td><input id="bkFrom' + i + '" type="time" value="09:00"></td>' +
+      '<td><input id="bkTo' + i + '" type="time" value="17:00"></td>' +
+      '<td><input id="bkOn' + i + '" type="checkbox" checked></td></tr>';
+  }).join('');
+  return '<div class="card" style="margin-bottom:18px"><h3 style="margin-top:0">Open hours</h3>' +
+    '<p class="muted" style="margin-top:-6px">Set the hours once, then use the shortcuts so a week is two clicks.</p>' +
+    '<label style="display:flex;gap:8px;align-items:center;margin:8px 0"><input id="bkSameEveryDay" type="checkbox" onchange="bkApplyToAllDays()"> Same hours every weekday</label>' +
+    '<table class="table"><thead><tr><th>Day</th><th>From</th><th>To</th><th>Open</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">' +
+      '<button class="btn btn-secondary btn-sm" onclick="bkCopyMonday()">Copy Monday to Tue–Fri</button>' +
+      '<button class="btn btn-primary btn-sm" onclick="bkSaveHours()">Save hours</button>' +
+    '</div>' +
+    '<p class="muted" style="font-size:12px;margin-bottom:0">Hours are saved per bookable item. Pick one below to apply them.</p>' +
+    '<div id="bkHoursTarget"></div></div>';
+}
+
+function bkApplyToAllDays() {
+  const on = document.getElementById('bkSameEveryDay').checked;
+  if (!on) return;
+  const f = document.getElementById('bkFrom0').value, t = document.getElementById('bkTo0').value;
+  for (let i = 1; i < 5; i++) { document.getElementById('bkFrom' + i).value = f; document.getElementById('bkTo' + i).value = t; }
+}
+
+function bkCopyMonday() {
+  const f = document.getElementById('bkFrom0').value, t = document.getElementById('bkTo0').value;
+  for (let i = 1; i < 5; i++) {
+    document.getElementById('bkFrom' + i).value = f; document.getElementById('bkTo' + i).value = t;
+    document.getElementById('bkOn' + i).checked = true;
+  }
+  bkFlash('Monday copied to Tuesday–Friday.');
+}
+
+async function bkSaveHours() {
+  const res = (BK.detail && BK.detail.resources) || [];
+  if (!res.length) { bkFlash('Add a bookable item first — hours belong to one.', false); return; }
+  const rid = window.BK_HOURS_RESOURCE || res[0].id;
+  const rules = [];
+  for (let i = 0; i < 7; i++) {
+    if (!document.getElementById('bkOn' + i).checked) continue;
+    const f = document.getElementById('bkFrom' + i).value, t = document.getElementById('bkTo' + i).value;
+    if (!f || !t || f >= t) continue;
+    rules.push({ weekday: i, start_time: f + ':00', end_time: t + ':00' });
+  }
+  try {
+    await bkCall('PUT', '/resources/' + rid + '/availability-rules', rules);
+    bkFlash('Hours saved — ' + rules.length + ' open block' + (rules.length === 1 ? '' : 's') + '.');
+  } catch (e) { bkFlash(e.message, false); }
+}
+
+/* ---- dated slots (inventory / date_range) ------------------------------------------------------ */
+function bkSlotsPanel(res) {
+  if (!res.length) return '<div class="card" style="margin-bottom:18px"><p class="muted">Add a bookable item first — slots belong to one.</p></div>';
+  return '<div class="card" style="margin-bottom:18px"><h3 style="margin-top:0">Generate dated slots</h3>' +
+    '<p class="muted" style="margin-top:-6px">One run fills a whole quarter. Running it again never duplicates a position.</p>' +
+    '<div class="bk-form">' +
+      '<label>From<input id="bkGenFrom" type="date"></label>' +
+      '<label>To<input id="bkGenTo" type="date"></label>' +
+      '<label>Weekdays<input id="bkGenDays" value="1,3" placeholder="0=Mon … 6=Sun, e.g. 1,3"></label>' +
+      '<label>Time<input id="bkGenTime" type="time" value="07:00"></label>' +
+      '<label>Price (cents)<input id="bkGenPrice" type="number" value="20000"></label>' +
+      '<label>Tuesday price (optional)<input id="bkGenTue" type="number" placeholder="25000"></label>' +
+      '<label>Label<input id="bkGenLabel" value="Morning issue"></label>' +
+    '</div>' +
+    '<button class="btn btn-primary" onclick="bkGenSlots()">Generate</button>' +
+    '<div id="bkSlotList" style="margin-top:14px"></div></div>';
+}
+
+async function bkGenSlots() {
+  const res = (BK.detail && BK.detail.resources) || [];
+  if (!res.length) { bkFlash('Add a bookable item first.', false); return; }
+  const rid = window.BK_SLOTS_RESOURCE || res[0].id;
+  const days = (document.getElementById('bkGenDays').value || '').split(',')
+    .map(function (d) { return parseInt(d.trim(), 10); }).filter(function (d) { return d >= 0 && d <= 6; });
+  const body = {
+    from: document.getElementById('bkGenFrom').value,
+    to: document.getElementById('bkGenTo').value,
+    weekdays: days,
+    time: (document.getElementById('bkGenTime').value || '07:00') + ':00',
+    price_cents: parseInt(document.getElementById('bkGenPrice').value, 10) || 0,
+    label: document.getElementById('bkGenLabel').value || ''
+  };
+  const tue = parseInt(document.getElementById('bkGenTue').value, 10);
+  if (!isNaN(tue)) body.weekday_prices = { '1': tue };
+  try {
+    await bkCall('POST', '/resources/' + rid + '/slots/generate', body);
+    bkFlash('Generated.');
+    await bkOpenDetail(BK.current, true);
+    bkRender();
+  } catch (e) { bkFlash(e.message, false); }
+}
+
+async function bkEditSlotPrices() { bkFlash('Edit a slot from its row in the availability list.'); }
+
+/* ---- bundles ----------------------------------------------------------------------------------- */
+function bkBundlePanel(bundles) {
+  const rows = (bundles || []).map(function (b) {
+    const what = b.kind === 'percent_off'
+      ? b.percent_off + '% off ' + b.min_items + ' or more'
+      : b.min_items + ' for ' + bkMoney(b.fixed_price_cents);
+    return '<tr><td>' + escapeHtml(b.name) + '</td><td>' + what + '</td><td>' + (b.active ? 'On' : 'Off') + '</td></tr>';
+  }).join('');
+  return '<div class="card" style="margin-bottom:18px"><h3 style="margin-top:0">Bulk pricing</h3>' +
+    '<p class="muted" style="margin-top:-6px">The best one that applies is used automatically — they never stack.</p>' +
+    (bundles && bundles.length ? '<table class="table"><thead><tr><th>Name</th><th>Rule</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '') +
+    '<div class="bk-form" style="margin-top:12px">' +
+      '<label>Name<input id="bkBunName" placeholder="Any 4 issues for $700"></label>' +
+      '<label>Type<select id="bkBunKind"><option value="fixed_price">A fixed total</option><option value="percent_off">A percentage off</option></select></label>' +
+      '<label>At least<input id="bkBunMin" type="number" value="4" min="2"></label>' +
+      '<label>Fixed total (cents)<input id="bkBunFixed" type="number" value="70000"></label>' +
+      '<label>Percent off<input id="bkBunPct" type="number" value="10" min="1" max="100"></label>' +
+    '</div>' +
+    '<button class="btn btn-primary" onclick="bkAddBundle()">Add rule</button></div>';
+}
+
+async function bkAddBundle() {
+  const kind = document.getElementById('bkBunKind').value;
+  const body = {
+    name: (document.getElementById('bkBunName').value || 'Bulk price').trim(),
+    kind: kind,
+    min_items: parseInt(document.getElementById('bkBunMin').value, 10) || 2
+  };
+  if (kind === 'fixed_price') body.fixed_price_cents = parseInt(document.getElementById('bkBunFixed').value, 10) || 0;
+  else body.percent_off = parseInt(document.getElementById('bkBunPct').value, 10) || 10;
+  try {
+    await bkCall('POST', '/calendars/' + BK.current + '/bundles', body);
+    await bkOpenDetail(BK.current, true); bkRender(); bkFlash('Rule added.');
+  } catch (e) { bkFlash(e.message, false); }
+}
+
+/* ---- orders ------------------------------------------------------------------------------------ */
+function bkOrdersPanel() {
+  return '<div class="card"><h3 style="margin-top:0">Orders</h3>' +
+    '<div id="bkOrders"><div class="loading-wrap"><div class="spinner"></div> Loading orders…</div></div></div>';
+}
+
+async function bkLoadOrders() {
+  const el = document.getElementById('bkOrders');
+  if (!el) return;
+  try {
+    const res = await bkCall('GET', '/calendars/' + BK.current + '/orders');
+    const rows = (res && res.orders) ? res.orders : (Array.isArray(res) ? res : []);
+    if (!rows.length) { el.innerHTML = '<p class="muted">No orders yet.</p>'; return; }
+    el.innerHTML = '<table class="table"><thead><tr><th>Customer</th><th>Total</th><th>Status</th><th>When</th><th></th></tr></thead><tbody>' +
+      rows.map(function (o) {
+        const live = o.status === 'pending';
+        return '<tr><td>' + escapeHtml(o.customer_name || '') + '<div class="muted" style="font-size:12px">' + escapeHtml(o.customer_email || '') + '</div></td>' +
+          '<td>' + bkMoney(o.total_cents) + '</td>' +
+          '<td><span class="badge">' + escapeHtml(o.status) + '</span></td>' +
+          '<td class="muted">' + escapeHtml((o.created_at || '').slice(0, 16).replace('T', ' ')) + '</td>' +
+          '<td style="text-align:right">' + (live
+            ? '<button class="btn btn-primary btn-sm" onclick="bkConfirmOrder(\'' + o.id + '\')">Confirm</button> ' +
+              '<button class="btn btn-secondary btn-sm" onclick="bkCancelOrder(\'' + o.id + '\')">Cancel</button>'
+            : '') + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  } catch (e) { el.innerHTML = '<p class="muted">Could not load orders — ' + escapeHtml(e.message) + '</p>'; }
+}
+
+async function bkConfirmOrder(id) {
+  try { await bkCall('POST', '/orders/' + id + '/confirm', {}); bkLoadOrders(); bkFlash('Order confirmed.'); }
+  catch (e) { bkFlash(e.message, false); }
+}
+
+async function bkCancelOrder(id) {
+  try { await bkCall('POST', '/orders/' + id + '/cancel', {}); bkLoadOrders(); bkFlash('Order cancelled — the slots are free again.'); }
+  catch (e) { bkFlash(e.message, false); }
+}
+
+TAB_RENDERERS['booking'] = () => pageHeader(
+  'Booking',
+  'One engine, three kinds of calendar — appointment times, dated slots for sale, or a date range',
+  '<button class="btn btn-secondary btn-sm" onclick="bkInit()">↻ Reload</button>'
+) + '<div id="bkWrap"><div class="loading-wrap"><div class="spinner"></div> Loading calendars…</div></div>';
+
+TAB_LOADERS['booking'] = async () => { await bkInit(); if (BK.current) await bkLoadOrders(); };
+
 
 async function dmInit() {
   const wrap = document.getElementById('dmWrap');
