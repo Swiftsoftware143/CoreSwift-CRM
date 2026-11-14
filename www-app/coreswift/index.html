@@ -2388,11 +2388,15 @@ function showPortfolioSyncModal() {
 // The picker reads the app's own ACTIVE tier list (GET /api/billing/plans) — the same list the
 // customer's plan screens use — so a tier offered here is a tier the app really sells. The empty
 // value means "seat the entry plan", which the server resolves to the platform default (free).
+// PS_PLAN_INFO keeps the NAME of each tier: the sync reply reports the seated tier by its SLUG
+// (`res.plan`), and a slug is jargon in a confirmation an operator reads ("Plan: agency").
+const PS_PLAN_INFO = {};
 async function loadPortfolioSyncPlans() {
   const sel = document.getElementById('psPlan');
   if (!sel) return;
   try {
     const plans = famList(await API.get('/billing/plans'), 'plans');
+    plans.forEach(p => { PS_PLAN_INFO[String(p.slug)] = p; });
     const free = plans.find(p => Number(p.price_monthly || 0) === 0);
     sel.innerHTML = '<option value="">' + escapeHtml((free ? free.name : 'Entry plan') + ' — free') + '</option>' +
       plans.map(p => {
@@ -2417,16 +2421,24 @@ async function runPortfolioSync() {
     const synced = !!(res && res.status === 'synced');
     const emailed = !!(res && res.credentials_emailed);
     const who = escapeHtml((res && res.name) || name);
+    // The reply names the seated tier by SLUG; show the tier's own NAME (and its price) the way the
+    // picker showed it. An unknown slug still reads as a capitalised word, never lowercase jargon.
+    const planSlug = String((res && res.plan) || 'free');
+    const planRow = PS_PLAN_INFO[planSlug];
+    const planLabel = planRow
+      ? String(planRow.name || planSlug) + (Number(planRow.price_monthly || 0) > 0 ? ' — $' + Number(planRow.price_monthly).toFixed(0) + '/mo' : '')
+      : (planSlug ? planSlug.charAt(0).toUpperCase() + planSlug.slice(1) : 'Free');
     let head;
     if (!synced) {
       head = '<p><strong>' + who + ' already has an account.</strong> Nothing new was created — only its contact details were refreshed, so no password email was sent.</p>';
     } else if (emailed) {
       head = '<p><strong>' + who + ' now has an account.</strong> The login details and the password were emailed to ' +
         escapeHtml((res && res.email) || email) + '.</p>' +
-        '<p>Plan: <strong>' + escapeHtml((res && res.plan) || 'free') + '</strong>. They sign in at app.coreswiftcrm.com and can change the password in Settings.</p>';
+        '<p>Plan: <strong>' + escapeHtml(planLabel) + '</strong>. They sign in at app.coreswiftcrm.com and can change the password in Settings.</p>';
     } else {
       head = '<p><strong>' + who + ' now has an account, but the email did not go out.</strong> The owner has no password yet — ' +
-        'they can set one with &ldquo;Forgot password?&rdquo; on the sign-in page, or run this again once mail is working.</p>';
+        'they can set one with &ldquo;Forgot password?&rdquo; on the sign-in page, or run this again once mail is working.</p>' +
+        '<p>Plan: <strong>' + escapeHtml(planLabel) + '</strong> — it is seated already, so the workspace is on that tier as soon as the owner signs in.</p>';
     }
     toast(!synced ? 'Already has an account — details refreshed'
       : (emailed ? 'Account created — login emailed' : 'Account created — email did NOT go out'),
