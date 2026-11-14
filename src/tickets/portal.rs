@@ -227,7 +227,7 @@ pub async fn list(
 
     let tickets = sqlx::query_as::<_, PortalTicket>(&concat!(
         "SELECT t.id, t.subject, t.status, t.priority, t.source, t.created_at, t.updated_at, \
-                (SELECT count(*) FROM ticket_messages m WHERE m.ticket_id = t.id) AS message_count \
+                (SELECT count(*) FROM ticket_messages m WHERE m.ticket_id = t.id AND m.kind <> 'note') AS message_count \
          FROM tickets t WHERE t.tenant_id = $1 AND ",
         owner_predicate!(),
         " ORDER BY t.created_at DESC LIMIT 100"
@@ -264,7 +264,9 @@ pub async fn detail(
     .ok_or_else(|| AppError::NotFound("Request not found".into()))?;
 
     let messages = sqlx::query_as::<_, TicketMessage>(
-        "SELECT * FROM ticket_messages WHERE ticket_id = $1 ORDER BY created_at ASC",
+        // An internal note is the team talking to itself. The customer's portal must never show
+        // one, and this is the query that would (David, 2026-11-14).
+        "SELECT * FROM ticket_messages WHERE ticket_id = $1 AND kind <> 'note' ORDER BY created_at ASC",
     )
     .bind(ticket_id)
     .fetch_all(&s.db)

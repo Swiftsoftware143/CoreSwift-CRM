@@ -34,7 +34,7 @@ pub async fn list_tickets(
 
     let tickets = sqlx::query_as::<_, Ticket>(
         r#"SELECT id, tenant_id, subject, description, status, priority, assigned_to, contact_id,
-                  created_at, updated_at, source, contact_email,
+                  number, created_at, updated_at, source, contact_email,
                   CASE
                     WHEN tenant_id IS NULL THEN COALESCE(NULLIF(contact_name, ''), 'Website visitor')
                     ELSE contact_name
@@ -227,10 +227,17 @@ pub async fn update_ticket(
     let new_priority = body.priority.unwrap_or(ticket.priority);
     let new_assigned_to = body.assigned_to.or(ticket.assigned_to);
 
+    // `solved_at` is the ticket's own record of when it was closed, and the resolution clock reads it.
+    // It is cleared when a ticket goes back into the queue, so a reopened ticket cannot carry a solve
+    // time from the last time it was closed and report a negative resolution.
     let updated = sqlx::query_as::<_, Ticket>(
         r#"UPDATE tickets
            SET subject = $1, description = $2, status = $3, priority = $4,
-               assigned_to = $5, updated_at = NOW()
+               assigned_to = $5, updated_at = NOW(),
+               solved_at = CASE
+                   WHEN $3 IN ('solved', 'closed') THEN COALESCE(solved_at, NOW())
+                   ELSE NULL
+               END
            WHERE id = $6 AND tenant_id = $7
            RETURNING *"#,
     )
@@ -296,28 +303,57 @@ pub async fn add_message(
     }
 
     let sender = body.sender_type.unwrap_or_else(|| "agent".to_string());
+
+    // A NOTE IS NOT A REPLY (David, 2026-11-14). The helpdesk's most valuable writing is the kind a
+    // customer never sees: "rang them, invoice is already paid", "this is the third time he has asked".
+    // Until the database grew a `kind` there was nowhere to put that, and the outbound mail below fired
+    // on the AUTHOR — so any attempt at a private note would have been emailed to the customer. The gate
+    // is now the kind, and an unknown kind is refused rather than silently treated as a reply.
+    let kind = match body.kind.as_deref().map(str::trim) {
+        None | Some("") | Some("reply") => "reply",
+        Some("note") => "note",
+        Some(other) => {
+            return Err(AppError::BadRequest(format!(
+                "a ticket message is either a reply or a note, not `{other}`"
+            )))
+        }
+    };
+
     let msg = sqlx::query_as::<_, TicketMessage>(
-        r#"INSERT INTO ticket_messages (ticket_id, sender_type, message)
-           VALUES ($1, $2, $3) RETURNING *"#,
+        r#"INSERT INTO ticket_messages (ticket_id, sender_type, message, kind)
+           VALUES ($1, $2, $3, $4) RETURNING *"#,
     )
     .bind(ticket_id)
     .bind(&sender)
     .bind(&body.message)
+    .bind(kind)
     .fetch_one(&s.db)
     .await?;
 
-    // Touch ticket updated_at
-    sqlx::query("UPDATE tickets SET updated_at = NOW() WHERE id = $1")
-        .bind(ticket_id)
-        .execute(&s.db)
-        .await?;
+    // Touch the ticket, and record the first time a person answered — the first-response clock the
+    // SLA work needs. A note does not answer the customer, so it deliberately does not set it.
+    sqlx::query(
+        "UPDATE tickets
+            SET updated_at = NOW(),
+                first_responded_at = CASE
+                    WHEN $2 = 'reply' AND $3 = 'agent'
+                        THEN COALESCE(first_responded_at, NOW())
+                    ELSE first_responded_at
+                END
+          WHERE id = $1",
+    )
+    .bind(ticket_id)
+    .bind(kind)
+    .bind(&sender)
+    .execute(&s.db)
+    .await?;
 
     // TELL THE ASKER (2026-11-13). The rows above are the thread and the queue; this is the only
     // thing the person who asked actually receives. A public requester (the buyer who pressed
     // "Request this plan", the customer who cannot sign in) has no account and no portal login, so
     // before this the operator's answer existed only inside the console. Best effort by design: the
     // reply is already recorded, so a mail failure is logged and the 201 kept.
-    if sender == "agent" {
+    if sender == "agent" && kind == "reply" {
         let row = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
             "SELECT subject, contact_email, contact_name FROM tickets WHERE id = $1",
         )
@@ -688,8 +724,10 @@ pub async fn public_support_answer(
     };
 
     let messages: Vec<(String, String, String)> = sqlx::query_as(
+        // public_support_answer is reachable with a ticket id and an email address: it is the
+        // customer's own view, so an internal note must not be in it.
         "SELECT sender_type, message, created_at::text FROM ticket_messages \
-          WHERE ticket_id = $1 ORDER BY created_at ASC",
+          WHERE ticket_id = $1 AND kind <> 'note' ORDER BY created_at ASC",
     )
     .bind(id)
     .fetch_all(&s.db)

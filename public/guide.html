@@ -847,6 +847,19 @@ POST /api/lists/:id/members</pre>
   </div>
 
   <div class="card">
+    <h3>One conversation, one ticket</h3>
+    <p>Email is now the front door, and it behaves like a real support desk. The first message from someone opens a ticket and gives it a number
+    (<code>CS-1042</code>) that they can quote back to you. When they reply, the answer joins <em>that</em> ticket rather than opening a new one &mdash;
+    matched on the mail headers, so it threads whether or not they left the number in the subject. A reply to a ticket you had marked solved reopens it
+    for seven days; after that it counts as a fresh question.</p>
+    <p>Mail a machine wrote never reaches your queue: auto-replies, bounce reports, read receipts and the automated reports servers send each other are
+    stored as mail and nothing more. That is what keeps the queue worth reading.</p>
+    <h3>Replies and notes</h3>
+    <p>Every ticket has two ways to write, and they are deliberately different things. <strong>Send reply</strong> answers the customer by email.
+    <strong>Add internal note</strong> records what your team knows &mdash; &ldquo;rang them, invoice already paid&rdquo;, &ldquo;third time he has asked&rdquo; &mdash;
+    and <em>never</em> reaches the customer: not by email, not in their portal, not in the status lookup. Notes show on the thread in amber and are labelled
+    as never sent, so nobody mistakes one for a reply.</p>
+    <p>Because a note does not answer anybody, it also does not stop the first-response clock. That clock starts the first time a person replies.</p>
     <h3>How Tickets Come In</h3>
     <p>Tickets can arrive through multiple channels — all tracked by source so you know where every request came from:</p>
     <table style="width:100%;border-collapse:collapse;margin-top:0.5rem">

@@ -17,6 +17,10 @@ pub struct Ticket {
     pub source: String,
     pub contact_email: Option<String>,
     pub contact_name: Option<String>,
+    /// The number a customer quotes (`CS-1042`), allocated per account by a trigger. Optional because
+    /// a row written before migration 162 — or by a path that predates it — may not carry one yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub number: Option<i32>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -48,13 +52,23 @@ pub struct TicketMessage {
     pub ticket_id: uuid::Uuid,
     pub sender_type: String,
     pub message: String,
+    /// `reply` (sent to the customer), `note` (internal, never sent) or `event` (something happened).
+    #[serde(default = "default_reply_kind")]
+    pub kind: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+fn default_reply_kind() -> String {
+    "reply".to_string()
 }
 
 #[derive(Debug, Deserialize)]
 pub struct AddMessageRequest {
     pub message: String,
     pub sender_type: Option<String>, // "agent" or "contact", defaults to "agent"
+    /// `reply` (default) or `note`. A note is for the team only and is never emailed — see the
+    /// handler, where the outbound mail is gated on this field rather than on the author.
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

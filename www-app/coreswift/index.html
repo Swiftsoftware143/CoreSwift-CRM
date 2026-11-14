@@ -3977,7 +3977,9 @@ async function openTicket(id) {
     const msgs = (data && data.messages) || [];
     const assignee = data && data.assigned_member;
     let html = '<div class="card"><div class="card-body">' +
-      '<p style="margin-bottom:8px"><strong>' + escapeHtml(t.subject || 'Ticket') + '</strong></p>' +
+      '<p style="margin-bottom:8px"><strong>' +
+        (t.number ? '<code style="margin-right:8px">#' + escapeHtml(String(t.number)) + '</code>' : '') +
+        escapeHtml(t.subject || 'Ticket') + '</strong></p>' +
       '<p style="color:var(--text-secondary);white-space:pre-wrap">' + escapeHtml(t.description || '') + '</p>' +
       '<p style="color:var(--text-muted);font-size:12px">Status: ' + escapeHtml(t.status || 'open') +
       ' · Priority: ' + escapeHtml(t.priority || 'medium') + ' · Source: ' + escapeHtml(t.source || 'form') +
@@ -3996,33 +3998,45 @@ async function openTicket(id) {
       html += '<p style="color:var(--text-secondary)">No replies yet.</p>';
     } else {
       msgs.forEach(m => {
-        html += '<div style="border-left:3px solid var(--border);padding:6px 10px;margin-bottom:8px">' +
-          '<div style="font-size:12px;color:var(--text-muted)">' + escapeHtml(m.sender_type || '') + ' · ' +
-          escapeHtml(m.created_at ? new Date(m.created_at).toLocaleString() : '') + '</div>' +
+        // A note is the team talking to itself: amber bar, labelled, and marked as never sent. A reply
+        // is what the customer received. Rendering the two identically is how somebody eventually sends
+        // the wrong one.
+        const isNote = (m.kind || 'reply') === 'note';
+        const accent = isNote ? '#d97706' : 'var(--border)';
+        const who = isNote ? 'internal note · never sent to the customer'
+                           : escapeHtml(m.sender_type || '') + ' · reply sent';
+        html += '<div style="border-left:3px solid ' + accent + ';padding:6px 10px;margin-bottom:8px' +
+          (isNote ? ';background:rgba(217,119,6,.08);border-radius:0 6px 6px 0' : '') + '">' +
+          '<div style="font-size:12px;color:' + (isNote ? '#b45309' : 'var(--text-muted)') + '">' +
+          who + ' · ' + escapeHtml(m.created_at ? new Date(m.created_at).toLocaleString() : '') + '</div>' +
           '<div style="white-space:pre-wrap">' + escapeHtml(m.message || '') + '</div></div>';
       });
     }
-    html += '<div class="form-group"><label>Reply</label><textarea rows="3" id="tkReplyBox"></textarea></div>';
+    html += '<div class="form-group"><label>Write to the customer, or leave a note only your team sees</label>' +
+      '<textarea rows="3" id="tkReplyBox"></textarea></div>';
     html += '</div></div>';
     showModal('🎫 ' + escapeHtml(t.subject || 'Ticket'), html,
       '<button class="btn btn-ghost" onclick="closeModal()">Close</button>' +
+      '<button class="btn btn-secondary" onclick="replyTicket(\'' + id + '\', true)">Add internal note</button>' +
       '<button class="btn btn-primary" onclick="replyTicket(\'' + id + '\')">Send reply</button>', true);
   } catch (e) {
     toast('Could not open the ticket: ' + e.message, 'error');
   }
 }
-async function replyTicket(id) {
+async function replyTicket(id, isNote) {
   const el = document.getElementById('tkReplyBox');
   const message = el ? el.value.trim() : '';
-  if (!message) { toast('Write a reply first', 'error'); return; }
+  if (!message) { toast(isNote ? 'Write the note first' : 'Write a reply first', 'error'); return; }
   try {
     // CS-22: a reply written in the tenant console is the STAFF side of the thread. It used to be
     // stored as sender_type 'contact', which made the agent's own answer read as the customer's —
     // wrong in this console and wrong in the customer portal, where 'contact' renders as "you".
-    await API.post('/tickets/' + id + '/messages', { message: message, sender_type: 'agent' });
-    toast('Reply sent', 'success');
+    // The server decides what is emailed, from `kind`: a note is never sent anywhere.
+    await API.post('/tickets/' + id + '/messages',
+      { message: message, sender_type: 'agent', kind: isNote ? 'note' : 'reply' });
+    toast(isNote ? 'Note saved — only your team can see it' : 'Reply sent', 'success');
     openTicket(id);
-  } catch (e) { toast('Reply failed: ' + e.message, 'error'); }
+  } catch (e) { toast((isNote ? 'Note failed: ' : 'Reply failed: ') + e.message, 'error'); }
 }
 // CS-22: the customer-facing 💬 My Support portal. The URL is built by the API from the tenant on
 // the token (GET /api/tickets -> portal_url) and cached by the tickets tab loader, so no account
