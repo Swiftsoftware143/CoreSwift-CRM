@@ -796,12 +796,69 @@ fn support_reply_bodies(who: &str, ticket_subject: &str, reply: &str) -> (String
 /// to no workspace, and recorded in `outbound_messages` (tenant NULL) so the Communications Log can
 /// answer "did the provider take it?". A synthetic (harness) requester is withheld BEFORE any row is
 /// queued, so a probe ticket can never mail a person.
+/// The subject an agent's answer goes out with.
+///
+/// It carries the ticket's token because that token is the one thing a mail client reliably keeps: when the
+/// customer answers, the inbound path threads on it and the answer joins the same ticket instead of opening
+/// a second one. Exactly one token, however many times the conversation goes round.
+fn support_reply_subject(ticket_subject: &str, ticket_number: Option<i32>) -> String {
+    match ticket_number {
+        Some(n) => format!("[CS-{n}] Re: {}", strip_leading_token(ticket_subject)),
+        None => format!("We answered your request: {}", ticket_subject.trim()),
+    }
+}
+
+/// Drop a leading `[CS-123]` (or `[#123]`) from a subject so the reply carries exactly one token.
+///
+/// Without this, a ticket whose subject already came from a customer's reply would accumulate prefixes and
+/// the subject would grow `[CS-1] Re: [CS-1] Re: …` with every exchange until it was unreadable.
+fn strip_leading_token(subject: &str) -> &str {
+    let trimmed = subject.trim_start();
+    if let Some(rest) = trimmed.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            let inner = rest[..end].trim();
+            let lower = inner.to_ascii_lowercase();
+            if lower.starts_with("cs-") || inner.starts_with('#') {
+                if inner[if lower.starts_with("cs-") { 3 } else { 1 }..]
+                    .chars()
+                    .all(|c| c.is_ascii_digit())
+                    && !inner[if lower.starts_with("cs-") { 3 } else { 1 }..].is_empty()
+                {
+                    return strip_reply_prefixes(rest[end + 1..].trim_start());
+                }
+            }
+        }
+    }
+    strip_reply_prefixes(trimmed)
+}
+
+/// Drop any number of leading `Re:` / `Fwd:` / `Fw:` markers, so adding one cannot produce `Re: Re: Re:`.
+fn strip_reply_prefixes(mut subject: &str) -> &str {
+    loop {
+        let lower = subject.to_ascii_lowercase();
+        let rest = if lower.starts_with("re:") {
+            &subject[3..]
+        } else if lower.starts_with("fwd:") {
+            &subject[4..]
+        } else if lower.starts_with("fw:") {
+            &subject[3..]
+        } else {
+            return subject.trim_start();
+        };
+        subject = rest.trim_start();
+        if subject.is_empty() {
+            return subject;
+        }
+    }
+}
+
 pub async fn send_support_reply_to_requester(
     db: &PgPool,
     to: &str,
     who: &str,
     ticket_subject: &str,
     reply: &str,
+    ticket_number: Option<i32>,
 ) -> Result<(), String> {
     let to = to.trim();
     if to.is_empty() {
@@ -825,7 +882,11 @@ pub async fn send_support_reply_to_requester(
     } else {
         who.trim()
     };
-    let subject = format!("We answered your request: {}", ticket_subject.trim());
+    // THE TOKEN IN THE SUBJECT IS WHAT MAKES THE REPLY COME BACK TO ITS OWN TICKET (David, 2026-11-14).
+    // Most mail clients keep the subject when a customer answers, and the inbound path threads on this
+    // token when the headers do not match — so one conversation stays one ticket instead of opening a
+    // second one for every answer. It reads as [#CS-1042], which is also what a customer would quote.
+    let subject = support_reply_subject(ticket_subject, ticket_number);
     let (text, html) = support_reply_bodies(who, ticket_subject, reply);
 
     let msg_id = Uuid::new_v4();
@@ -884,6 +945,57 @@ struct EmailTemplateRow {
     body: Option<String>,
     body_text: Option<String>,
     html_body: Option<String>,
+}
+
+#[cfg(test)]
+mod reply_subject_tests {
+    use super::support_reply_subject;
+
+    #[test]
+    fn the_answer_carries_the_ticket_token() {
+        assert_eq!(
+            support_reply_subject("My invoice is wrong", Some(42)),
+            "[CS-42] Re: My invoice is wrong"
+        );
+    }
+
+    #[test]
+    fn a_subject_that_already_has_a_token_does_not_grow_a_second_one() {
+        // the round trip: customer replies (subject gains the token) -> agent answers again
+        assert_eq!(
+            support_reply_subject("[CS-42] Re: My invoice is wrong", Some(42)),
+            "[CS-42] Re: My invoice is wrong"
+        );
+        assert_eq!(
+            support_reply_subject("[#42] my invoice", Some(42)),
+            "[CS-42] Re: my invoice"
+        );
+        // three exchanges must not produce "Re: Re: Re:"
+        assert_eq!(
+            support_reply_subject("[CS-42] Re: Re: my invoice", Some(42)),
+            "[CS-42] Re: my invoice"
+        );
+        assert_eq!(
+            support_reply_subject("Re: my invoice", Some(42)),
+            "[CS-42] Re: my invoice"
+        );
+    }
+
+    #[test]
+    fn a_bracketed_word_that_is_not_a_token_is_kept() {
+        assert_eq!(
+            support_reply_subject("[URGENT] the site is down", Some(7)),
+            "[CS-7] Re: [URGENT] the site is down"
+        );
+    }
+
+    #[test]
+    fn without_a_number_the_old_wording_is_unchanged() {
+        assert_eq!(
+            support_reply_subject("My invoice is wrong", None),
+            "We answered your request: My invoice is wrong"
+        );
+    }
 }
 
 #[cfg(test)]

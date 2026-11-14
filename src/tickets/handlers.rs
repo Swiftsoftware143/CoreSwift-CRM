@@ -445,20 +445,21 @@ pub async fn add_message(
     // before this the operator's answer existed only inside the console. Best effort by design: the
     // reply is already recorded, so a mail failure is logged and the 201 kept.
     if sender == "agent" && kind == "reply" {
-        let row = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
-            "SELECT subject, contact_email, contact_name FROM tickets WHERE id = $1",
+        let row = sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<i32>)>(
+            "SELECT subject, contact_email, contact_name, number FROM tickets WHERE id = $1",
         )
         .bind(ticket_id)
         .fetch_optional(&s.db)
         .await;
         match row {
-            Ok(Some((subject, Some(email), name))) if !email.trim().is_empty() => {
+            Ok(Some((subject, Some(email), name, number))) if !email.trim().is_empty() => {
                 if let Err(e) = crate::email::send_support_reply_to_requester(
                     &s.db,
                     &email,
                     name.as_deref().unwrap_or(""),
                     &subject,
                     &body.message,
+                    number,
                 )
                 .await
                 {
