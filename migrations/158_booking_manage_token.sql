@@ -1,4 +1,4 @@
--- 157_booking_manage_token.sql
+-- 158_booking_manage_token.sql
 --
 -- A booking needs a way for the customer to manage it without an account: reschedule, cancel, rebook.
 -- The link carries the authority, so the token must be unguessable and unique, and it is scoped to
