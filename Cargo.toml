@@ -29,6 +29,7 @@ csv = "1"
 
 # Dates
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 uuid = { version = "1", features = ["v4", "v1", "serde"] }
 
 # Deterministic `regex_extract(pattern)` transform in the data mapper (src/data_mapping/transforms.rs)

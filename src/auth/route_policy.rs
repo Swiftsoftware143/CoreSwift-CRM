@@ -186,7 +186,7 @@
 //!        t_e968e9ad: `/api/admin/provisioning-config` and
 //!        `/api/v1/internal/provision-free-account`) were measured the same way and each answered
 //!        401 anonymous; both are named in the lists below
-//!    30 deliberate anonymous entries  -> PUBLIC_ROUTES  (27 /api + 3 /inbound) — COUNTS ARRAY
+//!    38 deliberate anonymous entries  -> PUBLIC_ROUTES  (35 /api + 3 /inbound) — COUNTS ARRAY
 //!        ENTRIES: measured 27 (24 /api + 3 /inbound) before the confirm arm above was added,
 //!        i.e. one more than the 26 this line used to claim, and 30 after the hosted calendar
 //!        address added its two public arms (kanban t_8457bfef), and 31 after the per-calendar
@@ -399,6 +399,17 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // `x-satellite-key` header). Named here so a NEW route under `/inbound/` is private by default.
     "/inbound/:key_prefix/:event_type",
     "/inbound/v2/:key_prefix/:event_type",
+    // --- booking engine, buyer-facing ----------------------------------------------------------
+    // A buyer has no account here: the public booking pages are how a stranger reserves a slot and
+    // pays. Six paths, nothing else — every admin route of the engine stays private by default.
+    // The engine's own hold/expiry rules are what stop two buyers taking the same slot, so this
+    // being anonymous cannot oversell anything.
+    "/api/public/booking/c/:slug",
+    "/api/public/booking/c/:slug/availability",
+    "/api/public/booking/c/:slug/quote",
+    "/api/public/booking/c/:slug/orders",
+    "/api/public/booking/orders/:id",
+    "/api/public/booking/orders/:order_id/bookings/:booking_id/creative",
     "/inbound/v3/:key_prefix/:event_type",
 ];
 
