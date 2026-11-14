@@ -260,6 +260,31 @@
   </div>
 </section>
 
+<!-- ======= 1c. DATA MAPPING ======= -->
+<section id="data-mapping">
+  <h2 class="sec-title"><span class="sec-num">1c</span> Data mapping — bring another app&rsquo;s data in</h2>
+  <div class="card">
+    <p>Your other SwiftSoftware apps can send their leads into this CRM. <strong>Data mapping</strong> is where you decide which of <em>their</em> fields lands in which of <em>your</em> contact fields — no code, and nothing to redo when they add a new question.</p>
+    <p><strong>To build one:</strong></p>
+    <ol>
+      <li><strong>Settings &rarr; Data mapping.</strong> Pick the app and the kind of row you want (its leads, its clients, its contacts).</li>
+      <li><strong>The left column lists the fields that app sends.</strong> If it has already sent you data, the list is built from what actually arrived. A field it has never sent cannot be listed yet — it appears by itself after the first push that carries it.</li>
+      <li><strong>Click a source field</strong> to drop it into a destination as a pill, or type plain text around it. A pill always deletes whole, so a token can never be cut in half.</li>
+      <li><strong>The right column</strong> shows exactly what CoreSwift would receive, and updates as you go. Nothing is written to a contact from this screen.</li>
+      <li><strong>Choose what happens on a match</strong> — the same person already in your CRM: <em>Update</em> (fill in what arrived), <em>Skip</em> (leave them alone) or <em>Create new</em>.</li>
+      <li><strong>Save</strong>, then press <strong>Test with sample row</strong> to see the server agree with the preview.</li>
+    </ol>
+    <p><strong>Things worth knowing:</strong></p>
+    <ul>
+      <li><strong>Extra data goes to <code>metadata.&lt;name&gt;</code></strong>, so storing a new field never needs a database change.</li>
+      <li><strong>A required field that arrives empty refuses the whole push</strong> and names the field — you never get a half-written contact.</li>
+      <li><strong>&ldquo;Create new&rdquo; cannot make a second contact with the same email.</strong> One contact per email is this account&rsquo;s rule, so it says so plainly instead of quietly updating the existing one.</li>
+      <li><strong>Runs</strong> lists the last 50 attempts with what was refused and why. A mapping that has never succeeded says so rather than looking healthy.</li>
+      <li><strong>Data only flows in.</strong> Sister apps push to this CRM; nothing here sends contacts back out.</li>
+    </ul>
+  </div>
+</section>
+
 <!-- ======= 2. DASHBOARD ======= -->
 <section id="dashboard">
   <h2 class="sec-title"><span class="sec-num">2</span> Dashboard</h2>
