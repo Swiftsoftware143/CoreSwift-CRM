@@ -178,3 +178,41 @@ rows written under the old vocabulary violate the new constraint the moment it i
 | Help centre articles, KB suggestions | new |
 | AI v1 with citations, handoff, confidence | model calls exist; retrieval and rules new |
 | Basic API + `ticket.created` / `message.created` webhooks | ticket API exists; webhooks endpoint table exists |
+
+---
+
+## What is BUILT (updated 2026-11-14, after migrations 162–169)
+
+This section is the reality check on the plan above. If the two disagree, this one is right.
+
+| Piece | State | How it is proved |
+|---|---|---|
+| Ticket numbering per account | built (162) | trigger allocates; numbers unique per account |
+| Status/priority/channel vocabularies | widened (162) | CHECK constraints read from the live DB |
+| Internal notes (`kind`) | built | 12/12 — a note never reaches the portal, the count, or the public lookup |
+| First response + resolution clocks | built (163) | 13/13 views; 7/7 worker |
+| One conversation, one ticket | built (`helpdesk::ingest`) | 12/12 through the signed webhook |
+| Machine mail kept out of the queue | built (`helpdesk::junk`) | DMARC report and auto-reply create nothing |
+| Ticket views (`?view=`) | built | 13/13, incl. another account's ticket absent from every view |
+| SLA warnings and breaches | built (165, `helpdesk::sla`) | 7/7 against the RUNNING worker, no duplicates on a second tick |
+| Assignment to a teammate | fixed (164 — pointed at contacts) | a user is accepted, a contact refused, guard proved |
+| Merge and split | built (`helpdesk::merge`) | 18/18, including every refusal |
+| Knowledge base + search | built (166, `helpdesk::kb`) | 12/12, attacking the public endpoint with the internal article's own words |
+| Widget article search | built | proved in a real browser on a fake customer site |
+| Saved answers with placeholders | built (167, `helpdesk::canned`) | 12/12, render on the server |
+| Desk report | built (`helpdesk::reports`) | 12/12, incl. "a dash, not a zero" |
+| Attachments on the timeline | built (168, `helpdesk::attachments`) | 7/7, file only on the ticket its mail belongs to |
+| Customer history in the ticket | built | 6/6, incl. the same address in two accounts |
+| **AI answers** | **NOT built** | needs a model key in the Integration Center |
+
+### Deliberate decisions that differ from the spec
+
+1. `site_id` = `tenant_id`. The spec's site level does not exist in CoreSwift and inventing it would mean
+   re-proving tenancy across tables that have never carried a second dimension.
+2. No `embedding` column and no vector search: pgvector is not installable here. Search is full-text, and the
+   column simply does not exist rather than sitting empty.
+3. Clocks are wall-clock. Business hours and pause-while-pending are not applied to the arithmetic yet, and
+   the report says so rather than pretending.
+4. Attachments are linked, not duplicated: the bytes stay where the mail pipeline put them.
+5. Ticket numbers, SLA stamping and attachment links are triggers/columns, not code paths, because the code
+   that creates a ticket is five paths today and more coming.
