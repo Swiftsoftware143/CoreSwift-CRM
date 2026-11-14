@@ -52,6 +52,13 @@
  .logo { font-weight: 800; font-size: 1.5rem; color: #fff; text-decoration: none; }
  .logo span { color: var(--accent-blue); }
  .nav-btns { display: flex; gap: 12px; align-items: center; }
+ /* Phones: the logo and the two nav buttons cannot share one row at 390px — the row pushed the
+    whole page 48px wider than the screen, so the page scrolled sideways (measured 2026-11-14 at
+    390x844). Wrap the nav onto its own row; every link stays visible. */
+ @media (max-width: 640px) {
+ header { flex-wrap: wrap; row-gap: 10px; padding: 20px 0; }
+ .nav-btns { flex-wrap: wrap; gap: 8px; }
+ }
  .btn-outline {
  padding: 8px 20px;
  border: 1px solid var(--border-color);
@@ -126,7 +133,7 @@
  .section-subtitle { text-align: center; font-size: 1.1rem; color: var(--text-muted); max-width: 640px; margin: -20px auto 40px; }
 
  /* FEATURE CARDS */
- .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; }
+ .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 24px; }
  .feature-card {
  background: var(--card-bg);
  border: 1px solid var(--border-color);
