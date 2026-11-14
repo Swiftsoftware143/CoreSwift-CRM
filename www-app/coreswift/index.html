@@ -785,8 +785,7 @@ const MENU = [
     // used to be the 'inbox' tab, which the mail client now owns — see the TAB_RENDERERS note below.
     { id:'email-settings', icon:'🌐', label:'Email Domains & Sending' }
   ]},
-  { id:'calendar', icon:'📅', label:'Calendar' },
-  { id:'bookings', icon:'📆', label:'Bookings' },
+  { id:'calendar', icon:'🔗', label:'Google Calendar sync' },
   { id:'ai-assistant', icon:'🤖', label:'AI Assistant' },
   { id:'tracked-links', icon:'🔗', label:'Tracked Links' },
   { type:'group', icon:'🔄', label:'Workflow', children:[
@@ -1461,8 +1460,6 @@ const TAB_RENDERERS = {
   'inbox': () => inboxShell(),
 
   'calendar': () => calendarShell(),
-
-  'bookings': () => placeholderPanel('Bookings', 'Manage appointments and bookings. Share your booking link for self-scheduling.', '📆'),
 
   'ai-assistant': () => {
     return pageHeader('AI Assistant', 'Your AI-powered CRM assistant') +
@@ -7158,8 +7155,7 @@ TAB_RENDERERS['widgets'] = widgetsShell;
 const GC = { configured: false, items: [], loaded: false };
 
 function calendarShell() {
-  return pageHeader('Calendar', 'Your public calendar address, the booking calendars it shows, and the Google Calendar each one mirrors into',
-    '<button class="btn btn-secondary btn-sm" onclick="gcOpenNewCalendar()">+ New Calendar</button>' +
+  return pageHeader('Google Calendar sync', 'Your public calendar address, and the Google Calendar each booking calendar mirrors into. Calendars themselves are created in Booking.',
     '<button class="btn btn-secondary btn-sm" onclick="switchTab(\'integrations\')">🔑 Google credentials</button>') +
     // THE PUBLIC ADDRESS (kanban t_8457bfef). Every workspace has one from the moment it exists, so
     // this card is a statement of fact plus the two things an owner can change: the name in front of
