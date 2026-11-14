@@ -286,6 +286,9 @@ pub struct RangeQuery {
     pub from: NaiveDate,
     /// inclusive
     pub to: NaiveDate,
+    /// `?w=<workspace>` — only needed when the same calendar name exists in more than one workspace
+    #[serde(default)]
+    pub w: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

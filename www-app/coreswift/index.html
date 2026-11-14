@@ -9940,6 +9940,12 @@ function bkFlash(msg, ok) {
 
 async function bkInit() {
   try {
+    if (!window.BK_WS) {
+      try {
+        var acc = await dmCall('GET', '/account/profile');
+        window.BK_WS = (acc && (acc.tenant_slug || acc.slug || (acc.account && acc.account.slug))) || '';
+      } catch (e) { /* the address simply is not shown */ }
+    }
     const res = await bkCall('GET', '/calendars');
     BK.list = (res && res.calendars) ? res.calendars : (Array.isArray(res) ? res : []);
     if (BK.current) {
@@ -10040,6 +10046,12 @@ function bkDetailPanel() {
     '<h3 style="margin:12px 0 4px">' + escapeHtml(cal.name) + '</h3>' +
     '<p class="muted" style="margin:0">' + bkTypeWords(cal.kind) + ' · ' + escapeHtml(cal.timezone || '') + ' · holds ' + (cal.hold_minutes || 30) + ' min</p>' +
     '<p style="margin:10px 0 0"><strong>Public link:</strong> <a href="' + pub + '" target="_blank" rel="noopener">' + bkFullLink(cal.slug) + '</a></p>' +
+    (bkSharedLink(cal.slug) !== bkFullLink(cal.slug)
+      ? '<p class="muted" style="margin:4px 0 0;font-size:12px">Also: <a href="' + bkSharedLink(cal.slug) + '" target="_blank" rel="noopener">' + bkSharedLink(cal.slug) + '</a> — the same calendar, and the link to publish if this name might be used by another workspace.</p>'
+      : '') +
+    (bkWsLink(cal.slug)
+      ? '<p class="muted" style="margin:4px 0 0;font-size:12px">On your own workspace address: <code>' + bkWsLink(cal.slug) + '</code></p>'
+      : '') +
     '<span class="bk-flash" id="bkFlash"></span>' +
     bkEmbedPanel(cal.slug) + '</div>';
 
@@ -10055,6 +10067,21 @@ function bkDetailPanel() {
 function bkFullLink(slug) {
   return 'https://booking.coreswiftcrm.com/book/' + slug;
 }
+
+/* The addresses this calendar answers on. The SHARED one carries the workspace in the path, because
+ * a calendar's name is unique per workspace and two owners may hold the same name — so that link is
+ * the safe one to publish, and it always resolves. */
+function bkWsLink(slug) {
+  var ws = (BK_WS || '');
+  return ws ? 'https://' + ws + '.coreswiftcrm.com/b/' + slug : '';
+}
+function bkSharedLink(slug) {
+  var ws = (BK_WS || '');
+  return ws
+    ? 'https://booking.coreswiftcrm.com/b/' + ws + '/' + slug
+    : 'https://booking.coreswiftcrm.com/book/' + slug;
+}
+window.BK_WS = '';
 
 /* Where the calendar can be put on the customer's own website. Two snippets, both copy-paste, both
  * driven by one script served from the booking address so nothing can go stale. */

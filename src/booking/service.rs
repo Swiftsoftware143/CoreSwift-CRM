@@ -56,12 +56,49 @@ pub async fn calendar_for_tenant(
     .ok_or(BookingError::NotFound("calendar"))
 }
 
-pub async fn calendar_by_slug(conn: &mut PgConnection, slug: &str) -> Result<Calendar> {
-    sqlx::query_as::<_, Calendar>("SELECT * FROM booking_calendars WHERE slug = $1 AND is_active")
-        .bind(slug)
-        .fetch_optional(conn)
-        .await?
-        .ok_or(BookingError::NotFound("calendar"))
+/// Resolve a calendar from the address a customer opened.
+///
+/// A calendar's name is unique per WORKSPACE, not platform-wide: "consultations" is a good name and
+/// two owners are allowed to want it. So a bare name is only accepted while it is unambiguous, and a
+/// name that exists in more than one workspace must arrive workspace-qualified — which the shared
+/// address does (`/b/<workspace>/<name>`), while a workspace host or a verified own domain implies
+/// the workspace by host.
+pub async fn calendar_by_slug(
+    conn: &mut PgConnection,
+    slug: &str,
+    workspace: Option<&str>,
+) -> Result<Calendar> {
+    let tenant: Option<Uuid> = match workspace.map(str::trim).filter(|w| !w.is_empty()) {
+        Some(ws) => Some(
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM tenants WHERE (slug = $1 OR lower(name) = lower($1)) AND is_active LIMIT 1",
+            )
+            .bind(ws)
+            .fetch_optional(&mut *conn)
+            .await?
+            .ok_or(BookingError::NotFound("workspace"))?,
+        ),
+        None => None,
+    };
+
+    let rows = sqlx::query_as::<_, Calendar>(
+        "SELECT * FROM booking_calendars
+          WHERE slug = $1 AND is_active AND ($2::uuid IS NULL OR tenant_id = $2)
+          ORDER BY created_at",
+    )
+    .bind(slug)
+    .bind(tenant)
+    .fetch_all(&mut *conn)
+    .await?;
+
+    let mut rows = rows.into_iter();
+    let first = rows.next().ok_or(BookingError::NotFound("calendar"))?;
+    if rows.next().is_some() {
+        return Err(BookingError::conflict(
+            "that calendar name exists in more than one workspace — open it from the workspace's own address, or with the workspace in the link",
+        ));
+    }
+    Ok(first)
 }
 
 async fn calendar_by_id(conn: &mut PgConnection, id: Uuid) -> Result<Calendar> {

@@ -133,11 +133,27 @@
 <script>
 (function () {
   'use strict';
-  var SLUG = (location.pathname.replace(/^\/book\/?/, '').split('/')[0] || '').trim();
-  if (!SLUG) {
-    var fromQuery = new URLSearchParams(location.search).get('c');
-    if (fromQuery) SLUG = fromQuery;
+  // The calendar's name is the LAST segment of three supported shapes, so one page serves all of
+  // them and a link keeps working wherever it is opened:
+  //   booking.coreswiftcrm.com/book/<name>     the module's own address
+  //   <workspace>.coreswiftcrm.com/b/<name>    the workspace's address, in a folder
+  //   <own domain>/b/<name>                    a customer's own domain
+  function slugFromPath() {
+    var p = location.pathname.replace(/\/+$/, '');
+    if (/^\/book\/manage\//.test(p)) return { ws: '', name: '' };  // manage handles its own path
+    // two segments: /b/<workspace>/<name> — the shared address, where a name may repeat
+    var two = p.match(/\/b\/([^/]+)\/([^/]+)$/);
+    if (two) return { ws: decodeURIComponent(two[1]), name: decodeURIComponent(two[2]) };
+    // one segment: /book/<name> or /b/<name> — the workspace is implied by the host
+    var one = p.match(/\/(?:book|b)\/([^/]+)$/);
+    if (one) return { ws: '', name: decodeURIComponent(one[1]) };
+    var q = new URLSearchParams(location.search).get('c');
+    return { ws: '', name: q ? q.trim() : '' };
   }
+  var ADDR = slugFromPath();
+  var SLUG = ADDR.name;
+  // the workspace travels as ?w= when the address could be ambiguous, and nowhere else
+  var WSQ = ADDR.ws ? ('w=' + encodeURIComponent(ADDR.ws)) : '';
   var STATE = { cal: null, avail: [], picked: {}, quote: null, filter: 'all', busy: false };
   var EMBEDDED = /[?&]embed=1/.test(location.search);
   if (EMBEDDED) document.body.classList.add('embed');
@@ -192,7 +208,7 @@
       el('calName').textContent = 'No calendar';
       return;
     }
-    api('/c/' + encodeURIComponent(SLUG)).then(function (payload) {
+    api('/c/' + encodeURIComponent(SLUG) + (WSQ ? '?' + WSQ : '')).then(function (payload) {
       // the endpoint answers {calendar, resources, bundles}; a bare calendar object is accepted too
       var cal = payload.calendar || payload;
       if (!cal.resources && payload.resources) cal.resources = payload.resources;
@@ -213,7 +229,7 @@
   function loadAvailability() {
     var from = el('from') ? el('from').value : isoDay(0);
     var to = el('to') ? el('to').value : isoDay(60);
-    return api('/c/' + encodeURIComponent(SLUG) + '/availability?from=' + from + '&to=' + to)
+    return api('/c/' + encodeURIComponent(SLUG) + '/availability?from=' + from + '&to=' + to + (WSQ ? '&' + WSQ : ''))
       .then(function (rows) {
         STATE.avail = Array.isArray(rows) ? rows : (rows.availability || []);
         // a picked slot that no longer exists must not stay in the cart
@@ -316,7 +332,7 @@
       return a ? { resource_id: a.resource_id, slot_id: id } : null;
     }).filter(Boolean);
     if (!items.length) { STATE.quote = { subtotal_cents: 0, discount_cents: 0, total_cents: 0 }; return Promise.resolve(); }
-    return api('/c/' + encodeURIComponent(SLUG) + '/quote', {
+    return api('/c/' + encodeURIComponent(SLUG) + '/quote' + (WSQ ? '?' + WSQ : ''), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: items })
     }).then(function (q) { STATE.quote = q; }).catch(function (e) {
       STATE.quote = { subtotal_cents: 0, discount_cents: 0, total_cents: 0, bundle_name: '' };
@@ -344,7 +360,7 @@
       STATE.busy = true;
       var btns = [el('payBtn'), el('payBtnM')].filter(Boolean);
       btns.forEach(function (b) { b.disabled = true; b.textContent = 'Reserving…'; });
-      api('/c/' + encodeURIComponent(SLUG) + '/orders', {
+      api('/c/' + encodeURIComponent(SLUG) + '/orders' + (WSQ ? '?' + WSQ : ''), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer_name: name.trim(), customer_email: email.trim(),

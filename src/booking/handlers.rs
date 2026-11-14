@@ -177,12 +177,20 @@ pub async fn review_creative(
 
 // ---------- public (no auth; calendar found by slug, orders by unguessable id) ----------
 
+/// `?w=<workspace>` — only needed when the same calendar name exists in more than one workspace.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct WsQuery {
+    #[serde(default)]
+    pub w: Option<String>,
+}
+
 pub async fn public_calendar(
     State(pool): State<PgPool>,
     Path(slug): Path<String>,
+    Query(q): Query<WsQuery>,
 ) -> Result<Json<Value>> {
     let mut c = pool.acquire().await?;
-    let cal = service::calendar_by_slug(&mut c, &slug).await?;
+    let cal = service::calendar_by_slug(&mut c, &slug, q.w.as_deref()).await?;
     let resources = service::list_resources(&mut c, cal.id, true).await?;
     let bundles = service::list_bundles(&mut c, cal.id, true).await?;
     Ok(Json(json!({
@@ -199,7 +207,7 @@ pub async fn public_availability(
     Query(q): Query<RangeQuery>,
 ) -> Result<Json<Vec<Opening>>> {
     let mut c = pool.acquire().await?;
-    let cal = service::calendar_by_slug(&mut c, &slug).await?;
+    let cal = service::calendar_by_slug(&mut c, &slug, q.w.as_deref()).await?;
     Ok(Json(
         service::availability(&mut c, &cal, q.from, q.to).await?,
     ))
@@ -208,20 +216,22 @@ pub async fn public_availability(
 pub async fn public_quote(
     State(pool): State<PgPool>,
     Path(slug): Path<String>,
+    Query(q): Query<WsQuery>,
     Json(body): Json<QuoteRequest>,
 ) -> Result<Json<Quote>> {
     let mut c = pool.acquire().await?;
-    let cal = service::calendar_by_slug(&mut c, &slug).await?;
+    let cal = service::calendar_by_slug(&mut c, &slug, q.w.as_deref()).await?;
     Ok(Json(service::quote(&mut c, &cal, &body.items).await?))
 }
 
 pub async fn public_create_order(
     State(pool): State<PgPool>,
     Path(slug): Path<String>,
+    Query(q): Query<WsQuery>,
     Json(body): Json<NewOrder>,
 ) -> Result<(StatusCode, Json<OrderWithBookings>)> {
     let mut c = pool.acquire().await?;
-    let cal = service::calendar_by_slug(&mut c, &slug).await?;
+    let cal = service::calendar_by_slug(&mut c, &slug, q.w.as_deref()).await?;
     drop(c);
     Ok((
         StatusCode::CREATED,
