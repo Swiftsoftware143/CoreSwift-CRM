@@ -445,3 +445,64 @@ pub async fn public_host(
     let ws = workspace_of(&headers, &q);
     Ok(Json(service::public_host(&pool, ws.as_deref()).await?))
 }
+
+// ---------- the operator filling a slot by hand ----------
+
+#[derive(Debug, serde::Deserialize)]
+pub struct AdminBookingBody {
+    pub resource_id: Uuid,
+    #[serde(default)]
+    pub slot_id: Option<Uuid>,
+    #[serde(default)]
+    pub starts_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub start_date: Option<chrono::NaiveDate>,
+    #[serde(default)]
+    pub end_date: Option<chrono::NaiveDate>,
+    #[serde(default)]
+    pub quantity: Option<i32>,
+    pub customer_name: String,
+    pub customer_email: String,
+    #[serde(default)]
+    pub notes: Option<String>,
+    /// A booking taken on the phone is usually already agreed, so it confirms straight away unless
+    /// the caller says otherwise.
+    #[serde(default = "default_true")]
+    pub confirm: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+pub async fn admin_create_booking(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<AdminBookingBody>,
+) -> Result<(StatusCode, Json<OrderWithBookings>)> {
+    let item = OrderItemInput {
+        resource_id: body.resource_id,
+        slot_id: body.slot_id,
+        starts_at: body.starts_at,
+        start_date: body.start_date,
+        end_date: body.end_date,
+        quantity: body.quantity,
+        meta: None,
+    };
+    let res = service::admin_create_booking(
+        &pool,
+        t.0,
+        id,
+        body.customer_name,
+        body.customer_email,
+        body.notes,
+        item,
+        body.confirm,
+    )
+    .await?;
+    let pool2 = pool.clone();
+    let oid = res.order.id;
+    tokio::spawn(async move { super::notify::on_confirmed(&pool2, oid).await });
+    Ok((StatusCode::CREATED, Json(res)))
+}

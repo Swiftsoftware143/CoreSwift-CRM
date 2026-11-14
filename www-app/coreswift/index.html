@@ -10031,6 +10031,7 @@ async function bkOpen(id) {
   await bkOpenDetail(id, true);
   bkRender();
   await bkLoadNotify();
+  await bkLoadOpenSlots();
   await bkLoadOrders();
 }
 
@@ -10064,6 +10065,7 @@ function bkDetailPanel() {
 
   html += bkThemePanel(cal);
   html += bkResourcePanel(res, cal.kind);
+  html += bkManualPanel(res);
   if (cal.kind === 'appointment') html += bkHoursPanel();
   if (cal.kind !== 'appointment') html += bkSlotsPanel(res);
   html += bkBundlePanel(bundles);
@@ -10311,6 +10313,71 @@ async function bkSaveHost() {
   try {
     BK.host = await bkCall('PUT', '/host', body);
     bkFlash('Saved — your booking address follows this now.');
+  } catch (e) { bkFlash(e.message, false); }
+}
+
+/* The operator filling a position by hand: the phone call, the invoice, the sponsor who pays by
+ * transfer and never opens the page. It goes through the SAME writer as a customer's booking, so a
+ * manually filled slot is indistinguishable from one sold on the page — the buyer sees it as taken. */
+function bkManualPanel(res) {
+  if (!res.length) return '';
+  return '<div class="card" style="margin-bottom:18px">' +
+    '<h3 style="margin-top:0">Fill a position by hand</h3>' +
+    '<p class="muted" style="margin-top:-6px">For a booking taken on the phone or by invoice. It blocks the slot for buyers exactly as a sale does.</p>' +
+    '<div class="bk-form">' +
+      '<label>What<select id="bkManRes" onchange="bkLoadOpenSlots()">' + res.map(function (r) {
+        return '<option value="' + r.id + '">' + escapeHtml(r.name) + '</option>';
+      }).join('') + '</select></label>' +
+      '<label>Open positions<select id="bkManSlot"><option value="">Loading…</option></select></label>' +
+      '<label>Business<input id="bkManName" placeholder="Their company"></label>' +
+      '<label>Email<input id="bkManEmail" type="email" placeholder="them@company.com"></label>' +
+      '<label>Note<input id="bkManNote" placeholder="How they paid, who took the call"></label>' +
+    '</div>' +
+    '<button class="btn btn-primary" onclick="bkManualBook()">Book it and block the slot</button>' +
+    '</div>';
+}
+
+async function bkLoadOpenSlots() {
+  var sel = document.getElementById('bkManSlot');
+  if (!sel || !BK.current) return;
+  sel.innerHTML = '<option value="">Loading…</option>';
+  var resId = document.getElementById('bkManRes').value;
+  var today = new Date().toISOString().slice(0, 10);
+  var later = new Date(Date.now() + 120 * 864e5).toISOString().slice(0, 10);
+  try {
+    var rows = await bkCall('GET', '/calendars/' + BK.current + '/availability?from=' + today + '&to=' + later);
+    var open = (rows || []).filter(function (a) { return a.resource_id === resId && a.remaining > 0; });
+    if (!open.length) { sel.innerHTML = '<option value="">Nothing open right now</option>'; return; }
+    sel.innerHTML = open.map(function (a) {
+      var key = a.slot_id || a.starts_at;
+      return '<option value="' + escapeHtml(key) + '" data-slot="' + (a.slot_id || '') + '" data-start="' + (a.starts_at || '') + '">' +
+        escapeHtml(new Date(a.starts_at).toLocaleString()) + '</option>';
+    }).join('');
+  } catch (e) {
+    sel.innerHTML = '<option value="">Could not load positions</option>';
+  }
+}
+
+async function bkManualBook() {
+  var sel = document.getElementById('bkManSlot');
+  var opt = sel.options[sel.selectedIndex];
+  if (!opt || !opt.value) { bkFlash('Pick an open position first.', false); return; }
+  var body = {
+    resource_id: document.getElementById('bkManRes').value,
+    customer_name: (document.getElementById('bkManName').value || '').trim(),
+    customer_email: (document.getElementById('bkManEmail').value || '').trim(),
+    notes: (document.getElementById('bkManNote').value || '').trim(),
+    confirm: true
+  };
+  if (opt.getAttribute('data-slot')) body.slot_id = opt.getAttribute('data-slot');
+  else body.starts_at = opt.getAttribute('data-start');
+  try {
+    await bkCall('POST', '/calendars/' + BK.current + '/bookings', body);
+    bkFlash('Booked — the position is now blocked for buyers.');
+    await bkOpenDetail(BK.current, true);
+    bkRender();
+    await bkLoadOpenSlots();
+    await bkLoadOrders();
   } catch (e) { bkFlash(e.message, false); }
 }
 function bkBack() { BK.current = null; BK.detail = null; bkRender(); }

@@ -42,6 +42,8 @@ pub fn admin_router(pool: PgPool) -> Router {
             get(h::get_calendar).patch(h::update_calendar),
         )
         .route("/calendars/:id/resources", post(h::create_resource))
+        // the operator filling a position by hand (phone, invoice, a sponsor who never opens the page)
+        .route("/calendars/:id/bookings", post(h::admin_create_booking))
         .route("/calendars/:id/bundles", post(h::create_bundle))
         // who hears about a booking, and when to remind
         .route(

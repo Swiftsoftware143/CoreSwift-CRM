@@ -1736,3 +1736,54 @@ pub async fn public_host(pool: &PgPool, workspace: Option<&str>) -> Result<Publi
             .collect(),
     })
 }
+
+/// An operator books a position on behalf of a business — the phone call, the invoice, the sponsor
+/// who pays by bank transfer and never opens the page.
+///
+/// It goes through the SAME writer as a customer's booking (`create_order`, which does the capacity
+/// check inside a transaction and locks the resource), and is then confirmed. There is deliberately no
+/// second insert path: a manually filled slot must be indistinguishable from one sold on the page, or
+/// the two sides drift and a slot gets sold twice.
+pub async fn admin_create_booking(
+    pool: &PgPool,
+    tenant: Uuid,
+    calendar_id: Uuid,
+    customer_name: String,
+    customer_email: String,
+    notes: Option<String>,
+    item: OrderItemInput,
+    confirm_now: bool,
+) -> Result<OrderWithBookings> {
+    let cal = calendar_for_tenant(&mut *pool.acquire().await?, calendar_id, tenant).await?;
+
+    let name = customer_name.trim().to_string();
+    let email = customer_email.trim().to_lowercase();
+    if name.is_empty() {
+        return Err(BookingError::invalid(
+            "whose booking is this? a name is needed",
+        ));
+    }
+    if !email.contains('@') || !email.split('@').nth(1).is_some_and(|d| d.contains('.')) {
+        return Err(BookingError::invalid(
+            "that does not look like an email address for the business",
+        ));
+    }
+
+    let order = create_order(
+        pool,
+        &cal,
+        NewOrder {
+            customer_name: name,
+            customer_email: email,
+            contact_id: None,
+            notes: notes.filter(|n| !n.trim().is_empty()),
+            items: vec![item],
+        },
+    )
+    .await?;
+
+    if confirm_now {
+        return confirm_order(pool, order.order.id, Some(tenant), None).await;
+    }
+    Ok(order)
+}
