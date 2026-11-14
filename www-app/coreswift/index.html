@@ -785,7 +785,6 @@ const MENU = [
     // used to be the 'inbox' tab, which the mail client now owns — see the TAB_RENDERERS note below.
     { id:'email-settings', icon:'🌐', label:'Email Domains & Sending' }
   ]},
-  { id:'calendar', icon:'🔗', label:'Google Calendar sync' },
   { id:'ai-assistant', icon:'🤖', label:'AI Assistant' },
   { id:'tracked-links', icon:'🔗', label:'Tracked Links' },
   { type:'group', icon:'🔄', label:'Workflow', children:[
@@ -1458,8 +1457,6 @@ const TAB_RENDERERS = {
   },
 
   'inbox': () => inboxShell(),
-
-  'calendar': () => calendarShell(),
 
   'ai-assistant': () => {
     return pageHeader('AI Assistant', 'Your AI-powered CRM assistant') +
@@ -4040,7 +4037,7 @@ function openMySupportPortal() {
   }).catch(e => toast('Could not open the customer portal: ' + e.message, 'error'));
 }
 // (removed) showAddEventModal was a false-success stub with ZERO callers in this console: the
-// tenant Calendar tab is the Google-Calendar integration (calendarShell -> gcOpenNewCalendar),
+// tenant Google-Calendar integration (loadCalendarTab -> gcOpenNewCalendar),
 // never a /api/events list, so a click on it could not be reached. Deleted after a caller census
 // (grep -o showAddEventModal -> 1 occurrence = the definition only).
 // The admin console's own '+ New Event' is wired to POST /api/events (createEvent above).
@@ -7151,19 +7148,8 @@ TAB_RENDERERS['widgets'] = widgetsShell;
 //    entity_type; auto-replies wants domain_id; send wants from_address).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ── Calendar tab: booking calendars + the Google Calendar each mirrors ─────────
+// ── Google Calendar mirroring: rendered inside the Booking screen ─────────────
 const GC = { configured: false, items: [], loaded: false };
-
-function calendarShell() {
-  return pageHeader('Google Calendar sync', 'Your public calendar address, and the Google Calendar each booking calendar mirrors into. Calendars themselves are created in Booking.',
-    '<button class="btn btn-secondary btn-sm" onclick="switchTab(\'integrations\')">🔑 Google credentials</button>') +
-    // THE PUBLIC ADDRESS (kanban t_8457bfef). Every workspace has one from the moment it exists, so
-    // this card is a statement of fact plus the two things an owner can change: the name in front of
-    // the system domain, and an owned domain pointed at the same calendar.
-    '<div id="calHost"><div class="loading-wrap"><div class="spinner"></div> Loading your calendar address...</div></div>' +
-    '<div id="gcContent"><div class="loading-wrap"><div class="spinner"></div> Loading calendars...</div></div>' +
-    '<div id="gcFlow"></div>';
-}
 
 // ── The hosted calendar address ────────────────────────────────────────────────────────────────
 // GET /api/calendar-host returns the address and its custom-domain state. Nothing here is invented:
@@ -8790,7 +8776,6 @@ TAB_RENDERERS['inbox'] = inboxShell;
 // Add domain) was dead on arrival. Registering the same panel under its own id gives it a menu entry
 // that cannot be taken over, without touching the mail client's file.
 TAB_RENDERERS['email-settings'] = inboxShell;
-TAB_RENDERERS['calendar'] = calendarShell;
 TAB_LOADERS['telnyx'] = loadTelnyxTab;
 // The ADMIN_MENU entry `telnyx-admin` rendered a placeholder ("Configure Telnyx provider settings
 // for all tenants.") and nothing else, while this screen — config, numbers, send-a-text, search —
@@ -10644,13 +10629,19 @@ TAB_RENDERERS['booking'] = () => pageHeader(
   'Booking',
   'One engine, three kinds of calendar — appointment times, dated slots for sale, or a date range',
   '<button class="btn btn-secondary btn-sm" onclick="bkInit()">↻ Reload</button>'
-) + '<div id="bkWrap"><div class="loading-wrap"><div class="spinner"></div> Loading calendars…</div></div>';
+) + '<div id="bkWrap"><div class="loading-wrap"><div class="spinner"></div> Loading calendars…</div></div>'
+  // Retired from the old Calendar screen: the public address of this workspace and the Google
+  // Calendar each booking calendar mirrors into. Both belong here, where calendars are managed.
+  + '<div id="calHost"><div class="loading-wrap"><div class="spinner"></div> Loading your booking address...</div></div>'
+  + '<div id="gcContent"></div><div id="gcFlow"></div>';
 
 TAB_LOADERS['booking'] = async () => {
   await bkInit();
   await bkLoadHost();
   bkRender();
   if (BK.current) { await bkLoadNotify(); await bkLoadOrders(); }
+  // the address card and the Google mirroring list, moved off the retired Calendar screen
+  await loadCalendarTab();
 };
 
 
