@@ -938,13 +938,6 @@ async fn open_ticket_for_message(
     message_id: Uuid,
     inbound: &InboundEmail,
 ) -> Result<Option<Uuid>, AppError> {
-    let contact_name = inbound
-        .from
-        .split('@')
-        .next()
-        .unwrap_or(&inbound.from)
-        .to_string();
-
     let mut tx = db.begin().await.map_err(AppError::Database)?;
 
     let stored_ticket: Option<Option<Uuid>> = if message_id == Uuid::nil() {
@@ -974,19 +967,27 @@ async fn open_ticket_for_message(
         return Ok(Some(ticket_id));
     }
 
-    let ticket_id: Uuid = sqlx::query_scalar(
-        r#"INSERT INTO tickets (tenant_id, subject, description, status, priority, source, contact_email, contact_name)
-           VALUES ($1, $2, $3, 'open', 'medium', 'email', $4, $5)
-           RETURNING id"#,
-    )
-    .bind(tenant_id)
-    .bind(&inbound.subject)
-    .bind(&inbound.body_plain)
-    .bind(&inbound.from)
-    .bind(contact_name)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(AppError::Database)?;
+    // ONE CONVERSATION, ONE TICKET (David, 2026-11-14). Everything about deciding whether this mail is a
+    // new question or the next message on an existing ticket lives in `helpdesk::ingest`: thread by the
+    // mail headers, then by the subject token, and keep machine mail out of the queue. It runs inside
+    // this transaction, so the ticket, its first message and the link to the stored mail commit together.
+    let outcome = crate::helpdesk::ingest::ingest_inbound(&mut tx, tenant_id, inbound).await?;
+    let Some(ticket_id) = outcome.ticket_id() else {
+        // Machine mail: stored, linked to nothing, and no work created for a person.
+        if message_id != Uuid::nil() {
+            sqlx::query(
+                "UPDATE private_email_messages SET is_ticket = false, updated_at = NOW()
+                  WHERE id = $1 AND tenant_id = $2",
+            )
+            .bind(message_id)
+            .bind(tenant_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(AppError::Database)?;
+        }
+        tx.commit().await.map_err(AppError::Database)?;
+        return Ok(None);
+    };
 
     if message_id != Uuid::nil() {
         // Same statement as `messages_handler::link_ticket`, inside this transaction so the ticket,

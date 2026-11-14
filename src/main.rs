@@ -39,6 +39,7 @@ pub mod external_api;
 mod features;
 pub mod feedback;
 pub mod google_calendar;
+pub mod helpdesk;
 pub mod image_store;
 pub mod inbound;
 pub mod industries;
