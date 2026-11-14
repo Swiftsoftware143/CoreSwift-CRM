@@ -190,6 +190,25 @@
     d.setDate(d.getDate() + offsetDays);
     return d.toISOString().slice(0, 10);
   }
+  // An opening is identified by its dated slot when it has one, and by its start time when it does
+  // not (appointments are generated from open hours, so they have no slot row). Keying on slot_id
+  // alone marked every appointment as "picked" and sent a null slot with each item.
+  function keyOf(a) { return String(a.slot_id || a.starts_at || ''); }
+
+  // The item shape the engine expects differs by calendar kind, so the page builds it rather than
+  // assuming inventory everywhere: slot_id for dated stock, a start time for an appointment, and a
+  // start/end date pair for a range.
+  function itemOf(a) {
+    if (a.slot_id) return { resource_id: a.resource_id, slot_id: a.slot_id };
+    var kind = (STATE.cal && STATE.cal.kind) || '';
+    if (kind === 'date_range') {
+      return { resource_id: a.resource_id,
+               start_date: String(a.starts_at).slice(0, 10),
+               end_date: String(a.ends_at || a.starts_at).slice(0, 10) };
+    }
+    return { resource_id: a.resource_id, starts_at: a.starts_at };
+  }
+
   function api(path, opts) {
     return fetch('/api/public/booking' + path, opts).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (j) {
@@ -233,8 +252,8 @@
       .then(function (rows) {
         STATE.avail = Array.isArray(rows) ? rows : (rows.availability || []);
         // a picked slot that no longer exists must not stay in the cart
-        Object.keys(STATE.picked).forEach(function (id) {
-          if (!STATE.avail.some(function (a) { return a.slot_id === id && a.remaining > 0; })) delete STATE.picked[id];
+        Object.keys(STATE.picked).forEach(function (k) {
+          if (!STATE.avail.some(function (a) { return keyOf(a) === k && a.remaining > 0; })) delete STATE.picked[k];
         });
         render();
         reportHeight();
@@ -272,11 +291,11 @@
 
     var tiles = shown.length ? shown.map(function (a) {
       var sold = !(a.remaining > 0);
-      var on = !!STATE.picked[a.slot_id];
+      var on = !!STATE.picked[keyOf(a)];
       var placement = a.resource_name || res[a.resource_id] || 'Slot';
       var sub = (a.label && a.label !== placement) ? a.label : '';
       return '<button type="button" class="tile' + (sold ? ' off' : (on ? ' on' : '')) + '"' +
-        (sold ? ' disabled' : ' onclick="BKUI.toggle(\'' + a.slot_id + '\')"') + '>' +
+        (sold ? ' disabled' : ' onclick="BKUI.toggle(\'' + keyOf(a) + '\')"') + '>' +
         '<span class="tick">✓</span>' +
         (sold ? '<span class="sold">Sold</span>' : '') +
         '<span class="placement">' + esc(placement) + '</span>' +
@@ -287,15 +306,15 @@
         '</button>';
     }).join('') : '<div class="empty">Nothing is open in these dates. Try a wider range.</div>';
 
-    var picked = Object.keys(STATE.picked).map(function (id) {
-      return STATE.avail.filter(function (a) { return a.slot_id === id; })[0];
+    var picked = Object.keys(STATE.picked).map(function (k) {
+      return STATE.avail.filter(function (a) { return keyOf(a) === k; })[0];
     }).filter(Boolean);
 
     var lines = picked.length ? picked.map(function (a) {
       return '<div class="line"><span><b>' + esc(a.resource_name || res[a.resource_id] || 'Slot') + '</b><br>' +
         '<span style="color:#64748b;font-size:12px">' + esc(dayLabel(a.starts_at)) + '</span></span>' +
         '<span style="display:flex;gap:8px;align-items:center">' + money(a.price_cents) +
-        '<button class="x" title="Remove" onclick="BKUI.toggle(\'' + a.slot_id + '\')">×</button></span></div>';
+        '<button class="x" title="Remove" onclick="BKUI.toggle(\'' + keyOf(a) + '\')">×</button></span></div>';
     }).join('') : '<p class="hint" style="margin:0">Nothing picked yet — tap a slot.</p>';
 
     var q = STATE.quote || {};
@@ -327,9 +346,9 @@
   }
 
   function refreshQuote() {
-    var items = Object.keys(STATE.picked).map(function (id) {
-      var a = STATE.avail.filter(function (x) { return x.slot_id === id; })[0];
-      return a ? { resource_id: a.resource_id, slot_id: id } : null;
+    var items = Object.keys(STATE.picked).map(function (k) {
+      var a = STATE.avail.filter(function (x) { return keyOf(x) === k; })[0];
+      return a ? itemOf(a) : null;
     }).filter(Boolean);
     if (!items.length) { STATE.quote = { subtotal_cents: 0, discount_cents: 0, total_cents: 0 }; return Promise.resolve(); }
     return api('/c/' + encodeURIComponent(SLUG) + '/quote' + (WSQ ? '?' + WSQ : ''), {
@@ -341,8 +360,8 @@
   }
 
   window.BKUI = {
-    toggle: function (slotId) {
-      if (STATE.picked[slotId]) delete STATE.picked[slotId]; else STATE.picked[slotId] = true;
+    toggle: function (key) {
+      if (STATE.picked[key]) delete STATE.picked[key]; else STATE.picked[key] = true;
       render();
       refreshQuote().then(render);
     },
@@ -353,9 +372,9 @@
       var name = (el('buyerName') || {}).value || '';
       var email = (el('buyerEmail') || {}).value || '';
       if (!name.trim() || !email.trim()) { alert('Your name and email are needed so we can send the confirmation.'); return; }
-      var items = Object.keys(STATE.picked).map(function (id) {
-        var a = STATE.avail.filter(function (x) { return x.slot_id === id; })[0];
-        return a ? { resource_id: a.resource_id, slot_id: id } : null;
+      var items = Object.keys(STATE.picked).map(function (k) {
+        var a = STATE.avail.filter(function (x) { return keyOf(x) === k; })[0];
+        return a ? itemOf(a) : null;
       }).filter(Boolean);
       STATE.busy = true;
       var btns = [el('payBtn'), el('payBtnM')].filter(Boolean);
@@ -379,7 +398,9 @@
 
   function thankYou(order, items) {
     var picked = items.map(function (i) {
-      return STATE.avail.filter(function (a) { return a.slot_id === i.slot_id; })[0];
+      return STATE.avail.filter(function (a) {
+        return (i.slot_id && a.slot_id === i.slot_id) || (!i.slot_id && a.starts_at === i.starts_at);
+      })[0];
     }).filter(Boolean);
     var when = '';
     if (picked.length) {
