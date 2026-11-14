@@ -310,3 +310,37 @@ pub struct UpdateCalendar {
     pub reply_to_email: Option<String>,
     pub send_confirmation: Option<bool>,
 }
+
+/// The notification set as the console sends it: whole lists, replaced together.
+#[derive(Debug, Deserialize)]
+pub struct NotifySettingsInput {
+    #[serde(default)]
+    pub notify_emails: Option<Vec<NotifyEmailIn>>,
+    #[serde(default)]
+    pub reminders: Option<Vec<ReminderIn>>,
+    #[serde(default)]
+    pub tag_rules: Option<Vec<TagRuleIn>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NotifyEmailIn {
+    pub email: String,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReminderIn {
+    pub offset_minutes: i32,
+    #[serde(default)]
+    pub audience: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TagRuleIn {
+    pub tag_name: String,
+    #[serde(default)]
+    pub stage: String,
+    #[serde(default)]
+    pub mode: String,
+}

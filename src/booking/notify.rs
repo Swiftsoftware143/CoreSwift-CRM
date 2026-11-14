@@ -315,3 +315,105 @@ async fn ensure_tag(pool: &PgPool, tenant_id: Uuid, name: &str) -> Option<Uuid> 
     .ok()
     .flatten()
 }
+
+// ============================================================================================
+// Reminders
+// --------------------------------------------------------------------------------------------
+// A booking's reminder schedule is per calendar (`booking_reminders`: an offset in minutes before the
+// start, and who hears it). A tick runs at a fixed interval, finds what is due, sends it, and records
+// the send — so a restart, an overlapping tick or a second instance can never send the same reminder
+// twice. It is deliberately NOT a queue: the schedule is data, and the send table is the ledger.
+// ============================================================================================
+
+/// How often the reminder tick runs. Five minutes is the smallest useful granularity for "a day
+/// before" and it keeps the query cheap.
+pub const REMINDER_TICK: std::time::Duration = std::time::Duration::from_secs(300);
+
+pub async fn run_reminders(pool: &PgPool) -> usize {
+    let due: Vec<(Uuid, Uuid, i32, String)> = sqlx::query_as(
+        "SELECT b.id, o.tenant_id, rem.offset_minutes, rem.audience
+           FROM booking_bookings b
+           JOIN booking_orders o    ON o.id = b.order_id
+           JOIN booking_calendars c ON c.id = o.calendar_id
+           JOIN booking_reminders rem ON rem.calendar_id = c.id AND rem.is_active
+          WHERE b.status <> 'cancelled'
+            AND o.status IN ('pending', 'confirmed')
+            AND b.starts_at > now()
+            AND b.starts_at - (rem.offset_minutes * interval '1 minute') <= now()
+            AND NOT EXISTS (
+                SELECT 1 FROM booking_reminder_sends s
+                 WHERE s.booking_id = b.id
+                   AND s.offset_minutes = rem.offset_minutes
+                   AND s.audience = rem.audience)
+          ORDER BY b.starts_at
+          LIMIT 200",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut sent = 0usize;
+    for (booking_id, tenant_id, offset, audience) in due {
+        let Some(order_id) =
+            sqlx::query_scalar::<_, Uuid>("SELECT order_id FROM booking_bookings WHERE id = $1")
+                .bind(booking_id)
+                .fetch_optional(pool)
+                .await
+                .ok()
+                .flatten()
+        else {
+            continue;
+        };
+        let Some(ctx) = load(pool, order_id).await else {
+            continue;
+        };
+
+        let recipients: Vec<String> = if audience == "team" {
+            sqlx::query_scalar(
+                "SELECT email FROM booking_notify_emails WHERE calendar_id = $1 AND is_active",
+            )
+            .bind(ctx.calendar_id)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default()
+        } else {
+            vec![ctx.customer_email.clone()]
+        };
+
+        let mut all_ok = true;
+        for address in recipients {
+            if let Err(e) = crate::email::send_template_email(
+                pool,
+                tenant_id,
+                &address,
+                "booking_reminder",
+                &vars(&ctx),
+            )
+            .await
+            {
+                all_ok = false;
+                tracing::warn!(booking = %booking_id, to = %address, error = %e,
+                    "booking reminder: send failed");
+            }
+        }
+
+        // record only when the send was accepted, so a failure is retried on the next tick
+        if all_ok {
+            let _ = sqlx::query(
+                "INSERT INTO booking_reminder_sends (id, booking_id, offset_minutes, audience)
+                 VALUES (gen_random_uuid(), $1, $2, $3)
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(booking_id)
+            .bind(offset)
+            .bind(&audience)
+            .execute(pool)
+            .await;
+            sent += 1;
+        }
+    }
+    if sent > 0 {
+        tracing::info!(count = sent, "booking reminders sent");
+    }
+    sent
+}

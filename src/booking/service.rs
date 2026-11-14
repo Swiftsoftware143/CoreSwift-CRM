@@ -1428,3 +1428,184 @@ pub async fn manage_rebook(pool: &PgPool, token: &str) -> Result<OrderWithBookin
         bookings: vec![booking],
     })
 }
+
+/// The notification settings of one calendar: who hears about a booking, and when to remind.
+///
+/// Read and written as ONE object on purpose. These are three lists that only make sense together,
+/// and "replace the whole set in a transaction" removes every partial-update bug a per-row API would
+/// invite.
+#[derive(Debug, serde::Serialize)]
+pub struct NotifySettings {
+    pub notify_emails: Vec<serde_json::Value>,
+    pub reminders: Vec<serde_json::Value>,
+    pub tag_rules: Vec<serde_json::Value>,
+}
+
+pub async fn get_notify_settings(
+    pool: &PgPool,
+    tenant: Uuid,
+    calendar_id: Uuid,
+) -> Result<NotifySettings> {
+    calendar_for_tenant(&mut *pool.acquire().await?, calendar_id, tenant).await?;
+
+    let emails: Vec<(String, String)> = sqlx::query_as(
+        "SELECT email, label FROM booking_notify_emails WHERE calendar_id = $1 AND is_active ORDER BY email",
+    )
+    .bind(calendar_id)
+    .fetch_all(pool)
+    .await?;
+    let reminders: Vec<(i32, String)> = sqlx::query_as(
+        "SELECT offset_minutes, audience FROM booking_reminders
+          WHERE calendar_id = $1 AND is_active ORDER BY offset_minutes DESC",
+    )
+    .bind(calendar_id)
+    .fetch_all(pool)
+    .await?;
+    let rules: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT tag_name, stage, mode FROM booking_tag_rules
+          WHERE calendar_id = $1 AND is_active ORDER BY stage, tag_name",
+    )
+    .bind(calendar_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(NotifySettings {
+        notify_emails: emails
+            .into_iter()
+            .map(|(email, label)| serde_json::json!({ "email": email, "label": label }))
+            .collect(),
+        reminders: reminders
+            .into_iter()
+            .map(|(offset_minutes, audience)| {
+                serde_json::json!({ "offset_minutes": offset_minutes, "audience": audience })
+            })
+            .collect(),
+        tag_rules: rules
+            .into_iter()
+            .map(|(tag_name, stage, mode)| {
+                serde_json::json!({ "tag_name": tag_name, "stage": stage, "mode": mode })
+            })
+            .collect(),
+    })
+}
+
+/// Replace the whole notification set for a calendar. Each entry is validated here: an address must
+/// look like one, an offset must be a real interval, a letter cannot be anything else.
+pub async fn set_notify_settings(
+    pool: &PgPool,
+    tenant: Uuid,
+    calendar_id: Uuid,
+    body: NotifySettingsInput,
+) -> Result<NotifySettings> {
+    calendar_for_tenant(&mut *pool.acquire().await?, calendar_id, tenant).await?;
+
+    let mut emails: Vec<(String, String)> = Vec::new();
+    for e in body.notify_emails.unwrap_or_default() {
+        let address = e.email.trim().to_lowercase();
+        if address.is_empty() {
+            continue;
+        }
+        if !address.contains('@') || !address.split('@').nth(1).is_some_and(|d| d.contains('.')) {
+            return Err(BookingError::invalid(format!(
+                "{address} does not look like an email address"
+            )));
+        }
+        emails.push((address, e.label.unwrap_or_default().trim().to_string()));
+    }
+    emails.sort();
+    emails.dedup();
+
+    let mut reminders: Vec<(i32, String)> = Vec::new();
+    for r in body.reminders.unwrap_or_default() {
+        if r.offset_minutes <= 0 || r.offset_minutes > 60 * 24 * 90 {
+            return Err(BookingError::invalid(
+                "a reminder offset must be between 1 minute and 90 days",
+            ));
+        }
+        let audience = r.audience.trim().to_lowercase();
+        if audience != "customer" && audience != "team" {
+            return Err(BookingError::invalid(
+                "a reminder goes to the customer or to the team",
+            ));
+        }
+        reminders.push((r.offset_minutes, audience));
+    }
+    reminders.sort();
+    reminders.dedup();
+
+    let mut rules: Vec<(String, String, String)> = Vec::new();
+    for t in body.tag_rules.unwrap_or_default() {
+        let name = t.tag_name.trim().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let stage = t.stage.trim().to_lowercase();
+        let mode = t.mode.trim().to_lowercase();
+        if stage != "confirm" && stage != "cancel" {
+            return Err(BookingError::invalid(
+                "a tag rule runs on confirm or on cancel",
+            ));
+        }
+        if mode != "add" && mode != "remove" {
+            return Err(BookingError::invalid("a tag rule adds or removes the tag"));
+        }
+        rules.push((name, stage, mode));
+    }
+    rules.sort();
+    rules.dedup();
+
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM booking_notify_emails WHERE calendar_id = $1")
+        .bind(calendar_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM booking_reminders WHERE calendar_id = $1")
+        .bind(calendar_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM booking_tag_rules WHERE calendar_id = $1")
+        .bind(calendar_id)
+        .execute(&mut *tx)
+        .await?;
+
+    for (address, label) in &emails {
+        sqlx::query(
+            "INSERT INTO booking_notify_emails (id, tenant_id, calendar_id, email, label)
+             VALUES (gen_random_uuid(), $1, $2, $3, $4) ON CONFLICT DO NOTHING",
+        )
+        .bind(tenant)
+        .bind(calendar_id)
+        .bind(address)
+        .bind(label)
+        .execute(&mut *tx)
+        .await?;
+    }
+    for (offset, audience) in &reminders {
+        sqlx::query(
+            "INSERT INTO booking_reminders (id, tenant_id, calendar_id, offset_minutes, audience)
+             VALUES (gen_random_uuid(), $1, $2, $3, $4) ON CONFLICT DO NOTHING",
+        )
+        .bind(tenant)
+        .bind(calendar_id)
+        .bind(offset)
+        .bind(audience)
+        .execute(&mut *tx)
+        .await?;
+    }
+    for (name, stage, mode) in &rules {
+        sqlx::query(
+            "INSERT INTO booking_tag_rules (id, tenant_id, calendar_id, tag_name, stage, mode)
+             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+        )
+        .bind(tenant)
+        .bind(calendar_id)
+        .bind(name)
+        .bind(stage)
+        .bind(mode)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+
+    get_notify_settings(pool, tenant, calendar_id).await
+}

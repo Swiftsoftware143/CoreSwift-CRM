@@ -48,6 +48,25 @@ pub async fn get_calendar(
     ))
 }
 
+pub async fn get_notifications(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<service::NotifySettings>> {
+    Ok(Json(service::get_notify_settings(&pool, t.0, id).await?))
+}
+
+pub async fn set_notifications(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<NotifySettingsInput>,
+) -> Result<Json<service::NotifySettings>> {
+    Ok(Json(
+        service::set_notify_settings(&pool, t.0, id, body).await?,
+    ))
+}
+
 pub async fn update_calendar(
     State(pool): State<PgPool>,
     Extension(t): Extension<TenantId>,

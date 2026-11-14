@@ -10025,7 +10025,13 @@ function bkListPanel() {
   return '<div class="card"><table class="table"><thead><tr><th>Calendar</th><th>Type</th><th>Currency</th><th>Time zone</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
 
-async function bkOpen(id) { BK.current = id; await bkOpenDetail(id, true); bkRender(); }
+async function bkOpen(id) {
+  BK.current = id;
+  await bkOpenDetail(id, true);
+  bkRender();
+  await bkLoadNotify();
+  await bkLoadOrders();
+}
 
 async function bkOpenDetail(id, quiet) {
   try {
@@ -10060,6 +10066,7 @@ function bkDetailPanel() {
   if (cal.kind === 'appointment') html += bkHoursPanel();
   if (cal.kind !== 'appointment') html += bkSlotsPanel(res);
   html += bkBundlePanel(bundles);
+  html += bkNotifyPanel();
   html += bkOrdersPanel();
   return html;
 }
@@ -10152,6 +10159,117 @@ async function bkSaveTheme() {
     await bkOpenDetail(BK.current, true);
     bkRender();
     bkFlash('Look saved — your booking page uses it now.');
+  } catch (e) { bkFlash(e.message, false); }
+}
+
+/* Who hears about a booking, when to remind them, and what tag the contact gets. Three lists saved
+ * together (PUT), because they are one decision and a partial save is how half-configured calendars
+ * happen. */
+function bkNotifyPanel() { return '<div id="bkNotifyCard"></div>'; }
+
+async function bkLoadNotify() {
+  var card = document.getElementById('bkNotifyCard');
+  if (!card || !BK.current) return;
+  try {
+    var n = await bkCall('GET', '/calendars/' + BK.current + '/notifications');
+    BK.notify = n || { notify_emails: [], reminders: [], tag_rules: [] };
+    bkRenderNotify();
+  } catch (e) {
+    card.innerHTML = '<div class="card"><p class="muted">Could not load notification settings — ' + escapeHtml(e.message) + '</p></div>';
+  }
+}
+
+function bkRenderNotify() {
+  var card = document.getElementById('bkNotifyCard');
+  if (!card) return;
+  var n = BK.notify || { notify_emails: [], reminders: [], tag_rules: [] };
+  function rowList(items, render, removeFn) {
+    return items.length
+      ? '<div style="margin:6px 0 10px">' + items.map(function (it, i) {
+          return '<div class="line" style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:6px">' +
+            '<span style="font-size:13px">' + render(it) + '</span>' +
+            '<button class="btn btn-secondary btn-sm" onclick="' + removeFn + '(' + i + ')">Remove</button></div>';
+        }).join('') + '</div>'
+      : '<p class="muted" style="margin:4px 0 10px;font-size:12.5px">None yet.</p>';
+  }
+  card.innerHTML = '<div class="card" style="margin-bottom:18px">' +
+    '<h3 style="margin-top:0">Who hears about a booking</h3>' +
+    '<p class="muted" style="margin-top:-6px">The customer always gets a confirmation. Add the people who should know too, and choose when to remind.</p>' +
+
+    '<strong style="font-size:13px">Team members</strong>' +
+    rowList(n.notify_emails, function (e) { return escapeHtml(e.email) + (e.label ? ' <span class="muted">· ' + escapeHtml(e.label) + '</span>' : ''); }, 'bkRemoveEmail') +
+    '<div class="bk-form"><label>Add an address<input id="bkNewEmail" placeholder="team@yourcompany.com"></label>' +
+    '<label>Label (optional)<input id="bkNewEmailLabel" placeholder="Bookings"></label></div>' +
+    '<button class="btn btn-secondary btn-sm" onclick="bkAddEmail()">Add address</button>' +
+
+    '<hr style="border:none;border-top:1px dashed #e2e8f0;margin:16px 0">' +
+    '<strong style="font-size:13px">Reminders</strong>' +
+    rowList(n.reminders, function (r) {
+      return bkOffsetWords(r.offset_minutes) + ' — to the ' + escapeHtml(r.audience);
+    }, 'bkRemoveReminder') +
+    '<div class="bk-form">' +
+      '<label>When<select id="bkNewOffset">' +
+        '<option value="60">1 hour before</option><option value="180">3 hours before</option>' +
+        '<option value="1440" selected>1 day before</option><option value="2880">2 days before</option>' +
+        '<option value="10080">1 week before</option></select></label>' +
+      '<label>Who<select id="bkNewAudience"><option value="customer">The customer</option><option value="team">The team</option></select></label>' +
+    '</div>' +
+    '<button class="btn btn-secondary btn-sm" onclick="bkAddReminder()">Add reminder</button>' +
+
+    '<hr style="border:none;border-top:1px dashed #e2e8f0;margin:16px 0">' +
+    '<strong style="font-size:13px">Tags on the contact</strong>' +
+    rowList(n.tag_rules, function (t) {
+      return escapeHtml(t.tag_name) + ' <span class="muted">· on ' + escapeHtml(t.stage) + ' · ' + escapeHtml(t.mode) + '</span>';
+    }, 'bkRemoveTagRule') +
+    '<div class="bk-form">' +
+      '<label>Tag name<input id="bkNewTag" placeholder="Consultation Booked"></label>' +
+      '<label>When<select id="bkNewStage"><option value="confirm">On confirm</option><option value="cancel">On cancel</option></select></label>' +
+      '<label>Do<select id="bkNewMode"><option value="add">Add it</option><option value="remove">Remove it</option></select></label>' +
+    '</div>' +
+    '<button class="btn btn-secondary btn-sm" onclick="bkAddTagRule()">Add tag rule</button>' +
+    '<p class="muted" style="font-size:12px;margin:10px 0 0">Tags are matched ignoring case, so “Webinar” and “webinar” stay one tag.</p>' +
+    '</div>';
+}
+
+function bkOffsetWords(mins) {
+  if (mins % 10080 === 0) return (mins / 10080) + (mins === 10080 ? ' week' : ' weeks');
+  if (mins % 1440 === 0) return (mins / 1440) + (mins === 1440 ? ' day' : ' days');
+  if (mins % 60 === 0) return (mins / 60) + (mins === 60 ? ' hour' : ' hours');
+  return mins + ' minutes';
+}
+
+function bkAddEmail() {
+  var v = (document.getElementById('bkNewEmail').value || '').trim();
+  if (!v) return;
+  BK.notify.notify_emails.push({ email: v, label: (document.getElementById('bkNewEmailLabel').value || '').trim() });
+  bkSaveNotify();
+}
+function bkRemoveEmail(i) { BK.notify.notify_emails.splice(i, 1); bkSaveNotify(); }
+function bkAddReminder() {
+  BK.notify.reminders.push({
+    offset_minutes: parseInt(document.getElementById('bkNewOffset').value, 10),
+    audience: document.getElementById('bkNewAudience').value
+  });
+  bkSaveNotify();
+}
+function bkRemoveReminder(i) { BK.notify.reminders.splice(i, 1); bkSaveNotify(); }
+function bkAddTagRule() {
+  var name = (document.getElementById('bkNewTag').value || '').trim();
+  if (!name) { bkFlash('Give the tag a name.', false); return; }
+  BK.notify.tag_rules.push({
+    tag_name: name,
+    stage: document.getElementById('bkNewStage').value,
+    mode: document.getElementById('bkNewMode').value
+  });
+  bkSaveNotify();
+}
+function bkRemoveTagRule(i) { BK.notify.tag_rules.splice(i, 1); bkSaveNotify(); }
+
+async function bkSaveNotify() {
+  try {
+    BK.notify = await bkCall('PUT', '/calendars/' + BK.current + '/notifications', BK.notify);
+    bkRenderNotify();
+    bkFlash('Saved.');
   } catch (e) { bkFlash(e.message, false); }
 }
 function bkBack() { BK.current = null; BK.detail = null; bkRender(); }
@@ -10374,7 +10492,10 @@ TAB_RENDERERS['booking'] = () => pageHeader(
   '<button class="btn btn-secondary btn-sm" onclick="bkInit()">↻ Reload</button>'
 ) + '<div id="bkWrap"><div class="loading-wrap"><div class="spinner"></div> Loading calendars…</div></div>';
 
-TAB_LOADERS['booking'] = async () => { await bkInit(); if (BK.current) await bkLoadOrders(); };
+TAB_LOADERS['booking'] = async () => {
+  await bkInit();
+  if (BK.current) { await bkLoadNotify(); await bkLoadOrders(); }
+};
 
 
 async function dmInit() {

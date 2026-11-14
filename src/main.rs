@@ -897,6 +897,16 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Booking reminders: a fixed tick, its own ledger (`booking_reminder_sends`), so a restart or a
+    // second instance cannot repeat one.
+    let db_for_reminders = state.db.clone();
+    tokio::spawn(async move {
+        loop {
+            crate::booking::notify::run_reminders(&db_for_reminders).await;
+            tokio::time::sleep(crate::booking::notify::REMINDER_TICK).await;
+        }
+    });
+
     let addr = format!("{}:{}", config.host, config.port);
     tracing::info!("Starting CRM Swift server on {}", addr);
 

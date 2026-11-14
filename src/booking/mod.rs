@@ -41,6 +41,11 @@ pub fn admin_router(pool: PgPool) -> Router {
         )
         .route("/calendars/:id/resources", post(h::create_resource))
         .route("/calendars/:id/bundles", post(h::create_bundle))
+        // who hears about a booking, and when to remind
+        .route(
+            "/calendars/:id/notifications",
+            get(h::get_notifications).put(h::set_notifications),
+        )
         .route("/calendars/:id/availability", get(h::admin_availability))
         .route("/calendars/:id/orders", get(h::list_orders))
         .route("/resources/:id/availability-rules", put(h::set_rules))
