@@ -9761,7 +9761,7 @@ async function wsSwitchBusiness(idx) {
 window.appGuidePages = {
   dashboard:       { title: "Dashboard", desc: "Your workspace at a glance — contacts, deals, activity and what needs attention today.", actions: ["Scan the counters and recent activity", "Jump to anything that needs a follow-up", "Use the workspace switcher (🗂️ top bar) to move between workspaces"] },
   mcp:             { title: "MCP", desc: "Connect your AI tools to read this workspace. Point an MCP client (Claude Code, Cursor, Hermes, or your own agent) at https://hooks.swiftsoftware.net/mcp, using your API key as the token. Every tool is read-only and scoped to this workspace — there is no write tool and no free-form SQL door.", actions: ["Copy the endpoint", "View & copy your API key (re-enter your password)", "Paste both into your MCP client"] },
-  "booking":       { title: "Booking", desc: "One booking engine, three kinds of calendar. Pick the type when you create it: appointment times (a Calendly replacement), dated slots you sell (newsletter placements, ad spots), or a date range (a featured listing or a rental). You choose your open hours once and use the shortcuts to fill a whole week; slots can be generated for a whole quarter in one run, with a different price per weekday.", actions: ["Create a calendar and pick its type", "Add what customers can book, with a price and a length", "Set open hours, or generate dated slots", "Add a bulk-pricing rule", "Hand out the public link"] },
+  "booking":       { title: "Booking", desc: "One booking engine, three kinds of calendar. Pick the type when you create it: appointment times (a Calendly replacement), dated slots you sell (newsletter placements, ad spots), or a date range (a featured listing or a rental). Set your open hours once and use the shortcuts to fill a whole week; generate a quarter of dated slots in one run with a different price per weekday; add a bulk price. Every calendar has its own public address, and the screen gives you two snippets to put it on your own site — inline in the page, or a popup button that opens over it.", actions: ["Create a calendar and pick its type", "Add what customers can book, with a price and a length", "Set open hours, or generate dated slots", "Add a bulk-pricing rule", "Copy the link or an embed snippet"] },
   "data-mapping":  { title: "Data mapping", desc: "Bring another SwiftSoftware app's leads into this CRM without code. Pick the source app, then drop its fields into your contact fields as data pills — the preview shows exactly what CoreSwift would receive before anything is saved. If the app has already sent you data, the field list is built from what actually arrived.", actions: ["Pick the source app and the kind of row", "Click a source field to drop it into a destination", "Test with a sample row, then Save", "Check Runs to see what was refused and why"] },
   contacts:        { title: "Contacts", desc: "The people and companies you do business with. Each contact carries its history, tags and deals.", actions: ["Add a contact", "Open one to see its full record", "Search by name or email"] },
   duplicates:      { title: "Duplicates", desc: "Contacts in this workspace that look like the same person — the same phone number, or the same first and last name. Nothing is merged for you.", actions: ["Scan the groups for two records of one person", "Edit the record you keep, then remove the other on Contacts"] },
@@ -10039,8 +10039,9 @@ function bkDetailPanel() {
     '<button class="btn btn-secondary btn-sm" onclick="bkBack()">← All calendars</button>' +
     '<h3 style="margin:12px 0 4px">' + escapeHtml(cal.name) + '</h3>' +
     '<p class="muted" style="margin:0">' + bkTypeWords(cal.kind) + ' · ' + escapeHtml(cal.timezone || '') + ' · holds ' + (cal.hold_minutes || 30) + ' min</p>' +
-    '<p style="margin:10px 0 0"><strong>Public link:</strong> <a href="' + pub + '" target="_blank" rel="noopener">' + pub + '</a></p>' +
-    '<span class="bk-flash" id="bkFlash"></span></div>';
+    '<p style="margin:10px 0 0"><strong>Public link:</strong> <a href="' + pub + '" target="_blank" rel="noopener">' + bkFullLink(cal.slug) + '</a></p>' +
+    '<span class="bk-flash" id="bkFlash"></span>' +
+    bkEmbedPanel(cal.slug) + '</div>';
 
   html += bkResourcePanel(res, cal.kind);
   if (cal.kind === 'appointment') html += bkHoursPanel();
@@ -10050,6 +10051,40 @@ function bkDetailPanel() {
   return html;
 }
 
+
+function bkFullLink(slug) {
+  return 'https://booking.coreswiftcrm.com/book/' + slug;
+}
+
+/* Where the calendar can be put on the customer's own website. Two snippets, both copy-paste, both
+ * driven by one script served from the booking address so nothing can go stale. */
+function bkEmbedPanel(slug) {
+  var inline = '<div id="my-bookings"></div>\n<script src="https://booking.coreswiftcrm.com/embed.js"\n        data-calendar="' + slug + '"\n        data-mode="inline"\n        data-target="my-bookings"></' + 'script>';
+  var popup = '<script src="https://booking.coreswiftcrm.com/embed.js"\n        data-calendar="' + slug + '"\n        data-mode="popup"\n        data-label="Book a call"></' + 'script>';
+  function box(title, hint, code, id) {
+    return '<div style="margin-top:12px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
+      '<strong style="font-size:13px">' + title + '</strong>' +
+      '<button class="btn btn-secondary btn-sm" onclick="bkCopy(\'' + id + '\')">Copy</button></div>' +
+      '<p class="muted" style="margin:2px 0 6px;font-size:12px">' + hint + '</p>' +
+      '<textarea id="' + id + '" readonly rows="4" style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;' +
+      'border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#f8fafc;color:#0f172a">' + escapeHtml(code) + '</textarea></div>';
+  }
+  return '<div style="margin-top:16px;border-top:1px dashed #e2e8f0;padding-top:12px">' +
+    '<strong>Put this calendar on a website</strong>' +
+    '<p class="muted" style="margin:4px 0 0;font-size:12px">Paste either snippet on any page. The calendar keeps its own address, so the customer\'s site never handles a booking or a card.</p>' +
+    box('Inline — sits in the page', 'The frame resizes itself as the customer filters or picks.', inline, 'bkCodeInline') +
+    box('Popup — floats over the page', 'A button in the corner opens the calendar in a modal, so the visitor never leaves what they were reading.', popup, 'bkCodePopup') +
+    '</div>';
+}
+
+function bkCopy(id) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.select();
+  try { document.execCommand('copy'); bkFlash('Snippet copied.'); }
+  catch (e) { bkFlash('Select the text and copy it.', false); }
+}
 function bkBack() { BK.current = null; BK.detail = null; bkRender(); }
 
 function bkResourcePanel(res, kind) {

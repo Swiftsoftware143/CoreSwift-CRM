@@ -113,6 +113,12 @@
   .ref{display:inline-block;margin:14px 0;background:#f8fafc;border:1px dashed var(--line);border-radius:10px;
        padding:10px 16px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
   .thanks ul{text-align:left;max-width:420px;margin:16px auto 0;color:var(--ink-2);font-size:13.5px;line-height:1.7}
+
+  /* ---- embedded mode (?embed=1) --------------------------------------------------------------- */
+  body.embed{background:#fff}
+  body.embed .wrap{padding:14px 14px 210px;max-width:none}
+  body.embed header.hero{display:none}
+  body.embed .side{top:14px}
 </style>
 </head>
 <body>
@@ -133,6 +139,19 @@
     if (fromQuery) SLUG = fromQuery;
   }
   var STATE = { cal: null, avail: [], picked: {}, quote: null, filter: 'all', busy: false };
+  var EMBEDDED = /[?&]embed=1/.test(location.search);
+  if (EMBEDDED) document.body.classList.add('embed');
+
+  // An embedded calendar must never be cut off, so it tells the host page how tall it is whenever
+  // anything changes. Same-origin is not assumed: posting to '*' is safe here because the payload is
+  // a number and nothing else.
+  function reportHeight() {
+    if (!EMBEDDED || window.parent === window) return;
+    var h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+    try { window.parent.postMessage({ type: 'coreswift-booking-height', height: h }, '*'); } catch (e) {}
+  }
+  window.addEventListener('load', reportHeight);
+  window.addEventListener('resize', reportHeight);
 
   function el(id) { return document.getElementById(id); }
   function money(c) {
@@ -202,6 +221,7 @@
           if (!STATE.avail.some(function (a) { return a.slot_id === id && a.remaining > 0; })) delete STATE.picked[id];
         });
         render();
+        reportHeight();
         return refreshQuote();
       });
   }
@@ -373,6 +393,10 @@
       '<p style="margin-top:18px;font-size:13px">Need to change something? Reply to the confirmation email and a person will help.</p>' +
       '</div>';
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    reportHeight();
+    if (EMBEDDED) {
+      try { window.parent.postMessage({ type: 'coreswift-booking-done', reference: order.id || '' }, '*'); } catch (e) {}
+    }
   }
 
   boot();
