@@ -222,6 +222,36 @@ pub async fn register(
             );
         }
     }
+    // ── The tier the visitor picked on the price list (kanban t_71a3a39f) ───────────────────────
+    // The price page's "Get started" buttons carry the tier as ?plan=<slug> through every sign-up
+    // door (nginx map), the signup pane reads it and posts it HERE, and until this block existed the
+    // slug died at the door: the buyer got a Free workspace and no operator ever learned they had
+    // chosen Professional. Filed in the SAME request that mints the account — never a second call the
+    // page has to make with the token — so an ad blocker, a dropped mobile connection or a closed tab
+    // cannot lose the pick. The row is the SAME public plan request the console's own Upgrade card
+    // files (one `tickets` row with no workspace, which is the arm the operator's queue carries),
+    // idempotent on (address, tier, still open).
+    //
+    // Best effort by design: the account, its credentials mail and its API key are already real, so a
+    // failure here is logged and the signup still answers 201 with `plan_request: null` — the page
+    // then says nothing about the plan rather than promising a request nobody filed.
+    let plan_request = match req.plan_slug.as_deref() {
+        Some(slug) => crate::tickets::handlers::file_signup_plan_request(
+            &state.db, &req.email, &req.name, slug,
+        )
+        .await
+        .unwrap_or_else(|e| {
+            tracing::error!(
+                error = %e,
+                address = %req.email,
+                "register: account created but its plan request could not be filed"
+            );
+            None
+        })
+        .unwrap_or(serde_json::Value::Null),
+        None => serde_json::Value::Null,
+    };
+
     let mut next_steps = vec![
         "Connect your apps — POST /api/native/apps/{slug}/connect".to_string(),
         "Create contacts — POST /api/contacts".to_string(),
@@ -249,6 +279,7 @@ pub async fn register(
             // Truthful answer to "did the login mail leave?" (kanban t_d841df4f).
             credentials_emailed,
             api_key,
+            plan_request,
             account: AccountResponse {
                 id: tenant_id,
                 name: tenant_name,

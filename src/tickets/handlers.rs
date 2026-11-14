@@ -542,6 +542,111 @@ pub async fn public_support_request(
     ))
 }
 
+/// File the tier a visitor picked on the price list, at the moment their account is minted
+/// (kanban t_71a3a39f).
+///
+/// WHY IT IS THE PUBLIC INTAKE AND NOT A WORKSPACE TICKET: the console's own "Request this plan" card
+/// files through `POST /api/public/support-request`, i.e. one `tickets` row with NO workspace
+/// (`tenant_id IS NULL`) — the arm the operator's own queue carries (`list_tickets`: a platform admin
+/// sees `tenant_id = own OR tenant_id IS NULL`, so a ticket owned by the CUSTOMER's workspace is
+/// visible only to that customer). A brand-new Free workspace is refused 402 by `POST /api/tickets`
+/// anyway, and it has no ticket permission to file with. So this is not a shortcut: it is the SAME
+/// request the Upgrade card files, filed one step earlier — the operator reads it in the same queue,
+/// labelled "Website visitor", with the signup address as the reply-to.
+///
+/// Nothing is charged and no plan changes here. An unknown slug, `free`, an inactive tier
+/// (`inbox` ships inactive until a payment page exists) or a zero-price row files NOTHING and says so
+/// in the log: the account is already real, so a bad slug must never turn a finished signup into an
+/// error page.
+pub async fn file_signup_plan_request(
+    db: &sqlx::PgPool,
+    email: &str,
+    name: &str,
+    raw_slug: &str,
+) -> Result<Option<serde_json::Value>, AppError> {
+    let slug = raw_slug.trim().to_lowercase();
+    if slug.is_empty() || slug == "free" {
+        return Ok(None);
+    }
+    let plan: Option<(String, String)> = sqlx::query_as(
+        "SELECT slug, name FROM plans \
+          WHERE slug = $1 AND COALESCE(is_active, true) = true AND COALESCE(price_monthly, 0) > 0",
+    )
+    .bind(&slug)
+    .fetch_optional(db)
+    .await?;
+    let Some((plan_slug, plan_name)) = plan else {
+        tracing::warn!(
+            plan = %slug,
+            "signup named a plan that is not on sale — no plan request filed"
+        );
+        return Ok(None);
+    };
+
+    let subject = format!("Plan request at signup: {plan_name} plan");
+    let message = format!(
+        "This workspace picked the {plan_name} plan on the price list and then created the account. \
+         Self-serve checkout is not open on this installation, so the switch has to be made by the \
+         CoreSwift team. Nothing was charged.\n\nPlan: {plan_name} ({plan_slug})\n\
+         Signed up as: {email}"
+    );
+    // Idempotent on (address, subject, still open) — the same dedupe the public form uses. A dropped
+    // connection on the signup page is retried by real people, and a second ask for the same tier is
+    // noise the operator has to work twice.
+    let filed: Option<Uuid> = sqlx::query_scalar(
+        r#"INSERT INTO tickets
+               (tenant_id, subject, description, status, priority, source, contact_email, contact_name)
+           SELECT NULL, $1, $2, 'open', 'medium', 'form', $3, $4
+            WHERE NOT EXISTS (
+                SELECT 1 FROM tickets
+                 WHERE tenant_id IS NULL AND lower(contact_email) = lower($3)
+                   AND lower(subject) = lower($1) AND status IN ('open','in_progress'))
+           RETURNING id"#,
+    )
+    .bind(&subject)
+    .bind(&message)
+    .bind(email)
+    .bind(if name.trim().is_empty() {
+        None
+    } else {
+        Some(name.trim())
+    })
+    .fetch_optional(db)
+    .await?;
+
+    let Some(ticket_id) = filed else {
+        tracing::info!(
+            plan = %plan_slug,
+            address = %email,
+            "signup plan request already on the queue — not filed twice"
+        );
+        return Ok(Some(json!({
+            "plan_slug": plan_slug,
+            "plan_name": plan_name,
+            "status": "existing"
+        })));
+    };
+
+    // Tell the OPERATOR, through the one implementation the contact page uses (best effort: the row
+    // above is the record, so a mail failure must never undo a finished signup). A synthetic address
+    // (a proof run) is withheld by that function itself, before any mail is queued.
+    if let Err(e) =
+        crate::email::send_support_request_operator_alert(db, name, email, &subject, &message).await
+    {
+        tracing::warn!(
+            ticket = %ticket_id,
+            "signup plan-request operator alert was not sent: {e}"
+        );
+    }
+
+    Ok(Some(json!({
+        "plan_slug": plan_slug,
+        "plan_name": plan_name,
+        "ticket_id": ticket_id,
+        "status": "filed"
+    })))
+}
+
 /// POST /api/public/support-answer — the person who wrote from the contact page reads our answer.
 ///
 /// The filing arm above (2026-11-06) writes ONE ticket with no workspace and the address the visitor

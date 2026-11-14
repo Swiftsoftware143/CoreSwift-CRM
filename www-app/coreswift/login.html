@@ -49,6 +49,7 @@ button:disabled{opacity:.6;cursor:not-allowed}
 
   <form class="pane" id="paneRegister">
     <div class="msg ok" id="inviteNote" style="display:none;margin:0 0 14px"></div>
+    <div class="msg ok" id="rgPlanNote" style="display:none;margin:0 0 14px"></div>
     <label for="rgName">Full name</label><input id="rgName" autocomplete="name" required>
     <label for="rgEmail">Work email</label><input id="rgEmail" type="email" autocomplete="email" required>
     <button type="submit" id="rgBtn">Create free account</button>
@@ -66,6 +67,22 @@ button:disabled{opacity:.6;cursor:not-allowed}
   // creates their own login and joins it. POST /api/auth/register requires the token.
   var INVITE = '';
   try { INVITE = new URLSearchParams(window.location.search).get('invite_token') || ''; } catch (e) { INVITE = ''; }
+  // ── The tier the visitor picked on the price list (kanban t_71a3a39f) ──────────────────────────
+  // The pricing page's per-tier "Get started" buttons carry `?plan=<slug>`, and nginx carries it
+  // through all eight sign-up doors. Read it HERE or the pick dies at the form: the buyer would get a
+  // Free workspace and no operator would ever learn they had asked for Professional.
+  //
+  // Only a slug SHAPED like a plan is kept, and only the display name lives in this page: the SERVER
+  // validates the slug against the live catalogue (an unknown, inactive or free tier files nothing),
+  // and no price is printed — a price written into this page would drift from the catalogue the app
+  // actually enforces.
+  var PLAN = '';
+  try { PLAN = (new URLSearchParams(window.location.search).get('plan') || '').trim().toLowerCase(); } catch (e) { PLAN = ''; }
+  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(PLAN) || PLAN === 'free') PLAN = '';
+  var PLAN_NAMES = { starter: 'Starter', professional: 'Professional', enterprise: 'Enterprise', agency: 'Agency' };
+  function planLabel() {
+    return PLAN_NAMES[PLAN] || (PLAN.charAt(0).toUpperCase() + PLAN.slice(1));
+  }
   var msg = document.getElementById('msg');
 
   function show(text, ok) {
@@ -95,6 +112,18 @@ button:disabled{opacity:.6;cursor:not-allowed}
   // so open the create-account pane directly: the visitor who asked to sign UP must not be shown a
   // sign-in form with a "Create account" toggle they have to find. Mirrors WorkflowSwift's login.
   try { if (new URLSearchParams(window.location.search).get('register')) swap(false); } catch (e) {}
+
+  // A pick on the price list also opens the create-account pane: the visitor asked to START, so the
+  // sign-in form with a "Create account" toggle is the wrong first screen. The note NAMES the tier so
+  // the buyer can see their choice survived the click through two hosts.
+  if (PLAN) {
+    swap(false);
+    var planNote = document.getElementById('rgPlanNote');
+    planNote.textContent = 'You picked the ' + planLabel() + ' plan. Create your free account here and '
+      + 'we pass your choice to the CoreSwift team — nothing is charged today, and they switch the '
+      + 'workspace on and email you when it is ready.';
+    planNote.style.display = 'block';
+  }
 
   if (INVITE) {
     // Joining an existing workspace: no workspace to name, the token decides the tenant.
@@ -223,6 +252,20 @@ button:disabled{opacity:.6;cursor:not-allowed}
     });
   }
 
+  // Did the account's plan request actually reach the team? The API answers `plan_request` only when
+  // it FILED one (or found the same tier already open on the queue), so this sentence can never claim
+  // an ask that was not made (kanban t_71a3a39f).
+  function notePlanRequest(data) {
+    if (!data || !data.plan_request || !data.plan_request.plan_name) return;
+    var row = document.createElement('div');
+    row.style.cssText = 'margin-top:10px;font-size:13px;font-weight:600;color:#065f46';
+    row.textContent = 'Your ' + data.plan_request.plan_name + ' plan request is with the CoreSwift team'
+      + ' — nothing was charged.';
+    msg.appendChild(row);
+    var pill = document.getElementById('rgPlanNote');
+    if (pill) pill.style.display = 'none';
+  }
+
   document.getElementById('paneLogin').addEventListener('submit', function (e) {
     e.preventDefault();
     submit('/api/auth/login', {
@@ -257,6 +300,10 @@ button:disabled{opacity:.6;cursor:not-allowed}
       // account_name/account_slug, so they are deliberately omitted on the invite path.
       body.invite_token = INVITE;
     }
+    // The tier the visitor picked on the price list travels WITH the signup, so the request is filed
+    // by the same POST that mints the account (kanban t_71a3a39f) — no second call the page could
+    // lose to a dropped connection.
+    if (PLAN) body.plan_slug = PLAN;
     btn.disabled = true;
     btn.innerHTML = '<span class="spin"></span>' + (INVITE ? 'Joining…' : 'Creating account…');
     fetch('/api/auth/register', {
@@ -283,6 +330,7 @@ button:disabled{opacity:.6;cursor:not-allowed}
             : 'Account created — but we could not send your login details to ' + body.email + '.',
             false);
           offerInitialPassword(data && data.access_token, body.email);
+          notePlanRequest(data);
           btn.disabled = false;
           btn.textContent = 'Set your password below';
           return;
@@ -293,6 +341,7 @@ button:disabled{opacity:.6;cursor:not-allowed}
           ? 'You have joined the workspace. Check your email — we sent your login details to ' + body.email + '.'
           : 'Account created! Check your email — we sent your login details to ' + body.email +
             '. You can change your password any time in your profile settings.', true);
+        notePlanRequest(data);
         // A customer whose credentials mail never arrived has a way back in (cron 2026-10-19):
         // the address they just typed is carried into the reset-request page, so nothing is retyped.
         (function () {

@@ -142,6 +142,14 @@ pub struct RegisterRequest {
     pub account_name: Option<String>,
     pub account_slug: Option<String>,
     pub invite_token: Option<String>,
+    /// OPTIONAL: the tier the visitor picked on the price list, carried through the sign-up doors as
+    /// `?plan=<slug>` (kanban t_71a3a39f). Before this, a buyer who clicked "Get started" on the
+    /// Professional card created a Free workspace and the pick evaporated: no operator ever learned
+    /// what they asked for. A slug that names no plan ON SALE is not an error — the account is real by
+    /// then — it files nothing and the log line names the slug. `free` is where every account starts,
+    /// so asking for it is not an ask.
+    #[serde(default)]
+    pub plan_slug: Option<String>,
 }
 
 /// Register response with account info included.
@@ -165,6 +173,12 @@ pub struct RegisterResponse {
     /// key}`. Every account is provisioned with one; the plaintext is also sealed at rest, so the
     /// page can show it now and the customer can view/copy it again in Settings at any time.
     pub api_key: Value,
+    /// The tier this signup asked for, when `plan_slug` named a plan on sale (kanban t_71a3a39f):
+    /// `{plan_slug, plan_name, ticket_id, status}` where status is `filed` on the press that wrote
+    /// the request and `existing` when an open request for the same tier was already on the
+    /// operator's queue. `null` means nothing was asked for (or the slug named nothing on sale), so
+    /// the page must not claim a request was passed on.
+    pub plan_request: Value,
 }
 
 /// Account info for response (from `tenants` table).
