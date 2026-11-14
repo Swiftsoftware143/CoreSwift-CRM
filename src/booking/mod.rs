@@ -35,7 +35,10 @@ pub fn admin_router(pool: PgPool) -> Router {
             "/calendars",
             get(h::list_calendars).post(h::create_calendar),
         )
-        .route("/calendars/:id", get(h::get_calendar))
+        .route(
+            "/calendars/:id",
+            get(h::get_calendar).patch(h::update_calendar),
+        )
         .route("/calendars/:id/resources", post(h::create_resource))
         .route("/calendars/:id/bundles", post(h::create_bundle))
         .route("/calendars/:id/availability", get(h::admin_availability))

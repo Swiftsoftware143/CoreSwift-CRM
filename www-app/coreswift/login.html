@@ -51,6 +51,13 @@ button:disabled{opacity:.6;cursor:not-allowed}
     <div class="msg ok" id="inviteNote" style="display:none;margin:0 0 14px"></div>
     <div class="msg ok" id="rgPlanNote" style="display:none;margin:0 0 14px"></div>
     <label for="rgName">Full name</label><input id="rgName" autocomplete="name" required>
+    <!-- The workspace is NAMED at signup (David, 2026-11-14): every account gets exactly one, and its
+         name becomes the address the team and customers use. Never auto-named. -->
+    <div id="rgWsWrap">
+      <label for="rgWs">Workspace name</label>
+      <input id="rgWs" autocomplete="organization" placeholder="Your company name">
+      <p class="hint" style="margin:4px 0 10px">This becomes your address in CoreSwift — your team and your customers will see it. You can add more workspaces later if your plan allows.</p>
+    </div>
     <label for="rgEmail">Work email</label><input id="rgEmail" type="email" autocomplete="email" required>
     <button type="submit" id="rgBtn">Create free account</button>
     <p class="foot" style="margin-top:12px" id="rgFoot">Starts on the Free plan — no credit card required.</p>
@@ -127,6 +134,8 @@ button:disabled{opacity:.6;cursor:not-allowed}
 
   if (INVITE) {
     // Joining an existing workspace: no workspace to name, the token decides the tenant.
+    var wsWrap = document.getElementById('rgWsWrap');
+    if (wsWrap) wsWrap.style.display = 'none';
     swap(false);
     document.getElementById('rgBtn').textContent = 'Join workspace';
     document.getElementById('rgFoot').textContent = 'You will be added to the workspace as soon as you sign up.';
@@ -288,6 +297,9 @@ button:disabled{opacity:.6;cursor:not-allowed}
     var name = document.getElementById('rgName').value.trim();
     if (!name) { show('Please enter your name.', false); return; }
     var btn = document.getElementById('rgBtn');
+    var ws = (document.getElementById('rgWs') || {}).value || '';
+    ws = ws.trim();
+    if (!INVITE && !ws) { show('Please name your workspace — it becomes your address in CoreSwift.', false); return; }
     var body = {
       name: name,
       email: document.getElementById('rgEmail').value.trim()
@@ -295,6 +307,7 @@ button:disabled{opacity:.6;cursor:not-allowed}
       // model). Nothing is stored here and there is no auto-login — the user confirms their
       // address by signing in with the password we sent.
     };
+    if (!INVITE) body.account_name = ws;
     if (INVITE) {
       // resolve_account() joins the inviter's tenant when this field is present and ignores
       // account_name/account_slug, so they are deliberately omitted on the invite path.

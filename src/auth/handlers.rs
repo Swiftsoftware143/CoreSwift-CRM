@@ -89,6 +89,34 @@ pub async fn register(
         return Err(AppError::Validation("name: is required".to_string()));
     }
 
+    // ── The workspace must be NAMED by the person signing up (David, 2026-11-14) ──────────────
+    // Every account is created with exactly one workspace, and that workspace's name becomes the
+    // address its team and customers use (`<slug>.coreswiftcrm.com`, `/b/<calendar>`, the mail
+    // screens). Auto-naming it "<name>'s Workspace" left every account carrying a placeholder
+    // nobody chose, which then spread across the system. So the self-serve door REQUIRES it.
+    //
+    // Deliberately enforced HERE and not in the writer: the machine door
+    // (POST /api/v1/internal/provision-free-account) builds the same request with no name and
+    // must keep minting; this gate applies to a human signing up, including someone accepting an
+    // invite (who is joining a named workspace and is not asked for one).
+    let joining_existing = req
+        .invite_token
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|t| !t.is_empty());
+    if !joining_existing
+        && req
+            .account_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .is_none()
+    {
+        return Err(AppError::Validation(
+            "workspace_name: is required — name your workspace (for example your company name); it becomes the address your team and customers use".to_string(),
+        ));
+    }
+
     // David's signup model (2026-09-29): the page collects NAME + EMAIL only, so `password` may
     // arrive empty. The server then mints one and emails it; the user confirms their address by
     // signing in with it (the real two-step check) and changes it later in profile settings. A

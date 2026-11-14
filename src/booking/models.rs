@@ -57,6 +57,10 @@ pub struct Calendar {
     pub hold_minutes: i32,
     pub settings: Value,
     pub is_active: bool,
+    #[serde(default)]
+    pub reply_to_email: Option<String>,
+    #[serde(default)]
+    pub send_confirmation: bool,
     pub created_at: DateTime<Utc>,
 }
 
@@ -295,4 +299,14 @@ pub struct RangeQuery {
 pub struct CreativeReview {
     pub approved: bool,
     pub note: Option<String>,
+}
+
+/// Everything an owner may change about a calendar after it exists. Every field is optional: a
+/// missing one means "leave it as it is".
+#[derive(Debug, Deserialize)]
+pub struct UpdateCalendar {
+    pub name: Option<String>,
+    pub settings: Option<Value>,
+    pub reply_to_email: Option<String>,
+    pub send_confirmation: Option<bool>,
 }

@@ -199,6 +199,125 @@ pub async fn create_calendar(
     .await?)
 }
 
+/// Update the parts of a calendar an owner is allowed to change: its name, and its look.
+///
+/// The look lives in `settings.theme` (brand colour, ink, background, font stack) rather than in new
+/// columns, because it is presentation and will keep growing — a column per knob is a migration per
+/// knob. Every value is length-limited and colour-checked HERE: this string is written into a public
+/// page's stylesheet, so it is validated as data, never interpolated blindly.
+pub async fn update_calendar(
+    pool: &PgPool,
+    tenant: Uuid,
+    id: Uuid,
+    name: Option<String>,
+    settings: Option<serde_json::Value>,
+    reply_to_email: Option<String>,
+    send_confirmation: Option<bool>,
+) -> Result<Calendar> {
+    let current = calendar_for_tenant(&mut *pool.acquire().await?, id, tenant).await?;
+
+    let new_name = match name {
+        Some(n) if !n.trim().is_empty() => n.trim().to_string(),
+        Some(_) => return Err(BookingError::invalid("the calendar needs a name")),
+        None => current.name.clone(),
+    };
+
+    let mut merged = current.settings.clone();
+    if let Some(incoming) = settings {
+        if let (Some(base), Some(extra)) = (merged.as_object_mut(), incoming.as_object()) {
+            for (k, v) in extra {
+                base.insert(k.clone(), v.clone());
+            }
+        } else {
+            merged = incoming;
+        }
+    }
+    // validate the theme if one is present
+    if let Some(theme) = merged.get("theme") {
+        validate_theme(theme)?;
+    }
+
+    let reply = match reply_to_email {
+        Some(v) if v.trim().is_empty() => None,
+        Some(v) => Some(v.trim().to_string()),
+        None => current.reply_to_email.clone(),
+    };
+    let send = send_confirmation.unwrap_or(current.send_confirmation);
+
+    sqlx::query_as::<_, Calendar>(
+        "UPDATE booking_calendars
+            SET name = $3, settings = $4, reply_to_email = $5, send_confirmation = $6, updated_at = now()
+          WHERE id = $1 AND tenant_id = $2
+          RETURNING *",
+    )
+    .bind(id)
+    .bind(tenant)
+    .bind(new_name)
+    .bind(merged)
+    .bind(reply)
+    .bind(send)
+    .fetch_optional(&mut *pool.acquire().await?)
+    .await?
+    .ok_or(BookingError::NotFound("calendar"))
+}
+
+/// A colour is `#rgb` or `#rrggbb`; a font is a name from a short list. Nothing else reaches the
+/// public page's stylesheet.
+fn validate_theme(theme: &serde_json::Value) -> Result<()> {
+    let obj = match theme.as_object() {
+        Some(o) => o,
+        None => return Err(BookingError::invalid("theme must be an object")),
+    };
+    for key in ["brand", "ink", "bg", "accent"] {
+        if let Some(v) = obj.get(key) {
+            let Some(s) = v.as_str() else {
+                return Err(BookingError::invalid(format!(
+                    "theme.{key} must be a colour"
+                )));
+            };
+            let ok = s.trim().starts_with('#')
+                && matches!(s.trim().len(), 4 | 7)
+                && s.trim()[1..].chars().all(|c| c.is_ascii_hexdigit());
+            if !ok {
+                return Err(BookingError::invalid(format!(
+                    "theme.{key} must look like #6366f1"
+                )));
+            }
+        }
+    }
+    if let Some(v) = obj.get("font") {
+        let Some(s) = v.as_str() else {
+            return Err(BookingError::invalid("theme.font must be a font name"));
+        };
+        const ALLOWED: &[&str] = &[
+            "system",
+            "inter",
+            "rounded",
+            "geometric",
+            "humanist",
+            "serif",
+            "mono",
+        ];
+        if !ALLOWED.contains(&s.trim()) {
+            return Err(BookingError::invalid(format!(
+                "theme.font must be one of: {}",
+                ALLOWED.join(", ")
+            )));
+        }
+    }
+    if let Some(v) = obj.get("logo_url") {
+        let Some(s) = v.as_str() else {
+            return Err(BookingError::invalid("theme.logo_url must be an address"));
+        };
+        if !s.trim().is_empty() && !s.trim().starts_with("https://") {
+            return Err(BookingError::invalid(
+                "theme.logo_url must start with https://",
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub async fn list_calendars(conn: &mut PgConnection, tenant: Uuid) -> Result<Vec<Calendar>> {
     Ok(sqlx::query_as::<_, Calendar>(
         "SELECT * FROM booking_calendars WHERE tenant_id = $1 ORDER BY created_at",

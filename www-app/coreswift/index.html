@@ -10055,6 +10055,7 @@ function bkDetailPanel() {
     '<span class="bk-flash" id="bkFlash"></span>' +
     bkEmbedPanel(cal.slug) + '</div>';
 
+  html += bkThemePanel(cal);
   html += bkResourcePanel(res, cal.kind);
   if (cal.kind === 'appointment') html += bkHoursPanel();
   if (cal.kind !== 'appointment') html += bkSlotsPanel(res);
@@ -10111,6 +10112,47 @@ function bkCopy(id) {
   el.select();
   try { document.execCommand('copy'); bkFlash('Snippet copied.'); }
   catch (e) { bkFlash('Select the text and copy it.', false); }
+}
+
+/* The calendar's look: what the owner's customers see. Stored in settings.theme, validated on the
+ * server (colours must be hex, the font must be one of the listed stacks), and applied by the public
+ * page as CSS variables. */
+function bkThemePanel(cal) {
+  var t = (cal.settings && cal.settings.theme) || {};
+  var fonts = [['system','System sans'],['inter','Inter'],['rounded','Rounded'],['geometric','Geometric'],
+               ['humanist','Humanist'],['serif','Serif'],['mono','Monospace']];
+  return '<div class="card" style="margin-bottom:18px">' +
+    '<h3 style="margin-top:0">Look and feel</h3>' +
+    '<p class="muted" style="margin-top:-6px">What your customers see on the booking page.</p>' +
+    '<div class="bk-form">' +
+      '<label>Brand colour<input id="bkThBrand" type="color" value="' + escapeHtml(t.brand || '#6366f1') + '"></label>' +
+      '<label>Text colour<input id="bkThInk" type="color" value="' + escapeHtml(t.ink || '#0f172a') + '"></label>' +
+      '<label>Page background<input id="bkThBg" type="color" value="' + escapeHtml(t.bg || '#f8fafc') + '"></label>' +
+      '<label>Font<select id="bkThFont">' + fonts.map(function (f) {
+        return '<option value="' + f[0] + '"' + ((t.font || 'system') === f[0] ? ' selected' : '') + '>' + f[1] + '</option>';
+      }).join('') + '</select></label>' +
+      '<label>Logo address (https)<input id="bkThLogo" placeholder="https://…/logo.png" value="' + escapeHtml(t.logo_url || '') + '"></label>' +
+    '</div>' +
+    '<button class="btn btn-primary" onclick="bkSaveTheme()">Save look</button>' +
+    '<a class="btn btn-secondary" style="margin-left:8px" href="' + bkFullLink(cal.slug) + '" target="_blank" rel="noopener">Preview</a>' +
+    '</div>';
+}
+
+async function bkSaveTheme() {
+  var theme = {
+    brand: document.getElementById('bkThBrand').value,
+    ink: document.getElementById('bkThInk').value,
+    bg: document.getElementById('bkThBg').value,
+    font: document.getElementById('bkThFont').value
+  };
+  var logo = (document.getElementById('bkThLogo').value || '').trim();
+  if (logo) theme.logo_url = logo;
+  try {
+    await bkCall('PATCH', '/calendars/' + BK.current, { settings: { theme: theme } });
+    await bkOpenDetail(BK.current, true);
+    bkRender();
+    bkFlash('Look saved — your booking page uses it now.');
+  } catch (e) { bkFlash(e.message, false); }
 }
 function bkBack() { BK.current = null; BK.detail = null; bkRender(); }
 

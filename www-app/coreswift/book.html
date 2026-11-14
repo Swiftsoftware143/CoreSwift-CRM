@@ -209,6 +209,37 @@
     return { resource_id: a.resource_id, starts_at: a.starts_at };
   }
 
+  // The calendar's own look, set by its owner: brand colour, ink, background, and one of a short
+  // list of font stacks. Applied as CSS custom properties rather than inline styles, so the page's
+  // own rules keep working. Every value was validated on the server before it was stored.
+  var FONTS = {
+    system: '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif',
+    inter: '"Inter","Plus Jakarta Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
+    rounded: '"Nunito","Varela Round",ui-rounded,"Segoe UI",system-ui,sans-serif',
+    geometric: '"Futura","Century Gothic","Poppins","Avenir Next",system-ui,sans-serif',
+    humanist: '"Optima","Segoe UI","Candara",system-ui,sans-serif',
+    serif: 'Georgia,Cambria,"Times New Roman",serif',
+    mono: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace'
+  };
+
+  function applyTheme(cal) {
+    var theme = (cal && cal.settings && cal.settings.theme) || {};
+    var root = document.documentElement;
+    if (theme.brand) {
+      root.style.setProperty('--brand', theme.brand);
+      root.style.setProperty('--brand-soft', theme.brand + '1a');
+    }
+    if (theme.ink) root.style.setProperty('--ink', theme.ink);
+    if (theme.bg) root.style.setProperty('--bg', theme.bg);
+    var font = FONTS[theme.font] || FONTS.system;
+    document.body.style.fontFamily = font;
+    var title = document.getElementById('calName');
+    if (theme.logo_url && title) {
+      title.innerHTML = '<img src="' + theme.logo_url.replace(/"/g, '') +
+        '" alt="" style="height:34px;width:auto;display:block;margin-bottom:8px">' + title.innerHTML;
+    }
+  }
+
   function api(path, opts) {
     return fetch('/api/public/booking' + path, opts).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (j) {
@@ -233,6 +264,7 @@
       if (!cal.resources && payload.resources) cal.resources = payload.resources;
       if (!cal.bundles && payload.bundles) cal.bundles = payload.bundles;
       STATE.cal = cal;
+      applyTheme(cal);
       el('calName').textContent = cal.name || 'Book';
       el('calBlurb').textContent = cal.description ||
         'Pick what you want below. Nothing is reserved until you confirm.';

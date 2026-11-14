@@ -48,6 +48,26 @@ pub async fn get_calendar(
     ))
 }
 
+pub async fn update_calendar(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<UpdateCalendar>,
+) -> Result<Json<Calendar>> {
+    Ok(Json(
+        service::update_calendar(
+            &pool,
+            t.0,
+            id,
+            body.name,
+            body.settings,
+            body.reply_to_email,
+            body.send_confirmation,
+        )
+        .await?,
+    ))
+}
+
 pub async fn create_resource(
     State(pool): State<PgPool>,
     Extension(t): Extension<TenantId>,
