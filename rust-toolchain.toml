@@ -1,0 +1,13 @@
+# Pin the toolchain so CI and the build box compile the same code with the same compiler.
+#
+# Why this file exists: CI used to install whatever Rust was newest. On 2026-11-12 that was 1.99.0,
+# which carries a clippy regression (clippy::double_must_use) that turned CI red on repos that had
+# changed nothing — and the production box builds with 1.97.1, so CI was judging this crate with a
+# compiler it is never built with. Pinning keeps CI honest and stops a toolchain release from
+# turning the board red overnight.
+#
+# Bump this, and the dtolnay/rust-toolchain@1.97.1 pins in the workflow, together and on purpose.
+[toolchain]
+channel = "1.97.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"
