@@ -604,21 +604,23 @@ async fn main() -> anyhow::Result<()> {
         // own pool state (`Router<()>`), while every router in this function carries `AppState`. A
         // fully-stated router cannot be re-opened for state, so it is nested as a service, which
         // keeps the engine's files untouched and gives the outer app its expected state type.
-        .nest(
+        // `nest_service`, NOT `nest`: the engine builds its routers around its own pool, so they are
+        // `Router<()>` and cannot carry this app's `AppState`. Mounting a differently-stated router
+        // as a service strips the prefix and forwards it; a `fallback_service` inside a `nest` does
+        // not (a fallback sees the ORIGINAL path), which is why this answered 404/405 when it was
+        // written the other way.
+        .nest_service(
             "/api/booking",
-            axum::Router::<AppState>::new().fallback_service(
-                booking::admin_router(state.db.clone()).layer(axum::middleware::from_fn(
-                    booking::tenant::accept_tenant_from_claims,
-                )),
-            ),
+            booking::admin_router(state.db.clone()).layer(axum::middleware::from_fn(
+                booking::tenant::accept_tenant_from_claims,
+            )),
         )
         // The buyer-facing pages sit INSIDE /api so a single proxy rule carries them, and each of
         // their six paths is named in `auth::route_policy::PUBLIC_ROUTES` — anonymity here is
         // declared and measured, not a side effect of the path not starting with /api.
-        .nest(
+        .nest_service(
             "/api/public/booking",
-            axum::Router::<AppState>::new()
-                .fallback_service(booking::public_router(state.db.clone())),
+            booking::public_router(state.db.clone()),
         )
         .nest("/api/bookings", bookings::router(state.clone()))
         .nest(
