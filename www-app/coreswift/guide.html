@@ -862,6 +862,13 @@ POST /api/lists/:id/members</pre>
     priority. The ticket list shows the answer deadline as a countdown that turns amber inside the last hour and red once it has passed, and
     <strong>Due soon</strong> lists only what is unanswered and due within four hours &mdash; soonest deadline first, because that is the order the
     work has to be done in. A clock is only set when a policy exists: an account with no policy gets an empty deadline rather than a wrong one.</p>
+    <h3>Saved answers — the same question, answered once</h3>
+    <p>The same question fifty times should cost one answer. <strong>Saved answers</strong> live on the Knowledge Base page: a title, the text, and an
+    optional shortcut such as <code>/refund</code>. In a ticket, pick one from the list above the reply box and the text is inserted already filled in
+    for that ticket &mdash; the customer's first name, the ticket reference, your name and the business name, from the placeholders
+    <code>{{contact.first_name}}</code>, <code>{{ticket.number}}</code>, <code>{{agent.first_name}}</code> and <code>{{site.name}}</code>.</p>
+    <p>The filling happens on the server, so what you see in the box is exactly what the customer receives. A placeholder the software does not know
+    is left alone rather than blanked, so nothing of yours disappears silently.</p>
     <h3>When two tickets are one, or one is two</h3>
     <p><strong>Merge into…</strong> folds another ticket's whole conversation into the one you are reading. You give the number to merge into, and
     that ticket keeps its number &mdash; the customer who was told <code>CS-1042</code> must not find that number now means something else. The other

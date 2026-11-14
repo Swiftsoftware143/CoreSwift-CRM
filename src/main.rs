@@ -701,10 +701,12 @@ async fn main() -> anyhow::Result<()> {
         // articles of the account their widget names. Both halves live in `helpdesk::kb`.
         .nest(
             "/api/helpdesk",
-            crate::helpdesk::kb::router(state.clone()).layer(axum::middleware::from_fn_with_state(
-                state.clone(),
-                crate::auth::middleware::auth_middleware,
-            )),
+            crate::helpdesk::kb::router(state.clone())
+                .merge(crate::helpdesk::canned::router(state.clone()))
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::auth::middleware::auth_middleware,
+                )),
         )
         .nest("/api", tickets::router(state.clone()))
         .nest("/api/widgets", support_widgets::router(state.clone()))

@@ -4168,6 +4168,13 @@ async function openTicket(id) {
       });
     }
     html += '<div class="form-group"><label>Write to the customer, or leave a note only your team sees</label>' +
+      ((CR.replies && CR.replies.length)
+        ? '<select style="margin-bottom:6px" onchange="if(this.value){insertCanned(this.value, \'' + id + '\');this.value=\'\'}">' +
+          '<option value="">Insert a saved answer…</option>' +
+          CR.replies.map(r => '<option value="' + escapeHtml(String(r.id)) + '">' + escapeHtml(r.title) +
+            (r.shortcut ? ' (/' + escapeHtml(r.shortcut) + ')' : '') + '</option>').join('') +
+          '</select>'
+        : '') +
       '<textarea rows="3" id="tkReplyBox"></textarea></div>';
     html += '</div></div>';
     showModal('🎫 ' + escapeHtml(t.subject || 'Ticket'), html,
@@ -4179,6 +4186,81 @@ async function openTicket(id) {
     toast('Could not open the ticket: ' + e.message, 'error');
   }
 }
+// ── Saved answers (David, 2026-11-14) ────────────────────────────────────────────────────────────
+// The same question fifty times should cost one answer. The placeholders are filled by the SERVER at the
+// moment of insertion (POST /helpdesk/canned/:id/render), so what an agent sees in the box is exactly what
+// the customer receives; a browser-side substitution could quietly disagree with the server's.
+const CR = { replies: [] };
+
+async function loadCanned() {
+  const el = document.getElementById('crTable');
+  if (!el) return;
+  try {
+    const d = await API.get('/helpdesk/canned');
+    CR.replies = (d && d.replies) || [];
+    const rows = CR.replies.map(r => [
+      escapeHtml(r.title || '—'),
+      r.shortcut ? '<code>/' + escapeHtml(r.shortcut) + '</code>' : '—',
+      escapeHtml((r.body_md || '').slice(0, 70)) + ((r.body_md || '').length > 70 ? '…' : ''),
+      escapeHtml(String(r.use_count || 0)),
+      '<button class="btn btn-ghost btn-xs" onclick="crEdit(\'' + escapeHtml(String(r.id)) + '\')">Edit</button>' +
+      ' <button class="btn btn-ghost btn-xs" onclick="crDelete(\'' + escapeHtml(String(r.id)) + '\')">Delete</button>'
+    ]);
+    el.innerHTML = dataTable(['Title', 'Shortcut', 'Text', 'Used', ''], rows,
+      'No saved answers yet. Write the ones you type most: refunds, how to export, how to reset a password.');
+  } catch (e) {
+    el.innerHTML = '<p style="color:var(--text-secondary)">' + escapeHtml(e.message) + '</p>';
+  }
+}
+
+function crNew() { crEdit(null); }
+
+function crEdit(id) {
+  const r = id ? CR.replies.find(x => String(x.id) === String(id)) : null;
+  const html =
+    '<div class="form-group"><label>Title</label><input type="text" id="crTitle" value="' + escapeHtml(r ? r.title : '') + '"></div>' +
+    '<div class="form-group"><label>Shortcut (optional)</label><input type="text" id="crShortcut" placeholder="refund" value="' +
+      escapeHtml(r && r.shortcut ? r.shortcut : '') +
+      '"><div style="font-size:12px;color:var(--text-muted)">Agents pick it by name in a reply; the shortcut is how you would say it.</div></div>' +
+    '<div class="form-group"><label>The answer</label><textarea rows="8" id="crBody">' + escapeHtml(r ? r.body_md : '') + '</textarea>' +
+      '<div style="font-size:12px;color:var(--text-muted)">Placeholders: {{contact.first_name}} {{ticket.number}} {{agent.first_name}} {{site.name}}</div></div>';
+  showModal(r ? '💬 Edit saved answer' : '💬 New saved answer', html,
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="crSave(' + (id ? "'" + id + "'" : 'null') + ')">Save</button>', true);
+}
+
+async function crSave(id) {
+  const body = {
+    title: (document.getElementById('crTitle') || {}).value || '',
+    shortcut: (document.getElementById('crShortcut') || {}).value || null,
+    body_md: (document.getElementById('crBody') || {}).value || ''
+  };
+  if (!body.title.trim() || !body.body_md.trim()) { toast('A saved answer needs a title and some text', 'error'); return; }
+  try {
+    if (id) { await API.patch('/helpdesk/canned/' + id, body); }
+    else { await API.post('/helpdesk/canned', body); }
+    closeModal(); toast('Saved', 'success'); loadCanned();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function crDelete(id) {
+  const r = CR.replies.find(x => String(x.id) === String(id));
+  if (!confirm('Delete "' + ((r && r.title) || 'this answer') + '"?')) return;
+  try { await API.del('/helpdesk/canned/' + id); toast('Deleted', 'success'); loadCanned(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+
+// Insert a saved answer into the reply box, already filled for THIS ticket.
+async function insertCanned(id, ticketId) {
+  try {
+    const d = await API.post('/helpdesk/canned/' + id + '/render', { ticket_id: ticketId });
+    const box = document.getElementById('tkReplyBox');
+    if (!box) return;
+    box.value = (box.value ? box.value + '\n\n' : '') + (d.text || '');
+    box.focus();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 // ── Merge and split (David, 2026-11-14) ─────────────────────────────────────────────────────────
 // Two tickets that are really one conversation, and one ticket that is really two. The customer's words
 // exist once at every moment: both operations MOVE messages inside a transaction, they never copy them.
@@ -10830,10 +10912,15 @@ TAB_RENDERERS['knowledge'] = () => pageHeader(
   'Knowledge Base',
   'Answers your team writes once — for customers, or for the team only',
   '<button class="btn btn-primary btn-sm" onclick="kbNew()">+ New article</button>'
-) + '<div id="kbTable"><div class="loading-wrap"><div class="spinner"></div> Loading articles...</div></div>';
+) + '<div id="kbTable"><div class="loading-wrap"><div class="spinner"></div> Loading articles...</div></div>' +
+  '<div class="card" style="margin-top:16px"><div class="card-header">Saved answers ' +
+    '<button class="btn btn-secondary btn-xs" style="float:right" onclick="crNew()">+ New saved answer</button>' +
+  '</div><div class="card-body" id="crTable">' +
+    '<div class="loading-wrap"><div class="spinner"></div> Loading saved answers...</div></div></div>';
 
 TAB_LOADERS['knowledge'] = async () => {
   await loadKb();
+  await loadCanned();
 };
 
 TAB_RENDERERS['booking'] = () => pageHeader(
