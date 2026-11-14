@@ -38,8 +38,17 @@ place. The plumbing is unbuilt, not unmodelled: nothing currently writes a `tick
 inbound mail, and 17 tickets in the live database are DMARC reports and spam filed by the mail
 pipeline, with **zero** messages between them.
 
-Consumed today: `status` only ever `open`; `source` `form` on the portal path. So the vocabulary can be
-introduced without migrating a live population.
+The three vocabularies are **enforced by CHECK constraints**, read from the live database:
+
+```
+tickets_status_check    open, in_progress, resolved, closed
+tickets_priority_check  low, medium, high, urgent
+tickets_source_check    manual, email, form, agent, portal
+```
+
+Live data: every ticket is `status = open`, `priority = medium`, `source = email`. So the population is
+uniform and a vocabulary change is cheap — but it is a **constraint change plus a data change in one
+transaction**, never a constraint change alone, or the next write fails on a value the old rows hold.
 
 ### A2 — the stack holds; two corrections
 
@@ -107,12 +116,15 @@ it is what exists, behind the name the spec wants.
 
 ### `tickets` field map
 
+Note: widening a CHECK constraint and updating the rows it governs must ship in ONE migration, or the
+rows written under the old vocabulary violate the new constraint the moment it is added.
+
 | Spec | Existing | Action |
 |---|---|---|
 | `number` per site | — | **add** `number` + `helpdesk_ticket_counters` (per-site counter in the same transaction) |
-| `status` | `status` | keep column, introduce `new/open/pending/on_hold/solved/closed` |
-| `priority` | `priority` | keep, introduce `low/normal/high/urgent` |
-| `channel` | `source` | keep `source`, constrain to `email/widget/form/api` |
+| `status` | `status` (open/in_progress/resolved/closed) | widen to `new/open/pending/on_hold/solved/closed`, mapping in the same migration: `in_progress → open`, `resolved → solved`, `open`/`closed` unchanged |
+| `priority` | `priority` (low/medium/high/urgent) | **keep as is.** The spec says `normal`; the live constraint says `medium`. Mapping `normal → medium` keeps the existing rows and every current writer valid — renaming would break them for no gain |
+| `channel` | `source` (manual/email/form/agent/portal) | add `widget` and `api` to the constraint; keep the rest. `manual`/`agent` stay as the "an agent opened it" values, `portal` is the hosted form. Reporting groups manual+agent as agent-created rather than pretending they are a channel |
 | `assignee_id` | `assigned_to` | keep |
 | `queue_id`, `tags[]`, `ai_state`, `sla_policy_id`, `first_response_due`, `resolution_due`, `first_responded_at`, `solved_at`, `merged_into_id`, `csat_score`, `custom_fields` | — | **add** (`tags` as a link table to `tags`, not a text array) |
 | `contact_id` | `contact_id` | keep |
