@@ -13,6 +13,7 @@ pub mod availability;
 pub mod error;
 pub mod handlers;
 pub mod models;
+pub mod notify;
 pub mod pricing;
 pub mod service;
 pub mod tenant;

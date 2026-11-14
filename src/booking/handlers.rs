@@ -152,9 +152,12 @@ pub async fn confirm_order(
     body: Option<Json<ConfirmOrder>>,
 ) -> Result<Json<OrderWithBookings>> {
     let payment_ref = body.and_then(|Json(b)| b.payment_ref);
-    Ok(Json(
-        service::confirm_order(&pool, id, Some(t.0), payment_ref).await?,
-    ))
+    let res = service::confirm_order(&pool, id, Some(t.0), payment_ref).await?;
+    // the booking is committed; the mail is a courtesy that must never fail it
+    let pool2 = pool.clone();
+    let oid = res.order.id;
+    tokio::spawn(async move { super::notify::on_confirmed(&pool2, oid).await });
+    Ok(Json(res))
 }
 
 pub async fn cancel_order(
@@ -162,7 +165,11 @@ pub async fn cancel_order(
     Extension(t): Extension<TenantId>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<OrderWithBookings>> {
-    Ok(Json(service::cancel_order(&pool, id, Some(t.0)).await?))
+    let res = service::cancel_order(&pool, id, Some(t.0)).await?;
+    let pool2 = pool.clone();
+    let oid = res.order.id;
+    tokio::spawn(async move { super::notify::on_cancelled(&pool2, oid).await });
+    Ok(Json(res))
 }
 
 pub async fn review_creative(
@@ -233,10 +240,23 @@ pub async fn public_create_order(
     let mut c = pool.acquire().await?;
     let cal = service::calendar_by_slug(&mut c, &slug, q.w.as_deref()).await?;
     drop(c);
-    Ok((
-        StatusCode::CREATED,
-        Json(service::create_order(&pool, &cal, body).await?),
-    ))
+    let created = service::create_order(&pool, &cal, body).await?;
+    if created.order.status != "confirmed" && created.order.total_cents == 0 {
+        // nothing to pay, so there is nothing to wait for
+        match service::confirm_order(&pool, created.order.id, None, None).await {
+            Ok(mut confirmed) => {
+                let pool2 = pool.clone();
+                let oid = confirmed.order.id;
+                tokio::spawn(async move { super::notify::on_confirmed(&pool2, oid).await });
+                confirmed.order.status = "confirmed".to_string();
+                return Ok((StatusCode::CREATED, Json(confirmed)));
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "booking: free order could not be auto-confirmed");
+            }
+        }
+    }
+    Ok((StatusCode::CREATED, Json(created)))
 }
 
 pub async fn public_get_order(
