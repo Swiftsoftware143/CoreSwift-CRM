@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Book</title>
+<style>
+  :root{
+    --ink:#0f172a; --ink-2:#475569; --muted:#64748b; --line:#e2e8f0; --card:#ffffff; --bg:#f8fafc;
+    --brand:#6366f1; --brand-soft:#eef2ff; --ok:#059669; --warn:#b45309; --bad:#dc2626;
+    --shadow-sm:0 1px 2px rgba(15,23,42,.06);
+    --shadow-md:0 6px 18px rgba(15,23,42,.08);
+    --shadow-lg:0 18px 40px rgba(15,23,42,.12);
+    --r:14px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.5 "Inter","Plus Jakarta Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  a{color:var(--brand);text-decoration:none}
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 20px 170px}
+  header.hero{margin-bottom:18px}
+  header.hero h1{margin:0 0 6px;font-size:26px;letter-spacing:-.02em}
+  header.hero p{margin:0;color:var(--muted);font-size:14px}
+
+  /* ---- filter bar ------------------------------------------------------------------ */
+  .filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:18px 0}
+  .pill{border:1px solid var(--line);background:#fff;color:var(--ink-2);border-radius:999px;
+        padding:8px 14px;font:inherit;font-size:13px;font-weight:600;cursor:pointer;
+        transition:background .15s ease,border-color .15s ease,transform .12s ease}
+  .pill:hover{background:#f1f5f9}
+  .pill:active{transform:scale(.97)}
+  .pill.on{background:var(--brand-soft);border-color:var(--brand);color:var(--brand)}
+  .spacer{flex:1}
+  .dates{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--muted)}
+  .dates input{border:1px solid var(--line);border-radius:9px;padding:7px 9px;font:inherit;font-size:13px;background:#fff}
+
+  /* ---- layout ---------------------------------------------------------------------- */
+  .cols{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,3fr);gap:22px;align-items:start}
+  @media (max-width:880px){ .cols{grid-template-columns:1fr} .side{position:static!important} }
+
+  /* ---- tile grid ------------------------------------------------------------------- */
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+  .tile{position:relative;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+        padding:16px;cursor:pointer;font:inherit;color:inherit;display:flex;flex-direction:column;gap:8px;
+        box-shadow:var(--shadow-sm);
+        transition:transform .14s ease,box-shadow .18s ease,border-color .18s ease,background .18s ease}
+  .tile:hover{transform:translateY(-2px);box-shadow:var(--shadow-md)}
+  .tile:active{transform:scale(.98)}
+  .tile.on{border-color:var(--brand);background:var(--brand-soft);
+           box-shadow:0 0 0 2px var(--brand),0 8px 22px rgba(99,102,241,.20)}
+  .tile.off{opacity:.5;cursor:not-allowed;filter:grayscale(.15)}
+  .tile.off:hover{transform:none;box-shadow:var(--shadow-sm)}
+  .tile .placement{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .tile .when{font-size:15px;font-weight:700;letter-spacing:-.01em}
+  .tile .meta{font-size:12.5px;color:var(--muted)}
+  .tile .price{margin-top:auto;font-size:19px;font-weight:800;letter-spacing:-.02em}
+  .tile .price small{font-size:12px;font-weight:600;color:var(--muted);letter-spacing:0}
+  .tick{position:absolute;top:10px;right:10px;width:22px;height:22px;border-radius:50%;background:var(--brand);color:#fff;
+        display:none;place-items:center;font-size:13px;font-weight:700;box-shadow:0 2px 6px rgba(99,102,241,.45)}
+  .tile.on .tick{display:grid}
+  .sold{position:absolute;top:10px;right:10px;background:#f1f5f9;color:var(--muted);border-radius:999px;
+        padding:3px 9px;font-size:11px;font-weight:700;letter-spacing:.04em}
+
+  /* ---- sticky summary --------------------------------------------------------------- */
+  .side{position:sticky;top:22px;background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+        box-shadow:var(--shadow-md);padding:18px}
+  .side h2{margin:0 0 4px;font-size:15px;letter-spacing:-.01em}
+  .side .hint{margin:0 0 12px;font-size:12.5px;color:var(--muted)}
+  .lines{display:flex;flex-direction:column;gap:8px;margin:0 0 12px;max-height:260px;overflow:auto}
+  .line{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:8px 10px;border:1px solid var(--line);
+        border-radius:10px;background:#fcfdff}
+  .line b{font-weight:700}
+  .line .x{border:none;background:none;color:var(--muted);cursor:pointer;font-size:15px;line-height:1;padding:0 2px}
+  .totals{border-top:1px dashed var(--line);padding-top:10px;font-size:13.5px}
+  .row{display:flex;justify-content:space-between;padding:4px 0}
+  .row.big{font-size:17px;font-weight:800;letter-spacing:-.01em;padding-top:8px}
+  .row.save{color:var(--ok);font-weight:700}
+  .badge-rule{display:inline-block;margin-top:8px;background:var(--brand-soft);color:var(--brand);
+              border-radius:8px;padding:5px 9px;font-size:11.5px;font-weight:700}
+  .cta{width:100%;margin-top:14px;border:none;border-radius:11px;background:var(--brand);color:#fff;
+       font:inherit;font-weight:700;font-size:15px;padding:13px;cursor:pointer;
+       box-shadow:0 8px 20px rgba(99,102,241,.28);transition:transform .12s ease,box-shadow .18s ease}
+  .cta:hover{box-shadow:0 10px 26px rgba(99,102,241,.36)}
+  .cta:active{transform:scale(.985)}
+  .cta[disabled]{background:#c7d2fe;box-shadow:none;cursor:not-allowed}
+  .field{display:flex;flex-direction:column;gap:4px;font-size:12.5px;font-weight:600;color:var(--ink-2);margin-top:10px}
+  .field input{border:1px solid var(--line);border-radius:9px;padding:9px 10px;font:inherit;font-size:13px;background:#fff}
+  .field input:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(99,102,241,.15)}
+
+  /* ---- mobile bar ------------------------------------------------------------------- */
+  .mbar{position:fixed;left:0;right:0;bottom:0;display:none;gap:12px;align-items:center;justify-content:space-between;
+        background:#fff;border-top:1px solid var(--line);box-shadow:0 -8px 24px rgba(15,23,42,.10);padding:12px 16px;z-index:20}
+  .mbar .m-total{font-size:16px;font-weight:800}
+  .mbar .m-count{font-size:12px;color:var(--muted)}
+  .mbar .cta{width:auto;margin:0;padding:11px 20px;font-size:14px}
+  @media (max-width:880px){ .mbar{display:flex} .side .cta{display:none} }
+
+  /* ---- states ----------------------------------------------------------------------- */
+  .empty,.err{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:26px;text-align:center;color:var(--muted)}
+  .err{border-color:#fecaca;background:#fef2f2;color:var(--bad)}
+  .skel{height:120px;border-radius:var(--r);background:linear-gradient(90deg,#f1f5f9,#f8fafc,#f1f5f9);
+        background-size:200% 100%;animation:sh 1.2s infinite}
+  @keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+  /* ---- thank you -------------------------------------------------------------------- */
+  .thanks{max-width:640px;margin:60px auto;background:#fff;border:1px solid var(--line);border-radius:18px;
+          box-shadow:var(--shadow-lg);padding:34px;text-align:center}
+  .thanks .big{width:58px;height:58px;border-radius:50%;background:#ecfdf5;color:var(--ok);display:grid;place-items:center;
+               font-size:28px;margin:0 auto 14px}
+  .thanks h1{margin:0 0 8px;font-size:23px;letter-spacing:-.02em}
+  .thanks p{margin:0 0 6px;color:var(--muted);font-size:14px}
+  .ref{display:inline-block;margin:14px 0;background:#f8fafc;border:1px dashed var(--line);border-radius:10px;
+       padding:10px 16px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
+  .thanks ul{text-align:left;max-width:420px;margin:16px auto 0;color:var(--ink-2);font-size:13.5px;line-height:1.7}
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <header class="hero">
+    <h1 id="calName">Loading…</h1>
+    <p id="calBlurb">Getting the latest availability…</p>
+  </header>
+  <div id="body"><div class="skel"></div></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var SLUG = (location.pathname.replace(/^\/book\/?/, '').split('/')[0] || '').trim();
+  if (!SLUG) {
+    var fromQuery = new URLSearchParams(location.search).get('c');
+    if (fromQuery) SLUG = fromQuery;
+  }
+  var STATE = { cal: null, avail: [], picked: {}, quote: null, filter: 'all', busy: false };
+
+  function el(id) { return document.getElementById(id); }
+  function money(c) {
+    return '$' + ((c || 0) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+    });
+  }
+  function dayLabel(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d)) return iso;
+    return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) +
+      ' · ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+  function isoDay(offsetDays) {
+    var d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    return d.toISOString().slice(0, 10);
+  }
+  function api(path, opts) {
+    return fetch('/api/public/booking' + path, opts).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) {
+          var msg = (j && (j.error || j.message)) || ('Request failed (' + r.status + ')');
+          throw new Error(msg);
+        }
+        return j;
+      });
+    });
+  }
+
+  function boot() {
+    if (!SLUG) {
+      el('body').innerHTML = '<div class="err">This page needs a calendar address, like /book/consultations.</div>';
+      el('calName').textContent = 'No calendar';
+      return;
+    }
+    api('/c/' + encodeURIComponent(SLUG)).then(function (cal) {
+      STATE.cal = cal;
+      el('calName').textContent = cal.name || 'Book';
+      el('calBlurb').textContent = cal.description ||
+        'Pick what you want below. Nothing is reserved until you confirm.';
+      document.title = (cal.name || 'Book') + ' — booking';
+      return loadAvailability();
+    }).catch(function (e) {
+      el('calName').textContent = 'Calendar unavailable';
+      el('calBlurb').textContent = '';
+      el('body').innerHTML = '<div class="err">' + esc(e.message) + '</div>';
+    });
+  }
+
+  function loadAvailability() {
+    var from = el('from') ? el('from').value : isoDay(0);
+    var to = el('to') ? el('to').value : isoDay(60);
+    return api('/c/' + encodeURIComponent(SLUG) + '/availability?from=' + from + '&to=' + to)
+      .then(function (rows) {
+        STATE.avail = Array.isArray(rows) ? rows : (rows.availability || []);
+        // a picked slot that no longer exists must not stay in the cart
+        Object.keys(STATE.picked).forEach(function (id) {
+          if (!STATE.avail.some(function (a) { return a.slot_id === id && a.remaining > 0; })) delete STATE.picked[id];
+        });
+        render();
+        return refreshQuote();
+      });
+  }
+
+  function resources() {
+    var names = {};
+    (STATE.cal.resources || []).forEach(function (r) { names[r.id] = r.name; });
+    return names;
+  }
+
+  function render() {
+    var cal = STATE.cal || {};
+    var res = resources();
+    var filters = Object.keys(res).map(function (id) {
+      return { id: id, name: res[id] };
+    });
+    var bar = '<div class="filters">' +
+      '<button class="pill' + (STATE.filter === 'all' ? ' on' : '') + '" onclick="BKUI.filter(\'all\')">All slots</button>' +
+      filters.map(function (f) {
+        return '<button class="pill' + (STATE.filter === f.id ? ' on' : '') + '" onclick="BKUI.filter(\'' + f.id + '\')">' +
+          esc(f.name) + '</button>';
+      }).join('') +
+      '<span class="spacer"></span>' +
+      '<span class="dates">Dates' +
+        '<input type="date" id="from" value="' + esc(isoDay(0)) + '" onchange="BKUI.reload()">' +
+        '<input type="date" id="to" value="' + esc(isoDay(60)) + '" onchange="BKUI.reload()">' +
+      '</span></div>';
+
+    var shown = STATE.avail.filter(function (a) {
+      return STATE.filter === 'all' || a.resource_id === STATE.filter;
+    });
+
+    var tiles = shown.length ? shown.map(function (a) {
+      var sold = !(a.remaining > 0);
+      var on = !!STATE.picked[a.slot_id];
+      var placement = a.resource_name || res[a.resource_id] || 'Slot';
+      var sub = (a.label && a.label !== placement) ? a.label : '';
+      return '<button type="button" class="tile' + (sold ? ' off' : (on ? ' on' : '')) + '"' +
+        (sold ? ' disabled' : ' onclick="BKUI.toggle(\'' + a.slot_id + '\')"') + '>' +
+        '<span class="tick">✓</span>' +
+        (sold ? '<span class="sold">Sold</span>' : '') +
+        '<span class="placement">' + esc(placement) + '</span>' +
+        '<span class="when">' + esc(dayLabel(a.starts_at)) + '</span>' +
+        (sub ? '<span class="meta" style="font-size:12px">' + esc(sub) + '</span>' : '') +
+        '<span class="meta">' + (a.remaining > 1 ? a.remaining + ' places left' : 'One place') + '</span>' +
+        '<span class="price">' + money(a.price_cents) + '</span>' +
+        '</button>';
+    }).join('') : '<div class="empty">Nothing is open in these dates. Try a wider range.</div>';
+
+    var picked = Object.keys(STATE.picked).map(function (id) {
+      return STATE.avail.filter(function (a) { return a.slot_id === id; })[0];
+    }).filter(Boolean);
+
+    var lines = picked.length ? picked.map(function (a) {
+      return '<div class="line"><span><b>' + esc(a.resource_name || res[a.resource_id] || 'Slot') + '</b><br>' +
+        '<span style="color:#64748b;font-size:12px">' + esc(dayLabel(a.starts_at)) + '</span></span>' +
+        '<span style="display:flex;gap:8px;align-items:center">' + money(a.price_cents) +
+        '<button class="x" title="Remove" onclick="BKUI.toggle(\'' + a.slot_id + '\')">×</button></span></div>';
+    }).join('') : '<p class="hint" style="margin:0">Nothing picked yet — tap a slot.</p>';
+
+    var q = STATE.quote || {};
+    var summary = '<div class="side">' +
+      '<h2>Your booking</h2>' +
+      '<p class="hint">' + (picked.length ? picked.length + ' selected' : 'No slots selected') + '</p>' +
+      '<div class="lines">' + lines + '</div>' +
+      '<div class="totals">' +
+        '<div class="row"><span>Subtotal</span><span>' + money(q.subtotal_cents) + '</span></div>' +
+        (q.discount_cents ? '<div class="row save"><span>Bulk saving</span><span>−' + money(q.discount_cents) + '</span></div>' : '') +
+        '<div class="row big"><span>Total</span><span>' + money(q.total_cents) + '</span></div>' +
+        (q.bundle_name ? '<span class="badge-rule">✓ ' + esc(q.bundle_name) + ' applied</span>' : '') +
+      '</div>' +
+      '<label class="field">Your name<input id="buyerName" placeholder="Alex Morgan" autocomplete="name"></label>' +
+      '<label class="field">Email<input id="buyerEmail" type="email" placeholder="you@company.com" autocomplete="email"></label>' +
+      '<label class="field">Anything we should know?<input id="buyerNote" placeholder="Optional"></label>' +
+      '<button class="cta" id="payBtn"' + (picked.length ? '' : ' disabled') + ' onclick="BKUI.reserve()">' +
+        (picked.length ? 'Reserve & pay' : 'Pick a slot to continue') + '</button>' +
+      '</div>';
+
+    el('body').innerHTML = '<div class="cols"><div><div class="grid">' + tiles + '</div></div>' + summary + '</div>' +
+      '<div class="mbar"><span><span class="m-total">' + money(q.total_cents) + '</span>' +
+      '<div class="m-count">' + picked.length + ' selected</div></span>' +
+      '<button class="cta" id="payBtnM"' + (picked.length ? '' : ' disabled') + ' onclick="BKUI.reserve()">Reserve & pay</button></div>' +
+      '<div id="filtersHolder" style="display:none">' + bar + '</div>';
+    // the filter bar belongs above the grid, inside the left column for alignment
+    var gridCol = el('body').querySelector('.cols > div');
+    if (gridCol) gridCol.insertAdjacentHTML('afterbegin', bar);
+  }
+
+  function refreshQuote() {
+    var items = Object.keys(STATE.picked).map(function (id) {
+      var a = STATE.avail.filter(function (x) { return x.slot_id === id; })[0];
+      return a ? { resource_id: a.resource_id, slot_id: id } : null;
+    }).filter(Boolean);
+    if (!items.length) { STATE.quote = { subtotal_cents: 0, discount_cents: 0, total_cents: 0 }; return Promise.resolve(); }
+    return api('/c/' + encodeURIComponent(SLUG) + '/quote', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: items })
+    }).then(function (q) { STATE.quote = q; }).catch(function (e) {
+      STATE.quote = { subtotal_cents: 0, discount_cents: 0, total_cents: 0, bundle_name: '' };
+      console.warn('quote failed:', e.message);
+    });
+  }
+
+  window.BKUI = {
+    toggle: function (slotId) {
+      if (STATE.picked[slotId]) delete STATE.picked[slotId]; else STATE.picked[slotId] = true;
+      render();
+      refreshQuote().then(render);
+    },
+    filter: function (id) { STATE.filter = id; render(); refreshQuote().then(render); },
+    reload: function () { loadAvailability(); },
+    reserve: function () {
+      if (STATE.busy) return;
+      var name = (el('buyerName') || {}).value || '';
+      var email = (el('buyerEmail') || {}).value || '';
+      if (!name.trim() || !email.trim()) { alert('Your name and email are needed so we can send the confirmation.'); return; }
+      var items = Object.keys(STATE.picked).map(function (id) {
+        var a = STATE.avail.filter(function (x) { return x.slot_id === id; })[0];
+        return a ? { resource_id: a.resource_id, slot_id: id } : null;
+      }).filter(Boolean);
+      STATE.busy = true;
+      var btns = [el('payBtn'), el('payBtnM')].filter(Boolean);
+      btns.forEach(function (b) { b.disabled = true; b.textContent = 'Reserving…'; });
+      api('/c/' + encodeURIComponent(SLUG) + '/orders', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customer_name: name.trim(), customer_email: email.trim(),
+          notes: (el('buyerNote') || {}).value || '', items: items
+        })
+      }).then(function (order) {
+        thankYou(order, items);
+      }).catch(function (e) {
+        STATE.busy = false;
+        btns.forEach(function (b) { b.disabled = false; b.textContent = 'Reserve & pay'; });
+        alert(e.message);
+        loadAvailability();
+      });
+    }
+  };
+
+  function thankYou(order, items) {
+    var picked = items.map(function (i) {
+      return STATE.avail.filter(function (a) { return a.slot_id === i.slot_id; })[0];
+    }).filter(Boolean);
+    var when = '';
+    if (picked.length) {
+      when = picked[0].starts_at;
+    }
+    var gcal = '';
+    if (when) {
+      var s = new Date(when), e2 = new Date(new Date(when).getTime() + 60 * 60 * 1000);
+      var fmt = function (d) { return d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'; };
+      gcal = 'https://calendar.google.com/calendar/render?action=TEMPLATE' +
+        '&text=' + encodeURIComponent((STATE.cal.name || 'Booking')) +
+        '&dates=' + fmt(s) + '/' + fmt(e2) +
+        '&details=' + encodeURIComponent('Reference ' + (order.id || ''));
+    }
+    el('body').innerHTML = '<div class="thanks">' +
+      '<div class="big">✓</div>' +
+      '<h1>Thank you — your slots are held</h1>' +
+      '<p>We have emailed ' + esc((order.customer_email || '')) + ' with the details.</p>' +
+      '<div class="ref">' + esc(order.id || '') + '</div>' +
+      '<ul>' +
+        picked.map(function (p) {
+          return '<li><b>' + esc(p.resource_name || p.label || 'Slot') + '</b> — ' + esc(dayLabel(p.starts_at)) + ' · ' + money(p.price_cents) + '</li>';
+        }).join('') +
+        '<li>Total: <b>' + money(order.total_cents) + '</b></li>' +
+      '</ul>' +
+      (gcal ? '<p style="margin-top:18px"><a href="' + gcal + '" target="_blank" rel="noopener">Add to Google Calendar</a></p>' : '') +
+      '<p style="margin-top:18px;font-size:13px">Need to change something? Reply to the confirmation email and a person will help.</p>' +
+      '</div>';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>
