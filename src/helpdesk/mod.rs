@@ -4,6 +4,7 @@
 //! conversation, a number a customer can quote, notes a customer can never see, and machine mail kept
 //! out of the way — before any of the larger surface (knowledge base, AI answers, SLAs) is built on top.
 
+pub mod attachments;
 pub mod canned;
 pub mod ingest;
 pub mod junk;

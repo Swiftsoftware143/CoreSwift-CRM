@@ -971,7 +971,13 @@ async fn open_ticket_for_message(
     // new question or the next message on an existing ticket lives in `helpdesk::ingest`: thread by the
     // mail headers, then by the subject token, and keep machine mail out of the queue. It runs inside
     // this transaction, so the ticket, its first message and the link to the stored mail commit together.
-    let outcome = crate::helpdesk::ingest::ingest_inbound(&mut tx, tenant_id, inbound).await?;
+    let stored = if message_id == Uuid::nil() {
+        None
+    } else {
+        Some(message_id)
+    };
+    let outcome =
+        crate::helpdesk::ingest::ingest_inbound(&mut tx, tenant_id, inbound, stored).await?;
     let Some(ticket_id) = outcome.ticket_id() else {
         // Machine mail: stored, linked to nothing, and no work created for a person.
         if message_id != Uuid::nil() {

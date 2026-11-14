@@ -4127,6 +4127,11 @@ async function openTicket(id) {
     const data = await API.get('/tickets/' + id);
     const t = (data && data.ticket) || {};
     const msgs = (data && data.messages) || [];
+    let ticketAttachments = [];
+    try {
+      const att = await API.get('/helpdesk/tickets/' + id + '/attachments');
+      ticketAttachments = (att && att.attachments) || [];
+    } catch (e) { ticketAttachments = []; }
     const assignee = data && data.assigned_member;
     let html = '<div class="card"><div class="card-body">' +
       '<p style="margin-bottom:8px"><strong>' +
@@ -4149,6 +4154,11 @@ async function openTicket(id) {
     if (!msgs.length) {
       html += '<p style="color:var(--text-secondary)">No replies yet.</p>';
     } else {
+      // which files arrived with which message
+      const ATT = {};
+      (ticketAttachments || []).forEach(a => {
+        (ATT[a.ticket_message_id] = ATT[a.ticket_message_id] || []).push(a);
+      });
       msgs.forEach(m => {
         // A note is the team talking to itself: amber bar, labelled, and marked as never sent. A reply
         // is what the customer received. Rendering the two identically is how somebody eventually sends
@@ -4166,7 +4176,17 @@ async function openTicket(id) {
           ((m.kind || 'reply') === 'reply' && m.id
             ? '<button class="btn btn-ghost btn-xs" style="margin-top:4px" ' +
               'onclick="splitTicket(\'' + id + '\', \'' + escapeHtml(String(m.id)) + '\')">Split out</button>'
-            : '') + '</div>';
+            : '') +
+          // The files the customer sent are part of what they said.
+          ((ATT[m.id] || []).map(a =>
+            '<div style="margin-top:6px"><a href="#" onclick="event.preventDefault();downloadAttachment(' +
+              JSON.stringify(a.message_row_id).replace(/"/g, '&quot;') + ',' +
+              JSON.stringify(a.attachment_id).replace(/"/g, '&quot;') + ',' +
+              JSON.stringify(a.filename).replace(/"/g, '&quot;') + ')" ' +
+              'style="font-size:12px">📎 ' + escapeHtml(a.filename) +
+              (a.size_bytes ? ' <span style="color:var(--text-muted)">(' +
+                 Math.round(a.size_bytes / 1024) + ' KB)</span>' : '') + '</a></div>').join('')) +
+          '</div>';
       });
     }
     html += '<div class="form-group"><label>Write to the customer, or leave a note only your team sees</label>' +
@@ -4188,6 +4208,24 @@ async function openTicket(id) {
     toast('Could not open the ticket: ' + e.message, 'error');
   }
 }
+// ── Attachments (David, 2026-11-14) ──────────────────────────────────────────────────────────────
+// The file is fetched with the session token and handed to the browser as a blob: a plain link would be an
+// anonymous request, and the download route refuses those.
+async function downloadAttachment(messageRowId, attachmentId, filename) {
+  try {
+    const res = await fetch('/api/private-email/messages/' + messageRowId + '/attachments/' + attachmentId, {
+      headers: { 'Authorization': 'Bearer ' + STATE.token }
+    });
+    if (!res.ok) { toast('Could not fetch that file (' + res.status + ')', 'error'); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename || 'attachment';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 // ── The report strip (David, 2026-11-14) ─────────────────────────────────────────────────────────
 // Four questions: how fast did we answer, how fast did we finish, what is open, what is late. A median of
 // nothing is shown as a dash, never as "0 min" — a desk nobody has asked anything would otherwise look

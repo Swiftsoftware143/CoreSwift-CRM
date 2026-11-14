@@ -68,6 +68,10 @@ pub struct TicketMessage {
     /// `reply` (sent to the customer), `note` (internal, never sent) or `event` (something happened).
     #[serde(default = "default_reply_kind")]
     pub kind: String,
+    /// The stored mail this message came from, when it arrived by email — the way to the files the customer
+    /// sent. Null for anything a person wrote in the console.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email_message_row_id: Option<uuid::Uuid>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 

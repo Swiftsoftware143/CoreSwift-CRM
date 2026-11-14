@@ -90,6 +90,9 @@ pub async fn ingest_inbound(
     tx: &mut Transaction<'_, Postgres>,
     tenant_id: Uuid,
     inbound: &InboundEmail,
+    // The row the mail was stored in, when the caller has one. Recorded on the ticket message so the files the
+    // customer sent can be found from the ticket, instead of only from the inbox.
+    stored_message: Option<Uuid>,
 ) -> Result<IngestOutcome, AppError> {
     let own = own_addresses(tx, tenant_id).await?;
 
@@ -159,7 +162,16 @@ pub async fn ingest_inbound(
         let closed = status == "solved" || status == "closed";
 
         if !(closed && stale) {
-            insert_message(tx, ticket_id, "contact", "reply", inbound, contact_id).await?;
+            insert_message(
+                tx,
+                ticket_id,
+                "contact",
+                "reply",
+                inbound,
+                contact_id,
+                stored_message,
+            )
+            .await?;
 
             if closed {
                 // A reply inside the window means the conversation is not finished: reopen it and
@@ -212,7 +224,16 @@ pub async fn ingest_inbound(
     .await
     .map_err(AppError::Database)?;
 
-    insert_message(tx, ticket_id, "contact", "reply", inbound, contact_id).await?;
+    insert_message(
+        tx,
+        ticket_id,
+        "contact",
+        "reply",
+        inbound,
+        contact_id,
+        stored_message,
+    )
+    .await?;
 
     tracing::info!(ticket = %ticket_id, number, tenant = %tenant_id, "opened a ticket from inbound mail");
     Ok(IngestOutcome::Created { ticket_id, number })
@@ -226,6 +247,7 @@ async fn insert_message(
     kind: &str,
     inbound: &InboundEmail,
     author_id: Option<Uuid>,
+    stored_message: Option<Uuid>,
 ) -> Result<(), AppError> {
     let body = if inbound.body_plain.trim().is_empty() {
         inbound.body_html.clone().unwrap_or_default()
@@ -241,8 +263,8 @@ async fn insert_message(
     sqlx::query(
         r#"INSERT INTO ticket_messages
              (ticket_id, sender_type, kind, message, body_text, body_html,
-              email_message_id, in_reply_to, email_references, author_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#,
+              email_message_id, in_reply_to, email_references, author_id, email_message_row_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#,
     )
     .bind(ticket_id)
     .bind(sender_type)
@@ -254,6 +276,7 @@ async fn insert_message(
     .bind(&inbound.in_reply_to)
     .bind(&references)
     .bind(author_id)
+    .bind(stored_message)
     .execute(&mut **tx)
     .await
     .map_err(AppError::Database)?;
