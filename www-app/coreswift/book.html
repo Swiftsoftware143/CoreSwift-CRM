@@ -121,6 +121,10 @@
   body.embed .wrap{padding:14px 14px 210px;max-width:none}
   body.embed header.hero{display:none}
   body.embed .side{top:14px}
+  .note{border-radius:12px;padding:12px 14px;font-size:13.5px;margin-bottom:12px;border:1px solid}
+  .note.good{background:#ecfdf5;border-color:#a7f3d0;color:#065f46}
+  .note.bad{background:#fffbeb;border-color:#fde68a;color:#92400e}
+  .tile.off{cursor:pointer}
 </style>
 </head>
 <body>
@@ -329,7 +333,9 @@
       var placement = a.resource_name || res[a.resource_id] || 'Slot';
       var sub = (a.label && a.label !== placement) ? a.label : '';
       return '<button type="button" class="tile' + (sold ? ' off' : (on ? ' on' : '')) + '"' +
-        (sold ? ' disabled' : ' onclick="BKUI.toggle(\'' + keyOf(a) + '\')"') + '>' +
+        // A taken position still ANSWERS when pressed: a dead tile leaves the customer wondering
+        // whether the site is broken or the slot is gone.
+        (sold ? ' onclick="BKUI.taken(this)"' : ' onclick="BKUI.toggle(\'' + keyOf(a) + '\')"') + '>' +
         '<span class="tick">✓</span>' +
         (sold ? '<span class="sold">Sold</span>' : '') +
         '<span class="placement">' + esc(placement) + '</span>' +
@@ -369,7 +375,8 @@
         (picked.length ? 'Reserve & pay' : 'Pick a slot to continue') + '</button>' +
       '</div>';
 
-    el('body').innerHTML = '<div class="cols"><div><div class="grid">' + tiles + '</div></div>' + summary + '</div>' +
+    el('body').innerHTML = '<div class="cols"><div><div id="bookNote"></div><div class="grid">' + tiles +
+      '</div></div>' + summary + '</div>' +
       '<div class="mbar"><span><span class="m-total">' + money(q.total_cents) + '</span>' +
       '<div class="m-count">' + picked.length + ' selected</div></span>' +
       '<button class="cta" id="payBtnM"' + (picked.length ? '' : ' disabled') + ' onclick="BKUI.reserve()">Reserve & pay</button></div>' +
@@ -377,6 +384,17 @@
     // the filter bar belongs above the grid, inside the left column for alignment
     var gridCol = el('body').querySelector('.cols > div');
     if (gridCol) gridCol.insertAdjacentHTML('afterbegin', bar);
+  }
+
+  function setNote(html, ok) {
+    var box = document.getElementById('bookNote');
+    if (!box) return;
+    box.innerHTML = '<div class="note ' + (ok === false ? 'bad' : 'good') + '">' + html + '</div>';
+    clearTimeout(window.__bookNoteT);
+    window.__bookNoteT = setTimeout(function () {
+      var again = document.getElementById('bookNote');
+      if (again) again.innerHTML = '';
+    }, 9000);
   }
 
   function refreshQuote() {
@@ -394,6 +412,11 @@
   }
 
   window.BKUI = {
+    taken: function (btn) {
+      var when = btn ? (btn.querySelector('.when') || {}).innerText || 'That time' : 'That time';
+      setNote('<b>' + when + '</b> has just been taken. The calendar has been refreshed — pick another time, or reply to your confirmation and we will find one for you.');
+      loadAvailability();
+    },
     toggle: function (key) {
       if (STATE.picked[key]) delete STATE.picked[key]; else STATE.picked[key] = true;
       render();
@@ -420,6 +443,16 @@
           notes: (el('buyerNote') || {}).value || '', items: items
         })
       }).then(function (order) {
+        // Money to collect: hand the buyer to the owner's checkout page, carrying the reference so
+        // the two sides can be matched. No checkout configured -> the in-house thank-you page says
+        // plainly that the slots are held and a payment link is coming.
+        var total = order.total_cents || 0;
+        var checkout = (STATE.cal && STATE.cal.settings && STATE.cal.settings.checkout_url) || '';
+        if (total > 0 && checkout) {
+          var sep = checkout.indexOf('?') === -1 ? '?' : '&';
+          window.location.href = checkout + sep + 'ref=' + encodeURIComponent(order.id || '');
+          return;
+        }
         thankYou(order, items);
       }).catch(function (e) {
         STATE.busy = false;
@@ -453,6 +486,9 @@
       '<div class="big">✓</div>' +
       '<h1>Thank you — your slots are held</h1>' +
       '<p>We have emailed ' + esc((order.customer_email || '')) + ' with the details.</p>' +
+      ((order.total_cents || 0) > 0
+        ? '<p style="margin-top:8px"><b>Payment:</b> nothing has been charged yet — a payment link is on its way to that address, and your slots are held until it is settled.</p>'
+        : '') +
       '<div class="ref">' + esc(order.id || '') + '</div>' +
       '<ul>' +
         picked.map(function (p) {

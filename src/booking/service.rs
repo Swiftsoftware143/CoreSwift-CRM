@@ -236,6 +236,19 @@ pub async fn update_calendar(
     if let Some(theme) = merged.get("theme") {
         validate_theme(theme)?;
     }
+    // Where a buyer goes when there is money to pay. https only, for the same reason the plan links
+    // are: this address is opened by a customer with a card in hand.
+    if let Some(v) = merged.get("checkout_url") {
+        match v.as_str() {
+            Some(u) if u.trim().is_empty() => {}
+            Some(u) if u.trim().starts_with("https://") => {}
+            _ => {
+                return Err(BookingError::invalid(
+                    "checkout_url must start with https://",
+                ))
+            }
+        }
+    }
 
     let reply = match reply_to_email {
         Some(v) if v.trim().is_empty() => None,

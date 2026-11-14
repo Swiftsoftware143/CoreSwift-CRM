@@ -10139,6 +10139,7 @@ function bkThemePanel(cal) {
         return '<option value="' + f[0] + '"' + ((t.font || 'system') === f[0] ? ' selected' : '') + '>' + f[1] + '</option>';
       }).join('') + '</select></label>' +
       '<label>Logo address (https)<input id="bkThLogo" placeholder="https://…/logo.png" value="' + escapeHtml(t.logo_url || '') + '"></label>' +
+      '<label>Checkout link for paid items<input id="bkCheckout" placeholder="https://…/pay" value="' + escapeHtml((cal.settings && cal.settings.checkout_url) || '') + '"><span class="muted" style="font-weight:400">When a booking costs money, the buyer is sent here with their reference. Leave empty and the thank-you page says a payment link is coming.</span></label>' +
     '</div>' +
     '<button class="btn btn-primary" onclick="bkSaveTheme()">Save look</button>' +
     '<a class="btn btn-secondary" style="margin-left:8px" href="' + bkFullLink(cal.slug) + '" target="_blank" rel="noopener">Preview</a>' +
@@ -10155,7 +10156,10 @@ async function bkSaveTheme() {
   var logo = (document.getElementById('bkThLogo').value || '').trim();
   if (logo) theme.logo_url = logo;
   try {
-    await bkCall('PATCH', '/calendars/' + BK.current, { settings: { theme: theme } });
+    var checkout = (document.getElementById('bkCheckout').value || '').trim();
+    await bkCall('PATCH', '/calendars/' + BK.current, {
+      settings: { theme: theme, checkout_url: checkout }
+    });
     await bkOpenDetail(BK.current, true);
     bkRender();
     bkFlash('Look saved — your booking page uses it now.');
