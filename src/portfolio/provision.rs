@@ -232,15 +232,32 @@ pub async fn provision(
     let may_mail =
         mail_if_never_sent && already_mailed.is_none() && !company.email.trim().is_empty();
     if may_mail {
-        out.mailed = crate::auth::signup::send_credentials_email(
+        // THE PORTFOLIO WELCOME MAIL, not the customer one: same login and password, plus the key PREFIX so the
+        // owner can tell which key is live. The customer welcome stays login-and-password only (David 2026-11-15).
+        let vars = serde_json::json!({
+            "name": company.name,
+            "email": company.email,
+            "password": password,
+            "account_name": company.name,
+            "key_prefix": out.key_prefix.clone().unwrap_or_default(),
+            "app_name": "CoreSwift CRM",
+            "app_url": "https://app.coreswiftcrm.com",
+        });
+        out.mailed = match crate::email::send_template_email(
             pool,
             tenant_id,
-            company.name,
             company.email,
-            company.name,
-            &password,
+            "portfolio_welcome",
+            &vars,
         )
-        .await;
+        .await
+        {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(error = %e, "portfolio welcome mail failed; the account is real and the key exists");
+                false
+            }
+        };
         if out.mailed {
             let _ = sqlx::query(
                 "UPDATE portfolio_companies SET welcome_mailed_at = now() WHERE id = $1",
