@@ -126,9 +126,12 @@ button:disabled{opacity:.6;cursor:not-allowed}
   if (PLAN) {
     swap(false);
     var planNote = document.getElementById('rgPlanNote');
-    planNote.textContent = 'You picked the ' + planLabel() + ' plan. Create your free account here and '
-      + 'we pass your choice to the CoreSwift team — nothing is charged today, and they switch the '
-      + 'workspace on and email you when it is ready.';
+    // NOTHING is promised here: the server is the only thing that knows whether a pick can be
+    // filed, and it says so in the register answer (`plan_request`). Measured 2026-11-14: a tier
+    // that is not on sale (`inbox`, is_active = false) files NOTHING, so a sentence promising a
+    // handoff was untrue for exactly the buyer this note exists for.
+    planNote.textContent = 'You picked the ' + planLabel() + ' plan. Create your free account here — '
+      + 'nothing is charged today, and your workspace starts on the free tier.';
     planNote.style.display = 'block';
   }
 
@@ -265,7 +268,27 @@ button:disabled{opacity:.6;cursor:not-allowed}
   // it FILED one (or found the same tier already open on the queue), so this sentence can never claim
   // an ask that was not made (kanban t_71a3a39f).
   function notePlanRequest(data) {
-    if (!data || !data.plan_request || !data.plan_request.plan_name) return;
+    if (!data || !data.plan_request || !data.plan_request.plan_name) {
+      // The pick was NOT filed (a tier the price list does not sell: no request row, no alert).
+      // Replace the neutral note with what happened and the door that DOES file a request.
+      if (PLAN) {
+        var pill = document.getElementById('rgPlanNote');
+        if (pill) {
+          pill.textContent = '';
+          pill.appendChild(document.createTextNode(
+            'Your ' + planLabel() + ' plan is not on self-serve checkout yet, so it was not passed '
+            + 'automatically. Ask the team to set it up for you: '));
+          var link = document.createElement('a');
+          link.href = '/contact.html';
+          link.style.fontWeight = '600';
+          link.textContent = 'send the request';
+          pill.appendChild(link);
+          pill.appendChild(document.createTextNode('.'));
+          pill.style.display = 'block';
+        }
+      }
+      return;
+    }
     var row = document.createElement('div');
     row.style.cssText = 'margin-top:10px;font-size:13px;font-weight:600;color:#065f46';
     row.textContent = 'Your ' + data.plan_request.plan_name + ' plan request is with the CoreSwift team'
