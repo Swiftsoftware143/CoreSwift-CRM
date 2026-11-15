@@ -12,7 +12,6 @@ use serde_json::json;
 use uuid::Uuid;
 
 use super::models::*;
-use super::sync::broadcast_portfolio_sync;
 use crate::auth::Claims;
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
@@ -71,6 +70,71 @@ pub async fn list(
     Ok(Json(json!({"portfolio_companies": companies})))
 }
 
+/// POST /api/portfolio/:id/provision — give a company the shape a hand-made account has, again.
+///
+/// This is the re-sync door the CEO's standard needs: it tops up a missing owner or key, can align an existing
+/// account's password to the fleet-derived value (the BV backfill), and can re-send the welcome mail on request.
+/// Everything it does is idempotent, so running it twice changes nothing the second time.
+#[derive(Debug, serde::Deserialize)]
+pub struct ProvisionRequest {
+    #[serde(default)]
+    pub align_password: bool,
+    #[serde(default)]
+    pub send_welcome: bool,
+}
+
+pub async fn provision_company(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<ProvisionRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    let row: Option<(Uuid, String, String, String)> = sqlx::query_as(
+        "SELECT id, name, slug, COALESCE(email, '') FROM portfolio_companies
+          WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(id)
+    .bind(tenant_id)
+    .fetch_optional(&s.db)
+    .await?;
+    let Some((cid, name, slug, email)) = row else {
+        return Err(AppError::NotFound(
+            "That portfolio company is not in your account.".into(),
+        ));
+    };
+
+    let company = super::provision::Company {
+        id: cid,
+        name: &name,
+        slug: &slug,
+        email: &email,
+    };
+    let done = super::provision::provision(
+        &s.db,
+        &s.config.internal_sync_key,
+        &company,
+        req.align_password,
+        req.send_welcome,
+    )
+    .await?;
+
+    Ok(Json(serde_json::json!({
+        "portfolio_id": cid,
+        "tenant_id": done.tenant_id,
+        "user_created": done.user_created,
+        "user_existed": done.user_existed,
+        "password_aligned": done.password_aligned,
+        "password_already_correct": done.password_already_correct,
+        "key_created": done.key_created,
+        "key_existed": done.key_existed,
+        "key_prefix": done.key_prefix,
+        "mailed": done.mailed,
+        // a fingerprint, never a password: two implementations agreeing is what this is for
+        "password_fingerprint": super::provision::password_fingerprint(&s.config.internal_sync_key, cid),
+    })))
+}
+
 /// POST /api/portfolio — create a portfolio company
 pub async fn create(
     State(s): State<AppState>,
@@ -100,24 +164,6 @@ pub async fn create(
     .bind(&req.settings)
     .fetch_one(&s.db)
     .await?;
-
-    // Broadcast to all sister apps
-    let sync_key = s.config.internal_sync_key.clone();
-    let email_clone = email.clone();
-    let desc_clone = description.clone();
-    tokio::spawn(async move {
-        broadcast_portfolio_sync(
-            "create",
-            id,
-            tenant_id,
-            &req.name,
-            &slug,
-            &email_clone,
-            &desc_clone,
-            sync_key,
-        )
-        .await;
-    });
 
     Ok((StatusCode::CREATED, Json(json!(company))))
 }
@@ -162,20 +208,6 @@ pub async fn update(
     .await?
     .ok_or(AppError::NotFound("Portfolio company not found".into()))?;
 
-    // Broadcast to all sister apps
-    let sync_key = s.config.internal_sync_key.clone();
-    let name = company.name.clone();
-    let slug_val = company.slug.clone().unwrap_or_default();
-    let email_val = company.email.clone().unwrap_or_default();
-    let desc_val = company.description.clone().unwrap_or_default();
-    let tenant = tenant_id;
-    tokio::spawn(async move {
-        broadcast_portfolio_sync(
-            "update", id, tenant, &name, &slug_val, &email_val, &desc_val, sync_key,
-        )
-        .await;
-    });
-
     Ok(Json(json!(company)))
 }
 
@@ -194,12 +226,6 @@ pub async fn delete(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Portfolio company not found".into()));
     }
-
-    // Broadcast to all sister apps
-    let sync_key = s.config.internal_sync_key.clone();
-    tokio::spawn(async move {
-        broadcast_portfolio_sync("delete", id, tenant_id, "", "", "", "", sync_key).await;
-    });
 
     Ok(Json(json!({"message": "Deleted"})))
 }

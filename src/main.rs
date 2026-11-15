@@ -949,6 +949,7 @@ async fn main() -> anyhow::Result<()> {
     // announces itself, because a background task that dies silently is indistinguishable from one whose
     // work is simply never due.
     let db_for_sla = state.db.clone();
+    let sync_key_for_tick = state.config.internal_sync_key.clone();
     tokio::spawn(async move {
         tracing::info!(
             every_secs = crate::helpdesk::sla::tick_interval().as_secs(),
@@ -959,6 +960,8 @@ async fn main() -> anyhow::Result<()> {
             // the same tick harvests what was solved: an answer that helped one customer becomes a draft the
             // next customer may find
             crate::helpdesk::learn::run_once(&db_for_sla).await;
+            // a portfolio company created by SQL, a migration or a script provisions every app through here
+            crate::portfolio::outbox::drain(&db_for_sla, &sync_key_for_tick, 5).await;
             tokio::time::sleep(crate::helpdesk::sla::tick_interval()).await;
         }
     });

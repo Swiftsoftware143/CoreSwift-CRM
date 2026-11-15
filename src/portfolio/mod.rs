@@ -3,6 +3,8 @@ pub mod sync;
 
 pub mod handlers;
 pub mod models;
+pub mod outbox;
+pub mod provision;
 
 use crate::AppState;
 use axum::{middleware, Router};
@@ -16,6 +18,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/:id", axum::routing::put(handlers::update))
         .route("/:id", axum::routing::delete(handlers::delete))
         .route("/:id/targets", axum::routing::get(handlers::list_targets))
+        .route(
+            "/:id/provision",
+            axum::routing::post(handlers::provision_company),
+        )
         .route("/:id/targets", axum::routing::post(handlers::create_target))
         // Plan gating — the admin controls this module per plan
         // (the module & feature registry is the source of truth for the admin UI — see src/module_registry).
