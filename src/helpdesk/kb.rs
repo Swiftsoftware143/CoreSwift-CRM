@@ -310,6 +310,12 @@ pub async fn update(
     .fetch_optional(&s.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Article not found".into()))?;
+
+    // an article that came from a conversation and is now live closes that loop in the ledger, so the ratio of
+    // suggestions that turned into published answers is a fact rather than a feeling
+    if row.status == "published" {
+        let _ = crate::helpdesk::learn::mark_published(&s.db, tid, row.id).await;
+    }
     Ok(Json(row))
 }
 

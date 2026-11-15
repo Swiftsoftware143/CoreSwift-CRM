@@ -4024,6 +4024,54 @@ function renderKbSections() {
     '</div>';
 }
 
+// ── Learning from what was already answered (David, 2026-11-14) ─────────────────────────────────
+// A solved ticket is drafted into a DRAFT article by the background pass. Nothing is published here: the panel
+// lists what is waiting, with the ticket it came from, and the two decisions a person can make — review it, or
+// throw it away. The counts are the loop's own record of whether it is paying off.
+async function loadLearning() {
+  const el = document.getElementById('learnPanel');
+  if (!el) return;
+  try {
+    const d = await API.get('/helpdesk/kb/learning');
+    const rows = (d && d.candidates) || [];
+    const head = '<p style="margin:0 0 8px;color:var(--text-secondary)">' +
+      (d.waiting || 0) + ' waiting · ' + (d.published || 0) + ' published from tickets · ' +
+      (d.discarded || 0) + ' discarded</p>';
+    if (!rows.length) {
+      el.innerHTML = head + '<p style="color:var(--text-muted)">Nothing waiting. Solve a ticket and reply to it, ' +
+        'and the answer appears here as a draft for you to review.</p>';
+      return;
+    }
+    el.innerHTML = head + rows.map(c =>
+      '<div style="border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px">' +
+        '<div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">' +
+          (c.ticket_number ? '<code>#' + escapeHtml(String(c.ticket_number)) + '</code>' : '') +
+          '<strong style="flex:1">' + escapeHtml(c.article_title || c.ticket_subject || '') + '</strong>' +
+          '<span class="badge badge-warning">' + escapeHtml(c.status) + '</span>' +
+        '</div>' +
+        '<div style="font-size:12px;color:var(--text-muted)">from “' + escapeHtml(c.ticket_subject || '') + '”</div>' +
+        '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">' +
+          (c.article_id
+            ? '<button class="btn btn-primary btn-xs" onclick="kbEdit(\'' + escapeHtml(String(c.article_id)) + '\')">Review and publish</button>'
+            : '<span style="font-size:12px;color:var(--text-muted)">drafting…</span>') +
+          '<button class="btn btn-ghost btn-xs" onclick="learnDiscard(\'' + escapeHtml(String(c.id)) + '\')">Discard</button>' +
+        '</div>' +
+      '</div>').join('');
+  } catch (e) {
+    el.innerHTML = '<p style="color:var(--text-secondary)">' + escapeHtml(e.message) + '</p>';
+  }
+}
+
+async function learnDiscard(id) {
+  if (!confirm('Throw this suggestion away? The draft is deleted; the ticket is unaffected.')) return;
+  try {
+    await API.post('/helpdesk/kb/learning/' + id + '/discard', {});
+    toast('Discarded', 'success');
+    loadLearning();
+    loadKb();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 // Drafting from a description: the model writes, a person decides. Everything lands as a draft, and the
 // button says so before anything is generated.
 async function kbGenerate() {
@@ -11134,7 +11182,10 @@ TAB_RENDERERS['knowledge'] = () => pageHeader(
   'Knowledge Base',
   'Answers your team writes once — for customers, or for the team only',
   '<button class="btn btn-primary btn-sm" onclick="kbNew()">+ New article</button>'
-) + '<div class="card" style="margin-bottom:16px"><div class="card-header">Draft it for me</div>' +
+) + '<div class="card" style="margin-bottom:16px"><div class="card-header">From solved tickets ' +
+  '<span style="font-size:12px;color:var(--text-muted)">— answers that already helped somebody</span></div>' +
+  '<div class="card-body" id="learnPanel"><div class="loading-wrap"><div class="spinner"></div> Loading…</div></div></div>' +
+  '<div class="card" style="margin-bottom:16px"><div class="card-header">Draft it for me</div>' +
   '<div class="card-body">' +
     '<p style="color:var(--text-secondary);margin:0 0 8px">Describe the business in a sentence or two. The model drafts articles ' +
     '<strong>as drafts</strong> — nothing is published until you read it, and anything it does not know is marked ' +
@@ -11167,6 +11218,7 @@ TAB_RENDERERS['knowledge'] = () => pageHeader(
 TAB_LOADERS['knowledge'] = async () => {
   await loadKb();
   await loadCanned();
+  await loadLearning();
 };
 
 TAB_RENDERERS['booking'] = () => pageHeader(

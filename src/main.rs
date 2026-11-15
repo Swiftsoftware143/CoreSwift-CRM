@@ -706,6 +706,7 @@ async fn main() -> anyhow::Result<()> {
                 .merge(crate::helpdesk::reports::router(state.clone()))
                 .merge(crate::helpdesk::attachments::router(state.clone()))
                 .merge(crate::helpdesk::generate::router(state.clone()))
+                .merge(crate::helpdesk::learn::router(state.clone()))
                 .layer(axum::middleware::from_fn_with_state(
                     state.clone(),
                     crate::auth::middleware::auth_middleware,
@@ -955,6 +956,9 @@ async fn main() -> anyhow::Result<()> {
         );
         loop {
             crate::helpdesk::sla::run_once(&db_for_sla).await;
+            // the same tick harvests what was solved: an answer that helped one customer becomes a draft the
+            // next customer may find
+            crate::helpdesk::learn::run_once(&db_for_sla).await;
             tokio::time::sleep(crate::helpdesk::sla::tick_interval()).await;
         }
     });

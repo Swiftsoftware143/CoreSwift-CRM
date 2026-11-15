@@ -831,6 +831,11 @@ mod tests {
             func: "router",
         },
         Nest {
+            prefix: "/api/helpdesk",
+            src: include_str!("../helpdesk/learn.rs"),
+            func: "router",
+        },
+        Nest {
             prefix: "/api/booking",
             src: include_str!("../booking/mod.rs"),
             func: "admin_router",
@@ -1288,12 +1293,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            467,
+            469,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 455,
+            api, 457,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

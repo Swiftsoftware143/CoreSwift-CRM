@@ -305,6 +305,15 @@ pub async fn update_ticket(
     .fetch_one(&s.db)
     .await?;
 
+    // A SOLVED TICKET IS A CANDIDATE ARTICLE (David, 2026-11-14). Queued here; drafted by the background pass;
+    // published only by a person — this line does no drafting work in the request path.
+    if matches!(new_status.as_str(), "solved" | "closed") {
+        if let Err(e) = crate::helpdesk::learn::enqueue_on_solve(&s.db, tid, ticket_id).await {
+            tracing::warn!(ticket = %ticket_id, error = %e,
+                "could not queue a solved ticket for the knowledge base");
+        }
+    }
+
     Ok(Json(json!(updated)))
 }
 

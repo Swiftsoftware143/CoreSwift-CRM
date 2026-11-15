@@ -10,6 +10,7 @@ pub mod generate;
 pub mod ingest;
 pub mod junk;
 pub mod kb;
+pub mod learn;
 pub mod merge;
 pub mod reports;
 pub mod sla;
