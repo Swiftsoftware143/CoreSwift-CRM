@@ -61,6 +61,49 @@ pub const PROTECTED_MARKERS: &[&str] = &[
     "probe-canary",
 ];
 
+/// Is this workspace one of the portfolio companies, according to the REGISTRY the hub's own
+/// portfolio sync writes (`portfolio_companies`)?
+///
+/// The [`PROTECTED_MARKERS`] list above is a FALLBACK for a row the hub has not mirrored yet; it is
+/// not the authority. Measured live 2026-11-15: the registry held FIVE companies — BV Premiere
+/// Products, Giraudy Capital, SwiftImpact Solutions, Xride Drivers, ZaarHub — the marker list named
+/// only some of them, and `tenants.is_portfolio` was true for just ONE (Xride Drivers). BV Premiere
+/// Products and Xride Drivers matched NO marker, so a `DELETE` of either id through
+/// `account::delete` passed every guard and removed the row — an owner's company destroyed by one
+/// click in the console.
+///
+/// The registry row links to the company's workspace through `account_tenant_id` (written by
+/// `portfolio::provision`), and the hub's own tenant through `tenant_id` — the latter is the same
+/// row for every company, so matching on it alone would protect the hub and NONE of the companies.
+/// Name and slug are matched too (case-insensitively), so a mirror whose link column is still empty
+/// is protected the moment its name appears in the registry.
+///
+/// Reading the registry is what makes a company the sync mirrors TOMORROW protected without anyone
+/// editing a constant (the FunnelSwift shape, db393bf).
+pub async fn portfolio_registry_hit(
+    db: &PgPool,
+    tenant_id: Uuid,
+    name: &str,
+    slug: &str,
+) -> Result<Option<String>, AppError> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT COALESCE(name, '') FROM portfolio_companies \
+          WHERE account_tenant_id = $1 OR tenant_id = $1 \
+             OR lower(name) = lower($2) OR lower(slug) = lower($3) \
+          ORDER BY COALESCE(account_tenant_id = $1, false) DESC, (tenant_id = $1) DESC LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(name)
+    .bind(slug)
+    .fetch_optional(db)
+    .await?;
+    Ok(match row {
+        Some((n,)) if !n.trim().is_empty() => Some(n),
+        Some(_) => Some("portfolio registry".to_string()),
+        None => None,
+    })
+}
+
 /// Which door asked for the destruction. The guards differ; the delete does not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Door {
@@ -164,6 +207,15 @@ pub async fn delete_tenant(
     if let Some(marker) = protected_marker(&name, &slug) {
         return Err(AppError::Conflict(format!(
             "refusing to delete the workspace '{name}' ({slug}): it is a portfolio account ('{marker}') and is never removed"
+        )));
+    }
+    // The registry the hub's portfolio sync writes is the AUTHORITY; the marker list above is a
+    // fallback for a company it has not mirrored yet (measured live 2026-11-15: the registry held
+    // five companies, `is_portfolio` was true for one, and two of them matched no marker — either
+    // was deletable from the console in one click).
+    if let Some(company) = portfolio_registry_hit(db, id, &name, &slug).await? {
+        return Err(AppError::Conflict(format!(
+            "refusing to delete the workspace '{name}' ({slug}): it is the portfolio company '{company}' in the registry and is never removed"
         )));
     }
     if is_portfolio.unwrap_or(false) {

@@ -1284,10 +1284,6 @@ fn company_slug(name: &str) -> String {
     }
 }
 
-/// The portfolio accounts are kept by rule (never deleted from any panel): SwiftImpact, ZaarHub
-/// and Giraudy Capital each hold an account in EVERY app, plus whatever the platform itself flags.
-const PORTFOLIO_TENANT_MARKERS: [&str; 3] = ["swiftimpact", "zaarhub", "giraudy"];
-
 /// POST /api/admin/tenants/bulk-delete — retire several workspaces in one call (kanban t_ac2fe688).
 ///
 /// The counterpart of the same control in the IncentiveSwift and FunnelSwift panels, so an operator
@@ -1297,7 +1293,12 @@ const PORTFOLIO_TENANT_MARKERS: [&str; 3] = ["swiftimpact", "zaarhub", "giraudy"
 ///
 /// Two deletes are refused by rule and cannot be forced from the panel:
 ///   * the workspace the caller is SIGNED IN AS — that is a lockout, not a cleanup;
-///   * a portfolio company (`tenants.is_portfolio`, or a name/slug carrying a portfolio marker).
+///   * a portfolio company — `tenants.is_portfolio`, a name/slug carrying an owner marker, or ANY
+///     company named in `portfolio_companies` (the registry the hub's own portfolio sync writes).
+///     The registry is the authority (measured live 2026-11-15: it held five companies, the old
+///     three-name constant here named three and `is_portfolio` was true for one, so BV Premiere
+///     Products and Xride Drivers were one click from being destroyed). This panel now shares
+///     `tenant_purge`'s guard instead of keeping its own list, so the two doors can never drift.
 ///
 /// Everything else behaves as a plain `DELETE FROM tenants`: measured on the live DB (2026-10-10),
 /// all 70 foreign keys that reference `tenants` are `ON DELETE CASCADE`, so no hand-rolled child
@@ -1362,13 +1363,29 @@ pub async fn bulk_delete_tenants(
             continue;
         }
 
-        let hay = format!("{} {}", name, slug).to_lowercase();
-        if let Some(hit) = PORTFOLIO_TENANT_MARKERS.iter().find(|m| hay.contains(*m)) {
+        if let Some(hit) = crate::tenant_purge::protected_marker(&name, &slug) {
             failed.push(json!({
                 "id": raw,
                 "error": format!("refusing to delete a portfolio company ({})", hit)
             }));
             continue;
+        }
+        // …and the registry the hub's own sync writes is the authority, not this panel's old
+        // three-name constant. One helper, shared with `tenant_purge`, so the two doors agree.
+        match crate::tenant_purge::portfolio_registry_hit(&s.db, tid, &name, &slug).await {
+            Ok(Some(company)) => {
+                failed.push(json!({
+                    "id": raw,
+                    "error": format!("refusing to delete the portfolio company '{company}' (registry)")
+                }));
+                continue;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                // A delete must never proceed on an UNKNOWN answer from the authority.
+                failed.push(json!({"id": raw, "error": e.to_string()}));
+                continue;
+            }
         }
 
         match sqlx::query("DELETE FROM tenants WHERE id = $1")

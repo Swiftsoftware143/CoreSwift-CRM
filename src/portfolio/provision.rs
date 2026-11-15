@@ -164,6 +164,17 @@ pub async fn provision(
     };
     out.tenant_id = Some(tenant_id);
 
+    // ── the flag, made honest at the source ────────────────────────────────────────────────────
+    // `tenants.is_portfolio` is one of the guards every delete door reads, and the signup writer
+    // does not set it (a company mirror is minted through the ordinary signup core). Measured live
+    // 2026-11-15: it was true for ONE of five mirrored companies. Setting it here — on every sync,
+    // idempotently — is what keeps the flag from drifting away from the registry again.
+    sqlx::query("UPDATE tenants SET is_portfolio = true WHERE id = $1 AND COALESCE(is_portfolio, false) = false")
+        .bind(tenant_id)
+        .execute(pool)
+        .await
+        .map_err(AppError::Database)?;
+
     // ── the password: aligned only when asked AND only when the derived value does not already work ────────
     //
     // Re-hashing an identical password is invisible in effect but a lie in the report ("aligned" on a re-sync

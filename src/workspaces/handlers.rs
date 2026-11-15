@@ -257,6 +257,16 @@ pub async fn delete_workspace(
             "This is a portfolio business and its workspaces cannot be deleted.".into(),
         ));
     }
+    // The registry the hub's portfolio sync writes is the authority; the marker list is a fallback,
+    // so a company mirrored tomorrow is protected without editing a constant (DB truth 2026-11-15:
+    // the registry held five companies and two of them matched no marker).
+    if let Some(company) =
+        crate::tenant_purge::portfolio_registry_hit(&state.db, tid, &tname, &tslug).await?
+    {
+        return Err(AppError::Conflict(format!(
+            "This is the portfolio business '{company}' and its workspaces cannot be deleted."
+        )));
+    }
 
     let rows = sqlx::query("SELECT id, is_default FROM workspaces WHERE tenant_id = $1")
         .bind(tid)
