@@ -5033,6 +5033,16 @@ async function loadBrandingTab() {
       if (doc && typeof doc.email_branding === 'object' && doc.email_branding) brand = doc.email_branding;
     } catch(e) { loadFailed = true; }
   }
+  // The workspace signature (kanban cron 2026-11-15). GET|PUT /api/private-email/signature/workspace
+  // is the ONLY writer of the tenant default the send path prints under the logo, and the mail client
+  // tells a user to set it in Email Branding — a route with no UI is a defect by this fleet's rule.
+  let sig = { full_name: '', job_title: '', company: '', phone: '', line: '' };
+  try {
+    const s = await API.get('/private-email/signature/workspace');
+    const got = (s && s.signature) || {};
+    sig = { full_name: got.full_name || '', job_title: got.job_title || '', company: got.company || '',
+            phone: got.phone || '', line: got.line || '' };
+  } catch (e) { /* the signature is optional — a refusal must never blank the branding tab */ }
   const name = brand.brand_name || '';
   const color = brand.brand_color || '#4f46e5';
   const logo = brand.logo_url || '';
@@ -5087,6 +5097,20 @@ async function loadBrandingTab() {
       '</div>' +
     '</div>',
     '<button class="btn btn-primary" data-ops="branding-save" onclick="saveBranding()">Save branding</button>'
+  ) + card(
+    '<span class="card-title">Company signature</span>' +
+      '<span class="badge ' + ((sig.full_name || sig.company) ? 'badge-success' : 'badge-muted') + '">' + ((sig.full_name || sig.company) ? 'set' : 'not set') + '</span>',
+    '<div class="form-hint" style="margin-bottom:12px">Five plain fields that print under your logo on every message this workspace sends. Each mailbox can use this default, write its own, or send without one.</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
+      '<div class="form-group" style="margin:0"><label>Full name</label><input type="text" id="sigFullName" maxlength="120" value="' + escapeHtmlAttr(sig.full_name) + '" placeholder="e.g. Dana Reed"></div>' +
+      '<div class="form-group" style="margin:0"><label>Job title</label><input type="text" id="sigJobTitle" maxlength="120" value="' + escapeHtmlAttr(sig.job_title) + '" placeholder="e.g. Owner"></div>' +
+      '<div class="form-group" style="margin:0"><label>Company</label><input type="text" id="sigCompany" maxlength="120" value="' + escapeHtmlAttr(sig.company) + '" placeholder="e.g. Acme Capital"></div>' +
+      '<div class="form-group" style="margin:0"><label>Phone</label><input type="text" id="sigPhone" maxlength="120" value="' + escapeHtmlAttr(sig.phone) + '" placeholder="e.g. +1 555 010 1234"></div>' +
+      '<div class="form-group" style="margin:0;grid-column:1 / -1"><label>A line</label><input type="text" id="sigLine" maxlength="160" value="' + escapeHtmlAttr(sig.line) + '" placeholder="e.g. Miami - Mon-Fri"></div>' +
+    '</div>' +
+    // The button lives in the BODY, not the card footer: the footer is right-aligned and lands under
+    // the floating Feedback button, which swallowed the click (hit-tested live 2026-11-15).
+    '<div style="margin-top:14px"><button class="btn btn-primary btn-sm" data-ops="branding-signature-save" onclick="saveWorkspaceSignature()">Save signature</button></div>'
   );
   const picker = document.getElementById('brandColorPicker');
   const hex = document.getElementById('brandColor');
@@ -5134,6 +5158,22 @@ async function saveBranding() {
     toast('Email branding saved', 'success');
     loadBrandingTab();
   } catch(e) { toast('Save failed: ' + e.message, 'error'); }
+}
+
+// The workspace signature save (kanban cron 2026-11-15). PUT /api/private-email/signature/workspace is
+// the ONLY writer of the tenant default printed under the logo, so this is the one control the mail
+// client's "set it in Email Branding" promise depends on.
+async function saveWorkspaceSignature() {
+  const val = id => ((document.getElementById(id) || {}).value || '').trim();
+  try {
+    // API.put does not exist in THIS console (only call/get/patch/del are defined) — a live run
+    // measured `typeof API.put === 'undefined'`, so the save threw TypeError and nothing was written.
+    const d = await API.call('PUT', '/private-email/signature/workspace', {
+      full_name: val('sigFullName'), job_title: val('sigJobTitle'), company: val('sigCompany'),
+      phone: val('sigPhone'), line: val('sigLine') });
+    toast((d && d.detail) || 'Signature saved', 'success');
+    loadBrandingTab();
+  } catch (e) { toast('Signature not saved: ' + ((e && e.message) || e), 'error'); }
 }
 
 async function uploadBrandingLogo() {
