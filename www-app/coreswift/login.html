@@ -267,7 +267,44 @@ button:disabled{opacity:.6;cursor:not-allowed}
   // Did the account's plan request actually reach the team? The API answers `plan_request` only when
   // it FILED one (or found the same tier already open on the queue), so this sentence can never claim
   // an ask that was not made (kanban t_71a3a39f).
-  function notePlanRequest(data) {
+  // A tier the price list prints but the app does not sell yet files NOTHING in the register POST:
+  // measured 2026-11-15, `plan_slug=starter` answers `plan_request {status: filed}` while
+  // `plan_slug=inbox` (the $1 plan, page live at /inbox) answers `plan_request: null`. The visitor
+  // was then told to send the request themselves — an ask that depends on a second click most people
+  // never make. This files it for them through the PUBLIC support door
+  // (POST /api/public/support-request, which dedupes one email+subject per hour), and only claims it
+  // once that door has answered 2xx.
+  var PLAN_ASK = false;
+  function askTeamForPlan(who) {
+    if (PLAN_ASK || !PLAN) return;
+    PLAN_ASK = true;
+    fetch('/api/public/support-request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: (who && who.name) || '',
+        email: (who && who.email) || '',
+        subject: planLabel() + ' plan request',
+        body: 'I started a free account from the ' + planLabel() + ' page and would like the '
+          + planLabel() + ' plan switched on when it is available. My workspace is '
+          + ((who && who.ws) || 'the one I just created') + '.'
+      })
+    }).then(function (r) {
+      if (!r.ok) return null;
+      return r.json().catch(function () { return null; });
+    }).then(function (d) {
+      if (!d) return;
+      var pill = document.getElementById('rgPlanNote');
+      if (!pill) return;
+      pill.textContent = '';
+      pill.appendChild(document.createTextNode(
+        'Your ' + planLabel() + ' plan is not on self-serve checkout yet, so we passed your request '
+        + 'to the CoreSwift team — they will switch it on and email you.'));
+      pill.style.display = 'block';
+    }).catch(function () {});
+  }
+
+  function notePlanRequest(data, who) {
     if (!data || !data.plan_request || !data.plan_request.plan_name) {
       // The pick was NOT filed (a tier the price list does not sell: no request row, no alert).
       // Replace the neutral note with what happened and the door that DOES file a request.
@@ -286,6 +323,8 @@ button:disabled{opacity:.6;cursor:not-allowed}
           pill.appendChild(document.createTextNode('.'));
           pill.style.display = 'block';
         }
+        // File the ask instead of waiting for the visitor to make a second trip to /contact.html.
+        askTeamForPlan(who);
       }
       return;
     }
@@ -366,7 +405,7 @@ button:disabled{opacity:.6;cursor:not-allowed}
             : 'Account created — but we could not send your login details to ' + body.email + '.',
             false);
           offerInitialPassword(data && data.access_token, body.email);
-          notePlanRequest(data);
+          notePlanRequest(data, { name: body.name, email: body.email, ws: body.account_name });
           btn.disabled = false;
           btn.textContent = 'Set your password below';
           return;
@@ -377,7 +416,7 @@ button:disabled{opacity:.6;cursor:not-allowed}
           ? 'You have joined the workspace. Check your email — we sent your login details to ' + body.email + '.'
           : 'Account created! Check your email — we sent your login details to ' + body.email +
             '. You can change your password any time in your profile settings.', true);
-        notePlanRequest(data);
+        notePlanRequest(data, { name: body.name, email: body.email, ws: body.account_name });
         // A customer whose credentials mail never arrived has a way back in (cron 2026-10-19):
         // the address they just typed is carried into the reset-request page, so nothing is retyped.
         (function () {
