@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Help centre</title>
+<meta name="description" content="Answers to the questions we are asked most. Search, or talk to a person.">
+<style>
+  :root{--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--brand:#0ea5e9;--bg:#f8fafc}
+  *{box-sizing:border-box}
+  body{margin:0;font:16px/1.6 -apple-system,system-ui,Segoe UI,Roboto,sans-serif;color:var(--ink);background:var(--bg)}
+  .wrap{max-width:820px;margin:0 auto;padding:28px 20px 80px}
+  header.head{padding:26px 0 6px}
+  .site{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  h1{font-size:28px;margin:6px 0 14px}
+  .searchrow{display:flex;gap:8px;margin:0 0 22px}
+  .searchrow input{flex:1;padding:12px 14px;border:1px solid var(--line);border-radius:12px;font:inherit;outline:none;background:#fff}
+  .searchrow input:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(14,165,233,.15)}
+  .searchrow button{padding:0 18px;border:none;border-radius:12px;background:var(--brand);color:#fff;font:600 15px inherit;cursor:pointer}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin:0 0 14px}
+  .card h2{font-size:15px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .card a,.res a{display:block;padding:7px 0;color:var(--ink);text-decoration:none;border-bottom:1px solid #f1f5f9}
+  .card a:last-child,.res a:last-child{border-bottom:none}
+  .card a:hover,.res a:hover{color:var(--brand)}
+  .muted{color:var(--muted);font-size:13px}
+  .empty{color:var(--muted);padding:18px 0}
+  article h1{font-size:24px}
+  article .body{background:#fff;border:1px solid var(--line);border-radius:14px;padding:20px;white-space:pre-wrap}
+  article .body h3{margin:18px 0 6px;font-size:17px;white-space:normal}
+  .crumbs{margin:0 0 14px;font-size:13px}
+  .crumbs a{color:var(--brand);text-decoration:none}
+  .vote{display:flex;gap:10px;align-items:center;margin:14px 0 4px;flex-wrap:wrap}
+  .vote button{padding:9px 14px;border:1px solid var(--line);background:#fff;border-radius:10px;font:inherit;cursor:pointer}
+  .vote button:hover{border-color:var(--brand);color:var(--brand)}
+  .say{padding:12px 14px;border-radius:12px;background:#ecfdf5;border:1px solid #a7f3d0;margin:12px 0;display:none}
+  .foot{margin-top:26px;font-size:13px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="head">
+    <div class="site" id="site">Help centre</div>
+    <h1 id="title">How can we help?</h1>
+    <div class="searchrow">
+      <input id="q" type="search" placeholder="Search the answers" autocomplete="off" aria-label="Search the answers">
+      <button id="go" type="button">Search</button>
+    </div>
+  </header>
+  <main id="main"><div class="empty">Loading…</div></main>
+  <div class="foot" id="foot"></div>
+</div>
+<script>
+(function(){
+  var parts = location.pathname.split('/').filter(Boolean);   // /help/<workspace>
+  var W = new URLSearchParams(location.search).get('w') || parts[1] || '';
+  var API = location.origin;
+  var main = document.getElementById('main');
+  var siteEl = document.getElementById('site');
+  var titleEl = document.getElementById('title');
+  var qEl = document.getElementById('q');
+  var TENANT = '';
+
+  function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+
+  // markdown-lite: headings, bold, inline code and paragraphs. Escaped first, so an article can never inject.
+  function renderBody(md){
+    var out = esc(md);
+    out = out.replace(/^### (.*)$/gm,'<h3>$1</h3>')
+             .replace(/^## (.*)$/gm,'<h3>$1</h3>')
+             .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+             .replace(/`([^`]+)`/g,'<code>$1</code>');
+    return out;
+  }
+
+  function get(url){ return fetch(url).then(function(r){ if(!r.ok) throw new Error(r.status); return r.json() }) }
+
+  function index(){
+    if(!W){ main.innerHTML = '<div class="empty">This help centre is not configured yet.</div>'; return }
+    get(API+'/api/public/helpdesk/kb/index?w='+encodeURIComponent(W)).then(function(d){
+      if(d.tenant_id) TENANT = d.tenant_id;
+      if(d.site) siteEl.textContent = d.site;
+      document.title = (d.site || 'Help centre') + ' — Help centre';
+      if(!d.count){
+        main.innerHTML = '<div class="card"><div class="empty">Nothing published yet.</div></div>';
+        return;
+      }
+      var html = '';
+      (d.sections||[]).filter(function(s){return s.count}).forEach(function(s){
+        html += '<div class="card"><h2>'+esc(s.name)+'</h2>' +
+          (s.description ? '<div class="muted" style="margin:-4px 0 8px">'+esc(s.description)+'</div>' : '') +
+          s.articles.map(function(a){
+            return '<a href="#" data-slug="'+esc(a.slug)+'">'+esc(a.title)+'</a>';
+          }).join('') + '</div>';
+      });
+      if((d.uncategorised||[]).length){
+        html += '<div class="card"><h2>More answers</h2>' +
+          d.uncategorised.map(function(a){
+            return '<a href="#" data-slug="'+esc(a.slug)+'">'+esc(a.title)+'</a>';
+          }).join('') + '</div>';
+      }
+      if((d.popular||[]).length){
+        html += '<div class="card"><h2>Most read</h2>' +
+          d.popular.map(function(a){
+            return '<a href="#" data-slug="'+esc(a.slug)+'">'+esc(a.title)+'</a>';
+          }).join('') + '</div>';
+      }
+      main.innerHTML = html;
+      wire();
+      // the same chat the site has, so "one stop" is real: browse, then talk if the answer is not here
+      if(TENANT && !document.getElementById('help-widget')){
+        var s = document.createElement('script');
+        s.id = 'help-widget';
+        s.src = API + '/s/' + TENANT + '/widget.js';
+        s.async = true;
+        document.body.appendChild(s);
+      }
+    }).catch(function(){ main.innerHTML = '<div class="empty">This help centre is not available right now.</div>' });
+  }
+
+  function wire(){
+    main.querySelectorAll('a[data-slug]').forEach(function(a){
+      a.onclick = function(e){ e.preventDefault(); openArticle(a.getAttribute('data-slug')) };
+    });
+  }
+
+  function openArticle(slug){
+    history.replaceState(null,'','?w='+encodeURIComponent(W)+'&a='+encodeURIComponent(slug));
+    get(API+'/api/public/helpdesk/kb/article?w='+encodeURIComponent(W)+'&slug='+encodeURIComponent(slug)).then(function(a){
+      titleEl.textContent = '';
+      main.innerHTML =
+        '<div class="crumbs"><a href="#" id="back">← All answers</a>' +
+          (a.section ? ' · ' + esc(a.section.name) : '') + '</div>' +
+        '<article><h1>'+esc(a.title)+'</h1><div class="body">'+renderBody(a.body_md)+'</div>' +
+        '<div class="vote"><span class="muted">Did this answer it?</span>' +
+          '<button type="button" id="yes">Yes</button><button type="button" id="no">No</button></div>' +
+        '<div class="say" id="say"></div></article>';
+      document.getElementById('back').onclick = function(e){
+        e.preventDefault(); history.replaceState(null,'','?w='+encodeURIComponent(W)); index();
+      };
+      function vote(helpful, label){
+        fetch(API+'/api/public/helpdesk/kb/vote',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({w:W, slug:slug, helpful:helpful})})
+          .then(function(){ var s=document.getElementById('say');
+            s.textContent = helpful ? 'Thank you — glad it helped.'
+              : 'Thanks for saying so. Use the Support button to tell us what was missing.';
+            s.style.display='block'; })
+          .catch(function(){});
+      }
+      document.getElementById('yes').onclick = function(){ vote(true,'yes') };
+      document.getElementById('no').onclick = function(){ vote(false,'no') };
+    }).catch(function(){
+      main.innerHTML = '<div class="empty">That answer is not available.</div>';
+    });
+  }
+
+  function search(){
+    var term = (qEl.value||'').trim();
+    if(!term){ index(); return }
+    get(API+'/api/public/helpdesk/kb?w='+encodeURIComponent(W)+'&q='+encodeURIComponent(term)+'&limit=15').then(function(d){
+      var list = d.articles || [];
+      titleEl.textContent = 'Search: ' + term;
+      if(!list.length){
+        main.innerHTML = '<div class="card"><div class="empty">Nothing matches that. Use the Support button and a person will help.</div></div>';
+        return;
+      }
+      main.innerHTML = '<div class="card res"><h2>' + list.length + ' answer(s)</h2>' +
+        list.map(function(a){ return '<a href="#" data-slug="'+esc(a.slug)+'">'+esc(a.title)+'</a>' }).join('') +
+        '</div>';
+      wire();
+    }).catch(function(){});
+  }
+
+  document.getElementById('go').onclick = search;
+  qEl.addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); search() } });
+
+  var initial = new URLSearchParams(location.search).get('a');
+  index();
+  if(initial) setTimeout(function(){ openArticle(initial) }, 400);
+})();
+</script>
+</body>
+</html>

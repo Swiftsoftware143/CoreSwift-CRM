@@ -406,6 +406,10 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // being anonymous cannot oversell anything.
     // what a customer may read of the knowledge base, for the account their widget names
     "/api/public/helpdesk/kb",
+    // a stranger browsing the help centre: its menu, one article, and one vote
+    "/api/public/helpdesk/kb/index",
+    "/api/public/helpdesk/kb/article",
+    "/api/public/helpdesk/kb/vote",
     "/api/public/booking/c/:slug",
     "/api/public/booking/c/:slug/availability",
     "/api/public/booking/c/:slug/quote",
@@ -819,6 +823,11 @@ mod tests {
         Nest {
             prefix: "/api/helpdesk",
             src: include_str!("../helpdesk/attachments.rs"),
+            func: "router",
+        },
+        Nest {
+            prefix: "/api/helpdesk",
+            src: include_str!("../helpdesk/generate.rs"),
             func: "router",
         },
         Nest {
@@ -1266,7 +1275,9 @@ mod tests {
     /// tickets router so they inherit its account scoping and its auth; the fourth added saved answers
     /// (+3: list/create, update/delete, and the render that fills an answer's placeholders); the fifth added
     /// the desk report (+1), which is a read that asks four questions of the ticket rows; the sixth added the
-    /// attachments list (+1), which answers "which files came with this ticket?". Nothing was added to the tree: the
+    /// attachments list (+1), which answers "which files came with this ticket?"; the seventh turned the
+    /// knowledge base into a help centre (+5: two section routes, and the menu, one article and one vote a
+    /// stranger can reach); the eighth added the draft generator (+1), which reads the account's own model key. Nothing was added to the tree: the
     /// booking engine's two routers (`.nest_service("/api/booking")` and `/api/public/booking`) joined
     /// `NESTS`, which is what made `"/api/public/booking/c/:slug"` checkable on the public allowlist at
     /// all. The instrument saw more routes because the product has more routes; the root-level count is
@@ -1277,12 +1288,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            461,
+            467,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 449,
+            api, 455,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

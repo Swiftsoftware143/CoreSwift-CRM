@@ -57,9 +57,13 @@ pub async fn model_keys(
 
     let mut map = HashMap::new();
 
+    // ONLY model providers. The table holds every credential an account owns — mailgun, telnyx, and the
+    // model keys — and the first version of this query took all of them, so an account with a mail key
+    // "had a model key" and every AI call failed at a provider that was never configured.
     let rows: Vec<(uuid::Uuid, String, String)> = sqlx::query_as(
         "SELECT tenant_id, provider, api_key FROM provider_keys
           WHERE tenant_id = $1 AND is_active AND api_key <> ''
+            AND lower(provider) IN ('deepseek', 'openai', 'anthropic', 'claude')
           ORDER BY updated_at DESC",
     )
     .bind(tenant_id)

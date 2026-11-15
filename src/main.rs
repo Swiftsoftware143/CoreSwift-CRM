@@ -705,6 +705,7 @@ async fn main() -> anyhow::Result<()> {
                 .merge(crate::helpdesk::canned::router(state.clone()))
                 .merge(crate::helpdesk::reports::router(state.clone()))
                 .merge(crate::helpdesk::attachments::router(state.clone()))
+                .merge(crate::helpdesk::generate::router(state.clone()))
                 .layer(axum::middleware::from_fn_with_state(
                     state.clone(),
                     crate::auth::middleware::auth_middleware,
@@ -824,6 +825,19 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/public/helpdesk/kb",
             axum::routing::get(crate::helpdesk::kb::public_list),
+        )
+        // The help centre a stranger browses: its menu, one article, and "was this helpful?".
+        .route(
+            "/api/public/helpdesk/kb/index",
+            axum::routing::get(crate::helpdesk::kb::public_index),
+        )
+        .route(
+            "/api/public/helpdesk/kb/article",
+            axum::routing::get(crate::helpdesk::kb::public_article),
+        )
+        .route(
+            "/api/public/helpdesk/kb/vote",
+            axum::routing::post(crate::helpdesk::kb::public_vote),
         )
         // CS-22 — the customer-facing "💬 My Support" portal (public, capability-scoped: the grant
         // travels in the X-Support-Token header, never in the URL). Reached through nginx's

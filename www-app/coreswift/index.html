@@ -4002,7 +4002,78 @@ async function createTicket(){
 // Articles are written once and read by two audiences: customers (through the widget's search) and the
 // team. The visibility switch is on every article and it is the server that enforces it — this page only
 // shows what the API returned, so there is no client-side filter to get the rule wrong.
-const KB = { articles: [] };
+const KB = { articles: [], sections: [] };
+
+// Sections are the menu a customer sees, and the link below is the page they land on.
+function renderKbSections() {
+  const el = document.getElementById('kbSections');
+  if (!el) return;
+  const ws = (STATE.user && (STATE.user.workspace_slug || STATE.user.workspace)) || '';
+  const rows = KB.sections.map(x =>
+    '<div style="display:flex;gap:8px;align-items:baseline;padding:4px 0;border-bottom:1px solid var(--border)">' +
+      '<span style="flex:1">' + escapeHtml(x.name) + '</span>' +
+      '<span style="font-size:12px;color:var(--text-muted)">' +
+        KB.articles.filter(a => a.category_id === x.id).length + ' article(s)</span>' +
+      '<button class="btn btn-ghost btn-xs" onclick="kbDeleteSection(\'' + escapeHtml(String(x.id)) + '\')">Delete</button>' +
+    '</div>').join('');
+  el.innerHTML = (KB.sections.length ? rows : '<p style="color:var(--text-secondary)">No sections yet.</p>') +
+    '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">' +
+      '<input id="kbNewSection" placeholder="New section name" style="flex:1;min-width:150px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;font:inherit">' +
+      '<button class="btn btn-secondary btn-xs" onclick="kbAddSection()">Add section</button>' +
+      '<a class="btn btn-secondary btn-xs" target="_blank" rel="noopener" href="/help/' + encodeURIComponent(ws) + '">Open the help centre ↗</a>' +
+    '</div>';
+}
+
+// Drafting from a description: the model writes, a person decides. Everything lands as a draft, and the
+// button says so before anything is generated.
+async function kbGenerate() {
+  const btn = document.getElementById('genGo');
+  const out = document.getElementById('genOut');
+  const about = (document.getElementById('genAbout') || {}).value || '';
+  if (!about.trim()) { toast('Describe the business first', 'error'); return; }
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = 'Drafting…';
+  out.innerHTML = '';
+  try {
+    const d = await API.post('/helpdesk/kb/generate', {
+      about: about,
+      industry: (document.getElementById('genIndustry') || {}).value || null,
+      audience: (document.getElementById('genAudience') || {}).value || null,
+      questions: (document.getElementById('genQuestions') || {}).value || null,
+      section: (document.getElementById('genSection') || {}).value || null,
+      count: parseInt((document.getElementById('genCount') || {}).value || '6', 10)
+    });
+    out.innerHTML = '<div class="badge badge-warning">' + (d.drafted || 0) + ' draft(s) ready to review</div>' +
+      '<ul style="margin:8px 0 0 18px">' + ((d.articles || []).map(a =>
+        '<li>' + escapeHtml(a.title) + ' <span style="color:var(--text-muted)">— draft</span></li>').join('')) + '</ul>' +
+      '<p style="color:var(--text-secondary);font-size:12px;margin-top:6px">' + escapeHtml(d.note || '') + '</p>';
+    toast('Drafted ' + (d.drafted || 0) + ' article(s)', 'success');
+    loadKb();
+  } catch (e) {
+    out.innerHTML = '<p style="color:#b45309">' + escapeHtml(e.message) + '</p>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+async function kbAddSection() {
+  const el = document.getElementById('kbNewSection');
+  const name = ((el && el.value) || '').trim();
+  if (!name) { toast('Give the section a name', 'error'); return; }
+  try {
+    await API.post('/helpdesk/kb/sections', { name: name });
+    toast('Section added', 'success');
+    loadKb();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function kbDeleteSection(id) {
+  if (!confirm('Delete this section? Its articles stay, uncategorised.')) return;
+  try { await API.del('/helpdesk/kb/sections/' + id); toast('Deleted', 'success'); loadKb(); }
+  catch (e) { toast(e.message, 'error'); }
+}
 
 async function loadKb() {
   const el = document.getElementById('kbTable');
@@ -4010,6 +4081,11 @@ async function loadKb() {
   try {
     const d = await API.get('/helpdesk/kb');
     KB.articles = (d && d.articles) || [];
+    try {
+      const sec = await API.get('/helpdesk/kb/sections');
+      KB.sections = (sec && sec.sections) || [];
+    } catch (e) { KB.sections = []; }
+    renderKbSections();
     const rows = KB.articles.map(a => {
       const badge = a.status === 'published'
         ? '<span class="badge badge-success">published</span>'
@@ -4047,6 +4123,11 @@ function kbEdit(id) {
     '<div class="form-group"><label>The answer</label>' +
     '<textarea rows="10" id="kbBody" placeholder="Plain language. What to do, step by step.">' +
     escapeHtml(a ? a.body_md : '') + '</textarea></div>' +
+    '<div class="form-group"><label>Section (optional)</label><select id="kbSection">' +
+      '<option value="">— no section —</option>' +
+      KB.sections.map(x => '<option value="' + escapeHtml(String(x.id)) + '"' +
+        (a && a.category_id === x.id ? ' selected' : '') + '>' + escapeHtml(x.name) + '</option>').join('') +
+    '</select><div style="font-size:12px;color:var(--text-muted)">Sections are the menu of your help centre.</div></div>' +
     '<div class="form-group"><label>Status</label><select id="kbStatus">' +
       ['draft', 'published', 'archived'].map(v =>
         '<option value="' + v + '"' + ((a ? a.status : 'draft') === v ? ' selected' : '') + '>' + v + '</option>').join('') +
@@ -4066,13 +4147,14 @@ async function kbSave(id) {
   const title = (document.getElementById('kbTitle') || {}).value || '';
   const body = (document.getElementById('kbBody') || {}).value || '';
   const status = (document.getElementById('kbStatus') || {}).value || 'draft';
+  const section = (document.getElementById('kbSection') || {}).value || null;
   const visibility = (document.getElementById('kbVis') || {}).value || 'public';
   if (!title.trim()) { toast('An article needs a title', 'error'); return; }
   try {
     if (id) {
-      await API.patch('/helpdesk/kb/' + id, { title: title, body_md: body, status: status, visibility: visibility });
+      await API.patch('/helpdesk/kb/' + id, { title: title, body_md: body, status: status, visibility: visibility, section: section });
     } else {
-      await API.post('/helpdesk/kb', { title: title, body_md: body, status: status, visibility: visibility });
+      await API.post('/helpdesk/kb', { title: title, body_md: body, status: status, visibility: visibility, section: section });
     }
     closeModal();
     toast(status === 'published' ? 'Published' : 'Saved', 'success');
@@ -11052,7 +11134,31 @@ TAB_RENDERERS['knowledge'] = () => pageHeader(
   'Knowledge Base',
   'Answers your team writes once — for customers, or for the team only',
   '<button class="btn btn-primary btn-sm" onclick="kbNew()">+ New article</button>'
-) + '<div id="kbTable"><div class="loading-wrap"><div class="spinner"></div> Loading articles...</div></div>' +
+) + '<div class="card" style="margin-bottom:16px"><div class="card-header">Draft it for me</div>' +
+  '<div class="card-body">' +
+    '<p style="color:var(--text-secondary);margin:0 0 8px">Describe the business in a sentence or two. The model drafts articles ' +
+    '<strong>as drafts</strong> — nothing is published until you read it, and anything it does not know is marked ' +
+    '<code>[confirm: …]</code> so the blank is obvious.</p>' +
+    '<div class="form-group"><label>What do you do?</label>' +
+      '<textarea rows="3" id="genAbout" placeholder="We sell weekly newsletter sponsorship to local businesses in Palm Bay."></textarea></div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+      '<div class="form-group" style="flex:1;min-width:150px"><label>Industry</label>' +
+        '<input type="text" id="genIndustry" placeholder="local media"></div>' +
+      '<div class="form-group" style="flex:1;min-width:150px"><label>Who are your customers?</label>' +
+        '<input type="text" id="genAudience" placeholder="local business owners"></div>' +
+      '<div class="form-group" style="width:110px"><label>How many</label>' +
+        '<input type="number" id="genCount" value="6" min="1" max="12"></div>' +
+    '</div>' +
+    '<div class="form-group"><label>What do people ask most? (optional)</label>' +
+      '<textarea rows="2" id="genQuestions" placeholder="How much is a slot? When does it go out?"></textarea></div>' +
+    '<div class="form-group"><label>File them under (optional)</label>' +
+      '<input type="text" id="genSection" placeholder="Sponsorship"></div>' +
+    '<button class="btn btn-primary btn-sm" id="genGo" onclick="kbGenerate()">Draft articles</button>' +
+    '<div id="genOut" style="margin-top:10px"></div>' +
+  '</div></div>' +
+  '<div class="card" style="margin-bottom:16px"><div class="card-header">Sections — the menu of your help centre</div>' +
+  '<div class="card-body" id="kbSections"><div class="loading-wrap"><div class="spinner"></div> Loading sections...</div></div></div>' +
+  '<div id="kbTable"><div class="loading-wrap"><div class="spinner"></div> Loading articles...</div></div>' +
   '<div class="card" style="margin-top:16px"><div class="card-header">Saved answers ' +
     '<button class="btn btn-secondary btn-xs" style="float:right" onclick="crNew()">+ New saved answer</button>' +
   '</div><div class="card-body" id="crTable">' +

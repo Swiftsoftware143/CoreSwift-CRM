@@ -6,6 +6,7 @@
 
 pub mod attachments;
 pub mod canned;
+pub mod generate;
 pub mod ingest;
 pub mod junk;
 pub mod kb;
