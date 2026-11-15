@@ -760,7 +760,8 @@ const MENU = [
   { id:'duplicates', icon:'🧬', label:'Duplicates' },
   { id:'industries', icon:'🏭', label:'Industries' },
   { type:'group', icon:'💰', label:'Sales', children:[
-    { id:'pipelines', icon:'📈', label:'Pipelines & Deals' }
+    { id:'pipelines', icon:'📈', label:'Pipelines & Deals' },
+    { id:'companies', icon:'🏢', label:'Companies' }
   ]},
   { type:'group', icon:'📣', label:'Marketing', children:[
     { id:'campaigns', icon:'📢', label:'Campaigns' },
@@ -777,7 +778,6 @@ const MENU = [
     { id:'messages', icon:'💬', label:'Messages' },
     { id:'notifications', icon:'🔔', label:'Notifications' },
     { id:'telnyx', icon:'📱', label:'Telnyx SMS/Voice' },
-    { id:'comm-log', icon:'📜', label:'Communications Log' }
   ]},
   { id:'tickets', icon:'🎫', label:'Support Tickets' },
   { id:'knowledge', icon:'📚', label:'Knowledge Base' },
@@ -1442,11 +1442,6 @@ const TAB_RENDERERS = {
   },
 
   'telnyx': () => telnyxShell(),
-
-  'comm-log': () => {
-    return pageHeader('Communications Log', 'History of all communications') +
-    card('Communication History', '<div class="empty-state"><div class="empty-icon">📜</div><h3>No communications yet</h3><p>Your communications log will appear here once you start sending messages.</p></div>');
-  },
 
   'tickets': () => {
     return pageHeader('Support Tickets', 'Manage customer support tickets',
@@ -10323,7 +10318,6 @@ window.appGuidePages = {
   messages:        { title: "Messages", desc: "Individual emails or texts you send to one contact from inside the CRM.", actions: ["Compose a message", "Pick a contact", "See the delivery result"] },
   notifications:   { title: "Notifications", desc: "Alerts about activity in your workspace that needs your attention.", actions: ["Read an alert", "Clear one you have handled"] },
   telnyx:          { title: "Telnyx SMS/Voice", desc: "Send texts and place calls through your connected Telnyx number.", actions: ["Connect your Telnyx account", "Send a text", "Check the message log"] },
-  "comm-log":      { title: "Communications Log", desc: "Every message in and out — email, text and calls — in one chronological history.", actions: ["Filter by contact or channel", "Open an entry to see its content"] },
   tickets:         { title: "Support Tickets", desc: "Support requests raised in your workspace and their status.", actions: ["Open a ticket", "Reply and change its status"] },
   branding:        { title: "Email Branding", desc: "One logo and one signature for every message this workspace sends. Upload the logo once — the app resizes it so it renders in Gmail, Outlook and Apple Mail on a phone or a desktop — then fill in the signature (name, title, company, phone and a short line) and press Save signature. Compose and every reply then open with both already in place; an individual address can use its own wording from the mail client's Signature button.", actions: ["Upload the company logo (PNG, JPEG, GIF or WebP — no size to choose)", "Fill in the signature and press Save signature", "Read the preview: it is the message the mailer really produces", "Send yourself a test email to see it in your own inbox"] },
   inbox:           { title: "Shared Inbox", desc: "Your mail in one place: every message that arrived at your workspace's addresses. CoreSwift does not host your mail \u2014 you bring your own domain, and sending and receiving are TWO separate choices: send through your own Mailgun account or any SMTP service (Amazon SES, SendGrid, Postmark, Google Workspace), and receive through Mailgun or SendGrid. The setup page is three steps: the domain plus the keys those choices need, the mail records (MX, SPF/DKIM) each with a Copy button and a live Active / Waiting / Needs attention badge, then the inbox itself. The API key is the sending key (Mailgun \u2192 Settings \u2192 API Keys \u2192 Private API key, it starts key-) and the webhook signing key is the receiving key (Mailgun \u2192 Send \u2192 Domains \u2192 your domain \u2192 Webhook signing key); without the second one the domain can only send. One extra CNAME makes inbox.yourbusiness.com open your mail, and it is the only record that must be Proxied (orange cloud) \u2014 the mail records stay grey. Nothing is charged and no mailbox exists until the records verify, and the 30-day clock starts at your first verified inbox. When it ends the address still receives and only sending pauses: Keep inbox \u2014 $1/mo or Upgrade CRM brings sending back on the spot, and nothing is ever deleted. The meter at the bottom of the left column is your storage, with a banner and one email at 50, 75 and 99 per cent.", actions: ["Pick an address to narrow the list", "Open a message, star it, or file it under a label", "Received files: press a file's chip to open it in place (a picture or PDF draws on screen, with Download beside it), or press the ↓ arrow to save a copy", "Follow the three setup steps and press Check again when the records show Active", "LOG IN on an inbox row opens your branded address once it is live", "Receive-only? Use Keep inbox \u2014 $1/mo or Upgrade CRM to restore sending", "Catch-all is switched on Email Domains & Sending, not here", "Change how a domain RECEIVES (Mailgun, SendGrid, or nowhere) under the domain on the setup page \u2014 sending is untouched by it"] },

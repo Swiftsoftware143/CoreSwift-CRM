@@ -15,10 +15,22 @@ pub async fn broadcast_portfolio_sync(
     description: &str,
     internal_sync_key: String,
 ) {
+    // WHAT `tenant_id` MEANS HERE (fixed 2026-11-15, CEO finding on BV Premiere Products).
+    //
+    // A sibling's sync door creates ITS OWN tenant from this field. It used to carry CoreSwift's ADMIN
+    // workspace id, which is the same value for every company — and in ADASwift that id is already Xride
+    // Drivers' workspace, so a push either collided or wrote one company over another. The id sent now is the
+    // COMPANY's own id: distinct per company, stable across re-pushes (so a sibling can upsert on it), and
+    // incapable of naming a workspace that already exists somewhere else.
+    //
+    // `portfolio_id` stays the identity of the company itself; `owner_tenant_id` is carried for information
+    // only, so a sibling can tell which CoreSwift account the push came from without ever using it as a key.
+    let sibling_tenant_id = portfolio_id;
     let payload = json!({
         "action": action,
         "portfolio_id": portfolio_id.to_string(),
-        "tenant_id": tenant_id.to_string(),
+        "tenant_id": sibling_tenant_id.to_string(),
+        "owner_tenant_id": tenant_id.to_string(),
         "name": name,
         "slug": slug,
         "email": email,
@@ -59,17 +71,27 @@ pub async fn broadcast_portfolio_sync(
             Ok(resp) => {
                 let status = resp.status();
                 if status.is_success() {
+                    // ONE LINE PER TARGET, URL AND STATUS INCLUDED (CEO, 2026-11-15): the first version logged
+                    // success without the address, so "did the broadcast run at all?" could not be answered from
+                    // the log. This line answers it for each app, and the ids make an id-contract mistake visible.
                     info!(
-                        "Portfolio sync ({}) broadcast to {} ({}): OK",
-                        action, app_name, port
+                        target: "portfolio_sync",
+                        "portfolio-sync {} -> {} {} : HTTP {} (portfolio {} , sibling tenant {})",
+                        action,
+                        app_name,
+                        url,
+                        status.as_u16(),
+                        portfolio_id,
+                        sibling_tenant_id
                     );
                 } else {
                     let body = resp.text().await.unwrap_or_default();
                     warn!(
-                        "Portfolio sync ({}) to {} ({}): HTTP {} — {}",
+                        target: "portfolio_sync",
+                        "portfolio-sync {} -> {} {} : HTTP {} — body: {}",
                         action,
                         app_name,
-                        port,
+                        url,
                         status.as_u16(),
                         body
                     );
@@ -77,10 +99,18 @@ pub async fn broadcast_portfolio_sync(
             }
             Err(e) => {
                 error!(
-                    "Portfolio sync ({}) to {} ({}): failed — {}",
-                    action, app_name, port, e
+                    target: "portfolio_sync",
+                    "portfolio-sync {} -> {} {} : request failed — {}",
+                    action, app_name, url, e
                 );
             }
         }
     }
+    info!(
+        target: "portfolio_sync",
+        "portfolio-sync {} for portfolio {} finished: {} target(s) attempted",
+        action,
+        portfolio_id,
+        targets.len()
+    );
 }
