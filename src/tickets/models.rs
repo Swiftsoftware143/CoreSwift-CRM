@@ -98,6 +98,10 @@ pub struct TicketListQuery {
     /// Everything from one address. Most tickets arrive with an email and no linked contact, so filtering on
     /// the contact alone would show an agent an empty history for the customer who writes most often.
     pub contact_email: Option<String>,
+    /// What a person types into the search box: a ticket number (`42`, `#42`, `CS-42`), an email address, a
+    /// name, or words from the subject. One field, because a support desk is asked "where is ticket 42" and
+    /// "what did Dana send" with the same keystrokes.
+    pub q: Option<String>,
     pub contact_id: Option<uuid::Uuid>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,

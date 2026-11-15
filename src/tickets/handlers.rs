@@ -49,6 +49,19 @@ pub async fn list_tickets(
              AND ($3::text IS NULL OR priority = $3)
              AND ($4::uuid IS NULL OR contact_id = $4)
              AND ($10::text IS NULL OR lower(contact_email) = lower($10))
+             -- ── SEARCH (David, 2026-11-14) ────────────────────────────────────────────────
+             -- One box for the two questions a desk is actually asked: "where is ticket 42?" and "what has
+             -- this person sent?". The number arm uses a CASE so the cast only happens when the text really
+             -- is a number — an OR chain does not promise which side is evaluated, and a cast of "dana"
+             -- would be a 500 instead of an empty result.
+             AND (
+               $11::text IS NULL
+               OR number = CASE WHEN $11 ~ '^[#]?[0-9]+$' THEN replace($11, '#', '')::int ELSE NULL END
+               OR ('cs-' || coalesce(number::text, '')) = lower($11)
+               OR lower(coalesce(contact_email, '')) LIKE '%' || lower($11) || '%'
+               OR lower(coalesce(contact_name, '')) LIKE '%' || lower($11) || '%'
+               OR lower(subject) LIKE '%' || lower($11) || '%'
+             )
              -- ── THE VIEWS AN AGENT ACTUALLY WORKS FROM (David, 2026-11-14) ────────────────
              -- One predicate list rather than a query per view, so every view is scoped by the same
              -- tenant clause above it: a new view cannot accidentally forget the account.
@@ -101,6 +114,7 @@ pub async fn list_tickets(
     .bind(&q.view)
     .bind(assignee)
     .bind(&q.contact_email)
+    .bind(q.q.as_deref().map(str::trim).filter(|v| !v.is_empty()))
     .fetch_all(&s.db)
     .await?;
 
@@ -909,101 +923,210 @@ pub async fn public_submit_ticket(
 
     Ok((
         StatusCode::CREATED,
-        Json(json!({"status": "received", "ticket_id": ticket.id})),
+        Json(json!({
+            "status": "received",
+            "ticket_id": ticket.id,
+            // the widget tells the visitor this, so they have something to quote in a reply
+            "number": ticket.number,
+        })),
     ))
 }
-
-// ── Public: Embed script (no auth) ────────────────────────────────────
-
-/// GET /s/:tid/widget.js — returns the embeddable widget
 pub async fn support_embed_script(
     State(_s): State<AppState>,
     Path(tenant_id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
+    // A CONVERSATION, NOT A FORM (David, 2026-11-14). The widget used to open with three fields and a Send
+    // button, which asks a stranger to do the work before they have been helped. It now opens with a greeting
+    // and a message box: the visitor says what is wrong, we answer from the published articles if we can, and
+    // the form appears only when a person is actually needed — with the whole conversation attached, so the
+    // agent reads what was said instead of a single flattened line.
     let js = format!(
         r#"(function(){{
   var d=document;
   if(d.getElementById('crm-support-root'))return;
   var tid='{tid}';
-  // The widget is served by whichever host the customer embedded it from, so the API base is taken
-  // from this script's own URL. It used to be hardcoded to coreswiftcrm.com — a host whose vhost had
-  // no `/s/` proxy at all — so the advertised one-line embed could not post a ticket from anywhere.
+  // The widget is served by whichever host the customer embedded it from, so the API base comes from this
+  // script's own URL rather than a hardcoded host.
   var me=d.currentScript;
   var BASE=(me&&me.src?me.src:'').replace(/\/s\/[^\/]+\/widget\.js.*$/,'')||'https://coreswiftcrm.com';
 
-  // Styles
+  var S={{said:[], first:'', stage:'chat', answered:false}};
+
   var s=d.createElement('style');
-  s.textContent='.crm-support-btn{{position:fixed;bottom:20px;right:20px;z-index:9999;background:#0ea5e9;color:#fff;border:none;border-radius:50px;padding:14px 24px;font-size:15px;font-family:-apple-system,system-ui,sans-serif;cursor:pointer;box-shadow:0 4px 20px rgba(14,165,233,0.35);transition:transform .2s,box-shadow .2s}}.crm-support-btn:hover{{transform:scale(1.05);box-shadow:0 6px 28px rgba(14,165,233,0.5)}}.crm-support-panel{{position:fixed;bottom:90px;right:20px;z-index:9998;width:360px;max-width:calc(100vw-40px);background:#fff;border-radius:16px;box-shadow:0 8px 40px rgba(0,0,0,0.15);display:none;overflow:hidden;font-family:-apple-system,system-ui,sans-serif;color:#1e293b}}.crm-support-panel.open{{display:block}}.crm-support-header{{background:#0ea5e9;color:#fff;padding:20px;font-weight:600;font-size:16px}}.crm-support-body{{padding:20px}}.crm-support-field{{margin-bottom:14px}}.crm-support-field label{{display:block;font-size:13px;font-weight:500;margin-bottom:4px;color:#475569}}.crm-support-field input,.crm-support-field textarea,.crm-support-field select{{width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;font-family:inherit;box-sizing:border-box;outline:none;transition:border .2s}}.crm-support-field input:focus,.crm-support-field textarea:focus,.crm-support-field select:focus{{border-color:#0ea5e9;box-shadow:0 0 0 3px rgba(14,165,233,0.15)}}.crm-support-field textarea{{resize:vertical;min-height:90px}}.crm-support-submit{{width:100%;background:#0ea5e9;color:#fff;border:none;border-radius:8px;padding:12px;font-size:14px;font-weight:600;cursor:pointer;transition:background .2s}}.crm-support-submit:hover{{background:#0284c7}}.crm-support-submit:disabled{{opacity:0.6;cursor:default}}.crm-support-thanks{{display:none;text-align:center;padding:40px 20px}}.crm-support-thanks.show{{display:block}}.crm-support-thanks h3{{color:#0ea5e9;margin:0 0 8px}}.crm-support-kb{{padding:10px 14px 0}}.crm-support-kb input{{width:100%;padding:8px 10px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;font-family:inherit}}.crm-support-kb-hit{{padding:8px 10px;margin-top:6px;border:1px solid #e2e8f0;border-radius:8px;cursor:pointer;font-size:13px;color:#0f172a}}.crm-support-kb-hit:hover{{background:#f0f9ff;border-color:#bae6fd}}.crm-support-kb-article{{padding:10px;margin-top:6px;border:1px solid #bae6fd;border-radius:8px;background:#f8fbff;font-size:13px;line-height:1.5;color:#0f172a}}.crm-support-kb-article div{{margin-top:6px}}.crm-support-kb-back{{margin-top:8px;background:none;border:none;color:#0284c7;cursor:pointer;font-size:12px;padding:0}}.crm-support-kb-empty{{font-size:12px;color:#64748b;padding:8px 2px}}';
+  s.textContent='.csb-fab{{position:fixed;bottom:20px;right:20px;z-index:9999;display:flex;align-items:center;gap:8px;background:#0ea5e9;color:#fff;border:none;border-radius:50px;padding:14px 22px;font:600 15px -apple-system,system-ui,sans-serif;cursor:pointer;box-shadow:0 4px 20px rgba(14,165,233,.35)}}' +
+    '.csb-fab:hover{{transform:scale(1.04)}}' +
+    '.csb-fab-ico{{font-size:17px}}' +
+    '.csb-panel{{position:fixed;bottom:88px;right:20px;z-index:9998;width:378px;max-width:calc(100vw - 32px);height:520px;max-height:calc(100vh - 120px);background:#fff;border-radius:16px;box-shadow:0 12px 44px rgba(15,23,42,.18);display:none;overflow:hidden;font:14px/1.5 -apple-system,system-ui,sans-serif;color:#0f172a}}' +
+    '.csb-panel.on{{display:flex;flex-direction:column}}' +
+    '.csb-head{{background:#0ea5e9;color:#fff;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;flex:0 0 auto}}' +
+    '.csb-title{{font-weight:600;font-size:15px}}' +
+    '.csb-x{{background:none;border:none;color:#fff;font-size:22px;line-height:1;cursor:pointer;padding:0 4px}}' +
+    '.csb-log{{flex:1 1 auto;overflow-y:auto;padding:14px;background:#f8fafc}}' +
+    '.csb-b{{max-width:86%;padding:9px 12px;border-radius:14px;margin-bottom:9px;white-space:pre-wrap;word-wrap:break-word}}' +
+    '.csb-you{{margin-left:auto;background:#0ea5e9;color:#fff;border-bottom-right-radius:4px}}' +
+    '.csb-us{{background:#fff;border:1px solid #e2e8f0;border-bottom-left-radius:4px}}' +
+    '.csb-art{{display:block;width:100%;text-align:left;background:#fff;border:1px solid #bae6fd;color:#0369a1;border-radius:10px;padding:8px 10px;margin:0 0 7px;font:inherit;cursor:pointer}}' +
+    '.csb-art:hover{{background:#f0f9ff}}' +
+    '.csb-chip{{display:inline-block;background:#fff;border:1px solid #cbd5e1;border-radius:20px;padding:7px 13px;margin:0 6px 8px 0;font:inherit;cursor:pointer;color:#0f172a}}' +
+    '.csb-chip:hover{{border-color:#0ea5e9;color:#0369a1}}' +
+    '.csb-form{{flex:0 0 auto;padding:0 14px;background:#f8fafc}}' +
+    '.csb-form input{{width:100%;box-sizing:border-box;padding:9px 11px;margin-bottom:7px;border:1px solid #e2e8f0;border-radius:9px;font:inherit;outline:none}}' +
+    '.csb-form input:focus{{border-color:#0ea5e9;box-shadow:0 0 0 3px rgba(14,165,233,.15)}}' +
+    '.csb-go{{width:100%;background:#0ea5e9;color:#fff;border:none;border-radius:9px;padding:11px;font:600 14px inherit;cursor:pointer;margin-bottom:10px}}' +
+    '.csb-go:disabled{{opacity:.6;cursor:default}}' +
+    '.csb-row{{flex:0 0 auto;display:flex;gap:8px;padding:10px 14px 14px;border-top:1px solid #e2e8f0;background:#fff}}' +
+    '.csb-in{{flex:1 1 auto;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;font:inherit;outline:none;min-width:0}}' +
+    '.csb-in:focus{{border-color:#0ea5e9;box-shadow:0 0 0 3px rgba(14,165,233,.15)}}' +
+    '.csb-send{{background:#0ea5e9;color:#fff;border:none;border-radius:10px;padding:0 16px;font:600 14px inherit;cursor:pointer}}' +
+    '.csb-send:disabled{{opacity:.6;cursor:default}}' +
+    '.csb-note{{font-size:11px;color:#64748b;padding:0 2px 8px}}';
   d.head.appendChild(s);
 
-  // Button
-  var b=d.createElement('button');
-  b.className='crm-support-btn';
-  b.textContent='💬 Support';
-  b.onclick=function(){{
-    var p=d.getElementById('crm-support-panel');
-    if(!p){{renderPanel();return}}
-    p.classList.toggle('open');
-  }};
-  d.body.appendChild(b);
+  var fab=d.createElement('button');
+  fab.type='button'; fab.className='csb-fab'; fab.setAttribute('aria-label','Open support chat');
+  fab.innerHTML='<span class="csb-fab-ico">💬</span><span>Support</span>';
+  d.body.appendChild(fab);
 
-  function renderPanel(){{
-    var p=d.createElement('div');
-    p.id='crm-support-panel';
-    p.className='crm-support-panel open';
-    p.innerHTML='<div class="crm-support-header">How can we help?</div>' +
-      // Answers first (David, 2026-11-14): a customer who finds their answer never opens a ticket, and a
-      // ticket nobody opened costs nothing to answer. This reads the same published+public articles the
-      // console writes; the endpoint enforces who may see them, not this script.
-      '<div class="crm-support-kb"><input id="cs-kb-q" placeholder="Search the answers…" ' +
-        'oninput="csKbSearch()" autocomplete="off"><div id="cs-kb-results"></div></div>' +
-      '<div class="crm-support-body" id="crm-support-form"><div class="crm-support-field"><label>Your name</label><input id="cs-name" placeholder="Jane Smith"></div><div class="crm-support-field"><label>Email</label><input id="cs-email" type="email" placeholder="you@example.com"></div><div class="crm-support-field"><label>What do you need help with?</label><input id="cs-subject" placeholder="Brief summary"></div><div class="crm-support-field"><label>Details</label><textarea id="cs-message" placeholder="Describe your issue or question..."></textarea></div><div class="crm-support-field"><label>Priority</label><select id="cs-priority"><option value="medium">Medium — normal response</option><option value="low">Low — not urgent</option><option value="high">High — need help soon</option><option value="urgent">Urgent — critical issue</option></select></div><button class="crm-support-submit" id="cs-submit" onclick="submitSupport()">Send</button></div><div class="crm-support-thanks" id="crm-support-thanks"><h3>✓ Received!</h3><p>We will get back to you shortly.</p></div>';
-    d.body.appendChild(p);
-  }}
+  var p=d.createElement('div');
+  p.id='crm-support-root'; p.className='csb-panel'; p.setAttribute('role','dialog');
+  p.setAttribute('aria-label','Support');
+  p.innerHTML='<div class="csb-head"><div class="csb-title">Support</div>' +
+    '<button class="csb-x" type="button" aria-label="Close support">×</button></div>' +
+    '<div class="csb-log" id="csb-log" role="log" aria-live="polite"></div>' +
+    '<div class="csb-form" id="csb-form"></div>' +
+    '<div class="csb-row"><input class="csb-in" id="csb-in" placeholder="Write a message…" autocomplete="off" aria-label="Your message">' +
+    '<button class="csb-send" id="csb-send" type="button">Send</button></div>';
+  d.body.appendChild(p);
 
-  var kbTimer=null;
-  window.csKbSearch=function(){{
-    clearTimeout(kbTimer);
-    kbTimer=setTimeout(function(){{
-      var q=(d.getElementById('cs-kb-q')||{{}}).value||'';
-      var box=d.getElementById('cs-kb-results');
-      if(!box)return;
-      if(q.trim().length<2){{box.innerHTML='';return}}
-      fetch(BASE+'/api/public/helpdesk/kb?w='+encodeURIComponent(tid)+'&q='+encodeURIComponent(q))
-        .then(function(r){{return r.json()}})
-        .then(function(res){{
-          var list=(res&&res.articles)||[];
-          if(!list.length){{box.innerHTML='<div class="crm-support-kb-empty">No answer for that yet — send us a message below.</div>';return}}
-          window.__csKb=list;
-          box.innerHTML=list.map(function(a,i){{
-            return '<div class="crm-support-kb-hit" onclick="csKbOpen('+i+')">'+esc(a.title)+'</div>';
-          }}).join('');
-        }})
-        .catch(function(){{box.innerHTML=''}});
-    }},250);
-  }};
-  window.csKbOpen=function(i){{
-    var a=(window.__csKb||[])[i];
-    var box=d.getElementById('cs-kb-results');
-    if(!a||!box)return;
-    box.innerHTML='<div class="crm-support-kb-article"><strong>'+esc(a.title)+'</strong><div>'+
-      esc(a.body_md).replace(/\n/g,'<br>')+
-      '</div><button type="button" class="crm-support-kb-back" onclick="csKbSearch()">Back to results</button></div>';
-  }};
+  var log=p.querySelector('#csb-log'), input=p.querySelector('#csb-in'),
+      sendBtn=p.querySelector('#csb-send'), formSlot=p.querySelector('#csb-form');
+
   function esc(v){{return String(v==null?'':v).replace(/[&<>"']/g,function(c){{
     return {{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]}})}}
 
-  window.submitSupport=function(){{
-    var btn=d.getElementById('cs-submit');
-    var subject=d.getElementById('cs-subject').value;
-    if(!subject){{alert('Please enter a subject');return}}
-    btn.disabled=true;btn.textContent='Sending...';
-    var payload={{subject:subject,message:d.getElementById('cs-message').value||'',name:d.getElementById('cs-name').value||null,email:d.getElementById('cs-email').value||null,priority:d.getElementById('cs-priority').value||'medium'}};
-    fetch(BASE+'/s/'+tid+'/ticket',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(payload)}})
+  function scroll(){{log.scrollTop=log.scrollHeight}}
+
+  function bubble(who,text){{
+    var el=d.createElement('div');
+    el.className='csb-b '+(who==='you'?'csb-you':'csb-us');
+    el.textContent=text;
+    log.appendChild(el); scroll();
+    if(who==='you'){{S.said.push(text)}}
+    return el;
+  }}
+
+  function toggle(){{
+    var open=p.classList.toggle('on');
+    fab.style.display=open?'none':'flex';
+    if(open){{
+      if(!log.childNodes.length){{
+        bubble('us','Hi 👋 What can we help you with today?');
+      }}
+      input.focus();
+    }}
+  }}
+
+  fab.onclick=toggle;
+  p.querySelector('.csb-x').onclick=toggle;
+
+  // ── searching what we already know ─────────────────────────────────────────────────────
+  function search(text){{
+    fetch(BASE+'/api/public/helpdesk/kb?w='+encodeURIComponent(tid)+'&q='+encodeURIComponent(text))
       .then(function(r){{return r.json()}})
-      .then(function(){{d.getElementById('crm-support-form').style.display='none';d.getElementById('crm-support-thanks').className='crm-support-thanks show'}})
-      .catch(function(e){{alert('Error: '+e.message);btn.disabled=false;btn.textContent='Send'}});
-  }};
+      .then(function(res){{
+        var list=(res&&res.articles)||[];
+        if(!list.length){{ offerHuman('I could not find an answer for that.'); return }}
+        var el=bubble('us','A couple of answers that might help before a person does:');
+        list.slice(0,3).forEach(function(a){{
+          var b=d.createElement('button');
+          b.type='button'; b.className='csb-art'; b.textContent=a.title;
+          b.onclick=function(){{
+            var body=d.createElement('div');
+            body.className='csb-b csb-us';
+            body.innerHTML='<strong>'+esc(a.title)+'</strong><div style="margin-top:6px">'+
+              esc(a.body_md).replace(/\n/g,'<br>')+'</div>';
+            log.appendChild(body); scroll();
+          }};
+          log.appendChild(b);
+        }});
+        scroll();
+        chip('That answered it — thanks', function(){{ bubble('us','Glad it helped. If anything else comes up, just write here.'); }});
+        chip('Talk to a person', function(){{ offerHuman('Of course.'); }});
+      }})
+      .catch(function(){{ offerHuman('') }});
+  }}
+
+  function chip(label,fn){{
+    var b=d.createElement('button');
+    b.type='button'; b.className='csb-chip'; b.textContent=label; b.onclick=fn;
+    log.appendChild(b); scroll();
+  }}
+
+  // ── asking for a person ────────────────────────────────────────────────────────────────
+  function offerHuman(prefix){{
+    if(S.stage==='human')return;
+    S.stage='human';
+    if(prefix){{ bubble('us', prefix + ' Leave your name and email and a person will reply by email.'); }}
+    else {{ bubble('us','Leave your name and email and a person will reply by email.'); }}
+    var name=d.createElement('input'); name.id='csb-name'; name.placeholder='Your name';
+    name.setAttribute('aria-label','Your name');
+    var mail=d.createElement('input'); mail.id='csb-email'; mail.type='email';
+    mail.placeholder='you@example.com'; mail.setAttribute('aria-label','Your email');
+    var go=d.createElement('button'); go.type='button'; go.className='csb-go'; go.textContent='Send to a person';
+    go.onclick=function(){{ submit(name.value, mail.value, go) }};
+    formSlot.innerHTML='';
+    formSlot.appendChild(name); formSlot.appendChild(mail); formSlot.appendChild(go);
+    name.focus();
+  }}
+
+  function transcript(){{
+    if(!S.said.length) return '(the visitor sent no messages)';
+    return 'Conversation from the website widget:\n\n' +
+      S.said.map(function(t){{return '- ' + t}}).join('\n');
+  }}
+
+  function submit(name, email, btn){{
+    if(!email || email.indexOf('@')<1){{ alert('Please add an email address so we can reply.'); return }}
+    btn.disabled=true; btn.textContent='Sending…';
+    fetch(BASE+'/s/'+tid+'/ticket',{{
+      method:'POST', headers:{{'Content-Type':'application/json'}},
+      body:JSON.stringify({{
+        subject:(S.first||'Support request').slice(0,110),
+        message:transcript(),
+        name:name||'Website Visitor',
+        email:email,
+        priority:'medium'
+      }})
+    }})
+      .then(function(r){{return r.json()}})
+      .then(function(res){{
+        formSlot.innerHTML='';
+        S.stage='done';
+        var ref=res&&res.number?(' Your reference is CS-'+res.number+'.'):'';
+        bubble('us','Thank you — we have it.'+ref+' We will reply to '+email+'.');
+        input.disabled=true; sendBtn.disabled=true;
+      }})
+      .catch(function(e){{ btn.disabled=false; btn.textContent='Send to a person';
+        alert('That did not send: '+e.message) }});
+  }}
+
+  // ── sending a message ──────────────────────────────────────────────────────────────────
+  function say(){{
+    var text=(input.value||'').trim();
+    if(!text)return;
+    input.value='';
+    if(!S.first)S.first=text;
+    bubble('you', text);
+    if(S.stage==='chat'||S.stage==='human'){{
+      // one search per message: the visitor's own words are the query, no tagging needed
+      if(S.stage==='chat') search(text);
+    }}
+  }}
+
+  sendBtn.onclick=say;
+  input.addEventListener('keydown', function(e){{
+    if(e.key==='Enter' && !e.shiftKey){{ e.preventDefault(); say() }}
+  }});
 }})();"#,
         tid = tenant_id
     );

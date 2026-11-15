@@ -412,6 +412,7 @@ const STATE = {
   activeTab: 'dashboard',
   portalUrl: '',   // CS-22: the customer "My Support" URL, filled from GET /api/tickets
   ticketView: 'open',   // which saved view the ticket list is showing (server-side predicate)
+  ticketQuery: '',      // the search box: a number, an email, a name or words from the subject
   sidebarCollapsed: false,
   planName: '',    // set by checkPlan() from the tenant's OWN plan row; '' = not known, never a guess
   planId: null,    // that plan's id — the upgrade modal's Current badge keys off this, not off a name
@@ -1456,6 +1457,13 @@ const TAB_RENDERERS = {
       '<button class="btn btn-secondary btn-sm" data-keep-on-lock="1" onclick="openMySupportPortal()">💬 My Support</button>' +
       '<button class="btn btn-primary btn-sm" onclick="showAddTicketModal()">+ New Ticket</button>') +
     '<div id="tkReport" style="margin-bottom:10px"></div>' +
+    '<div style="display:flex;gap:8px;margin-bottom:10px">' +
+      '<input id="tkSearch" type="search" placeholder="Search: ticket number, email, name or subject"' +
+        ' style="flex:1;padding:9px 12px;border:1px solid var(--border);border-radius:9px;font:inherit"' +
+        ' onkeydown="if(event.key===&#39;Enter&#39;){runTicketSearch()}">' +
+      '<button class="btn btn-secondary btn-sm" onclick="runTicketSearch()">Search</button>' +
+      '<button class="btn btn-ghost btn-sm" onclick="clearTicketSearch()">Clear</button>' +
+    '</div>' +
     '<div id="tkViews" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>' +
     '<div id="ticketsTable"><div class="loading-wrap"><div class="spinner"></div> Loading tickets...</div></div>';
   },
@@ -2066,7 +2074,12 @@ const TAB_LOADERS = {
       // filter: "due soon" and "mine" depend on clocks and on who is asking, and neither belongs in
       // the browser where it can disagree with the queue.
       loadDeskReport();
-      const resp = await API.get('/tickets?view=' + encodeURIComponent(STATE.ticketView || 'open'));
+      // A search looks across the whole account, not inside the current view: "where is ticket 42" has one
+      // answer and the view you happen to be looking at cannot change it.
+      const searching = (STATE.ticketQuery || '').trim();
+      const resp = searching
+        ? await API.get('/tickets?view=all&limit=100&q=' + encodeURIComponent(searching))
+        : await API.get('/tickets?view=' + encodeURIComponent(STATE.ticketView || 'open'));
       if (resp && resp.portal_url) STATE.portalUrl = resp.portal_url;   // CS-22
       const tickets = Array.isArray(resp) ? resp : ((resp && resp.tickets) || []);
       let rows = [];
@@ -2088,9 +2101,11 @@ const TAB_LOADERS = {
       renderTicketViews();
       ticketsTableEl.innerHTML = dataTable(
         ['Subject','Status','Priority','Contact','Assigned to','Due','Created',''], rows,
-        STATE.ticketView === 'due'
-          ? 'Nothing is due in the next four hours.'
-          : 'No tickets in this view.'
+        (STATE.ticketQuery || '').trim()
+          ? 'Nothing matches “' + (STATE.ticketQuery || '').replace(/[<>&]/g, '') + '”.'
+          : STATE.ticketView === 'due'
+            ? 'Nothing is due in the next four hours.'
+            : 'No tickets in this view.'
       );
     } catch(e) {
       ticketsTableEl.innerHTML = (e && e.planGate)
@@ -4090,6 +4105,8 @@ const TICKET_VIEWS = [
 ];
 
 function renderTicketViews() {
+  const box = document.getElementById('tkSearch');
+  if (box && !box.value) box.value = STATE.ticketQuery || '';
   const el = document.getElementById('tkViews');
   if (!el) return;
   const current = STATE.ticketView || 'open';
@@ -4098,6 +4115,19 @@ function renderTicketViews() {
     return '<button class="btn btn-xs ' + (on ? 'btn-primary' : 'btn-secondary') + '" ' +
       'onclick="setTicketView(\'' + key + '\')">' + label + '</button>';
   }).join('');
+}
+
+function runTicketSearch() {
+  const el = document.getElementById('tkSearch');
+  STATE.ticketQuery = el ? el.value : '';
+  switchTab('tickets');
+}
+
+function clearTicketSearch() {
+  const el = document.getElementById('tkSearch');
+  if (el) el.value = '';
+  STATE.ticketQuery = '';
+  switchTab('tickets');
 }
 
 function setTicketView(view) {

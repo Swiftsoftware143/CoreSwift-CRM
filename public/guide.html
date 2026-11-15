@@ -862,6 +862,11 @@ POST /api/lists/:id/members</pre>
     priority. The ticket list shows the answer deadline as a countdown that turns amber inside the last hour and red once it has passed, and
     <strong>Due soon</strong> lists only what is unanswered and due within four hours &mdash; soonest deadline first, because that is the order the
     work has to be done in. A clock is only set when a policy exists: an account with no policy gets an empty deadline rather than a wrong one.</p>
+    <h3>Finding one ticket</h3>
+    <p>The box above the queue searches the whole account, not just the view you are looking at, because &ldquo;where is ticket 42&rdquo; has one
+    answer. Type a <strong>ticket number</strong> (42, #42 or CS-42), an <strong>email address</strong>, a <strong>name</strong>, or a word from the
+    <strong>subject</strong>, and press Search. Searching an address brings back everything that person has sent, which is usually the real
+    question behind the search.</p>
     <h3>Is this a new customer or the fifth time this month?</h3>
     <p>Opening a ticket also shows what that customer sent before: how many earlier tickets, how many of them are still open, and the last five with
     their status. One click moves to any of them. It reads only your own account, narrowed to the address that wrote in, so it is never somebody

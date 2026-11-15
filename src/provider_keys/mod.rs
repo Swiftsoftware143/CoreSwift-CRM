@@ -38,3 +38,61 @@ pub fn router(state: AppState) -> Router<AppState> {
 
     Router::new().merge(public).merge(protected)
 }
+
+/// The account's own model keys, as `{provider: plaintext key}`, read from the SEALED store.
+///
+/// This is the one place model credentials are looked up. The AI paths used to read
+/// `tenants.settings->'ai'->'providers'` instead — a different, UNSEALED field that no screen writes, while
+/// the screen that does write a key seals it here. Two stores meant a customer could enter a key, watch it
+/// save, and still have no AI, with the key they typed sitting readable in a settings blob. Anything that
+/// calls a model asks this function.
+///
+/// Settings are still read afterwards as a fallback, so an account that was configured the old way keeps
+/// working; the sealed store always wins, because that is the one the console writes.
+pub async fn model_keys(
+    db: &sqlx::PgPool,
+    tenant_id: uuid::Uuid,
+) -> std::collections::HashMap<String, String> {
+    use std::collections::HashMap;
+
+    let mut map = HashMap::new();
+
+    let rows: Vec<(uuid::Uuid, String, String)> = sqlx::query_as(
+        "SELECT tenant_id, provider, api_key FROM provider_keys
+          WHERE tenant_id = $1 AND is_active AND api_key <> ''
+          ORDER BY updated_at DESC",
+    )
+    .bind(tenant_id)
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
+
+    for (owner, provider, sealed) in rows {
+        let plain = crate::secret_box::open(owner, &sealed);
+        if !plain.trim().is_empty() {
+            map.entry(provider.to_ascii_lowercase()).or_insert(plain);
+        }
+    }
+
+    // the older field, only for an account that has nothing in the sealed store
+    if map.is_empty() {
+        let legacy: Option<Option<serde_json::Value>> =
+            sqlx::query_scalar("SELECT settings->'ai'->'providers' FROM tenants WHERE id = $1")
+                .bind(tenant_id)
+                .fetch_optional(db)
+                .await
+                .ok()
+                .flatten();
+        if let Some(Some(serde_json::Value::Object(obj))) = legacy {
+            for (k, v) in obj {
+                if let Some(s) = v.as_str() {
+                    if !s.trim().is_empty() {
+                        map.insert(k.to_ascii_lowercase(), s.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    map
+}

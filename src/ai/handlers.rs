@@ -242,22 +242,8 @@ pub async fn compose_for_contact(
     let template_slug = engine::select_template(context, assessment.churn_probability);
 
     // Try AI-powered composition via DeepSeek (with OpenAI/Anthropic fallback)
-    let mut api_keys = std::collections::HashMap::new();
-    if let Ok(Some(keys)) = sqlx::query_scalar::<_, Option<serde_json::Value>>(
-        "SELECT settings->'ai'->'providers' FROM tenants WHERE id = $1",
-    )
-    .bind(tid)
-    .fetch_one(db)
-    .await
-    {
-        if let Some(obj) = keys.as_object() {
-            for (k, v) in obj {
-                if let Some(val) = v.as_str() {
-                    api_keys.insert(k.clone(), val.to_string());
-                }
-            }
-        }
-    }
+    // ONE resolver: the sealed per-account store the console writes, never a second field.
+    let api_keys = crate::provider_keys::model_keys(db, tid).await;
 
     let body = if !api_keys.is_empty() {
         crate::ai::router::ai_compose_follow_up(

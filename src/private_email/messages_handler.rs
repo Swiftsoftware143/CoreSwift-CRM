@@ -1544,24 +1544,8 @@ pub async fn save_draft(
 
 /// The account's AI provider keys, as `{provider: key}`. An empty map means the feature cannot run.
 async fn ai_keys(state: &AppState, tenant_id: Uuid) -> std::collections::HashMap<String, String> {
-    let mut map = std::collections::HashMap::new();
-    let row: Option<Option<Value>> =
-        sqlx::query_scalar("SELECT settings->'ai'->'providers' FROM tenants WHERE id = $1")
-            .bind(tenant_id)
-            .fetch_optional(&state.db)
-            .await
-            .ok()
-            .flatten();
-    if let Some(Some(Value::Object(obj))) = row {
-        for (k, v) in obj {
-            if let Some(s) = v.as_str() {
-                if !s.trim().is_empty() {
-                    map.insert(k, s.to_string());
-                }
-            }
-        }
-    }
-    map
+    // The same resolver the AI handlers use: the account's SEALED key store first, never a second field.
+    crate::provider_keys::model_keys(&state.db, tenant_id).await
 }
 
 // ────────────────────────────────────────────────────────────────────────────────────────────────
