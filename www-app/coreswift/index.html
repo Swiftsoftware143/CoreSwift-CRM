@@ -8318,9 +8318,6 @@ function inboxShell() {
     // EVERY MESSAGE, WHICHEVER ADDRESS IT CAME TO (David, 2026-11-15). This panel is the reason the work
     // order exists: mail to info@ and david@ was stored and then invisible, because the only place mail
     // surfaced was as a ticket. Rows are never filtered by ticket state — the tag says which it is.
-    '<br><div class="card"><div class="card-header">All mail ' +
-      '<span style="font-size:12px;color:var(--text-muted)">— every message, tagged ticket or personal</span></div>' +
-      '<div class="card-body" id="peMessages"><div class="loading-wrap"><div class="spinner"></div> Loading messages...</div></div></div>' +
     '<br><div id="peAuto"><div class="loading-wrap"><div class="spinner"></div> Loading auto-replies...</div></div>' +
     '<br><div id="peSend"></div>';
 }
@@ -8416,9 +8413,6 @@ function pePlanCard(st, domainCount) {
 async function loadInboxTab() {
   const el = document.getElementById('peDomains');
   if (!el) return;
-  // the message list loads alongside the setup panels, and independently: a mail problem must never hide
-  // the messages that did arrive
-  loadMailList();
   const peSupportEl = document.getElementById('peSupport');
   const peBoxesEl = document.getElementById('peBoxes');
   const peAutoEl = document.getElementById('peAuto');
@@ -9399,48 +9393,6 @@ TAB_LOADERS['telnyx'] = loadTelnyxTab;
 // Integration Center does, and the install-wide key is read-only from the environment.)
 TAB_RENDERERS['telnyx-admin'] = telnyxShell;
 TAB_LOADERS['telnyx-admin'] = loadTelnyxTab;
-// ── All mail (David, 2026-11-15) ────────────────────────────────────────────────────────────────
-// A message that arrived at an address on this account is never invisible, whatever else it became.
-// The tag is the only difference between a ticket and personal mail: `david@` is personal and gets no queue
-// and no reports, `support@` still becomes a ticket, and both sit in one list.
-async function loadMailList() {
-  const el = document.getElementById('peMessages');
-  if (!el) return;
-  try {
-    const d = await API.get('/private-email/messages');
-    const rows = (d && (d.messages || d.items || d)) || [];
-    const list = Array.isArray(rows) ? rows : [];
-    if (!list.length) {
-      el.innerHTML = '<p style="color:var(--text-muted);margin:0">No messages yet. Mail sent to any address on ' +
-        'this account appears here.</p>';
-      return;
-    }
-    el.innerHTML = '<div style="overflow:auto"><table style="width:100%;border-collapse:collapse;min-width:720px">' +
-      '<thead><tr>' +
-        '<th style="text-align:left;padding:8px">Address</th>' +
-        '<th style="text-align:left;padding:8px">From</th>' +
-        '<th style="text-align:left;padding:8px">Subject</th>' +
-        '<th style="text-align:left;padding:8px">Kind</th>' +
-        '<th style="text-align:left;padding:8px">Received</th>' +
-      '</tr></thead><tbody>' +
-      list.map(m => {
-        const kind = m.is_ticket
-          ? '<span class="badge" style="background:#1e3a8a;color:#fff">Ticket' + (m.ticket_id ? '' : ' (pending)') + '</span>'
-          : '<span class="badge" style="background:#374151;color:#e5e7eb">Personal</span>';
-        return '<tr>' +
-          '<td style="padding:8px;border-top:1px solid var(--border)">' + escapeHtml(m.address || '—') + '</td>' +
-          '<td style="padding:8px;border-top:1px solid var(--border)">' + escapeHtml(m.from_address || '') + '</td>' +
-          '<td style="padding:8px;border-top:1px solid var(--border)">' + escapeHtml(m.subject || '(no subject)') + '</td>' +
-          '<td style="padding:8px;border-top:1px solid var(--border)">' + kind + '</td>' +
-          '<td style="padding:8px;border-top:1px solid var(--border);color:var(--text-muted)">' +
-            escapeHtml((m.received_at || m.created_at || '').replace('T', ' ').slice(0, 16)) + '</td>' +
-        '</tr>';
-      }).join('') + '</tbody></table></div>';
-  } catch (e) {
-    el.innerHTML = '<p style="color:var(--text-secondary);margin:0">' + escapeHtml(e.message) + '</p>';
-  }
-}
-
 TAB_LOADERS['inbox'] = loadInboxTab;
 TAB_LOADERS['email-settings'] = loadInboxTab;
 TAB_LOADERS['calendar'] = loadCalendarTab;
