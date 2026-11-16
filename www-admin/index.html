@@ -3258,6 +3258,10 @@ const TAB_LOADERS = {
           escapeHtml(c.email || '—'),
           escapeHtml(c.phone || '—'),
           escapeHtml(c.company || c.company_name || '—'),
+          // Where the contact is. The record always carried city/state and every imported lead
+          // arrives with them, but this table showed neither, so the operator could not see where
+          // a contact was even after the tenant console's form started asking.
+          escapeHtml(([c.city, c.state].filter(Boolean).join(', ')) || '—'),
           // The Status cell that used to sit here (a badge built from `c.status`) is gone:
           // GET /api/contacts has never returned a `status` key (`contacts` has no such column), so
           // the badge showed the same text on every row of every tenant. It is deliberately NOT
@@ -3268,7 +3272,7 @@ const TAB_LOADERS = {
         ]);
       }
       contactsTableEl.innerHTML = dataTable(
-        ['Name','Email','Phone','Company','Actions'], rows,
+        ['Name','Email','Phone','Company','City','Actions'], rows,
         'No contacts yet. Add your first contact to get started.'
       );
     } catch(e) {
@@ -5213,7 +5217,9 @@ function showAddContactModal() {
     '<div class="form-group"><label>Last name *</label><input type="text" id="ctAddLast"></div>' +
     '<div class="form-group"><label>Email</label><input type="email" id="ctAddEmail"></div>' +
     '<div class="form-group"><label>Phone</label><input type="text" id="ctAddPhone"></div>' +
-    '<div class="form-group"><label>Company</label><input type="text" id="ctAddCompany"></div>',
+    '<div class="form-group"><label>Company</label><input type="text" id="ctAddCompany"></div>' +
+    '<div class="form-group"><label>City</label><input type="text" id="ctAddCity" placeholder="Miami"></div>' +
+    '<div class="form-group"><label>State</label><input type="text" id="ctAddState" placeholder="FL"></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
     '<button class="btn btn-primary btn-sm" data-ops="contact-create" onclick="saveNewContact()">Save</button>');
 }
@@ -5228,6 +5234,12 @@ async function saveNewContact() {
   if (email) body.email = email;
   if (phone) body.phone = phone;
   if (company) body.company = company;
+  // Where the contact is (kanban: platform-admin parity) — the contact record has carried
+  // city/state all along, every imported lead arrives with them, and the tenant console's
+  // own Add Contact form already sends both; this console could not record them at all.
+  const city = ctModalValue('ctAddCity'), state = ctModalValue('ctAddState');
+  if (city) body.city = city;
+  if (state) body.state = state;
   try {
     await API.post('/contacts', body);
     closeModal();
@@ -5253,8 +5265,11 @@ async function editContact(id) {
     '<div class="form-group"><label>Last name *</label><input type="text" id="ctEditLast" value="' + escapeHtmlAttr(c.last_name || '') + '"></div>' +
     '<div class="form-group"><label>Email</label><input type="email" id="ctEditEmail" value="' + escapeHtmlAttr(c.email || '') + '"></div>' +
     '<div class="form-group"><label>Phone</label><input type="text" id="ctEditPhone" value="' + escapeHtmlAttr(c.phone || '') + '"></div>' +
-    '<div class="form-group"><label>Company</label><input type="text" id="ctEditCompany" value="' + escapeHtmlAttr(c.company || '') + '"></div>',
+    '<div class="form-group"><label>Company</label><input type="text" id="ctEditCompany" value="' + escapeHtmlAttr(c.company || '') + '"></div>' +
+    '<div class="form-group"><label>City</label><input type="text" id="ctEditCity" value="' + escapeHtmlAttr(c.city || '') + '"></div>' +
+    '<div class="form-group"><label>State</label><input type="text" id="ctEditState" value="' + escapeHtmlAttr(c.state || '') + '"></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-danger btn-sm" data-ops="contact-delete-from-editor" onclick="deleteContactFromEditor()">Delete</button>' +
     '<button class="btn btn-primary btn-sm" data-ops="contact-update" onclick="saveContactEdit()">Save</button>');
 }
 
@@ -5268,6 +5283,7 @@ async function saveContactEdit() {
       first_name: first, last_name: last,
       email: ctModalValue('ctEditEmail'), phone: ctModalValue('ctEditPhone'),
       company: ctModalValue('ctEditCompany'),
+      city: ctModalValue('ctEditCity'), state: ctModalValue('ctEditState'),
     });
     closeModal();
     toast('Contact updated', 'success');
@@ -5275,6 +5291,25 @@ async function saveContactEdit() {
   } catch (e) {
     toast('Update failed: ' + e.message, 'error');
   }
+}
+
+// Remove a contact from the platform-admin console (kanban: platform-admin parity). The tenant
+// console has had this in its own editor since t_fbb30c16; here there was NO delete path at all —
+// a contact imported with a bad address or created by mistake could only be corrected, never
+// removed, from this console. `DELETE /api/contacts/{id}` is the same route the tenant console
+// calls, so the permission model is unchanged.
+function deleteContactFromEditor() {
+  const id = CT_EDIT_ID;
+  if (!id) { toast('No contact selected', 'error'); return; }
+  if (!confirm('Delete this contact? This removes the record for good.')) return;
+  API.del('/contacts/' + encodeURIComponent(id))
+    .then(function () {
+      closeModal();
+      CT_EDIT_ID = null;
+      toast('Contact deleted', 'success');
+      if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['contacts']) TAB_LOADERS['contacts']();
+    })
+    .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
 }
 function famList(res, key) {
   if (Array.isArray(res)) return res;
