@@ -1354,6 +1354,24 @@ Authorization: Bearer &lt;token&gt;
   </div>
 
   <div class="card">
+    <h3>Export everything you have (Download my data)</h3>
+    <p>On <strong>Settings &gt; Profile</strong>, the <strong>Download my data</strong> card writes one
+       JSON file holding the whole workspace: contacts, companies, deals, pipelines, tags and lists,
+       tickets and help-desk settings, calendars and bookings, automations and webhooks, messages,
+       your own mail, plus your plan and team. The file is built fresh each time you press the button.</p>
+    <ul>
+      <li><strong>What is in it</strong> — every record above, with its dates and its ids, so the file can be
+          read on its own or loaded into another system.</li>
+      <li><strong>What is never in it</strong> — anything that could be used to sign in as you or act as your
+          workspace: passwords and password hashes, API-key secrets (each key's prefix and dates are
+          there instead), webhook signing secrets, connected-app credentials, invite links and the
+          Google calendar connection token. The file states this in its own <code>excluded</code> field.</li>
+      <li><strong>CSV stays</strong> — contacts and deals also export as CSV from their own screens, for
+          loading into a spreadsheet.</li>
+    </ul>
+  </div>
+
+  <div class="card">
     <h3>Close your account</h3>
     <p>The exit door is the last card on <strong>Settings &gt; Profile</strong>: <strong>Close my account</strong>. Press it once to open the form, then enter your password and type <code>CLOSE</code> &mdash; nothing is sent before that, so an account cannot be closed by one careless click.</p>
     <p>Closing ends your sign-in and every API key on the account, and the sign-in address will be refused from then on. It is <strong>not</strong> a delete: your contacts, deals and history stay on file for the operator, so support can reopen the account if you closed it by mistake.</p>
@@ -1459,7 +1477,9 @@ PATCH /api/account/:id — Update name</pre>
   </div>
   <div class="card">
     <h3>Export to CSV</h3>
-    <p>Two tables export to CSV: your <strong>contacts</strong> and your <strong>deals</strong>.</p>
+    <p>Two tables export to CSV: your <strong>contacts</strong> and your <strong>deals</strong>. For a copy of
+       the whole workspace in one file, use <strong>Settings &gt; Profile &rarr; Download my data</strong>
+       (see <em>Export everything you have</em> in the Profile section).</p>
     <ul>
       <li><strong>From Contacts</strong> — Click <strong>⬇ Export CSV</strong> on the Contacts screen to download all contacts as CSV</li>
       <li><strong>From Pipelines &amp; Deals</strong> — Click <strong>⬇ Export deals</strong> to download every deal in the workspace as CSV, with its contact, company, pipeline and stage names</li>

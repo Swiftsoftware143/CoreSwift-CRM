@@ -468,6 +468,21 @@ async fn main() -> anyhow::Result<()> {
         )
         // Protected routes
         .nest("/api/account", account::router(state.clone()))
+        // FLEET-CONTRACT ALIAS for the data copy (kanban t_e2ec5452). The other five apps all
+        // answer `GET /api/v1/account/export` from their customer console; this app's account
+        // surface lives at `/api/account/*`, so ONE extra mount keeps the documented fleet path
+        // answering here. SAME handler and SAME auth middleware as the app-native
+        // `/api/account/export`; private by default (on no allowlist), so the credential boundary
+        // refuses an anonymous caller before the handler runs. The account comes from the token.
+        .route(
+            "/api/v1/account/export",
+            axum::routing::get(crate::account::export::export_account).layer(
+                axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::auth::middleware::auth_middleware,
+                ),
+            ),
+        )
         // The signed-in user's OWN record — name + password. The workspace Profile tab has always
         // called these two paths; until now neither was registered (both answered 405).
         .nest("/api/profile", profile::router(state.clone()))

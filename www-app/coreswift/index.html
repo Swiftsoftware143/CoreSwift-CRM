@@ -3333,6 +3333,16 @@ async function loadProfileTab() {
       '<a class="btn btn-secondary" href="/contact.html">✉️ Contact us</a>' +
       '<span class="form-hint" style="margin-left:10px">/contact.html</span>', '') +
     '<br>' +
+    // DOWNLOAD MY DATA (kanban t_e2ec5452) — the customer's OWN copy of the workspace. Until now
+    // the only export was two CSV tables (contacts, opportunities), so a workspace leaving could
+    // not take its pipelines, tickets, bookings, automations or mail with it. The document is built
+    // FRESH on each press by GET /api/v1/account/export from the session's account — there is no id
+    // to spoof — and this card is the fleet-standard door to it.
+    card('Download my data',
+      '<p style="color:var(--text-secondary);margin:0 0 10px">One file with everything this workspace holds: your contacts, companies, deals, pipelines, tags and lists, tickets and help-desk settings, calendars and bookings, automations and webhooks, messages, mail, plan and team. It is built fresh each time you press the button, and nothing that could be used to sign in as somebody &mdash; passwords, API-key secrets, webhook signing secrets &mdash; is ever in it.</p>' +
+      '<button type="button" class="btn btn-secondary" id="dlDataBtn" data-ops="profile-download" onclick="downloadMyData()">Download my data</button>' +
+      '<p id="dlDataMsg" role="status" style="margin:10px 0 0;font-size:13px;display:none"></p>', '') +
+    '<br>' +
     // CLOSE MY ACCOUNT (kanban t_ae02611a) — the exit door. CoreSwift was the last app of the six
     // without one: until now the only way out was asking support to DELETE the user row, and the FK
     // chain CASCADEs, so a privacy request took the contacts, deals and history with it. The server
@@ -3525,6 +3535,53 @@ async function changePassword() {
     // The API's own sentence (e.g. "Current password is incorrect") is what the user acts on.
     toast(e.message, 'error');
   }
+}
+
+// ── DOWNLOAD MY DATA (kanban t_e2ec5452) ───────────────────────────────────────────────────────
+// The route answers a DOCUMENT (a JSON file the browser must
+// SAVE), not a value this page renders, so it is fetched directly instead of through API.call,
+// which always parses the body as JSON. The filename comes from the server's Content-Disposition
+// when it sends one, and every refusal is printed in the card rather than swallowed.
+function downloadMyData() {
+  const btn = document.getElementById('dlDataBtn');
+  const msg = document.getElementById('dlDataMsg');
+  const say = (text, ok) => {
+    if (!msg) return;
+    msg.textContent = text;
+    msg.style.color = ok ? '#047857' : '#b91c1c';
+    msg.style.display = 'block';
+  };
+  const refusal = (body, status) => {
+    try {
+      const d = JSON.parse(body);
+      if (d && typeof d.error === 'string' && d.error) return d.error;
+      if (d && typeof d.message === 'string' && d.message) return d.message;
+    } catch (e) { /* not JSON — fall through to the status */ }
+    return 'Could not build your copy (error ' + status + ').';
+  };
+  if (msg) msg.style.display = 'none';
+  if (btn) { btn.disabled = true; btn.textContent = 'Building your file…'; }
+  fetch('/api/v1/account/export', {
+    headers: STATE.token ? { 'Authorization': 'Bearer ' + STATE.token } : {},
+    cache: 'no-store'
+  })
+    .then(r => {
+      if (!r.ok) return r.text().then(t => { throw new Error(refusal(t, r.status)); });
+      let name = 'coreswift-account-' + new Date().toISOString().slice(0, 10) + '.json';
+      const m = /filename="?([^";]+)"?/i.exec(r.headers.get('content-disposition') || '');
+      if (m && m[1]) name = m[1];
+      return r.blob().then(bl => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(bl);
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { try { URL.revokeObjectURL(a.href); } catch (e) { /* revoked */ } a.remove(); }, 1500);
+        say('Your copy has been downloaded.', true);
+      });
+    })
+    .catch(e => say((e && e.message) || 'Could not build your copy', false))
+    .then(() => { if (btn) { btn.disabled = false; btn.textContent = 'Download my data'; } });
 }
 
 // ── CLOSE MY ACCOUNT (kanban t_ae02611a) ────────────────────────────────────────────────────────

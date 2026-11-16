@@ -1,4 +1,5 @@
 pub mod branding;
+pub mod export;
 pub mod handlers;
 pub mod models;
 pub mod settings;
@@ -38,6 +39,11 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/branding/preview",
             axum::routing::post(branding::preview_email),
         )
+        // The customer's OWN copy of the workspace, one JSON document (kanban t_e2ec5452). Parity
+        // with the rest of the fleet, which all answer `/api/v1/account/export`; this is the
+        // app-native twin at `/api/account/export`, behind this router's auth layer. The account
+        // comes from the token, so there is no id to spoof.
+        .route("/export", axum::routing::get(export::export_account))
         .layer(axum::middleware::from_fn_with_state(
             crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
             crate::body_deadline::body_read_deadline_middleware,

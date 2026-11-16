@@ -180,6 +180,16 @@
 //!        + the 12 root-level mounts), and those are what the census test pins. The last +8 are the
 //!        data-mapping surface (`/api/data-mapping/*`, migration 155).
 //!
+//!   +2 mounts (2026-11-16, kanban t_e2ec5452), THE CUSTOMER'S OWN DATA COPY: `GET
+//!        /api/account/export` on the account router (the customer's own copy of the workspace, one
+//!        JSON document, account read from the token) and its fleet-contract alias `GET
+//!        /api/v1/account/export`, mounted once in `main.rs` with the SAME handler and the same
+//!        `auth_middleware`, because the other five apps all answer the /api/v1 path. Neither joins
+//!        an allowlist: measured anonymous, both answer 401 "Authentication required" — the
+//!        boundary refused before the handler ran. The extractor now resolves 472 mounted
+//!        `.route(..)` calls / 460 on /api** (472 = 460 /api + the 12 root-level mounts), and those
+//!        are what `the_census_shape_is_what_the_docs_say` pins.
+//!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
 //!        the per-module gate was doing its job. The two /api routes added since (kanban
@@ -1293,12 +1303,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            470,
+            472,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 458,
+            api, 460,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.
