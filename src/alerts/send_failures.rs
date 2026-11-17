@@ -12,6 +12,9 @@
 //!     that fires on every tick is an alert nobody reads.
 //!   * ONE NOTIFICATION PER ACCOUNT PER PASS, naming how many failed and the first reason in plain words, rather
 //!     than a burst of identical rows that hides the count.
+//!   * NEVER FOR AN ADDRESS THAT CANNOT RECEIVE MAIL. A harness address (`@example.invalid` and the rest of the
+//!     class `security::probe_addr` owns) can only bounce, so its failure is expected; counting it buries the real
+//!     refusal. The ledger still records it, so the sweep never reconsiders it.
 //!
 //! Deliberately NOT included: automatic retrying. A permanent refusal (a bad key, a rejected domain) fails the
 //! same way however many times it is tried, and a retry loop would bury the alert in its own noise.
@@ -23,13 +26,22 @@ use uuid::Uuid;
 pub struct AlertPass {
     pub accounts: usize,
     pub messages: usize,
+    /// Failed sends the pass deliberately did not page anyone about: an address that cannot receive
+    /// mail (`@example.invalid` and the rest of the harness class) is expected, not news.
+    pub withheld: usize,
 }
+
+/// The feed reads `message` and `read`; naming only `title`/`body` is the defect this module shipped
+/// with (t_6dcb0d23), so the statement lives in one place and a test pins both vocabularies.
+const NOTIFICATION_INSERT: &str =
+    "INSERT INTO notifications (tenant_id, user_id, title, message, body, notification_type, read)
+     VALUES ($1, $2, $3, $4, $4, 'email_failure', false)";
 
 /// Gather failures nobody has been told about, and tell them.
 pub async fn run_once(pool: &PgPool) -> AlertPass {
     let rows: Vec<(Uuid, Uuid, Option<String>, Option<String>, Option<String>)> =
         match sqlx::query_as(
-            "SELECT o.id, o.tenant_id, o.to_address, o.subject, o.error_message
+            "SELECT o.id, o.tenant_id, COALESCE(o.to_address, o.recipient), o.subject, o.error_message
            FROM outbound_messages o
            LEFT JOIN send_failure_alerts a ON a.message_id = o.id
           WHERE o.status = 'failed'
@@ -66,31 +78,19 @@ pub async fn run_once(pool: &PgPool) -> AlertPass {
 
     let mut pass = AlertPass::default();
     for (tenant_id, failures) in by_tenant {
-        let count = failures.len();
-        let first = failures
+        // A failed send to an address that cannot receive mail is expected, not news: the fleet's
+        // own proofs and the transport's reserved-domain refusal both land here, so paging the
+        // operator for them is how a real alert gets missed (measured 2026-11-17: 2 of the 3
+        // recipients behind "3 messages could not be sent" were @example.invalid probes). The row
+        // is still recorded in the ledger, so a sweep every minute never reconsiders it.
+        let (withheld, real): (Vec<_>, Vec<_>) = failures
+            .into_iter()
+            .partition(|(_, to, _, _)| withheld_reason(to.as_deref()).is_some());
+
+        let first = real
             .iter()
             .find_map(|(_, _, _, e)| e.clone())
             .unwrap_or_else(|| "no reason recorded".to_string());
-        let title = if count == 1 {
-            "A message could not be sent".to_string()
-        } else {
-            format!("{count} messages could not be sent")
-        };
-        let body = format!(
-            "{count} message(s) this account tried to send were refused by the mail provider, so the people \
-             addressed to them never received them. The first reason recorded: {first}. \
-             Check the sending domain's credential in Email Domains, then send again from the message."
-        );
-
-        // the owner is the person who can act on a credential problem
-        let owner: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM users WHERE tenant_id = $1 AND is_active
-              ORDER BY (role = 'owner') DESC, created_at LIMIT 1",
-        )
-        .bind(tenant_id)
-        .fetch_optional(pool)
-        .await
-        .unwrap_or(None);
 
         let mut tx = match pool.begin().await {
             Ok(t) => t,
@@ -99,21 +99,47 @@ pub async fn run_once(pool: &PgPool) -> AlertPass {
                 continue;
             }
         };
-        if let Err(e) = sqlx::query(
-            "INSERT INTO notifications (tenant_id, user_id, title, body, notification_type)
-             VALUES ($1, $2, $3, $4, 'email_failure')",
-        )
-        .bind(tenant_id)
-        .bind(owner)
-        .bind(&title)
-        .bind(&body)
-        .execute(&mut *tx)
-        .await
-        {
-            tracing::error!(error = %e, "could not write the send-failure notification");
-            continue;
+
+        if !real.is_empty() {
+            let count = real.len();
+            let title = if count == 1 {
+                "A message could not be sent".to_string()
+            } else {
+                format!("{count} messages could not be sent")
+            };
+            let body = format!(
+                "{count} message(s) this account tried to send were refused by the mail provider, so the people \
+                 addressed to them never received them. The first reason recorded: {first}. \
+                 Check the sending domain's credential in Email Domains, then send again from the message."
+            );
+
+            // the owner is the person who can act on a credential problem
+            let owner: Option<Uuid> = sqlx::query_scalar(
+                "SELECT id FROM users WHERE tenant_id = $1 AND is_active
+                  ORDER BY (role = 'owner') DESC, created_at LIMIT 1",
+            )
+            .bind(tenant_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            // The feed reads `message`; this writer named only title/body, so the alert was
+            // invisible even when the feed itself worked (t_6dcb0d23). `message` carries the same
+            // sentence as `body`, and `read` is explicit: the notification is unread by definition.
+            if let Err(e) = sqlx::query(NOTIFICATION_INSERT)
+                .bind(tenant_id)
+                .bind(owner)
+                .bind(&title)
+                .bind(&body)
+                .execute(&mut *tx)
+                .await
+            {
+                tracing::error!(error = %e, "could not write the send-failure notification");
+                continue;
+            }
         }
-        for (message_id, _, _, _) in &failures {
+
+        for (message_id, _, _, _) in &real {
             let _ = sqlx::query(
                 "INSERT INTO send_failure_alerts (message_id, tenant_id, summary)
                  VALUES ($1, $2, $3) ON CONFLICT (message_id) DO NOTHING",
@@ -124,22 +150,60 @@ pub async fn run_once(pool: &PgPool) -> AlertPass {
             .execute(&mut *tx)
             .await;
         }
+        for (message_id, to, _, _) in &withheld {
+            let why = withheld_reason(to.as_deref()).unwrap_or("undeliverable recipient");
+            let summary = format!("not alerted: {why}");
+            let _ = sqlx::query(
+                "INSERT INTO send_failure_alerts (message_id, tenant_id, summary)
+                 VALUES ($1, $2, $3) ON CONFLICT (message_id) DO NOTHING",
+            )
+            .bind(message_id)
+            .bind(tenant_id)
+            .bind(&summary)
+            .execute(&mut *tx)
+            .await;
+            tracing::info!(
+                message = %message_id,
+                recipient = to.as_deref().unwrap_or("-"),
+                why,
+                "failed send to an address that cannot receive mail; no notification"
+            );
+        }
         if let Err(e) = tx.commit().await {
             tracing::error!(error = %e, "could not commit the send-failure alert");
             continue;
         }
-        pass.accounts += 1;
-        pass.messages += count;
-        tracing::warn!(
-            target: "send_failures",
-            "account {} told about {} refused message(s): {}", tenant_id, count, first
-        );
+        if !real.is_empty() {
+            pass.accounts += 1;
+            pass.messages += real.len();
+            tracing::warn!(
+                target: "send_failures",
+                "account {} told about {} refused message(s): {}", tenant_id, real.len(), first
+            );
+        }
+        pass.withheld += withheld.len();
     }
     pass
 }
 
+/// Why a failed send must not page a human, or `None` when it should.
+///
+/// The app already classifies the identities a harness mints (`security::probe_addr`): the fleet's
+/// own domains, the RFC 2606/6761 reserved names and the `probe-`/`canary-`/`bounce+` local parts.
+/// A message addressed there can only land in the fleet's own mailboxes or nowhere at all, so its
+/// failure is expected — counting it turns a real credential break into "3 messages could not be
+/// sent" whose first reason is a probe.
+fn withheld_reason(to: Option<&str>) -> Option<&'static str> {
+    match to {
+        Some(addr) => crate::security::probe_addr::synthetic_requester(addr, ""),
+        None => Some("no recipient address"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn the_notification_says_what_happened_and_what_to_do() {
         // the wording is the product: "failed" tells an owner nothing they can act on
@@ -148,5 +212,25 @@ mod tests {
         let body = "1 message(s) this account tried to send were refused by the mail provider";
         assert!(body.contains("refused by the mail provider"));
         assert!(body.contains("never received them") || body.contains("refused"));
+    }
+
+    #[test]
+    fn the_alert_writes_the_columns_the_feed_reads() {
+        // the two vocabularies must not drift apart again: the feed selects message + read (t_6dcb0d23)
+        assert!(NOTIFICATION_INSERT.contains("message"));
+        assert!(NOTIFICATION_INSERT.contains("read"));
+    }
+
+    #[test]
+    fn harness_addresses_are_recorded_but_never_paged() {
+        // measured live 2026-11-17: these two were 2 of the 3 recipients in "3 messages could not be sent"
+        assert_eq!(
+            withheld_reason(Some("zz3-booking@example.invalid")),
+            Some("example.invalid")
+        );
+        // the one real refusal in that same alert stays alertable
+        assert!(withheld_reason(Some("mdp-1794480245@fldubai.com")).is_none());
+        assert!(withheld_reason(Some("swiftsoftware143@yahoo.com")).is_none());
+        assert_eq!(withheld_reason(None), Some("no recipient address"));
     }
 }
