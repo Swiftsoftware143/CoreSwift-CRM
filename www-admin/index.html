@@ -2388,10 +2388,33 @@ function rrDeleteTeam(id) {
     .then(function () { toast('Team deleted', 'success'); loadRoundRobinTab(); })
     .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
 }
-function rrAddMember(teamId) {
+// The picker reads THIS workspace's roster from GET /api/auth/team/members (the same list the
+// Inbox assignment picker uses: any signed-in member may read it). This modal used to ask the
+// operator to PASTE A RAW USER ID and told them "there is no endpoint that lists a workspace's
+// users from here" — untrue: that route exists and is tenant-scoped, so the id was the only
+// thing the screen was missing. If the roster cannot be read, the modal says why instead of
+// offering an empty box.
+async function rrAddMember(teamId) {
+  let roster = [];
+  try {
+    roster = famList(await API.get('/auth/team/members'), 'members');
+  } catch (e) {
+    toast('Could not load the workspace members: ' + planGateText(e), 'error');
+    return;
+  }
+  const active = roster.filter(function (u) { return u && u.id && u.is_active !== false; });
+  if (!active.length) {
+    toast('This workspace has no other members yet. Invite a teammate first, then add them to a team.', 'error');
+    return;
+  }
+  const opts = active.map(function (u) {
+    const label = (u.name && String(u.name).trim()) ? String(u.name).trim() : (u.email || u.id);
+    const mail = (u.email && label !== u.email) ? ' — ' + u.email : '';
+    return '<option value="' + u.id + '">' + escapeHtml(label + mail) + '</option>';
+  }).join('');
   showModal('Add Team Member',
-    '<div class="form-group"><label>User ID</label><input type="text" id="rrUserId" placeholder="uuid of a user in this workspace"></div>' +
-    '<p class="form-hint">There is no endpoint that lists a workspace&rsquo;s users from here, so this takes the user id (found in Users) rather than faking a picker.</p>' +
+    '<div class="form-group"><label>Workspace member</label><select id="rrUserId">' + opts + '</select></div>' +
+    '<p class="form-hint">Everyone listed is a person on this workspace. Only active members are offered.</p>' +
     '<div class="form-group"><label>Weight</label><input type="number" id="rrWeight" value="1" min="1"></div>' +
     '<div class="form-group"><label>Max concurrent bookings</label><input type="number" id="rrMax" value="10" min="1"></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
@@ -2399,7 +2422,7 @@ function rrAddMember(teamId) {
 }
 async function rrCreateMember(teamId) {
   const uid = ((document.getElementById('rrUserId') || {}).value || '').trim();
-  if (!uid) { toast('User id is required', 'error'); return; }
+  if (!uid) { toast('Choose a member to add', 'error'); return; }
   try {
     await API.post('/round-robin/teams/' + teamId + '/members', {
       user_id: uid,
