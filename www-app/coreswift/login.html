@@ -56,7 +56,7 @@ button:disabled{opacity:.6;cursor:not-allowed}
     <div id="rgWsWrap">
       <label for="rgWs">Workspace name</label>
       <input id="rgWs" autocomplete="organization" placeholder="Your company name">
-      <p class="hint" style="margin:4px 0 10px">This becomes your address in CoreSwift — your team and your customers will see it. You can add more workspaces later if your plan allows.</p>
+      <p class="hint" id="rgWsAddr" style="margin:4px 0 10px">This becomes your address in CoreSwift — your team and your customers will see it. You can add more workspaces later if your plan allows.</p>
     </div>
     <label for="rgEmail">Work email</label><input id="rgEmail" type="email" autocomplete="email" required>
     <button type="submit" id="rgBtn">Create free account</button>
@@ -155,6 +155,51 @@ button:disabled{opacity:.6;cursor:not-allowed}
     note.textContent = 'You have been invited to join a CoreSwift CRM workspace. Create your login below — you will join the existing workspace, not a new one.';
     note.style.display = 'block';
     document.title = 'Join your workspace — CoreSwift CRM';
+  }
+
+  // ── The workspace NAME is the ADDRESS (cron 2026-11-17) ──────────────────────────────────────
+  // Every account gets one workspace, and the signup model says its name "becomes the address your
+  // team and customers use". The server can only build that address from the name when it is HANDED
+  // the slug: with none, `signup::tenant_identity` derives it from the EMAIL's local part plus random
+  // hex, so a customer who named their workspace "Acme Plumbing" landed on
+  // `bob-3f2a1c9d.coreswiftcrm.com` — an address nobody would share, and two customers called "bob"
+  // got unrelated random addresses. The form therefore derives the slug from the typed name, shows
+  // the address back live, and sends it with the signup.
+  function slugifyWs(v) {
+    var s = String(v || '').toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+    if (s.length > 40) { s = s.slice(0, 40).replace(/-$/, ''); }
+    return s;
+  }
+  (function () {
+    var input = document.getElementById('rgWs');
+    var hint = document.getElementById('rgWsAddr');
+    if (!input || !hint) return;
+    var base = hint.textContent;
+    function paint() {
+      var s = slugifyWs(input.value);
+      hint.textContent = s ? 'Your address: ' + s + '.coreswiftcrm.com' : base;
+    }
+    input.addEventListener('input', paint);
+    paint();
+  })();
+
+  // POST the signup and hand back {res, data} so the caller can retry a TAKEN address:
+  // `tenants.slug` is UNIQUE and the refusal is a readable 409, never a 500.
+  function postSignup(b) {
+    return fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(b)
+    }).then(function (res) {
+      return res.text().then(function (text) {
+        var data = null;
+        try { data = text ? JSON.parse(text) : null; } catch (err) { data = null; }
+        return { res: res, data: data };
+      });
+    });
   }
 
   function submit(url, body, btn, label, okText) {
@@ -378,7 +423,13 @@ button:disabled{opacity:.6;cursor:not-allowed}
       // model). Nothing is stored here and there is no auto-login — the user confirms their
       // address by signing in with the password we sent.
     };
-    if (!INVITE) body.account_name = ws;
+    if (!INVITE) {
+      body.account_name = ws;
+      // The address follows the name (see slugifyWs). Omitted when the name yields nothing usable —
+      // the server then derives its own, so a signup can never be BLOCKED on the address.
+      var wsSlug = slugifyWs(ws);
+      if (wsSlug) body.account_slug = wsSlug;
+    }
     if (INVITE) {
       // resolve_account() joins the inviter's tenant when this field is present and ignores
       // account_name/account_slug, so they are deliberately omitted on the invite path.
@@ -390,14 +441,26 @@ button:disabled{opacity:.6;cursor:not-allowed}
     if (PLAN) body.plan_slug = PLAN;
     btn.disabled = true;
     btn.innerHTML = '<span class="spin"></span>' + (INVITE ? 'Joining…' : 'Creating account…');
-    fetch('/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    }).then(function (res) {
-      return res.text().then(function (text) {
-        var data = null;
-        try { data = text ? JSON.parse(text) : null; } catch (err) { data = null; }
+    postSignup(body).then(function (first) {
+      // A TAKEN address is not a failed signup. Retry with a short suffix, and only then let the
+      // server derive its own, so the customer is never told their signup failed because someone
+      // else already had "acme-plumbing".
+      if (first.res.status === 409 && body.account_slug) {
+        var alt = {};
+        for (var k1 in body) { alt[k1] = body[k1]; }
+        alt.account_slug = body.account_slug + '-' + Math.random().toString(36).slice(2, 6);
+        return postSignup(alt).then(function (second) {
+          if (second.res.status !== 409) return second;
+          var third = {};
+          for (var k2 in body) { third[k2] = body[k2]; }
+          delete third.account_slug;
+          return postSignup(third);
+        });
+      }
+      return first;
+    }).then(function (r) {
+      var res = r.res;
+      var data = r.data;
         if (!res.ok) {
           throw new Error((data && (data.message || data.error)) || ('Request failed (HTTP ' + res.status + ')'));
         }
@@ -442,7 +505,6 @@ button:disabled{opacity:.6;cursor:not-allowed}
         })();
         btn.disabled = false;
         btn.textContent = INVITE ? 'Join workspace' : 'Check your email';
-      });
     }).catch(function (err) {
       btn.disabled = false;
       btn.textContent = INVITE ? 'Join workspace' : 'Create free account';
