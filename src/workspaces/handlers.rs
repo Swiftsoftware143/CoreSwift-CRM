@@ -330,6 +330,16 @@ pub async fn delete_workspace(
     }
 
     let mut tx = state.db.begin().await.map_err(AppError::Database)?;
+    // The SAME tenant-scoped lock `set_default_workspace` takes (kanban t_e534aa46), and taken
+    // FIRST so both writers acquire it before touching workspace rows — the other order lets a
+    // press hold the advisory lock while waiting for this row, and this delete hold the row while
+    // waiting for the lock (a deadlock the customer would see as a 500). Without it, the
+    // replacement-default UPDATE below can race a press and violate ux_workspaces_one_default.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1::text))")
+        .bind(tid.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(AppError::Database)?;
     sqlx::query("DELETE FROM workspaces WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tid)
@@ -339,14 +349,24 @@ pub async fn delete_workspace(
 
     // never leave the account without a default
     if was_default {
-        sqlx::query(
+        let promoted = sqlx::query(
             "UPDATE workspaces SET is_default = true, updated_at = now() \
              WHERE id = (SELECT id FROM workspaces WHERE tenant_id = $1 ORDER BY created_at LIMIT 1)",
         )
         .bind(tid)
         .execute(&mut *tx)
-        .await
-        .map_err(AppError::Database)?;
+        .await;
+        match promoted {
+            Ok(_) => {}
+            Err(sqlx::Error::Database(db))
+                if db.constraint() == Some("ux_workspaces_one_default") =>
+            {
+                return Err(AppError::Duplicate(
+                    "Another workspace was made the default at the same moment. Try again.".into(),
+                ));
+            }
+            Err(e) => return Err(AppError::Database(e)),
+        }
     }
     tx.commit().await.map_err(AppError::Database)?;
 
