@@ -8304,6 +8304,11 @@ function txBind(root) {
 
 // ── Private Email tab: domains, mailboxes, auto-replies, send, support box ─────
 const PE = { domains: [], boxes: [], autoReplies: [], support: null, keys: [], keysError: null, planNote: '', available: true, transport: null };
+// The mail client's own host. The vhost (/opt/swift/nginx/sites/mail-coreswift.conf) proxies /api/ to
+// THIS same container, so a customer signs in once and reads the same mail here and in the CRM; the
+// per-customer branded name (inbox.<their domain>) only answers once THEY finish the CNAME, so the
+// button in the Mailboxes list always points at the name that works today.
+const MAIL_CLIENT_URL = 'https://inbox.coreswiftcrm.com/';
 
 function inboxShell() {
   return pageHeader('Private Email', 'Send from your own domains, auto-reply, and turn forwarded mail into tickets',
@@ -8443,10 +8448,12 @@ async function loadInboxTab() {
   // send path consults the same function for can_send / the daily cap, so the card below cannot
   // show a limit the server does not enforce. A failed read paints an error, never a clean sheet.
   const planEl = document.getElementById('pePlan');
+  // Read ONCE, above the plan card, and used again by the Mailboxes card below: the create-inbox
+  // button and the plan card must not be able to disagree about how many inboxes the plan allows.
+  let planStatus = null, planErr = null;
+  try { planStatus = await API.get('/private-email/mailbox-status'); }
+  catch (e) { planErr = e.message; }
   if (planEl) {
-    let planStatus = null, planErr = null;
-    try { planStatus = await API.get('/private-email/mailbox-status'); }
-    catch (e) { planErr = e.message; }
     planEl.innerHTML = planErr
       ? icErr('Could not read your mailbox plan and limits', planErr)
       : pePlanCard(planStatus, domains.length);
@@ -8489,20 +8496,50 @@ async function loadInboxTab() {
         'No domains on this account yet.') + peKeysCard();
   }
 
+  // ── Mailboxes: the list a customer works from, the door into the mail client, and the create
+  // button the plan and the domain's own verification decide ─────────────────────────────────
+  // Every control here is an EXISTING route: GET /api/private-email/boxes, POST
+  // /api/private-email/boxes ({domain_id, local_part}) and GET /api/private-email/domains/:id/records,
+  // whose `can_create_mailbox` is the SERVER's own answer to "may this domain carry an inbox yet".
+  // The cap comes from /private-email/mailbox-status — the same read the plan card renders — so this
+  // button cannot offer an inbox the plan would refuse to provision.
+  const verifiedDomains = (PE.domains || []).filter(function (d) { return !!d.verified; });
+  const boxLimit = (planStatus && planStatus.mailbox_limit != null) ? Number(planStatus.mailbox_limit) : null;
+  const boxCount = (planStatus && Array.isArray(planStatus.mailboxes)) ? planStatus.mailboxes.length : PE.boxes.length;
+  const atLimit = boxLimit != null && boxCount >= boxLimit;
+  let boxesAction = '';
+  let boxesFoot = '';
+  if (atLimit) {
+    boxesAction = '<button class="btn btn-ghost btn-sm" onclick="openUpgradeModal()">Upgrade for more inboxes</button>';
+    boxesFoot = '<p style="color:var(--text-secondary);margin:10px 0 0">Your plan includes ' +
+      escapeHtml(String(boxLimit)) + ' inbox' + (boxLimit === 1 ? '' : 'es') + ' and ' +
+      (boxCount === boxLimit ? 'all of them are' : 'they are all') + ' in use. ' +
+      '<a href="#" onclick="openUpgradeModal();return false;">Upgrade your plan</a> to add another — ' +
+      'existing inboxes keep working either way.</p>';
+  } else if (!verifiedDomains.length) {
+    boxesFoot = '<p style="color:var(--text-secondary);margin:10px 0 0">A new inbox needs a <b>verified</b> domain. ' +
+      'Add a domain above, add the DNS records it lists, then press <b>Re-check</b> — the create button appears as soon as a domain is verified.</p>';
+  } else {
+    boxesAction = '<button class="btn btn-primary btn-sm" onclick="peOpenNewBox()">+ New inbox</button>';
+  }
   peBoxesEl.innerHTML = card('📬 Mailboxes',
-    '<p style="color:var(--text-secondary);margin:0">A mailbox is an address on one of your domains. Outbound mail can only be sent FROM a mailbox.</p>') +
+    '<p style="color:var(--text-secondary);margin:0">A mailbox is an address on one of your domains. Outbound mail can only be sent FROM a mailbox; <b>Open inbox</b> opens the mail client where you read and answer what arrives.</p>',
+    boxesAction) +
     dataTable(['Address', 'Local part', 'Status', 'Forwarding', 'Actions'],
       PE.boxes.map(b => [
         '<code>' + escapeHtml(b.email_address || '') + '</code>',
         escapeHtml(b.local_part || ''),
         b.status === 'active' ? '<span class="badge badge-success">active</span>' : '<span class="badge badge-muted">' + escapeHtml(b.status || '') + '</span>',
         b.forwarding_enabled ? 'on' : 'off',
+        (b.status === 'active'
+          ? '<a class="btn btn-ghost btn-xs" href="' + escapeHtmlAttr(MAIL_CLIENT_URL) + '" target="_blank" rel="noopener">Open inbox ↗</a> '
+          : '') +
         '<button class="btn btn-ghost btn-xs" onclick="peEditBox(\'' + b.id + '\')">Edit</button>' +
         (b.status === 'active'
           ? ' <button class="btn btn-ghost btn-xs" onclick="peDeactivateBox(\'' + b.id + '\')">Deactivate</button>'
           : '')
       ]),
-      'No mailboxes yet — add a domain first.');
+      'No mailboxes yet — add a domain first.') + boxesFoot;
 
   if (errs.autoReplies) peAutoEl.innerHTML = icErr('Could not read auto-replies', errs.autoReplies);
   else {
@@ -9664,6 +9701,93 @@ async function gcEditCalendar(slug) {
       closeModal(); toast('Calendar updated', 'success'); await loadCalendarTab();
     } catch (e) { toast('Could not save: ' + e.message, 'error'); b.disabled = false; }
   });
+}
+
+// ── New inbox: pick a verified domain, ask the SERVER whether it may carry an inbox, then create ──
+// The gate is the server's own answer (GET /private-email/domains/:id/records -> `can_create_mailbox`
+// = verified AND its sending records present), never a local guess: a customer can never make an
+// address that cannot receive, and the sentence beside the button cannot disagree with the write.
+const PE_NEWBOX = { domId: null, ok: false, checked: false, err: null };
+
+function peOpenNewBox() {
+  const verified = (PE.domains || []).filter(function (d) { return !!d.verified; });
+  if (!verified.length) { toast('Verify a domain first — press Re-check on the domain row', 'error'); return; }
+  PE_NEWBOX.domId = null; PE_NEWBOX.ok = false; PE_NEWBOX.checked = false; PE_NEWBOX.err = null;
+  const opts = verified.map(function (d) {
+    return '<option value="' + escapeHtmlAttr(d.id) + '">' + escapeHtml(d.domain || '') + '</option>';
+  }).join('');
+  showModal('New inbox',
+    '<div class="form-group"><label>Domain</label>' +
+      '<select id="peNewBoxDomain" onchange="peNewBoxCheck(this.value)">' + opts + '</select>' +
+      '<span class="form-hint">Only verified domains are listed — an inbox can only receive on a domain whose DNS records pass.</span></div>' +
+    '<div class="form-group"><label>Address</label>' +
+      '<input type="text" id="peNewBoxLocal" placeholder="info" autocomplete="off" oninput="peNewBoxPaint()">' +
+      '<span class="form-hint">The part before the @. <span id="peNewBoxPreview"></span></span></div>' +
+    '<p id="peNewBoxState" style="color:var(--text-secondary);margin:0">Checking whether this domain can take an inbox…</p>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="peNewBoxCreate" disabled>Create inbox</button>');
+  peNewBoxCheck(verified[0].id);
+  const b = document.getElementById('peNewBoxCreate');
+  if (!b) return;
+  b.addEventListener('click', async function () {
+    const dom = (document.getElementById('peNewBoxDomain') || {}).value || '';
+    const local = String((document.getElementById('peNewBoxLocal') || {}).value || '').trim().toLowerCase();
+    if (!local) { toast('Enter the part before the @', 'error'); return; }
+    b.disabled = true; b.textContent = 'Creating…';
+    try {
+      await API.post('/private-email/boxes', { domain_id: dom, local_part: local });
+      closeModal(); toast('Inbox created — open it from its row', 'success'); await loadInboxTab();
+    } catch (e) {
+      b.disabled = false; b.textContent = 'Create inbox';
+      toast('Could not create the inbox: ' + ((e && e.message) || e), 'error');
+    }
+  });
+}
+
+async function peNewBoxCheck(domId) {
+  PE_NEWBOX.domId = domId; PE_NEWBOX.ok = false; PE_NEWBOX.checked = false; PE_NEWBOX.err = null;
+  peNewBoxPaint();
+  let rec = null;
+  try { rec = await API.get('/private-email/domains/' + encodeURIComponent(domId) + '/records'); }
+  catch (e) {
+    if (PE_NEWBOX.domId === domId) { PE_NEWBOX.checked = true; PE_NEWBOX.err = ((e && e.message) || String(e)); peNewBoxPaint(); }
+    return;
+  }
+  // A slow answer for a domain the customer has already switched away from must not overwrite the
+  // state of the domain they are looking at now.
+  if (PE_NEWBOX.domId !== domId) return;
+  PE_NEWBOX.checked = true;
+  PE_NEWBOX.ok = !!(rec && rec.can_create_mailbox);
+  peNewBoxPaint();
+}
+
+function peNewBoxPaint() {
+  const domEl = document.getElementById('peNewBoxDomain');
+  if (!domEl) return;                       // the modal was closed while the check was in flight
+  const localEl = document.getElementById('peNewBoxLocal');
+  const stateEl = document.getElementById('peNewBoxState');
+  const prevEl = document.getElementById('peNewBoxPreview');
+  const b = document.getElementById('peNewBoxCreate');
+  const local = String((localEl && localEl.value) || '').trim().toLowerCase();
+  const dom = (PE.domains || []).filter(function (d) { return d.id === PE_NEWBOX.domId; })[0] || {};
+  if (prevEl) prevEl.innerHTML = local ? '<code>' + escapeHtml(local + '@' + (dom.domain || '')) + '</code>' : '';
+  if (b) b.disabled = !(local && PE_NEWBOX.ok);
+  if (!stateEl) return;
+  if (!local) { stateEl.textContent = 'Enter the part before the @ — for example info.'; return; }
+  if (!PE_NEWBOX.checked) { stateEl.textContent = 'Checking whether this domain can take an inbox…'; return; }
+  if (PE_NEWBOX.err) {
+    stateEl.innerHTML = 'Could not check this domain: ' + escapeHtml(PE_NEWBOX.err) +
+      '. You can still try — the server refuses an inbox on a domain that cannot receive.';
+    if (b) b.disabled = false;               // the server is the last word; let the attempt answer
+    return;
+  }
+  if (PE_NEWBOX.ok) {
+    stateEl.innerHTML = 'This domain is verified — <b>' + escapeHtml(local + '@' + (dom.domain || '')) +
+      '</b> can receive mail as soon as it is created.';
+  } else {
+    stateEl.innerHTML = 'This domain is not ready yet: add the DNS records it lists and press <b>Re-check</b> on its row. ' +
+      'An inbox made on an unverified domain could not receive mail.';
+  }
 }
 
 // ── Private email: per-id mailbox + auto-reply actions ──────────────────────
