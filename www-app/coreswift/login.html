@@ -33,7 +33,7 @@ button:disabled{opacity:.6;cursor:not-allowed}
 <body>
 <div class="card">
   <h1>CoreSwift CRM</h1>
-  <p class="sub">Sign in to your workspace</p>
+  <p class="sub" id="authSub">Sign in to your workspace</p>
   <div class="tabs">
     <div class="tab on" id="tabLogin">Sign in</div>
     <div class="tab" id="tabRegister">Create account</div>
@@ -109,6 +109,15 @@ button:disabled{opacity:.6;cursor:not-allowed}
   document.getElementById('tabRegister').addEventListener('click', function () { swap(false); });
   function swap(isLogin) {
     hide();
+    // The tab and the subtitle follow the pane. Measured live 2026-11-17: the $1 Inbox page's
+    // "Start free" CTA lands on /register/?plan=inbox, which opens the CREATE-ACCOUNT pane — and
+    // the browser tab still read "Sign in" while the line under the heading said "Sign in to your
+    // workspace". A buyer who pressed Start free was being told to sign in.
+    document.title = isLogin ? 'Sign in \u2014 CoreSwift CRM' : 'Create your account \u2014 CoreSwift CRM';
+    var sub = document.getElementById('authSub');
+    if (sub) {
+      sub.textContent = isLogin ? 'Sign in to your workspace' : 'Create your free account \u2014 no card needed';
+    }
     document.getElementById('tabLogin').classList.toggle('on', isLogin);
     document.getElementById('tabRegister').classList.toggle('on', !isLogin);
     document.getElementById('paneLogin').classList.toggle('on', isLogin);
