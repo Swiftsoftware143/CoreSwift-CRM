@@ -62,12 +62,6 @@ pub struct UpdateRuleRequest {
     pub is_active: Option<bool>,
 }
 
-/// `SELECT *` cannot carry the coalesce — `SELECT *, COALESCE(..) AS message` would put TWO columns
-/// named `message` in the row and sqlx resolves the first (the raw, nullable one). So the feed's
-/// column list is written once here and used by all three read filters (t_6dcb0d23).
-const NOTIFICATION_COLUMNS: &str =
-    "id, tenant_id, user_id, COALESCE(message, body, title, '') AS message, read, created_at";
-
 /// GET /api/notifications
 pub async fn list(
     State(s): State<AppState>,
@@ -87,41 +81,48 @@ pub async fn list(
     let (notifications, total) = match read_filter {
         Some("true") => {
             // t_6dcb0d23: this was `SELECT *` into a `message: String` field, so a NULL message
-            // (the alert writer's own rows) failed the decode and 500'd the entire feed.
-            let sql = format!("SELECT {NOTIFICATION_COLUMNS} FROM notifications WHERE tenant_id=$1 AND user_id=$2 AND read=true ORDER BY created_at DESC LIMIT $3 OFFSET $4");
-            let n = sqlx::query_as::<_, Notification>(&sql)
-                .bind(tid)
-                .bind(uid)
-                .bind(per_page)
-                .bind(offset)
-                .fetch_all(&s.db)
-                .await?;
+            // (the alert writer's own rows) failed the decode and 500'd the entire feed. A `SELECT *`
+            // cannot carry the coalesce — two columns named `message`, and sqlx takes the raw first.
+            let n = sqlx::query_as::<_, Notification>(
+                "SELECT id, tenant_id, user_id, COALESCE(message, body, title, '') AS message, read, created_at \
+                 FROM notifications WHERE tenant_id=$1 AND user_id=$2 AND read=true ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+            )
+            .bind(tid)
+            .bind(uid)
+            .bind(per_page)
+            .bind(offset)
+            .fetch_all(&s.db)
+            .await?;
             let t: i64 = sqlx::query_scalar::<_, Option<i64>>("SELECT COUNT(*) FROM notifications WHERE tenant_id=$1 AND user_id=$2 AND read=true")
                 .bind(tid).bind(uid).fetch_one(&s.db).await?.unwrap_or(0);
             (n, t)
         }
         Some("false") => {
-            let sql = format!("SELECT {NOTIFICATION_COLUMNS} FROM notifications WHERE tenant_id=$1 AND user_id=$2 AND read=false ORDER BY created_at DESC LIMIT $3 OFFSET $4");
-            let n = sqlx::query_as::<_, Notification>(&sql)
-                .bind(tid)
-                .bind(uid)
-                .bind(per_page)
-                .bind(offset)
-                .fetch_all(&s.db)
-                .await?;
+            let n = sqlx::query_as::<_, Notification>(
+                "SELECT id, tenant_id, user_id, COALESCE(message, body, title, '') AS message, read, created_at \
+                 FROM notifications WHERE tenant_id=$1 AND user_id=$2 AND read=false ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+            )
+            .bind(tid)
+            .bind(uid)
+            .bind(per_page)
+            .bind(offset)
+            .fetch_all(&s.db)
+            .await?;
             let t: i64 = sqlx::query_scalar::<_, Option<i64>>("SELECT COUNT(*) FROM notifications WHERE tenant_id=$1 AND user_id=$2 AND read=false")
                 .bind(tid).bind(uid).fetch_one(&s.db).await?.unwrap_or(0);
             (n, t)
         }
         _ => {
-            let sql = format!("SELECT {NOTIFICATION_COLUMNS} FROM notifications WHERE tenant_id=$1 AND user_id=$2 ORDER BY created_at DESC LIMIT $3 OFFSET $4");
-            let n = sqlx::query_as::<_, Notification>(&sql)
-                .bind(tid)
-                .bind(uid)
-                .bind(per_page)
-                .bind(offset)
-                .fetch_all(&s.db)
-                .await?;
+            let n = sqlx::query_as::<_, Notification>(
+                "SELECT id, tenant_id, user_id, COALESCE(message, body, title, '') AS message, read, created_at \
+                 FROM notifications WHERE tenant_id=$1 AND user_id=$2 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+            )
+            .bind(tid)
+            .bind(uid)
+            .bind(per_page)
+            .bind(offset)
+            .fetch_all(&s.db)
+            .await?;
             let t: i64 = sqlx::query_scalar::<_, Option<i64>>(
                 "SELECT COUNT(*) FROM notifications WHERE tenant_id=$1 AND user_id=$2",
             )
