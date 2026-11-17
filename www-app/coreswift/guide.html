@@ -202,6 +202,7 @@
     <a href="#tags-lists">Tags &amp; Lists</a>
     <a href="#tag-to-free-account">Tag to free account</a>
     <a href="#webhooks">Webhooks</a>
+    <a href="#round-robin">Round robin</a>
     <a href="#settings">Settings</a>
   </div>
 </nav>
@@ -1844,6 +1845,52 @@ once.</p>
     the addresses go away. Because that cannot be undone, the app asks you to type the domain name
     to confirm, and refuses every other answer.</li>
   </ul>
+<section id="round-robin">
+  <h2 class="sec-title"><span class="sec-num">24</span> Round robin: who gets the next lead</h2>
+
+  <div class="card">
+    <h3>Where it lives</h3>
+    <p>Open the <strong>Round Robin</strong> tab. It is part of the <strong>Enterprise</strong> and
+    <strong>Agency</strong> plans; on a plan without it the screen says the module is not on your
+    current plan rather than showing an empty list.</p>
+  </div>
+
+  <div class="card">
+    <h3>A team, and the two ways it hands work out</h3>
+    <p>Press <strong>+ New Team</strong>, give it a name and choose a strategy:</p>
+    <ul>
+      <li><strong>Round robin (take turns)</strong> &mdash; the teammate who has waited longest gets
+      the next one.</li>
+      <li><strong>Least busy (fewest open bookings)</strong> &mdash; whoever currently holds the
+      fewest open assignments, and never more than that person&rsquo;s
+      <strong>max concurrent bookings</strong>.</li>
+    </ul>
+    <p>Those are the only two the assignment engine implements. The screen used to also offer
+    <em>Weighted</em> and <em>Random</em>, and pressing one built a team every assignment was then
+    refused for &mdash; so a team made earlier with one of those two shows the reason on its own card
+    and nothing else. Delete it and make it again with one of the two above.</p>
+  </div>
+
+  <div class="card">
+    <h3>Adding people</h3>
+    <p>Press <strong>+ Add member</strong> on a team and pick the person from the list &mdash; the
+    list is this workspace&rsquo;s own roster, by name and address, and only active people are
+    offered. (It used to ask you to paste an internal user id; the roster was always available to
+    read, so that box is gone.) Each member carries a <strong>weight</strong>, which is kept on the
+    record but is not used by either strategy above, and a <strong>max concurrent bookings</strong>
+    limit, which is what caps the least-busy strategy.</p>
+    <p>Take someone out with <strong>Remove</strong>; their past assignments stay in the history.</p>
+  </div>
+
+  <div class="card">
+    <h3>What happened, and turning a team off</h3>
+    <p><strong>Assignments</strong> on a team lists every hand-out with the teammate, the contact,
+    the time and the status (<em>pending</em>, <em>accepted</em>, <em>rejected</em>,
+    <em>completed</em>). A team can be switched off without deleting it: its card shows
+    <strong>off</strong> and it stops being offered, while its history stays readable. Deleting a
+    team removes its members and its assignment history with it, so switch it off if you may want
+    the record.</p>
+  </div>
 </section>
 </body>
 </html>
