@@ -10,6 +10,7 @@ pub mod account;
 pub mod account_match;
 pub mod admin_actions;
 pub mod ai;
+mod alerts;
 pub mod analytics;
 pub mod audit;
 pub mod auth;
@@ -977,6 +978,8 @@ async fn main() -> anyhow::Result<()> {
             crate::helpdesk::learn::run_once(&db_for_sla).await;
             // a portfolio company created by SQL, a migration or a script provisions every app through here
             crate::portfolio::outbox::drain(&db_for_sla, &sync_key_for_tick, 5).await;
+            // a refused send must reach a person, not sit in a failed row (see src/alerts/send_failures.rs)
+            crate::alerts::send_failures::run_once(&db_for_sla).await;
             tokio::time::sleep(crate::helpdesk::sla::tick_interval()).await;
         }
     });
