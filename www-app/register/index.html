@@ -7,7 +7,12 @@
 // Sign up now lives as a tab on the single canonical login page. Carry the sign-up INTENT
 // through the redirect (?register=1) so the create-account pane opens directly — a visitor who
 // asked to sign up must never be handed a sign-in form to toggle out of (kanban t_7c1398c0).
-window.location.replace('/login?register=1');
+// AND carry every other argument through with it: the price list's per-tier buttons hand a door
+// `?plan=<slug>`, and this stub used to drop it, so a visitor who picked a tier on this path
+// arrived at a form that could not name the pick back or file the request (measured 2026-11-17
+// with a real click on /register/index.html?plan=agency: the pick vanished).
+var qs = window.location.search ? window.location.search.slice(1) : '';
+window.location.replace('/login?register=1' + (qs ? '&' + qs : ''));
 </script>
 </head>
 <body>
