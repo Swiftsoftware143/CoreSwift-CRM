@@ -113,7 +113,13 @@ pub async fn register(
             .is_none()
     {
         return Err(AppError::Validation(
-            "workspace_name: is required — name your workspace (for example your company name); it becomes the address your team and customers use".to_string(),
+            // Name the field THIS door reads. It used to say `workspace_name`, which no request
+            // struct in the app declares: a caller who followed the refusal sent
+            // {"workspace_name":"X"} and was refused again, forever (kanban t_2af2ee28). The
+            // console/mobile happen to know it is `account_name`; a third-party caller reads the
+            // message, so the message must carry the truth. `workspace_name` remains the name of
+            // the derived value inside auth::signup — that is internal and unchanged.
+            "account_name: is required — name your workspace (for example your company name); it becomes the address your team and customers use".to_string(),
         ));
     }
 
