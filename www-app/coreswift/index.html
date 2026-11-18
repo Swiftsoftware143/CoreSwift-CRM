@@ -2221,7 +2221,7 @@ const TAB_LOADERS = {
           (t.number ? '<code style="opacity:.7">#' + escapeHtml(String(t.number)) + '</code> ' : '') +
             escapeHtml(t.subject || t.title || '—'),
           `<span class="badge ${t.status==='open'?'badge-error':t.status==='in_progress'?'badge-warning':'badge-success'}">${escapeHtml(t.status||'open')}</span>`,
-          escapeHtml(t.priority || 'normal'),
+          escapeHtml(t.priority || 'medium'),
           escapeHtml(t.contact_name || t.contact_email || t.requester || '—'),
           // The SAME assignment the shared inbox writes (kanban t_5f314e9a): one conversation, two
           // views. A ticket raised by hand has no conversation behind it, so it shows nobody.
@@ -4456,20 +4456,38 @@ function setTicketView(view) {
 }
 
 // What was promised, and how much of it is left. Colour is the whole point: amber means the deadline is
-// close enough to act on, red means it has already passed.
+// close enough to act on, red means it has already passed. Shows the NEAREST promise still owed — the
+// first reply until the ticket is answered, the resolution after that — so the second clock is not
+// invisible once the first one is met. The admin console's ticket list speaks the same words
+// (`slaPlaque`), so an operator and a customer reading the same ticket read the same sentence.
 function ticketDueCell(t) {
-  if (t.solved_at) return '<span style="color:var(--text-muted)">solved</span>';
-  if (t.first_responded_at) return '<span style="color:var(--text-muted)">answered</span>';
-  if (!t.first_response_due) return '<span style="color:var(--text-muted)">—</span>';
-  const due = new Date(t.first_response_due).getTime();
-  const mins = Math.round((due - Date.now()) / 60000);
+  if (t.solved_at && !t.resolution_due) return '<span style="color:var(--text-muted)">solved</span>';
+  const now = Date.now();
+  const parse = s => { const v = s ? Date.parse(s) : NaN; return isNaN(v) ? null : v; };
+  const span = ms => {
+    const m = Math.round(ms / 60000);
+    if (m < 1) return 'under a minute';
+    if (m < 60) return m + 'm';
+    const h = Math.floor(m / 60);
+    if (h < 24) return h + 'h' + (m % 60 ? ' ' + (m % 60) + 'm' : '');
+    return Math.floor(h / 24) + 'd' + (h % 24 ? ' ' + (h % 24) + 'h' : '');
+  };
+  const owed = (dueStr, metStr, label) => {
+    const due = parse(dueStr);
+    if (due === null || parse(metStr) !== null) return null;
+    return { due, late: due < now, text: label + (due < now ? ' breached ' + span(now - due) + ' ago' : ' in ' + span(due - now)) };
+  };
+  const live = [
+    owed(t.first_response_due, t.first_responded_at, 'reply'),
+    owed(t.resolution_due, t.solved_at, 'resolve')
+  ].filter(x => x !== null);
+  if (!live.length) return '<span style="color:var(--text-muted)">' + (t.solved_at ? 'solved' : '—') + '</span>';
+  live.sort((a, b) => a.due - b.due);
+  const w = live[0];
   let colour = 'var(--text-muted)';
-  if (mins < 0) colour = '#dc2626';
-  else if (mins <= 60) colour = '#d97706';
-  const label = mins < 0
-    ? 'breached ' + Math.abs(mins) + 'm ago'
-    : (mins < 60 ? 'in ' + mins + 'm' : 'in ' + Math.round(mins / 60) + 'h');
-  return '<span style="color:' + colour + ';font-weight:600">' + label + '</span>';
+  if (w.late) colour = '#dc2626';
+  else if (w.due - now <= 3600000) colour = '#d97706';
+  return '<span style="color:' + colour + ';font-weight:600">' + w.text + '</span>';
 }
 
 async function openTicket(id) {

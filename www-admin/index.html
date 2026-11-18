@@ -3440,6 +3440,42 @@ async function loadPaymentGap() {
   if (btn) btn.onclick = () => switchTab('billing');
 }
 
+/* The promise stamped on a ticket, in plain language.
+   Migration 163 put `first_response_due` / `resolution_due` on every ticket and the helpdesk SLA
+   tick records approaching/breached events on the ticket's own timeline, but the list never showed
+   the deadline itself — an operator could only discover a promise had been missed after it had been
+   (and the tick, until now, reported failure every time it fired, so even that was unreliable).
+   This cell shows the NEAREST promise still owed: the first reply until it is answered, the
+   resolution after that, and a dash once both are settled. A satisfied promise never renders as
+   overdue, and the badge colour says which side of the line it is on. */
+function slaPlaque(t) {
+  var now = Date.now();
+  var span = function (ms) {
+    var m = Math.round(ms / 60000);
+    if (m < 1) return 'under a minute';
+    if (m < 60) return m + ' min';
+    var h = Math.floor(m / 60), r = m % 60;
+    if (h < 24) return h + ' h' + (r ? ' ' + r + ' min' : '');
+    return Math.floor(h / 24) + ' d' + (h % 24 ? ' ' + (h % 24) + ' h' : '');
+  };
+  var parse = function (s) { var v = s ? Date.parse(s) : NaN; return isNaN(v) ? null : v; };
+  var owed = function (dueStr, metStr, label) {
+    var due = parse(dueStr);
+    if (due === null) return null;
+    if (parse(metStr) !== null) return null;          // the promise was kept: nothing outstanding
+    return { due: due, late: due < now, text: label + (due < now ? ' breached ' + span(now - due) + ' ago' : ' in ' + span(due - now)) };
+  };
+  var live = [
+    owed(t.first_response_due, t.first_responded_at, 'reply'),
+    owed(t.resolution_due, t.solved_at, 'resolve')
+  ].filter(function (x) { return x !== null; });
+  if (!live.length) return '<span class="badge badge-muted" title="No response promise is outstanding">—</span>';
+  live.sort(function (a, b) { return a.due - b.due; });
+  var w = live[0];
+  var cls = w.late ? 'badge-error' : (w.due - now < 3600000 ? 'badge-warning' : 'badge-muted');
+  return '<span class="badge ' + cls + '" title="The response clock this ticket was given">' + escapeHtml(w.text) + '</span>';
+}
+
 const TAB_LOADERS = {
   // The renderer runs before its HTML is in the document, so the load registers here.
   'industries': async () => { await loadIndustriesTab(); },
@@ -3883,7 +3919,8 @@ const TAB_LOADERS = {
           return [
           escapeHtml(subj || '—'),
           `<span class="badge ${t.status==='open'?'badge-error':t.status==='in_progress'?'badge-warning':'badge-success'}">${escapeHtml(t.status||'open')}</span>`,
-          escapeHtml(t.priority || 'normal'),
+          escapeHtml(t.priority || 'medium'),
+          slaPlaque(t),
           escapeHtml(t.contact_name || t.contact_email || t.requester || '—'),
           escapeHtml(t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'),
           actions
@@ -3891,7 +3928,7 @@ const TAB_LOADERS = {
         });
       }
       ticketsTableEl.innerHTML = dataTable(
-        ['Subject','Status','Priority','Contact','Created',''], rows,
+        ['Subject','Status','Priority','SLA','Contact','Created',''], rows,
         'No support tickets. Great job keeping customers happy!'
       );
     } catch(e) {
