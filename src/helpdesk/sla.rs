@@ -98,7 +98,11 @@ pub async fn run_once(pool: &PgPool) -> SlaPass {
                    'SLA due soon: this is due to be resolved by ' || to_char(m.due_at, 'YYYY-MM-DD HH24:MI') || '.'
                END
           FROM marked m
-        RETURNING 1
+        -- `RETURNING 1` types as INT4, and this is fetched as i64 (INT8), so sqlx refused to decode
+        -- the row it had just written: the clocks landed, the pass still logged a failure and
+        -- reported zero events on every tick. The cast keeps the shield/count shape and makes the
+        -- column the type the decoder asks for.
+        RETURNING 1::bigint
         "#,
     )
     .bind(APPROACHING_WINDOW)
