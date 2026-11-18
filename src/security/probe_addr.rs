@@ -129,12 +129,24 @@ pub fn harness_domain(addr: &str) -> Option<&'static str> {
 /// Domains that can only belong to a harness. `x.com` / `test.com` are added on top of the
 /// RFC-reserved class because the fleet's own proof scripts address them and they are NOT
 /// mail-suppressed (they are real, registrable domains), so nothing else would stop the alert.
+///
+/// `swiftsoftware.com` (added 2026-11-18, parity with ADASwift `bd74ae1`) is the fleet's own BRAND
+/// domain and belongs here for the same reason — no customer can own an address there, so a request
+/// from one is fleet machinery by construction. It is deliberately NOT in
+/// [`FLEET_HARNESS_DOMAINS`]: that list suppresses MAIL, the owner's proof inbox lives on this
+/// domain, and the welcome/credential mail must keep being delivered. Measured on this app's
+/// deployed binary 2026-11-18 before the fix: a signup on `realcustomer-<ts>@swiftsoftware.com`
+/// with a plan pick wrote one operator page ("A support request needs an answer: Plan request at
+/// signup: Professional plan"). Note this domain is deliberately in the fleet residue classifier's
+/// `HUMAN_DOM` ("a human owns these rows, never swept"), so no cleanup arm will ever remove what a
+/// probe minted here — this alert predicate is the only half that can silence it.
 pub const SYNTHETIC_REQUESTER_DOMAINS: &[&str] = &[
     "example.invalid",
     "example.test",
     "example.com",
     "x.com",
     "test.com",
+    "swiftsoftware.com",
 ];
 
 /// Local parts a harness mints. `bounce+` is the shape a deliverability probe uses.
@@ -232,6 +244,43 @@ mod synthetic_requester_tests {
         assert_eq!(synthetic_requester("x@x.com.evil.net", ""), None);
         // Empty input is not a match.
         assert_eq!(synthetic_requester("", ""), None);
+    }
+
+    /// The fleet's own BRAND domain can never belong to a customer, so a request from it is
+    /// machinery — but it stays OUT of the mail-suppression list, because the owner's proof inbox
+    /// lives there and the welcome/credential mail must still be delivered. Measured on this app's
+    /// deployed binary 2026-11-18: an audit signup on this domain paged the operator while
+    /// `probe_sweep` had always classified the same address as residue.
+    #[test]
+    fn the_fleet_brand_domain_never_pages_the_operator_but_still_receives_mail() {
+        assert_eq!(
+            synthetic_requester("realcustomer-1795045785@swiftsoftware.com", ""),
+            Some("swiftsoftware.com")
+        );
+        // Case, whitespace and a trailing root dot are normalised away, like every other arm.
+        assert_eq!(
+            synthetic_requester("Happy.Customer@SwiftSoftware.COM.", ""),
+            Some("swiftsoftware.com")
+        );
+        // A subdomain is still the brand class.
+        assert_eq!(
+            synthetic_requester("inbox@mail.swiftsoftware.com", ""),
+            Some("swiftsoftware.com")
+        );
+        // THE MAIL LAYER MUST NOT LEARN IT: the owner's proof inbox is on this domain.
+        assert_eq!(
+            harness_domain("realcustomer-1795045785@swiftsoftware.com"),
+            None
+        );
+        assert_eq!(harness_domain("david@swiftsoftware.com"), None);
+        // A lookalike domain is a real customer, never a match.
+        assert_eq!(synthetic_requester("x@notswiftsoftware.com", ""), None);
+        // Controls: the identities this predicate must keep admitting.
+        assert_eq!(
+            synthetic_requester("owner@albert-tire.com", "Albert Tire"),
+            None
+        );
+        assert_eq!(synthetic_requester("someone@gmail.com", ""), None);
     }
 }
 
