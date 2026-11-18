@@ -1203,6 +1203,10 @@ const MENU = [
   // Pipeline cleanliness: GET /api/account-match/duplicates shipped with NO console screen, so
   // the only way to see two records for one person was psql. This is the read-only report it feeds.
   { id:'duplicates', icon:'🧭', label:'Possible Duplicates' },
+  // The console screen for /api/industries (list, available, limit, activate, deactivate):
+  // the backend shipped complete with NO screen, so a workspace's industry dashboards and the
+  // plan's max_industries ceiling could only be read with psql.
+  { id:'industries', icon:'🏭', label:'Industry Dashboards' },
   { id:'companies', icon:'🏢', label:'Companies' },
   { type:'group', icon:'💰', label:'Sales', children:[
     { id:'pipelines', icon:'📈', label:'Pipelines & Deals' }
@@ -1631,6 +1635,106 @@ function pageHeader(title, desc, actions) {
   </div>`;
 }
 
+// ── Industry Dashboards (2026-11-18) ────────────────────────────────────────────────────────
+// The console screen for src/industries: GET /api/industries (this workspace's switched-on
+// dashboards), GET /api/industries/available (the catalogue), GET /api/industries/limit (the
+// plan's ceiling and the count in use), POST /api/industries {industry_slug} and
+// DELETE /api/industries/{slug}. Every number printed here is read back from those routes.
+async function loadIndustriesTab() {
+  const wrap = document.getElementById('indWrap');
+  if (!wrap) return;                 // the tab was switched away mid-load
+  wrap.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Loading industry dashboards...</div>';
+  try {
+    const answers = await Promise.all([
+      API.get('/industries/limit'),
+      API.get('/industries'),
+      API.get('/industries/available')
+    ]);
+    renderIndustries(answers[0] || {}, answers[1] || [], answers[2] || []);
+  } catch (e) {
+    wrap.innerHTML = '<div class="card"><div class="card-body" style="text-align:center;padding:40px">' +
+      '<p style="color:var(--error)">Could not load the industry dashboards: ' + escapeHtml(planGateText(e)) + '</p>' +
+      '<button class="btn btn-secondary btn-sm" onclick="loadIndustriesTab()">Retry</button></div></div>';
+  }
+}
+
+function renderIndustries(limit, active, available) {
+  const wrap = document.getElementById('indWrap');
+  if (!wrap) return;
+  const on = {};
+  (active || []).forEach(function (r) { if (r && r.industry_slug) on[r.industry_slug] = true; });
+  const cur = Number(limit.current || 0);
+  const max = Number(limit.max || 0);
+  const remaining = (typeof limit.remaining === 'number') ? Number(limit.remaining) : Math.max(0, max - cur);
+  const planName = STATE.planName || 'your current plan';
+  const usage = max > 0
+    ? cur + ' of ' + max + ' industry dashboard' + (max === 1 ? '' : 's') + ' in use on ' + escapeHtml(planName) + '.'
+    : 'Your plan (' + escapeHtml(planName) + ') does not include industry dashboards.';
+  let h = '<div class="card"><div class="card-header">Your plan</div><div class="card-body">' +
+    '<p style="color:var(--text-secondary);margin:0">' + usage + '</p>' +
+    ((max > 0 && remaining <= 0)
+      ? '<p style="color:var(--text-secondary);margin:6px 0 0">Switch one off to make room for another — the count has reached the limit.</p>'
+      : '') +
+    '</div></div>';
+  if (!available || available.length === 0) {
+    h += '<div class="card"><div class="card-body"><div class="empty-state"><div class="empty-icon">🏭</div>' +
+      '<p>The catalogue of industry dashboards came back empty, so nothing can be switched on yet.</p></div></div></div>';
+    wrap.innerHTML = h;
+    return;
+  }
+  h += '<div class="card"><div class="card-header">Available industry dashboards</div><div class="card-body">';
+  available.forEach(function (it) {
+    const slug = String(it.slug || '');
+    const name = String(it.name || slug);
+    const isOn = !!on[slug];
+    const blocked = !isOn && remaining <= 0;
+    const safeSlug = slug.replace(/'/g, '');
+    const safeName = name.replace(/'/g, '');
+    h += '<div style="display:flex;gap:14px;align-items:flex-start;padding:14px 0;border-bottom:1px solid var(--border)">' +
+      '<div style="font-size:24px;line-height:1">' + escapeHtml(it.icon || '🏭') + '</div>' +
+      '<div style="flex:1">' +
+        '<div style="font-weight:700">' + escapeHtml(name) +
+          (isOn ? ' <span class="badge badge-success">● switched on</span>' : '') + '</div>' +
+        '<div style="color:var(--text-secondary);font-size:13px">' + escapeHtml(it.description || '') + '</div>' +
+      '</div>' +
+      '<div>' + (isOn
+        ? '<button class="btn btn-secondary btn-sm" onclick="switchIndustryOff(\'' + safeSlug + '\')">Switch off</button>'
+        : '<button class="btn btn-primary btn-sm"' +
+          (blocked ? ' disabled title="The limit for your plan is reached. Switch one off first."' : '') +
+          ' onclick="switchIndustryOn(\'' + safeSlug + '\', \'' + safeName + '\')">Switch on</button>') +
+      '</div></div>';
+  });
+  h += '</div></div><div id="indMsg" style="margin-top:12px"></div>';
+  wrap.innerHTML = h;
+}
+
+function industriesMsg(text, isError) {
+  const m = document.getElementById('indMsg');
+  if (!m) return;
+  m.innerHTML = '<p style="color:' + (isError ? 'var(--error)' : 'var(--success)') + ';margin:0">' + escapeHtml(text) + '</p>';
+}
+
+async function switchIndustryOn(slug, name) {
+  try {
+    await API.post('/industries', { industry_slug: slug, dashboard_name: name });
+    await loadIndustriesTab();
+    industriesMsg('Switched on. That dashboard is now part of this workspace.', false);
+  } catch (e) {
+    industriesMsg('Could not switch that on: ' + planGateText(e), true);
+  }
+}
+
+async function switchIndustryOff(slug) {
+  if (!confirm('Switch this industry dashboard off for the workspace?')) return;
+  try {
+    await API.del('/industries/' + encodeURIComponent(slug));
+    await loadIndustriesTab();
+    industriesMsg('Switched off.', false);
+  } catch (e) {
+    industriesMsg('Could not switch that off: ' + planGateText(e), true);
+  }
+}
+
 function card(header, body, footer) {
   return `<div class="card">
     ${header ? `<div class="card-header">${header}</div>` : ''}
@@ -1730,6 +1834,11 @@ window.crmImpersonate = async function (tenantId) {
 
 // ========== SYNC TAB RENDERERS (no API calls needed) ==========
 const TAB_RENDERERS = {
+  'industries': () => {
+    return pageHeader('Industry Dashboards',
+      'The dashboards and automation templates this workspace uses. A workspace can switch on as many as its plan allows.') +
+      '<div id="indWrap"><div class="loading-wrap"><div class="spinner"></div> Loading industry dashboards...</div></div>';
+  },
   'dashboard': () => {
     return pageHeader('Dashboard', 'Overview of your CRM performance') +
     '<div class="stats-grid" id="statsGrid"><div class="loading-wrap"><div class="spinner"></div> Loading stats...</div></div>' +
@@ -3332,6 +3441,8 @@ async function loadPaymentGap() {
 }
 
 const TAB_LOADERS = {
+  // The renderer runs before its HTML is in the document, so the load registers here.
+  'industries': async () => { await loadIndustriesTab(); },
   // Same rule as every loader below: the renderer runs before its HTML is in the document, so the
   // audit load registers here and runs against an #auditContent that already exists.
   'audit-log': async () => { await loadAuditTab(); },
