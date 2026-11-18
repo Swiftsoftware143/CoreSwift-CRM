@@ -445,7 +445,14 @@ const API = {
       throw err;
     }
     if (!res.ok) {
-      let msg = `HTTP ${res.status}`;
+      // 2026-11-18: the last resort a panel could fall back to was the transport's own
+      // "HTTP 500", which names nothing a person can act on. Every other branch above prefers
+      // the server's own sentence; when there ISN'T one, say what happened in plain words.
+      let msg = res.status >= 500
+        ? 'The server had a problem answering that. Please try again in a moment.'
+        : res.status === 404
+          ? 'That item could not be found.'
+          : 'That request could not be completed.';
       // Failures answer {"error": true, "message": "<human text>"} (src/errors.rs) — a BOOLEAN
       // `error` flag with the text in `message`. Reading `e.error` first therefore threw the flag
       // and every failed request in this console reported the literal string "true" instead of the
@@ -3232,7 +3239,7 @@ async function runAccountMatch() {
     });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) {
-      out.innerHTML = '<p style="color:var(--text-secondary)">' + escapeHtml(j.message || ('HTTP ' + res.status)) + '</p>';
+      out.innerHTML = '<p style="color:var(--text-secondary)">' + escapeHtml(j.message || 'We could not check those details just now. Please try again.') + '</p>';
       return;
     }
     // The answering arm comes from `reason`, but on a non-match reason is always "none" — so the
@@ -3508,7 +3515,7 @@ const TAB_LOADERS = {
           '</div></div>';
         return;
       }
-      if (!res.ok) throw new Error('HTTP ' + res.status);
+      if (!res.ok) throw new Error('We could not load the duplicate accounts just now. Please try again.');
       const data = await res.json();
       const groups = Array.isArray(data.groups) ? data.groups : [];
       if (!groups.length) {
@@ -4884,7 +4891,7 @@ async function icDoViewKey(id) {
     if (shown) { shown.focus(); shown.select(); }
     return;
   }
-  const serverMsg = (d && typeof d.message === 'string' && d.message) ? d.message : ('Error ' + res.status);
+  const serverMsg = (d && typeof d.message === 'string' && d.message) ? d.message : ('the server did not give a reason');
   if (res.status === 401 && !/password/i.test(serverMsg)) {
     toast('Your session ended — sign in again', 'error');
     logout(true);
@@ -5085,7 +5092,9 @@ async function uploadAvatar(input) {
       body: fd
     });
     if (!res.ok) {
-      let msg = 'HTTP ' + res.status;
+      // 2026-11-18: the fallback here was the transport's own "HTTP 500". A person cannot
+      // act on a status line, so a failure the server did not explain now says what failed.
+      let msg = 'The picture could not be uploaded. Please try again.';
       try { const e = await res.json(); if (e && typeof e.message === 'string') msg = e.message; } catch(_){}
       throw new Error(msg);
     }
@@ -5114,7 +5123,9 @@ async function removeAvatar() {
       headers: { 'Authorization': 'Bearer ' + STATE.token }
     });
     if (!res.ok) {
-      let msg = 'HTTP ' + res.status;
+      // 2026-11-18: the fallback here was the transport's own "HTTP 500". A person cannot
+      // act on a status line, so a failure the server did not explain now says what failed.
+      let msg = 'The picture could not be removed. Please try again.';
       try { const e = await res.json(); if (e && typeof e.message === 'string') msg = e.message; } catch(_){}
       throw new Error(msg);
     }
@@ -5144,7 +5155,7 @@ async function changePassword() {
     });
     let d = {};
     try { d = await res.json(); } catch(_) {}
-    if (!res.ok) throw new Error(d && typeof d.message === 'string' ? d.message : ('HTTP ' + res.status));
+    if (!res.ok) throw new Error(d && typeof d.message === 'string' ? d.message : 'The password could not be changed. Please try again.');
     toast('Password updated', 'success');
     document.getElementById('currentPw').value = '';
     document.getElementById('newPw').value = '';
@@ -5412,7 +5423,7 @@ async function uploadBrandingLogo() {
     const res = await fetch('/api/account/branding/logo', { method: 'POST', headers, body: fd });
     if (res.status === 401) { logout(true); return; }
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.message || body.error || ('Error ' + res.status));
+    if (!res.ok) throw new Error(body.message || body.error || 'The logo could not be uploaded. Please try again.');
     toast('Logo uploaded', 'success');
     loadBrandingTab();
   } catch(e) { toast('Upload failed: ' + e.message, 'error'); }
