@@ -19,6 +19,7 @@
 //! GET  /api/admin/provisioning-config — the tag → free account knobs (admin; kanban t_e968e9ad)
 //! PUT  /api/admin/provisioning-config — save them (admin; kanban t_e968e9ad)
 
+pub mod billing_settings;
 pub mod email_config;
 pub mod handlers;
 pub mod provisioning_config;
@@ -82,6 +83,17 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route(
             "/email-config/test",
             axum::routing::post(email_config::test_config),
+        )
+        // HOW A CUSTOMER PAYS YOU (kanban t_3f4c16a7; fleet parity with FunnelSwift, IncentiveSwift,
+        // ADASwift, WorkflowSwift and MissedCall Respondr). This app has no card till — a paid plan
+        // is bought by ASKING — so the operator's own payment details are the only way money can
+        // reach the business. The words are published on the anonymous price list
+        // (`GET /api/v1/public/plans`) for the marketing page and the customer plan ladder. On this
+        // router, so the platform-admin gate below covers both arms; a tenant owner is refused.
+        .route(
+            "/billing-settings",
+            axum::routing::get(billing_settings::get_billing_settings)
+                .put(billing_settings::update_billing_settings),
         )
         // The operator's half of the tag → free account contract: the master switch (ships ON)
         // and the entry-plan picker, read by `POST /api/v1/internal/provision-free-account`

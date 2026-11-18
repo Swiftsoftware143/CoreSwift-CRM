@@ -196,7 +196,7 @@
 //!        t_e968e9ad: `/api/admin/provisioning-config` and
 //!        `/api/v1/internal/provision-free-account`) were measured the same way and each answered
 //!        401 anonymous; both are named in the lists below
-//!    43 deliberate anonymous entries  -> PUBLIC_ROUTES  (40 /api + 3 /inbound) — COUNTS ARRAY
+//!    44 deliberate anonymous entries  -> PUBLIC_ROUTES  (41 /api + 3 /inbound) — COUNTS ARRAY
 //!        ENTRIES: measured 27 (24 /api + 3 /inbound) before the confirm arm above was added,
 //!        i.e. one more than the 26 this line used to claim, and 30 after the hosted calendar
 //!        address added its two public arms (kanban t_8457bfef), and 31 after the per-calendar
@@ -257,6 +257,16 @@
 //! route URL for every tenant, so it would mean re-provisioning each domain's route, and the
 //! signing key is the credential Mailgun can actually carry.
 //!
+//!   +2 mounts (2026-11-18, kanban t_3f4c16a7), HOW A CUSTOMER PAYS: `GET|PUT
+//!        /api/admin/billing-settings` (the operator's own payment details, on the platform-admin
+//!        router — private by default, measured anonymous 401 and refused for a tenant owner by the
+//!        router's platform-admin gate) and the ANONYMOUS price list `GET /api/v1/public/plans`,
+//!        which the marketing pricing page reads with no session and therefore joins
+//!        [`PUBLIC_ROUTES`] — the one deliberate anonymous entry this card adds. Both were measured
+//!        live after the deploy. The extractor now resolves 474 mounted `.route(..)` calls / 462 on
+//!        /api** (474 = 462 /api + the 12 root-level mounts), and those are what
+//!        `the_census_shape_is_what_the_docs_say` pins.
+//!
 //! # Credentials accepted
 //!
 //! * **App JWT** — `Authorization: Bearer <jwt>`, HS256 over `JWT_SECRET`, `iss=coreswift`,
@@ -315,6 +325,13 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // the same way).
     "/api/available-providers",
     "/api/industries/available",
+    // The ANONYMOUS PRICE LIST (kanban t_3f4c16a7). The marketing pricing page at
+    // `nginx/www/coreswift/pricing.html` is read by a visitor with no session, and it carries the
+    // operator's own `payment_instructions` ("how do I pay you?") beside the tiers — this app has no
+    // card till at all, so those words are the only way money reaches the business. Narrow by
+    // construction: active plans' slug/name/amounts/allowances and the operator's words, no ids, no
+    // `checkout_url`, no raw feature JSON. Measured anonymous: 200.
+    "/api/v1/public/plans",
     // --- public booking surfaces (a visitor has no session) -------------------------------------
     // The public booking page resolves a tenant by id and lists that tenant's open slots, and a
     // visitor books without an account. All three are scoped to the tenant named in the path/body
@@ -1303,12 +1320,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            472,
+            474,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 460,
+            api, 462,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

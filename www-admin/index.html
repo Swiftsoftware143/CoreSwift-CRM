@@ -1279,6 +1279,10 @@ const ADMIN_MENU = [
   ]},
   { id:'features-plans', icon:'🧩', label:'Modules & Plans' },
   { type:'group', icon:'⚙️', label:'Admin Settings', children:[
+    // HOW A CUSTOMER PAYS (kanban t_3f4c16a7). This install has no card till at all — a paid plan
+    // is bought by asking — so the operator's own words are the only way a buyer learns where the
+    // money goes. One box, published on the pricing page and the customer plan ladder.
+    { id:'how-customers-pay', icon:'💳', label:'How Customers Pay' },
     { id:'configuration', icon:'⚙️', label:'Configuration' }
   ]},
   // Customer feedback queue (kanban B209, t_2b4e36f9): idea / bug / complaint from any signed-in
@@ -2116,6 +2120,15 @@ const TAB_RENDERERS = {
     '<div id="siteConfigForm" style="max-width:900px"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading site settings...</div></div>';
     loadSiteConfig();
     return html;
+  },
+  // HOW CUSTOMERS PAY (kanban t_3f4c16a7). The form itself is rendered by loadBillingSettings()
+  // from GET /api/admin/billing-settings, so the box always shows what the database holds; this
+  // renderer only lays out the shell (and the loader in TAB_LOADERS fills it).
+  'how-customers-pay': () => {
+    return pageHeader('How Customers Pay',
+      'The words a buyer sees when they ask for a paid plan — this install takes payment by hand, so these are the only directions they get',
+      '<button class="btn btn-secondary btn-sm" onclick="loadBillingSettings()">🔄 Reload</button>') +
+      '<div id="paySettingsWrap" style="max-width:900px"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading the payment instructions…</div></div>';
   }
 };
 
@@ -2396,6 +2409,65 @@ async function clearSystemEmail() {
     loadSystemEmail();
   } catch (e) {
     toast('Could not remove the stored credential: ' + e.message, 'error');
+  }
+}
+
+// ========== HOW CUSTOMERS PAY (kanban t_3f4c16a7) ==========
+// CoreSwift has no card till: a paid plan is bought by ASKING, so the operator's own words are the
+// only way a buyer can learn where the money goes. ONE row (admin_settings key 'billing',
+// {"payment_instructions": "..."}) and ONE writer (PUT /api/admin/billing-settings). The words are
+// published on the ANONYMOUS price list GET /api/v1/public/plans, which the marketing pricing page
+// and the customer plan ladder read. Empty = off: every surface stays exactly as it shipped.
+async function loadBillingSettings() {
+  const wrap = document.getElementById('paySettingsWrap');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Loading the payment instructions…</div>';
+  let d = null;
+  try {
+    d = await API.get('/admin/billing-settings');
+  } catch (e) {
+    wrap.innerHTML = '<div class="card"><div class="card-body"><p style="color:#b91c1c">The saved words could not be read (' +
+      escapeHtml(planGateText(e)) + '), so this box may not show what is published. Reload before saving.</p>' +
+      '<button class="btn btn-secondary btn-sm" onclick="loadBillingSettings()">Retry</button></div></div>';
+    return;
+  }
+  const words = (d && typeof d.payment_instructions === 'string') ? d.payment_instructions : '';
+  const isSet = !!(d && d.payment_instructions_set);
+  const maxLen = (d && d.max_length) ? d.max_length : 4000;
+  const status = isSet
+    ? 'Published: a visitor on the pricing page and a signed-in buyer both see these words.'
+    : 'Nothing written yet — no buyer is shown anything.';
+  wrap.innerHTML = card('How a customer pays you',
+    '<p style="font-size:13px;color:var(--text-muted);margin:0 0 12px">This installation has no card checkout: a paid plan is bought by asking, and a person switches the workspace on. Write how you take payment — bank details, an invoice, any rail of your own — and the same words appear on the public pricing page (so a visitor sees them before signing up) and on the plan screen inside the app. Leave it empty and every surface behaves exactly as it did before.</p>' +
+    '<textarea id="payInstructions" rows="6" maxlength="' + Number(maxLen) + '" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font:inherit;line-height:1.5" placeholder="e.g. Pay by bank transfer to Acme Ltd, sort code 00-00-00, account 12345678, and put your workspace name as the reference. A person on our team switches your plan on as soon as the payment lands."></textarea>' +
+    '<div style="display:flex;align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap">' +
+      '<button id="paySaveBtn" class="btn btn-primary" onclick="saveBillingSettings()">Save</button>' +
+      '<span id="paySaveMsg" style="font-size:13px;color:var(--text-secondary)">' + escapeHtml(status) + '</span>' +
+    '</div>');
+  const box = document.getElementById('payInstructions');
+  if (box) box.value = words;
+}
+
+async function saveBillingSettings() {
+  const box = document.getElementById('payInstructions');
+  const msg = document.getElementById('paySaveMsg');
+  const btn = document.getElementById('paySaveBtn');
+  if (!box || !btn) return;
+  btn.disabled = true;
+  if (msg) msg.textContent = 'Saving…';
+  try {
+    const d = await API.put('/admin/billing-settings', { payment_instructions: box.value || '' });
+    const isSet = !!(d && d.payment_instructions_set);
+    if (msg) msg.textContent = isSet
+      ? 'Published: a visitor on the pricing page and a signed-in buyer both see these words.'
+      : 'Cleared: no buyer is shown anything.';
+    toast(isSet ? 'Payment instructions published.' : 'Payment instructions cleared.', 'success');
+  } catch (e) {
+    const why = planGateText(e);
+    if (msg) msg.textContent = 'Not saved: ' + why;
+    toast('Could not save the payment instructions: ' + why, 'error');
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -3280,6 +3352,10 @@ const TAB_LOADERS = {
   // bailed out, and the panel sat on "Loading feature registry..." for ever. Every other
   // server-backed panel here registers a loader for the same reason.
   'features-plans': async () => { await loadFeatureMatrix(); await loadPlanPaymentLinks(); },
+  // HOW CUSTOMERS PAY (kanban t_3f4c16a7). Same rule as every loader here: the renderer runs
+  // before its HTML is in the document, so the load registers here and runs against a
+  // #paySettingsWrap that already exists.
+  'how-customers-pay': async () => { await loadBillingSettings(); },
   // Same reason as the loaders above: the renderer runs before its HTML is in the document, so the
   // round-robin load registers here and runs against a #rrContent that already exists.
   'round-robin': async () => { await loadRoundRobinTab(); },
@@ -6757,6 +6833,7 @@ window.appGuidePages = {
   'system-email': { title: 'System Email', desc: 'The platform mail transport — the provider and credential every workspace without its own sending identity falls back to.', actions: ['Set the provider and credential', 'Send a test'] },
   provisioning: { title: 'Tag Provisioning', desc: 'Lets a tag applied in a sister app mint a free account here, on the plan you choose.', actions: ['Turn the switch on', 'Choose the entry plan'] },
   'features-plans': { title: 'Modules & Plans', desc: 'Which modules each plan includes, as a matrix.', actions: ['Tick a module for a plan'] },
+  'how-customers-pay': { title: 'How Customers Pay', desc: 'The words a buyer sees when they ask for a paid plan. This install has no card checkout, so these directions are how money reaches you — write them once and they appear on the public pricing page and on the plan screen inside the app. Empty means nothing is shown.', actions: ['Write how you take payment, then press Save', 'Leave it empty to switch the message off everywhere'] },
   configuration: { title: 'Configuration', desc: 'Platform settings for running the service.', actions: ['Change a setting and save'] }
 };
 </script>

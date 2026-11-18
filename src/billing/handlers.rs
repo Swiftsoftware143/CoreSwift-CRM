@@ -12,6 +12,7 @@ use axum::{
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
+use sqlx::Row;
 use uuid::Uuid;
 
 fn count_or_zero(v: Option<i64>) -> i64 {
@@ -971,3 +972,56 @@ pub async fn get_credit_usage(
 // `available_providers` rows, implement square/paddle (or answer 501 for them — never a minted URL
 // that does not exist upstream), verify provider webhook signatures, grant the purchase (credits
 // or `tenant_plans`), and give it a caller in the shell.
+
+/// GET /api/v1/public/plans — the ANONYMOUS price list the marketing pricing page reads.
+///
+/// The served page at `nginx/www/coreswift/pricing.html` printed hand-authored bullets and said
+/// "nothing is charged on this page: the CoreSwift team switches the workspace on and emails you",
+/// while no surface told a visitor HOW to send the money — this app has no card till at all
+/// (`checkout_sessions` was dropped by migration 097). This read lets the page carry the operator's
+/// own `payment_instructions` (written on the console's How Customers Pay screen) beside the tiers,
+/// and the customer console's plan ladder reads the same payload.
+///
+/// Deliberately NARROW, and narrower than the authenticated `GET /api/billing/plans`: `slug`,
+/// `name`, the two amounts, the two allowances a buyer is sold, and the operator's words. No plan
+/// `id`, no `checkout_url`, no `payment_provider`, no raw feature JSON, no timestamps — a visitor
+/// needs a price list and a way to pay, and the ids and payment links are the console's business.
+/// `is_active = false` rows never reach a member of the public. Pricing/order mirrors the operator
+/// ladder ("cheapest first"): `sort_order` pin → price → name → id.
+pub async fn public_list_plans(State(s): State<AppState>) -> ApiResult<impl IntoResponse> {
+    let rows = sqlx::query(
+        "SELECT slug, name, price_monthly::text AS price_monthly, price_yearly::text AS price_yearly, \
+         monthly_credits, max_industries \
+         FROM plans WHERE is_active = true \
+         ORDER BY sort_order ASC NULLS LAST, price_monthly ASC NULLS LAST, name ASC, id ASC",
+    )
+    .fetch_all(&s.db)
+    .await?;
+
+    let plans: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "slug": r.try_get::<Option<String>, _>("slug").ok().flatten(),
+                "name": r.try_get::<Option<String>, _>("name").ok().flatten(),
+                "price_monthly": r.try_get::<Option<String>, _>("price_monthly").ok().flatten(),
+                "price_yearly": r.try_get::<Option<String>, _>("price_yearly").ok().flatten(),
+                "limits": {
+                    "monthly_credits": r.try_get::<Option<i32>, _>("monthly_credits").ok().flatten(),
+                    "max_industries": r.try_get::<Option<i32>, _>("max_industries").ok().flatten(),
+                },
+            })
+        })
+        .collect();
+
+    // HOW TO PAY: the operator's own details, published so a VISITOR on the pricing page — not only
+    // an operator reading the console — can see how this installation takes the money while no card
+    // provider is configured. Empty or absent keeps every surface exactly as it shipped.
+    let payment_instructions = crate::billing_instructions::load(&s.db).await;
+
+    Ok(Json(json!({
+        "plans": plans,
+        "total": plans.len(),
+        "payment_instructions": payment_instructions,
+    })))
+}

@@ -16,6 +16,7 @@ pub mod audit;
 pub mod auth;
 pub mod automation;
 pub mod billing;
+pub mod billing_instructions;
 mod body_deadline;
 pub mod booking;
 pub mod bookings;
@@ -593,6 +594,15 @@ async fn main() -> anyhow::Result<()> {
         // Billing (plan tiers, feature toggles)
         .nest("/api/campaigns", campaigns::router(state.clone()))
         .nest("/api/billing", billing::router(state.clone()))
+        // THE ANONYMOUS PRICE LIST (kanban t_3f4c16a7). Mounted HERE, outside every module router
+        // and its auth layer, because a visitor on the marketing pricing page has no session: the
+        // page reads it to show the operator's own `payment_instructions` ("how do I pay you?")
+        // beside the tiers. Named in `auth::route_policy::PUBLIC_ROUTES`, so its anonymity is a
+        // declared decision rather than an accident of the mount; measured anonymous it answers 200.
+        .route(
+            "/api/v1/public/plans",
+            axum::routing::get(billing::handlers::public_list_plans),
+        )
         // Audit logs (system-wide event trail)
         .nest("/api/audit", audit::router(state.clone()))
         // Event webhook hub

@@ -87,6 +87,7 @@
  <header class="container">
   <a href="/" class="logo" aria-label="CoreSwift CRM home">CoreSwift<span>CRM</span></a>
   <div class="nav-btns">
+   <a href="/inbox" class="nav-link">Inbox</a>
    <a href="/pricing" class="nav-link">Pricing</a>
    <a href="https://app.coreswiftcrm.com/login" class="btn-outline">Sign In</a>
    <a href="https://app.coreswiftcrm.com/register/" class="cta-button">Get Started Free</a>
@@ -143,6 +144,11 @@
         
       </article>
   </section>
+
+  <div id="how-to-pay" hidden style="background:var(--card-bg);border:1px solid var(--border-color);border-left:4px solid var(--accent-blue);border-radius:14px;padding:20px 24px;margin:0 0 28px">
+   <h2 style="font-size:1.05rem;font-weight:800;color:var(--text-main);margin-bottom:6px">How to pay for a paid plan</h2>
+   <p style="font-size:.92rem;color:var(--text-muted);white-space:pre-wrap" id="how-to-pay-text"></p>
+  </div>
 
   <aside class="inbox-door" style="background:#121620;border:1px solid #21283b;border-radius:14px;padding:22px 24px;margin:0 0 28px;display:flex;gap:18px;align-items:center;justify-content:space-between;flex-wrap:wrap">
    <div>
@@ -202,6 +208,29 @@
     var scripts = document.querySelectorAll('script[src*="googletagmanager"],script[src*="analytics"]');
     scripts.forEach(function(s){ s.remove(); });
   };
+})();
+</script>
+
+<script>
+/* HOW TO PAY (2026-11-18). This installation has no card checkout: a paid plan is bought by asking,
+   and a person switches the workspace on. Nothing on the old page told a visitor where the money
+   goes. The operator writes that once in the console (How Customers Pay) and it is published on the
+   anonymous price list below — the same words then appear here and on the plan screen inside the
+   app. Empty or absent leaves the block hidden, so the page is exactly what it was before. */
+(function () {
+  'use strict';
+  fetch('/api/v1/public/plans', { headers: { 'Accept': 'application/json' } })
+    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function (d) {
+      var pay = (d && typeof d.payment_instructions === 'string') ? d.payment_instructions.trim() : '';
+      var box = document.getElementById('how-to-pay');
+      var text = document.getElementById('how-to-pay-text');
+      if (pay && box && text) {
+        text.textContent = pay;
+        box.hidden = false;
+      }
+    })
+    .catch(function () { /* the tiers above are unaffected */ });
 })();
 </script>
 
