@@ -550,10 +550,90 @@ async function loadFeatureMatrix() {
       'An <strong>unset</strong> box means the plan does not mention that feature, which the server treats as ' +
       '<em>allowed</em> (so existing tenants are never silently stripped). Unticking writes an explicit ' +
       '<code>false</code> and is what actually denies the request with HTTP 402. Changes save immediately.</p>';
-    wrap.innerHTML = h;
+    wrap.innerHTML = h + fpPaymentSection(plans);
+    wrap.querySelectorAll('[data-pay-save]').forEach(function (b) {
+      b.addEventListener('click', function () { fpSavePayLink(b.getAttribute('data-pay-save')); });
+    });
   } catch (e) {
     wrap.innerHTML = '<div style="padding:20px;color:var(--danger,#f66)">Could not load the registry: ' +
       escapeHtml(e.message) + '</div>';
+  }
+}
+
+// ── Payment page per plan — the money door the console could not open (2026-11-18) ──────────
+// The customer's plan modal shows an "Open payment page" door whenever a plan carries a hosted
+// checkout link (`plans.checkout_url`), and PATCH /api/billing/plans/:id has always accepted that
+// field — but this console had NO control that could set it. Measured 2026-11-18: every active plan
+// on this install has `checkout_url = NULL` and `payment_provider = NULL`, `payment_providers` holds
+// no row, and real buyers are refused at checkout with `payment_provider_not_configured`. A hosted
+// link needs no API integration at all: the operator creates a payment page (Stripe Payment Link,
+// PayPal button page, any https checkout), pastes it here, the buyer pays on that page and the
+// workspace is switched onto the plan by hand. The field only ever holds an https address and is
+// validated with the same predicate the customer's modal uses (`payLinkKind`), so the admin screen
+// and the buyer's screen can never disagree about whether a plan has a working door.
+function fpPayState(link) {
+  const k = payLinkKind(link);
+  if (k === 'ok') return { tone: '#16a34a', text: 'Live — buyers see “Open payment page”' };
+  if (k === 'not_https') return { tone: '#dc2626', text: 'Must start with https://' };
+  if (k === 'probe') return { tone: '#dc2626', text: 'That address is a placeholder, not a real page' };
+  return { tone: 'var(--text-muted)', text: 'No payment page — buyers can only ask the team' };
+}
+
+function fpPaymentSection(plans) {
+  let h = '<div style="margin-top:26px;max-width:980px">' +
+    '<h3 style="margin:0 0 6px">Payment page for each plan</h3>' +
+    '<p style="color:var(--text-secondary);margin:0 0 14px;font-size:13px">' +
+    'Paste the https address of the page that takes the money for a plan (a Stripe Payment Link, a ' +
+    'PayPal button page, any hosted checkout). A buyer who presses that plan is sent there, and the ' +
+    'workspace is switched onto the plan once the payment lands. Leave it empty and buyers can still ' +
+    'press <strong>Request this plan</strong> — the ask reaches the team and nothing is lost.</p>' +
+    '<div id="fpPayRows">';
+  plans.forEach(function (p) {
+    const st = fpPayState(p.checkout_url);
+    h += '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 0;' +
+      'border-bottom:1px solid var(--border,#2a2a2a)">' +
+      '<strong style="min-width:150px">' + escapeHtml(p.name || p.slug) + '</strong>' +
+      '<input type="url" data-pay-input="' + escapeHtml(p.id) + '" placeholder="https://buy.stripe.com/…" ' +
+      'value="' + escapeHtml(p.checkout_url || '') + '" style="flex:1;min-width:280px;padding:8px 10px;' +
+      'border:1px solid var(--border,#333);border-radius:6px;background:transparent;color:inherit">' +
+      '<button class="btn btn-secondary btn-sm" data-pay-save="' + escapeHtml(p.id) + '">Save</button>' +
+      '<span data-pay-state="' + escapeHtml(p.id) + '" style="font-size:12px;color:' + st.tone + '">' +
+      escapeHtml(st.text) + '</span></div>';
+  });
+  h += '</div><p id="fpPayMsg" style="font-size:13px;margin-top:10px"></p></div>';
+  return h;
+}
+
+async function fpSavePayLink(planId) {
+  const inp = document.querySelector('[data-pay-input="' + planId + '"]');
+  const msg = document.getElementById('fpPayMsg');
+  const stEl = document.querySelector('[data-pay-state="' + planId + '"]');
+  if (!inp || !msg) return;
+  const url = String(inp.value || '').trim();
+  if (url && payLinkKind(url) !== 'ok') {
+    msg.style.color = '#dc2626';
+    msg.textContent = 'Not saved: that address is not a real https payment page.';
+    return;
+  }
+  msg.style.color = 'var(--text-muted)';
+  msg.textContent = 'Saving…';
+  try {
+    const plan = await API.patch('/billing/plans/' + planId, { checkout_url: url });
+    const saved = (plan && typeof plan.checkout_url === 'string') ? plan.checkout_url : url;
+    inp.value = saved;
+    const s = fpPayState(saved);
+    if (stEl) { stEl.style.color = s.tone; stEl.textContent = s.text; }
+    if (FP_DATA && FP_DATA.plans) {
+      const row = FP_DATA.plans.find(function (p) { return p.id === planId; });
+      if (row) row.checkout_url = saved;
+    }
+    msg.style.color = '#16a34a';
+    msg.textContent = saved
+      ? 'Saved. Buyers on this plan now get “Open payment page”.'
+      : 'Cleared. Buyers on this plan can only ask the team.';
+  } catch (e) {
+    msg.style.color = '#dc2626';
+    msg.textContent = 'Could not save: ' + (e && e.message ? e.message : 'unknown error');
   }
 }
 
