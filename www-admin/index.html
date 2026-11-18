@@ -6435,13 +6435,18 @@ async function loadTrackedLinksTab() {
     // A 402 is the module gate (FeatureGate "tracked_links", src/tracked_links/mod.rs): this
     // workspace's plan does not include the module, so NO SOURCE answered. That is not "you have no
     // links" and it must not be dressed up as an empty list.
+    // 2026-11-18: the words an operator read in THIS panel were still internal transport terms,
+    // the same class the eleven panels fixed earlier today and this one missed. The gated branch
+    // quoted the route (`GET /api/tracked-links`) and the sentinel “Payment required” to the
+    // operator — and carried a doubled “the the” — while a failed read printed
+    // “Tracked Links endpoint: <message>”. The gate's own human sentence now rides
+    // `planGateText`, and a failed read says what could not be loaded, in the console's own voice.
     el.innerHTML = card('Tracked Links', /payment required|402/i.test(msg)
       ? '<div class="empty-state"><div class="empty-icon">🔒</div>' +
         '<h3>Tracked Links is not included in this plan</h3>' +
-        '<p>No source answered: the server refused GET /api/tracked-links with “Payment required” - the ' +
-        'this workspace’s plan does not include Tracked Links, so nothing is known about links here.</p>' +
+        '<p>' + escapeHtml(planGateText(e)) + '</p>' +
         '<button class="btn btn-secondary" onclick="openUpgradeModal()">View Plans</button></div>'
-      : '<p style="color:var(--text-secondary)">Tracked Links endpoint: ' + escapeHtml(msg) + '</p>');
+      : '<p style="color:var(--error)">Could not load your tracked links: ' + escapeHtml(msg) + '</p>');
   }
 }
 
