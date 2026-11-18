@@ -507,6 +507,25 @@ async function loadFeatureMatrix() {
 // Reads the same GET /billing/plans the customer modal reads; saves with
 // PATCH /billing/plans/{id}, which this console's own operator (agency_admin) may call.
 let FP_PLANS = [];
+// A hosted payment page a buyer can actually be SENT to. A URL-syntax test alone is not enough:
+// the fleet's probe/reserved hosts (`*.invalid`, `*.test`, `*.example`, localhost, test.com, x.com)
+// are exactly what a leftover probe row points at, and `https://example.invalid/probe-pay-...`
+// passes every syntax check while resolving to nothing. MEASURED 2026-11-17: the live `starter`
+// plan carried such a link, so it counted as a payable plan and a buyer who pressed "Open payment
+// page" landed on a host that does not resolve. Server-verified `dead` verdicts are the other half
+// (`/billing/readiness` on the admin console); this helper refuses what a link obviously is not.
+function payLinkKind(link) {
+  const s = String(link || '').trim();
+  if (!s) return 'none';
+  if (!/^https:\/\//i.test(s)) return 'not_https';
+  let host = '';
+  try { host = new URL(s).hostname.toLowerCase(); } catch (_) { return 'not_https'; }
+  if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' ||
+      /(^|\.)(invalid|test|example|localhost)$/.test(host) ||
+      host === 'test.com' || host === 'www.test.com' ||
+      host === 'x.com' || host === 'www.x.com') return 'probe';
+  return 'ok';
+}
 async function loadPlanPaymentLinks() {
   const wrap = document.getElementById('fpPay');
   if (!wrap) return;
@@ -519,11 +538,13 @@ async function loadPlanPaymentLinks() {
   }
   const rows = FP_PLANS.map(p => {
     const link = String(p.checkout_url || '').trim();
-    const state = !link
+    const kind = payLinkKind(link);
+    const state = kind === 'none'
       ? '<span class="badge" style="background:#fef3c7;color:#92400e">not set</span>'
-      : (/^https:\/\/[^\s"']+$/i.test(link)
+      : (kind === 'ok'
         ? '<span class="badge badge-success">set</span> <a href="' + escapeHtml(link) + '" target="_blank" rel="noopener" style="font-size:12px">open</a>'
-        : '<span class="badge" style="background:#fee2e2;color:#991b1b">not a secure link</span>');
+        : '<span class="badge" style="background:#fee2e2;color:#991b1b">' +
+          (kind === 'probe' ? 'test address \u2014 cannot take money' : 'not a secure link') + '</span>');
     return '<tr>' +
       '<td><strong>' + escapeHtml(p.name || p.slug || '') + '</strong>' +
         '<div style="font-size:11px;color:var(--text-muted)">' + planPriceHtml(p, true) + '</div></td>' +
@@ -534,7 +555,27 @@ async function loadPlanPaymentLinks() {
       '<td><button class="btn btn-primary btn-sm" data-save="' + escapeHtml(String(p.id)) + '">Save</button></td>' +
       '</tr>';
   }).join('');
-  wrap.innerHTML = '<div class="card"><div class="card-header"><h3 style="margin:0;font-size:16px">Plan payment links</h3></div>' +
+  // AT A GLANCE, CAN I SELL ANYTHING? (2026-11-17) Every row below carries its own verdict, but
+  // nothing on this screen said whether ANY plan can take money — and zero sellable pages reads
+  // the same as one healthy plan when the eye is scanning the table. That is exactly the state
+  // this install was in: four paid plans, no payment page on any of them, `checkout/status`
+  // answering `configured:false` on every app. Counted from the same rows the table renders;
+  // nothing is computed server-side, so the banner cannot disagree with the links under it.
+  const paidPlans = FP_PLANS.filter(p => Number(p.price_monthly || 0) > 0 && p.is_active !== false);
+  const sellablePlans = paidPlans.filter(p => payLinkKind(p.checkout_url) === 'ok');
+  const noneSellable = paidPlans.length > 0 && sellablePlans.length === 0;
+  const paySummary = '<div class="card" id="fpPaySummary" style="margin-bottom:16px;border-left:4px solid ' +
+      (noneSellable ? '#ef4444' : '#10b981') + '"><div class="card-body">' +
+      '<strong style="display:block;margin-bottom:4px">' +
+      (noneSellable
+        ? 'Buyers cannot pay: none of the ' + paidPlans.length + ' paid plans has a payment page'
+        : sellablePlans.length + ' of ' + paidPlans.length + ' paid plans have a payment page') +
+      '</strong><div style="font-size:13px;color:var(--text-muted)">' +
+      (noneSellable
+        ? 'Anyone who presses Upgrade on a paid plan files a request instead of paying. Paste a payment page link into a plan below and it can be bought as soon as you save.'
+        : 'The badge under each link says whether that page actually answered — a link that opens nothing cannot sell. Every plan without a link files a request instead of paying.') +
+      '</div></div></div>';
+  wrap.innerHTML = paySummary + '<div class="card"><div class="card-header"><h3 style="margin:0;font-size:16px">Plan payment links</h3></div>' +
     '<div class="card-body">' +
     '<p style="font-size:13px;color:var(--text-muted);margin:0 0 12px">A hosted payment page for a plan — an NMI or EPD hosted page, a PayPal button, a Stripe Payment Link, anything that takes the money. A plan carrying one can be sold while this installation holds no payment key: the buyer pays on that page and the workspace is switched on here once the money lands. Leave a plan empty to keep it request-only. Create the page in your provider&#39;s own dashboard and paste its https://&hellip; address here — every provider&#39;s page is accepted, and pressing the link in the app now files the buyer&#39;s plan request so the payment and the switch meet. The server opens EVERY paid plan&#39;s page: the badge under each link says whether the page answered, because a saved link that answers a dead page is worse than an empty box. Every plan has to open before buyers count as able to pay.</p>' +
     '<div class="table-wrap"><table class="table"><thead><tr><th>Plan</th><th>Link</th><th>Payment page</th><th></th></tr></thead><tbody>' +
@@ -565,6 +606,31 @@ async function loadPlanPaymentLinks() {
               ? '<span class="badge" style="background:#fef3c7;color:#92400e">could not check just now</span>'
               : '';
     });
+    // The banner above counted LINKS; this is the server's answer about pages that actually OPEN.
+    // Repainted only from a SUCCESSFUL read, so a slow payment host never turns a claim into a lie,
+    // and `unknown` is never reported as shut.
+    const sum = document.getElementById('fpPaySummary');
+    if (sum) {
+      const reasonOf = (p) => String(((byslug[String(p.slug)] || {}).reason) || '');
+      const open = paidPlans.filter(p => reasonOf(p) === 'ok');
+      const shut = paidPlans.filter(p => ['dead', 'not_https', 'no_link', 'probe'].indexOf(reasonOf(p)) >= 0);
+      const names = (arr) => arr.map(p => String(p.name || p.slug || '')).join(', ');
+      const allOpen = paidPlans.length > 0 && open.length === paidPlans.length;
+      sum.style.borderLeftColor = allOpen ? '#10b981' : '#ef4444';
+      sum.innerHTML = '<div class="card-body"><strong style="display:block;margin-bottom:4px">' +
+        (allOpen
+          ? 'All ' + paidPlans.length + ' paid plans have a payment page that opens'
+          : (open.length === 0
+            ? 'Buyers cannot pay: none of the ' + paidPlans.length + ' paid plans has a payment page that opens'
+            : open.length + ' of ' + paidPlans.length + ' paid plans have a payment page that opens')) +
+        '</strong><div style="font-size:13px;color:var(--text-muted)">' +
+        (allOpen
+          ? 'Checked against the provider page itself, not just the link on file.'
+          : (shut.length
+            ? 'Not sellable yet: ' + escapeHtml(names(shut)) + '. Anyone who presses Upgrade on those files a request instead of paying \u2014 paste a page that opens and save it.'
+            : 'Some pages could not be checked just now, so nothing is claimed about them.')) +
+        '</div></div>';
+    }
   } catch (_) { /* platform-admin only; a tenant just sees no verdict */ }
 }
 
@@ -573,6 +639,7 @@ async function savePlanPaymentLink(id, btn) {
   if (!input || !btn || btn.disabled) return;
   const url = String(input.value || '').trim();
   if (url && !/^https?:\/\//i.test(url)) { toast('A payment link must start with https://', 'error'); return; }
+  if (url && payLinkKind(url) === 'probe') { toast('That is a test address, not a payment page \u2014 it can never take money. Paste the page your provider gave you.', 'error'); return; }
   btn.disabled = true;
   btn.textContent = 'Saving…';
   try {

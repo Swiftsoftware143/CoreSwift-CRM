@@ -1116,6 +1116,25 @@ async function recordPaymentHandoff(idx) {
   }
 }
 
+// A hosted payment page a buyer can actually be SENT to. A URL-syntax test alone is not enough:
+// the fleet's probe/reserved hosts (`*.invalid`, `*.test`, `*.example`, localhost, test.com, x.com)
+// are exactly what a leftover probe row points at, and `https://example.invalid/probe-pay-...`
+// passes every syntax check while resolving to nothing. MEASURED 2026-11-17: the live `starter`
+// plan carried such a link, so it counted as a payable plan and a buyer who pressed "Open payment
+// page" landed on a host that does not resolve. Server-verified `dead` verdicts are the other half
+// (`/billing/readiness` on the admin console); this helper refuses what a link obviously is not.
+function payLinkKind(link) {
+  const s = String(link || '').trim();
+  if (!s) return 'none';
+  if (!/^https:\/\//i.test(s)) return 'not_https';
+  let host = '';
+  try { host = new URL(s).hostname.toLowerCase(); } catch (_) { return 'not_https'; }
+  if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' ||
+      /(^|\.)(invalid|test|example|localhost)$/.test(host) ||
+      host === 'test.com' || host === 'www.test.com' ||
+      host === 'x.com' || host === 'www.x.com') return 'probe';
+  return 'ok';
+}
 async function openUpgradeModal() {
   let plansHtml = '<div class="loading-wrap"><div class="spinner"></div> Loading plans...</div>';
   showModal('Compare Plans', plansHtml, '', true);
@@ -1163,7 +1182,7 @@ async function openUpgradeModal() {
           ${features.map(f => `<li class="check">✓ ${escapeHtml(f)}</li>`).join('')}
         </ul>
         ${isCurrent ? '' : `<button class="btn btn-primary btn-sm" data-request-plan="${i}" style="margin-top:10px">Request this plan</button>`}
-        ${(!isCurrent && p.is_active !== false && /^https:\/\/[^\s"']+$/i.test(String(p.checkout_url || '').trim()))
+        ${(!isCurrent && p.is_active !== false && payLinkKind(p.checkout_url) === 'ok')
           ? `<a class="btn btn-secondary btn-sm" data-pay-link="${i}" href="${escapeHtml(String(p.checkout_url).trim())}" target="_blank" rel="noopener" style="margin-top:8px;display:inline-block">Open payment page</a>`
           : ''}
         <div data-pay-note="${i}" style="display:none;font-size:12px;color:var(--text-secondary);margin-top:6px"></div>
@@ -1197,7 +1216,7 @@ async function openUpgradeModal() {
         + 'proration. Moving back down to Inbox returns you to $1, and your mailbox and all its mail stay '
         + 'exactly where they are.</p>';
     }
-    var anyPayLink = plans.some(p => /^https:\/\/[^\s"']+$/i.test(String(p.checkout_url || '').trim())
+    var anyPayLink = plans.some(p => payLinkKind(p.checkout_url) === 'ok'
       && String(p.id) !== String(STATE.planId));
     plansHtml += '<p style="color:var(--text-secondary);font-size:13px;margin-top:14px;text-align:center">'
       + (anyPayLink
