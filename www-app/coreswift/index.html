@@ -1706,7 +1706,12 @@ const TAB_RENDERERS = {
   'features-plans': () => {
     let html = pageHeader('Features & Plans', 'Turn modules on or off per plan — enforced on every request') +
       '<div id="fpWrap"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading feature registry...</div></div>';
-    loadFeatureMatrix();
+    // A RENDERER RUNS BEFORE ITS HTML IS INSERTED (`renderTab` assigns `container.innerHTML = fn()`,
+    // so `#fpWrap` does not exist while this function is still returning). Calling the loader directly
+    // here found no element, returned early, and the panel said "Loading feature registry..." for ever
+    // on the FIRST visit to the screen (measured 2026-11-18; a second visit only worked because the
+    // previous render's node was still in the DOM). Defer one tick so the node exists.
+    setTimeout(loadFeatureMatrix, 0);
     return html;
   },
   'configuration': () => {
