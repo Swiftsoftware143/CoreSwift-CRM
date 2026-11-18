@@ -10711,8 +10711,21 @@ async function bkInit() {
   try {
     if (!window.BK_WS) {
       try {
-        var acc = await dmCall('GET', '/account/profile');
-        window.BK_WS = (acc && (acc.tenant_slug || acc.slug || (acc.account && acc.account.slug))) || '';
+        // The caller's OWN workspace slug. This asked for `GET /account/profile`, a route that
+        // does not exist: the account router's `/:id` matches it and the handler tries to parse
+        // "profile" as a UUID, so the server answered 400 ("UUID parsing failed: invalid
+        // character: found `p` at 0") and BK_WS stayed EMPTY on every visit. The cost was visible
+        // on this very screen: the owner's own calendar address was never shown, and the shared
+        // link silently degraded to the one-segment form the calendar cannot disambiguate.
+        // `GET /account` IS the real surface — it carries the workspace's `slug` — and the signed
+        // in account id picks the caller's own row even for a platform admin, whose list holds
+        // every tenant.
+        const accRes = await dmCall('GET', '/account');
+        const accRows = (accRes && accRes.accounts) || [];
+        const myId = (STATE.user && STATE.user.account_id) || '';
+        const mine = myId ? accRows.filter(function (a) { return String(a.id) === String(myId); })[0] : null;
+        const accRow = mine || (accRows.length === 1 ? accRows[0] : null);
+        window.BK_WS = (accRow && (accRow.slug || accRow.tenant_slug)) || '';
       } catch (e) { /* the address simply is not shown */ }
     }
     const res = await bkCall('GET', '/calendars');
