@@ -4487,7 +4487,12 @@ function ticketDueCell(t) {
   let colour = 'var(--text-muted)';
   if (w.late) colour = '#dc2626';
   else if (w.due - now <= 3600000) colour = '#d97706';
-  return '<span style="color:' + colour + ';font-weight:600">' + w.text + '</span>';
+  // BOTH promises stay visible (2026-11-18): the column used to show only the nearest clock, so an
+  // operator who met the first reply could not see how much of the resolution window was left, and
+  // could not see the resolution deadline at all while the reply clock was still live.
+  const rest = live.slice(1).map(x => x.text).join(' · ');
+  return '<span style="color:' + colour + ';font-weight:600">' + w.text + '</span>'
+    + (rest ? '<span style="color:var(--text-muted);font-weight:400"> · ' + rest + '</span>' : '');
 }
 
 async function openTicket(id) {
