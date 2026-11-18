@@ -1938,6 +1938,15 @@ async function saveSiteConfig() {
   }
 }
 
+/* A FAILED READ MUST SPEAK TO A CUSTOMER, NOT A DEVELOPER (2026-11-18). Eleven panels in this
+   console printed "<Thing> endpoint: <raw error text>" — measured live copies of that pattern, e.g.
+   "Contacts endpoint: HTTP 500" — which tells a business owner nothing they can act on and leaks
+   our own vocabulary into the product. One sentence everywhere; it never claims data was lost,
+   only that this read did not answer. */
+function readFailed(what) {
+  return 'We could not load ' + what + ' just now. Nothing was changed — reload the page to try again.';
+}
+
 function escapeHtmlAttr(str) {
   return String(str).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
@@ -2125,7 +2134,7 @@ const TAB_LOADERS = {
         'No contacts yet. Add your first contact to get started.'
       );
     } catch(e) {
-      contactsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Contacts endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      contactsTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">${escapeHtml(readFailed('your contacts'))}</p></div></div>`;
     }
   },
 
@@ -2157,7 +2166,7 @@ const TAB_LOADERS = {
         'No companies yet. Add your first company.'
       );
     } catch(e) {
-      companiesTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Companies endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      companiesTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">${escapeHtml(readFailed('your companies'))}</p></div></div>`;
     }
   },
 
@@ -2234,7 +2243,7 @@ const TAB_LOADERS = {
     } catch(e) {
       ticketsTableEl.innerHTML = (e && e.planGate)
         ? `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">\u{1F512} ${escapeHtml(e.planMessage || 'Support tickets is not available on your current plan. Upgrade to access it.')}</p><p style="color:var(--text-secondary);margin-top:10px">Requests your customers submit through the 💬 My Support portal or the embed widget are still accepted and stored while you are on this plan — the intake is not plan-gated — and they appear in this list as soon as the plan includes Support tickets.</p></div></div>`
-        : `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tickets endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+        : `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">${escapeHtml(readFailed('your support tickets'))}</p></div></div>`;
     }
   },
 
@@ -2282,7 +2291,7 @@ const TAB_LOADERS = {
       }
       plansContentEl.innerHTML = html;
     } catch(e) {
-      plansContentEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Plans endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      plansContentEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">${escapeHtml(readFailed('the plans'))}</p></div></div>`;
     }
   },
 
@@ -2345,7 +2354,7 @@ const TAB_LOADERS = {
       el.innerHTML = dataTable(['Company','Slug','Email','Status','Created',''], rows,
         'No portfolio companies yet — add one, or run a cross-app sync.');
     } catch(e) {
-      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Portfolio endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">${escapeHtml(readFailed('the portfolio'))}</p></div></div>`;
     }
   },
 
@@ -2368,7 +2377,7 @@ const TAB_LOADERS = {
       el.innerHTML = dataTable(['App','Config','Updated',''], rows,
         'No native app configs stored yet — use “+ Set App Config” to add one (e.g. adaswift base URL).');
     } catch(e) {
-      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Native app configs endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">${escapeHtml(readFailed('the native app settings'))}</p></div></div>`;
     }
   },
 
@@ -2402,7 +2411,7 @@ const TAB_LOADERS = {
       el.innerHTML = dataTable(['Tenant','Retention','Last purge','Limit overrides',''], rows,
         'No per-tenant email limit overrides yet — set retention below to create one.');
     } catch(e) {
-      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Private-email admin endpoint: ${escapeHtml(e.message)}</p></div></div>`;
+      el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">${escapeHtml(readFailed('the private-email settings'))}</p></div></div>`;
     }
   }
 };
@@ -4887,7 +4896,7 @@ async function loadTrackedLinksTab() {
         '<p>' + escapeHtml(e.planMessage || 'Tracked Links is not available on your current plan. Upgrade to access it.') +
         ' This module may be switched off on your plan — check <strong>Features &amp; Plans</strong>.</p>' +
         '<button class="btn btn-secondary" onclick="openUpgradeModal()">View Plans</button></div>'
-      : '<p style="color:var(--text-secondary)">Tracked Links endpoint: ' + escapeHtml(msg) + '</p>');
+      : '<p style="color:var(--text-secondary)">' + escapeHtml(readFailed('your tracked links')) + '</p>');
   }
 }
 
@@ -5713,7 +5722,7 @@ async function loadNotifications() {
       el.innerHTML = h;
     }
   } catch (e) {
-    el.innerHTML = card('Inbox', '<p style="color:var(--text-secondary)">Notifications endpoint: ' + escapeHtml(e.message) + '</p>');
+    el.innerHTML = card('Inbox', '<p style="color:var(--text-secondary)">' + escapeHtml(readFailed('your notifications')) + '</p>');
   }
   loadNotifCount();
 }
@@ -5921,7 +5930,7 @@ async function loadCredits() {
       '</div>' + rows +
       '<p class="config-desc" style="margin-top:10px">Credits are consumed by the features above. There is no self-serve purchase route: the old “buy credits” route granted credits with no payment attached and was removed, and the unfinished checkout route it pointed at was retired rather than shipped (2026-09-25).</p>');
   } catch (e) {
-    el.innerHTML = card('Credits', '<p style="color:var(--text-secondary)">Credits endpoint: ' + escapeHtml(e.message) + '</p>');
+    el.innerHTML = card('Credits', '<p style="color:var(--text-secondary)">' + escapeHtml(readFailed('your credit balance')) + '</p>');
   }
 }
 
@@ -6030,8 +6039,7 @@ function famErr(el, label, e) {
       escapeHtml(e.planMessage || 'This feature is not included in your current plan.') + '</p>');
     return;
   }
-  el.innerHTML = card(label, '<p style="color:var(--text-secondary)">' + escapeHtml(label) +
-    ' endpoint: ' + escapeHtml(e.message) + '</p>');
+  el.innerHTML = card(label, '<p style="color:var(--text-secondary)">' + escapeHtml(readFailed(String(label || 'this screen').toLowerCase())) + '</p>');
 }
 function confirmThen(msg, fn) { if (window.confirm(msg)) fn(); }
 
