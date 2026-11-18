@@ -276,7 +276,16 @@
       var list = host.calendars || [];
       el('calName').textContent = host.workspace ? 'Book with ' + host.workspace.replace(/-/g, ' ') : 'Book';
       if (!list.length) {
-        el('body').innerHTML = '<div class="empty">Nothing is open for booking yet. Please reply to the email that sent you here and a person will help.</div>';
+        // A VISITOR WHO TYPED THIS ADDRESS WAS TOLD TO REPLY TO AN EMAIL THAT DOES NOT EXIST
+        // (measured live 2026-11-18 on booking.bvpremiereproducts.com: "Book with bvpp / Nothing is
+        // open for booking yet. Please reply to the email that sent you here and a person will
+        // help."). Six public booking hosts answer this state, and a stranger arriving from a
+        // business card, a QR code or a link has no email to reply to. Name both ways forward: the
+        // business directly for a walk-up visitor, the message itself for someone who did arrive
+        // from one.
+        el('body').innerHTML = '<div class="empty">Nothing is open for booking yet. ' +
+          'If you were expecting to book an appointment here, please contact the business directly ' +
+          'and they will help \u2014 if you followed a link in an email, reply to that email.</div>';
         return;
       }
       el('body').innerHTML = '<div class="grid">' + list.map(function (c) {
@@ -288,7 +297,11 @@
       }).join('') + '</div>';
     }).catch(function () {
       el('calName').textContent = 'Book';
-      el('body').innerHTML = '<div class="empty">This address is not set up yet. Please reply to the email that sent you here and a person will help.</div>';
+      // Same audience as the empty state above: a walk-up visitor has no email to reply to, so the
+      // direct-contact route is named first.
+      el('body').innerHTML = '<div class="empty">This booking address is not available right now. ' +
+        'Please contact the business directly and they will help \u2014 if you followed a link in an ' +
+        'email, reply to that email.</div>';
     });
   }
 
