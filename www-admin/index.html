@@ -478,6 +478,45 @@ function planGateText(e) {
   return String((e && e.message) || e);
 }
 
+// ONE PRESS FROM "I want to buy" TO THE PLAN SEATED (cron 2026-11-18).
+// A customer who asks for a plan files a ticket whose subject is "Plan request at signup: <Plan>
+// plan" (src/tickets/handlers.rs::file_signup_plan_request). An operator admin's queue carries those
+// rows too (tenant_id IS NULL — see list_tickets), but the row offered only "View": answering a sale
+// meant leaving the queue, finding the workspace by hand on the tenant-plan panel, picking the plan a
+// second time and pressing Assign. With no self-serve checkout on this installation that queue IS the
+// money path, so the row now carries the action. It decides nothing on its own: the plan comes from
+// the ticket's own subject, the workspace from the ticket's own contact email, the operator confirms,
+// and the write is the SAME PUT /api/admin/tenants/{id}/plan the tenant-plan panel uses — so this
+// action can never seat a plan the panel could not. Every unknown (no workspace with that email, no
+// plan of that name on sale) is named out loud and changes nothing.
+async function seatPlanFromTicket(id) {
+  const t = (STATE.tickets || []).find(x => String(x.id) === String(id));
+  if (!t) { toast('That ticket is no longer in the list — reopen the tab.', 'error'); return; }
+  const subj = t.subject || t.title || '';
+  const m = subj.match(/plan request[^:]*:\s*(.+?)\s+plan\b/i);
+  const wantedName = (m && m[1] ? m[1] : '').trim();
+  const email = String(t.contact_email || '').trim().toLowerCase();
+  if (!wantedName) { toast('This request does not name a plan — open it and read the message.', 'error'); return; }
+  if (!email) { toast('This request carries no contact email, so no workspace can be matched.', 'error'); return; }
+  try {
+    if (!TP_TENANTS.length) TP_TENANTS = ((await API.get('/admin/tenants')) || {}).tenants || [];
+    if (!TP_PLANS.length) TP_PLANS = famList(await API.get('/billing/plans'), 'plans');
+    const tenant = TP_TENANTS.find(x =>
+      String(x.owner_email || '').toLowerCase() === email || String(x.email || '').toLowerCase() === email);
+    const plan = TP_PLANS.find(p => String(p.name || '').toLowerCase() === wantedName.toLowerCase())
+              || TP_PLANS.find(p => String(p.slug || '').toLowerCase() === wantedName.toLowerCase());
+    if (!tenant) { toast('No workspace is owned by ' + email + ' yet — seat the plan from the tenant-plan panel once it exists.', 'error'); return; }
+    if (!plan) { toast('No plan on sale is called "' + wantedName + '" — pick it on the tenant-plan panel.', 'error'); return; }
+    if (!window.confirm('Seat the ' + plan.name + ' plan on "' + (tenant.name || tenant.slug) + '"?\n\nNothing is charged here — this only changes the plan the workspace is on.')) return;
+    const r = await API.put('/admin/tenants/' + encodeURIComponent(tenant.id) + '/plan', { plan_slug: plan.slug });
+    const got = (r && r.plan && (r.plan.name || r.plan.slug)) || plan.name;
+    toast('Seated: ' + (tenant.name || tenant.slug) + ' is on ' + got, 'success');
+    setTimeout(() => { try { switchTab('tickets'); } catch(_){} }, 700);
+  } catch (e) {
+    toast('Could not seat the plan: ' + planGateText(e), 'error');
+  }
+}
+
 // ── Modules & Plans: the data-driven module/feature registry ─────────────────
 // Every tool is a MODULE and everything it can do is a FEATURE of it — both are ROWS in the
 // database now, so there is no hardcoded module list anywhere in this file. The panel renders
@@ -3638,14 +3677,24 @@ const TAB_LOADERS = {
       const tickets = Array.isArray(resp) ? resp : ((resp && resp.tickets) || []);
       let rows = [];
       if (Array.isArray(tickets)) {
-        rows = tickets.slice(0, 50).map(t => [
-          escapeHtml(t.subject || t.title || '—'),
+        // The ask itself is kept: a plan request's row needs the ticket's own subject and contact
+        // email to resolve the plan and the workspace (see seatPlanFromTicket below).
+        STATE.tickets = tickets;
+        rows = tickets.slice(0, 50).map(t => {
+          const subj = t.subject || t.title || '';
+          const actions = `<button class="btn btn-ghost btn-xs" onclick="openTicket('${t.id}')">View</button>` +
+            (/plan request/i.test(subj)
+              ? ` <button class="btn btn-primary btn-xs" onclick="seatPlanFromTicket('${t.id}')" title="Seat the plan this request names on the workspace that asked">Seat this plan</button>`
+              : '');
+          return [
+          escapeHtml(subj || '—'),
           `<span class="badge ${t.status==='open'?'badge-error':t.status==='in_progress'?'badge-warning':'badge-success'}">${escapeHtml(t.status||'open')}</span>`,
           escapeHtml(t.priority || 'normal'),
           escapeHtml(t.contact_name || t.contact_email || t.requester || '—'),
           escapeHtml(t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'),
-          `<button class="btn btn-ghost btn-xs" onclick="openTicket('${t.id}')">View</button>`
-        ]);
+          actions
+          ];
+        });
       }
       ticketsTableEl.innerHTML = dataTable(
         ['Subject','Status','Priority','Contact','Created',''], rows,
