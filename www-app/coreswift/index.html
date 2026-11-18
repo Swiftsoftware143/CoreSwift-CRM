@@ -11574,12 +11574,29 @@ async function dmInit() {
     } else {
       DM.current = null;
       DM.fieldMap = {};
-      DM.sourceApp = (DM.dest.sources && DM.dest.sources[0] && DM.dest.sources[0].app) || '';
+      DM.sourceApp = '';
       DM.entity = '';
       DM.schema = null;
       DM.dirty = false;
+      // A SOURCE IS ONLY A SOURCE IF THIS ACCOUNT CAN READ IT (measured 2026-11-18). The
+      // destinations list is the fleet's APP CATALOGUE, not this workspace's connections: a Free
+      // workspace with nothing connected used to land here with `funnelswift` pre-selected, fire
+      // /data-mapping/schema?app=funnelswift, and paint the backend's 400 as a red "Fields
+      // unavailable" card — a dead end whose next step (connect the app) was never named. Ask each
+      // catalogue entry for its fields and keep the first one that ANSWERS; when none does, the
+      // screen says so and links to the place that fixes it.
+      const picked = await dmFindUsableSource();
+      if (!picked) {
+        dmRenderAll();
+        dmRenderNoSource();
+        return;
+      }
+      DM.sourceApp = picked.app;
+      DM.schema = picked.schema;
+      if (!DM.entity && DM.schema.entities && DM.schema.entities[0]) DM.entity = DM.schema.entities[0].name;
       dmRenderAll();
-      await dmLoadSchema();
+      dmRenderSource();
+      dmRenderPreview();
     }
   } catch (e) {
     if (wrap) wrap.innerHTML = card('Could not load the mapper',
@@ -11617,12 +11634,75 @@ async function dmLoadSchema() {
     dmRenderPreview();
   } catch (e) {
     if (box) {
+      const needsConnect = /connection/i.test(String(e.message || ''));
       box.innerHTML = card('Fields unavailable',
         '<p style="color:var(--warning,#b45309)">' + dmEsc(e.message) + '</p>' +
         '<p class="form-hint">The mapper lists what the other app says it has. It will not invent field names — ' +
-        'a made-up name would resolve to nothing at run time.</p>', '');
+        'a made-up name would resolve to nothing at run time.</p>' +
+        (needsConnect
+          ? '<button class="btn btn-primary btn-sm" onclick="switchTab(\'integrations\')">Open the Integration Center</button>'
+          : ''), '');
     }
   }
+}
+
+/**
+ * The first catalogue source whose fields THIS ACCOUNT can actually read, with its schema.
+ *
+ * `/data-mapping/destinations` lists every app the fleet knows, connected or not; only the schema
+ * route knows the difference (it answers `This account has no <app> connection` for the rest). So
+ * the pick is made by asking, once per candidate, and the answer is cached on DM.probed so a
+ * later re-render does not repeat the round-trips. Returns null when nothing is connected.
+ */
+async function dmFindUsableSource() {
+  const sources = (DM.dest && DM.dest.sources) || [];
+  DM.probed = DM.probed || {};
+  for (let i = 0; i < sources.length; i++) {
+    const app = sources[i] && sources[i].app;
+    if (!app) continue;
+    if (DM.probed[app] === false) continue;
+    if (DM.probed[app]) return { app: app, schema: DM.probed[app] };
+    const connected = await dmIsConnected(app);
+    if (connected === false) { DM.probed[app] = false; continue; }
+    try {
+      const schema = await dmCall('GET', '/data-mapping/schema?app=' + encodeURIComponent(app));
+      if (schema && (schema.entities || []).length) {
+        DM.probed[app] = schema;
+        return { app: app, schema: schema };
+      }
+      DM.probed[app] = false;
+    } catch (e) {
+      DM.probed[app] = false;
+    }
+  }
+  return null;
+}
+
+/**
+ * Is this app connected to the CALLER's workspace? `GET /native/apps/<slug>/status` is the
+ * connector's own answer (`connected: true|false`), so asking it costs one small read and keeps
+ * `/data-mapping/schema` (which refuses with a 400 for an unconnected app) off the wire entirely.
+ * A status route that cannot answer is treated as "try the schema", never as "not connected".
+ */
+async function dmIsConnected(app) {
+  try {
+    const st = await dmCall('GET', '/native/apps/' + encodeURIComponent(app) + '/status');
+    return !!(st && st.connected);
+  } catch (e) {
+    return null;
+  }
+}
+
+/** The honest empty state: nothing is connected, and here is the one screen that changes that. */
+function dmRenderNoSource() {
+  const wrap = document.getElementById('dmWrap');
+  if (!wrap) return;
+  wrap.innerHTML = card('No app is connected yet',
+    '<p class="form-hint">The mapper copies contacts from an app you have connected — it reads that app\u2019s ' +
+    'real fields and never invents them, so there is nothing to map until one is connected.</p>' +
+    '<p class="form-hint">Connect FunnelSwift, IncentiveSwift, WorkflowSwift or MissedCall Respondr in the ' +
+    'Integration Center, then open this screen again.</p>' +
+    '<button class="btn btn-primary btn-sm" onclick="switchTab(\'integrations\')">Open the Integration Center</button>', '');
 }
 
 function dmSourceFields() {
