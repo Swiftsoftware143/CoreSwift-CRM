@@ -5467,18 +5467,67 @@ function famList(res, key) {
 // (p.features || []).slice(0, 6) threw "slice is not a function" and no plan card could paint.
 // Show what the plan really enables (true) or sizes (a positive number); a plain array is still
 // honoured for a plan that stores a list.
+// A plan card is read by a BUYER, so the JSONB object in `plans.features` is translated into plain
+// English ONCE, here, for both shells (the tenant's Compare Plans card and the admin Billing tab).
+// It used to print the machine key itself — "max users (1)", "api calls per day (100)",
+// "account health monitoring" — with a ✓ in front of a LIMIT, which reads as a benefit. A ceiling
+// now reads as a ceiling ("Up to 100 contacts"), a module reads in the words the console itself
+// uses ("Support tickets"), and the numbers a buyer compares first come first.
+const PLAN_NUM = (n) => Number(n).toLocaleString('en-US');
+const PLAN_FEATURE_COPY = {
+  max_contacts: (n) => 'Up to ' + PLAN_NUM(n) + ' contacts',
+  max_users: (n) => (n === 1 ? '1 user' : 'Up to ' + PLAN_NUM(n) + ' users'),
+  campaigns: () => 'Email campaigns',
+  catch_all: () => 'Catch-all mailboxes',
+  email_templates: () => 'Email templates',
+  support_tickets: () => 'Support tickets',
+  ai_enabled: () => 'AI assistant',
+  automation_enabled: () => 'Automation rules',
+  private_email: () => 'Your own private email domain',
+  agency_workspace: () => 'Agency workspace',
+  pipelines: (n) => (n === 1 ? '1 pipeline' : 'Up to ' + PLAN_NUM(n) + ' pipelines'),
+  integrations: (n) => (n === 1 ? '1 integration' : 'Up to ' + PLAN_NUM(n) + ' integrations'),
+  email_domains: (n) => (n === 1 ? '1 email domain' : 'Up to ' + PLAN_NUM(n) + ' email domains'),
+  email_mailboxes: (n) => (n === 1 ? '1 mailbox' : 'Up to ' + PLAN_NUM(n) + ' mailboxes'),
+  max_widgets: (n) => (n === 1 ? '1 website widget' : 'Up to ' + PLAN_NUM(n) + ' website widgets'),
+  storage_gb: (n) => (n < 1 ? Math.round(n * 1000) + ' MB' : PLAN_NUM(n) + ' GB') + ' of file storage',
+  api_calls_per_day: (n) => PLAN_NUM(n) + ' API calls a day',
+  email_history_days: (n) => 'Up to ' + PLAN_NUM(n) + ' days of email history',
+  onboarding_checklists: () => 'Onboarding checklists',
+  account_health_monitoring: () => 'Account health monitoring',
+};
+// Three numbers, then the modules that actually differ between plans, then the remaining ceilings:
+// six lines have to carry the whole comparison, so the top of the card is the part a buyer decides on.
+const PLAN_FEATURE_ORDER = ['max_contacts', 'max_users', 'pipelines', 'ai_enabled', 'automation_enabled',
+  'campaigns', 'catch_all', 'email_templates', 'support_tickets', 'private_email', 'agency_workspace',
+  'integrations', 'email_domains', 'email_mailboxes', 'max_widgets', 'storage_gb',
+  'api_calls_per_day', 'email_history_days', 'onboarding_checklists', 'account_health_monitoring'];
+
+function planFeatureKeyLabel(k) {
+  const s = String(k).replace(/_/g, ' ');
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 function planFeatureList(raw) {
-  const out = [];
   if (Array.isArray(raw)) {
-    raw.slice(0, 6).forEach(f => out.push(typeof f === 'string' ? f : (f && (f.name || f.key)) || ''));
-  } else if (raw && typeof raw === 'object') {
-    Object.keys(raw).forEach(k => {
-      const v = raw[k];
-      if (v === true) out.push(k.replace(/_/g, ' '));
-      else if (typeof v === 'number' && v > 0) out.push(k.replace(/_/g, ' ') + ' (' + v + ')');
-    });
+    return raw.slice(0, 6).map(f => (typeof f === 'string' ? f : (f && (f.name || f.key)) || '')).filter(Boolean);
   }
-  return out.slice(0, 6);
+  if (!raw || typeof raw !== 'object') return [];
+  // false / 0 / null means the plan does NOT include it: printing a ✓ there is a promise the app
+  // does not keep, so those keys stay off the card entirely.
+  const say = (k) => {
+    const v = raw[k];
+    if (v === true) return PLAN_FEATURE_COPY[k] ? PLAN_FEATURE_COPY[k]() : planFeatureKeyLabel(k);
+    if (typeof v === 'number' && v > 0) {
+      return PLAN_FEATURE_COPY[k] ? PLAN_FEATURE_COPY[k](v) : planFeatureKeyLabel(k) + ' (' + PLAN_NUM(v) + ')';
+    }
+    return null;
+  };
+  const known = PLAN_FEATURE_ORDER.filter(k => Object.prototype.hasOwnProperty.call(raw, k)).map(say).filter(Boolean);
+  const rest = Object.keys(raw)
+    .filter(k => PLAN_FEATURE_ORDER.indexOf(k) === -1)
+    .map(say).filter(Boolean);
+  return known.concat(rest).slice(0, 6);
 }
 // A plan's PRICE, on both terms. Every CoreSwift row carries a real `price_yearly` (measured live
 // 2026-11-10: Starter 290, Pro 290, Professional 790, Enterprise 1990, Agency 1490) yet every place
