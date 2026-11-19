@@ -3462,6 +3462,10 @@ function automatedTicketKind(t) {
   var from = String((t && (t.contact_email || t.requester || t.contact)) || '').toLowerCase();
   if (/report domain:|report-id:|feedback report/i.test(subj) || /@dmarc\.|^abuse@/.test(from)) return 'complaint';
   if (/^(bounces-|mailer-daemon|postmaster@)/.test(from) || /(sender-sib\.com|bounce\.)/.test(from)) return 'bounce';
+  // A vendor's own promotional mailbox ("marketing@discover.<vendor>", "news@…") is bulk mail to the
+  // support address, not a customer asking for help. Narrow on purpose: the LOCAL PART must be one of
+  // these words, so a customer whose own address is marketing@… still lands in the customer list.
+  if (/^(marketing|news|newsletter|promo|promotions|offers|deals|events)@/.test(from)) return 'spam';
   if (/(limited time offer|black friday|redefine your style|luxury watch|best price|guest post|seo (services|package)|crypto|casino)/i.test(subj)) return 'spam';
   return '';
 }
@@ -3981,12 +3985,15 @@ const TAB_LOADERS = {
               ]), '')}
             </div>
           </details>` : '';
-        ticketsTableEl.innerHTML = dataTable(
-          ['Subject','Status','Priority','SLA','Contact','Created',''], rows,
-          automated.length
-            ? 'No CUSTOMER tickets — only the automated reports listed below.'
-            : 'No support tickets. Great job keeping customers happy!'
-        ) + autoBlock;
+        // An empty customer list says so in one sentence instead of an empty grid plus a stock line.
+        const humanTable = human.length
+          ? dataTable(['Subject','Status','Priority','SLA','Contact','Created',''], rows, '')
+          : `<div class="card"><div class="card-body"><p style="color:var(--text-secondary);margin:0">`
+            + (automated.length
+                ? 'No CUSTOMER tickets — every row in the queue is machine mail, listed below.'
+                : 'No support tickets. Great job keeping customers happy!')
+            + `</p></div></div>`;
+        ticketsTableEl.innerHTML = humanTable + autoBlock;
       } else {
         ticketsTableEl.innerHTML = dataTable(
           ['Subject','Status','Priority','SLA','Contact','Created',''], [],
