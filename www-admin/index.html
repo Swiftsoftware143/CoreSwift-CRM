@@ -7392,13 +7392,13 @@ function auditExportCsv() {
 //   GET   /api/private-email/domains   -> [{id,domain,...}]
 //   POST  /api/tickets/:id/messages    -> records the reply on the thread
 //   POST  /api/private-email/send      -> {from_address,to,subject,body,in_reply_to}
-//   PATCH /api/tickets/:id             -> {status}
+//   POST /api/private-email/messages/:id/reply -> {from_address, body, mode}
 //
 // The tenant's own console (app.coreswiftcrm.com) has the setup half of this tab — adding a domain and
-// a mailbox. This screen is the READING half, for the operator: one list of every address, newest
-// first, open a thread, reply from the address the mail was sent to.
+// a mailbox. This screen is the READING half, for the operator: one list of every message that
+// arrived (not only the ones that became tickets), open one, reply from an address of this workspace.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-const PEI = { tickets: [], boxes: [], domains: [], mailOnly: true, err: null, open: null, loaded: false };
+const PEI = { msgs: [], boxes: [], domains: [], unreadOnly: false, err: null, open: null, loaded: false };
 
 function renderPrivateEmailInbox() {
   return pageHeader('Private Email',
@@ -7413,30 +7413,40 @@ function peiWhen(d) {
   try { return new Date(d).toLocaleString(); } catch (e) { return String(d); }
 }
 
-function peiWho(t) {
-  return (t && (t.contact_name || t.contact_email)) || 'Unknown sender';
+function peiWho(m) {
+  return (m && (m.from_name || m.from_address)) || 'Unknown sender';
 }
 
-function peiIsMail(t) {
-  const s = String((t && t.source) || '').toLowerCase();
-  return s === 'email' || s === 'mail' || s === 'inbound';
+function peiText(html) {
+  if (!html) return '';
+  var d = document.createElement('div');
+  d.innerHTML = String(html);
+  return d.textContent || '';
 }
 
+// The operator's inbox reads the MAIL ITSELF (`/api/private-email/messages`), not the ticket list.
+// It used to read `/api/tickets`, which only carries the messages that became tickets — measured on
+// this app 2026-11-19: the workspace held 75 messages and this screen showed 7, so any mail that
+// never opened a ticket (newsletters, provider reports, a person writing to an address no ticket
+// rule covers) was invisible to the operator. Same table the tenant's own mailbox reads, so the two
+// screens cannot disagree about what arrived.
 async function loadPrivateEmailTab() {
   const listEl = document.getElementById('peiInbox');
   if (!listEl) return;
   PEI.err = null;
   const r = await Promise.all([
-    API.get('/tickets?limit=100').catch(e => ({ __err: e })),
+    API.get('/private-email/messages?folder=inbox&address=all&limit=100').catch(e => ({ __err: e })),
     API.get('/private-email/boxes').catch(() => []),
-    API.get('/private-email/domains').catch(() => [])
+    API.get('/private-email/domains').catch(() => []),
+    API.get('/private-email/messages/counts').catch(() => null)
   ]);
-  const t = r[0] || {};
-  if (t.__err) { PEI.err = (t.__err && t.__err.message) || 'The ticket list could not be loaded.'; PEI.tickets = []; }
-  else PEI.tickets = (t.tickets || t.items || (Array.isArray(t) ? t : [])) || [];
+  const m = r[0] || {};
+  if (m.__err) { PEI.err = planGateText(m.__err) || 'The inbox could not be loaded.'; PEI.msgs = []; }
+  else PEI.msgs = (m.messages || []) || [];
   const b = r[1], d = r[2];
   PEI.boxes = Array.isArray(b) ? b : ((b && (b.boxes || b.items)) || []);
   PEI.domains = Array.isArray(d) ? d : ((d && (d.domains || d.items)) || []);
+  PEI.counts = r[3] || null;
   PEI.loaded = true;
   peiPaintList();
   peiPaintSetup();
@@ -7445,8 +7455,13 @@ async function loadPrivateEmailTab() {
 function peiPaintList() {
   const el = document.getElementById('peiInbox');
   if (!el) return;
-  const all = PEI.tickets || [];
-  const rows = PEI.mailOnly ? all.filter(peiIsMail) : all;
+  const all = PEI.msgs || [];
+  const rows = PEI.unreadOnly ? all.filter(function (x) { return !x.is_read; }) : all;
+  const unread = all.filter(function (x) { return !x.is_read; }).length;
+  // The list is capped (100 per read). The COUNT comes from the table, so a mailbox with more mail
+  // than one read returns is never described as if the cap were the total.
+  const total = (PEI.counts && typeof PEI.counts.inbox === 'number') ? PEI.counts.inbox : all.length;
+  const capped = total > all.length;
   let html = '';
   if (PEI.err) {
     html += '<div class="card" style="border-left:3px solid #dc2626;padding:12px"><strong>The inbox could not be read.</strong>' +
@@ -7455,47 +7470,53 @@ function peiPaintList() {
   html += '<div class="card">';
   html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">' +
     '<div><strong>Shared inbox</strong><div style="opacity:.7;font-size:13px">' +
-    rows.length + (rows.length === 1 ? ' message' : ' messages') +
-    (PEI.mailOnly ? ' that arrived by email' : ' (mail and other tickets)') +
+    total + (total === 1 ? ' message' : ' messages') +
+    (unread ? ' \u00B7 ' + unread + ' unread' : ' \u00B7 all read') +
+    (capped ? ' \u00B7 showing the newest ' + all.length : '') +
     ' \u00B7 every address in one box</div></div>' +
-    '<label style="font-size:13px;opacity:.85;cursor:pointer"><input type="checkbox" id="peiMailOnly"' +
-    (PEI.mailOnly ? ' checked' : '') + ' style="margin-right:6px">Mail only</label></div>';
+    '<label style="font-size:13px;opacity:.85;cursor:pointer"><input type="checkbox" id="peiUnreadOnly"' +
+    (PEI.unreadOnly ? ' checked' : '') + ' style="margin-right:6px">Unread only</label></div>';
 
   if (!rows.length) {
     html += '<div style="margin-top:14px;padding:14px;border:1px dashed rgba(128,128,128,.45);border-radius:8px">' +
-      '<strong>' + (PEI.mailOnly && all.length ? 'No mail yet' : 'Nothing in the inbox yet') + '</strong>' +
-      '<div style="margin:6px 0 8px">Incoming email becomes a ticket and appears here. Three things make that happen:</div>' +
+      '<strong>' + (PEI.unreadOnly && all.length ? 'Everything here has been read' : 'Nothing in the inbox yet') + '</strong>' +
+      '<div style="margin:6px 0 8px">Incoming mail appears here as soon as the provider hands it over. Three things make that happen:</div>' +
       '<ol style="margin:0 0 8px 18px;line-height:1.6">' +
       '<li>Add the domain you receive on, then in Mailgun point its MX records at <code>mxa.mailgun.org</code> and <code>mxb.mailgun.org</code>.</li>' +
-      '<li>Wait until Mailgun shows the domain as <strong>Active</strong>, then create the mailbox below.</li>' +
+      '<li>Wait until Mailgun shows the domain as <strong>Active</strong>, then create the mailbox.</li>' +
       '<li>Email that address. It lands here within a few seconds.</li></ol>' +
-      '<div style="opacity:.75">Sending and receiving are separate setups — sending can work while receiving is still being verified.</div></div>';
+      '<div style="opacity:.75">Sending and receiving are separate setups \u2014 sending can work while receiving is still being verified.</div></div>';
   } else {
     html += '<table style="width:100%;border-collapse:collapse;margin-top:12px"><thead><tr style="text-align:left;opacity:.7;font-size:13px">' +
-      '<th style="padding:6px 8px">From</th><th style="padding:6px 8px">Subject</th>' +
-      '<th style="padding:6px 8px">Received</th><th style="padding:6px 8px">Status</th></tr></thead><tbody>';
+      '<th style="padding:6px 8px">From</th><th style="padding:6px 8px">Subject</th><th style="padding:6px 8px">To</th>' +
+      '<th style="padding:6px 8px">Received</th><th style="padding:6px 8px">State</th></tr></thead><tbody>';
     rows.forEach(function (t) {
       const id = escapeHtml(t.id);
-      const unread = /open|new/i.test(String(t.status || '')) ? 'font-weight:600' : '';
-      html += '<tr class="pei-row" data-id="' + id + '" style="cursor:pointer;border-top:1px solid rgba(128,128,128,.25);' + unread + '">' +
+      const bold = t.is_read ? '' : 'font-weight:600';
+      html += '<tr class="pei-row" data-id="' + id + '" style="cursor:pointer;border-top:1px solid rgba(128,128,128,.25);' + bold + '">' +
         '<td style="padding:8px">' + escapeHtml(peiWho(t)) + '</td>' +
-        '<td style="padding:8px">' + escapeHtml(t.subject || '(no subject)') + '</td>' +
-        '<td style="padding:8px;white-space:nowrap;opacity:.8">' + escapeHtml(peiWhen(t.created_at)) + '</td>' +
-        '<td style="padding:8px;opacity:.8">' + escapeHtml(t.status || '') + '</td></tr>';
+        '<td style="padding:8px">' + escapeHtml(t.subject || '(no subject)') +
+        (t.has_attachments ? ' <span title="has files" style="opacity:.7">\uD83D\uDCCE</span>' : '') + '</td>' +
+        '<td style="padding:8px;opacity:.8">' + escapeHtml(t.address || '') + '</td>' +
+        '<td style="padding:8px;white-space:nowrap;opacity:.8">' + escapeHtml(peiWhen(t.received_at)) + '</td>' +
+        '<td style="padding:8px;opacity:.8">' + (t.is_read ? (t.is_ticket ? 'ticket' : 'read') : 'unread') + '</td></tr>';
     });
     html += '</tbody></table>';
   }
   html += '<div id="peiDetail"></div></div>';
   el.innerHTML = html;
 
-  const cb = document.getElementById('peiMailOnly');
-  if (cb) cb.onchange = function () { PEI.mailOnly = !!cb.checked; peiPaintList(); };
+  const cb = document.getElementById('peiUnreadOnly');
+  if (cb) cb.onchange = function () { PEI.unreadOnly = !!cb.checked; peiPaintList(); };
   const rs = document.querySelectorAll('.pei-row');
   for (let i = 0; i < rs.length; i++) {
     rs[i].onclick = function () { peiOpen(this.getAttribute('data-id')); };
   }
 }
 
+// Who this workspace can send from, and what it currently holds. The SETUP half lives in the
+// tenant's own console (Email Domains & Sending); this panel states the current state so an
+// operator reading mail knows which From addresses exist, and says where to add one.
 function peiPaintSetup() {
   const el = document.getElementById('peiSetup');
   if (!el) return;
@@ -7504,172 +7525,63 @@ function peiPaintSetup() {
   let html = '<div class="card"><strong>This workspace&rsquo;s mailboxes</strong>' +
     '<div style="margin-top:6px;font-size:13px;opacity:.85">' +
     'Domains: ' + (doms.length ? doms.join(', ') : 'none yet') + '<br>' +
-    'Addresses: ' + (boxes.length ? boxes.join(', ') + ' \u2014 all of them land in this one list' : 'none yet') +
+    'Addresses you can reply from: ' + (boxes.length ? boxes.join(', ') : 'none yet') +
+    '</div>' +
+    '<div style="margin-top:10px;font-size:13px;opacity:.8">Domains and mailboxes are set up by the workspace owner under <strong>Email Domains &amp; Sending</strong> in their own console. This screen reads and answers the mail.</div>' +
     '</div>';
-  if (!doms.length || !boxes.length) {
-    html += '<div style="margin-top:10px;font-size:13px;line-height:1.6">' +
-      '<strong>Set up a domain.</strong> Sending and receiving are two separate choices — a domain can send through Mailgun, or through any SMTP service (Amazon SES, SendGrid, Postmark, Google, your own server), and receive through Mailgun or SendGrid.' +
-      '<div style="margin-top:10px"><strong>1. The domain</strong><br>' +
-      '<input id="peiDom" placeholder="swiftsoftware.net" style="margin:4px 6px 0 0">' +
-      '<div style="margin-top:6px"><strong>How it sends</strong> ' +
-      '<select id="peiDomSend" onchange="peiSetupProviderFields()" style="margin:4px 6px 0 0">' +
-      '<option value="mailgun">Mailgun</option><option value="smtp">SMTP (SES / SendGrid / Postmark / Google / own server)</option></select></div>' +
-      '<div style="margin-top:6px"><strong>How it receives</strong> ' +
-      '<select id="peiDomRecv" onchange="peiSetupProviderFields()" style="margin:4px 6px 0 0">' +
-      '<option value="mailgun">Mailgun</option><option value="sendgrid">SendGrid (Inbound Parse)</option><option value="none">Nowhere &mdash; this domain only sends</option></select></div>' +
-      '<div id="peiMgWrap" style="margin-top:6px">' +
-      '<input id="peiKey" placeholder="Mailgun API key" style="width:240px;margin:4px 6px 0 0">' +
-      '<div style="opacity:.75">The key of the Mailgun account that carries this domain (for sending or receiving). Stored encrypted.</div></div>' +
-      '<div id="peiSmtpWrap" style="display:none;margin-top:6px">' +
-      '<input id="peiSmtpHost" placeholder="SMTP host" style="width:200px;margin:4px 6px 0 0">' +
-      '<input id="peiSmtpPort" placeholder="587" style="width:70px;margin:4px 6px 0 0">' +
-      '<input id="peiSmtpUser" placeholder="SMTP username" style="width:180px;margin:4px 6px 0 0">' +
-      '<input id="peiSmtpPass" type="password" placeholder="SMTP password" style="width:180px;margin:4px 6px 0 0">' +
-      '<label style="margin:4px 6px 0 0"><input type="checkbox" id="peiSmtpTls" checked> TLS</label></div>' +
-      '<div id="peiWhWrap" style="display:none;margin-top:6px">' +
-      '<input id="peiWhKey" type="password" placeholder="Mailgun webhook signing key (to receive)" style="width:260px;margin:4px 6px 0 0">' +
-      '<div style="opacity:.75">Mailgun signs each inbound delivery with this key; without it, inbound mail for this domain is refused.</div></div>' +
-      '<div style="margin-top:8px"><button class="btn btn-primary btn-sm" id="peiAddDom">Add domain</button> <span id="peiDomMsg"></span></div></div>' +
-      '<div style="margin-top:10px"><strong>2. Addresses people write to</strong><br>' +
-      '<input id="peiLocal" placeholder="info" style="width:130px;margin:4px 6px 0 0">' +
-      '<button class="btn btn-primary btn-sm" id="peiAddBox">Add address</button> <span id="peiBoxMsg"></span>' +
-      '<div style="opacity:.75;margin-top:4px">One per address — info, support, sales. All of them land in this one list, and each becomes a From choice when you reply.</div></div>' +
-      '</div>';
-  }
-  html += '</div>';
   el.innerHTML = html;
-  peiSetupProviderFields();
-  peiBindSetup();
-}
-
-function peiSetupProviderFields() {
-  var send = document.getElementById('peiDomSend');
-  var recv = document.getElementById('peiDomRecv');
-  if (!send || !recv) return;
-  var s = send.value, r = recv.value;
-  var mg = document.getElementById('peiMgWrap');
-  if (mg) mg.style.display = (s === 'mailgun' || r === 'mailgun') ? '' : 'none';
-  var sm = document.getElementById('peiSmtpWrap');
-  if (sm) sm.style.display = (s === 'smtp') ? '' : 'none';
-  var wh = document.getElementById('peiWhWrap');
-  if (wh) wh.style.display = (r === 'mailgun') ? '' : 'none';
-}
-
-function peiBindSetup() {
-  var ad = document.getElementById('peiAddDom');
-  if (ad) ad.onclick = async function () {
-    var dEl = document.getElementById('peiDom'), m = document.getElementById('peiDomMsg');
-    var dom = (dEl && dEl.value || '').trim();
-    if (!dom) { m.textContent = 'Enter your domain'; return; }
-    var send = (document.getElementById('peiDomSend') && document.getElementById('peiDomSend').value) || 'mailgun';
-    var recv = (document.getElementById('peiDomRecv') && document.getElementById('peiDomRecv').value) || 'mailgun';
-    var payload = { domain: dom, sending_provider: send, receiving_provider: recv };
-    if (send === 'mailgun' || recv === 'mailgun') {
-      var key = (document.getElementById('peiKey') && document.getElementById('peiKey').value || '').trim();
-      if (!key) { m.textContent = 'Paste the Mailgun API key for this domain'; return; }
-      payload.mailgun_api_key = key;
-    }
-    if (send === 'smtp') {
-      var host = (document.getElementById('peiSmtpHost') && document.getElementById('peiSmtpHost').value || '').trim();
-      var user = (document.getElementById('peiSmtpUser') && document.getElementById('peiSmtpUser').value || '').trim();
-      var pass = (document.getElementById('peiSmtpPass') && document.getElementById('peiSmtpPass').value || '');
-      if (!host || !user || !pass) { m.textContent = 'SMTP needs a host, a username and a password'; return; }
-      payload.smtp_host = host;
-      payload.smtp_port = parseInt((document.getElementById('peiSmtpPort') && document.getElementById('peiSmtpPort').value) || '587', 10) || 587;
-      payload.smtp_username = user;
-      payload.smtp_password = pass;
-      payload.smtp_tls = !!(document.getElementById('peiSmtpTls') && document.getElementById('peiSmtpTls').checked);
-    }
-    if (recv === 'mailgun') {
-      var wh = (document.getElementById('peiWhKey') && document.getElementById('peiWhKey').value || '').trim();
-      if (send === 'smtp' && !wh) { m.textContent = 'Receiving through Mailgun needs its webhook signing key'; return; }
-      if (wh) payload.webhook_signing_key = wh;
-    }
-    this.disabled = true; m.textContent = 'Adding…';
-    try {
-      await API.post('/private-email/domains', payload);
-      m.textContent = 'Added'; await loadPrivateEmailTab();
-    } catch (e) { m.textContent = 'Failed: ' + ((e && e.message) || e); }
-    this.disabled = false;
-  };
-  var ab = document.getElementById('peiAddBox');
-  if (ab) ab.onclick = async function () {
-    var lEl = document.getElementById('peiLocal'), m = document.getElementById('peiBoxMsg');
-    var local = (lEl && lEl.value || '').trim();
-    var dom = (PEI.domains || [])[0];
-    if (!dom) { m.textContent = 'Add a domain first'; return; }
-    if (!local) { m.textContent = 'Enter an address, e.g. info'; return; }
-    this.disabled = true; m.textContent = 'Adding…';
-    try {
-      await API.post('/private-email/boxes', { domain_id: dom.id, local_part: local });
-      m.textContent = 'Added'; await loadPrivateEmailTab();
-    } catch (e) { m.textContent = 'Failed: ' + ((e && e.message) || e); }
-    this.disabled = false;
-  };
 }
 
 async function peiOpen(id) {
   const d = document.getElementById('peiDetail');
   if (!d) return;
-  const t = (PEI.tickets || []).find(function (x) { return String(x.id) === String(id); }) || { id: id };
+  const t = (PEI.msgs || []).find(function (x) { return String(x.id) === String(id); }) || { id: id };
   PEI.open = id;
   d.innerHTML = '<div style="margin-top:14px;padding:14px;border:1px solid rgba(128,128,128,.35);border-radius:8px">' +
-    '<div class="loading-wrap"><div class="spinner"></div> Opening the thread...</div></div>';
+    '<div class="loading-wrap"><div class="spinner"></div> Opening the message...</div></div>';
 
-  let thread = null;
-  try { thread = await API.get('/tickets/' + encodeURIComponent(id)); } catch (e) { thread = null; }
-  const msgs = (thread && (thread.messages || thread.ticket_messages)) || [];
-  const full = (thread && thread.ticket) || t;
-  const to = full.contact_email || t.contact_email || '';
+  let full = null;
+  try { full = await API.get('/private-email/messages/' + encodeURIComponent(id)); } catch (e) {
+    d.innerHTML = '<div style="margin-top:14px;padding:14px;border-left:3px solid #dc2626"><strong>The message could not be opened.</strong>' +
+      '<div style="margin-top:4px">' + escapeHtml(planGateText(e)) + '</div></div>';
+    return;
+  }
+  if (!full) full = t;
+  const f = full || {};
+  const body = f.body_plain || peiText(f.body_html) || t.snippet || '';
   const boxOpts = (PEI.boxes || []).map(function (b) {
     const a = b.email_address || b.address || '';
     return '<option value="' + escapeHtml(a) + '">' + escapeHtml(a) + '</option>';
   }).join('');
-
-  let chat = '';
-  if (msgs.length) {
-    chat = '<div style="margin:10px 0;padding:10px;border-radius:8px;background:rgba(128,128,128,.08)">' +
-      msgs.map(function (m) {
-        const mine = /agent|you|staff/i.test(String(m.sender_type || ''));
-        return '<div style="margin-bottom:8px"><div style="font-size:12px;opacity:.7">' +
-          (mine ? 'You' : 'Customer') + ' \u00B7 ' + escapeHtml(peiWhen(m.created_at)) + '</div>' +
-          '<div style="white-space:pre-wrap">' + escapeHtml(m.message || '') + '</div></div>';
-      }).join('') + '</div>';
-  }
+  const files = (f.attachments || []);
+  const fileLine = files.length
+    ? '<div style="margin:8px 0;font-size:13px;opacity:.85">\uD83D\uDCCE ' +
+      files.map(function (x) { return escapeHtml(x.filename || x.name || 'file'); }).join(', ') + '</div>'
+    : '';
 
   d.innerHTML = '<div style="margin-top:14px;padding:14px;border:1px solid rgba(128,128,128,.35);border-radius:8px">' +
     '<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:start">' +
-    '<div><h3 style="margin:0 0 2px">' + escapeHtml(full.subject || '(no subject)') + '</h3>' +
-    '<div style="opacity:.75;font-size:13px">From ' + escapeHtml(peiWho(full)) +
-    (to ? ' &lt;' + escapeHtml(to) + '&gt;' : '') + ' \u00B7 ' + escapeHtml(peiWhen(full.created_at)) + '</div></div>' +
-    '<select id="peiStatus" style="font-size:13px">' +
-    ['open', 'in_progress', 'resolved', 'closed'].map(function (s) {
-      return '<option value="' + s + '"' + (String(full.status) === s ? ' selected' : '') + '>' + s.replace('_', ' ') + '</option>';
-    }).join('') + '</select></div>' +
-    '<div style="white-space:pre-wrap;margin:12px 0">' + escapeHtml(full.description || t.description || '') + '</div>' +
-    chat +
+    '<div><h3 style="margin:0 0 2px">' + escapeHtml(f.subject || '(no subject)') + '</h3>' +
+    '<div style="opacity:.75;font-size:13px">From ' + escapeHtml(f.from_address || peiWho(t)) +
+    ' to ' + escapeHtml(f.to_address || f.address || t.address || '') +
+    ' \u00B7 ' + escapeHtml(peiWhen(f.received_at || t.received_at)) + '</div></div>' +
+    '<button class="btn btn-secondary btn-sm" id="peiClose">Close</button></div>' +
+    '<div style="white-space:pre-wrap;margin:12px 0;max-height:420px;overflow:auto">' + escapeHtml(body) + '</div>' +
+    fileLine +
     '<div style="margin-top:10px"><label style="display:block;font-size:12px;opacity:.75;margin-bottom:4px">Reply as</label>' +
     (boxOpts ? '<select id="peiFrom" style="margin-bottom:8px">' + boxOpts + '</select>'
-      : '<div style="margin-bottom:8px;color:#b45309">No mailbox is set up yet, so there is no address to reply from. Add one in the workspace console (Private Email &rarr; Set up your mailbox).</div>') +
+      : '<div style="margin-bottom:8px;color:#b45309">No mailbox is set up for this workspace, so there is no address to reply from. Add one under Email Domains &amp; Sending.</div>') +
     '<textarea id="peiText" rows="4" placeholder="Write your reply..." style="width:100%;margin-bottom:8px"></textarea>' +
-    '<button class="btn btn-primary" id="peiSend"' + (boxOpts && to ? '' : ' disabled') + '>Send reply</button>' +
-    ' <span id="peiMsg" style="margin-left:8px"></span>' +
-    (!to ? '<div style="margin-top:6px;color:#b45309;font-size:13px">This ticket carries no sender address, so it cannot be replied to.</div>' : '') +
-    '</div></div>';
+    '<button class="btn btn-primary" id="peiSend"' + (boxOpts ? '' : ' disabled') + '>Send reply</button>' +
+    ' <span id="peiMsg" style="margin-left:8px"></span></div></div>';
 
-  const st = document.getElementById('peiStatus');
-  if (st) st.onchange = async function () {
-    const btn = st;
-    btn.disabled = true;
-    try { await API.patch('/tickets/' + encodeURIComponent(id), { status: st.value }); toast('Ticket marked ' + st.value.replace('_', ' '), 'success'); }
-    catch (e) { toast('Could not change the status: ' + ((e && e.message) || e), 'error'); }
-    btn.disabled = false;
-  };
+  const cl = document.getElementById('peiClose');
+  if (cl) cl.onclick = function () { d.innerHTML = ''; PEI.open = null; };
   const send = document.getElementById('peiSend');
-  if (send) send.onclick = function () { peiSendReply(id, full, to); };
+  if (send) send.onclick = function () { peiSendReply(id, f, boxOpts); };
 }
 
-async function peiSendReply(id, t, to) {
+async function peiSendReply(id, t, boxOpts) {
   const btn = document.getElementById('peiSend');
   const msg = document.getElementById('peiMsg');
   const fromEl = document.getElementById('peiFrom');
@@ -7681,23 +7593,17 @@ async function peiSendReply(id, t, to) {
   btn.disabled = true;
   if (msg) msg.textContent = 'Sending...';
   try {
-    await API.post('/private-email/send', {
-      from_address: from, to: to, subject: 'Re: ' + (t.subject || ''), body: body, in_reply_to: t.id
+    await API.post('/private-email/messages/' + encodeURIComponent(id) + '/reply', {
+      from_address: from, body: body, mode: 'reply'
     });
   } catch (e) {
-    if (msg) msg.textContent = 'Not sent: ' + ((e && e.message) || e);
+    if (msg) msg.textContent = 'Not sent: ' + planGateText(e);
     btn.disabled = false;
     return;
   }
-  // The message is SENT at this point. Recording it on the thread is a second, separate write: if it
-  // fails the operator must be told the truth (sent, not logged) rather than shown a green tick.
-  let logged = true;
-  try { await API.post('/tickets/' + encodeURIComponent(id) + '/messages', { sender_type: 'agent', message: body }); }
-  catch (e) { logged = false; }
-  if (msg) msg.textContent = logged ? 'Sent \u2713' : 'Sent, but the thread log could not be updated.';
+  if (msg) msg.textContent = 'Sent \u2713';
   if (bodyEl) bodyEl.value = '';
   btn.disabled = false;
-  if (logged) setTimeout(function () { peiOpen(id); }, 600);
 }
 
 TAB_RENDERERS['inbox'] = renderPrivateEmailInbox;
