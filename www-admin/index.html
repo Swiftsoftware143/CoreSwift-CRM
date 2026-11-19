@@ -5229,7 +5229,9 @@ async function loadProfileTab() {
       '<div class="form-group"><label>Current Password</label><input type="password" id="currentPw" autocomplete="current-password"> <span class="form-hint">Required — proves it is really you.</span></div>' +
       '<div class="form-group"><label>New Password</label><input type="password" id="newPw" autocomplete="new-password"></div>' +
       '<div class="form-group"><label>Confirm New Password</label><input type="password" id="confirmPw" autocomplete="new-password"></div>',
-      '<button class="btn btn-primary" data-ops="profile-password" onclick="changePassword()">Update Password</button>');
+      '<button class="btn btn-primary" data-ops="profile-password" onclick="changePassword()">Update Password</button>') +
+    '<br>' +
+    closeAccountCard();
 }
 
 // Paint the header chip's picture (or the initial letter) from STATE.user.avatar_url, and keep the
@@ -5354,6 +5356,64 @@ async function removeAvatar() {
     toast('Remove failed: ' + e.message, 'error');
   }
 }
+
+// ── CLOSE MY ACCOUNT (2026-11-19) ────────────────────────────────────────────────────────────
+// POST /api/auth/close-account has been mounted since 2026-11-13 (it records closed_at, moves the
+// session line one second into the future, retires every API key and closes every way back in) and
+// THIS console had no way to press it. The customer SPA (www-app/coreswift) has carried the card
+// all along, so a customer who signs in at the admin host had to open a support ticket to leave:
+// a backend route with no UI is a defect. Hidden while impersonating, because the route acts on the
+// CALLER — on this console that would close the CUSTOMER's account, not the operator's own. The
+// server re-checks the password AND the word CLOSE, and refuses a platform-operator account with a
+// sentence of its own; that sentence is printed here rather than flattened into a generic failure.
+function closeAccountCard() {
+  if (localStorage.getItem(IMP_ORIG_KEY)) return '';
+  return card('Closing your account',
+    '<p style="color:var(--text-secondary);margin:0 0 10px">Closing stops new sign-ins and switches ' +
+      'off every connected device and API key. Your workspace and its records stay with us, so nothing ' +
+      'you collected is destroyed, and support can reopen the account if you change your mind. This ' +
+      'cannot be undone from this screen — type <strong>CLOSE</strong> to confirm.</p>' +
+    '<div class="form-group"><label>Current password</label>' +
+      '<input type="password" id="closeAcctPw" autocomplete="current-password" aria-label="Current password to close the account"></div>' +
+    '<div class="form-group"><label>Type CLOSE to confirm</label>' +
+      '<input type="text" id="closeAcctWord" placeholder="CLOSE" autocomplete="off" aria-label="Type CLOSE to confirm"></div>' +
+    '<p class="form-hint">A platform operator account cannot be closed from this screen; the server refuses it and says why.</p>',
+    '<button class="btn btn-danger" data-ops="profile-close-account" id="closeAcctBtn" onclick="crmCloseAccount()">Close my account</button>');
+}
+
+window.crmCloseAccount = async function () {
+  if (localStorage.getItem(IMP_ORIG_KEY)) { toast('Stop impersonating first', 'error'); return; }
+  const pwEl = document.getElementById('closeAcctPw');
+  const wordEl = document.getElementById('closeAcctWord');
+  const btn = document.getElementById('closeAcctBtn');
+  const pw = (pwEl && pwEl.value) || '';
+  const word = ((wordEl && wordEl.value) || '').trim();
+  if (!pw) { toast('Enter your current password', 'error'); return; }
+  if (word.toUpperCase() !== 'CLOSE') { toast('Type CLOSE to confirm', 'error'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Closing…'; }
+  try {
+    // Posted DIRECTLY, not through API.call: a wrong password is the contract's 401 "Your password
+    // is incorrect", and API.call's 401 arm signs the user out — which would read as "the account
+    // closed" to the person watching. A real closure ends this session on purpose, so on success the
+    // tab drops its own token and returns to the sign-in screen.
+    const res = await fetch('/api/auth/close-account', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, STATE.token ? { 'Authorization': 'Bearer ' + STATE.token } : {}),
+      body: JSON.stringify({ password: pw, confirm: word })
+    });
+    let d = {};
+    try { d = await res.json(); } catch(_) {}
+    if (!res.ok) {
+      const said = d && (typeof d.message === 'string' ? d.message : (typeof d.error === 'string' ? d.error : ''));
+      throw new Error(said || 'The account could not be closed. Please try again.');
+    }
+    toast('Your account is closed. You will be signed out now.', 'success');
+    setTimeout(() => logout(true), 1200);
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Close my account'; }
+    toast((e && e.message) || 'The account could not be closed', 'error');
+  }
+};
 
 async function changePassword() {
   const current = document.getElementById('currentPw').value;

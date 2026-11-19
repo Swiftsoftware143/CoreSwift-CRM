@@ -166,8 +166,15 @@ see the workspace, its contacts, deals and history in every operator read.</p>
 on the account (the rows are kept and marked inactive, so the record is auditable), and every way back in
 &mdash; sign-in answers <strong>403</strong> with the closed sentence, <code>refresh</code> answers
 <strong>401</strong>, <code>forgot-password</code> sends no link, and <code>reset-password</code> refuses even a
-token minted before the closure. A platform operator account (this console) cannot close itself from its own
-Profile screen.</p>
+token minted before the closure.</p>
+<p><strong>Both consoles carry the card</strong> (2026-11-19). The customer SPA has had it since the route
+shipped; this admin console showed nothing on its own <strong>Profile</strong> screen even though the route
+was already mounted there, so a customer who signs in at the admin host had to open a support ticket to
+leave. The card sits at the bottom of <strong>Profile</strong> and is hidden while you are impersonating &mdash;
+the route acts on the <em>caller</em>, so in someone else's workspace the button would close <em>their</em>
+account. A platform operator account is still refused by the server with its own sentence, shown in the
+console: an operator closes <em>workspaces</em>, and losing its own login would take the console away from
+the person who runs the install.</p>
 <p><strong>Reopening</strong> is an operator decision, not a button: clear <code>users.closed_at</code> for the
 account (and mark its API key active again if the customer needs it). Their password still works and their data
 never moved.</p>
