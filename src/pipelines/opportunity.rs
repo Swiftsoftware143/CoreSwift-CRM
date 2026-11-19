@@ -415,6 +415,17 @@ pub async fn delete(
     Path((pipeline_id, id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+    // The deal's name and value, read before the row goes (see contacts::delete).
+    let gone: Option<(String, Option<f64>)> = sqlx::query_as(
+        "SELECT name, value::float8 FROM opportunities \
+          WHERE id = $1 AND pipeline_id = $2 AND tenant_id = $3",
+    )
+    .bind(id)
+    .bind(pipeline_id)
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await?;
     let r = sqlx::query(
         "DELETE FROM opportunities WHERE id = $1 AND pipeline_id = $2 AND tenant_id = $3",
     )
@@ -425,6 +436,19 @@ pub async fn delete(
     .await?;
     if r.rows_affected() == 0 {
         return Err(AppError::NotFound(format!("Opportunity {} not found", id)));
+    }
+    if let Some((name, value)) = gone {
+        audit::logger::log_event(
+            &state.db,
+            tenant_id,
+            Some(user_id),
+            "opportunity.deleted",
+            "opportunity",
+            Some(id),
+            Some(json!({"name": name, "value": value})),
+            None,
+        )
+        .await;
     }
     Ok(Json(json!({"message": "Opportunity deleted successfully"})))
 }

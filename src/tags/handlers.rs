@@ -74,6 +74,14 @@ pub async fn delete_category(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
+    // The name, read before the row goes (see contacts::delete).
+    let gone: Option<String> =
+        sqlx::query_scalar("SELECT name FROM tag_categories WHERE id=$1 AND tenant_id=$2")
+            .bind(id)
+            .bind(t)
+            .fetch_optional(&s.db)
+            .await?;
     let r = sqlx::query("DELETE FROM tag_categories WHERE id=$1 AND tenant_id=$2")
         .bind(id)
         .bind(t)
@@ -81,6 +89,19 @@ pub async fn delete_category(
         .await?;
     if r.rows_affected() == 0 {
         return Err(AppError::NotFound(format!("Category {id} not found")));
+    }
+    if let Some(name) = gone {
+        audit::logger::log_event(
+            &s.db,
+            t,
+            Some(uid),
+            "tag_category.deleted",
+            "tag_category",
+            Some(id),
+            Some(json!({"name": name})),
+            None,
+        )
+        .await;
     }
     Ok(Json(json!({"message":"Deleted"})))
 }
@@ -244,6 +265,14 @@ pub async fn delete_tag(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
+    // The name, read before the row goes (see contacts::delete).
+    let gone: Option<String> =
+        sqlx::query_scalar("SELECT name FROM tags WHERE id=$1 AND tenant_id=$2")
+            .bind(id)
+            .bind(t)
+            .fetch_optional(&s.db)
+            .await?;
     let r = sqlx::query("DELETE FROM tags WHERE id=$1 AND tenant_id=$2")
         .bind(id)
         .bind(t)
@@ -251,6 +280,19 @@ pub async fn delete_tag(
         .await?;
     if r.rows_affected() == 0 {
         return Err(AppError::NotFound(format!("Tag {id} not found")));
+    }
+    if let Some(name) = gone {
+        audit::logger::log_event(
+            &s.db,
+            t,
+            Some(uid),
+            "tag.deleted",
+            "tag",
+            Some(id),
+            Some(json!({"name": name})),
+            None,
+        )
+        .await;
     }
     Ok(Json(json!({"message":"Deleted"})))
 }

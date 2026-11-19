@@ -10769,6 +10769,22 @@ window.appGuidePages = {
 // ---------------------------------------------------------------- AUDIT LOG
 // Rows are GET /api/audit (tenant-scoped, newest first). The CSV is built from exactly the rows this
 // panel read, so pressing Export can never produce a file the screen did not show.
+//
+// WHAT A ROW CHANGED, in words. Every trail row carries a `changes` document, and the delete paths
+// record the record's own name there (contacts: name + email; companies / lists / tags / pipelines /
+// deals: name) — deliberately read BEFORE the delete, because afterwards there is no row left to
+// look it up. Without this column the panel named a record only by an 8-character id, so
+// "contact.deleted" could not be acted on; that was a screen that looked complete and told nobody
+// which record went.
+function auditRecord(r) {
+  var c = r && r.changes;
+  if (typeof c === 'string') { try { c = JSON.parse(c); } catch (_) { return c; } }
+  if (!c || typeof c !== 'object') return '';
+  var name = c.name || c.subject || c.plan_slug || '';
+  var extra = (c.email && String(c.email) !== String(name)) ? ' \u2014 ' + c.email : '';
+  if (!name && c.value !== undefined && c.value !== null) name = '$' + c.value;
+  return name ? String(name) + extra : Object.keys(c).slice(0, 4).join(', ');
+}
 let AUDIT_ROWS = [];
 async function loadAuditTab() {
   const el = document.getElementById('auditContent');
@@ -10777,11 +10793,10 @@ async function loadAuditTab() {
     const res = await API.get('/audit?per_page=100');
     const rows = famList(res, 'logs');
     AUDIT_ROWS = rows;
-    el.innerHTML = dataTable(['When', 'Action', 'Entity', 'Entity id', 'By', 'IP'],
+    el.innerHTML = dataTable(['When', 'Action', 'Entity', 'Record', 'By', 'IP'],
       rows.map(function (r) {
         return [r.created_at ? new Date(r.created_at).toLocaleString() : '\u2014',
-          fh(r.action), fh(r.entity_type),
-          '<code style="font-size:.72rem">' + fh(r.entity_id ? String(r.entity_id).slice(0, 8) : '\u2014') + '</code>',
+          fh(r.action), fh(r.entity_type), fh(auditRecord(r)),
           fh(r.user_id ? String(r.user_id).slice(0, 8) : 'the platform'),
           fh(r.ip_address)];
       }), 'Nothing recorded for this workspace yet \u2014 entries appear as people change things.');
@@ -10793,8 +10808,10 @@ async function loadAuditTab() {
 }
 function auditExportCsv() {
   if (!AUDIT_ROWS.length) { toast('Nothing to export yet', 'error'); return; }
-  const cols = ['created_at', 'action', 'entity_type', 'entity_id', 'user_id', 'ip_address'];
+  // `changes` rides along: the name of what was removed lives nowhere else once the row is gone.
+  const cols = ['created_at', 'action', 'entity_type', 'entity_id', 'changes', 'user_id', 'ip_address'];
   const esc = function (v) {
+    if (v && typeof v === 'object') { try { v = JSON.stringify(v); } catch (_) { v = String(v); } }
     v = (v === null || v === undefined) ? '' : String(v);
     return '"' + v.replace(/"/g, '""') + '"';
   };

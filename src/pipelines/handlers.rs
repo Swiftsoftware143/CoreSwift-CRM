@@ -143,6 +143,14 @@ pub async fn delete_pipeline(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+    // The name, read before the row goes (see contacts::delete).
+    let gone: Option<String> =
+        sqlx::query_scalar("SELECT name FROM pipelines WHERE id = $1 AND tenant_id = $2")
+            .bind(id)
+            .bind(tenant_id)
+            .fetch_optional(&state.db)
+            .await?;
     let r = sqlx::query("DELETE FROM pipelines WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tenant_id)
@@ -150,6 +158,19 @@ pub async fn delete_pipeline(
         .await?;
     if r.rows_affected() == 0 {
         return Err(AppError::NotFound(format!("Pipeline {} not found", id)));
+    }
+    if let Some(name) = gone {
+        audit::logger::log_event(
+            &state.db,
+            tenant_id,
+            Some(user_id),
+            "pipeline.deleted",
+            "pipeline",
+            Some(id),
+            Some(json!({"name": name})),
+            None,
+        )
+        .await;
     }
     Ok(Json(json!({"message": "Pipeline deleted successfully"})))
 }
