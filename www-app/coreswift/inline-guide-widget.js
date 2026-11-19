@@ -134,6 +134,10 @@
         '</div>' +
       '</div>';
     document.body.appendChild(widget);
+    // MOUNTED, BUT NOT SHOWN, WITHOUT A SESSION. The console swaps its login form for the application without
+    // reloading, so hiding (rather than refusing to mount) is what lets the guide appear the moment somebody
+    // signs in — no reload, no second mount, one owner of the element.
+    widget.style.display = hasSession() ? '' : 'none';
 
     toggle = document.getElementById('ig-toggle');
     panel = document.getElementById('ig-panel');
@@ -208,7 +212,44 @@
 
   // Re-run on hash change (SPA navigation)
   window.addEventListener('hashchange', function(){
-    setTimeout(updateGuide, 50);
+    
+  // ── NEVER IN FRONT OF THE LOGIN (David, 2026-11-18) ────────────────────────────────────────────
+  // Both the console and the admin panel serve their login form from the SAME page that later becomes the
+  // application, so a widget that mounts on load appears to a stranger who has not signed in — and the page it
+  // then explains is one they cannot see. There is one session key in both surfaces (`crm_token`), so the widget
+  // waits for it: it mounts when a session exists, and it removes itself if the session goes away (sign-out).
+  function hasSession() {
+    try { return !!localStorage.getItem('crm_token'); } catch (e) { return false; }
+  }
+
+  // Bring the widget in line with the session, whenever that changes: shown after a login, removed after a
+  // sign-out. Cheap, idempotent, and it cannot produce two widgets because it never creates one.
+  function syncWithSession() {
+    var widget = document.getElementById('swGuideWidget') || document.querySelector('[id^="ig-"], body > div[id^="ig"]');
+    var toggle = document.getElementById('ig-toggle');
+    var panel = document.getElementById('ig-panel');
+    var live = hasSession();
+    if (!live) {
+      if (toggle) toggle.remove();
+      if (panel) panel.remove();
+      if (widget) widget.style.display = 'none';
+      return;
+    }
+    if (widget) widget.style.display = '';
+  }
+
+  function gate() {
+    var toggle = document.getElementById('ig-toggle');
+    var panel = document.getElementById('ig-panel');
+    if (!hasSession()) {
+      if (toggle) toggle.remove();
+      if (panel) panel.remove();
+      return false;
+    }
+    return true;
+  }
+
+  setTimeout(updateGuide, 50);
   });
 
   // Also observe DOM mutations in case the SPA replaces content without hash change
@@ -221,4 +262,9 @@
   if (document.getElementById('app')) {
     observer.observe(document.getElementById('app'), { childList: true, subtree: true });
   }
+  // One timer, one owner: a login shows the guide, a sign-out removes it. Inside the closure on purpose —
+  // outside it `syncWithSession` is out of scope and the guard would silently never run.
+  setInterval(syncWithSession, 2000);
+  syncWithSession();
 })();
+
