@@ -5929,6 +5929,21 @@ function planLabel(slug) {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
 }
 
+// A stored period end that is already in the PAST must never be printed as an upcoming event.
+// Measured 2026-11-19: every workspace whose paid period had ended was told "The next charge is on
+// <a date two weeks ago>" — the sentence asserts a future the calendar has already passed.
+function periodEndInPast(iso) {
+  if (!iso) return false;
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return t < today.getTime();
+}
+function periodEndDate(iso) {
+  try { return iso ? new Date(iso).toLocaleDateString() : ''; } catch (e) { return ''; }
+}
+
 async function loadBillState() {
   const el = document.getElementById('billCard');
   if (!el) return;
@@ -5970,7 +5985,10 @@ async function loadBillState() {
       return;
     }
     const next = b.current_period_ends_at
-      ? ' The next charge is on ' + when(b.current_period_ends_at) + '.'
+      ? (periodEndInPast(b.current_period_ends_at)
+          ? ' The period this plan was paid for ended on ' + periodEndDate(b.current_period_ends_at)
+            + ', and no renewal has been recorded since \u2014 so nothing has been charged for the time after it.'
+          : ' The next charge is on ' + periodEndDate(b.current_period_ends_at) + '.')
       : '';
     el.innerHTML = card('Your bill',
       '<div class="stats-grid">'
@@ -6039,7 +6057,13 @@ async function loadSubscriptionState() {
         (onFree
           ? 'You are on the Free plan \u2014 there is no paid subscription to cancel.'
           : active
-            ? 'Cancelling drops this account to the Free plan immediately. ' + (ends ? 'Current period ends ' + new Date(ends).toLocaleDateString() + '.' : '')
+            ? 'Cancelling drops this account to the Free plan immediately. '
+              + (ends
+                  ? (periodEndInPast(ends)
+                      ? 'The period that was paid for ended on ' + periodEndDate(ends)
+                        + ', and no renewal has been recorded since.'
+                      : 'Current period ends ' + periodEndDate(ends) + '.')
+                  : '')
             : 'No paid subscription is active.') +
       '</p>');
     const btn = document.getElementById('cancelSubBtn');
@@ -10907,7 +10931,7 @@ window.appGuidePages = {
   webhooks:        { title: "Webhooks", desc: "Send your workspace's events out to another system in real time.", actions: ["Add an endpoint", "Pick which events it receives"] },
   portfolio:       { title: "Portfolio Companies", desc: "Platform operator view: the businesses managed on this platform. Sync New Company gives a company its own workspace and owner login, emails the owner the login details, and converts a record that has no account behind it \u2014 pressing it again only refreshes the details.", actions: ["Open a company", "Change its plan", "Press \ud83d\udd04 Sync New Company to give a record its own account \u2014 the owner is emailed the login"] },
   users:           { title: "Users", desc: "Platform operator view: every user account across the platform with the workspace it belongs to. This list is read-only — no screen on it creates a person; people join a workspace through that workspace's own Team & Invites.", actions: ["Look up a person and the workspace they belong to", "Add somebody from the tenant console under Team & Invites"] },
-  billing:         { title: "Billing & Plans", desc: "Your bill, the plan this workspace is on, and every plan it could move to. Nothing on this screen changes the plan by itself. Your bill states the one amount due, says there is one subscription, names any plan that ended when the workspace last moved, and gives the next charge date. Each tier that is not yours carries Request this plan, which tells our team which workspace is asking and charges nothing; a tier that already has a payment page also shows Open payment page, and pressing it files the same request first. When the team has written how to pay, a How to pay for a paid plan block sits at the bottom of the plan list with their own directions. Cancel subscription drops the workspace to the Free plan as soon as you confirm.", actions: ["Read Your bill — the amount, the single subscription and the next charge date", "Press Request this plan on a tier you want — our team makes the change and nothing is charged here", "Open payment page where a tier shows one, then your request is already filed", "Cancel subscription to drop back to Free at once — it asks you to confirm first"] },
+  billing:         { title: "Billing & Plans", desc: "Your bill, the plan this workspace is on, and every plan it could move to. Nothing on this screen changes the plan by itself. Your bill states the one amount due, says there is one subscription, names any plan that ended when the workspace last moved, and states either the next charge date or — when the paid period has already ended and no renewal is on record — the date that period ended, with the fact that nothing has been charged since. Each tier that is not yours carries Request this plan, which tells our team which workspace is asking and charges nothing; a tier that already has a payment page also shows Open payment page, and pressing it files the same request first. When the team has written how to pay, a How to pay for a paid plan block sits at the bottom of the plan list with their own directions. Cancel subscription drops the workspace to the Free plan as soon as you confirm.", actions: ["Read Your bill — the amount, the single subscription and either the next charge date or the date the paid period ended", "Press Request this plan on a tier you want — our team makes the change and nothing is charged here", "Open payment page where a tier shows one, then your request is already filed", "Cancel subscription to drop back to Free at once — it asks you to confirm first"] },
   widgets:         { title: "Widgets", desc: "Platform operator view: embeddable pieces you can add to a customer's site.", actions: ["Create a widget"] },
   "native-apps":   { title: "Native Apps", desc: "Platform operator view: the mobile and desktop apps offered to customers.", actions: ["Review the apps"] },
   "audit-log":     { title: "Audit Log", desc: "Platform operator view: a record of who changed what, for accountability.", actions: ["Filter by user or action"] },
