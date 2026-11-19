@@ -244,6 +244,15 @@ pub async fn record_event(
     occurred_at: chrono::DateTime<chrono::Utc>,
     raw: Option<Value>,
 ) {
+    // Stored WITHOUT the angle brackets the provider wraps around a message id. The send log's own id
+    // came back from Mailgun's send response WITH them, so the two columns would otherwise describe the
+    // same message in two spellings and every report that joins them would silently find nothing.
+    let normalised_id = provider_message_id.map(|id| {
+        id.trim()
+            .trim_start_matches('<')
+            .trim_end_matches('>')
+            .to_string()
+    });
     let _ = sqlx::query(
         "INSERT INTO email_events
             (tenant_id, provider, provider_message_id, address, event, severity, reason, occurred_at, raw)
@@ -252,7 +261,7 @@ pub async fn record_event(
     )
     .bind(tenant_id)
     .bind(provider)
-    .bind(provider_message_id)
+    .bind(normalised_id.clone())
     .bind(address.map(normalise))
     .bind(event)
     .bind(severity)
