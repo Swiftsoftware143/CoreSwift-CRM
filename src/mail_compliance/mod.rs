@@ -665,12 +665,17 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// A complete document, not a fragment: this is the one page a stranger sees from this product, and
+/// an unstyled fragment with no `<html>` element renders differently in every mailbox browser there is.
 fn page_shell(title: &str, inner: &str) -> String {
     format!(
-        "<!doctype html><meta charset=utf-8><meta name=viewport \
-         content=\"width=device-width,initial-scale=1\"><title>{}</title>\
-         <div style=\"font:16px/1.6 system-ui,-apple-system,sans-serif;max-width:560px;margin:10vh \
-         auto;padding:0 20px;color:#111\">{}</div>",
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+         <meta name=\"robots\" content=\"noindex,nofollow\">\
+         <title>{}</title></head>\
+         <body style=\"margin:0;background:#fff\">\
+         <div style=\"font:16px/1.6 system-ui,-apple-system,Segoe UI,sans-serif;max-width:560px;\
+         margin:10vh auto;padding:0 20px;color:#111\">{}</div></body></html>",
         html_escape(title),
         inner
     )
