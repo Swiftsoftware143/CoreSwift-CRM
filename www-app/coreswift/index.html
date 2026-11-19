@@ -901,7 +901,13 @@ const SETTINGS_MENU = [
   { id:'webhooks', icon:'🔗', label:'Webhooks' },
   // Per-TENANT email branding (kanban t_feab8aff, ported from t_c06a32eb). Lives in the
   // workspace's OWN settings menu: the logo and name are the ACCOUNT's, set by the account.
-  { id:'branding', icon:'🎨', label:'Email Branding' }
+  { id:'branding', icon:'🎨', label:'Email Branding' },
+  // Mail compliance (kanban t_bec0f198): the delivery evidence, the per-account do-not-mail
+  // list, its remove arm and the two CSV downloads. The API has shipped all of it since
+  // migration 181 and no console screen called any of it. It sits with the account's OWN
+  // settings because the suppression list is PER ACCOUNT (one customer's opt-out must never
+  // silence another customer's mail to the same human).
+  { id:'mail-compliance', icon:'🛡️', label:'Mail compliance' }
 ];
 
 const ADMIN_MENU = [
@@ -4169,6 +4175,152 @@ async function loadMessagesTab(){
     el.innerHTML='<p style="color:var(--text-secondary)">Messages unavailable: '+escapeHtml(String(e.message||e))+'</p>';
   }
 }
+// ── Received mail (2026-11-19) ───────────────────────────────────────────────────────────────────
+// MEASURED WHY: the console's mail tab renders domains, mailboxes, auto-replies, keys and the send
+// card, and never a single received message — while this workspace held 78 in
+// `private_email_messages` (GET /api/private-email/messages = 200; the counts read reports inbox: 78).
+// The page's only other message list reads `/api/messages`, the UNIFIED OUTBOUND table (total 0), so a
+// customer's letter had no screen at all. POST /private-email/messages/:id/summarize had no control
+// either, though its own doc comment calls it "this button".
+//
+// Placement: an entry point in the header that opens a list in a modal, then the message in the same
+// modal. It is deliberately self-contained — the mail tab repaints from its own awaited reads and
+// replaces its container, so anything appended inside it is wiped a moment later (measured).
+//
+// Rules kept: bodies are rendered as TEXT (escapeHtml + pre-wrap), never as HTML — a customer's mail is
+// untrusted input and this page holds a session; and the Summarise control exists only when the counts
+// read says `ai_summary` is true, so nobody is offered a button whose route would answer 503.
+var peInboxAiSummary = false;
+
+function peEsc(s) { return escapeHtml(String(s == null ? '' : s)); }
+
+// An id inside an HTML attribute that is itself delimited by double quotes: entity-escape the quotes
+// and keep only UUID-safe characters, so the attribute cannot be closed early (measured: JSON.stringify
+// here produced onclick="peOpenMessage("uuid")", which threw on click).
+function peAttrId(id) {
+  const safe = String(id == null ? '' : id).replace(/[^A-Za-z0-9-]/g, '');
+  return '&quot;' + safe + '&quot;';
+}
+
+function peMessageText(m) {
+  const plain = String((m && m.body_plain) || '').trim();
+  if (plain) return plain;
+  return String((m && m.body_html) || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+async function peShowInbox() {
+  let list = [];
+  try {
+    const r = await API.get('/private-email/messages?limit=50');
+    list = (r && Array.isArray(r.messages)) ? r.messages : [];
+  } catch (e) {
+    showModal('Received mail',
+      '<div style="color:#b91c1c">Could not read the inbox: ' + peEsc((e && e.message) ? e.message : e) + '</div>',
+      '<button class="btn btn-ghost" onclick="closeModal()">Close</button>');
+    return;
+  }
+  try {
+    const c = await API.get('/private-email/messages/counts');
+    peInboxAiSummary = !!(c && c.ai_summary);
+  } catch (e) {
+    peInboxAiSummary = false;
+  }
+  if (!list.length) {
+    showModal('Received mail',
+      '<p style="color:var(--text-secondary)">No received messages yet.</p>',
+      '<button class="btn btn-ghost" onclick="closeModal()">Close</button>');
+    return;
+  }
+  const rows = list.map(function (m) {
+    const sub = peEsc(m.subject || '(no subject)');
+    const from = peEsc(m.from_name || m.from_address || '');
+    const when = peEsc(String(m.received_at || '').replace('T', ' ').slice(0, 16));
+    return '<div class="config-item" style="cursor:pointer" onclick="peOpenMessage(' + peAttrId(m.id) + ')">' +
+      '<div class="config-info"><div class="config-label">' + sub + '</div>' +
+      '<div class="config-desc">' + from + (when ? ' \u00b7 ' + when : '') +
+      (m.is_read === false ? ' \u00b7 unread' : '') + '</div></div>' +
+      '<span class="btn btn-ghost btn-xs">Open</span></div>';
+  });
+  showModal('Received mail (' + list.length + ')',
+    '<p style="font-size:12px;color:var(--text-secondary)">The last ' + list.length +
+    ' message(s) this workspace received. Open one to read it.</p><div class="config-list">' + rows.join('') + '</div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Close</button>', true);
+}
+
+async function peOpenMessage(id) {
+  if (!id) return;
+  let m = null;
+  try {
+    const r = await API.get('/private-email/messages/' + encodeURIComponent(id));
+    m = (r && r.message) ? r.message : r;
+  } catch (e) {
+    toast('Could not open that message: ' + ((e && e.message) ? e.message : e), 'error');
+    return;
+  }
+  if (!m || !m.id) { toast('That message could not be read', 'error'); return; }
+  const fromName = String(m.from_name || '');
+  const fromAddr = String(m.from_address || '');
+  const from = fromName && fromAddr ? fromName + ' <' + fromAddr + '>' : (fromAddr || fromName);
+  const when = String(m.received_at || '').replace('T', ' ').slice(0, 16);
+  const meta = [from, when, m.to_address ? ('to ' + String(m.to_address)) : '']
+    .filter(function (x) { return !!x; }).join(' \u00b7 ');
+  const body = peMessageText(m) || '(this message has no readable text)';
+  const html =
+    '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">' + peEsc(meta) + '</div>' +
+    '<div style="white-space:pre-wrap;max-height:50vh;overflow:auto">' + peEsc(body) + '</div>' +
+    '<div id="peSummary" style="margin-top:12px"></div>';
+  const footer =
+    '<button class="btn btn-ghost" onclick="peShowInbox()">Back</button>' +
+    '<button class="btn btn-ghost" onclick="closeModal()">Close</button>' +
+    (peInboxAiSummary ? '<button class="btn btn-primary" id="peSummariseBtn">Summarise this message</button>' : '');
+  showModal(peEsc(m.subject || '(no subject)'), html, footer, true);
+  const b = document.getElementById('peSummariseBtn');
+  if (b) b.addEventListener('click', function () { peSummariseMessage(String(m.id), b); });
+}
+
+// The server's own sentence is shown verbatim: "AI summaries need an AI provider key …" and
+// "This message has no text to summarise." are both written for the operator.
+async function peSummariseMessage(id, btn) {
+  const out = document.getElementById('peSummary');
+  if (btn) btn.disabled = true;
+  if (out) out.innerHTML = '<div style="font-size:12px;color:var(--text-secondary)">Summarising\u2026</div>';
+  try {
+    const r = await API.post('/private-email/messages/' + encodeURIComponent(id) + '/summarize', {});
+    const s = (r && r.summary) ? String(r.summary) : '';
+    if (out) {
+      out.innerHTML = s
+        ? '<div class="card"><div class="card-body"><div style="font-size:11px;text-transform:uppercase;color:var(--text-secondary);margin-bottom:6px">Summary</div><div style="white-space:pre-wrap">' + peEsc(s) + '</div></div></div>'
+        : '<div style="color:#b45309">The summariser answered with nothing, so there is no summary to show.</div>';
+    }
+  } catch (e) {
+    if (out) out.innerHTML = '<div style="color:#b91c1c">' + peEsc((e && e.message) ? e.message : e) + '</div>';
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// One entry point, installed once the console has painted a header (bounded retries).
+function peInstallInboxButton(n) {
+  n = n || 0;
+  if (document.getElementById('peInboxBtn')) return;
+  const host = document.querySelector('.topbar') || document.querySelector('header') ||
+               document.querySelector('.header') || document.querySelector('.topbar-actions');
+  if (!host) { if (n < 40) setTimeout(function () { peInstallInboxButton(n + 1); }, 250); return; }
+  const b = document.createElement('button');
+  b.id = 'peInboxBtn';
+  b.className = 'btn btn-ghost btn-sm';
+  b.type = 'button';
+  b.title = 'Read the mail this workspace has received';
+  b.textContent = '\uD83D\uDCEC Received mail';
+  b.addEventListener('click', function () { peShowInbox(); });
+  host.appendChild(b);
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', function () { peInstallInboxButton(0); });
+} else {
+  peInstallInboxButton(0);
+}
+
 // CS-22: the old modal only toasted "Ticket created" and posted nothing.
 function showAddTicketModal(){
   showModal('New Ticket',
@@ -12238,6 +12390,203 @@ async function dmLoadRuns() {
 window.addEventListener('beforeunload', function (ev) {
   if (DM.dirty) { ev.preventDefault(); ev.returnValue = 'You have unsaved mapping changes.'; return ev.returnValue; }
 });
+
+/* ==========================================================================================
+ * MAIL COMPLIANCE (kanban t_bec0f198)
+ * ------------------------------------------------------------------------------------------
+ * Everything this account sends passes one gate: transactional (receipts, password resets)
+ * cannot be opted out of but is still refused to a known-bad address; notification and bulk
+ * mail can be stopped. This page is the screen for that gate: what was sent, what the provider
+ * did with it, who has asked this account to stop, and the two downloads a customer takes to an
+ * address-verification service.
+ *
+ * Two things the panel refuses to fake:
+ *   * A RATE with no mail behind it. Over an account that has sent nothing, the API reports
+ *     `no_events_yet` and the tiles say so — never a red "0.0% delivered".
+ *   * A CEILING without the number. The complaint rate is shown against the 0.3% limit the
+ *     mailbox providers actually enforce, because the limit is the actionable fact.
+ * ========================================================================================== */
+
+window.MC = { rows: [] };
+
+var MC_CLASSES = [
+  { id: 'all', label: 'Everything except receipts' },
+  { id: 'bulk', label: 'Campaigns and sequences only' },
+  { id: 'notification', label: 'Notifications only' }
+];
+
+TAB_RENDERERS['mail-compliance'] = function () {
+  return pageHeader(
+    'Mail compliance',
+    'What this account sent, what the provider did with it, and who asked us to stop',
+    '<button class="btn btn-secondary btn-sm" data-ops="mc-refresh" onclick="mcLoad()">↻ Reload</button>'
+  ) + '<div id="mcWrap"><div class="loading-wrap"><div class="spinner"></div> Loading…</div></div>';
+};
+TAB_LOADERS['mail-compliance'] = async function () { await mcLoad(); };
+
+function mcEsc(v) { return escapeHtml(v == null ? '' : String(v)); }
+
+function mcTile(label, value, note) {
+  return '<div class="stat-tile" style="flex:1 1 150px;min-width:150px">' +
+    '<div class="stat-label" style="font-size:12px;color:var(--text-muted)">' + mcEsc(label) + '</div>' +
+    '<div class="stat-value" style="font-size:22px;font-weight:700">' + mcEsc(value) + '</div>' +
+    (note ? '<div class="form-hint" style="margin:2px 0 0">' + mcEsc(note) + '</div>' : '') +
+    '</div>';
+}
+
+async function mcLoad() {
+  var wrap = document.getElementById('mcWrap');
+  if (!wrap) return;
+  var ov = null, list = [];
+  try {
+    ov = await API.get('/mail-compliance/overview');
+  } catch (e) {
+    wrap.innerHTML = '<div class="card"><div class="card-body"><p>Delivery evidence could not be read: ' +
+      mcEsc(e.message) + '</p></div></div>';
+    return;
+  }
+  try {
+    var r = await API.get('/mail-compliance/suppressions');
+    list = (r && r.suppressions) || [];
+  } catch (e) {
+    wrap.innerHTML = '<div class="card"><div class="card-body"><p>The do-not-mail list could not be read: ' +
+      mcEsc(e.message) + '</p></div></div>';
+    return;
+  }
+  MC.rows = list;
+  mcRender(ov || {}, list, wrap);
+}
+
+function mcRender(ov, list, wrap) {
+  var rates = ov.rates || {};
+  var tiles = '';
+  if (rates.no_events_yet) {
+    tiles = mcTile('Mail sent (30 days)', String(rates.sent || 0), 'No delivery events yet — rates appear once the provider reports.');
+  } else {
+    tiles =
+      mcTile('Mail sent (30 days)', String(rates.sent || 0)) +
+      mcTile('Delivered', (rates.delivery_rate || 0) + '%', String(rates.delivered || 0) + ' messages') +
+      mcTile('Bounced', (rates.bounce_rate || 0) + '%', String(rates.bounced || 0) + ' messages') +
+      mcTile('Complained', (rates.complaint_rate || 0) + '%',
+        'Ceiling ' + (rates.complaint_rate_ceiling || 0.3) + '% — above it, mailbox providers start refusing this sender');
+  }
+  tiles += mcTile('On the do-not-mail list', String(ov.suppressed || 0),
+    String(ov.suppressed_last_30d || 0) + ' added in the last 30 days');
+
+  var options = MC_CLASSES.map(function (c) {
+    return '<option value="' + mcEsc(c.id) + '">' + mcEsc(c.label) + '</option>';
+  }).join('');
+
+  var form = '<div class="card">' +
+    '<div class="card-header">Stop mailing an address</div>' +
+    '<div class="card-body">' +
+    '<p class="form-hint">Adding an address here stops the mail this account sends to it. A receipt or a ' +
+    'password reset still goes out — the law exempts those — but nothing else will.</p>' +
+    '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">' +
+    '<div class="form-group" style="margin:0;flex:1 1 260px">' +
+    '<label class="form-label" for="mcAddress">Email address</label>' +
+    '<input class="form-input" id="mcAddress" type="email" autocomplete="off" placeholder="person@example.com" ' +
+    'onkeydown="if(event.key===\'Enter\'){event.preventDefault();mcAdd();}"></div>' +
+    '<div class="form-group" style="margin:0;flex:0 1 220px">' +
+    '<label class="form-label" for="mcClass">What to stop</label>' +
+    '<select class="form-input" id="mcClass">' + options + '</select></div>' +
+    '<button class="btn btn-primary" data-ops="mc-add" onclick="mcAdd()">Add to list</button>' +
+    '</div></div></div>';
+
+  var rows = list.map(function (r) {
+    var when = String(r.created_at || '').replace('T', ' ').slice(0, 19);
+    return '<tr>' +
+      '<td>' + mcEsc(r.address) + '</td>' +
+      '<td>' + mcEsc(r.mail_class) + '</td>' +
+      '<td>' + mcEsc(r.reason) + '</td>' +
+      '<td>' + mcEsc(r.source || '—') + '</td>' +
+      '<td>' + mcEsc(when) + '</td>' +
+      '<td><button class="btn btn-ghost btn-sm" data-ops="mc-remove" onclick="mcRemove(\'' +
+        mcEsc(r.id) + '\')">Remove</button></td>' +
+      '</tr>';
+  }).join('');
+
+  var table = list.length
+    ? '<div class="card"><div class="table-wrap"><table><thead><tr>' +
+      '<th>Address</th><th>Stops</th><th>Why</th><th>Source</th><th>Added</th><th></th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table></div></div>'
+    : '<div class="card"><div class="card-body"><div class="empty-state">' +
+      '<div class="empty-icon">🛡️</div><h3>Nobody has asked this account to stop</h3>' +
+      '<p>An unsubscribe, a hard bounce or a spam complaint adds an address here automatically.</p>' +
+      '</div></div></div>';
+
+  var downloads = '<div class="card"><div class="card-header">Downloads</div><div class="card-body">' +
+    '<p class="form-hint">Both files are this account\u2019s only.</p>' +
+    '<div style="display:flex;gap:10px;flex-wrap:wrap">' +
+    '<button class="btn btn-secondary btn-sm" data-ops="mc-csv-suppressions" ' +
+    'onclick="mcDownload(\'/mail-compliance/suppressions.csv\',\'suppressions.csv\')">⬇ Do-not-mail list (CSV)</button>' +
+    '<button class="btn btn-secondary btn-sm" data-ops="mc-csv-addresses" ' +
+    'onclick="mcDownload(\'/mail-compliance/addresses.csv\',\'contact-addresses.csv\')">⬇ Every contact address (CSV)</button>' +
+    '</div></div></div>';
+
+  wrap.innerHTML = '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">' + tiles + '</div>' +
+    form + table + downloads;
+}
+
+async function mcAdd() {
+  var addrEl = document.getElementById('mcAddress');
+  var clsEl = document.getElementById('mcClass');
+  var address = ((addrEl && addrEl.value) || '').trim();
+  if (address.indexOf('@') < 1) {
+    toast('Enter the email address to stop mailing', 'error');
+    if (addrEl) addrEl.focus();
+    return;
+  }
+  try {
+    // `reason` is a fixed vocabulary on the server (manual / unsubscribed / hard_bounce /
+    // complaint / provider). An address added HERE was added by hand, so it is 'manual' — never
+    // a free-text note, which the column's CHECK would refuse.
+    await API.post('/mail-compliance/suppressions', {
+      address: address,
+      mail_class: (clsEl && clsEl.value) || 'all',
+      reason: 'manual'
+    });
+    toast('Added ' + address + ' to the do-not-mail list', 'success');
+    if (addrEl) addrEl.value = '';
+    await mcLoad();
+  } catch (e) {
+    toast('Could not add that address: ' + e.message, 'error');
+  }
+}
+
+async function mcRemove(id) {
+  var row = null;
+  for (var i = 0; i < MC.rows.length; i++) {
+    if (String(MC.rows[i].id) === String(id)) { row = MC.rows[i]; break; }
+  }
+  var label = row ? row.address : 'this address';
+  if (typeof confirm === 'function' &&
+      !confirm('Remove ' + label + ' from the do-not-mail list? Mail to them may resume.')) return;
+  try {
+    await API.del('/mail-compliance/suppressions/' + encodeURIComponent(id));
+    toast('Removed ' + label + ' from the do-not-mail list', 'success');
+    await mcLoad();
+  } catch (e) {
+    toast('Could not remove that address: ' + e.message, 'error');
+  }
+}
+
+async function mcDownload(path, filename) {
+  try {
+    // The route is behind the session, so a plain link would be an anonymous request and be
+    // refused: fetch it with the token and hand the browser a blob, like the attachment downloads.
+    var res = await fetch('/api' + path, { headers: { 'Authorization': 'Bearer ' + STATE.token } });
+    if (!res.ok) { toast('Could not download that file (' + res.status + ')', 'error'); return; }
+    var blob = await res.blob();
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
 
 </script>
 <script src="/inline-guide-widget.js?v=20261119a"></script>

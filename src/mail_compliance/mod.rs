@@ -667,6 +667,7 @@ async fn list_suppressions(
     let rows = sqlx::query_as::<
         _,
         (
+            Uuid,
             String,
             String,
             String,
@@ -674,7 +675,7 @@ async fn list_suppressions(
             chrono::DateTime<chrono::Utc>,
         ),
     >(
-        "SELECT address, mail_class, reason, source, created_at FROM email_suppressions
+        "SELECT id, address, mail_class, reason, source, created_at FROM email_suppressions
           WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1000",
     )
     .bind(tenant_id)
@@ -683,9 +684,9 @@ async fn list_suppressions(
     .unwrap_or_default();
     let items: Vec<Value> = rows
         .into_iter()
-        .map(|(address, mail_class, reason, source, created_at)| {
+        .map(|(id, address, mail_class, reason, source, created_at)| {
             json!({
-                "address": address, "mail_class": mail_class, "reason": reason,
+                "id": id, "address": address, "mail_class": mail_class, "reason": reason,
                 "source": source, "created_at": created_at
             })
         })
@@ -749,6 +750,9 @@ async fn remove_suppression(
             .into_response();
     };
     // Tenant-scoped on the write itself: one account can never lift another's suppression.
+    // Rows affected is the whole verdict: `remove` of an id that belongs to another tenant (or that
+    // does not exist) is NOT a no-op success — it answers 404, so the console can tell "lifted" from
+    // "never yours", and the tenancy boundary is visible instead of silently unaddressable.
     let done = sqlx::query("DELETE FROM email_suppressions WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tenant_id)
@@ -756,6 +760,13 @@ async fn remove_suppression(
         .await
         .map(|r| r.rows_affected())
         .unwrap_or(0);
+    if done == 0 {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no such suppression in this account" })),
+        )
+            .into_response();
+    }
     Json(json!({ "removed": done })).into_response()
 }
 
@@ -857,6 +868,15 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/suppressions/:id", delete(remove_suppression))
         .route("/suppressions.csv", get(suppressions_csv))
         .route("/addresses.csv", get(addresses_csv))
+        // The session layer this surface never had (kanban t_bec0f198). Every handler below takes
+        // `Extension<Claims>` and scopes by `tenant_of(&c)`, and the app-wide credential boundary
+        // only REFUSES an anonymous caller — it does not put `Claims` on the request. Without this
+        // layer every path answered 500 "Missing request extension: Claims", so the whole surface
+        // was dead. Same layer, same order as every sibling module router.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::middleware::auth_middleware,
+        ))
         .with_state(state)
 }
 
