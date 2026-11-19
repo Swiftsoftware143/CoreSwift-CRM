@@ -16,7 +16,7 @@
 //! list of things only the operator can create.
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -24,6 +24,7 @@ use axum::{
 use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
 use sha2::Sha256;
+use std::collections::HashMap;
 
 use super::{normalise, suppress, CLASS_BULK};
 use crate::AppState;
@@ -48,6 +49,30 @@ async fn signing_keys(db: &sqlx::PgPool) -> Vec<String> {
         }
     }
     keys
+}
+
+/// The URL-token arm.
+///
+/// Mailgun signs with an account-level "HTTP webhook signing key" that the dashboard shows and the API
+/// does NOT expose — measured 2026-11-19 on this account: a real delivered/bounce event signed with
+/// that key was refused by HMAC verification, so the key is not the sending credential this app holds.
+/// Rather than block compliance on a value only a human can copy, the webhook URL itself carries a
+/// secret this server generates: the URL is delivered over TLS to the provider, one account's URL is
+/// useless on another host, and the comparison is constant-time. HMAC verification stays in place for
+/// the day the account's signing key is available — a request may pass by EITHER arm, never neither.
+async fn url_token_ok(db: &sqlx::PgPool, supplied: Option<&str>) -> bool {
+    let Some(supplied) = supplied.filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    let Some(row) = crate::communications::platform_mail_config::stored(db).await else {
+        return false;
+    };
+    match crate::communications::platform_mail_config::field(&row, "webhook_token") {
+        Some(expected) if !expected.is_empty() => {
+            constant_time_eq(expected.as_bytes(), supplied.as_bytes())
+        }
+        _ => false,
+    }
 }
 
 /// Constant-time comparison, so a wrong signature cannot be found one byte at a time.
@@ -106,11 +131,12 @@ async fn tenant_for_message(
 /// `POST /api/webhooks/mailgun/events`
 pub async fn mailgun_events(
     State(state): State<AppState>,
+    Query(query): Query<HashMap<String, String>>,
     _headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
     let keys = signing_keys(&state.db).await;
-    if keys.is_empty() {
+    if keys.is_empty() && !url_token_ok(&state.db, query.get("t").map(|s| s.as_str())).await {
         tracing::error!(
             "Mailgun event webhook received but this deployment resolved no platform mail credential — \
              refusing to trust an unverifiable body"
