@@ -513,6 +513,11 @@ pub const API_KEY_ROUTES: &[&str] = &[
     // token (account + address + mail class) and writes one suppression row for THAT account —
     // it can neither read nor name any other tenant's data, and it cannot lift a suppression.
     "/api/public/unsubscribe/:token",
+    // The provider's event stream (delivered / bounced / complained / dropped). Anonymous because a
+    // provider has no session; the HMAC signature over timestamp+token is the credential, verified
+    // before any row is written. It writes only to the account that this app itself logged as the
+    // sender of the message the event names — a body cannot choose a tenant.
+    "/api/webhooks/mailgun/events",
 ];
 
 /// Is `path` (a concrete request path) one of the committed public templates?
@@ -1338,19 +1343,21 @@ mod tests {
     /// `/api/mail-compliance` (the delivery evidence, the suppression list, its remove arm, and the
     /// two downloads) and 1 anonymous opt-out (`/api/public/unsubscribe/:token`, merged at the root
     /// and named in [`PUBLIC_ROUTES`] because the token in the path IS the credential). Every new
-    /// path is on `/api**`, so the root-level count is unchanged at 12: 480 mounted / 468 on /api**.
+    /// path is on `/api**`, so the root-level count is unchanged at 12. +1 more for the provider's
+    /// event stream (`/api/webhooks/mailgun/events`, signature-verified, anonymous). 481 mounted /
+    /// 469 on /api**.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
         let mounted = mounted_routes();
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            480,
+            481,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 468,
+            api, 469,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

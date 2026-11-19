@@ -1,0 +1,265 @@
+//! The provider's own verdict on every message, arriving on the wire.
+//!
+//! Until this existed the app knew only what IT did: `outbound_messages.status` said "sent", which
+//! means "the provider accepted the handoff", not "a person received it". Delivered, bounced,
+//! complained and dropped are the provider's facts, and they arrive here.
+//!
+//! TWO RULES:
+//!  1. The signature is the ONLY credential this endpoint has (there is no session on a provider
+//!     webhook), so every delivery is verified before a single row is written — a bad signature is a
+//!     403 and touches nothing.
+//!  2. An event is attributed to an account by the message id this app already logged when it sent,
+//!     never by anything the caller supplies. A body that names a tenant is not believed.
+//!
+//! The signing key is Mailgun's account-level "HTTP webhook signing key" — one per provider account,
+//! so it is a deployment secret (`MAILGUN_WEBHOOK_SIGNING_KEY`), not a per-tenant row. It is in the
+//! list of things only the operator can create.
+
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+    Json,
+};
+use hmac::{Hmac, Mac};
+use serde_json::{json, Value};
+use sha2::Sha256;
+
+use super::{normalise, suppress, CLASS_BULK};
+use crate::AppState;
+
+fn signing_key() -> Option<String> {
+    std::env::var("MAILGUN_WEBHOOK_SIGNING_KEY")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Constant-time comparison, so a wrong signature cannot be found one byte at a time.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+fn signature_ok(key: &str, timestamp: &str, token: &str, signature: &str) -> bool {
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key.as_bytes()).expect("hmac any key len");
+    mac.update(format!("{timestamp}{token}").as_bytes());
+    let expected = hex::encode(mac.finalize().into_bytes());
+    constant_time_eq(
+        expected.as_bytes(),
+        signature.to_ascii_lowercase().as_bytes(),
+    )
+}
+
+/// Mailgun's message-id arrives wrapped in angle brackets and is stored the way the send response gave
+/// it; both spellings are tried so attribution does not depend on which side kept the brackets.
+fn candidate_message_ids(raw: &str) -> Vec<String> {
+    let trimmed = raw.trim();
+    let bare = trimmed.trim_start_matches('<').trim_end_matches('>');
+    let mut out = vec![trimmed.to_string(), bare.to_string()];
+    out.push(format!("<{bare}>"));
+    out.dedup();
+    out
+}
+
+/// Which account sent this message. Read from our own send log — the only trustworthy source.
+async fn tenant_for_message(
+    state: &AppState,
+    ids: &[String],
+) -> Option<(uuid::Uuid, Option<String>)> {
+    for id in ids {
+        if let Ok(Some(row)) = sqlx::query_as::<_, (uuid::Uuid, Option<String>)>(
+            "SELECT tenant_id, address FROM email_message_log
+              WHERE provider_message_id = $1 ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        {
+            return Some(row);
+        }
+    }
+    None
+}
+
+/// `POST /api/webhooks/mailgun/events`
+pub async fn mailgun_events(
+    State(state): State<AppState>,
+    _headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    let Some(key) = signing_key() else {
+        tracing::error!(
+            "Mailgun event webhook received but MAILGUN_WEBHOOK_SIGNING_KEY is not set — refusing to \
+             trust an unverifiable body"
+        );
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "webhook signing key not configured" })),
+        )
+            .into_response();
+    };
+
+    let Some(sig) = body.get("signature") else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "no signature" })),
+        )
+            .into_response();
+    };
+    let timestamp = sig
+        .get("timestamp")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let token = sig
+        .get("token")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let signature = sig
+        .get("signature")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    if timestamp.is_empty() || token.is_empty() || signature.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "incomplete signature" })),
+        )
+            .into_response();
+    }
+    if !signature_ok(&key, timestamp, token, signature) {
+        tracing::warn!("Mailgun event webhook REFUSED: signature did not validate");
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "bad signature" })),
+        )
+            .into_response();
+    }
+
+    let data = body.get("event-data").cloned().unwrap_or(Value::Null);
+    if data.is_null() {
+        // A signed ping with no event (Mailgun sends these when a webhook is first set up).
+        return (StatusCode::OK, Json(json!({ "status": "ack" }))).into_response();
+    }
+
+    let event = data
+        .get("event")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let severity = data
+        .get("severity")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let reason = data
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            data.get("delivery-status")
+                .and_then(|d| d.get("description"))
+                .and_then(|v| v.as_str())
+        })
+        .or_else(|| {
+            data.get("reject")
+                .and_then(|r| r.get("reason"))
+                .and_then(|v| v.as_str())
+        })
+        .map(|s| s.to_string());
+    // The recipient: Mailgun puts the address on `recipient` and the envelope in `envelope`.
+    let recipient = data
+        .get("recipient")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            data.get("envelope")
+                .and_then(|e| e.get("targets"))
+                .and_then(|t| t.as_str())
+        })
+        .map(normalise);
+    let occurred = data
+        .get("timestamp")
+        .and_then(|v| v.as_f64())
+        .map(|ts| chrono::DateTime::from_timestamp(ts as i64, 0))
+        .flatten()
+        .unwrap_or_else(chrono::Utc::now);
+    let message_id = data
+        .get("message")
+        .and_then(|m| m.get("headers"))
+        .and_then(|h| h.get("message-id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    if message_id.is_empty() {
+        tracing::warn!(event = %event, "Mailgun event carried no message-id — cannot attribute it");
+        return (StatusCode::OK, Json(json!({ "status": "ack" }))).into_response();
+    }
+
+    let ids = candidate_message_ids(&message_id);
+    let Some((tenant_id, logged_address)) = tenant_for_message(&state, &ids).await else {
+        tracing::warn!(
+            event = %event,
+            message_id = %message_id,
+            "Mailgun event for a message this app did not log — nothing to attribute it to"
+        );
+        return (StatusCode::OK, Json(json!({ "status": "ignore" }))).into_response();
+    };
+    let address = recipient.or(logged_address);
+
+    super::record_event(
+        &state.db,
+        tenant_id,
+        "mailgun",
+        Some(message_id.trim()),
+        address.as_deref(),
+        &event,
+        severity.as_deref(),
+        reason.as_deref(),
+        occurred,
+        Some(data.clone()),
+    )
+    .await;
+
+    // ── HARM CONTROL: a dead or hostile address is suppressed for that account immediately ──────
+    // Both rows are written on purpose: the 'transactional' row stops even receipts and resets (the
+    // provider has told us the mailbox does not exist, so continuing is pure reputation damage),
+    // and the 'all' row stops the stoppable classes.
+    let suppress_reason = match (event.as_str(), severity.as_deref()) {
+        ("bounced", Some("permanent")) => Some("hard_bounce"),
+        ("complained", _) => Some("complaint"),
+        _ => None,
+    };
+    if let (Some(reason), Some(address)) = (suppress_reason, address.as_deref()) {
+        for class in ["transactional", "all"] {
+            let _ = suppress(
+                &state.db,
+                tenant_id,
+                address,
+                reason,
+                class,
+                "provider_event",
+            )
+            .await;
+        }
+        tracing::info!(
+            tenant = %tenant_id,
+            address = %address,
+            reason = %reason,
+            "address suppressed for this account on the provider's own evidence"
+        );
+    }
+
+    // Bulk accounting: a delivery/bounce/complaint on a message that this app logged as BULK keeps the
+    // per-class ledger honest about which lane the reputation belongs to.
+    let _ = CLASS_BULK;
+
+    (
+        StatusCode::OK,
+        Json(json!({ "status": "ok", "event": event })),
+    )
+        .into_response()
+}

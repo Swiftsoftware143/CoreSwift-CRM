@@ -18,11 +18,13 @@
 //! Rates are computed from `email_events` on read. Nothing stores a delivery rate — a stored rate is a
 //! number that drifts from the events it claims to summarise.
 
+pub mod webhook;
+
 use axum::{
     extract::{Path, State},
     http::{header, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Response},
-    routing::{delete, get},
+    routing::{delete, get, post},
     Extension, Json, Router,
 };
 use base64::Engine as _;
@@ -856,6 +858,12 @@ pub fn public_router(state: AppState) -> Router<AppState> {
         .route(
             "/api/public/unsubscribe/:token",
             get(show_unsubscribe).post(one_click),
+        )
+        // The provider's own verdict stream. Anonymous by necessity and verified by signature —
+        // the HMAC is the credential, and an unsigned body writes nothing.
+        .route(
+            "/api/webhooks/mailgun/events",
+            post(webhook::mailgun_events),
         )
         .with_state(state)
 }
