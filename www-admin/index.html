@@ -865,6 +865,9 @@ async function assignPlanToTenant() {
     if (st) st.textContent = 'Applied: ' + name + ' · ' + ((r && r.billing_cycle) || cycle) +
       (r && r.created_row ? ' · plan row created' : ' · existing row updated');
     toast('Account moved to ' + name, 'success');
+    // The workspace list's PLAN column caches each account's label; drop the one this call moved so
+    // the list cannot keep showing the tier the account just left.
+    try { delete TENANT_PLANS[tenant]; } catch (_) { }
     loadTenantEntitlements();
   } catch (e) {
     if (st) st.textContent = 'Failed: ' + e.message;
@@ -2975,6 +2978,10 @@ const tenantOwnerCell = (t) => {
   if (!oe) return '<span style="color:var(--text-muted)">no user</span>' + badge;
   return escapeHtml(oe) + badge;
 };
+// Per-tenant PLAN label cache for the workspace list (`id -> html`), so switching tabs does not
+// re-read every account. Only `assignPlanToTenant` changes a plan, and it clears the entry it moved.
+let TENANT_PLANS = {};
+
 async function loadTenantsTab() {
   const el = document.getElementById('tenantsTable');
   if (!el) return;
@@ -3027,6 +3034,11 @@ async function loadTenantsTab() {
     t.is_active === false ? '<span class="badge badge-muted">inactive</span>'
       : t.is_active === true ? '<span class="badge badge-success">active</span>'
       : '<span class="badge badge-muted">unknown</span>',
+    // PLAN level — filled after the table is drawn, from the SAME read the per-tenant card uses
+    // (GET /admin/tenants/:id/entitlements), so the list and the card can never disagree. Until
+    // 2026-11-19 this list carried no plan at all: the operator could only see a workspace's tier by
+    // opening its entitlements card one account at a time. Never a guess — a failed read stays '—'.
+    '<span data-plan-for="' + escapeHtmlAttr(t.id || '') + '" style="color:var(--text-muted)">…</span>',
     escapeHtml(t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'),
     // Enter the workspace as its own session (15 minutes). Platform operators only — the server
     // refuses anyone else, so offering the button to a tenant would only produce a dead-end error.
@@ -3036,8 +3048,42 @@ async function loadTenantsTab() {
   ]);
 
   el.innerHTML = dataTable(
-    ['<input type="checkbox" id="tnAll" title="Select all">', 'Name', 'Slug', 'Owner', 'Status', 'Created', 'Actions'],
+    ['<input type="checkbox" id="tnAll" title="Select all">', 'Name', 'Slug', 'Owner', 'Status', 'Plan', 'Created', 'Actions'],
     rows, 'No workspaces returned.');
+
+  // Fill the PLAN column progressively: one read per row, sequential so a long list cannot burst the
+  // API, and the table is already usable while it fills. Values come from the gate's own answer
+  // (`plan` = the active/trialing `tenant_plans` row, `no_plan` = the every-module-granted arm), so a
+  // workspace with no plan row is NAMED as such instead of borrowing the free tier's name.
+  (function fillTenantPlans() {
+    const cells = Array.from(el.querySelectorAll('[data-plan-for]'));
+    if (!cells.length) return;
+    const paint = (cell, html) => { if (cell) cell.innerHTML = html; };
+    const step = (i) => {
+      if (i >= cells.length) return;
+      const cell = cells[i], id = cell.getAttribute('data-plan-for') || '';
+      if (TENANT_PLANS[id]) { paint(cell, TENANT_PLANS[id]); step(i + 1); return; }
+      API.get('/admin/tenants/' + encodeURIComponent(id) + '/entitlements').then(d => {
+        let html;
+        if (d && d.plan) {
+          const name = d.plan.name || d.plan.slug || 'plan';
+          const status = d.plan.status ? String(d.plan.status) : '';
+          html = escapeHtml(name) + (status && status !== 'active'
+            ? ' <span class="badge badge-muted">' + escapeHtml(status) + '</span>' : '');
+        } else if (d && d.no_plan === true) {
+          html = '<span style="color:var(--warning,#fa0)" title="No plan row: every registered module is granted until a plan is assigned">no plan row</span>';
+        } else {
+          html = '<span style="color:var(--text-muted)">none assigned</span>';
+        }
+        TENANT_PLANS[id] = html;
+        paint(cell, html);
+      }).catch(() => {
+        // A failed read is reported as unknown, never as a tier the account may not be on.
+        paint(cell, '<span style="color:var(--text-muted)" title="The plan could not be read">—</span>');
+      }).then(() => step(i + 1));
+    };
+    step(0);
+  })();
 
   const boxes = () => Array.from(document.querySelectorAll('.tn-chk'));
   const all = document.getElementById('tnAll');
