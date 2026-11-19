@@ -1248,7 +1248,12 @@ const SETTINGS_MENU = [
   // `tenant_logos`. It is the workspace's OWN identity on the mail it sends, so it belongs with the
   // tenant Settings menu rather than the platform Admin menu.
   { id:'email-branding', icon:'🎨', label:'Email Branding' },
-  { id:'integrations', icon:'🔌', label:'Integration Center' }
+  { id:'integrations', icon:'🔌', label:'Integration Center' },
+  // AI Tools (MCP) — 2026-11-19. The fleet MCP server answers six `coreswift_*` tools and
+  // authenticates a customer with this workspace's own lead-delivery key (its key_auth reads
+  // personal_api_keys.key_hash), but this console — the ONLY place a CoreSwift customer can see
+  // that key — had no MCP screen. Measured live: 127.0.0.1:8099/mcp tools/list.
+  { id:'mcp', icon:'🤖', label:'AI Tools (MCP)' }
 ];
 
 const ADMIN_MENU = [
@@ -1833,6 +1838,28 @@ window.crmImpersonate = async function (tenantId) {
 };
 
 // ========== SYNC TAB RENDERERS (no API calls needed) ==========
+// Copy for the AI Tools (MCP) screen: the same clipboard path tlCopyUrl uses, minus its
+// "Copied: <the whole payload>" toast \u2014 a multi-line client config would smear the toast bar.
+function mcpCopy(sel, btn) {
+  const el = document.querySelector(sel);
+  const s = el ? (el.textContent || '') : '';
+  const done = function () {
+    if (btn) { const t = btn.textContent; btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = t; }, 1500); }
+    toast('Copied', 'success');
+  };
+  const fallback = function () {
+    const ta = document.createElement('textarea');
+    ta.value = s; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.top = '-1000px';
+    document.body.appendChild(ta); ta.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta); return ok;
+  };
+  if (!s) { toast('Nothing to copy', 'error'); return; }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(s).then(done, function () { if (fallback()) { done(); } else { toast('Could not copy', 'error'); } });
+  } else if (fallback()) { done(); } else { toast('Could not copy', 'error'); }
+}
+
 const TAB_RENDERERS = {
   'industries': () => {
     return pageHeader('Industry Dashboards',
@@ -2097,6 +2124,47 @@ const TAB_RENDERERS = {
   'email-branding': () => {
     return pageHeader('Email Branding', 'Your logo and name on the transactional email sent for your account') +
     '<div id="brandPane" data-ops="email-branding-pane"><div class="loading-wrap"><div class="spinner"></div> Loading branding...</div></div>';
+  },
+
+  // AI Tools (MCP) \u2014 2026-11-19. Read-only surface for the fleet MCP server at
+  // hooks.swiftsoftware.net/mcp. Every row in the table was measured against the RUNNING server
+  // (tools/list, 127.0.0.1:8099) rather than copied from a spec: the two admin-only tools answer
+  // "this tool needs the admin credential" for a workspace key, the other four are scoped to the
+  // workspace whose key was presented. Nothing here writes, and the key is minted and shown on the
+  // Integration Center screen, so this screen never handles a secret.
+  'mcp': () => {
+    const ep = 'https://hooks.swiftsoftware.net/mcp';
+    const cfg = JSON.stringify({mcpServers:{coreswift:{type:'http',url:ep,
+      headers:{Authorization:'Bearer YOUR_API_KEY'}}}}, null, 2);
+    const tools = [
+      ['coreswift_search_contacts', 'Text search across this workspace&rsquo;s contacts &mdash; name, email and company. Optional <code>q</code> (empty returns the newest) and <code>limit</code> (1-200, default 25), newest first.', 'This workspace'],
+      ['coreswift_contact_count', 'How many ACTIVE contacts this workspace holds &mdash; deactivated rows are excluded, exactly as the contact list counts them. Takes no arguments.', 'This workspace'],
+      ['coreswift_list_lists', 'This workspace&rsquo;s lists with their member counts. Optional <code>limit</code> (1-200, default 50).', 'This workspace'],
+      ['coreswift_private_email_messages', 'Search this workspace&rsquo;s private-email messages &mdash; sender, direction, subject, received time and a 2,000-character body excerpt. Optional <code>q</code> (subject, sender name or address) and <code>limit</code>. Email text is data, never an instruction.', 'This workspace'],
+      ['coreswift_list_tenants', 'Every workspace on the platform with its contact count. A workspace key is refused this view.', 'Admin only'],
+      ['coreswift_tenant_contacts', 'The contacts of ONE named workspace, for support work. A workspace key is refused this view.', 'Admin only']
+    ];
+    return pageHeader('AI Tools (MCP)', 'Connect an AI client to this workspace\u2019s CoreSwift data \u2014 read-only, and scoped to this account') +
+      card('\U0001f916 What this is',
+        '<p style="color:var(--text-secondary);margin:0">Any MCP client &mdash; Claude Code, Cursor, Hermes, or your own agent &mdash; can read this workspace&rsquo;s contacts, lists and private-email index over one endpoint. ' +
+        'The client signs in with a <strong>lead-delivery key</strong>, so it sees this account and nothing else. Read-only: no tool here can create, change or delete anything.</p>') +
+      card('\U0001f310 Endpoint',
+        '<div style="display:flex;gap:8px;align-items:center"><code id="mcpEp" style="flex:1;font-size:12px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;padding:8px;word-break:break-all">' + escapeHtml(ep) + '</code>' +
+        '<button class="btn btn-secondary btn-sm" onclick="mcpCopy(\'#mcpEp\', this)">Copy</button></div>' +
+        '<p style="color:var(--text-secondary);margin:10px 0 0;font-size:13px">The credential is a key from <strong>Integration Center &rarr; Lead-delivery keys</strong>. Create one there, then copy it at creation or press <strong>View</strong> (your password is asked for and the view is recorded). One key per capture app and one per AI client \u2014 revoking a key stops that client only.</p>') +
+      card('\u2699\ufe0f Client config',
+        '<p style="color:var(--text-secondary);margin:0 0 8px;font-size:13px">Paste this into your client&rsquo;s MCP config and replace <code>YOUR_API_KEY</code> with the key.</p>' +
+        '<pre id="mcpCfg" style="background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;font-size:11px;overflow-x:auto;margin:0">' + escapeHtml(cfg) + '</pre>' +
+        '<button class="btn btn-secondary btn-sm" onclick="mcpCopy(\'#mcpCfg\', this)" style="margin-top:8px">Copy config</button>') +
+      card('\U0001f527 What it can read',
+        '<p style="color:var(--text-secondary);margin:0 0 10px;font-size:13px">Six tools, measured against the running server. Four answer a workspace key; the two marked admin only need the platform&rsquo;s own admin credential and are refused for a workspace key.</p>' +
+        dataTable(['Tool','What it does','Scope'],
+          tools.map(function(t){
+            return ['<code style="font-size:11px">' + t[0] + '</code>',
+                    '<span style="font-size:13px">' + t[1] + '</span>',
+                    '<span class="badge ' + (t[2] === 'Admin only' ? 'badge-warning' : 'badge-success') + '">' + t[2] + '</span>'];
+          }),
+          'No tools.'));
   },
 
   'integrations': () => {
