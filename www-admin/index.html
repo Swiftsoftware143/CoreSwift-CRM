@@ -866,8 +866,12 @@ async function assignPlanToTenant() {
       (r && r.created_row ? ' · plan row created' : ' · existing row updated');
     toast('Account moved to ' + name, 'success');
     // The workspace list's PLAN column caches each account's label; drop the one this call moved so
-    // the list cannot keep showing the tier the account just left.
+    // the list cannot keep showing the tier the account just left. Its plain-text twin (the plan-mix
+    // counts) is dropped in the same breath, and any active plan chip is released, because the row
+    // this call moved may no longer belong to the group being shown.
     try { delete TENANT_PLANS[tenant]; } catch (_) { }
+    try { delete TENANT_PLAN_LABELS[tenant]; } catch (_) { }
+    TENANT_PLAN_FILTER = null;
     loadTenantEntitlements();
   } catch (e) {
     if (st) st.textContent = 'Failed: ' + e.message;
@@ -2206,6 +2210,12 @@ const TAB_RENDERERS = {
       '<span id="tnProbeHidden" class="badge badge-warning" style="display:none;margin-right:12px"></span> ' +
       '<button class="btn btn-sm btn-outline" id="tnProbes" disabled>Select probes (0)</button> ' +
       '<button class="btn btn-danger btn-sm" id="tnDel" disabled>Delete selected</button>') +
+    // THE PLAN MIX (2026-11-19). Filled by loadTenantsTab once every PLAN cell is painted: one chip
+    // per plan with its workspace count, plus "no plan row", and pressing a chip filters the table to
+    // those workspaces. Counts come from the same painted labels as the column, so a chip and the
+    // rows under it can never disagree. Until now the operator had to read the column row by row to
+    // answer "how many workspaces are actually on a paid tier?".
+    '<div id="tnPlanMix" style="margin:0 0 12px"></div>' +
     '<div id="tenantsTable"><div class="loading-wrap"><div class="spinner"></div> Loading workspaces...</div></div>';
   },
   'billing': () => {
@@ -2981,6 +2991,11 @@ const tenantOwnerCell = (t) => {
 // Per-tenant PLAN label cache for the workspace list (`id -> html`), so switching tabs does not
 // re-read every account. Only `assignPlanToTenant` changes a plan, and it clears the entry it moved.
 let TENANT_PLANS = {};
+// The plain-text twin of the cache above (`id -> "Free" | "no plan row" | "—"`), used only to count
+// the plan mix; and the chip currently pressed (null = every workspace). Both live beside the cache
+// so a re-read and a filter can never drift apart.
+let TENANT_PLAN_LABELS = {};
+let TENANT_PLAN_FILTER = null;
 
 async function loadTenantsTab() {
   const el = document.getElementById('tenantsTable');
@@ -3059,12 +3074,59 @@ async function loadTenantsTab() {
     const cells = Array.from(el.querySelectorAll('[data-plan-for]'));
     if (!cells.length) return;
     const paint = (cell, html) => { if (cell) cell.innerHTML = html; };
+    const groups = {};   // plain label -> count
+    const byId = {};     // account id -> plain label
+    const UNKNOWN = '\u2014';
+    const labelOf = (d) => {
+      if (d && d.plan) return String(d.plan.name || d.plan.slug || 'plan');
+      if (d && d.no_plan === true) return 'no plan row';
+      return UNKNOWN;
+    };
+    const applyFilter = () => {
+      cells.forEach(cell => {
+        const tr = cell.closest('tr');
+        if (!tr) return;
+        const label = byId[cell.getAttribute('data-plan-for') || ''] || UNKNOWN;
+        tr.style.display = (!TENANT_PLAN_FILTER || label === TENANT_PLAN_FILTER) ? '' : 'none';
+      });
+      paintMix();
+    };
+    const paintMix = () => {
+      const box = document.getElementById('tnPlanMix');
+      if (!box) return;
+      const labels = Object.keys(groups).sort((a, b) => (groups[b] - groups[a]) || a.localeCompare(b));
+      const chip = (key, text, n) =>
+        '<button type="button" class="btn btn-sm ' + (TENANT_PLAN_FILTER === key ? 'btn-primary' : 'btn-outline') +
+        '" data-plan-filter="' + escapeHtmlAttr(key === null ? '' : key) + '" title="Show only these workspaces">' +
+        escapeHtml(text) + ' <b>' + n + '</b></button>';
+      box.innerHTML = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
+        chip(null, 'All workspaces', cells.length) +
+        labels.map(l => chip(l, l, groups[l])).join('') +
+        '<span style="color:var(--text-muted);font-size:12px">Press a plan to show only those workspaces</span></div>';
+      box.querySelectorAll('[data-plan-filter]').forEach(b => {
+        b.onclick = () => {
+          const k = b.getAttribute('data-plan-filter') || '';
+          TENANT_PLAN_FILTER = k === '' ? null : k;
+          applyFilter();
+        };
+      });
+    };
+    let done = 0;
+    const record = (id, label) => { byId[id] = label; groups[label] = (groups[label] || 0) + 1; };
+    const finish = () => { done += 1; if (done === cells.length) applyFilter(); };
     const step = (i) => {
       if (i >= cells.length) return;
       const cell = cells[i], id = cell.getAttribute('data-plan-for') || '';
-      if (TENANT_PLANS[id]) { paint(cell, TENANT_PLANS[id]); step(i + 1); return; }
+      if (TENANT_PLANS[id]) {
+        paint(cell, TENANT_PLANS[id]);
+        record(id, TENANT_PLAN_LABELS[id] || UNKNOWN);
+        finish();
+        step(i + 1);
+        return;
+      }
       API.get('/admin/tenants/' + encodeURIComponent(id) + '/entitlements').then(d => {
         let html;
+        const label = labelOf(d);
         if (d && d.plan) {
           const name = d.plan.name || d.plan.slug || 'plan';
           const status = d.plan.status ? String(d.plan.status) : '';
@@ -3076,11 +3138,14 @@ async function loadTenantsTab() {
           html = '<span style="color:var(--text-muted)">none assigned</span>';
         }
         TENANT_PLANS[id] = html;
+        TENANT_PLAN_LABELS[id] = label;
         paint(cell, html);
+        record(id, label);
       }).catch(() => {
         // A failed read is reported as unknown, never as a tier the account may not be on.
-        paint(cell, '<span style="color:var(--text-muted)" title="The plan could not be read">—</span>');
-      }).then(() => step(i + 1));
+        paint(cell, '<span style="color:var(--text-muted)" title="The plan could not be read">\u2014</span>');
+        record(id, UNKNOWN);
+      }).then(() => { finish(); step(i + 1); });
     };
     step(0);
   })();
@@ -7245,7 +7310,7 @@ window.appGuidePages = {
   'email-branding': { title: 'Email Branding', desc: 'Your logo and display name on every transactional email this account sends. Leave it blank and mail keeps the CoreSwift look.', actions: ['Upload a logo (PNG/JPEG/GIF/WebP, up to 2 MB)', 'Set a brand name and colour, then save', 'Press “Email it to me” to have the exact message sent to your own inbox'] },
   integrations: { title: 'Integration Center', desc: 'Connect the services this workspace uses, each with your own provider key (BYOK).', actions: ['Paste a provider key and save', 'Email integrations drive the mail you send'] },
   portfolio: { title: 'Portfolio Companies', desc: 'Advisory portfolios — one parent whose companies are managed together. Sync New Company gives a company its own workspace and owner login and emails the login details to the owner; a record with no account behind it is converted by the same press, and a second press only refreshes the details.', actions: ['Add a portfolio and its companies', 'Press 🔄 Sync New Company — the owner receives the login by email', 'Pick the plan the new account is seated on'] },
-  tenants: { title: 'Users', desc: 'Every workspace on the platform, with a per-row checkbox, a Select probes picker and Delete selected to retire junk workspaces (the server refuses a protected row and shows why). This is the workspace list, not an invite screen: people join a workspace through that workspace\u2019s own Team & Invites.', actions: ['Tick the workspaces to retire, or press Select probes to tick every probe/test workspace at once', 'Delete selected removes them with their data', 'To add a person, open the tenant console\u2019s Team & Invites for that workspace'] },
+  tenants: { title: 'Users', desc: 'Every workspace on the platform, with a per-row checkbox, a Select probes picker and Delete selected to retire junk workspaces (the server refuses a protected row and shows why). This is the workspace list, not an invite screen: people join a workspace through that workspace\u2019s own Team & Invites. Each row also names the plan that workspace is actually on, read from the same entitlement check the plan card uses \u2014 "no plan row" means the workspace has no active plan and the every-module default applies, never that it is on a paid tier. The chips above the table count how many workspaces sit on each plan; pressing one shows only those workspaces, and All workspaces shows the full list again.', actions: ['Tick the workspaces to retire, or press Select probes to tick every probe/test workspace at once', 'Press a plan chip (All workspaces, Free, Agency, no plan row) to show only those workspaces', 'Read the Plan column to see each workspace\u2019s real tier \u2014 a workspace with no plan row is called out rather than guessed', 'Delete selected removes them with their data', 'To add a person, open the tenant console\u2019s Team & Invites for that workspace'] },
   users: { title: 'Users', desc: 'Read-only list of the people on the platform and the workspace each belongs to. No screen here invites anybody.', actions: ['Look up a person and the workspace they belong to', 'Add somebody in the tenant console under Team & Invites'] },
   billing: { title: 'Billing & Plans', desc: 'The plan catalogue as a customer sees it: every tier with its price and features, read-only. Nothing on this screen edits a plan or moves a workspace \u2014 a tier\u2019s modules and features are switched in Modules & Plans, and a workspace is put on a plan in Modules & Plans \u2192 Per-tenant plan & overrides with Assign plan.', actions: ['Read a tier\u2019s price and features', 'Switch a module or feature on or off in Modules & Plans', 'Move a workspace onto a plan in Modules & Plans \u2192 Per-tenant plan & overrides'] },
   widgets: { title: 'Widgets', desc: 'Embeddable widgets the platform serves.', actions: ['Configure a widget'] },
