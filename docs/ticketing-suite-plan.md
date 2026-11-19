@@ -42,9 +42,23 @@ Then the ticketing suite in the order David set: **3 (customer panel) → 2 (at-
 Working rules he set for this work: a new branch (never main), build and test after each step, **stop and show him
 before any database migration**, no secrets in code/docs/commits, tenant isolation proved by a test, **no deploy**.
 
-## Open item to settle BEFORE building on the branch
+## Open item to settle BEFORE building on the branch — RESOLVED 2026-11-19
 
-`feat/ticketing-suite` is **16 commits ahead of `main` and 1 behind**. Real shipped work (admin tickets separating
-automated reports from customer tickets, vendor promotional mailboxes, the profile close-account control) exists on
-that branch and not on main. Reconcile the two before building, or the suite will sit on code the live app does not
-have. This is the same class of drift that produced the duplicate-migration outage on 17 Nov.
+The drift was smaller than the counts suggested, and it is now reconciled on `feat/ticketing-suite`
+(commit `0820a82`, gate green: fmt + check + clippy):
+
+- `origin/main` is **fully contained** in the branch (0 commits on main missing from the branch). The
+  only commit that was not, `e00c7b1` ("the help guide no longer stands in front of the login"), lived
+  on the **stale local `main`** and was merged in. Local `main` has been pointed back at `origin/main`
+  so the counts are honest again: branch is **8 ahead, 0 behind**.
+- Real byte drift was found, and it was in the repo not the served root: `www-admin/inline-guide-widget.js`
+  was 1,198 bytes behind the file nginx actually serves. Nothing served the stale copy, so no user saw
+  it — but it was a dead twin waiting for the next session to edit "the widget". Both repo copies are now
+  byte-identical to the served roots (`www-admin/`, `www-app/coreswift/`), which is the state the
+  frontend-mirror gate expects.
+- `main` was deliberately **not** moved to the branch tip: it is the deploy branch, and David's rule for
+  this work is branch-only, no deploy. The suite therefore sits on a branch that contains everything
+  main has, plus the shipped work main never received.
+
+Re-check before building: `git rev-list --left-right --count main...HEAD` must read `0 <n>`.
+
