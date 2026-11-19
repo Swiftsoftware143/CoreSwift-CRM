@@ -1388,12 +1388,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            481,
+            482,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 469,
+            api, 470,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

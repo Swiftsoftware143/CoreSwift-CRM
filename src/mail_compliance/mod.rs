@@ -539,81 +539,348 @@ pub async fn watchdog(db: &PgPool, tenant_id: Uuid) -> Option<String> {
 
 // ── public surface: the opt-out itself ────────────────────────────────────────────────────────────
 
-/// `GET` for a human clicking the link in a message — a page with one button, no login, no session.
-async fn show_unsubscribe(Path(token): Path<String>) -> Response {
+/// The words on the opt-out page. Every field is editable per account
+/// (`tenants.settings->'compliance'->'unsubscribe_page'`) so a customer's opt-out page speaks in their
+/// own voice; anything they have not set falls back to the platform's wording. Never empty: an opt-out
+/// page with no explanation is worse than a plain one.
+pub struct PageCopy {
+    pub title: String,
+    pub intro: String,
+    pub all_label: String,
+    pub button_label: String,
+    pub done_title: String,
+    pub done_body: String,
+}
+
+fn copy_field(settings: &Value, key: &str) -> Option<String> {
+    settings
+        .get("compliance")
+        .and_then(|c| c.get("unsubscribe_page"))
+        .and_then(|u| u.get(key))
+        .and_then(|v| v.as_str())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+pub fn page_copy(settings: &Value, address: &str) -> PageCopy {
+    let defaults = |k: &str| match k {
+        "title" => format!("Mail preferences for {address}"),
+        "intro" => "Choose what you would like to stop receiving. Messages you need — receipts, \
+                    password resets, security notices — keep working."
+            .to_string(),
+        "all_label" => "Unsubscribe from everything".to_string(),
+        "button_label" => "Save my choices".to_string(),
+        "done_title" => "You're unsubscribed".to_string(),
+        "done_body" => "That change is saved. Nothing else to do.".to_string(),
+        _ => String::new(),
+    };
+    PageCopy {
+        title: copy_field(settings, "title").unwrap_or_else(|| defaults("title")),
+        intro: copy_field(settings, "intro").unwrap_or_else(|| defaults("intro")),
+        all_label: copy_field(settings, "all_label").unwrap_or_else(|| defaults("all_label")),
+        button_label: copy_field(settings, "button_label")
+            .unwrap_or_else(|| defaults("button_label")),
+        done_title: copy_field(settings, "done_title").unwrap_or_else(|| defaults("done_title")),
+        done_body: copy_field(settings, "done_body").unwrap_or_else(|| defaults("done_body")),
+    }
+}
+
+async fn tenant_settings(db: &PgPool, tenant_id: Uuid) -> Value {
+    sqlx::query_scalar::<_, Value>(
+        "SELECT coalesce(settings, '{}'::jsonb) FROM tenants WHERE id = $1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| json!({}))
+}
+
+/// The campaigns THIS address is actually in, read from the account's own campaign rows. Names come
+/// from `email_campaigns.name`, so the page can never show a campaign the customer renamed or deleted,
+/// and one account's campaigns can never appear on another account's page.
+pub async fn campaigns_for(db: &PgPool, tenant_id: Uuid, address: &str) -> Vec<(Uuid, String)> {
+    sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT c.id, c.name
+           FROM email_campaigns c
+           JOIN email_campaign_enrollments e ON e.campaign_id = c.id
+           JOIN contacts ct ON ct.id = e.entity_id AND ct.tenant_id = c.tenant_id
+          WHERE c.tenant_id = $1
+            AND e.entity_type = 'contact'
+            AND lower(trim(ct.email)) = $2
+          GROUP BY c.id, c.name
+          ORDER BY c.name",
+    )
+    .bind(tenant_id)
+    .bind(normalise(address))
+    .fetch_all(db)
+    .await
+    .unwrap_or_default()
+}
+
+/// Has this address opted out of this campaign? The single question a campaign sender must ask.
+pub async fn campaign_opted_out(
+    db: &PgPool,
+    tenant_id: Uuid,
+    address: &str,
+    campaign_id: Uuid,
+) -> bool {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM email_campaign_optouts
+          WHERE tenant_id = $1 AND address = $2 AND campaign_id = $3",
+    )
+    .bind(tenant_id)
+    .bind(normalise(address))
+    .bind(campaign_id)
+    .fetch_one(db)
+    .await
+    .unwrap_or(0)
+        > 0
+}
+
+async fn opt_into_campaign_off(
+    db: &PgPool,
+    tenant_id: Uuid,
+    address: &str,
+    campaign_id: Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO email_campaign_optouts (tenant_id, address, campaign_id, source)
+         VALUES ($1, $2, $3, 'unsubscribe_page')
+         ON CONFLICT (tenant_id, address, campaign_id) DO NOTHING",
+    )
+    .bind(tenant_id)
+    .bind(normalise(address))
+    .bind(campaign_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn page_shell(title: &str, inner: &str) -> String {
+    format!(
+        "<!doctype html><meta charset=utf-8><meta name=viewport \
+         content=\"width=device-width,initial-scale=1\"><title>{}</title>\
+         <div style=\"font:16px/1.6 system-ui,-apple-system,sans-serif;max-width:560px;margin:10vh \
+         auto;padding:0 20px;color:#111\">{}</div>",
+        html_escape(title),
+        inner
+    )
+}
+
+/// `GET` — the page a person actually lands on. No login, no session: the signed token in the link is
+/// the whole credential, and it names one account and one address.
+async fn show_unsubscribe(State(state): State<AppState>, Path(token): Path<String>) -> Response {
     let Some((tenant_id, address, mail_class)) = verify_token(&token) else {
         return (
             StatusCode::GONE,
-            Html(
-                "<!doctype html><meta charset=utf-8><title>Link expired</title>\
-                 <p>This unsubscribe link is not valid. Reply to any message from this sender and ask \
-                 them to remove you.</p>"
-                    .to_string(),
-            ),
+            Html(page_shell(
+                "Link expired",
+                "<h1 style=\"font-size:1.2rem\">This link is not valid</h1><p>Reply to any message \
+                 from this sender and ask them to remove you.</p>",
+            )),
         )
             .into_response();
     };
-    let label = if mail_class == CLASS_TRANSACTIONAL {
-        "stop non-essential mail"
+
+    let settings = tenant_settings(&state.db, tenant_id).await;
+    let copy = page_copy(&settings, &normalise(&address));
+    let campaigns = campaigns_for(&state.db, tenant_id, &address).await;
+
+    let mut rows = String::new();
+    for (id, name) in &campaigns {
+        rows.push_str(&format!(
+            "<label style=\"display:flex;gap:10px;align-items:flex-start;padding:10px 0;\
+             border-bottom:1px solid #eee\"><input type=checkbox name=\"campaign\" value=\"{id}\" \
+             style=\"margin-top:4px\"><span>{name}</span></label>",
+            id = id,
+            name = html_escape(name)
+        ));
+    }
+    // The campaign list is only shown when there IS one; a person who is in no campaign still gets the
+    // "everything" choice, which is the only thing that can be true for them.
+    let campaign_block = if rows.is_empty() {
+        String::new()
     } else {
-        "unsubscribe"
+        format!(
+            "<p style=\"color:#555;margin:0 0 4px\">Campaigns you are in:</p>{}<div style=\"height:12px\">\
+             </div>",
+            rows
+        )
     };
+    let everything_label = html_escape(&copy.all_label);
+    let button = html_escape(&copy.button_label);
+    let _ = mail_class; // the class the link was mailed for; the page offers the widest honest choice
+
     let body = format!(
-        "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">\
-         <title>Unsubscribe</title>\
-         <div style=\"font:16px/1.5 system-ui,sans-serif;max-width:520px;margin:12vh auto;padding:0 20px\">\
-         <h1 style=\"font-size:1.25rem\">Stop mail to {address}</h1>\
-         <p style=\"color:#555\">You will not receive further mail of this kind from this sender. \
-         Messages you need — receipts, password resets, security notices — keep working.</p>\
-         <form method=post action=\"/api/public/unsubscribe/{token}\">\
-         <button style=\"font:inherit;padding:12px 20px;border:0;border-radius:8px;background:#4f46e5;color:#fff;cursor:pointer\">{label}</button>\
-         </form></div>"
+        "<h1 style=\"font-size:1.25rem;margin:0 0 8px\">{title}</h1>\
+         <p style=\"color:#555;margin:0 0 20px\">{intro}</p>\
+         <form method=post action=\"/api/public/unsubscribe/{token}\">{campaign_block}\
+         <label style=\"display:flex;gap:10px;align-items:flex-start;padding:12px 0\">\
+         <input type=checkbox name=\"everything\" value=\"1\" style=\"margin-top:4px\">\
+         <span><strong>{everything_label}</strong></span></label>\
+         <button style=\"font:inherit;padding:12px 22px;border:0;border-radius:8px;background:#4f46e5;\
+         color:#fff;cursor:pointer;margin-top:8px\">{button}</button></form>",
+        title = html_escape(&copy.title),
+        intro = html_escape(&copy.intro),
+        token = token,
     );
-    // One tenant's opt-out page must not be cacheable or indexable under another's.
-    let _ = tenant_id;
+
     (
         StatusCode::OK,
         [(axum::http::header::CACHE_CONTROL, "no-store")],
-        Html(body),
+        Html(page_shell(&copy.title, &body)),
     )
         .into_response()
 }
 
-/// `POST` is the one-click arm (RFC 8058 `List-Unsubscribe-Post`): mailbox providers post here with no
-/// human in the loop, so it acts immediately and answers 200 with no page.
-async fn one_click(State(state): State<AppState>, Path(token): Path<String>) -> Response {
+/// `POST` — both arms land here.
+///
+/// * A browser submits the form (checkbox choices), so the body is urlencoded.
+/// * A mailbox provider's one-click button posts RFC 8058's `List-Unsubscribe=One-Click` with no human,
+///   and some providers post JSON. Both mean "stop everything", which is the only thing a provider can
+///   consent to on the person's behalf.
+async fn one_click(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
     let Some((tenant_id, address, mail_class)) = verify_token(&token) else {
         return (StatusCode::GONE, Json(json!({ "error": "invalid link" }))).into_response();
     };
-    let stored_class = if mail_class == CLASS_TRANSACTIONAL {
-        "all"
+
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let mut everything = false;
+    let mut campaigns: Vec<Uuid> = Vec::new();
+    let is_form = content_type.contains("application/x-www-form-urlencoded");
+
+    if is_form {
+        if let Ok(fields) = serde_urlencoded::from_bytes::<Vec<(String, String)>>(&body) {
+            for (key, value) in fields {
+                match key.as_str() {
+                    "everything" => everything = true,
+                    "campaign" => {
+                        if let Ok(id) = value.parse::<Uuid>() {
+                            campaigns.push(id);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
     } else {
-        mail_class.as_str()
-    };
-    match suppress(
-        &state.db,
-        tenant_id,
-        &address,
-        "unsubscribed",
-        stored_class,
-        "one_click",
-    )
-    .await
-    {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(json!({ "unsubscribed": true, "address": normalise(&address) })),
+        // JSON or the provider's one-click post both mean the widest choice available.
+        everything = true;
+        if let Ok(parsed) = serde_json::from_slice::<Value>(&body) {
+            if let Some(list) = parsed.get("campaigns").and_then(|v| v.as_array()) {
+                everything = false;
+                for v in list {
+                    if let Some(id) = v.as_str().and_then(|s| s.parse::<Uuid>().ok()) {
+                        campaigns.push(id);
+                    }
+                }
+            }
+            if parsed.get("campaigns").is_none() {
+                everything = true;
+            }
+        }
+    }
+
+    if !everything && campaigns.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "nothing selected" })),
         )
-            .into_response(),
-        Err(e) => {
+            .into_response();
+    }
+
+    if everything {
+        let stored_class = if mail_class == CLASS_TRANSACTIONAL {
+            "all"
+        } else {
+            mail_class.as_str()
+        };
+        if let Err(e) = suppress(
+            &state.db,
+            tenant_id,
+            &address,
+            "unsubscribed",
+            stored_class,
+            "one_click",
+        )
+        .await
+        {
             tracing::error!("unsubscribe failed for tenant {tenant_id}: {e}");
-            (
+            return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": "could not record the opt-out" })),
             )
-                .into_response()
+                .into_response();
         }
     }
+
+    // A campaign choice is always written for THIS account and THIS address only.
+    for campaign_id in &campaigns {
+        let owned: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM email_campaigns WHERE id = $1 AND tenant_id = $2")
+                .bind(campaign_id)
+                .bind(tenant_id)
+                .fetch_optional(&state.db)
+                .await
+                .ok()
+                .flatten();
+        if owned.is_none() {
+            // A campaign id that this account does not own is ignored, never honoured: the page must
+            // not become a way to write into another tenant's rows.
+            continue;
+        }
+        if let Err(e) = opt_into_campaign_off(&state.db, tenant_id, &address, *campaign_id).await {
+            tracing::error!("campaign opt-out failed for tenant {tenant_id}: {e}");
+        }
+    }
+
+    if !everything && campaigns.is_empty() {
+        return (StatusCode::OK, Json(json!({ "unsubscribed": false }))).into_response();
+    }
+
+    if is_form {
+        let settings = tenant_settings(&state.db, tenant_id).await;
+        let copy = page_copy(&settings, &normalise(&address));
+        let inner = format!(
+            "<h1 style=\"font-size:1.2rem\">{}</h1><p style=\"color:#555\">{}</p>",
+            html_escape(&copy.done_title),
+            html_escape(&copy.done_body)
+        );
+        return (
+            StatusCode::OK,
+            [(axum::http::header::CACHE_CONTROL, "no-store")],
+            Html(page_shell(&copy.done_title, &inner)),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "unsubscribed": everything,
+            "campaigns_stopped": campaigns.len(),
+            "address": normalise(&address)
+        })),
+    )
+        .into_response()
 }
 
 // ── authenticated surface: what the operator sees ─────────────────────────────────────────────────
@@ -840,6 +1107,162 @@ async fn suppressions_csv(
     csv_response("unsubscribes.csv", out)
 }
 
+#[derive(Deserialize)]
+struct PageCopyIn {
+    title: Option<String>,
+    intro: Option<String>,
+    all_label: Option<String>,
+    button_label: Option<String>,
+    done_title: Option<String>,
+    done_body: Option<String>,
+}
+
+fn is_manager(c: &Claims) -> bool {
+    matches!(c.role.as_str(), "account_owner" | "admin")
+}
+
+/// `GET /api/mail-compliance/unsubscribe-page` — what the opt-out page will say, plus how many
+/// campaigns the account has (the page lists only the ones a person is actually in).
+async fn get_unsubscribe_page(
+    State(state): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> Response {
+    let Some(tenant_id) = tenant_of(&c) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "no tenant" })),
+        )
+            .into_response();
+    };
+    let settings = tenant_settings(&state.db, tenant_id).await;
+    let copy = page_copy(&settings, "<the address>");
+    let row = sqlx::query_as::<
+        _,
+        (
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
+        "SELECT
+            settings->'compliance'->'unsubscribe_page'->>'title',
+            settings->'compliance'->'unsubscribe_page'->>'intro',
+            settings->'compliance'->'unsubscribe_page'->>'all_label',
+            settings->'compliance'->'unsubscribe_page'->>'button_label',
+            settings->'compliance'->'unsubscribe_page'->>'done_title',
+            settings->'compliance'->'unsubscribe_page'->>'done_body'
+           FROM tenants WHERE id = $1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or((None, None, None, None, None, None));
+
+    Json(json!({
+        "effective": {
+            "title": copy.title, "intro": copy.intro, "all_label": copy.all_label,
+            "button_label": copy.button_label, "done_title": copy.done_title,
+            "done_body": copy.done_body,
+        },
+        "overrides": {
+            "title": row.0, "intro": row.1, "all_label": row.2,
+            "button_label": row.3, "done_title": row.4, "done_body": row.5,
+        },
+        "can_edit": is_manager(&c),
+        "campaigns": sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM email_campaigns WHERE tenant_id = $1",)
+            .bind(tenant_id).fetch_one(&state.db).await.unwrap_or(0),
+    }))
+    .into_response()
+}
+
+/// `PUT /api/mail-compliance/unsubscribe-page` — the account's own words on its own opt-out page.
+/// Emptying a field restores the platform default rather than leaving a blank page.
+async fn put_unsubscribe_page(
+    State(state): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(body): Json<PageCopyIn>,
+) -> Response {
+    let Some(tenant_id) = tenant_of(&c) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "no tenant" })),
+        )
+            .into_response();
+    };
+    if !is_manager(&c) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "only the account owner or an admin can change this page" })),
+        )
+            .into_response();
+    }
+    // Empty means "use the platform wording": storing an empty string would render a page with no
+    // explanation, which is a worse opt-out page than the one it replaced.
+    let clean = |v: Option<String>, max: usize| -> Option<String> {
+        v.map(|s| s.trim().chars().take(max).collect::<String>())
+            .filter(|s| !s.is_empty())
+    };
+    let patch = json!({
+        "title": clean(body.title, 120),
+        "intro": clean(body.intro, 600),
+        "all_label": clean(body.all_label, 120),
+        "button_label": clean(body.button_label, 60),
+        "done_title": clean(body.done_title, 120),
+        "done_body": clean(body.done_body, 600),
+    });
+    // Written field by field: a null clears that override and the default comes back.
+    let result = sqlx::query(
+        "UPDATE tenants
+            SET settings = jsonb_set(
+                  coalesce(settings, '{}'::jsonb),
+                  '{compliance,unsubscribe_page}',
+                  coalesce(settings->'compliance'->'unsubscribe_page', '{}'::jsonb) || $2::jsonb,
+                  true)
+          WHERE id = $1",
+    )
+    .bind(tenant_id)
+    .bind(patch)
+    .execute(&state.db)
+    .await;
+    match result {
+        Ok(_) => {
+            // A cleared field must actually disappear, so the default returns. jsonb `||` keeps nulls,
+            // and a stored null is not "unset" for the reader above — strip them in a second pass.
+            let _ = sqlx::query(
+                "UPDATE tenants SET settings = jsonb_strip_nulls(settings) WHERE id = $1",
+            )
+            .bind(tenant_id)
+            .execute(&state.db)
+            .await;
+            let settings = tenant_settings(&state.db, tenant_id).await;
+            let copy = page_copy(&settings, "<the address>");
+            Json(json!({
+                "saved": true,
+                "effective": {
+                    "title": copy.title, "intro": copy.intro, "all_label": copy.all_label,
+                    "button_label": copy.button_label, "done_title": copy.done_title,
+                    "done_body": copy.done_body,
+                }
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            tracing::error!("unsubscribe page copy save failed for tenant {tenant_id}: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "not saved" })),
+            )
+                .into_response()
+        }
+    }
+}
+
 fn csv_response(name: &str, body: String) -> Response {
     let disposition = HeaderValue::from_str(&format!("attachment; filename=\"{name}\""))
         .unwrap_or_else(|_| HeaderValue::from_static("attachment"));
@@ -868,6 +1291,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/suppressions/:id", delete(remove_suppression))
         .route("/suppressions.csv", get(suppressions_csv))
         .route("/addresses.csv", get(addresses_csv))
+        .route(
+            "/unsubscribe-page",
+            get(get_unsubscribe_page).put(put_unsubscribe_page),
+        )
         // The session layer this surface never had (kanban t_bec0f198). Every handler below takes
         // `Extension<Claims>` and scopes by `tenant_of(&c)`, and the app-wide credential boundary
         // only REFUSES an anonymous caller — it does not put `Claims` on the request. Without this

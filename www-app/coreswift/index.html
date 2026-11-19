@@ -12477,6 +12477,11 @@ async function mcLoad() {
       mcEsc(e.message) + '</p></div></div>';
     return;
   }
+  var cp = null;
+  try {
+    cp = await API.get('/mail-compliance/unsubscribe-page');
+  } catch (e) { cp = null; }
+  MC.copy = cp;
   MC.rows = list;
   mcRender(ov || {}, list, wrap);
 }
@@ -12539,7 +12544,26 @@ function mcRender(ov, list, wrap) {
       '<p>An unsubscribe, a hard bounce or a spam complaint adds an address here automatically.</p>' +
       '</div></div></div>';
 
-  var downloads = '<div class="card"><div class="card-header">Downloads</div><div class="card-body">' +
+    var eff = (MC.copy && MC.copy.effective) || {};
+  var canEdit = !!(MC.copy && MC.copy.can_edit);
+  var nCamp = (MC.copy && MC.copy.campaigns) || 0;
+  var copyCard = '<div class="card"><div class="card-header">The opt-out page: your words</div><div class="card-body">' +
+    '<p class="form-hint">This is what a person sees when they click unsubscribe. Leave a box empty to use the platform\u2019s wording for that line.</p>' +
+    (canEdit ? (
+      '<div style="display:grid;gap:10px">' +
+      '<label class="form-label">Title<input class="form-input" id="mcCopyTitle" value="' + mcEsc(eff.title || '') + '"></label>' +
+      '<label class="form-label">Explanation<input class="form-input" id="mcCopyIntro" value="' + mcEsc(eff.intro || '') + '"></label>' +
+      '<label class="form-label">Label on the stop-everything box<input class="form-input" id="mcCopyAll" value="' + mcEsc(eff.all_label || '') + '"></label>' +
+      '<label class="form-label">Button label<input class="form-input" id="mcCopyButton" value="' + mcEsc(eff.button_label || '') + '"></label>' +
+      '<label class="form-label">After they submit \u2014 title<input class="form-input" id="mcCopyDoneTitle" value="' + mcEsc(eff.done_title || '') + '"></label>' +
+      '<label class="form-label">After they submit \u2014 message<input class="form-input" id="mcCopyDoneBody" value="' + mcEsc(eff.done_body || '') + '"></label>' +
+      '<div><button class="btn btn-primary btn-sm" data-ops="mc-save-copy" onclick="mcSaveCopy()">Save page wording</button></div>' +
+      '</div>'
+    ) : '<p class="form-hint">Only the account owner or an admin can change this page.</p>') +
+    '<p class="form-hint" style="margin-top:10px">Campaigns appear on that page automatically from this account\u2019s own list \u2014 ' +
+    nCamp + ' campaign' + (nCamp === 1 ? '' : 's') + ' today, each with its own checkbox, plus a stop-everything choice.</p>' +
+    '</div></div>';
+var downloads = '<div class="card"><div class="card-header">Downloads</div><div class="card-body">' +
     '<p class="form-hint">Both files are this account\u2019s only.</p>' +
     '<div style="display:flex;gap:10px;flex-wrap:wrap">' +
     '<button class="btn btn-secondary btn-sm" data-ops="mc-csv-suppressions" ' +
@@ -12549,7 +12573,25 @@ function mcRender(ov, list, wrap) {
     '</div></div></div>';
 
   wrap.innerHTML = '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">' + tiles + '</div>' +
-    form + table + downloads;
+    copyCard + form + table + downloads;
+}
+
+async function mcSaveCopy() {
+  function v(id) {
+    var el = document.getElementById(id);
+    return el ? el.value.trim() : '';
+  }
+  try {
+    var r = await API.put('/mail-compliance/unsubscribe-page', {
+      title: v('mcCopyTitle'), intro: v('mcCopyIntro'),
+      all_label: v('mcCopyAll'), button_label: v('mcCopyButton'),
+      done_title: v('mcCopyDoneTitle'), done_body: v('mcCopyDoneBody')
+    });
+    if (r && r.effective) { MC.copy = MC.copy || {}; MC.copy.effective = r.effective; }
+    toast('Opt-out page wording saved');
+  } catch (e) {
+    toast(e.message || 'Could not save the wording', 'error');
+  }
 }
 
 async function mcAdd() {
