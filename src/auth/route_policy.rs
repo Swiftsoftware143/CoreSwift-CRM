@@ -452,6 +452,22 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/public/booking/manage/:token/reschedule",
     "/api/public/booking/manage/:token/rebook",
     "/inbound/v3/:key_prefix/:event_type",
+    // The opt-out itself (2026-11-19). Anonymous BY NECESSITY and the token in the path is the whole
+    // credential: the person clicking it has no session, and the mailbox provider's one-click arm
+    // (RFC 8058 `List-Unsubscribe-Post`) posts here with no human at all. It reads one signed token
+    // (account + address + mail class) and writes one suppression row for THAT account — it can
+    // neither read nor name another tenant's data, and it cannot lift a suppression.
+    "/api/public/unsubscribe/:token",
+    // The provider's event stream (delivered / bounced / complained / dropped). Anonymous because a
+    // provider has no session; the HMAC signature over timestamp+token is the credential, verified
+    // before a row is written. It attributes an event only to the account this app itself logged as
+    // the sender of the message the event names — a body cannot choose a tenant.
+    //
+    // BOTH of these were first appended to `API_KEY_ROUTES` by mistake, which is why they answered
+    // 401 "Authentication required" live: a route on the wrong list is anonymous in the docs and
+    // private in production, and no unit test can tell the two apart. `anonymous_arms_are_on_the
+    // _public_list` below pins the CLASS, not these two paths.
+    "/api/webhooks/mailgun/events",
 ];
 
 /// Service-to-service routes: reachable with the app's own shared key and nothing else.
@@ -507,17 +523,6 @@ pub const API_KEY_ROUTES: &[&str] = &[
     // The data-mapping intake: a sibling app reports one event with the account's issued key. The
     // tenant comes from the key, never from the payload, so a caller cannot name another tenant.
     "/api/data-mapping/events",
-    // The opt-out itself. Anonymous BY NECESSITY, and the token in the path is the whole
-    // credential: the person clicking it has no session, and the mailbox provider's one-click arm
-    // (RFC 8058 `List-Unsubscribe-Post`) posts here with no human at all. It reads one signed
-    // token (account + address + mail class) and writes one suppression row for THAT account —
-    // it can neither read nor name any other tenant's data, and it cannot lift a suppression.
-    "/api/public/unsubscribe/:token",
-    // The provider's event stream (delivered / bounced / complained / dropped). Anonymous because a
-    // provider has no session; the HMAC signature over timestamp+token is the credential, verified
-    // before any row is written. It writes only to the account that this app itself logged as the
-    // sender of the message the event names — a body cannot choose a tenant.
-    "/api/webhooks/mailgun/events",
 ];
 
 /// Is `path` (a concrete request path) one of the committed public templates?
@@ -1031,6 +1036,37 @@ mod tests {
             }
         }
         out
+    }
+
+    /// A route on the WRONG list is anonymous in the docs and private in production, and nothing
+    /// else catches it: the mounted-route census passes either way and `cargo check` never looks.
+    /// Measured 2026-11-19: the opt-out and the provider's event receiver were appended to
+    /// `API_KEY_ROUTES` by mistake and answered 401 "Authentication required" on the live box while
+    /// the code read as if they were open. This pins the CLASS.
+    #[test]
+    fn anonymous_surfaces_are_never_filed_as_key_or_internal_routes() {
+        for entry in API_KEY_ROUTES.iter().chain(INTERNAL_ROUTES.iter()) {
+            // `/public/` and `/unsubscribe` are customer-facing by definition: the person has no
+            // session. (`/webhooks/` alone is NOT the signal — `/api/v1/webhooks/cross-app/tag-sync`
+            // is a sibling-app push that legitimately carries an issued API key, so the provider
+            // receiver is pinned by name in the test below instead.)
+            assert!(
+                !entry.contains("/public/") && !entry.contains("/unsubscribe"),
+                "{entry:?} is an anonymous surface filed on a credential list — it will answer 401 \
+                 while the docs say open"
+            );
+        }
+    }
+
+    /// The two arms a stranger or a provider must reach with NO credential: the one-click opt-out
+    /// (RFC 8058) and the provider's event receiver. Their credential is the signed token / the HMAC
+    /// signature, never a bearer.
+    #[test]
+    fn the_optout_and_the_provider_receiver_are_public() {
+        assert!(super::is_public_route("/api/public/unsubscribe/abc.def"));
+        assert!(super::is_public_route("/api/webhooks/mailgun/events"));
+        assert!(!super::is_api_key_route("/api/public/unsubscribe/abc.def"));
+        assert!(!super::is_internal_route("/api/webhooks/mailgun/events"));
     }
 
     #[test]

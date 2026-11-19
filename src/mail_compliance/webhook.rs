@@ -28,11 +28,26 @@ use sha2::Sha256;
 use super::{normalise, suppress, CLASS_BULK};
 use crate::AppState;
 
-fn signing_key() -> Option<String> {
-    std::env::var("MAILGUN_WEBHOOK_SIGNING_KEY")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+/// The keys a signature may be verified against.
+///
+/// Mailgun signs with the account's HTTP webhook signing key. On many accounts that key IS the private
+/// API key the platform already sends with, so the credential is read from the SAME place delivery
+/// reads it — `platform_mail_config::resolved` (the admin-editable row, sealed at rest, with the
+/// environment as fallback). No third-party key is read from the process environment directly: the
+/// fleet gate forbids that, and one resolver means the send path and the verification path can never
+/// disagree about which account's mail this is.
+///
+/// A signature must match exactly; an account with no resolvable credential verifies nothing and the
+/// endpoint refuses every delivery rather than trusting an unverifiable body.
+async fn signing_keys(db: &sqlx::PgPool) -> Vec<String> {
+    let mut keys = Vec::new();
+    if let Some(transport) = crate::communications::platform_mail_config::resolved(db).await {
+        let key = transport.api_key.trim().to_string();
+        if !key.is_empty() && !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
 }
 
 /// Constant-time comparison, so a wrong signature cannot be found one byte at a time.
@@ -94,17 +109,18 @@ pub async fn mailgun_events(
     _headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
-    let Some(key) = signing_key() else {
+    let keys = signing_keys(&state.db).await;
+    if keys.is_empty() {
         tracing::error!(
-            "Mailgun event webhook received but MAILGUN_WEBHOOK_SIGNING_KEY is not set — refusing to \
-             trust an unverifiable body"
+            "Mailgun event webhook received but this deployment resolved no platform mail credential — \
+             refusing to trust an unverifiable body"
         );
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "error": "webhook signing key not configured" })),
         )
             .into_response();
-    };
+    }
 
     let Some(sig) = body.get("signature") else {
         return (
@@ -132,7 +148,10 @@ pub async fn mailgun_events(
         )
             .into_response();
     }
-    if !signature_ok(&key, timestamp, token, signature) {
+    if !keys
+        .iter()
+        .any(|k| signature_ok(k, timestamp, token, signature))
+    {
         tracing::warn!("Mailgun event webhook REFUSED: signature did not validate");
         return (
             StatusCode::FORBIDDEN,
