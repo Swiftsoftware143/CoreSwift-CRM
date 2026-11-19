@@ -1122,8 +1122,14 @@ struct PageCopyIn {
     done_body: Option<String>,
 }
 
+/// "This tenant's owner, or a platform operator" — through the ONE helper that already knows the
+/// platform carries three role vocabularies (`owner`, `account_owner`/`admin`, `agency_admin`).
+///
+/// Measured live 2026-11-19: comparing against `account_owner | admin` alone answered 403 to a REAL
+/// account owner whose row says `owner`, i.e. it locked out every customer on the platform while
+/// reading correctly. The same defect had already been found once in `native_apps::connect_app`.
 fn is_manager(c: &Claims) -> bool {
-    matches!(c.role.as_str(), "account_owner" | "admin")
+    crate::auth::middleware::is_account_admin(&c.role)
 }
 
 /// `GET /api/mail-compliance/unsubscribe-page` — what the opt-out page will say, plus how many
