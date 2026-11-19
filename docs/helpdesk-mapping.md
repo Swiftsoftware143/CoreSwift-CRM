@@ -192,7 +192,7 @@ This section is the reality check on the plan above. If the two disagree, this o
 | Internal notes (`kind`) | built | 12/12 — a note never reaches the portal, the count, or the public lookup |
 | First response + resolution clocks | built (163) | 13/13 views; 7/7 worker |
 | One conversation, one ticket | built (`helpdesk::ingest`) | 12/12 through the signed webhook |
-| Machine mail kept out of the queue | built (`helpdesk::junk`) | DMARC report and auto-reply create nothing |
+| Machine mail kept out of the queue | built (`helpdesk::junk`) | DMARC/bounce reports, a per-bounce random sender, `postmaster@`, `marketing@` and desk-impersonating spam create nothing; a human sender still does (signed webhook, 3 legs) |
 | Ticket views (`?view=`) | built | 13/13, incl. another account's ticket absent from every view |
 | SLA warnings and breaches | built (165, `helpdesk::sla`) | 7/7 against the RUNNING worker, no duplicates on a second tick |
 | Assignment to a teammate | fixed (164 — pointed at contacts) | a user is accepted, a contact refused, guard proved |
