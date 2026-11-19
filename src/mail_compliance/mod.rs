@@ -313,6 +313,8 @@ pub struct Gate {
     pub headers: Vec<(String, String)>,
     pub footer_html: String,
     pub footer_text: String,
+    /// The account's settings blob, so the caller can read its own allowance without a second query.
+    pub settings: Value,
 }
 
 /// Where the account's postal address lives in settings (CAN-SPAM requires one in bulk mail). Kept in
@@ -412,7 +414,116 @@ pub async fn gate(db: &PgPool, tenant_id: Uuid, address: &str, mail_class: &str)
         headers,
         footer_html,
         footer_text,
+        settings: row
+            .as_ref()
+            .map(|(_, s)| s.clone())
+            .unwrap_or_else(|| json!({})),
     }
+}
+
+/// Sending isolation (2026-11-19). Measured before this: every account without its own domain sends
+/// on the platform's shared identity, so one careless sender stains the name that carries everybody
+/// else's receipts and replies. The fix is not to refuse them — most accounts have no domain yet and
+/// their mail is legitimate — it is to make the shared identity a SMALL allowance and the account's
+/// own identity a large one, with the reason stated in the refusal the account can read.
+pub struct Quota {
+    /// Ceilings, overridable per account in `tenants.settings->'compliance'`.
+    pub daily: i64,
+    pub hourly: i64,
+    pub shared_identity: bool,
+}
+
+fn setting_i64(settings: &Value, key: &str) -> Option<i64> {
+    settings
+        .get("compliance")
+        .and_then(|c| c.get(key))
+        .and_then(|v| v.as_i64())
+}
+
+/// The allowance for this account and this class. `shared` means the message would leave on the
+/// platform's own identity, which is a shared reputation and therefore a much smaller allowance.
+pub fn quota_for(mail_class: &str, shared: bool, settings: &Value) -> Option<Quota> {
+    if mail_class == CLASS_TRANSACTIONAL {
+        return None; // receipts and resets are never capped — a cap there is an outage
+    }
+    let (d_key, h_key) = if shared {
+        ("shared_daily_cap", "shared_hourly_cap")
+    } else {
+        ("bulk_daily_cap", "bulk_hourly_cap")
+    };
+    let defaults = if shared { (100, 30) } else { (2000, 400) };
+    let daily = setting_i64(settings, d_key).unwrap_or(defaults.0);
+    let hourly = setting_i64(settings, h_key).unwrap_or(defaults.1);
+    Some(Quota {
+        daily,
+        hourly,
+        shared_identity: shared,
+    })
+}
+
+/// How much of that allowance is already spent. Counted from the send log, never from a counter column
+/// that could drift from the rows it claims to summarise.
+pub async fn spent(db: &PgPool, tenant_id: Uuid, mail_class: &str) -> (i64, i64) {
+    let row = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT
+            count(*) FILTER (WHERE created_at > now() - interval '24 hours'),
+            count(*) FILTER (WHERE created_at > now() - interval '1 hour')
+           FROM email_message_log
+          WHERE tenant_id = $1 AND mail_class = $2 AND status = 'sent'",
+    )
+    .bind(tenant_id)
+    .bind(if mail_class == "all" {
+        CLASS_BULK
+    } else {
+        mail_class
+    })
+    .fetch_one(db)
+    .await
+    .unwrap_or((0, 0));
+    row
+}
+
+/// Reputation watchdog: an account whose mail is drawing complaints or hard bounces has its bulk lane
+/// paused BEFORE the shared pool is damaged. Rates are computed from the event ledger; an account with
+/// no events yet is never paused (silence is not evidence).
+pub async fn watchdog(db: &PgPool, tenant_id: Uuid) -> Option<String> {
+    let row = sqlx::query_as::<_, (i64, i64, i64, i64)>(
+        "SELECT
+            count(*) FILTER (WHERE ee.event = 'delivered'),
+            count(*) FILTER (WHERE ee.event = 'bounced'),
+            count(*) FILTER (WHERE ee.event = 'complained'),
+            (SELECT count(*) FROM email_message_log ml
+              WHERE ml.tenant_id = $1 AND ml.status = 'sent'
+                AND ml.created_at > now() - interval '30 days')
+           FROM email_events ee
+          WHERE ee.tenant_id = $1 AND ee.occurred_at > now() - interval '30 days'",
+    )
+    .bind(tenant_id)
+    .fetch_one(db)
+    .await
+    .unwrap_or((0, 0, 0, 0));
+
+    let (delivered, bounced, complained, sent) = row;
+    let denom = if sent > 0 { sent as f64 } else { 0.0 };
+    if denom == 0.0 {
+        return None;
+    }
+    let bounce_rate = (bounced as f64 / denom) * 100.0;
+    let complaint_rate = (complained as f64 / denom) * 100.0;
+    // 5% bounces is a broken list, 0.3% complaints is a mailbox provider's hard ceiling.
+    if complaint_rate >= 0.3 {
+        return Some(format!(
+            "bulk sending paused: {complaint_rate:.2}% of this account's mail is being reported as \
+             spam (the ceiling is 0.30%). Clear the list and reply to support to resume."
+        ));
+    }
+    if bounce_rate >= 5.0 && delivered + bounced >= 20 {
+        return Some(format!(
+            "bulk sending paused: {bounce_rate:.1}% of this account's mail bounced — that is a list \
+             problem, not a sending problem. Clean the addresses and reply to support to resume."
+        ));
+    }
+    None
 }
 
 // ── public surface: the opt-out itself ────────────────────────────────────────────────────────────

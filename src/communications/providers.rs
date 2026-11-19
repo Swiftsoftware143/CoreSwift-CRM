@@ -571,6 +571,63 @@ pub async fn deliver(db: &sqlx::PgPool, cfg: &DeliveryConfig, mail_class: &str) 
         ));
     }
 
+    // ── ISOLATION AND ALLOWANCE (2026-11-19) ─────────────────────────────────────────────────
+    // `shared` means this message would leave on the PLATFORM's identity, whose reputation every
+    // account shares. Those accounts get a deliberately small allowance; an account sending on its
+    // own domain gets a large one. Neither is a punishment — it is the blast wall that stops one
+    // careless sender from silencing everybody else's receipts and replies.
+    let shared = matches!(cfg.transport, TransportSource::Platform) && cfg.byok_source.is_none();
+    if let Some(quota) = crate::mail_compliance::quota_for(mail_class, shared, &gate.settings) {
+        let refusal = match crate::mail_compliance::watchdog(db, cfg.tenant_id).await {
+            Some(reason) => Some(("refused_reputation", reason)),
+            None => {
+                let (day, hour) =
+                    crate::mail_compliance::spent(db, cfg.tenant_id, mail_class).await;
+                if day >= quota.daily {
+                    Some((
+                        "refused_quota",
+                        format!(
+                            "daily allowance spent ({day} of {} {mail_class} messages in 24h{})",
+                            quota.daily,
+                            if quota.shared_identity {
+                                " on the shared platform identity — connect the account's own domain to send at volume"
+                            } else {
+                                ""
+                            }
+                        ),
+                    ))
+                } else if hour >= quota.hourly {
+                    Some((
+                        "refused_quota",
+                        format!(
+                            "hourly allowance spent ({} of {} in the last hour)",
+                            hour, quota.hourly
+                        ),
+                    ))
+                } else {
+                    None
+                }
+            }
+        };
+        if let Some((status, reason)) = refusal {
+            tracing::warn!(msg = %cfg.msg_id, to = %cfg.to, class = %mail_class, %reason,
+                "not dispatched: allowance or reputation refusal");
+            crate::mail_compliance::log_attempt(
+                db,
+                cfg.tenant_id,
+                Some(cfg.msg_id),
+                mail_class,
+                &cfg.to,
+                cfg.subject.as_deref(),
+                None,
+                status,
+                Some(&reason),
+            )
+            .await;
+            return DeliveryOutcome::permanent(reason);
+        }
+    }
+
     let mut outgoing = cfg.clone();
     if !gate.footer_text.is_empty() {
         if outgoing.is_html {
