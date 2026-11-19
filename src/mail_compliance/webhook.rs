@@ -136,52 +136,43 @@ pub async fn mailgun_events(
     Json(body): Json<Value>,
 ) -> Response {
     let keys = signing_keys(&state.db).await;
-    if keys.is_empty() && !url_token_ok(&state.db, query.get("t").map(|s| s.as_str())).await {
-        tracing::error!(
-            "Mailgun event webhook received but this deployment resolved no platform mail credential — \
-             refusing to trust an unverifiable body"
+
+    // Arm 1: the provider's own HMAC signature. Arm 2: the secret this server put in the webhook URL.
+    // Measured 2026-11-19: a REAL report from Mailgun was refused here because this account signs with
+    // a key the API does not expose, so HMAC alone would have left every compliance number at zero
+    // until a human copied a value out of a browser. A request must satisfy one arm; neither = 403.
+    let signed = body
+        .get("signature")
+        .map(|sig| {
+            let timestamp = sig
+                .get("timestamp")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let token = sig
+                .get("token")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let signature = sig
+                .get("signature")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            !timestamp.is_empty()
+                && !token.is_empty()
+                && !signature.is_empty()
+                && keys
+                    .iter()
+                    .any(|k| signature_ok(k, timestamp, token, signature))
+        })
+        .unwrap_or(false);
+
+    let authorised = signed || url_token_ok(&state.db, query.get("t").map(|s| s.as_str())).await;
+    if !authorised {
+        tracing::warn!(
+            "Mailgun event webhook REFUSED: neither the signature nor the URL token validated"
         );
         return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": "webhook signing key not configured" })),
-        )
-            .into_response();
-    }
-
-    let Some(sig) = body.get("signature") else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "no signature" })),
-        )
-            .into_response();
-    };
-    let timestamp = sig
-        .get("timestamp")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    let token = sig
-        .get("token")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    let signature = sig
-        .get("signature")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    if timestamp.is_empty() || token.is_empty() || signature.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "incomplete signature" })),
-        )
-            .into_response();
-    }
-    if !keys
-        .iter()
-        .any(|k| signature_ok(k, timestamp, token, signature))
-    {
-        tracing::warn!("Mailgun event webhook REFUSED: signature did not validate");
-        return (
             StatusCode::FORBIDDEN,
-            Json(json!({ "error": "bad signature" })),
+            Json(json!({ "error": "not authorised" })),
         )
             .into_response();
     }
