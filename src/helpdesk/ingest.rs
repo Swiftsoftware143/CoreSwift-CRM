@@ -99,6 +99,7 @@ pub async fn ingest_inbound(
     if junk::is_noise(
         &inbound.subject,
         &inbound.from,
+        &inbound.body_plain,
         inbound.is_auto_generated,
         &own,
     ) {
