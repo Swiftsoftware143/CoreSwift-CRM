@@ -49,6 +49,7 @@ pub mod integration_center;
 pub mod integrations;
 pub mod lists;
 pub mod lists_internal;
+pub mod mail_compliance;
 pub mod messages;
 pub mod module_registry;
 pub mod monitoring;
@@ -558,6 +559,10 @@ async fn main() -> anyhow::Result<()> {
         // Unified Inbox — protected CRUD for messages
         .nest("/api/messages", messages::router(state.clone()))
         .nest(
+            "/api/mail-compliance",
+            mail_compliance::router(state.clone()),
+        )
+        .nest(
             "/api/internal/tenants",
             tenants_internal::router().layer(axum::middleware::from_fn_with_state(
                 body_read_deadline,
@@ -924,6 +929,7 @@ async fn main() -> anyhow::Result<()> {
         // hang off the `/api/widgets` nest, where the nest prefix doubled the path and NOTHING served
         // the advertised URL; the authenticated widget CRUD stays on that nest.
         .merge(support_widgets::public_router(state.clone()))
+        .merge(mail_compliance::public_router(state.clone()))
         // Layer stack (inner to outer = last to first in call order)
         .layer(CompressionLayer::new())
         .layer(axum::middleware::from_fn(security_headers_middleware))

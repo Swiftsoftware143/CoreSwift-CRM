@@ -719,7 +719,12 @@ pub async fn send_support_request_operator_alert(
         Some(&html),
         &transport.mail(),
     );
-    let outcome = crate::communications::providers::deliver(&cfg).await;
+    let outcome = crate::communications::providers::deliver(
+        db,
+        &cfg,
+        crate::mail_compliance::CLASS_NOTIFICATION,
+    )
+    .await;
     if let Err(e) = crate::communications::providers::record_attempt(db, msg_id, &outcome).await {
         tracing::error!(msg = %msg_id, error = %e, "failed to record the support-request operator alert");
     }
@@ -911,7 +916,12 @@ pub async fn send_support_reply_to_requester(
         Some(&html),
         &transport.mail(),
     );
-    let outcome = crate::communications::providers::deliver(&cfg).await;
+    let outcome = crate::communications::providers::deliver(
+        db,
+        &cfg,
+        crate::mail_compliance::CLASS_NOTIFICATION,
+    )
+    .await;
     if let Err(e) = crate::communications::providers::record_attempt(db, msg_id, &outcome).await {
         tracing::error!(msg = %msg_id, error = %e, "failed to record the support reply");
     }

@@ -369,7 +369,8 @@ async fn exec_send_email(
                 &body_text,
             )
             .await;
-            crate::communications::providers::deliver(&cfg).await
+            crate::communications::providers::deliver(db, &cfg, crate::mail_compliance::CLASS_BULK)
+                .await
         }
         None => crate::communications::providers::DeliveryOutcome::permanent(
             "this account has no verified sending domain, so its automation lane (mg.<domain>) \
@@ -464,7 +465,9 @@ async fn exec_send_sms(
     // Deliver once, and let the shared policy record the result. Discarding the outcome used to
     // leave the row 'queued' after an inline send, so the worker poll sent the same message a
     // second time.
-    let outcome = crate::communications::providers::deliver(&cfg).await;
+    let outcome =
+        crate::communications::providers::deliver(db, &cfg, crate::mail_compliance::CLASS_BULK)
+            .await;
     let _ = crate::communications::providers::record_attempt(db, msg_id, &outcome).await;
 
     let _ = sqlx::query(

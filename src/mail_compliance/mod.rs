@@ -1,0 +1,750 @@
+//! Email compliance — one gate in front of every class of outgoing mail.
+//!
+//! THE RULE (2026-11-19, David): platform mail, operator alerts, customer notifications and campaigns
+//! are all mail this product sends on a customer's behalf, so all of them are held to the same
+//! standard. There are three classes and the difference between them is what an opt-out is allowed
+//! to stop:
+//!
+//! * `transactional` — receipts, password resets, security notices. Exempt from opt-out by law and
+//!   must keep working for someone who unsubscribed from everything. NOT exempt from harm control: an
+//!   address that hard-bounced or complained is never mailed again, in any class.
+//! * `notification` — "your ticket was answered", digests, assignment alerts. Stoppable.
+//! * `bulk` — campaigns and sequences. Stoppable, and carries the opt-out footer, the postal address
+//!   and the one-click headers that Gmail/Yahoo require of bulk senders.
+//!
+//! The suppression list is PER ACCOUNT, never global: one customer's opt-out must not silence another
+//! customer's mail to the same human.
+//!
+//! Rates are computed from `email_events` on read. Nothing stores a delivery rate — a stored rate is a
+//! number that drifts from the events it claims to summarise.
+
+use axum::{
+    extract::{Path, State},
+    http::{header, HeaderValue, StatusCode},
+    response::{Html, IntoResponse, Response},
+    routing::{delete, get},
+    Extension, Json, Router,
+};
+use base64::Engine as _;
+use hmac::{Hmac, Mac};
+use serde::Deserialize;
+use serde_json::{json, Value};
+use sha2::Sha256;
+use sqlx::PgPool;
+use uuid::Uuid;
+
+use crate::auth::models::Claims;
+use crate::AppState;
+
+pub const CLASS_BULK: &str = "bulk";
+pub const CLASS_NOTIFICATION: &str = "notification";
+pub const CLASS_TRANSACTIONAL: &str = "transactional";
+
+/// Where the customer-facing pages live. Same host as the rest of the app's mailed links.
+const APP_URL: &str = "https://app.coreswiftcrm.com";
+
+/// Addresses are compared lowercased and trimmed: `David@X.com` and `david@x.com` are one human, and
+/// a provider event carries whatever case the remote server said.
+pub fn normalise(address: &str) -> String {
+    address.trim().to_lowercase()
+}
+
+fn secret() -> Vec<u8> {
+    std::env::var("JWT_SECRET")
+        .unwrap_or_else(|_| "coreswift-email-compliance".to_string())
+        .into_bytes()
+}
+
+fn sign(payload: &str) -> String {
+    let mut mac =
+        <Hmac<Sha256> as Mac>::new_from_slice(&secret()).expect("hmac accepts any key len");
+    mac.update(payload.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
+}
+
+/// A tamper-proof opt-out token: tenant + address + class, signed. No expiry — an unsubscribe link in
+/// a two-year-old message must still work, and there is no state to lose in a table.
+pub fn token_for(tenant_id: Uuid, address: &str, mail_class: &str) -> String {
+    let addr = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(normalise(address));
+    let payload = format!("{tenant_id}.{addr}.{mail_class}");
+    let sig = sign(&payload);
+    format!("{payload}.{sig}")
+}
+
+pub fn verify_token(token: &str) -> Option<(Uuid, String, String)> {
+    let mut parts = token.rsplitn(2, '.');
+    let sig = parts.next()?;
+    let payload = parts.next()?;
+    if sign(payload) != sig {
+        return None;
+    }
+    let mut it = payload.split('.');
+    let tenant_id: Uuid = it.next()?.parse().ok()?;
+    let address = String::from_utf8(
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(it.next()?)
+            .ok()?,
+    )
+    .ok()?;
+    let mail_class = it.next()?.to_string();
+    Some((tenant_id, address, mail_class))
+}
+
+pub fn unsubscribe_url(tenant_id: Uuid, address: &str, mail_class: &str) -> String {
+    format!(
+        "{APP_URL}/api/public/unsubscribe/{}",
+        token_for(tenant_id, address, mail_class)
+    )
+}
+
+/// Which stored suppression rows stop a message of this class.
+fn blocking_classes(mail_class: &str) -> &'static [&'static str] {
+    match mail_class {
+        CLASS_TRANSACTIONAL => &["transactional"],
+        CLASS_NOTIFICATION => &["all", "notification"],
+        _ => &["all", "bulk"],
+    }
+}
+
+/// Somebody asked this account to mail this address less. Returns the reason when that covers the
+/// class we were about to send.
+pub async fn suppression(
+    db: &PgPool,
+    tenant_id: Uuid,
+    address: &str,
+    mail_class: &str,
+) -> Option<String> {
+    let classes: Vec<String> = blocking_classes(mail_class)
+        .iter()
+        .map(|c| c.to_string())
+        .collect();
+    sqlx::query_scalar::<_, String>(
+        "SELECT reason FROM email_suppressions
+          WHERE tenant_id = $1 AND address = $2 AND mail_class = ANY($3)
+          ORDER BY created_at LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(normalise(address))
+    .bind(&classes)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Record an opt-out / bad address. Idempotent: pressing the button twice is one suppression.
+pub async fn suppress(
+    db: &PgPool,
+    tenant_id: Uuid,
+    address: &str,
+    reason: &str,
+    mail_class: &str,
+    source: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO email_suppressions (tenant_id, address, mail_class, reason, source)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (tenant_id, address, mail_class)
+         DO UPDATE SET reason = EXCLUDED.reason, source = EXCLUDED.source, updated_at = now()",
+    )
+    .bind(tenant_id)
+    .bind(normalise(address))
+    .bind(mail_class)
+    .bind(reason)
+    .bind(source)
+    .execute(db)
+    .await?;
+
+    // Only a human's own choice is consent history; a bounce is not an opinion.
+    if mail_class != CLASS_TRANSACTIONAL {
+        let _ = sqlx::query(
+            "INSERT INTO email_consent (tenant_id, address, mail_class, state, how)
+             VALUES ($1, $2, $3, 'revoked', $4)",
+        )
+        .bind(tenant_id)
+        .bind(normalise(address))
+        .bind(if mail_class == "all" {
+            CLASS_BULK
+        } else {
+            mail_class
+        })
+        .bind(source)
+        .execute(db)
+        .await;
+    }
+    Ok(())
+}
+
+/// One row per send attempt, written BEFORE the provider is asked, so a later provider event can be
+/// attributed to this account and this class.
+pub async fn log_attempt(
+    db: &PgPool,
+    tenant_id: Uuid,
+    outbound_message_id: Option<Uuid>,
+    mail_class: &str,
+    address: &str,
+    subject: Option<&str>,
+    provider: Option<&str>,
+    status: &str,
+    detail: Option<&str>,
+) {
+    let _ = sqlx::query(
+        "INSERT INTO email_message_log
+            (tenant_id, outbound_message_id, mail_class, address, subject, provider, status, detail)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(tenant_id)
+    .bind(outbound_message_id)
+    .bind(if mail_class == "all" {
+        CLASS_BULK
+    } else {
+        mail_class
+    })
+    .bind(normalise(address))
+    .bind(subject)
+    .bind(provider)
+    .bind(status)
+    .bind(detail)
+    .execute(db)
+    .await;
+}
+
+/// Stamp the provider's own message id onto the newest attempt for this address, so the event stream
+/// can join back to the row. Best-effort: a missing id costs attribution, never the send.
+pub async fn attach_provider_id(
+    db: &PgPool,
+    tenant_id: Uuid,
+    address: &str,
+    provider_message_id: &str,
+) {
+    let _ = sqlx::query(
+        "UPDATE email_message_log SET provider_message_id = $3
+          WHERE id = (SELECT id FROM email_message_log
+                       WHERE tenant_id = $1 AND address = $2 AND provider_message_id IS NULL
+                       ORDER BY created_at DESC LIMIT 1)",
+    )
+    .bind(tenant_id)
+    .bind(normalise(address))
+    .bind(provider_message_id)
+    .execute(db)
+    .await;
+}
+
+pub async fn record_event(
+    db: &PgPool,
+    tenant_id: Uuid,
+    provider: &str,
+    provider_message_id: Option<&str>,
+    address: Option<&str>,
+    event: &str,
+    severity: Option<&str>,
+    reason: Option<&str>,
+    occurred_at: chrono::DateTime<chrono::Utc>,
+    raw: Option<Value>,
+) {
+    let _ = sqlx::query(
+        "INSERT INTO email_events
+            (tenant_id, provider, provider_message_id, address, event, severity, reason, occurred_at, raw)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(tenant_id)
+    .bind(provider)
+    .bind(provider_message_id)
+    .bind(address.map(normalise))
+    .bind(event)
+    .bind(severity)
+    .bind(reason)
+    .bind(occurred_at)
+    .bind(raw)
+    .execute(db)
+    .await;
+}
+
+/// Delivery evidence for one account, computed from the event ledger over a window.
+pub async fn rates(db: &PgPool, tenant_id: Uuid, days: i64) -> Value {
+    let row = sqlx::query_as::<_, (i64, i64, i64, i64, i64, i64)>(
+        "SELECT
+            count(*) FILTER (WHERE event = 'delivered'),
+            count(*) FILTER (WHERE event = 'bounced'),
+            count(*) FILTER (WHERE event = 'complained'),
+            count(*) FILTER (WHERE event = 'dropped'),
+            count(*) FILTER (WHERE event = 'failed'),
+            (SELECT count(*) FROM email_message_log
+              WHERE tenant_id = $1 AND status = 'sent'
+                AND created_at > now() - ($2 || ' days')::interval)
+           FROM email_events
+          WHERE tenant_id = $1 AND occurred_at > now() - ($2 || ' days')::interval",
+    )
+    .bind(tenant_id)
+    .bind(days.to_string())
+    .fetch_one(db)
+    .await
+    .unwrap_or((0, 0, 0, 0, 0, 0));
+
+    let (delivered, bounced, complained, dropped, failed, sent) = row;
+    let denom = if sent > 0 { sent as f64 } else { 1.0 };
+    let pct = |n: i64| ((n as f64 / denom) * 1000.0).round() / 10.0;
+
+    json!({
+        "window_days": days,
+        "sent": sent,
+        "delivered": delivered,
+        "bounced": bounced,
+        "complained": complained,
+        "dropped": dropped,
+        "failed": failed,
+        "delivery_rate": pct(delivered),
+        "bounce_rate": pct(bounced),
+        // Gmail/Yahoo bulk-sender rules: stay under 0.3% or the mailbox provider starts refusing.
+        "complaint_rate": pct(complained),
+        "complaint_rate_ceiling": 0.3,
+        "no_events_yet": delivered + bounced + complained + dropped + failed == 0,
+    })
+}
+
+/// The gate's verdict for one message, computed once and applied by the transport.
+pub struct Gate {
+    /// `Some(reason)` = do not send: this account has been asked not to mail this address in this
+    /// class, or the address is known bad.
+    pub blocked: Option<String>,
+    /// Provider-level opt-out headers (`h:List-Unsubscribe`, `h:List-Unsubscribe-Post`), empty for
+    /// transactional mail, which is legally exempt and must not invite an opt-out it cannot honour.
+    pub headers: Vec<(String, String)>,
+    pub footer_html: String,
+    pub footer_text: String,
+}
+
+/// Where the account's postal address lives in settings (CAN-SPAM requires one in bulk mail). Kept in
+/// the jsonb settings the account already owns — no migration, and the console can set it.
+fn postal_address(settings: &Value) -> Option<String> {
+    settings
+        .get("branding")
+        .and_then(|b| b.get("postal_address"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            settings
+                .get("postal_address")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+}
+
+/// Build the gate for one message. Never fails: a database that cannot answer must not silently turn
+/// an opt-out off, so a failed suppression read is treated as "send" only for transactional mail and
+/// as "refuse" for the two stoppable classes — the safe side of the only decision that matters.
+pub async fn gate(db: &PgPool, tenant_id: Uuid, address: &str, mail_class: &str) -> Gate {
+    let addr = normalise(address);
+    let mut blocked = None;
+    let classes: Vec<String> = blocking_classes(mail_class)
+        .iter()
+        .map(|c| c.to_string())
+        .collect();
+
+    match sqlx::query_scalar::<_, String>(
+        "SELECT reason FROM email_suppressions
+          WHERE tenant_id = $1 AND address = $2 AND mail_class = ANY($3)
+          ORDER BY created_at LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(&addr)
+    .bind(&classes)
+    .fetch_optional(db)
+    .await
+    {
+        Ok(found) => blocked = found,
+        Err(e) => {
+            tracing::error!("suppression read failed for tenant {tenant_id}: {e}");
+            if mail_class != CLASS_TRANSACTIONAL {
+                blocked = Some("suppression list unavailable".to_string());
+            }
+        }
+    }
+
+    // Account identity for the footer, and the postal address legal bulk mail must carry.
+    let row = sqlx::query_as::<_, (Option<String>, Value)>(
+        "SELECT name, coalesce(settings, '{}'::jsonb) FROM tenants WHERE id = $1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten();
+    let account = row
+        .as_ref()
+        .and_then(|(name, _)| name.clone())
+        .unwrap_or_else(|| "CoreSwift CRM".to_string());
+    let postal = row
+        .as_ref()
+        .and_then(|(_, settings)| postal_address(settings));
+
+    let mut headers = Vec::new();
+    let mut footer_html = String::new();
+    let mut footer_text = String::new();
+
+    if mail_class != CLASS_TRANSACTIONAL {
+        let url = unsubscribe_url(tenant_id, &addr, mail_class);
+        headers.push(("h:List-Unsubscribe".to_string(), format!("<{url}>")));
+        // RFC 8058: lets Gmail/Yahoo render their own unsubscribe button and post it with no human.
+        headers.push((
+            "h:List-Unsubscribe-Post".to_string(),
+            "List-Unsubscribe=One-Click".to_string(),
+        ));
+        let where_ = postal.as_deref().unwrap_or("");
+        footer_text = format!(
+            "\n\n--\n{account}{sep}{where_}\nStop these emails: {url}\n",
+            sep = if where_.is_empty() { "" } else { " · " }
+        );
+        footer_html = format!(
+            "<hr style=\"border:0;border-top:1px solid #e5e7eb;margin:28px 0 12px\">\
+             <p style=\"font:13px/1.5 system-ui,-apple-system,sans-serif;color:#6b7280;margin:0\">\
+             {account}{sep}{where_}<br>\
+             <a href=\"{url}\" style=\"color:#4f46e5\">Stop these emails</a></p>",
+            sep = if where_.is_empty() { "" } else { " · " }
+        );
+    }
+
+    Gate {
+        blocked,
+        headers,
+        footer_html,
+        footer_text,
+    }
+}
+
+// ── public surface: the opt-out itself ────────────────────────────────────────────────────────────
+
+/// `GET` for a human clicking the link in a message — a page with one button, no login, no session.
+async fn show_unsubscribe(Path(token): Path<String>) -> Response {
+    let Some((tenant_id, address, mail_class)) = verify_token(&token) else {
+        return (
+            StatusCode::GONE,
+            Html(
+                "<!doctype html><meta charset=utf-8><title>Link expired</title>\
+                 <p>This unsubscribe link is not valid. Reply to any message from this sender and ask \
+                 them to remove you.</p>"
+                    .to_string(),
+            ),
+        )
+            .into_response();
+    };
+    let label = if mail_class == CLASS_TRANSACTIONAL {
+        "stop non-essential mail"
+    } else {
+        "unsubscribe"
+    };
+    let body = format!(
+        "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">\
+         <title>Unsubscribe</title>\
+         <div style=\"font:16px/1.5 system-ui,sans-serif;max-width:520px;margin:12vh auto;padding:0 20px\">\
+         <h1 style=\"font-size:1.25rem\">Stop mail to {address}</h1>\
+         <p style=\"color:#555\">You will not receive further mail of this kind from this sender. \
+         Messages you need — receipts, password resets, security notices — keep working.</p>\
+         <form method=post action=\"/api/public/unsubscribe/{token}\">\
+         <button style=\"font:inherit;padding:12px 20px;border:0;border-radius:8px;background:#4f46e5;color:#fff;cursor:pointer\">{label}</button>\
+         </form></div>"
+    );
+    // One tenant's opt-out page must not be cacheable or indexable under another's.
+    let _ = tenant_id;
+    (
+        StatusCode::OK,
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Html(body),
+    )
+        .into_response()
+}
+
+/// `POST` is the one-click arm (RFC 8058 `List-Unsubscribe-Post`): mailbox providers post here with no
+/// human in the loop, so it acts immediately and answers 200 with no page.
+async fn one_click(State(state): State<AppState>, Path(token): Path<String>) -> Response {
+    let Some((tenant_id, address, mail_class)) = verify_token(&token) else {
+        return (StatusCode::GONE, Json(json!({ "error": "invalid link" }))).into_response();
+    };
+    let stored_class = if mail_class == CLASS_TRANSACTIONAL {
+        "all"
+    } else {
+        mail_class.as_str()
+    };
+    match suppress(
+        &state.db,
+        tenant_id,
+        &address,
+        "unsubscribed",
+        stored_class,
+        "one_click",
+    )
+    .await
+    {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({ "unsubscribed": true, "address": normalise(&address) })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!("unsubscribe failed for tenant {tenant_id}: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "could not record the opt-out" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+// ── authenticated surface: what the operator sees ─────────────────────────────────────────────────
+
+/// The account the caller is signed into — the same claim every other authenticated handler reads.
+fn tenant_of(c: &Claims) -> Option<Uuid> {
+    c.aid.parse().ok()
+}
+
+async fn overview(State(state): State<AppState>, Extension(c): Extension<Claims>) -> Response {
+    let Some(tenant_id) = tenant_of(&c) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "no tenant" })),
+        )
+            .into_response();
+    };
+    let days: i64 = 30;
+    Json(json!({
+        "rates": rates(&state.db, tenant_id, days).await,
+        "suppressed": sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM email_suppressions WHERE tenant_id = $1")
+            .bind(tenant_id).fetch_one(&state.db).await.unwrap_or(0),
+        "suppressed_last_30d": sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM email_suppressions WHERE tenant_id = $1 AND created_at > now() - interval '30 days'")
+            .bind(tenant_id).fetch_one(&state.db).await.unwrap_or(0),
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct ManualSuppression {
+    address: String,
+    #[serde(default)]
+    mail_class: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+async fn list_suppressions(
+    State(state): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> Response {
+    let Some(tenant_id) = tenant_of(&c) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "no tenant" })),
+        )
+            .into_response();
+    };
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            Option<String>,
+            chrono::DateTime<chrono::Utc>,
+        ),
+    >(
+        "SELECT address, mail_class, reason, source, created_at FROM email_suppressions
+          WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1000",
+    )
+    .bind(tenant_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    let items: Vec<Value> = rows
+        .into_iter()
+        .map(|(address, mail_class, reason, source, created_at)| {
+            json!({
+                "address": address, "mail_class": mail_class, "reason": reason,
+                "source": source, "created_at": created_at
+            })
+        })
+        .collect();
+    Json(json!({ "suppressions": items })).into_response()
+}
+
+async fn add_suppression(
+    State(state): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(body): Json<ManualSuppression>,
+) -> Response {
+    let Some(tenant_id) = tenant_of(&c) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "no tenant" })),
+        )
+            .into_response();
+    };
+    let mail_class = body.mail_class.unwrap_or_else(|| "all".to_string());
+    let reason = body.reason.unwrap_or_else(|| "manual".to_string());
+    if !body.address.contains('@') {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "not an address" })),
+        )
+            .into_response();
+    }
+    match suppress(
+        &state.db,
+        tenant_id,
+        &body.address,
+        &reason,
+        &mail_class,
+        "console",
+    )
+    .await
+    {
+        Ok(()) => (StatusCode::OK, Json(json!({ "suppressed": true }))).into_response(),
+        Err(e) => {
+            tracing::error!("manual suppression failed: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "not recorded" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn remove_suppression(
+    State(state): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(tenant_id) = tenant_of(&c) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "no tenant" })),
+        )
+            .into_response();
+    };
+    // Tenant-scoped on the write itself: one account can never lift another's suppression.
+    let done = sqlx::query("DELETE FROM email_suppressions WHERE id = $1 AND tenant_id = $2")
+        .bind(id)
+        .bind(tenant_id)
+        .execute(&state.db)
+        .await
+        .map(|r| r.rows_affected())
+        .unwrap_or(0);
+    Json(json!({ "removed": done })).into_response()
+}
+
+/// A plain addresses CSV — the download a customer takes to an address-verification service. One
+/// address per line, no other columns, so it pastes into any checker.
+async fn addresses_csv(State(state): State<AppState>, Extension(c): Extension<Claims>) -> Response {
+    let Some(tenant_id) = tenant_of(&c) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "no tenant" })),
+        )
+            .into_response();
+    };
+    let rows = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT lower(trim(email)) FROM contacts
+          WHERE tenant_id = $1 AND email IS NOT NULL AND trim(email) <> ''
+          ORDER BY 1",
+    )
+    .bind(tenant_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    let mut out = String::from("email\n");
+    for a in &rows {
+        out.push_str(a);
+        out.push('\n');
+    }
+    csv_response("contact-addresses.csv", out)
+}
+
+/// The suppression list as a CSV, for a customer's own records.
+async fn suppressions_csv(
+    State(state): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> Response {
+    let Some(tenant_id) = tenant_of(&c) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "no tenant" })),
+        )
+            .into_response();
+    };
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            Option<String>,
+            chrono::DateTime<chrono::Utc>,
+        ),
+    >(
+        "SELECT address, mail_class, reason, source, created_at FROM email_suppressions
+          WHERE tenant_id = $1 ORDER BY created_at DESC",
+    )
+    .bind(tenant_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    let mut out = String::from("address,scope,reason,source,recorded_at\n");
+    for (address, mail_class, reason, source, created_at) in rows {
+        out.push_str(&format!(
+            "{},{},{},{},{}\n",
+            address,
+            mail_class,
+            reason,
+            source.unwrap_or_default(),
+            created_at.to_rfc3339()
+        ));
+    }
+    csv_response("unsubscribes.csv", out)
+}
+
+fn csv_response(name: &str, body: String) -> Response {
+    let disposition = HeaderValue::from_str(&format!("attachment; filename=\"{name}\""))
+        .unwrap_or_else(|_| HeaderValue::from_static("attachment"));
+    (
+        StatusCode::OK,
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/csv; charset=utf-8"),
+            ),
+            (header::CONTENT_DISPOSITION, disposition),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+pub fn router(state: AppState) -> Router<AppState> {
+    Router::new()
+        .route("/overview", get(overview))
+        .route(
+            "/suppressions",
+            get(list_suppressions).post(add_suppression),
+        )
+        .route("/suppressions/:id", delete(remove_suppression))
+        .route("/suppressions.csv", get(suppressions_csv))
+        .route("/addresses.csv", get(addresses_csv))
+        .with_state(state)
+}
+
+/// Merged at the ROOT of the app: these paths are their own namespace, and the opt-out arms are
+/// deliberately anonymous (the token in the message IS the credential).
+pub fn public_router(state: AppState) -> Router<AppState> {
+    Router::new()
+        .route(
+            "/api/public/unsubscribe/:token",
+            get(show_unsubscribe).post(one_click),
+        )
+        .with_state(state)
+}

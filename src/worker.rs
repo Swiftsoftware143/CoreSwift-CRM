@@ -339,7 +339,12 @@ async fn process_notification_queue(db: &PgPool) {
         .await;
 
         // Deliver
-        let outcome = crate::communications::providers::deliver(&cfg).await;
+        let outcome = crate::communications::providers::deliver(
+            db,
+            &cfg,
+            crate::mail_compliance::CLASS_NOTIFICATION,
+        )
+        .await;
 
         if outcome.ok {
             let _ = sqlx::query(
@@ -852,7 +857,9 @@ async fn deliver_queued_messages(db: &PgPool) {
             }
         };
 
-        let outcome = crate::communications::providers::deliver(&cfg).await;
+        let outcome =
+            crate::communications::providers::deliver(db, &cfg, crate::mail_compliance::CLASS_BULK)
+                .await;
 
         match crate::communications::providers::record_attempt(db, *msg_id, &outcome).await {
             Ok(record) => tracing::info!(

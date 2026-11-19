@@ -507,6 +507,12 @@ pub const API_KEY_ROUTES: &[&str] = &[
     // The data-mapping intake: a sibling app reports one event with the account's issued key. The
     // tenant comes from the key, never from the payload, so a caller cannot name another tenant.
     "/api/data-mapping/events",
+    // The opt-out itself. Anonymous BY NECESSITY, and the token in the path is the whole
+    // credential: the person clicking it has no session, and the mailbox provider's one-click arm
+    // (RFC 8058 `List-Unsubscribe-Post`) posts here with no human at all. It reads one signed
+    // token (account + address + mail class) and writes one suppression row for THAT account —
+    // it can neither read nor name any other tenant's data, and it cannot lift a suppression.
+    "/api/public/unsubscribe/:token",
 ];
 
 /// Is `path` (a concrete request path) one of the committed public templates?
@@ -926,6 +932,19 @@ mod tests {
             src: include_str!("../calendar_host/mod.rs"),
             func: "public_router",
         },
+        // The email-compliance surface (2026-11-19). The opt-out arms are merged at the ROOT, so
+        // their prefix is empty and the census reads their FULL paths — which is the point: an
+        // anonymous route that the census cannot see is an anonymous route nobody reviews.
+        Nest {
+            prefix: "/api/mail-compliance",
+            src: include_str!("../mail_compliance/mod.rs"),
+            func: "router",
+        },
+        Nest {
+            prefix: "",
+            src: include_str!("../mail_compliance/mod.rs"),
+            func: "public_router",
+        },
     ];
 
     /// The body of `fn <func>`, assuming rustfmt puts the closing brace at column 0.
@@ -1314,18 +1333,24 @@ mod tests {
     /// `NESTS`, which is what made `"/api/public/booking/c/:slug"` checkable on the public allowlist at
     /// all. The instrument saw more routes because the product has more routes; the root-level count is
     /// unchanged at 12, which is the tell that no new surface was mounted outside /api**.
+    ///
+    /// +6 mounts / +6 paths (2026-11-19): the email-compliance surface — 5 on
+    /// `/api/mail-compliance` (the delivery evidence, the suppression list, its remove arm, and the
+    /// two downloads) and 1 anonymous opt-out (`/api/public/unsubscribe/:token`, merged at the root
+    /// and named in [`PUBLIC_ROUTES`] because the token in the path IS the credential). Every new
+    /// path is on `/api**`, so the root-level count is unchanged at 12: 480 mounted / 468 on /api**.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
         let mounted = mounted_routes();
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            474,
+            480,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 462,
+            api, 468,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.

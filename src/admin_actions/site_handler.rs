@@ -582,7 +582,7 @@ fn default_site_settings() -> serde_json::Value {
         // applier writes both VERBATIM (they are hero HTML, not prose), so a row whose hero equals
         // the shipped one renders the page byte-for-byte and `--check` reads `unchanged`
         // (kanban t_9dede800).
-        "homepage": { "headline": "One CRM That Replaces <span class=\"hero-gradient\">6+ Separate Tools</span>", "subheadline": "Automated follow-up sequences. Built-in calendar &amp; bookings. SMS &amp; email campaigns. Deal pipelines. Event management. All included in the free tier — not scattered across six different subscriptions." }
+        "homepage": { "headline": "One CRM That Replaces <span class=\"hero-gradient\">6+ Separate Tools</span>", "subheadline": "Built-in calendar &amp; bookings. SMS &amp; email campaigns. Deal pipelines. Event management. All included in the free tier — not scattered across six different subscriptions. Automations start on the Professional plan." }
     })
 }
 

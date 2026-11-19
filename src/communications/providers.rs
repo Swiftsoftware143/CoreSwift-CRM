@@ -527,16 +527,86 @@ fn refuse_reserved_destination(to: &str) -> Option<DeliveryOutcome> {
 }
 
 /// Attempt delivery via the configured provider chain.
-pub async fn deliver(cfg: &DeliveryConfig) -> DeliveryOutcome {
-    match cfg.channel.as_str() {
-        "email" => deliver_email(cfg).await,
-        "sms" => deliver_sms(cfg).await,
-        "whatsapp" => deliver_whatsapp(cfg).await,
-        other => DeliveryOutcome::permanent(format!("Unknown channel: {}", other)),
+///
+/// EVERY email in this app passes through here — the worker's poll and its retry poll, the manual
+/// send, automation, the queued drain and the support mail — so this is where the compliance gate
+/// lives (2026-11-19): (1) an address this account was asked to stop mailing is refused before any
+/// provider traffic, (2) the opt-out footer is appended for the two stoppable classes, (3) the
+/// one-click headers ride along for the transports that can carry them, and (4) every attempt is
+/// written to `email_message_log` so a later provider event can be attributed to this account.
+/// `mail_class` is chosen by the CALLER because only the caller knows whether it is sending a
+/// receipt, a notification or a campaign.
+pub async fn deliver(db: &sqlx::PgPool, cfg: &DeliveryConfig, mail_class: &str) -> DeliveryOutcome {
+    if cfg.channel.as_str() != "email" {
+        return match cfg.channel.as_str() {
+            "sms" => deliver_sms(cfg).await,
+            "whatsapp" => deliver_whatsapp(cfg).await,
+            other => DeliveryOutcome::permanent(format!("Unknown channel: {}", other)),
+        };
     }
+
+    let gate = crate::mail_compliance::gate(db, cfg.tenant_id, &cfg.to, mail_class).await;
+    if let Some(reason) = gate.blocked.as_deref() {
+        tracing::info!(
+            msg = %cfg.msg_id,
+            to = %cfg.to,
+            class = %mail_class,
+            reason = %reason,
+            "not dispatched: this account has been asked not to mail this address in this class"
+        );
+        crate::mail_compliance::log_attempt(
+            db,
+            cfg.tenant_id,
+            Some(cfg.msg_id),
+            mail_class,
+            &cfg.to,
+            cfg.subject.as_deref(),
+            None,
+            "refused_suppressed",
+            Some(reason),
+        )
+        .await;
+        return DeliveryOutcome::permanent(format!(
+            "suppressed for this account ({reason}): nothing was sent to the provider"
+        ));
+    }
+
+    let mut outgoing = cfg.clone();
+    if !gate.footer_text.is_empty() {
+        if outgoing.is_html {
+            match outgoing.html.as_mut() {
+                Some(html) => html.push_str(&gate.footer_html),
+                None => outgoing.body.push_str(&gate.footer_html),
+            }
+        } else {
+            outgoing.body.push_str(&gate.footer_text);
+            if let Some(html) = outgoing.html.as_mut() {
+                html.push_str(&gate.footer_html);
+            }
+        }
+    }
+
+    let outcome = deliver_email(&outgoing, &gate.headers).await;
+
+    crate::mail_compliance::log_attempt(
+        db,
+        cfg.tenant_id,
+        Some(cfg.msg_id),
+        mail_class,
+        &cfg.to,
+        cfg.subject.as_deref(),
+        outcome.provider.as_deref(),
+        if outcome.ok { "sent" } else { "failed" },
+        outcome.error.as_deref(),
+    )
+    .await;
+    if let Some(provider_id) = outcome.provider_message_id.as_deref() {
+        crate::mail_compliance::attach_provider_id(db, cfg.tenant_id, &cfg.to, provider_id).await;
+    }
+    outcome
 }
 
-async fn deliver_email(cfg: &DeliveryConfig) -> DeliveryOutcome {
+async fn deliver_email(cfg: &DeliveryConfig, headers: &[(String, String)]) -> DeliveryOutcome {
     // A destination that cannot exist is refused here, before any transport is chosen: this is the
     // last point before provider traffic, and every email path goes through this function (the
     // worker's poll, its retry poll, and the manual send in handlers.rs).
@@ -577,7 +647,10 @@ async fn deliver_email(cfg: &DeliveryConfig) -> DeliveryOutcome {
         ));
     }
     match cfg.email_provider.as_str() {
-        "mailgun" => deliver_via_mailgun(cfg).await,
+        "mailgun" => deliver_via_mailgun(cfg, headers).await,
+        // SMTP.com's v4 API takes no arbitrary header block; its mail still carries the visible
+        // opt-out footer, which is what the law requires. The provider-level headers are a
+        // Mailgun-only nicety (Gmail/Yahoo render a one-click button from them).
         "smtp" => deliver_via_smtp(cfg).await,
         other => DeliveryOutcome::permanent(format!("Unknown email provider: {}", other)),
     }
@@ -586,7 +659,10 @@ async fn deliver_email(cfg: &DeliveryConfig) -> DeliveryOutcome {
 /// Send email through the transport resolved in `load_delivery_config` — the workspace's own
 /// Mailgun domain/key, or the platform's. The URL is resolved once, at config time, so this
 /// function cannot disagree with the transport the caller reported.
-async fn deliver_via_mailgun(cfg: &DeliveryConfig) -> DeliveryOutcome {
+async fn deliver_via_mailgun(
+    cfg: &DeliveryConfig,
+    headers: &[(String, String)],
+) -> DeliveryOutcome {
     let url = match &cfg.mailgun_url {
         Some(u) => u,
         None => {
@@ -626,6 +702,10 @@ async fn deliver_via_mailgun(cfg: &DeliveryConfig) -> DeliveryOutcome {
     } else if let Some(html) = cfg.html.as_deref().filter(|h| !h.is_empty()) {
         // A caller that built a real HTML part beside its text body (the operator support alert).
         params.insert("html", html);
+    }
+    // Compliance headers (opt-out + one-click). Absent for transactional mail, which is exempt.
+    for (name, value) in headers {
+        params.insert(name.as_str(), value.as_str());
     }
     if let Some(reply_to) = cfg.reply_to.as_deref() {
         params.insert("h:Reply-To", reply_to);
@@ -1449,7 +1529,7 @@ mod tests {
             // message TO it, this arm must keep it off a relay like any other probe destination.
             "support@swiftsoftware.net",
         ] {
-            let outcome = deliver_email(&email_cfg(addr)).await;
+            let outcome = deliver_email(&email_cfg(addr), &[]).await;
             assert!(outcome.permanent && !outcome.ok, "{addr}");
             assert!(
                 outcome.provider.is_none() && outcome.provider_message_id.is_none(),
@@ -1477,7 +1557,7 @@ mod tests {
     /// swapped the order would be visible here.
     #[tokio::test]
     async fn a_local_harness_address_is_refused_by_the_neighbouring_arm_first() {
-        let outcome = deliver_email(&email_cfg("x@swiftsoftware.local")).await;
+        let outcome = deliver_email(&email_cfg("x@swiftsoftware.local"), &[]).await;
         assert!(outcome.permanent && !outcome.ok);
         assert!(outcome.provider.is_none());
         let msg = outcome.error.expect("a refusal always carries its reason");
@@ -1502,7 +1582,7 @@ mod tests {
             "t193-delivery-proof@mail.coreswiftcrm.com",
             "a@test.com",
         ] {
-            let outcome = deliver_email(&email_cfg(addr)).await;
+            let outcome = deliver_email(&email_cfg(addr), &[]).await;
             let msg = outcome.error.unwrap_or_default();
             assert!(
                 msg.contains(NOT_CONFIGURED_PREFIX),

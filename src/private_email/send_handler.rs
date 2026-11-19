@@ -607,7 +607,11 @@ pub async fn send_automation_reply(
     cfg.html = Some(body_html.to_string());
     cfg.reply_to = Some(reply_to.to_string());
 
-    let outcome = crate::communications::providers::deliver(&cfg).await;
+    // Automation lane from the account's own mailbox: bulk, so the opt-out footer and one-click
+    // headers ride along and a suppressed address is refused here rather than at the provider.
+    let outcome =
+        crate::communications::providers::deliver(db, &cfg, crate::mail_compliance::CLASS_BULK)
+            .await;
     let _ = crate::communications::providers::record_attempt(db, msg_id, &outcome).await;
 
     if outcome.ok {
