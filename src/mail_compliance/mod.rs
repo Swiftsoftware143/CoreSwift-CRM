@@ -1228,12 +1228,21 @@ async fn put_unsubscribe_page(
         "done_body": clean(body.done_body, 600),
     });
     // Written field by field: a null clears that override and the default comes back.
+    // jsonb_set only creates the LAST key of a path: a path whose INTERMEDIATE key does not exist yet
+    // returns the document unchanged, silently. Measured live 2026-11-19 — the save answered 200, the
+    // UPDATE reported one row, and the row was byte-identical, because `compliance` did not exist yet
+    // under `settings`. Writing the top-level key in ONE step is therefore the only correct form here
+    // (the same trap is documented in src/account/branding.rs).
     let result = sqlx::query(
         "UPDATE tenants
             SET settings = jsonb_set(
                   coalesce(settings, '{}'::jsonb),
-                  '{compliance,unsubscribe_page}',
-                  coalesce(settings->'compliance'->'unsubscribe_page', '{}'::jsonb) || $2::jsonb,
+                  '{compliance}',
+                  coalesce(settings->'compliance', '{}'::jsonb)
+                    || jsonb_build_object(
+                         'unsubscribe_page',
+                         coalesce(settings->'compliance'->'unsubscribe_page', '{}'::jsonb) || $2::jsonb
+                       ),
                   true)
           WHERE id = $1",
     )
