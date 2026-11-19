@@ -5410,6 +5410,8 @@ async function loadProfileTab() {
       '<div class="form-group"><label>Confirm New Password</label><input type="password" id="confirmPw" autocomplete="new-password"></div>',
       '<button class="btn btn-primary" data-ops="profile-password" onclick="changePassword()">Update Password</button>') +
     '<br>' +
+    downloadDataCard() +
+    '<br>' +
     closeAccountCard();
 }
 
@@ -5535,6 +5537,54 @@ async function removeAvatar() {
     toast('Remove failed: ' + e.message, 'error');
   }
 }
+
+// ── DOWNLOAD MY DATA (2026-11-19) ────────────────────────────────────────────────────────────
+// GET /api/account/export has been mounted on the account router since it shipped: it answers the
+// CALLER'S OWN workspace as one JSON file and names, in the file's own `excluded` field, the few
+// things it deliberately leaves out. THIS console had no way to ask for it, so a customer who wanted
+// their own copy had to open a support ticket — a backend route with no UI is a defect.
+// Fetched directly, not through API.call: that helper parses JSON, and this response is a document
+// meant to be handed to the browser's own download.
+function downloadDataCard() {
+  return card('Download my data',
+    '<p style="color:var(--text-secondary);margin:0 0 10px">Get your own copy of everything this ' +
+      'workspace holds — your account and plan, the team, contacts and companies, pipelines and ' +
+      'opportunities, lists and tags, mail and its folders, tickets, automations, scoring rules, ' +
+      'tracked links and integration names — in one file you keep.</p>' +
+    '<p class="form-hint">Nothing that could be used to sign in as anyone, or to act as this ' +
+      'workspace, is included: no passwords or password hashes, no API-key secrets (each key\'s ' +
+      'prefix and dates are here), no webhook signing secrets, no connected-app credentials, and no ' +
+      'unopened invite links. The file itself lists exactly what was left out and why.</p>',
+    '<button class="btn btn-secondary" data-ops="profile-download-data" id="downloadDataBtn" onclick="crmDownloadData()">Download my data</button>');
+}
+
+window.crmDownloadData = async function () {
+  const btn = document.getElementById('downloadDataBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Preparing…'; }
+  try {
+    const res = await fetch('/api/account/export', {
+      headers: Object.assign({ 'Accept': 'application/json' }, STATE.token ? { 'Authorization': 'Bearer ' + STATE.token } : {})
+    });
+    if (!res.ok) {
+      let said = '';
+      try { const d = await res.json(); said = (d && typeof d.message === 'string') ? d.message : ''; } catch(_) {}
+      throw new Error(said || 'The file could not be prepared. Please try again.');
+    }
+    const blob = await res.blob();
+    const stamp = new Date().toISOString().slice(0, 10);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'coreswift-export-' + stamp + '.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    toast('Your file is downloading', 'success');
+  } catch (e) {
+    toast((e && e.message) || 'The file could not be prepared', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Download my data'; }
+  }
+};
 
 // ── CLOSE MY ACCOUNT (2026-11-19) ────────────────────────────────────────────────────────────
 // POST /api/auth/close-account has been mounted since 2026-11-13 (it records closed_at, moves the
