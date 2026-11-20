@@ -719,10 +719,16 @@ pub async fn send_support_request_operator_alert(
         Some(&html),
         &transport.mail(),
     );
+    // TRANSACTIONAL, not notification: this is the alert that tells the operator somebody asked for
+    // help. A customer-facing "unsubscribe from everything" must never be able to silence it — the
+    // person who clicks that link is often the same person who answers these, and a support request
+    // nobody sees is the most expensive kind of silence (the lesson of the failed-send audit). It is
+    // still tracked, still event-attributed, and still refused for an address that hard-bounced or
+    // complained, because that is harm control rather than preference.
     let outcome = crate::communications::providers::deliver(
         db,
         &cfg,
-        crate::mail_compliance::CLASS_NOTIFICATION,
+        crate::mail_compliance::CLASS_TRANSACTIONAL,
     )
     .await;
     if let Err(e) = crate::communications::providers::record_attempt(db, msg_id, &outcome).await {
