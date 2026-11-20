@@ -34,6 +34,8 @@
   .vote button:hover{border-color:var(--brand);color:var(--brand)}
   .say{padding:12px 14px;border-radius:12px;background:#ecfdf5;border:1px solid #a7f3d0;margin:12px 0;display:none}
   .foot{margin-top:26px;font-size:13px;color:var(--muted)}
+  .card a.cta{display:inline-block;border-bottom:none;padding:10px 16px;border-radius:10px;background:var(--brand);color:#fff;font-weight:600;text-decoration:none}
+  .card a.cta:hover{color:#fff;filter:brightness(.95)}
 </style>
 </head>
 <body>
@@ -75,6 +77,28 @@
 
   function get(url){ return fetch(url).then(function(r){ if(!r.ok) throw new Error(r.status); return r.json() }) }
 
+  // The same chat the site has, so "one stop" is real: browse, then talk if the answer is not here.
+  // Loaded on EVERY arm of the page. MEASURED 2026-11-20: this used to run only when at least one
+  // article was published, so a workspace with an empty knowledge base showed one sentence and
+  // nothing to click — the public help centre was a dead end for every customer.
+  function talkToHuman(){
+    var who = TENANT || W;
+    if(!who || document.getElementById('help-widget')) return;
+    var s = document.createElement('script');
+    s.id = 'help-widget';
+    s.src = API + '/s/' + encodeURIComponent(who) + '/widget.js';
+    s.async = true;
+    document.body.appendChild(s);
+  }
+
+  // A visible way to reach a person that does not depend on the chat widget loading at all.
+  function askCard(line){
+    return '<div class="card"><div class="empty">' + esc(line) + '</div>' +
+      '<p style="margin:14px 0 0">' +
+        '<a class="cta" href="/contact.html">Send us a message</a>' +
+      '</p></div>';
+  }
+
   function index(){
     if(!W){ main.innerHTML = '<div class="empty">This help centre is not configured yet.</div>'; return }
     get(API+'/api/public/helpdesk/kb/index?w='+encodeURIComponent(W)).then(function(d){
@@ -82,7 +106,8 @@
       if(d.site) siteEl.textContent = d.site;
       document.title = (d.site || 'Help centre') + ' — Help centre';
       if(!d.count){
-        main.innerHTML = '<div class="card"><div class="empty">Nothing published yet.</div></div>';
+        main.innerHTML = askCard('Nothing is published here yet.');
+        talkToHuman();
         return;
       }
       var html = '';
@@ -107,15 +132,11 @@
       }
       main.innerHTML = html;
       wire();
-      // the same chat the site has, so "one stop" is real: browse, then talk if the answer is not here
-      if(TENANT && !document.getElementById('help-widget')){
-        var s = document.createElement('script');
-        s.id = 'help-widget';
-        s.src = API + '/s/' + TENANT + '/widget.js';
-        s.async = true;
-        document.body.appendChild(s);
-      }
-    }).catch(function(){ main.innerHTML = '<div class="empty">This help centre is not available right now.</div>' });
+      talkToHuman();
+    }).catch(function(){
+      main.innerHTML = askCard('This help centre is not available right now, but you can still reach us.');
+      talkToHuman();
+    });
   }
 
   function wire(){
