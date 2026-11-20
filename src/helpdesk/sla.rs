@@ -36,6 +36,8 @@ pub fn tick_interval() -> Duration {
 pub struct SlaPass {
     /// Events fired this pass: warnings and breaches together.
     pub fired: u64,
+    /// People actually told this pass: one per escalation rung that reached a mailbox.
+    pub escalated: u64,
 }
 
 /// Walk the clocks once and record what changed.
@@ -118,9 +120,187 @@ pub async fn run_once(pool: &PgPool) -> SlaPass {
     if fired > 0 {
         tracing::info!(events = fired, "SLA clocks updated");
     }
+
+    // THE LADDER. The timeline events above tell whoever is already looking at the ticket; this tells a
+    // person who is not. A failing ladder must not hide the clocks that already landed, so it is reported
+    // on its own and the pass still returns.
+    let escalated = escalate(pool).await;
+
     SlaPass {
         fired: fired.max(0) as u64,
+        escalated,
     }
+}
+
+/// One rung of the ladder, as claimed for delivery.
+#[derive(sqlx::FromRow)]
+struct Rung {
+    id: uuid::Uuid,
+    tenant_id: uuid::Uuid,
+    clock: String,
+    rung: String,
+    audience: String,
+    recipient: Option<String>,
+    number: i32,
+    subject: String,
+    due_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Tell the right person, once per rung.
+///
+/// Who: a deadline that is CLOSE goes to whoever owns the ticket (falling back to the account's owner when
+/// nobody owns it, because an unowned ticket is exactly the one that gets missed); a deadline that has been
+/// MISSED goes to the account's owner/admin as well. What: the workspace's own wording, from the template
+/// registry, so a customer-facing brand is a customer-facing brand in an escalation too.
+async fn escalate(pool: &PgPool) -> u64 {
+    let claimed = sqlx::query_as::<_, Rung>(
+        r#"
+        WITH due AS (
+            SELECT t.id AS ticket_id,
+                   t.tenant_id,
+                   t.number,
+                   t.subject,
+                   t.assigned_to,
+                   'first_response'::text AS clock,
+                   t.first_response_due AS due_at
+              FROM tickets t
+             WHERE t.first_responded_at IS NULL
+               AND t.first_response_due IS NOT NULL
+               AND t.status IN ('new', 'open', 'pending', 'on_hold')
+               AND t.first_response_due <= NOW() + $1::interval
+            UNION ALL
+            SELECT t.id,
+                   t.tenant_id,
+                   t.number,
+                   t.subject,
+                   t.assigned_to,
+                   'resolution'::text,
+                   t.resolution_due
+              FROM tickets t
+             WHERE t.solved_at IS NULL
+               AND t.resolution_due IS NOT NULL
+               AND t.status IN ('new', 'open', 'pending', 'on_hold')
+               AND t.resolution_due <= NOW() + $1::interval
+        ),
+        rungs AS (
+            SELECT d.ticket_id,
+                   d.tenant_id,
+                   d.number,
+                   d.subject,
+                   d.clock,
+                   d.due_at,
+                   CASE WHEN d.due_at < NOW() THEN 'breached' ELSE 'due_soon' END AS rung,
+                   CASE WHEN d.due_at < NOW() THEN 'owner' ELSE 'assignee' END AS audience,
+                   -- who to tell: the ticket's owner, or the account's owner/admin when there is none
+                   CASE
+                     WHEN d.due_at >= NOW() THEN
+                       COALESCE(
+                         (SELECT u.email FROM users u
+                           WHERE u.id = d.assigned_to AND u.email IS NOT NULL LIMIT 1),
+                         (SELECT u.email FROM users u
+                           WHERE u.tenant_id = d.tenant_id
+                             AND u.email IS NOT NULL
+                             AND u.role IN ('owner', 'account_owner', 'admin', 'agency_admin')
+                           ORDER BY u.created_at LIMIT 1)
+                       )
+                     ELSE
+                       (SELECT u.email FROM users u
+                         WHERE u.tenant_id = d.tenant_id
+                           AND u.email IS NOT NULL
+                           AND u.role IN ('owner', 'account_owner', 'admin', 'agency_admin')
+                         ORDER BY u.created_at LIMIT 1)
+                   END AS recipient
+              FROM due d
+        ),
+        claimed AS (
+            INSERT INTO ticket_escalations (tenant_id, ticket_id, clock, rung, audience, delivered)
+            SELECT tenant_id, ticket_id, clock, rung, audience, false
+              FROM rungs
+            ON CONFLICT (ticket_id, clock, rung, audience) DO NOTHING
+            RETURNING id, tenant_id, ticket_id, clock, rung, audience
+        )
+        SELECT c.id,
+               c.tenant_id,
+               c.clock,
+               c.rung,
+               c.audience,
+               r.recipient,
+               r.number,
+               r.subject,
+               r.due_at
+          FROM claimed c
+          JOIN rungs r ON r.ticket_id = c.ticket_id AND r.clock = c.clock AND r.rung = c.rung
+        "#,
+    )
+    .bind(APPROACHING_WINDOW)
+    .fetch_all(pool)
+    .await;
+
+    let claimed = match claimed {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!(error = %e, "the escalation ladder could not claim its rungs");
+            return 0;
+        }
+    };
+
+    let mut told = 0u64;
+    for r in claimed {
+        let Some(to) = r.recipient.clone() else {
+            // Nobody to tell is a fact worth keeping: an account with no owner mailbox is an account where
+            // every promise is silent, and that is exactly what this table should show.
+            let _ = sqlx::query(
+                "UPDATE ticket_escalations SET delivered = false, detail = $2 WHERE id = $1",
+            )
+            .bind(r.id)
+            .bind("no reachable mailbox on this account")
+            .execute(pool)
+            .await;
+            continue;
+        };
+
+        let template = if r.rung == "breached" {
+            "ticket_sla_breached"
+        } else {
+            "ticket_due_soon"
+        };
+        let link = format!("https://app.coreswiftcrm.com/tickets/{}", r.id);
+        let vars = serde_json::json!({
+            "number": format!("CS-{}", r.number),
+            "subject": r.subject,
+            "clock": if r.clock == "first_response" { "first response" } else { "resolution" },
+            "due_at": r.due_at.to_rfc3339(),
+            "link": link,
+        });
+
+        match crate::email::send_template_email(pool, r.tenant_id, &to, template, &vars).await {
+            Ok(()) => {
+                told += 1;
+                let _ = sqlx::query(
+                    "UPDATE ticket_escalations SET delivered = true, detail = $2 WHERE id = $1",
+                )
+                .bind(r.id)
+                .bind(format!("{} -> {}", r.audience, to))
+                .execute(pool)
+                .await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, rung = %r.rung, "an escalation message could not be sent");
+                let _ = sqlx::query(
+                    "UPDATE ticket_escalations SET delivered = false, detail = $2 WHERE id = $1",
+                )
+                .bind(r.id)
+                .bind(format!("send failed: {e}"))
+                .execute(pool)
+                .await;
+            }
+        }
+    }
+
+    if told > 0 {
+        tracing::info!(told, "escalation ladder delivered");
+    }
+    told
 }
 
 #[cfg(test)]
