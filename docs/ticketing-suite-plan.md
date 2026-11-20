@@ -96,3 +96,33 @@ running container and the live database, not read off the code.
    change stays invisible until someone copies it by hand (done here). Until a publisher exists, any
    change to `www-app/coreswift/index.html` must be followed by that copy, and the repo/served pair
    re-checked.
+
+## State of the suite — 2026-11-20 (so a new session starts from facts, not memory)
+
+| Item | State | Proof |
+|---|---|---|
+| 3. Customer panel — branding | **SHIPPED + PROVED** | The portal reads `tenants.settings.email_branding` (same document the mail renderer uses) for name, colour and logo. Proved live: an account's name/colour appear, an unbranded account falls back to its own name, a `<script>` brand name came back escaped, and a stored colour of `red;background:url(x)` is now REFUSED (it painted into the `<style>` block before the fix). |
+| 3. Customer panel — sign-in | **SHIPPED + PROVED** | Emailed one-time link (migration 185 `portal_login_tokens`, SHA-256 at rest, 30-minute expiry, single use) with the address+reference path kept as the fallback. Token travels in the URL FRAGMENT so it never reaches a server log; `/link` answers identically for unknown addresses (no enumeration). 8/8 live checks. |
+| 2. At-risk escalation | **SHIPPED + PROVED** | Migration 187 `ticket_escalations`; a due-soon deadline tells the ticket's owner (falling back to the account owner/admin), a missed deadline tells the owner, one row per (ticket, clock, rung, audience) so a weekend cannot mail 2,880 times. 8/8 live checks, including "nobody to tell is recorded as such". |
+| Sentiment tags | **SHIPPED + PROVED** | `src/helpdesk/sentiment.rs`, three tags from the phrases people use when a thread has gone wrong, wired at the portal reply and inbound mail paths. The tag is a FLOOR: a later polite message does not erase "cancel my account". 5/5 live checks. A calm message leaves the ticket unjudged rather than stamping "calm". |
+| 5. Per-account AI keys | **SHIPPED; one arm unproved** | Migration 189 `ai_usage`; `model_keys_with_source` adds an EXPLICIT platform-key fallback (`DEEPSEEK_API_KEY`/`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`) recorded per row as `platform_key`; `route_to_llm_tracked` records every attempt including failures; `GET /api/ai/usage` + a console card answer "how much, on what, with whose key" and say plainly when the AI is OFF. Proved live: the OFF answer, a refused call recorded against the account on its own key, and the endpoint reporting it. **NOT proved: a call billed to the PLATFORM key** — that needs a real platform credential in the container's environment (David's to supply); an invalid one would only prove the failure path. |
+| 4. Status page | covered by item 3 | The portal IS the status page; the emailed link is its login. |
+| 1. Action agent | **NOT STARTED** | Deliberately last: it is the only item that can change data on a customer's behalf. |
+| Currency (David, 2026-11-20) | **SHIPPED + PROVED** | Migrations 190/191 seat `settings.default_currency = "USD"` on every workspace and on every workspace created from now on (BEFORE INSERT trigger). Proved: the 422 refusal on Giraudy Capital became 201/USD/rate 1.0, and a workspace created inside a rolled-back transaction came out USD. |
+
+### Fleet lessons this work cost (read before touching the same ground)
+
+1. `git commit -m` with backticks in the message silently runs the shell and skips the commit. Write the
+   message to a file and use `-F`.
+2. A string replace that "applies" can still be a no-op: rustfmt rewrapping the target made a whole
+   verification block vanish while the tool reported success. Prove the edit landed in the BINARY
+   (`docker exec <app> grep -c '<new message>'`), not just in the file.
+3. `jsonb_set(obj,'{a,b}',...)` does NOT create the intermediate `a`; the write is a silent no-op. Seat the
+   parent object first. This fooled a probe into "setting" an AI key that no code could see.
+4. The live edge answers an automated browser signature with Cloudflare error 1010 regardless of User-Agent.
+   A probe that reads that as an app failure is measuring the edge; use curl for the arm in question.
+5. `user_role` on this app is {agency_admin, client_admin, team_member, user, company_admin, owner, member}.
+   Comparing the enum against a label that does not exist raises 22P02 and takes the whole statement down —
+   compare `role::text` against the canonical list.
+6. `users.email` is NOT NULL and `tickets.priority` accepts only low/medium/high/urgent. A probe that
+   assumes otherwise fails as a probe bug that looks like a product bug.
