@@ -327,6 +327,33 @@
     <p><strong>Your calendar&rsquo;s own look.</strong> Colours and font are yours: brand colour, text colour, page background, one of seven font stacks, and a logo. Save it and the booking page wears it immediately — including when it is embedded on your own site.</p>
     <p><strong>What customers get told.</strong> A confirmation when they book, with what they bought, when it runs, what it cost and the manage link. The confirmation invites a reply, and the reply reaches the address you set on your sending domain — so a customer with a question gets a person.</p>
   </div>
+
+  <div class="card">
+    <h3>Putting your calendar on your own website</h3>
+    <p>One file, three shapes. Paste the snippet on your site and the calendar keeps its own origin, so your page never touches your customers&rsquo; booking details and a change here can never break your site.</p>
+    <p><strong>1. Inline</strong> &mdash; the calendar sits in the page and resizes itself as the visitor filters or picks.</p>
+    <pre><code>&lt;div id="my-bookings"&gt;&lt;/div&gt;
+&lt;script src="https://booking.coreswiftcrm.com/embed.js"
+        data-calendar="consultations"
+        data-mode="inline"
+        data-target="my-bookings"&gt;&lt;/script&gt;</code></pre>
+    <p><strong>2. Pop&#8209;up</strong> &mdash; a floating button in the corner of your site opens the calendar over the page, so a visitor never leaves what they were reading. The pop&#8209;up is part of the snippet: you do not build it, and pressing Escape or the &times; closes it (a finished booking closes it too).</p>
+    <pre><code>&lt;script src="https://booking.coreswiftcrm.com/embed.js"
+        data-calendar="consultations"
+        data-mode="popup"
+        data-label="Book a call"&gt;&lt;/script&gt;</code></pre>
+    <p><strong>3. Inside your own pop&#8209;up, panel or section</strong> &mdash; if you already have a modal, add <code>data-fill="container"</code> and the calendar fills the box you give it instead of reporting its own height. Whatever sizes your container decides the size and the calendar scrolls inside it, so there are no gaps and nothing is cut off.</p>
+    <pre><code>&lt;div id="booking-modal-body" style="height:min(88vh,900px)"&gt;
+  &lt;div id="my-bookings" style="height:100%"&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;script src="https://booking.coreswiftcrm.com/embed.js"
+        data-calendar="consultations"
+        data-mode="inline"
+        data-fill="container"
+        data-min-height="420"
+        data-target="my-bookings"&gt;&lt;/script&gt;</code></pre>
+    <p>Without <code>data-fill</code> the calendar reports its own height (clamped so a long list of dates cannot make your page enormous). With it, the container is in charge &mdash; which is what you want inside a pop&#8209;up.</p>
+  </div>
 </section>
 
 <!-- ======= 2. DASHBOARD ======= -->

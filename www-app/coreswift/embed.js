@@ -20,6 +20,21 @@
  *           data-mode="popup"
  *           data-label="Book a call"></script>
  *
+ *   INSIDE YOUR OWN MODAL / POP-UP / PANEL — `data-fill="container"` makes the calendar fill the box
+ *   you put it in instead of reporting its own content height. Whatever sizes the container (your
+ *   modal, a CSS grid cell, a fixed-height section) decides the size, and the calendar scrolls inside
+ *   it. Nothing to measure, no gaps, no cut-off:
+ *
+ *   <div id="booking-modal-body" style="height:min(88vh,900px)">   <!-- your popup's body -->
+ *     <div id="my-bookings" style="height:100%"></div>
+ *   </div>
+ *   <script src="https://booking.coreswiftcrm.com/embed.js"
+ *           data-calendar="consultations"
+ *           data-mode="inline"
+ *           data-fill="container"
+ *           data-min-height="420"
+ *           data-target="my-bookings"></script>
+ *
  * WHY AN IFRAME AND NOT AN INJECTED FORM: the booking page keeps its own origin, so the customer's
  * site never touches the customer's card details or their booking data — and a change here can never
  * break their page.
@@ -36,6 +51,13 @@
   var LABEL = (script.getAttribute('data-label') || 'Book now').trim();
   var HOST = (script.getAttribute('data-host') || 'https://booking.coreswiftcrm.com').replace(/\/+$/, '');
   var ACCENT = (script.getAttribute('data-accent') || '#6366f1').trim();
+  // 'container' = fill whatever box the host page gives us, instead of reporting our own height.
+  // This is what makes the calendar look right inside somebody else's pop-up: their modal owns the
+  // size, we simply use all of it, and our content scrolls rather than pushing their layout around.
+  var FILL = (script.getAttribute('data-fill') || '').trim().toLowerCase();
+  var FILLS = FILL === 'container' || FILL === '1' || FILL === 'true';
+  var MIN_H = parseInt(script.getAttribute('data-min-height') || '420', 10);
+  if (!isFinite(MIN_H) || MIN_H < 200) MIN_H = 420;
 
   if (!CAL) {
     console.warn('[coreswift-booking] data-calendar is required');
@@ -52,7 +74,9 @@
     f.setAttribute('loading', 'lazy');
     f.setAttribute('allowtransparency', 'true');
     f.style.cssText = 'width:100%;border:0;display:block;background:transparent;' +
-      (MODE === 'inline' ? 'min-height:520px;' : 'height:100%;border-radius:0;');
+      (MODE !== 'inline' ? 'height:100%;border-radius:0;'
+        : FILLS ? 'height:100%;min-height:' + MIN_H + 'px;'
+        : 'min-height:520px;');
     return f;
   }
 
@@ -120,10 +144,20 @@
     }
     script.parentNode.insertBefore(host, script.nextSibling);
   }
+  if (FILLS) {
+    // The host element must have a height for "100%" to mean anything. If the page already sized it
+    // (a pop-up body, a grid cell), leave that alone; otherwise let it fill its own parent.
+    host.style.display = host.style.display || 'block';
+    if (!host.style.height) host.style.height = '100%';
+    if (!host.style.minHeight) host.style.minHeight = MIN_H + 'px';
+  }
   var inline = frame('csbk-frame-inline');
   host.appendChild(inline);
 
-  // the page reports its own height so nothing is cut off when the customer filters or picks
+  // the page reports its own height so nothing is cut off when the customer filters or picks.
+  // In fill mode the CONTAINER owns the height, so a report must not resize the frame — that is the
+  // one thing that would make the calendar jump around inside somebody's modal.
+  if (FILLS) return;
   window.addEventListener('message', function (e) {
     var data = e.data;
     if (!data || typeof data !== 'object') {
