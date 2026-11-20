@@ -84,23 +84,10 @@ pub async fn build_report(
         // Every deal contributes `value` (when it already trades in the reporting currency) or
         // `value * its OWN stored rate`. The stored rate is what makes a past quarter stable:
         // nothing here reads today's market.
-        let reporting_currency = super::fx::workspace_reporting_currency(&state.db, tenant)
-            .await?
-            .unwrap_or_default();
-        let rep = if reporting_currency.is_empty() {
-            ReportingTotals {
-                currency: String::new(),
-                open_count: 0,
-                open_value: 0.0,
-                open_weighted_value: 0.0,
-                won_count: 0,
-                won_value: 0.0,
-                lost_count: 0,
-                lost_value: 0.0,
-                win_rate: 0.0,
-                unconverted_count: 0,
-            }
-        } else {
+        let reporting_currency = super::fx::workspace_reporting_currency(&state.db, tenant).await?;
+        // Reports always have a currency now: an unstated workspace reports in the standing
+        // default (USD, David 2026-11-20), so there is no "no reporting currency" arm left.
+        let rep = {
             let row: ReportingRow = sqlx::query_as(
                 "SELECT
                     COUNT(*) FILTER (WHERE NOT x.is_won AND NOT x.is_lost) AS open_count,
@@ -149,7 +136,7 @@ pub async fn build_report(
         };
 
         // Which currencies does this pipeline actually hold? A pipeline with no deals still gets
-        // one row in the workspace currency (or a blank one) so the screen is not empty-shaped.
+        // one row in the workspace currency, so the screen is not empty-shaped.
         let currencies: Vec<String> = sqlx::query_scalar(
             "SELECT DISTINCT COALESCE(currency,'') FROM opportunities
               WHERE tenant_id = $1 AND pipeline_id = $2 ORDER BY 1",
@@ -159,9 +146,7 @@ pub async fn build_report(
         .fetch_all(&state.db)
         .await?;
         let currencies = if currencies.is_empty() {
-            vec![super::writer::workspace_default_currency(&state.db, tenant)
-                .await?
-                .unwrap_or_default()]
+            vec![super::writer::workspace_default_currency(&state.db, tenant).await?]
         } else {
             currencies
         };

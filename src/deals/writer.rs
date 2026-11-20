@@ -93,22 +93,20 @@ pub async fn set_collaborators_pub(
     set_collaborators(state, tenant, deal_id, ids).await
 }
 
-/// The workspace's own currency, as the workspace stated it (`tenants.settings.default_currency`).
+/// The workspace's own currency (`tenants.settings.default_currency`), or the STANDING DEFAULT
+/// (USD) when the workspace has never stated one.
 ///
-/// There is deliberately NO fallback to `USD`: an amount with no stated currency is not a dollar
-/// amount, and guessing is how a 1,200 EUR deal becomes a 1,200 USD report line (David,
-/// 2026-11-20). A workspace that has not chosen one is asked to choose.
-pub async fn workspace_default_currency(
-    db: &PgPool,
-    tenant_id: Uuid,
-) -> Result<Option<String>, AppError> {
+/// David's ruling, 2026-11-20 (kanban t_4e220c20): the US dollar is the standing default currency
+/// — a stated rule, not a guess — so a workspace that has not chosen one is not a workspace with
+/// an unknown currency, it is a dollar workspace. Deals may still be priced in any ISO 4217
+/// currency per deal; this only decides what an unstated amount means.
+pub async fn workspace_default_currency(db: &PgPool, tenant_id: Uuid) -> Result<String, AppError> {
     Ok(super::fx::workspace_currencies(db, tenant_id).await?.0)
 }
 
 /// Resolve the deal's currency: what the caller said → what the deal already held → what the
-/// workspace chose. Never a guess. `None` is refused by the caller with a sentence naming both
-/// remedies. A code that is not a real ISO 4217 currency is refused here, not stored and
-/// discovered later as an unconvertible row.
+/// workspace chose → the standing default (USD). A code that is not a real ISO 4217 currency is
+/// refused here, not stored and discovered later as an unconvertible row.
 fn normalize_currency(raw: Option<&str>) -> Result<Option<String>, AppError> {
     match raw.map(str::trim).filter(|c| !c.is_empty()) {
         None => Ok(None),
@@ -562,7 +560,8 @@ fn parse_money(val: &Value) -> Result<Option<(f64, Option<String>)>, AppError> {
 
 /// Resolve a money amount into the three stored facts a report needs: the amount, its currency,
 /// and the rate+date that convert it into the workspace's reporting currency. Same contract as the
-/// deal's own value — no guessed currency, no guessed rate.
+/// deal's own value — the same order (caller → the deal's own currency → the workspace default →
+/// the standing default, USD), no guessed RATE.
 async fn price_money(
     state: &AppState,
     tenant_id: Uuid,
@@ -570,7 +569,7 @@ async fn price_money(
     amount: f64,
     currency: Option<String>,
 ) -> Result<(f64, String, f64, chrono::DateTime<Utc>, String), AppError> {
-    let (deal_currency, reporting) = {
+    let (deal_currency, reporting_currency) = {
         let deal_cur: Option<String> = sqlx::query_scalar(
             "SELECT currency FROM opportunities WHERE id = $1 AND tenant_id = $2",
         )
@@ -581,39 +580,23 @@ async fn price_money(
         .flatten();
         let (default_cur, rep) = super::fx::workspace_currencies(&state.db, tenant_id).await?;
         (
-            deal_cur.or(default_cur).unwrap_or_default(),
-            rep.unwrap_or_default(),
+            deal_cur
+                .filter(|c| !c.trim().is_empty())
+                .unwrap_or(default_cur),
+            rep,
         )
     };
-    let reporting = if reporting.is_empty() {
-        deal_currency.clone()
-    } else {
-        reporting
-    };
-    let currency = currency
-        .or_else(|| (!deal_currency.is_empty()).then(|| deal_currency.clone()))
-        .ok_or_else(|| {
-            AppError::Validation(
-                "this workspace has no currency — choose one before recording a money field"
-                    .to_string(),
-            )
-        })?;
-    if reporting.is_empty() {
-        return Err(AppError::Validation(
-            "this workspace has no reporting currency — choose one under Deals → Settings"
-                .to_string(),
-        ));
-    }
-    let (rate, day) = super::fx::rate_between(&state.db, &currency, &reporting, None)
+    let currency = currency.unwrap_or(deal_currency);
+    let (rate, day) = super::fx::rate_between(&state.db, &currency, &reporting_currency, None)
         .await?
         .ok_or_else(|| {
             AppError::Validation(format!(
-                "no exchange rate for {currency} into {reporting}: refresh the rate table under \
+                "no exchange rate for {currency} into {reporting_currency}: refresh the rate table under \
                  Deals → Settings"
             ))
         })?;
     let when = day.and_hms_opt(0, 0, 0).unwrap_or_default().and_utc();
-    Ok((amount, currency, rate, when, reporting))
+    Ok((amount, currency, rate, when, reporting_currency))
 }
 
 fn scalar_to_string(v: &Value) -> Option<String> {
@@ -1070,9 +1053,13 @@ pub async fn upsert(
     let source_app = blank(&req.source).unwrap_or_else(|| "console".to_string());
 
     // ── currency (CORE, software-wide) ──────────────────────────────────────────────────────
-    // Order: what the caller said -> what the deal already held -> what the workspace chose.
-    // There is NO USD fallback: a workspace with no stated currency is refused, with the two
-    // remedies named, because inventing a currency silently misprices every deal it touches.
+    // Order: what the caller said → what the deal already held → the workspace's stated default →
+    // the STANDING DEFAULT, USD.
+    //
+    // David's ruling, 2026-11-20 (kanban t_4e220c20): the US dollar is the standing default
+    // currency — a stated rule, not a guess — so a workspace that has not chosen one is a dollar
+    // workspace, and nobody's FIRST deal is refused for the want of a default. A per-deal currency
+    // still wins whenever the caller names one: this only decides what an unstated amount means.
     let (workspace_currency, workspace_reporting) =
         super::fx::workspace_currencies(&state.db, tenant_id).await?;
     let effective_currency = normalize_currency(req.currency.as_deref())?
@@ -1083,14 +1070,7 @@ pub async fn upsert(
                 .map(|c| c.trim().to_uppercase())
                 .filter(|c| !c.is_empty())
         })
-        .or_else(|| workspace_currency.clone())
-        .ok_or_else(|| {
-            AppError::Validation(
-                "this workspace has no default currency — send `currency` with the deal, or choose a \
-                 workspace currency under Deals → Settings"
-                    .to_string(),
-            )
-        })?;
+        .unwrap_or(workspace_currency);
     let currency_bind: Option<String> = if blank(&req.currency).is_some() {
         Some(effective_currency.clone())
     } else {
@@ -1108,9 +1088,7 @@ pub async fn upsert(
     //   3. the rate table for today, from the daily refresh.
     // A cross-currency deal that cannot be quoted is REFUSED with both remedies named; it is never
     // given a guessed rate and never left with a rate-less amount.
-    let reporting_currency = workspace_reporting
-        .clone()
-        .unwrap_or_else(|| effective_currency.clone());
+    let reporting_currency = workspace_reporting;
     let kept_rate = if currency_bind.is_none() {
         existing.as_ref().and_then(|d| {
             d.exchange_rate.map(|r| {

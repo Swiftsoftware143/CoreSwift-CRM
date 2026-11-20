@@ -63,8 +63,19 @@ pub fn normalize_iso(raw: &str) -> Result<String, AppError> {
     Ok(up)
 }
 
-/// The workspace's stated currency pair: (default, reporting).
-pub async fn workspace_currencies(
+/// The standing default currency (David, 2026-11-20 — kanban t_4e220c20): the US dollar, always.
+///
+/// This is a STATED RULE, not a guess — which is why it is a constant here instead of a per-row
+/// default that a newer workspace can be missing. A workspace that has never chosen a currency
+/// prices its deals in dollars and reports in dollars, and nobody's first deal is refused for the
+/// want of a default. Deals may still be priced in any ISO 4217 currency per deal; this only
+/// decides what an amount with no stated currency means.
+pub const STANDING_DEFAULT_CURRENCY: &str = "USD";
+
+/// The workspace's STATED currency pair, exactly as it sits in `tenants.settings` — no fallback at
+/// all. Only the settings screen reads this, because it is the one place that must be able to say
+/// "running on the standing default" instead of pretending the workspace chose.
+pub async fn stated_currencies(
     db: &PgPool,
     tenant_id: Uuid,
 ) -> Result<(Option<String>, Option<String>), AppError> {
@@ -80,6 +91,9 @@ pub async fn workspace_currencies(
             .filter(|c| !c.is_empty())
     };
     Ok(match settings {
+        // `settings` is jsonb but not guaranteed to be an OBJECT: one probe tenant carries a JSON
+        // string. `get` on a string yields nothing, so that row reads as "stated nothing" and falls
+        // through to the standing default rather than being rewritten.
         Some(s) => (
             pick(&s, &["default_currency", "currency"]),
             pick(&s, &["reporting_currency", "default_currency", "currency"]),
@@ -88,12 +102,26 @@ pub async fn workspace_currencies(
     })
 }
 
-/// What reports are computed in. Falls back to the default currency, because a workspace that has
-/// chosen ONE currency has chosen both.
+/// The workspace's EFFECTIVE currency pair: what it stated, else the standing default (USD).
+/// Reporting follows the default, because a workspace that has chosen ONE currency has chosen both.
+///
+/// Both arms are always present — that is the point. There is no longer such a thing as a missing
+/// default, so no write path can refuse a deal over one.
+pub async fn workspace_currencies(
+    db: &PgPool,
+    tenant_id: Uuid,
+) -> Result<(String, String), AppError> {
+    let (default, reporting) = stated_currencies(db, tenant_id).await?;
+    let default = default.unwrap_or_else(|| STANDING_DEFAULT_CURRENCY.to_string());
+    let reporting = reporting.unwrap_or_else(|| default.clone());
+    Ok((default, reporting))
+}
+
+/// What reports are computed in — always a currency, never `None`.
 pub async fn workspace_reporting_currency(
     db: &PgPool,
     tenant_id: Uuid,
-) -> Result<Option<String>, AppError> {
+) -> Result<String, AppError> {
     Ok(workspace_currencies(db, tenant_id).await?.1)
 }
 
@@ -146,13 +174,14 @@ pub async fn rate_between(
 }
 
 /// Store the workspace's currency choice. `reporting` is what reports compute in; when a workspace
-/// sets only a default, the reporting currency follows it (one currency = one answer).
+/// sets only a default, the reporting currency follows it (one currency = one answer). Returns the
+/// workspace's EFFECTIVE pair — a workspace that leaves both alone is still a USD workspace.
 pub async fn set_workspace_currencies(
     db: &PgPool,
     tenant_id: Uuid,
     default: Option<&str>,
     reporting: Option<&str>,
-) -> Result<(Option<String>, Option<String>), AppError> {
+) -> Result<(String, String), AppError> {
     if let Some(d) = default {
         sqlx::query(
             "UPDATE tenants SET settings = jsonb_set(COALESCE(settings,'{}'::jsonb),
@@ -178,7 +207,7 @@ pub async fn set_workspace_currencies(
     // A workspace that names a default but never names a reporting currency reports in its
     // default; keeping that rule in one place means no reader has to guess.
     if default.is_some() && reporting.is_none() {
-        let (_, current) = workspace_currencies(db, tenant_id).await?;
+        let (_, current) = stated_currencies(db, tenant_id).await?;
         if current.is_none() {
             sqlx::query(
                 "UPDATE tenants SET settings = jsonb_set(COALESCE(settings,'{}'::jsonb),
@@ -363,26 +392,21 @@ pub struct MoneyQuote {
 
 /// Resolve "what currency is this deal in, and at what rate" for a write path that is not the deal
 /// writer itself (the legacy pipeline routes and the CSV import) so they cannot drift back to a
-/// silent USD assumption. Order is the same everywhere: what the caller said → the workspace
-/// default → refusal. A cross-currency deal needs a rate; when the table has none the caller is
-/// told both remedies instead of being given a guess.
+/// silent USD assumption of their own. Order is the same everywhere: what the caller said → the
+/// workspace default → the standing default (USD, David 2026-11-20). Nothing here refuses a write
+/// for a missing workspace default, because there is no longer such a thing as one. A cross-currency
+/// deal still needs a rate; when the table has none the caller is told both remedies instead of
+/// being given a guess.
 pub async fn quote(
     db: &PgPool,
     tenant_id: Uuid,
     requested: Option<&str>,
 ) -> Result<MoneyQuote, AppError> {
-    let (default, reporting) = workspace_currencies(db, tenant_id).await?;
+    let (default, reporting_currency) = workspace_currencies(db, tenant_id).await?;
     let currency = match requested.map(str::trim).filter(|c| !c.is_empty()) {
         Some(c) => normalize_iso(c)?,
-        None => default.ok_or_else(|| {
-            AppError::Validation(
-                "this workspace has no default currency — say which currency the amount is in, or \
-                 choose a workspace currency under Deals → Settings"
-                    .to_string(),
-            )
-        })?,
+        None => default,
     };
-    let reporting_currency = reporting.unwrap_or_else(|| currency.clone());
     let (rate, day) = rate_between(db, &currency, &reporting_currency, None)
         .await?
         .ok_or_else(|| {

@@ -180,10 +180,8 @@ pub async fn list(
     .await?;
 
     let reporting_currency = super::fx::workspace_reporting_currency(&state.db, tenant).await?;
-    let mut reporting_total = 0.0f64;
-    let mut reporting_weighted = 0.0f64;
-    let mut unconverted = 0i64;
-    if let Some(rc) = reporting_currency.as_deref() {
+    let (reporting_total, reporting_weighted, unconverted) = {
+        let rc = reporting_currency.as_str();
         let row: (f64, f64, i64) = sqlx::query_as(
             "SELECT
                 COALESCE(SUM(CASE
@@ -236,10 +234,8 @@ pub async fn list(
         .bind(rc)
         .fetch_one(&state.db)
         .await?;
-        reporting_total = row.0;
-        reporting_weighted = row.1;
-        unconverted = row.2;
-    }
+        (row.0, row.1, row.2)
+    };
 
     let deal_count: i64 = by_currency.iter().map(|r| r.1).sum();
     let single_currency = by_currency.len() == 1;
@@ -260,8 +256,8 @@ pub async fn list(
         "totals_by_currency": totals_by_currency,
         "reporting": {
             "currency": reporting_currency,
-            "total_value": reporting_currency.as_ref().map(|_| reporting_total),
-            "weighted_value": reporting_currency.as_ref().map(|_| reporting_weighted),
+            "total_value": reporting_total,
+            "weighted_value": reporting_weighted,
             "unconverted_count": unconverted,
         },
     })))
@@ -1402,12 +1398,18 @@ pub async fn get_currency(
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant = tenant_of(&claims)?;
+    // The EFFECTIVE pair plus where it came from. Since David's ruling (2026-11-20) the US dollar
+    // is the standing default, so a workspace that never chose a currency is not "unset" — it is a
+    // dollar workspace, and the console says so instead of asking the human to pick one first.
     let (default, reporting) = fx::workspace_currencies(&state.db, tenant).await?;
-    // `set: false` is the console's cue to ask the human, not to print a bracket of dollars.
+    let (stated, _) = fx::stated_currencies(&state.db, tenant).await?;
     Ok(Json(json!({
         "currency": default,
         "reporting_currency": reporting,
-        "set": default.is_some(),
+        // Kept for older console builds: there is always a currency now.
+        "set": true,
+        "source": if stated.is_some() { "workspace" } else { "standing_default" },
+        "standing_default": fx::STANDING_DEFAULT_CURRENCY,
         "iso_currencies": fx::ISO_4217,
     })))
 }
@@ -1441,20 +1443,21 @@ pub async fn set_currency(
         .map(fx::normalize_iso)
         .transpose()?;
 
+    let names_reporting = reporting.is_some();
     let (default, reporting) =
         fx::set_workspace_currencies(&state.db, tenant, default.as_deref(), reporting.as_deref())
             .await?;
 
     let mut requoted = 0u64;
-    if let Some(rc) = reporting.as_deref() {
-        // Only a CHANGE of destination needs a re-quote: re-running it on every save would move
-        // rates around for no reason.
-        requoted = fx::requote_tenant(&state.db, tenant, rc).await?;
+    if names_reporting {
+        // Only a save that NAMES a reporting currency re-quotes: re-running it on every save would
+        // move rates around for no reason.
+        requoted = fx::requote_tenant(&state.db, tenant, &reporting).await?;
     }
     Ok(Json(json!({
         "currency": default,
         "reporting_currency": reporting,
-        "set": default.is_some(),
+        "set": true,
         "deals_requoted": requoted,
     })))
 }

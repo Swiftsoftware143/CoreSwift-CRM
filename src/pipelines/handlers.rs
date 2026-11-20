@@ -459,9 +459,7 @@ async fn reporting_money(
     pipeline_id: Uuid,
     stage_id: Option<Uuid>,
 ) -> Result<ReportingMoney, AppError> {
-    let reporting = crate::deals::fx::workspace_reporting_currency(db, tenant_id)
-        .await?
-        .unwrap_or_default();
+    let reporting = crate::deals::fx::workspace_reporting_currency(db, tenant_id).await?;
     if reporting.is_empty() {
         return Ok(ReportingMoney {
             currency: String::new(),

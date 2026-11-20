@@ -51,7 +51,7 @@ Accepted fields on `POST /api/external/deals`:
 | `external_ref` | **required**, the dedupe key |
 | `title` / `name` | the deal's name (either spelling) |
 | `value` | number; `null` clears it |
-| `currency` | ISO 4217 code, validated. Falls back to the workspace's DEFAULT currency. **Never assumed to be USD** — a workspace with no default is refused with a sentence naming both remedies |
+| `currency` | ISO 4217 code, validated. Falls back to the workspace's default currency, and then to **USD** — the standing default (David, 2026-11-20). A push that names no currency is never refused for a missing workspace default |
 | `exchange_rate` | optional; 1 unit of `currency` → the workspace REPORTING currency. Stored with the deal and stamped `rate_date`, so a past period never moves when rates do. Omitted → the deal's own stored rate is kept, else today's rate from the table |
 | `probability` | 0-100. Omitted → the stage's own default |
 | `expected_close_date` | `YYYY-MM-DD` |
@@ -99,10 +99,23 @@ A workspace states **two** currencies (Deals → Deals settings, or `PUT /api/de
 
 | setting | what it decides |
 | --- | --- |
-| `currency` (default) | what a deal is priced in when the push names no currency. **Never assumed to be USD** — a workspace with no default is refused with a sentence naming both remedies |
+| `currency` (default) | what a deal is priced in when the push names no currency. **USD is the standing default** (David, 2026-11-20): a workspace that has never stated one prices and reports in US dollars, and a first deal is never refused for the want of a default. Set another here to price this workspace's deals in something else |
 | `reporting_currency` | what totals and reports are computed in. Follows the default when a workspace only states one |
 
 Both are validated against the real ISO 4217 list, so `ABC` is refused rather than stored.
+
+The resolution order, identical on every write path (the console, this API, the legacy pipeline
+routes and the CSV import) is: **what the caller said → what the deal already held → the workspace
+default → USD**. Only a code that is not a real currency is refused; a missing workspace default is
+not a reason to refuse anything. A per-deal currency still wins whenever one is named — the default
+decides only what an unstated amount means.
+
+A workspace created from now on is also **seated** with `default_currency = "USD"` at creation (a
+BEFORE INSERT trigger on `tenants`), so its own record says what it is instead of looking unset on
+the settings screen. Seating and the read-time fallback are deliberately both present: the seat is
+what a human sees, the fallback is what keeps the rule true for a workspace created before the seat
+existed (or by a write path that forgot to pass one). Neither writes `reporting_currency` — it is
+derived from the default, and a second stored copy would be a fact that can disagree.
 
 Every deal stores three facts beside its value: `currency`, `exchange_rate` (1 unit of the deal's
 currency → the workspace reporting currency) and `rate_date` (the day that rate was true), plus

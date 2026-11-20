@@ -6406,13 +6406,15 @@ function confirmThen(msg, fn) { if (window.confirm(msg)) fn(); }
 // it. Nothing here is industry-specific: a workspace that needs courier fields (Xride) adds them
 // as CUSTOM FIELDS, which is the same mechanism any other industry uses.
 //
-// Money is shown per currency, never added across currencies. A workspace that has not chosen a
-// currency is asked to choose one before it can record a value — the app never assumes dollars.
+// Money is shown per currency, never added across currencies. David's standing rule (2026-11-20):
+// the US DOLLAR is the default currency, so a workspace that has not chosen one prices its deals in
+// USD and reports in USD — nobody is asked to choose one first, and a first deal is never refused.
 let PL_DATA = [];
 let PL_FILTER = { q: '', owner_id: '', stage_id: '', source: '', status: '', from: '', to: '', rotting: false };
 let PL_REPORT = [];
 let PL_CURRENCY = null;          // the workspace DEFAULT currency (what a new deal is priced in)
 let PL_REPORTING = null;         // what reports are computed in
+let PL_CURRENCY_SOURCE = null;   // 'workspace' (chosen here) or 'standing_default' (USD by rule)
 let PL_ISO = [];                 // the real ISO 4217 codes the server accepts
 let PL_TEAM = [];
 let PL_DETAIL = null;
@@ -6586,15 +6588,17 @@ async function loadPipelinesTab() {
         const cur = await API.get('/deals/currency');
         PL_CURRENCY = cur.currency || '';
         PL_REPORTING = cur.reporting_currency || PL_CURRENCY;
+        PL_CURRENCY_SOURCE = cur.source || null;
         PL_ISO = cur.iso_currencies || [];
       } catch (_) {}
     }
     const noteEl = document.getElementById('plCurrencyNote');
     if (noteEl) {
       noteEl.innerHTML = PL_CURRENCY
-        ? 'Default currency: <strong>' + escapeHtml(PL_CURRENCY) + '</strong> · reports in <strong>' +
-          escapeHtml(PL_REPORTING || PL_CURRENCY) + '</strong> · <a href="#" onclick="plDealSettings();return false">change</a> · <a href="#" onclick="plRefreshRates();return false">refresh rates</a>'
-        : '<span style="color:var(--bad,#ef4444)">No workspace currency set — <a href="#" onclick="plDealSettings();return false">choose one</a> before recording values.</span>';
+        ? 'Default currency: <strong>' + escapeHtml(PL_CURRENCY) + '</strong>' +
+          (PL_CURRENCY_SOURCE === 'standing_default' ? ' <span class="config-desc">(the standing default — set another per workspace)</span>' : '') +
+          ' · reports in <strong>' + escapeHtml(PL_REPORTING || PL_CURRENCY) + '</strong> · <a href="#" onclick="plDealSettings();return false">change</a> · <a href="#" onclick="plRefreshRates();return false">refresh rates</a>'
+        : '';
     }
     const pipes = famList(await API.get('/pipelines'), 'pipelines');
     PL_DATA = [];
@@ -7083,6 +7087,7 @@ async function plDealSettings() {
       const c = await API.get('/deals/currency');
       PL_CURRENCY = c.currency || '';
       PL_REPORTING = c.reporting_currency || PL_CURRENCY;
+      PL_CURRENCY_SOURCE = c.source || null;
       PL_ISO = c.iso_currencies || [];
     } catch (_) {}
   }
@@ -7096,7 +7101,7 @@ async function plDealSettings() {
   showModal('Deals settings',
     '<div class="form-group"><label>Default currency — what a new deal is priced in</label>' +
       '<select id="dlDefaultCur">' + plCurrencyOptions(PL_CURRENCY) + '</select>' +
-      '<div class="config-desc">A deal that names no currency takes this one. A workspace with none is refused, never assumed to be dollars.</div></div>' +
+      '<div class="config-desc">A deal that names no currency takes this one. <strong>USD is the standing default</strong> — a workspace that has not chosen here is a dollar workspace, and a first deal is never refused for the want of a default.</div></div>' +
     '<div class="form-group"><label>Reporting currency — what totals and reports compute in</label>' +
       '<select id="dlReportingCur">' + plCurrencyOptions(PL_REPORTING || PL_CURRENCY) + '</select>' +
       '<div class="config-desc">Every deal stores the rate that converts it into this currency, on the day it was written. Changing this re-quotes open history from the rate that was true on each deal\'s own date — it never re-prices from today\'s market.</div></div>' +
@@ -7128,6 +7133,7 @@ async function plSaveCurrency() {
     const r = await API.put('/deals/currency', body);
     PL_CURRENCY = r.currency || PL_CURRENCY;
     PL_REPORTING = r.reporting_currency || PL_REPORTING;
+    PL_CURRENCY_SOURCE = 'workspace';
     toast('Currencies saved' + (r.deals_requoted ? ' (' + r.deals_requoted + ' deal(s) re-quoted)' : ''), 'success');
     closeModal();
     loadPipelinesTab();
@@ -7240,10 +7246,11 @@ async function plAddDeal(pid, presetStageId) {
     '<div class="form-group"><label>Contact</label><select id="dlContact">' + opts + '</select></div>' +
     '<div class="form-group"><label>Stage</label><select id="dlStage">' + stageOpts + '</select></div>' +
     '<div class="form-group"><label>Value</label><input type="number" id="dlValue" step="0.01"></div>' +
-    // Currency is chosen per deal from the real ISO list; it defaults to the workspace currency and
-    // is never assumed to be dollars (David, 2026-11-20).
+    // Currency is chosen per deal from the real ISO list. It starts at the workspace default, which
+    // is USD unless the workspace set another one — the standing default (David, 2026-11-20), so
+    // there is always a code here and a first deal is never refused.
     '<div class="form-group"><label>Currency</label><select id="dlCur">' + plCurrencyOptions(cur) + '</select>' +
-      (cur ? '' : '<div class="config-desc" style="color:var(--bad,#ef4444)">No workspace currency set — choose one under “Deals settings”.</div>') + '</div>' +
+      (cur ? '' : '<div class="config-desc">Using the standing default currency, USD.</div>') + '</div>' +
     '<div class="form-group"><label>Exchange rate <span class="config-desc">(optional — 1 unit of this currency in ' +
       escapeHtml(PL_REPORTING || 'the reporting currency') + ')</span></label>' +
       '<input type="number" id="dlRate" step="0.00000001" placeholder="leave empty to use today\'s stored rate"></div>' +
