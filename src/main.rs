@@ -407,17 +407,33 @@ async fn main() -> anyhow::Result<()> {
     let body_read_deadline =
         body_deadline::BodyReadDeadline::from_secs(config.body_read_deadline_secs);
 
-    // Telnyx webhook verification posture (kanban t_fd5000e1), in the boot log for the same reason
-    // the body deadline is above: whether the two public Telnyx receivers can accept ANYTHING has to
-    // be readable without opening the source. Unset key = every delivery refused, which an operator
-    // needs to see before wondering why inbound SMS stopped.
+    // Telnyx webhook verification posture (kanban t_fd5000e1; the operator-row fallback is
+    // t_e2017eb0), in the boot log for the same reason the body deadline is above: whether the two
+    // public Telnyx receivers can accept ANYTHING has to be readable without opening the source.
+    // No key anywhere = every delivery refused, which an operator needs to see before wondering why
+    // inbound calls and SMS stopped.
+    let (telnyx_signing_key, telnyx_key_source) = match telnyx::handlers::resolve_signing_key(
+        config.telnyx_public_key.as_deref(),
+        &state.db,
+    )
+    .await
+    {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            tracing::error!(
+                    "Telnyx signing key could not be read from the operator row: {e} — both receivers refuse every delivery 503 until it can be read"
+                );
+            (None, telnyx::handlers::SigningKeySource::None)
+        }
+    };
     tracing::info!(
-        "Telnyx webhook verification: {} (telnyx-signature-ed25519 over `<telnyx-timestamp>|<body>`, {}s tolerance, TELNYX_PUBLIC_KEY)",
-        match config.telnyx_public_key.as_deref() {
+        "Telnyx webhook verification: {} (telnyx-signature-ed25519 over `<telnyx-timestamp>|<body>`, {}s tolerance, key from {})",
+        match telnyx_signing_key.as_deref() {
             Some(_) => "ENABLED on /api/telnyx/webhook and /api/telnyx/sms-webhook".to_string(),
-            None => "NOT CONFIGURED — both receivers refuse every delivery with 503 until TELNYX_PUBLIC_KEY is set".to_string(),
+            None => "NOT CONFIGURED — both receivers refuse every delivery with 503 telnyx_verification_not_configured until a key is set (TELNYX_PUBLIC_KEY or the admin console's Telnyx panel)".to_string(),
         },
-        config.telnyx_signature_tolerance_secs
+        config.telnyx_signature_tolerance_secs,
+        telnyx_key_source.as_str()
     );
 
     // Rate-limit posture in the boot log for the same reason the body deadline is above: the

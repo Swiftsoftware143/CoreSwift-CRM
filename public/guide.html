@@ -1292,14 +1292,29 @@ GET /api/billing/features</pre>
   </div>
 
   <div class="card">
-    <h3>Admin: Telnyx Configuration (API only)</h3>
-    <p>Telnyx provider settings are read and written through the API: <code>GET /api/telnyx/config</code>,
-       <code>PUT /api/telnyx/config</code>, and <code>GET /api/telnyx/available</code> for the phone numbers on
-       the account. The console's <strong>Telnyx Admin</strong> entry (Communication Admin group) is a placeholder
-       screen today, so there is no form to paste the key into.</p>
-    <pre>GET /api/telnyx/config
-PUT /api/telnyx/config
-GET /api/telnyx/available</pre>
+    <h3>Admin: Telnyx Admin panel (SMS, voice and the inbound signing key)</h3>
+    <p>The console's <strong>Telnyx Admin</strong> entry (Communication Admin group) is a real screen:
+       it reads <code>GET /api/telnyx/config</code>, writes <code>PUT /api/telnyx/config</code> (this
+       workspace's own key, encrypted before it is stored) and lists the numbers on the account with
+       <code>GET /api/telnyx/available</code>.</p>
+    <p>Below those sits one more card, the <strong>inbound webhook signing key</strong>. Telnyx signs
+       every inbound call and SMS delivery with the account's Ed25519 public key; while no key is
+       configured, both public receivers (<code>POST /api/telnyx/webhook</code> and
+       <code>POST /api/telnyx/sms-webhook</code>) answer
+       <code>503 telnyx_verification_not_configured</code> and apply nothing, so inbound calls and SMS
+       cannot work. Paste the ACCOUNT public key (Telnyx Mission Control &rarr; account settings &rarr;
+       public key &rarr; Show; base64, 32 bytes) into the card and press <strong>Save signing key</strong>
+       &mdash; no redeploy and no restart. <strong>Clear saved key</strong> removes it again, and the
+       card says plainly whether inbound deliveries can be received at all.</p>
+    <p>The two receivers read <code>TELNYX_PUBLIC_KEY</code> from the server environment FIRST and the
+       key saved here second, so a deployment that sets that variable behaves exactly as before; the
+       card names which of the two is in force. A delivery that fails the signature is answered
+       <code>401</code> and nothing from it is applied.</p>
+    <pre>GET  /api/admin/telnyx-config   platform admin: readiness, which store carries the key, masked
+PUT  /api/admin/telnyx-config   platform admin: { "public_key": "…" } or { "clear_public_key": true }
+GET  /api/telnyx/config
+PUT  /api/telnyx/config
+GET  /api/telnyx/available</pre>
   </div>
 
   <div class="card">

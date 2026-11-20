@@ -18,12 +18,15 @@
 //! PUT  /api/admin/tenants/:id/plan — put a TARGET tenant on a plan (admin; kanban t_f1ffb865)
 //! GET  /api/admin/provisioning-config — the tag → free account knobs (admin; kanban t_e968e9ad)
 //! PUT  /api/admin/provisioning-config — save them (admin; kanban t_e968e9ad)
+//! GET  /api/admin/telnyx-config — inbound Telnyx signing-key readiness, masked (admin; kanban t_e2017eb0)
+//! PUT  /api/admin/telnyx-config — save or clear the Telnyx account signing key (admin; kanban t_e2017eb0)
 
 pub mod billing_settings;
 pub mod email_config;
 pub mod handlers;
 pub mod provisioning_config;
 pub mod site_handler;
+pub mod telnyx_config;
 
 use crate::AppState;
 use axum::{middleware, Router};
@@ -103,6 +106,15 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/provisioning-config",
             axum::routing::get(provisioning_config::get_config)
                 .put(provisioning_config::update_config),
+        )
+        // The Telnyx ACCOUNT Ed25519 signing key — the inbound receivers' credential (kanban
+        // t_e2017eb0). Without it both public Telnyx receivers answer
+        // `503 telnyx_verification_not_configured` and apply nothing, so inbound calls and SMS are
+        // dead; before this route the key existed only in the deploy environment. On this router,
+        // so the platform-admin gate below covers it — a tenant `owner` is refused.
+        .route(
+            "/telnyx-config",
+            axum::routing::get(telnyx_config::get_config).put(telnyx_config::update_config),
         )
         // Data-driven module & feature registry (CS-25..CS-27). The admin assigns MODULES and
         // individual FEATURES of each module to plans here; the catalogue itself lives in the

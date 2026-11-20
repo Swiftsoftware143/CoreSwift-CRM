@@ -198,6 +198,17 @@
 //!        resolves 520 mounted `.route(..)` calls / 506 on /api** (520 = 506 /api + the 14
 //!        root-level mounts), and those are what `the_census_shape_is_what_the_docs_say` pins.
 //!
+//!   +1 mount (2026-11-20, kanban t_e2017eb0), THE TELNYX INBOUND SIGNING KEY:
+//!        `GET|PUT /api/admin/telnyx-config` — the operator's second way in for the ACCOUNT Ed25519
+//!        public key that both public Telnyx receivers verify deliveries with (before it, that key
+//!        existed only as `TELNYX_PUBLIC_KEY` in the deploy environment, so inbound calls and SMS
+//!        could not be turned on without a root file edit and a restart). It sits on the
+//!        admin_actions protected branch, i.e. behind `auth_middleware` AND the router-wide
+//!        platform-admin gate, so it joins no allowlist; measured anonymous it answers 401
+//!        "Authentication required". The extractor now resolves 528 mounted `.route(..)` calls /
+//!        514 on /api** (528 = 514 /api + the 14 root-level mounts), and those are what
+//!        `the_census_shape_is_what_the_docs_say` pins.
+//!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
 //!        the per-module gate was doing its job. The two /api routes added since (kanban
@@ -1432,12 +1443,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            527,
+            528,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 513,
+            api, 514,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.

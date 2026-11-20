@@ -1252,6 +1252,7 @@ const MENU = [
     { id:'telnyx', icon:'📱', label:'Telnyx SMS/Voice' },
     { id:'comm-log', icon:'📜', label:'Communications Log' }
   ]},
+  { id:'deals', icon:'💰', label:'Deals' },
   { id:'tickets', icon:'🎫', label:'Support Tickets' },
   { type:'group', icon:'📬', label:'Inbox', children:[
     { id:'inbox', icon:'📬', label:'Private Email' }
@@ -1699,6 +1700,98 @@ function renderTelnyxAdmin(d) {
     '<div id="txNumbers" style="margin-top:16px"></div>' +
     '</div></div>';
   wrap.innerHTML = html;
+  // Inbound signing key (kanban t_e2017eb0) — rendered by loadTelnyxSigningKey() from
+  // GET /api/admin/telnyx-config, so this screen shows the key the TWO PUBLIC RECEIVERS actually
+  // verify with (server environment first, then the value saved here).
+  const signBox = document.createElement('div');
+  signBox.id = 'txSigning';
+  signBox.style.marginTop = '20px';
+  wrap.appendChild(signBox);
+  loadTelnyxSigningKey();
+}
+
+// ========== TELNYX INBOUND SIGNING KEY (kanban t_e2017eb0) ==========
+// Telnyx signs every inbound call and SMS delivery with the ACCOUNT's Ed25519 key. While no key is
+// configured, POST /api/telnyx/webhook and POST /api/telnyx/sms-webhook answer
+// 503 telnyx_verification_not_configured and apply NOTHING — inbound calls and SMS are dead. The
+// receivers read TELNYX_PUBLIC_KEY from the deploy environment FIRST, then the row this panel
+// writes, so saving here turns inbound verification on with no file edit and no restart.
+async function loadTelnyxSigningKey() {
+  const box = document.getElementById('txSigning');
+  if (!box) return;                 // the tab was switched away mid-load
+  box.innerHTML = '<div class="card"><div class="card-body" style="color:var(--text-muted)">Reading the inbound signing key…</div></div>';
+  try {
+    renderTelnyxSigning(await API.get('/admin/telnyx-config'));
+  } catch (e) {
+    box.innerHTML = '<div class="card"><div class="card-body" style="text-align:center">' +
+      '<p style="color:var(--error)">Could not read the inbound signing key: ' + escapeHtml(e.message) + '</p>' +
+      '<button class="btn btn-secondary btn-sm" onclick="loadTelnyxSigningKey()">Retry</button></div></div>';
+  }
+}
+
+function renderTelnyxSigning(d) {
+  const box = document.getElementById('txSigning');
+  if (!box) return;
+  const on = !!(d && d.configured);
+  const src = (d && d.source) || 'none';
+  const srcLabel = src === 'env' ? 'server environment (TELNYX_PUBLIC_KEY)'
+    : (src === 'config' ? 'saved from this panel' : 'nothing configured');
+  const row = (label, value, hint) =>
+    '<div class="config-item"><div class="config-info"><div class="config-label">' + label + '</div>' +
+    (hint ? '<div class="config-desc">' + hint + '</div>' : '') + '</div>' +
+    '<div style="font-size:.86rem;color:var(--text-primary);text-align:right;word-break:break-all">' + value + '</div></div>';
+
+  let html = '<div class="card"><div class="card-header">📞 Inbound webhook signing key</div><div class="card-body"><div class="config-list">';
+  html += row('Inbound calls & SMS',
+    on ? '<span class="badge badge-success">● can be received</span>'
+       : '<span class="badge badge-error">● refused — nothing is applied</span>',
+    'Telnyx signs every delivery. With no key the two public receivers answer 503 and drop the event.');
+  html += row('Key in use', escapeHtml(srcLabel),
+    'The server environment wins whenever it carries a key; otherwise the value saved here is used.');
+  if (d && d.public_key_preview) {
+    html += row('Saved key', escapeHtml(d.public_key_preview),
+      'A public key is not a secret — this is shown so you can tell WHICH key is in force.');
+  }
+  if (d && d.note) html += row('Status', escapeHtml(d.note), '');
+  html += '</div>';
+  if (d && d.env_set) {
+    html += '<p class="config-desc" style="margin-top:12px">The server environment carries a key, so a value saved here is ignored until that environment variable is cleared.</p>';
+  }
+  html += '<div class="form-group" style="margin-top:14px"><label class="form-label">Account public key (base64, 32 bytes)</label>' +
+    '<input class="form-input" id="tx_pubkey" placeholder="paste the ACCOUNT public key from Telnyx Mission Control" autocomplete="off" value=""></div>' +
+    '<p class="config-desc" style="margin-bottom:12px">Telnyx Mission Control → Account settings → Public key (Show). This is the PUBLIC half only — never paste the API key here.</p>' +
+    '<button class="btn btn-primary" onclick="saveTelnyxSigningKey()">Save signing key</button> ' +
+    '<button class="btn btn-danger" onclick="clearTelnyxSigningKey()">Clear saved key</button>' +
+    '</div></div>';
+  box.innerHTML = html;
+}
+
+async function saveTelnyxSigningKey() {
+  const el = document.getElementById('tx_pubkey');
+  const key = el ? el.value.trim() : '';
+  if (!key) { toast('Paste the account public key first.', 'warning'); return; }
+  try {
+    const d = await API.put('/admin/telnyx-config', { public_key: key });
+    toast(d.configured
+      ? 'Signing key saved — inbound calls and SMS can be verified now.'
+      : 'Saved, but inbound verification is still off — check the status line.', d.configured ? 'success' : 'warning');
+    renderTelnyxSigning(d);
+  } catch (e) {
+    toast('Save failed: ' + e.message, 'error');
+  }
+}
+
+async function clearTelnyxSigningKey() {
+  if (!confirm('Remove the signing key saved here? Inbound Telnyx calls and SMS will be REFUSED (503) until a key is set again or the server environment carries one.')) return;
+  try {
+    const d = await API.put('/admin/telnyx-config', { clear_public_key: true });
+    toast(d.configured
+      ? 'Saved key removed — the server environment still carries one, so inbound verification stays on.'
+      : 'Saved key removed — inbound Telnyx deliveries are refused until a key is set.', d.configured ? 'success' : 'warning');
+    renderTelnyxSigning(d);
+  } catch (e) {
+    toast('Could not clear the key: ' + e.message, 'error');
+  }
 }
 
 async function saveTelnyxAdmin() {
@@ -2011,6 +2104,12 @@ const TAB_RENDERERS = {
   },
 
   'pipelines': () => {
+    return pageHeader('Pipelines & Deals', 'Track deals through your sales pipeline',
+      '<button class="btn btn-primary btn-sm" onclick="showAddDealModal()">+ Add Deal</button>') +
+    '<div id="pipelinesContent"><div class="loading-wrap"><div class="spinner"></div> Loading pipelines...</div></div>';
+  },
+  // The Deals tab opens the deals workspace itself (David, 2026-11-20).
+  'deals': () => {
     return pageHeader('Pipelines & Deals', 'Track deals through your sales pipeline',
       '<button class="btn btn-primary btn-sm" onclick="showAddDealModal()">+ Add Deal</button>') +
     '<div id="pipelinesContent"><div class="loading-wrap"><div class="spinner"></div> Loading pipelines...</div></div>';
@@ -4087,6 +4186,60 @@ const TAB_LOADERS = {
   },
 
   'pipelines': async () => {
+    const pipelinesContentEl = document.getElementById('pipelinesContent');
+    if (!pipelinesContentEl) return;
+    try {
+      // GET /api/pipelines answers an ENVELOPE of WRAPPERS — {pipelines:[{pipeline:{…},stages:[…]}]} —
+      // and each pipeline's deals live behind their own route. This reader tested Array.isArray() on the
+      // envelope and then read a nested `deals` key the route has never returned, so the tab painted
+      // "No pipelines yet" for every tenant and its deal table could never hold a row. The unwrap, the
+      // wrapper hop, the opportunities read and the three counters are the TENANT shell's own
+      // (nginx/www-app/coreswift/index.html loadPipelinesTab), copied expression-for-expression.
+      const pipes = famList(await API.get('/pipelines'), 'pipelines');
+      let html = '';
+      if (pipes.length > 0) {
+        for (const row of pipes) {
+          const p = row.pipeline || row;
+          let opps = [];
+          try { opps = famList(await API.get('/pipelines/' + p.id + '/opportunities?per_page=50'), 'opportunities'); } catch (_) {}
+          const won = opps.filter(function (o) { return o.is_won; }).length;
+          const lost = opps.filter(function (o) { return o.is_lost; }).length;
+          const open = opps.length - won - lost;
+          html += '<div class="card" style="margin-bottom:16px">' +
+            '<div class="card-header">📈 ' + fh(p.name) +
+              ' <span class="badge badge-primary">' + opps.length + ' deals</span> ' +
+              '<span class="badge badge-success">' + won + ' won</span> ' +
+              '<span class="badge badge-muted">' + open + ' open</span> ' +
+              '<span class="badge badge-error">' + lost + ' lost</span>' +
+            '</div><div class="card-body">' +
+              '<div class="table-wrap"><table>' +
+                '<thead><tr><th>Deal</th><th>Value</th><th>Probability</th></tr></thead><tbody>';
+          if (opps.length === 0) {
+            html += '<tr><td colspan="3" style="text-align:center;color:var(--text-muted)">No deals in this pipeline</td></tr>';
+          } else {
+            opps.forEach(o => {
+              // The old Contact and Stage columns are gone rather than re-fed: the opportunity row
+              // carries contact_id/stage_id, not names, and GET /api/pipelines has never returned a
+              // nested `deals` key — both cells were fed by keys that do not exist (t_4b1081bf's rule:
+              // a cell fed by a key the route never returns is a lie; removal is the honest arm).
+              html += '<tr>' +
+                '<td>' + fh(o.name) + '</td>' +
+                '<td>' + (o.value !== null && o.value !== undefined ? '$' + Number(o.value).toLocaleString() : '—') + '</td>' +
+                '<td>' + (o.probability !== null && o.probability !== undefined ? o.probability + '%' : '—') + '</td>' +
+              '</tr>';
+            });
+          }
+          html += '</tbody></table></div></div></div>';
+        }
+      } else {
+        html = '<div class="card"><div class="card-body"><div class="empty-state"><div class="empty-icon">📈</div><h3>No pipelines yet</h3><p>Create your first sales pipeline to start tracking deals.</p></div></div></div>';
+      }
+      pipelinesContentEl.innerHTML = html;
+    } catch(e) {
+      pipelinesContentEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Pipelines endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
+    }
+  },
+  'deals': async () => {
     const pipelinesContentEl = document.getElementById('pipelinesContent');
     if (!pipelinesContentEl) return;
     try {
@@ -7739,11 +7892,36 @@ function auditExportCsv() {
 const PEI = { msgs: [], boxes: [], domains: [], unreadOnly: false, err: null, open: null, loaded: false };
 
 function renderPrivateEmailInbox() {
+  // ── A MAILBOX PEOPLE CAN ACTUALLY USE (David, 2026-11-20) ──────────────────────────────────────
+  // It was a list and nothing else: no folders, no compose, no way to move a message. The API had all
+  // of it already (folder=inbox|spam|trash|sent|drafts|archive, POST /private-email/send,
+  // POST /messages/:id/move) — the screen did not offer it. Folders are tabs with their counts, and
+  // Compose is a button on the panel, because "I cannot send an email from the mailbox" makes the
+  // mailbox decoration.
   return pageHeader('Private Email',
     'Read the mail that arrives on your domains and reply from the address it was sent to',
+    '<button class="btn btn-primary btn-sm" data-pei="compose">\u2709 Compose</button> ' +
     '<button class="btn btn-secondary btn-sm" onclick="loadPrivateEmailTab()">\uD83D\uDD03 Refresh</button>') +
+    '<div id="peiFolders" style="margin-bottom:10px"></div>' +
     '<div id="peiInbox"><div class="loading-wrap"><div class="spinner"></div> Loading the shared inbox...</div></div>' +
     '<div id="peiSetup" style="margin-top:16px"></div>';
+}
+
+// The folder tabs. Counts come from the table, so a folder is never described by what one read returned.
+function peiPaintFolders() {
+  const el = document.getElementById('peiFolders');
+  if (!el) return;
+  const folders = [
+    ['inbox', '\uD83D\uDCE5 Inbox'], ['unread', '\u25CF Unread'], ['sent', '\u2191 Sent'],
+    ['drafts', '\u270E Drafts'], ['spam', '\u26A0 Spam'], ['trash', '\uD83D\uDDD1 Trash'], ['archive', '\uD83D\uDCE6 Archive']
+  ];
+  const counts = PEI.counts || {};
+  el.innerHTML = folders.map(function (f) {
+    const active = (PEI.folder || 'inbox') === f[0];
+    const n = counts[f[0]];
+    return '<button class="btn ' + (active ? 'btn-primary' : 'btn-secondary') + ' btn-sm" data-pei="folder" data-id="' + f[0] + '" style="margin:0 6px 6px 0">' +
+      f[1] + (typeof n === 'number' ? ' <span style="opacity:.75">' + n + '</span>' : '') + '</button>';
+  }).join('');
 }
 
 function peiWhen(d) {
@@ -7773,7 +7951,7 @@ async function loadPrivateEmailTab() {
   if (!listEl) return;
   PEI.err = null;
   const r = await Promise.all([
-    API.get('/private-email/messages?folder=inbox&address=all&limit=100').catch(e => ({ __err: e })),
+    API.get('/private-email/messages?folder=' + encodeURIComponent(PEI.folder || 'inbox') + '&address=all&limit=100').catch(e => ({ __err: e })),
     API.get('/private-email/boxes').catch(() => []),
     API.get('/private-email/domains').catch(() => []),
     API.get('/private-email/messages/counts').catch(() => null)
@@ -7786,6 +7964,7 @@ async function loadPrivateEmailTab() {
   PEI.domains = Array.isArray(d) ? d : ((d && (d.domains || d.items)) || []);
   PEI.counts = r[3] || null;
   PEI.loaded = true;
+  peiPaintFolders();
   peiPaintList();
   peiPaintSetup();
 }
@@ -7995,13 +8174,64 @@ document.addEventListener('click', function (ev) {
   if (!t) return;
   const action = t.getAttribute('data-pei');
   const id = t.getAttribute('data-id');
-  if (action === 'add-domain') peiAddDomain();
+  if (action === 'folder') { PEI.folder = id; loadPrivateEmailTab(); }
+  else if (action === 'compose') peiCompose();
+  else if (action === 'move') peiMove(window.__peiMoveId, id);
+  else if (action === 'open') peiOpen(id);
+  else if (action === 'add-domain') peiAddDomain();
   else if (action === 'add-box') peiAddBox();
   else if (action === 'set-key') peiSetKey(id);
   else if (action === 'verify') peiVerifyDomain(id);
   else if (action === 'catch-on') peiCatchAll(id, true);
   else if (action === 'catch-off') peiCatchAll(id, false);
 });
+
+// Compose. From-address is one of this workspace's own mailboxes, so nothing can be sent from an
+// address the account does not own.
+function peiCompose() {
+  const boxes = (PEI.boxes || []).filter(function (b) { return (b.status || 'active') === 'active'; });
+  if (!boxes.length) {
+    toast('Add a mailbox first — a message has to be sent FROM one of your addresses.', 'error');
+    return;
+  }
+  const opts = boxes.map(function (b) {
+    return '<option value="' + escapeHtmlAttr(b.email_address) + '">' + escapeHtml(b.email_address) + '</option>';
+  }).join('');
+  showModal('Compose',
+    '<div class="form-group"><label>From</label><select id="peiFrom" style="width:100%">' + opts + '</select></div>' +
+    '<div class="form-group"><label>To</label><input id="peiTo" type="email" autocomplete="off" style="width:100%"></div>' +
+    '<div class="form-group"><label>Subject</label><input id="peiSubject" autocomplete="off" style="width:100%"></div>' +
+    '<div class="form-group"><label>Message</label><textarea id="peiBody" rows="8" style="width:100%"></textarea></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="peiSend()">Send</button>');
+}
+
+async function peiSend() {
+  const from = document.getElementById('peiFrom').value;
+  const to = (document.getElementById('peiTo').value || '').trim();
+  const subject = (document.getElementById('peiSubject').value || '').trim();
+  const body = (document.getElementById('peiBody').value || '');
+  if (!to || to.indexOf('@') < 1) { toast('Enter a valid To address.', 'error'); return; }
+  if (!subject) { toast('Give it a subject.', 'error'); return; }
+  if (!body.trim()) { toast('Write something first.', 'error'); return; }
+  try {
+    await API.post('/private-email/send', { from_address: from, to: to, subject: subject, body: body });
+    closeModal();
+    toast('Sent.');
+    PEI.folder = 'sent'; loadPrivateEmailTab();
+  } catch (e) { toast('Could not send: ' + (planGateText(e) || e.message), 'error'); }
+}
+
+// Move a message to spam / trash / archive, or back to the inbox. The route is the same one the
+// customer's own client uses.
+async function peiMove(messageId, folder) {
+  if (!messageId || !folder) return;
+  try {
+    await API.post('/private-email/messages/' + encodeURIComponent(messageId) + '/move', { folder: folder });
+    toast('Moved to ' + folder + '.');
+    loadPrivateEmailTab();
+  } catch (e) { toast('Could not move it: ' + (planGateText(e) || e.message), 'error'); }
+}
 
 function peiAddDomain() {
   showModal('Add a domain',

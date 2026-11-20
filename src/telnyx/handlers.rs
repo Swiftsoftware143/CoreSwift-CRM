@@ -184,6 +184,101 @@ async fn get_global_config(db: &sqlx::PgPool) -> Result<Option<TelnyxConfig>, Ap
     Ok(config)
 }
 
+// ---------------------------------------------------------------------------
+// The inbound signing key — where the receivers get it (kanban t_e2017eb0)
+// ---------------------------------------------------------------------------
+
+/// Length of a raw Ed25519 public key, in bytes. The only length Telnyx issues.
+pub const ED25519_PUBLIC_KEY_LEN: usize = 32;
+
+/// Which credential the inbound receivers verify a delivery against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigningKeySource {
+    /// `TELNYX_PUBLIC_KEY` in the deploy environment. WINS whenever it is set.
+    Env,
+    /// `telnyx_config.public_key`, saved from the admin console's Telnyx panel.
+    Config,
+    /// Neither: both receivers refuse every delivery `503 telnyx_verification_not_configured`.
+    None,
+}
+
+impl SigningKeySource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SigningKeySource::Env => "env",
+            SigningKeySource::Config => "config",
+            SigningKeySource::None => "none",
+        }
+    }
+}
+
+/// The key the inbound receivers must verify against, and where it came from.
+///
+/// ENV FIRST, then the operator row (fleet parity with MissedCall Respondr, kanban t_38b352f8 /
+/// t_e2017eb0). A deployment that sets `TELNYX_PUBLIC_KEY` behaves exactly as before and — because
+/// the stored value is only read when the environment carries none — pays no database read on the
+/// delivery path at all. Both empty is the pre-existing posture: `None`, which the receivers answer
+/// `503 telnyx_verification_not_configured`.
+///
+/// A database error is propagated rather than swallowed: refusing a delivery because the stored key
+/// could not be read is failing CLOSED, and Telnyx retries a non-2xx delivery.
+pub async fn resolve_signing_key(
+    env_key: Option<&str>,
+    db: &sqlx::PgPool,
+) -> Result<(Option<String>, SigningKeySource), AppError> {
+    if let Some(key) = env_key.map(str::trim).filter(|k| !k.is_empty()) {
+        return Ok((Some(key.to_string()), SigningKeySource::Env));
+    }
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT public_key FROM telnyx_config WHERE is_active = true LIMIT 1")
+            .fetch_optional(db)
+            .await?;
+    let stored = stored
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty());
+    match stored {
+        Some(key) => Ok((Some(key), SigningKeySource::Config)),
+        None => Ok((None, SigningKeySource::None)),
+    }
+}
+
+/// Validate an operator-supplied account signing key, returning the value to store.
+///
+/// Refused HERE rather than at the first delivery: a value that cannot be a 32-byte Ed25519 key
+/// would leave the receivers answering `503 telnyx_public_key_invalid` on every call, which looks
+/// like a Telnyx fault and is not. The sentence names the field, what was decoded, and where the
+/// value comes from.
+pub fn validate_public_key(raw: &str) -> Result<String, String> {
+    use base64::Engine as _;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("public_key is empty".to_string());
+    }
+    let mut decoded_len: Option<usize> = None;
+    for engine in [
+        base64::engine::general_purpose::STANDARD,
+        base64::engine::general_purpose::STANDARD_NO_PAD,
+        base64::engine::general_purpose::URL_SAFE,
+    ] {
+        if let Ok(bytes) = engine.decode(trimmed) {
+            if bytes.len() == ED25519_PUBLIC_KEY_LEN {
+                return Ok(trimmed.to_string());
+            }
+            decoded_len = Some(bytes.len());
+        }
+    }
+    Err(match decoded_len {
+        Some(n) => format!(
+            "public_key is not a Telnyx account signing key: it decodes to {n} bytes and must \
+             decode to {ED25519_PUBLIC_KEY_LEN}. Copy the ACCOUNT public key from Telnyx Mission \
+             Control (base64, 32 bytes)."
+        ),
+        None => "public_key is not valid base64. Copy the ACCOUNT public key from Telnyx Mission \
+                 Control (base64, 32 bytes)."
+            .to_string(),
+    })
+}
+
 /// Check if tenant has their own Telnyx key (BYOK) via provider_keys table.
 async fn tenant_has_own_telnyx(db: &sqlx::PgPool, tenant_id: Uuid) -> Result<bool, AppError> {
     let count = sqlx::query_scalar::<_, i64>(
@@ -461,13 +556,16 @@ pub async fn webhook(
 ) -> ApiResult<Response> {
     let now = verify::now_unix();
     let tolerance = state.config.telnyx_signature_tolerance_secs;
-    let delivery = match verify::verify(
-        state.config.telnyx_public_key.as_deref(),
-        &headers,
-        &body,
-        now,
-        tolerance,
-    ) {
+    // ENV FIRST, then the operator row (`telnyx_config.public_key`), so an operator can bring
+    // inbound verification up from the admin console with no file edit and no restart
+    // (kanban t_e2017eb0). Both empty = the pre-existing 503 posture.
+    let (signing_key, key_source) =
+        resolve_signing_key(state.config.telnyx_public_key.as_deref(), &state.db).await?;
+    tracing::debug!(
+        "Telnyx voice webhook signing-key source: {}",
+        key_source.as_str()
+    );
+    let delivery = match verify::verify(signing_key.as_deref(), &headers, &body, now, tolerance) {
         Ok(delivery) => delivery,
         Err(rejection) => {
             log_telnyx_refusal("voice", &rejection);
@@ -520,8 +618,18 @@ async fn process_voice_event(state: &AppState, body: &Value) -> ApiResult<Value>
         call_control_id
     );
 
+    // Telnyx spells call-control events with DOTS (`call.initiated`, `call.answered`, `call.hangup`);
+    // the arms below were written with UNDERSCORES. Measured 2026-11-20 on MissedCall Respondr (the
+    // app this module was ported from, same code shape): a correctly-signed `call.initiated` delivery
+    // answered `200 {"commands":[]}` and wrote NO `inbound_calls` row, so every real call was
+    // acknowledged and then DROPPED — the whole inbound-call arm never ran. After that app's fix the
+    // same signed event answered `{"commands":[{"type":"answer"}]}` and wrote the row.
+    // Normalise the separator and match on the normalised key; the raw string stays in force for the
+    // message arm (`message.received` already carries a dot) and for the log line above.
+    let event_key = event_type.replace('.', "_");
+
     // Only process inbound calls
-    if event_type != "call_received" && event_type != "call_initiated" {
+    if event_key != "call_received" && event_key != "call_initiated" {
         return Ok(json!({ "commands": [] }));
     }
 
@@ -627,13 +735,14 @@ pub async fn sms_webhook(
 ) -> ApiResult<Response> {
     let now = verify::now_unix();
     let tolerance = state.config.telnyx_signature_tolerance_secs;
-    let delivery = match verify::verify(
-        state.config.telnyx_public_key.as_deref(),
-        &headers,
-        &body,
-        now,
-        tolerance,
-    ) {
+    // Same key resolution as the voice arm: ENV FIRST, then the operator row (kanban t_e2017eb0).
+    let (signing_key, key_source) =
+        resolve_signing_key(state.config.telnyx_public_key.as_deref(), &state.db).await?;
+    tracing::debug!(
+        "Telnyx sms webhook signing-key source: {}",
+        key_source.as_str()
+    );
+    let delivery = match verify::verify(signing_key.as_deref(), &headers, &body, now, tolerance) {
         Ok(delivery) => delivery,
         Err(rejection) => {
             log_telnyx_refusal("sms", &rejection);
