@@ -81,6 +81,23 @@ def call(base, method, path, body=None, bearer=None):
 CHECKS = []
 
 
+def b64url(raw):
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def mint(uid, aid, role):
+    """A session token, exactly as src/auth signs one — so the CONSOLE's own reads are exercised."""
+    import hmac
+    secret = env("JWT_SECRET") or ""
+    now = int(time.time())
+    head = b64url(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
+    claims = {"sub": uid, "aid": aid, "role": role, "iat": now, "exp": now + 3600,
+              "iss": "coreswift", "aud": "coreswift-api"}
+    body = b64url(json.dumps(claims, separators=(",", ":")).encode())
+    sig = b64url(hmac.new(secret.encode(), f"{head}.{body}".encode(), hashlib.sha256).digest())
+    return f"{head}.{body}.{sig}"
+
+
 def check(name, ok, detail=""):
     CHECKS.append((name, ok, detail))
     print(("ok    " if ok else "FAIL  ") + name + ("" if ok else f"  [{detail}]"))
@@ -113,7 +130,15 @@ def make_workspace(label, currency=None, reporting=None):
         "insert into personal_api_keys (id, tenant_id, name, key_hash, key_prefix) values "
         f"('{str(uuid.uuid4())}', '{tid}', 'proof', '{kh}', '{key[:12]}')"
     )
-    return tid, key
+    # A real user row, because the session door refuses a token whose `sub` is not a live user
+    # (auth_middleware: users existence + enabled + password-change revocation).
+    uid = str(uuid.uuid4())
+    psql(
+        "insert into users (id, tenant_id, email, name, role, password_hash) values "
+        f"('{uid}', '{tid}', 'proof+{uid[:8]}@example.invalid', 'Proof User', 'owner', "
+        "'$2b$12$proofonlyproofonlyproofonlyproofonlyproofonlyproofonlyproo')"
+    )
+    return tid, key, uid
 
 
 def drop_workspace(tid):
@@ -216,7 +241,7 @@ def main():
 
     # 2b — the same per-deal path over HTTP, on a throw-away copy of that currency state, so the
     # assertions do not depend on the real workspace's leftover rows.
-    tid, key = make_workspace("usd", currency="USD")
+    tid, key, uid = make_workspace("usd", currency="USD")
     made.append(tid)
     st, js = call(args.base, "POST", "/api/external/deals", bearer=key, body={
         "external_ref": f"{ref}-copy", "title": "Proof default currency", "value": 1200.5,
@@ -233,7 +258,7 @@ def main():
     #   3a. created the way the app creates one (migration 191's BEFORE INSERT trigger seats USD);
     #   3b. a workspace whose settings hold no default at all — the legacy shape — still resolves
     #       to USD at read time, which is what makes the rule true even if a write path forgets.
-    tid2, key2 = make_workspace("fresh")
+    tid2, key2, uid2 = make_workspace("fresh")
     made.append(tid2)
     seated = psql(f"select coalesce(settings->>'default_currency','') from tenants where id='{tid2}'")
     check("a brand-new workspace is seated USD at creation", seated == "USD",
@@ -274,7 +299,7 @@ def main():
     # ── 4. EUR is still EUR for a push that names no currency ────────────────────────────────
     # Default EUR, reporting USD — the cross-currency case, so the stored rate must be the
     # EUR→USD rate the table holds and NOT 1 (a hardcoded dollar assumption would store 1).
-    tid3, key3 = make_workspace("eur", currency="EUR", reporting="USD")
+    tid3, key3, uid3 = make_workspace("eur", currency="EUR", reporting="USD")
     made.append(tid3)
     st3, js3 = call(args.base, "POST", "/api/external/deals", bearer=key3, body={
         "external_ref": f"PROOF-EUR-{stamp}", "title": "Euro deal", "value": 1000.0,
@@ -295,7 +320,25 @@ def main():
     check("…and reports in the workspace's reporting currency (follows the default)",
           eur_rep == "USD", eur)
 
-    # ── 5. zero residue ──────────────────────────────────────────────────────────────────────
+    # ── 5. what the CONSOLE's own read answers (the surface a human sees) ────────────────────
+    stc, cur = call(args.base, "GET", "/api/deals/currency",
+                    bearer=mint(uid2, tid2, "owner"))
+    check("the console's currency read answers 200", stc == 200, f"HTTP {stc} {cur}")
+    check("…reporting USD and naming the standing default as its source",
+          cur.get("currency") == "USD" and cur.get("source") == "standing_default",
+          str(cur)[:240])
+    stc3, cur3 = call(args.base, "GET", "/api/deals/currency",
+                      bearer=mint(uid3, tid3, "owner"))
+    check("…and a workspace that chose EUR reports EUR from the workspace",
+          cur3.get("currency") == "EUR" and cur3.get("source") == "workspace",
+          str(cur3)[:240])
+    std, dl = call(args.base, "GET", "/api/deals",
+                   bearer=mint(uid2, tid2, "owner"))
+    check("the deals list reports its money in USD (reporting block)",
+          std == 200 and (dl.get("reporting") or {}).get("currency") == "USD",
+          f"HTTP {std} {str(dl.get('reporting'))[:200]}")
+
+    # ── 6. zero residue ──────────────────────────────────────────────────────────────────────
     # The proof deal and the pipeline the writer created for it are removed from the real
     # workspace (it had none before this run — asserted above), so its state is exactly as found.
     psql("delete from opportunities where tenant_id="
