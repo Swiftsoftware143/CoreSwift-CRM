@@ -2109,6 +2109,18 @@ the subdomain from.</li>
 <li><strong>Inbound mail</strong> — the shared inbox you read and reply from. It needs your domain <em>and</em>
 the inbound signing key, because a delivery that cannot be authenticated is refused.</li>
 </ul>
+<h3 id="inbound-credential">The inbound signing key, and why it is 32 characters</h3>
+<p>Receiving mail needs one credential: the <strong>HTTP webhook signing key</strong> from your provider —
+<code>Settings &rarr; API Security &rarr; HTTP webhook signing key</code>, press Show. It is <strong>32
+hexadecimal characters</strong> and it is <em>account-wide</em>: one value covers every domain in the account.</p>
+<p>It is <strong>not</strong> your sending API key. That one is 50 characters with dashes in the middle, and pasting
+it here is the single most common cause of an inbox that looks empty — the panel used to accept it and then every
+delivery was refused on arrival. It is now refused at the door with that explanation.</p>
+<p>Before you paste a key, receiving already works on the platform credential this app carries. Pasting the
+correct key upgrades it: each delivery is then authenticated against <em>your own</em> key, which is the stronger
+door. A wrong key is worse than no key — with none, mail arrives; with a wrong one, everything is refused — so the
+panel offers <strong>Remove key</strong> as well.</p>
+
 <p><strong>How to set any of them up:</strong> Email Domains &rarr; add your domain &rarr; add the records the
 page shows you &rarr; press <em>Re-check</em> until it reads verified &rarr; press <em>Set key</em> and paste your
 provider's HTTP webhook signing key (<code>mailgun &rarr; Settings &rarr; API Security</code>). The posting address
