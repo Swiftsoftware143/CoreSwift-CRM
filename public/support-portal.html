@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>💬 My Support</title>
+<title>__BRAND_NAME__ · Support</title>
 <style>
-  :root{--bg:#f1f5f9;--card:#fff;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--brand:#0ea5e9;
-        --brand-dark:#0284c7;--ok:#16a34a;--warn:#d97706;--err:#dc2626}
+  :root{--bg:#f1f5f9;--card:#fff;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--brand:__BRAND_COLOR__;
+        --brand-dark:__BRAND_COLOR__;--ok:#16a34a;--warn:#d97706;--err:#dc2626}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
        font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
@@ -60,8 +60,13 @@
 </head>
 <body>
 <header>
-  <h1>💬 My Support</h1>
-  <p id="brandLine">Your requests, and only yours.</p>
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    __BRAND_LOGO__
+    <div>
+      <h1 style="margin:0">__BRAND_NAME__</h1>
+      <p id="brandLine" style="margin:4px 0 0">Your requests, and only yours.</p>
+    </div>
+  </div>
 </header>
 <main>
   <div id="error" class="err hide"></div>

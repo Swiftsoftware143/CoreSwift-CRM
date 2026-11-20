@@ -129,11 +129,59 @@ fn normalise_email(raw: &str) -> String {
 
 // ── Page ─────────────────────────────────────────────────────────────────
 
-/// `GET /s/:tenant_id/support` — the portal document. The tenant id is public (it is already in
-/// every embed snippet), so it is safe to inline; the page stores the grant in `sessionStorage`
-/// and sends it as a header, never as a URL.
-pub async fn page(Path(tenant_id): Path<Uuid>) -> Response {
-    let html = PORTAL_HTML.replace("__TENANT_ID__", &tenant_id.to_string());
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// `GET /s/:tenant_id/support` — the portal document.
+///
+/// The tenant id is public (it is already in every embed snippet), so it is safe to inline; the page
+/// stores the grant in `sessionStorage` and sends it as a header, never as a URL.
+///
+/// THE PAGE IS BRANDED FROM THE ACCOUNT, NOT FROM A LITERAL (2026-11-20). The audit for this work
+/// recorded "no tenant branding", and a support portal that answers in somebody else's colours is the
+/// first thing a customer notices. The name, the accent colour and the logo come from the SAME
+/// `tenants.settings -> 'email_branding'` document the transactional email renderer already reads, so the
+/// mail and the page a customer opens from it cannot disagree. Every value is HTML-escaped: this is
+/// user-supplied text being written into markup.
+pub async fn page(State(s): State<AppState>, Path(tenant_id): Path<Uuid>) -> Response {
+    let branding = crate::branding::load(&s.db, tenant_id).await;
+    let tenant_name: Option<String> = sqlx::query_scalar("SELECT name FROM tenants WHERE id = $1")
+        .bind(tenant_id)
+        .fetch_optional(&s.db)
+        .await
+        .ok()
+        .flatten();
+
+    let brand_name = branding
+        .as_ref()
+        .map(|b| b.brand_name.clone())
+        .filter(|n| !n.trim().is_empty())
+        .or(tenant_name)
+        .unwrap_or_else(|| "Support".to_string());
+    let brand_colour = branding
+        .as_ref()
+        .map(|b| b.brand_color.clone())
+        .filter(|c| !c.trim().is_empty())
+        .unwrap_or_else(|| crate::branding::DEFAULT_BRAND_COLOR.to_string());
+    let logo = match branding.as_ref() {
+        Some(b) if !b.logo_url.trim().is_empty() => format!(
+            "<img src=\"{src}\" alt=\"{name}\" style=\"max-height:40px;max-width:220px; \
+             display:block\">",
+            src = esc(&b.logo_url),
+            name = esc(&brand_name)
+        ),
+        _ => String::new(),
+    };
+
+    let html = PORTAL_HTML
+        .replace("__TENANT_ID__", &tenant_id.to_string())
+        .replace("__BRAND_NAME__", &esc(&brand_name))
+        .replace("__BRAND_COLOR__", &esc(&brand_colour))
+        .replace("__BRAND_LOGO__", &logo);
     (
         StatusCode::OK,
         [
