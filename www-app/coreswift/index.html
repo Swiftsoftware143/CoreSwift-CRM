@@ -2329,6 +2329,15 @@ const TAB_LOADERS = {
   },
 
   'tickets': async () => {
+    // A ticket queue still works when mail does not, so this WARNS: replies from the shared inbox and the
+    // customer's own email thread are what inbound setup buys, and it is said on the page rather than
+    // discovered later (David, 2026-11-20).
+    try {
+      const tkReady = await loadMailReadiness();
+      const tkBanner = mailLaneBanner(tkReady, 'inbox', 'Replying to customers from the shared inbox needs inbound mail set up.');
+      const tkPanel = document.getElementById('tabPanels');
+      if (tkBanner && tkPanel) tkPanel.insertAdjacentHTML('afterbegin', tkBanner);
+    } catch (e) {}
     const ticketsTableEl = document.getElementById('ticketsTable');
     if (!ticketsTableEl) return;
     try {

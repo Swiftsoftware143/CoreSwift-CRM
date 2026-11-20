@@ -304,39 +304,66 @@ impl EmailProvider for MailgunProvider {
             return None; // Signature mismatch
         }
 
-        let sender = get("sender").unwrap_or_default();
-        let recipient = get("recipient").unwrap_or_default();
-        let subject = get("subject").unwrap_or_default();
-        let body_plain = get("body-plain")
-            .or_else(|| get("stripped-text"))
-            .unwrap_or_default();
-        let body_html = get("body-html");
-        let message_id = get("Message-Id");
-        let in_reply_to = get("In-Reply-To");
-
-        let from = extract_email_address(&sender);
-        let to = extract_email_address(&recipient);
-
-        if from.is_empty() || to.is_empty() {
-            return None;
-        }
-
-        Some(InboundEmail {
-            from,
-            to,
-            subject,
-            body_plain,
-            body_html,
-            message_id,
-            in_reply_to,
-            provider_message_id: get("Message-Id"),
-            // The brake on the auto-reply engine: a machine-written message (an out-of-office, a
-            // bounce report, a mailing list) is never answered by one of ours.
-            is_auto_generated: super::machine_generated_from_json(
-                &get("message-headers").unwrap_or_default(),
-            ),
-        })
+        // The signature held: read the message.
+        parse_fields(&get)
     }
+
+    /// Parse a delivery that was authenticated by SOMETHING ELSE — today, the platform webhook token
+    /// carried in the forward URL. It exists for exactly one case: a domain with NO signing key
+    /// configured, where the HMAC arm has nothing to check against (the provider's signing key is
+    /// account-wide and only visible in its dashboard). It never overrides a configured key: the
+    /// handler calls it only when `encrypted_webhook_key` is absent or empty, so a domain that HAS a
+    /// key keeps the signature as its only credential.
+    fn parse_unverified(&self, body: &[u8]) -> Option<InboundEmail> {
+        let body_str = std::str::from_utf8(body).ok()?;
+        let params: Vec<(String, String)> = url::form_urlencoded::parse(body_str.as_bytes())
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        let get = move |key: &str| -> Option<String> {
+            params
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+        };
+        parse_fields(&get)
+    }
+}
+
+/// Turn the provider's form fields into the normalized message. Shared by the signature arm and the
+/// token arm so the two can never read a delivery differently.
+fn parse_fields(get: &dyn Fn(&str) -> Option<String>) -> Option<InboundEmail> {
+    let sender = get("sender").unwrap_or_default();
+    let recipient = get("recipient").unwrap_or_default();
+    let subject = get("subject").unwrap_or_default();
+    let body_plain = get("body-plain")
+        .or_else(|| get("stripped-text"))
+        .unwrap_or_default();
+    let body_html = get("body-html");
+    let message_id = get("Message-Id");
+    let in_reply_to = get("In-Reply-To");
+
+    let from = extract_email_address(&sender);
+    let to = extract_email_address(&recipient);
+
+    if from.is_empty() || to.is_empty() {
+        return None;
+    }
+
+    Some(InboundEmail {
+        from,
+        to,
+        subject,
+        body_plain,
+        body_html,
+        message_id,
+        in_reply_to,
+        provider_message_id: get("Message-Id"),
+        // The brake on the auto-reply engine: a machine-written message (an out-of-office, a
+        // bounce report, a mailing list) is never answered by one of ours.
+        is_auto_generated: super::machine_generated_from_json(
+            &get("message-headers").unwrap_or_default(),
+        ),
+    })
 }
 
 /// Extract bare email address from "Name <email>" format.

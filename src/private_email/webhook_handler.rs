@@ -128,6 +128,23 @@ pub async fn inbound_webhook(
     State(state): State<AppState>,
     request: Request,
 ) -> ApiResult<Json<serde_json::Value>> {
+    // ── THE SECOND CREDENTIAL, READ FIRST (2026-11-20) ─────────────────────────────────────────
+    // The provider's signing key is ACCOUNT-WIDE and visible only in its dashboard, so a workspace
+    // that has not pasted it cannot receive at all — measured: a real delivery arrived and was
+    // refused with "the configured signing key did not validate" while the domain looked healthy.
+    // The forward URL can therefore carry the platform webhook token that the events receiver
+    // already uses. It is read here, before the body is consumed, and it is honoured ONLY for a
+    // domain with NO signing key configured: a domain that has a key keeps the signature as its
+    // sole credential, so this can never weaken a configured door.
+    let supplied_token: String = request
+        .uri()
+        .query()
+        .and_then(|q| {
+            url::form_urlencoded::parse(q.as_bytes())
+                .find(|(k, _)| k == "t")
+                .map(|(_, v)| v.into_owned())
+        })
+        .unwrap_or_default();
     // ── Step 1: Extract sender + recipient ─────
     // The delivery arrives in ONE OF TWO SHAPES (kanban t_237e3005): a plain message as
     // `application/x-www-form-urlencoded`, and ANY message carrying an attachment — including the
@@ -216,20 +233,52 @@ pub async fn inbound_webhook(
             // anonymous writer of contacts/tickets/events — any caller could name a mailbox on it
             // and create rows in that tenant (reproduced live 2026-10-11: 200 + one contact, one
             // ticket, one event). Fail CLOSED.
-            if signing_key_configured {
-                tracing::warn!(
-                    recipient = %recipient_email,
-                    "inbound webhook refused: the configured signing key did not validate"
-                );
+            // No key on this domain? The forward URL may carry the platform webhook token instead.
+            if !signing_key_configured && !supplied_token.is_empty() {
+                let token_ok = crate::mail_compliance::webhook::url_token_ok_for_inbound(
+                    &state.db,
+                    Some(&supplied_token),
+                )
+                .await;
+                if !token_ok {
+                    tracing::warn!(
+                        recipient = %recipient_email,
+                        "inbound webhook refused: no signing key on this domain and the supplied token did not match"
+                    );
+                    return Err(AppError::UnauthorizedReason(
+                        "inbound webhook refused: the delivery could not be authenticated".into(),
+                    ));
+                }
+                match provider.parse_unverified(&delivery.auth_body) {
+                    Some(parsed) => {
+                        tracing::info!(
+                            recipient = %recipient_email,
+                            "inbound delivery authenticated by the platform webhook token (no signing key on this domain)"
+                        );
+                        parsed
+                    }
+                    None => {
+                        return Ok(Json(
+                            json!({"received": false, "error": "could not read the delivery"}),
+                        ));
+                    }
+                }
             } else {
-                tracing::warn!(
-                    recipient = %recipient_email,
-                    "inbound webhook refused: no webhook signing key is configured for this domain, so the delivery cannot be authenticated"
-                );
+                if signing_key_configured {
+                    tracing::warn!(
+                        recipient = %recipient_email,
+                        "inbound webhook refused: the configured signing key did not validate"
+                    );
+                } else {
+                    tracing::warn!(
+                        recipient = %recipient_email,
+                        "inbound webhook refused: no webhook signing key is configured for this domain, so the delivery cannot be authenticated"
+                    );
+                }
+                return Err(AppError::UnauthorizedReason(
+                    "inbound webhook refused: the delivery could not be authenticated".into(),
+                ));
             }
-            return Err(AppError::UnauthorizedReason(
-                "inbound webhook refused: the delivery could not be authenticated".into(),
-            ));
         }
     };
 

@@ -278,9 +278,18 @@ pub async fn readiness(
         .iter()
         .find(|r| r.verified && is_mailgun(r))
         .map(|r| r.domain.clone());
+    // Inbound needs a verified Mailgun domain AND a credential for the receiver: either the domain's
+    // own signing key, or the platform webhook token the forward URL can carry (the provider's key is
+    // account-wide and dashboard-only, so a workspace that never pasted it can still receive).
+    let platform_token = crate::communications::platform_mail_config::stored(&state.db)
+        .await
+        .and_then(|row| crate::communications::platform_mail_config::field(&row, "webhook_token"))
+        .map(|t| t.trim().len() >= 24)
+        .unwrap_or(false);
     let inbound_ready = rows
         .iter()
-        .any(|r| r.verified && is_mailgun(r) && r.has_key);
+        .any(|r| r.verified && is_mailgun(r) && r.has_key)
+        || (platform_token && main.is_some());
     let awaiting_key: Vec<String> = rows
         .iter()
         .filter(|r| r.verified && is_mailgun(r) && !r.has_key)

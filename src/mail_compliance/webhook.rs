@@ -75,6 +75,23 @@ async fn url_token_ok(db: &sqlx::PgPool, supplied: Option<&str>) -> bool {
     }
 }
 
+/// The inbound receiver's second credential: the token carried in the provider's forward URL.
+///
+/// WHY (2026-11-20): the provider's webhook signing key is account-wide and visible only in its own
+/// dashboard, so a workspace that has not pasted it can receive NOTHING and the failure lands on the
+/// customer as "your inbox is empty". The forward URL is under our control, so it carries the same
+/// platform webhook token the events receiver already uses.
+///
+/// GUARD, because this class has bitten the fleet before (an empty internal key was a bypass): a
+/// token shorter than 24 characters is treated as "no token configured" and refuses, so a blank or
+/// placeholder value can never authenticate a delivery.
+pub async fn url_token_ok_for_inbound(db: &sqlx::PgPool, supplied: Option<&str>) -> bool {
+    match supplied.map(str::trim) {
+        Some(t) if t.len() >= 24 => url_token_ok(db, Some(t)).await,
+        _ => false,
+    }
+}
+
 /// Constant-time comparison, so a wrong signature cannot be found one byte at a time.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {

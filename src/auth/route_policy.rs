@@ -153,6 +153,14 @@
 //!        multipart body: 401 "inbound webhook refused", i.e. the allowlisted handler answered,
 //!        not a 404). These numbers are what `the_census_shape_is_what_the_docs_say` pins.
 //!
+//!   +1 mount (2026-11-20, mail readiness gate): `GET /api/private-email/readiness`. A feature that
+//!        needs mail asks it before doing anything, so the answer has to come from the server that will
+//!        actually send: per lane (ordinary mail, automation, inbound) it names the identity, whether it
+//!        is ready, the reason and the next action. It sits on the private-email router behind the same
+//!        auth middleware as every sibling there, so it joins no allowlist. The extractor resolves
+//!        **529 mounted `.route(..)` calls / 515 on /api** (529 = 515 /api + the 14 root-level mounts),
+//!        which is what `the_census_shape_is_what_the_docs_say` pins.
+//!
 //!   +1 mount (2026-11-12, kanban t_f919924f), THE FILE A MESSAGE CARRIED: `GET
 //!        /api/private-email/messages/:id/attachments/:attachment_id`. It sits on the private-email
 //!        router behind the same auth middleware as every sibling, so it joins no allowlist: it
@@ -1443,12 +1451,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            528,
+            529,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 514,
+            api, 515,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.

@@ -192,6 +192,12 @@ pub trait EmailProvider: Send + Sync {
     /// Validate and parse an inbound webhook payload into a normalized InboundEmail.
     /// Returns None if signature validation fails or the payload isn't a valid inbound message.
     fn accept_inbound(&self, config: &ProviderConfig, body: &[u8]) -> Option<InboundEmail>;
+
+    /// Parse a delivery authenticated by something other than this provider's signature. Defaults to
+    /// refusing: only a provider that has a documented second credential may answer.
+    fn parse_unverified(&self, _body: &[u8]) -> Option<InboundEmail> {
+        None
+    }
 }
 
 /// Build the correct provider from a config.
