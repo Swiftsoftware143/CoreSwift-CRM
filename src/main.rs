@@ -891,6 +891,18 @@ async fn main() -> anyhow::Result<()> {
                 ),
             ),
         )
+        // Sign-in by emailed one-time link (migration 185). Anonymous by necessity: the person clicking
+        // it has no session, and the token IS the credential. It travels in a URL FRAGMENT, which browsers
+        // never send to a server, so it cannot land in an access log; the row at rest holds only its hash,
+        // and it is single-use.
+        .route(
+            "/s/:tenant_id/support/link",
+            axum::routing::post(tickets::portal::link),
+        )
+        .route(
+            "/s/:tenant_id/support/link/consume",
+            axum::routing::post(tickets::portal::consume_link),
+        )
         .route(
             "/s/:tenant_id/support/tickets",
             axum::routing::get(tickets::portal::list)

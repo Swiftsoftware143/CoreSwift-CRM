@@ -261,6 +261,138 @@ pub async fn login(
     })))
 }
 
+// ── Sign-in by emailed one-time link ─────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct LinkRequest {
+    pub email: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LinkConsume {
+    pub token: String,
+}
+
+/// A short, unguessable token. 32 bytes of OS randomness, base64url — never derived from the address,
+/// because a token that can be computed from what the caller already knows is not a second factor of any
+/// kind.
+fn mint_link_token() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn hash_link_token(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(token.as_bytes());
+    hex::encode(h.finalize())
+}
+
+/// `POST /s/:tenant_id/support/link` — mail a one-time sign-in link.
+///
+/// The answer is the SAME whether or not that address has ever written in: a support portal must not be
+/// a way to discover who is a customer. The mail is only sent when a ticket actually exists.
+pub async fn link(
+    State(s): State<AppState>,
+    Path(tenant_id): Path<Uuid>,
+    Json(body): Json<LinkRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let email = normalise_email(&body.email);
+    if !email.contains('@') {
+        return Err(AppError::Validation(
+            "Enter the email address you used when you contacted us.".into(),
+        ));
+    }
+
+    let owns: Option<(Uuid,)> = sqlx::query_as(&concat!(
+        "SELECT t.id FROM tickets t WHERE t.tenant_id = $1 AND ",
+        owner_predicate!(),
+        " LIMIT 1"
+    ))
+    .bind(tenant_id)
+    .bind(&email)
+    .fetch_optional(&s.db)
+    .await?;
+
+    if owns.is_some() {
+        let token = mint_link_token();
+        sqlx::query(
+            "INSERT INTO portal_login_tokens (tenant_id, address, token_hash, expires_at)
+             VALUES ($1, $2, $3, now() + interval '30 minutes')",
+        )
+        .bind(tenant_id)
+        .bind(&email)
+        .bind(hash_link_token(&token))
+        .execute(&s.db)
+        .await?;
+
+        // THE TOKEN TRAVELS IN THE FRAGMENT, NOT THE QUERY. A fragment is never sent to a server, so the
+        // sign-in credential cannot land in any access log — the same reason this portal already refuses
+        // to carry its session grant in a query string (kanban t_a724790f).
+        let link = format!("https://app.coreswiftcrm.com/s/{tenant_id}/support#t={token}");
+        if let Err(e) = crate::email::send_template_email(
+            &s.db,
+            tenant_id,
+            &email,
+            "support_portal_link",
+            &json!({ "link": link }),
+        )
+        .await
+        {
+            // The customer is told the same thing either way (no enumeration), but the failure must be
+            // visible to the operator: a link that was never delivered looks exactly like one that was.
+            tracing::warn!(tenant = %tenant_id, error = %e, "support portal sign-in link could not be sent");
+        }
+    }
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "sent": true,
+            "detail": "If that address has written to this team, a sign-in link is on its way. \
+                       It works once and expires in 30 minutes."
+        })),
+    ))
+}
+
+/// `POST /s/:tenant_id/support/link/consume` — exchange the emailed token for the session grant.
+///
+/// One use only, and only before it expires. The row is marked used in the SAME statement that finds it,
+/// so two browser tabs racing the same link cannot both get in.
+pub async fn consume_link(
+    State(s): State<AppState>,
+    Path(tenant_id): Path<Uuid>,
+    Json(body): Json<LinkConsume>,
+) -> ApiResult<impl IntoResponse> {
+    let token = body.token.trim();
+    if token.len() < 20 {
+        return Err(AppError::Unauthorized);
+    }
+    let hash = hash_link_token(token);
+
+    let address: Option<String> = sqlx::query_scalar(
+        "UPDATE portal_login_tokens
+            SET used_at = now()
+          WHERE tenant_id = $1 AND token_hash = $2 AND used_at IS NULL AND expires_at > now()
+          RETURNING address",
+    )
+    .bind(tenant_id)
+    .bind(&hash)
+    .fetch_optional(&s.db)
+    .await?;
+
+    let Some(address) = address else {
+        return Err(AppError::Unauthorized);
+    };
+
+    Ok(Json(json!({
+        "token": mint_grant(&s, tenant_id, &address)?,
+        "email": address,
+    })))
+}
+
 // ── Requests ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, serde::Serialize, sqlx::FromRow)]

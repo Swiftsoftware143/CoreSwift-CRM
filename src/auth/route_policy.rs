@@ -520,6 +520,12 @@ pub const INTERNAL_ROUTES: &[&str] = &[
 pub const API_KEY_ROUTES: &[&str] = &[
     "/api/external/lists",
     "/api/external/contacts",
+    // The DEAL WRITER (kanban t_2df68850): an outside system creates/updates a deal by its
+    // external reference, moves its stage, and sets won/lost. The key resolves the workspace and
+    // `external_ref` is unique per workspace, so a re-send updates rather than duplicating.
+    "/api/external/deals",
+    "/api/external/deals/:external_ref/stage",
+    "/api/external/deals/:external_ref/status",
     // The data-mapping intake: a sibling app reports one event with the account's issued key. The
     // tenant comes from the key, never from the payload, so a caller cannot name another tenant.
     "/api/data-mapping/events",
@@ -701,6 +707,11 @@ mod tests {
         Nest {
             prefix: "/api/external",
             src: include_str!("../external_api.rs"),
+            func: "router",
+        },
+        Nest {
+            prefix: "/api/deals",
+            src: include_str!("../deals/mod.rs"),
             func: "router",
         },
         Nest {
@@ -1375,6 +1386,11 @@ mod tests {
     /// all. The instrument saw more routes because the product has more routes; the root-level count is
     /// unchanged at 12, which is the tell that no new surface was mounted outside /api**.
     ///
+    /// +2 mounts / +2 paths (2026-11-20): the customer portal's emailed sign-in link — `/link` (mail one)
+    /// and `/link/consume` (exchange it). Both are ROOT-level `/s/...` routes: that surface is OUTSIDE the
+    /// credential boundary (like every other portal arm), which is why they are in no allowlist. 485
+    /// mounted / 471 on /api** / 14 root-level.
+    ///
     /// +6 mounts / +6 paths (2026-11-19): the email-compliance surface — 5 on
     /// `/api/mail-compliance` (the delivery evidence, the suppression list, its remove arm, and the
     /// two downloads) and 1 anonymous opt-out (`/api/public/unsubscribe/:token`, merged at the root
@@ -1388,7 +1404,7 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            483,
+            485,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
@@ -1397,6 +1413,6 @@ mod tests {
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.
-        assert_eq!(mounted.len() - api, 12);
+        assert_eq!(mounted.len() - api, 14);
     }
 }

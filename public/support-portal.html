@@ -87,6 +87,10 @@
     </div>
     <div class="row">
       <button id="signInBtn" type="button">View my requests</button>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">
+        <p class="hint" style="margin:0 0 8px">Or have a sign-in link emailed to you — it works once and expires in 30 minutes.</p>
+        <button id="emailLinkBtn" type="button" class="secondary" style="width:auto">Email me a sign-in link</button>
+      </div>
     </div>
   </section>
 
@@ -226,6 +230,50 @@
   }
 
   // ── sign in ────────────────────────────────────────────────────────────
+  // ── emailed one-time link ────────────────────────────────────────────────────────────────────────
+  var linkBtn = $('emailLinkBtn');
+  if (linkBtn) {
+    linkBtn.addEventListener('click', function () {
+      var email = $('email').value.trim();
+      if (email.indexOf('@') < 1) { fail('Enter the email address you contacted us with.'); return; }
+      fetch(BASE + '/link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email })
+      }).then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          if (!r.ok) throw new Error(j.message || 'Could not send the link.');
+          return j;
+        });
+      }).then(function (j) {
+        note(j.detail || 'If that address has written to this team, a sign-in link is on its way.');
+      }).catch(function (e) { fail(e.message); });
+    });
+  }
+
+  // The link carries its token in the FRAGMENT (#t=...), which browsers never send to a server. Read it
+  // once, exchange it, then strip it from the address bar so it cannot be copied out of history.
+  (function consumeFragment() {
+    var h = window.location.hash || '';
+    var m = h.match(/[#&]t=([A-Za-z0-9_-]+)/);
+    if (!m) return;
+    var token = m[1];
+    try { history.replaceState(null, '', window.location.pathname); } catch (e) {}
+    fetch(BASE + '/link/consume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: token })
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) throw new Error('That sign-in link has expired or was already used. Ask for a new one.');
+        return j;
+      });
+    }).then(function (j) {
+      sessionStorage.setItem(TOKEN_KEY, j.token);
+      signedIn(j.email);
+    }).catch(function (e) { fail(e.message); });
+  })();
+
   $('signInBtn').addEventListener('click', function () {
     var email = $('email').value.trim(), ref = $('reference').value.trim();
     if (!email) { fail('Enter the email address you used.'); return; }
