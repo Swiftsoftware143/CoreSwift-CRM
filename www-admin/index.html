@@ -8094,6 +8094,41 @@ function peiPaintSetup() {
     html += '</tbody></table>';
   }
 
+  // ── THE THREE MAIL LANES, NAMED (2026-11-20) ────────────────────────────────────────────────
+  // The app sends from three different identities (ordinary mail, automation mail, and what arrives
+  // in the inbox) and the console named NONE of them — the derivation lived in the server, so an owner
+  // could not tell what their automation would send from or why it was refusing. Same rule the server
+  // uses: the oldest verified Mailgun domain is the account's main sending domain, and automation is
+  // mg.<that domain>.
+  const mailgun = domains.filter(function (d) { return (d.provider_type || 'mailgun') === 'mailgun'; });
+  const verified = mailgun.filter(function (d) { return d.verified; })
+    .sort(function (a, b) { return String(a.created_at || '').localeCompare(String(b.created_at || '')); });
+  const mainDomain = verified.length ? (verified[0].domain || '') : '';
+  const autoDomain = mainDomain ? 'mg.' + mainDomain : '';
+  const laneRow = function (name, value, state, why) {
+    return '<div style="display:flex;gap:10px;padding:8px 0;border-top:1px solid rgba(128,128,128,.18)">' +
+      '<div style="flex:0 0 130px"><strong>' + name + '</strong></div>' +
+      '<div style="flex:1"><code style="word-break:break-all">' + escapeHtml(value) + '</code>' +
+      (why ? '<div style="font-size:12px;opacity:.75;margin-top:2px">' + why + '</div>' : '') + '</div>' +
+      '<div style="flex:0 0 110px;text-align:right">' + state + '</div></div>';
+  };
+  const ok = '<span class="badge badge-success">ready</span>';
+  const no = '<span class="badge badge-warning">not set up</span>';
+  html += '<div class="card" style="margin-top:16px"><strong>What this workspace sends as</strong>' +
+    '<div style="font-size:12.5px;opacity:.75;margin-top:2px">Three identities, three jobs. Mail sent by an automation goes out on its own subdomain so a campaign cannot damage the reputation of the address your receipts use.</div>' +
+    laneRow('Ordinary mail', mainDomain ? 'noreply@' + mainDomain : 'none yet',
+      mainDomain ? ok : no,
+      mainDomain ? 'Replies too — if you set a Reply-To, answers come back to your inbox.'
+                 : 'Verify a domain below before you rely on receipts or replies.') +
+    laneRow('Automation', autoDomain || 'none yet',
+      autoDomain ? ok : no,
+      autoDomain ? 'Your provider must also have ' + autoDomain + ' as an active domain. It uses the same Mailgun account, so no extra key is needed.'
+                 : 'Automation cannot send until a domain is verified — there is no base domain to build the subdomain from.') +
+    laneRow('Inbound mail', 'the posting address below',
+      domains.length ? ok : no,
+      'Arrives in the shared inbox. It needs the signing key on every domain you receive on.') +
+    '</div>';
+
   html += '<div style="margin-top:10px;font-size:12px;opacity:.75">Addresses you can reply from: ' +
     (boxes.length ? boxes.join(', ') : 'none yet') +
     '. A domain with no signing key still SENDS; it cannot receive, because nothing proves an inbound delivery came from your provider.</div></div>';
