@@ -359,10 +359,17 @@ fn parse_fields(get: &dyn Fn(&str) -> Option<String>) -> Option<InboundEmail> {
                 })
         })
         .unwrap_or_default();
-    let from = if header_from.trim().is_empty() {
-        extract_email_address(&sender)
-    } else {
+    // Precedence: the `From` header (what the human sent) -> the provider's own `from` field (which is
+    // the same header, already parsed for us) -> the envelope sender. The envelope is LAST because a
+    // relaying provider rewrites it to `bounce+<hash>@<its domain>`, and reading that as the customer
+    // both mislabels the message and trips the machine-generated check, so no ticket is opened.
+    let from_field = get("from").unwrap_or_default();
+    let from = if !header_from.trim().is_empty() {
         extract_email_address(&header_from)
+    } else if !from_field.trim().is_empty() {
+        extract_email_address(&from_field)
+    } else {
+        extract_email_address(&sender)
     };
     let to = extract_email_address(&recipient);
 
