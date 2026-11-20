@@ -286,10 +286,40 @@ pub async fn readiness(
         .and_then(|row| crate::communications::platform_mail_config::field(&row, "webhook_token"))
         .map(|t| t.trim().len() >= 24)
         .unwrap_or(false);
-    let inbound_ready = rows
+    // A KEY THAT CANNOT WORK IS NOT READY (2026-11-20). Presence is not the question: a 50-character
+    // SENDING API key stored in this field looked healthy everywhere and refused every delivery, so this
+    // gate would have said "ready" about a door that never opens. The stored value is opened and its shape
+    // checked exactly as the save path checks it (32 hexadecimal characters).
+    let mut keyed_and_usable = false;
+    let mut stored_wrong_shape: Vec<String> = Vec::new();
+    for r in rows
         .iter()
-        .any(|r| r.verified && is_mailgun(r) && r.has_key)
-        || (platform_token && main.is_some());
+        .filter(|r| r.verified && is_mailgun(r) && r.has_key)
+    {
+        let sealed: Option<String> = sqlx::query_scalar(
+            "SELECT webhook_signing_key_encrypted FROM private_email_domains \
+              WHERE tenant_id = $1 AND domain = $2",
+        )
+        .bind(account_id)
+        .bind(&r.domain)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+        match sealed {
+            Some(sealed) => {
+                let opened = crate::secret_box::open(account_id, &sealed);
+                let k = opened.trim();
+                if k.len() == 32 && k.chars().all(|c| c.is_ascii_hexdigit()) {
+                    keyed_and_usable = true;
+                } else {
+                    stored_wrong_shape.push(r.domain.clone());
+                }
+            }
+            None => stored_wrong_shape.push(r.domain.clone()),
+        }
+    }
+    let inbound_ready = keyed_and_usable || (platform_token && main.is_some());
     let awaiting_key: Vec<String> = rows
         .iter()
         .filter(|r| r.verified && is_mailgun(r) && !r.has_key)
@@ -332,7 +362,12 @@ pub async fn readiness(
             "blocking": true,
             "identity": main.as_ref().map(|d| format!("anything@{d}")),
             "reason": if inbound_ready { serde_json::Value::Null } else { json!(
-                if awaiting_key.is_empty() {
+                if !stored_wrong_shape.is_empty() {
+                    format!(
+                        "Receiving is refused for {}: the stored signing key is not the 32-character webhook key, so no delivery can be authenticated. Remove the key (receiving then works on the platform credential) or paste the correct one.",
+                        stored_wrong_shape.join(", ")
+                    )
+                } else if awaiting_key.is_empty() {
                     "No verified domain yet, so nothing can arrive.".to_string()
                 } else {
                     format!(
