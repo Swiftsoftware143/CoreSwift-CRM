@@ -38,6 +38,23 @@ impl EmailProvider for SmtpProvider {
         attachments: &[OutgoingAttachment],
         in_reply_to: Option<&str>,
     ) -> SendResult {
+        // THE MAIL STOP reaches THIS leaf too. Measured 2026-11-20: with the switch set in
+        // `communications::providers::deliver`, a private-email send still went out — because this provider
+        // talks to Mailgun directly and never passes through that function. One switch, every leaf.
+        if crate::communications::providers::mail_sending_paused() {
+            tracing::warn!(to = %to, "SENDING PAUSED by EMAIL_SENDING_PAUSED — private-email send refused");
+            return SendResult {
+                success: false,
+                provider_message_id: None,
+                provider_status: None,
+                error: Some(
+                    "Sending is paused for this deployment (EMAIL_SENDING_PAUSED): no mail leaves until it \
+                     is switched off."
+                        .into(),
+                ),
+            };
+        }
+
         let host = match &config.smtp_host {
             Some(h) => h.clone(),
             None => {

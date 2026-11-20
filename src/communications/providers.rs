@@ -35,7 +35,7 @@ use uuid::Uuid;
 ///
 /// Read on EVERY send (not cached at boot) so the switch takes effect without a restart of anything but
 /// the process's environment — and so a pause can be lifted the moment the owner says so.
-fn mail_sending_paused() -> bool {
+pub fn mail_sending_paused() -> bool {
     matches!(
         std::env::var("EMAIL_SENDING_PAUSED")
             .unwrap_or_default()
