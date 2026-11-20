@@ -976,6 +976,30 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Campaign runner: a fixed tick that sends whatever campaign step is due. It announces itself for
+    // the same reason the reminders above do — a task that dies silently looks exactly like a task
+    // whose work is never due, and that ambiguity is what let campaigns sit unsent with no symptom.
+    // Its own rule set lives in `campaigns::runner`: a campaign opt-out is honoured before a message is
+    // even built, and the account-wide gate (suppression, allowance, watchdog, footer) still applies.
+    let db_for_campaigns = state.db.clone();
+    tokio::spawn(async move {
+        tracing::info!("campaign runner tick started");
+        loop {
+            let report = crate::campaigns::runner::run_due(&db_for_campaigns).await;
+            if report.processed > 0 {
+                tracing::info!(
+                    processed = report.processed,
+                    sent = report.sent,
+                    opted_out = report.opted_out,
+                    completed = report.completed,
+                    refused = report.refused,
+                    "campaign runner tick"
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        }
+    });
+
     // Helpdesk response clocks: a fixed tick that records a warning before a deadline and a breach after
     // it, once each, on the ticket's own timeline. Same posture as the booking reminders above — it
     // announces itself, because a background task that dies silently is indistinguishable from one whose
