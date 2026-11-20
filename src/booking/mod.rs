@@ -50,6 +50,8 @@ pub fn admin_router(pool: PgPool) -> Router {
             "/calendars/:id/notifications",
             get(h::get_notifications).put(h::set_notifications),
         )
+        // Can a customer book this calendar right now, and if not why (David, 2026-11-20).
+        .route("/calendars/:id/readiness", get(h::readiness))
         .route("/calendars/:id/availability", get(h::admin_availability))
         .route("/calendars/:id/orders", get(h::list_orders))
         .route("/resources/:id/availability-rules", put(h::set_rules))

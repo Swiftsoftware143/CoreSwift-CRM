@@ -161,6 +161,12 @@
 //!        **529 mounted `.route(..)` calls / 515 on /api** (529 = 515 /api + the 14 root-level mounts),
 //!        which is what `the_census_shape_is_what_the_docs_say` pins.
 //!
+//!   +1 mount (2026-11-20, booking readiness): `GET /api/booking/calendars/:id/readiness`. A calendar with no
+//!        bookable resource or no opening hours is a public link that offers nothing, and from the owner's side
+//!        that is indistinguishable from a broken product, so the screen asks the server what a customer would
+//!        actually find. Behind the booking router's usual auth. The extractor resolves **530 mounted
+//!        `.route(..)` calls / 516 on /api** (530 = 516 /api + the 14 root-level mounts).
+//!
 //!   +1 mount (2026-11-12, kanban t_f919924f), THE FILE A MESSAGE CARRIED: `GET
 //!        /api/private-email/messages/:id/attachments/:attachment_id`. It sits on the private-email
 //!        router behind the same auth middleware as every sibling, so it joins no allowlist: it
@@ -1451,12 +1457,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            529,
+            530,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 515,
+            api, 516,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.

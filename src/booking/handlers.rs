@@ -476,6 +476,109 @@ fn default_true() -> bool {
     true
 }
 
+/// CAN A CUSTOMER BOOK THIS CALENDAR RIGHT NOW, AND IF NOT WHY (David, 2026-11-20).
+///
+/// A calendar with no bookable resource, or with no hours, is a public link that offers nothing — and from
+/// the owner's side that is indistinguishable from a broken product. This answers per check with the state
+/// the real booking path would find, so the screen can show a numbered list of what is done and what is
+/// missing instead of a page of controls with no verdict.
+pub async fn readiness(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>> {
+    use serde_json::json;
+
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        kind: String,
+        slug: String,
+        name: String,
+    }
+    let cal: Option<Row> = sqlx::query_as(
+        "SELECT kind, slug, name FROM booking_calendars WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(id)
+    .bind(t.0)
+    .fetch_optional(&pool)
+    .await?;
+    let Some(cal) = cal else {
+        return Ok(Json(json!({"error": "calendar not found"})));
+    };
+
+    // A resource a customer could actually pick.
+    let active_resources: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM booking_resources WHERE calendar_id = $1 AND active",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await?;
+
+    // Hours: an appointment needs weekly rules; the other kinds need open slots ahead.
+    let hour_rules: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM booking_availability_rules r \
+           JOIN booking_resources res ON res.id = r.resource_id \
+          WHERE res.calendar_id = $1 AND res.active",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await?;
+    let open_slots: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM booking_slots s \
+           JOIN booking_resources res ON res.id = s.resource_id \
+          WHERE res.calendar_id = $1 AND res.active AND s.status = 'open' \
+            AND s.starts_at > now()",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await?;
+    let availability_ok = if cal.kind == "appointment" {
+        hour_rules > 0
+    } else {
+        open_slots > 0
+    };
+
+    let tag_rules: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM booking_tag_rules WHERE calendar_id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
+    let list_rules: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM booking_list_rules WHERE calendar_id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
+
+    let checks = json!([
+        {"key": "resource", "done": active_resources > 0,
+         "label": "A bookable resource exists",
+         "detail": if active_resources > 0 { format!("{active_resources} bookable") } else { "Nothing to pick: the public page lists no positions.".to_string() },
+         "action": "Add a resource below."},
+        {"key": "availability", "done": availability_ok,
+         "label": if cal.kind == "appointment" { "Opening hours are set" } else { "Open positions are published" },
+         "detail": if availability_ok {
+             if cal.kind == "appointment" { format!("{hour_rules} weekly window(s)") } else { format!("{open_slots} open position(s) ahead") }
+         } else if cal.kind == "appointment" {
+             "No weekly hours, so the calendar offers no times at all.".to_string()
+         } else {
+             "No open positions ahead, so a customer sees nothing to buy.".to_string()
+         },
+         "action": if cal.kind == "appointment" { "Set the hours below." } else { "Generate the positions below." }},
+        {"key": "contact_rules", "done": tag_rules > 0 || list_rules > 0,
+         "label": "A booking tags or lists the customer (optional)",
+         "detail": if tag_rules + list_rules > 0 { format!("{} tag rule(s), {} list rule(s)", tag_rules, list_rules) } else { "Bookings will not reach automations, because nothing connects them to a tag or a list.".to_string() },
+         "action": "Add a tag or list rule below — that is what lets a booking start an automation."},
+    ]);
+
+    Ok(Json(json!({
+        "calendar": {"id": id, "name": cal.name, "slug": cal.slug, "kind": cal.kind},
+        "bookable_now": active_resources > 0 && availability_ok,
+        "checks": checks,
+    })))
+}
+
 pub async fn admin_create_booking(
     State(pool): State<PgPool>,
     Extension(t): Extension<TenantId>,
