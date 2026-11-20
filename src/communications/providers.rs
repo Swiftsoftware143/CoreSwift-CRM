@@ -31,6 +31,21 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+/// Is outbound mail paused for this whole deployment?
+///
+/// Read on EVERY send (not cached at boot) so the switch takes effect without a restart of anything but
+/// the process's environment — and so a pause can be lifted the moment the owner says so.
+fn mail_sending_paused() -> bool {
+    matches!(
+        std::env::var("EMAIL_SENDING_PAUSED")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
 /// Where a delivery attempt's transport came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportSource {
@@ -741,6 +756,29 @@ async fn deliver_via_mailgun(
         .mailgun_domain
         .clone()
         .unwrap_or_else(|| url.split("/v3/").nth(1).unwrap_or("").to_string());
+
+    // ── THE MAIL STOP ─────────────────────────────────────────────────────────────────────────────────
+    // Set `EMAIL_SENDING_PAUSED=1` and NOTHING sends, from any path, until it is removed. This is the
+    // one place every send reaches, which is why the switch lives here rather than in each caller: a
+    // bounce-rate emergency has to be stoppable in one move, not by finding every feature that mails.
+    //
+    // Measured 2026-11-20 (owner's Mailgun dashboard read 37.02% bounces over 30 days): the answer to
+    // "stop all mail" cannot be a code change per feature while mail is already going out.
+    //
+    // It returns Ok and records the refusal instead of erroring, deliberately: an error sends the
+    // queue into retry storms, and a paused send is not a failure the sender should keep retrying.
+    if mail_sending_paused() {
+        tracing::warn!(
+            to = %cfg.to,
+            "SENDING PAUSED by EMAIL_SENDING_PAUSED — this message was refused, not attempted"
+        );
+        // A PERMANENT refusal on purpose: a paused send is not something to retry, and an error would send
+        // the queue into a retry storm against a provider we are trying to stop talking to.
+        return DeliveryOutcome::permanent(
+            "Sending is paused for this deployment (EMAIL_SENDING_PAUSED): no mail leaves until it is \
+             switched off.",
+        );
+    }
 
     // On the platform transport `from_email` is already EMAIL_FROM (set in load_delivery_config);
     // the tenant's own identity rides along as Reply-To so replies still reach the workspace.
