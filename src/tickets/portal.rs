@@ -565,6 +565,10 @@ pub async fn reply(
     .fetch_one(&s.db)
     .await?;
 
+    // The customer's own words are the best reading of how this is going. The tag is a floor: a later
+    // polite message does not erase the one where they said they were leaving.
+    crate::helpdesk::sentiment::apply(&s.db, ticket_id, &message).await;
+
     sqlx::query(
         "UPDATE tickets SET updated_at = NOW(), \
          status = CASE WHEN status IN ('resolved', 'closed') THEN 'open' ELSE status END \
