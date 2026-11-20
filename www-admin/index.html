@@ -7226,6 +7226,26 @@ function filterCompanies(query) {
   });
 }
 
+
+// Ask the server who this session is, and reconcile the stored copy.
+//
+// Never throws into the boot path: a failed refresh must look like "no change", not like a failed
+// login, or an API blip would log an operator out of a screen they are already using.
+async function refreshWhoAmI() {
+  try {
+    const me = await API.get('/auth/me');
+    if (!me || !me.team_member) return;
+    const merged = Object.assign({}, me.team_member, { platform_admin: me.platform_admin === true });
+    const before = JSON.stringify(STATE.user || {});
+    STATE.user = merged;
+    localStorage.setItem('crm_user', JSON.stringify(merged));
+    if (JSON.stringify(merged) !== before) {
+      // The menu, and anything else gated on the account, is rebuilt from the fresh answer.
+      if (typeof renderSidebar === 'function') renderSidebar();
+    }
+  } catch (e) { /* keep the stored session; the next request will still be authorised or not */ }
+}
+
 // ========== INIT ==========
 window.addEventListener('DOMContentLoaded', () => {
   const token = localStorage.getItem('crm_token');
@@ -7235,6 +7255,13 @@ window.addEventListener('DOMContentLoaded', () => {
       STATE.token = token;
       STATE.user = JSON.parse(userStr);
       showApp();
+      // THE SERVER IS THE AUTHORITY ON WHO YOU ARE (measured 2026-11-20). This console trusted the
+      // stored user blob for ever: an operator whose session was written before `platform_admin`
+      // existed — or by an older build — saw NO admin menu (no Portfolio Companies, no Users) while
+      // every /api/admin/* route would have answered 200 for them, and nothing on the page ever
+      // refreshed it. A reload did not help; only a fresh login did. Now the boot asks /auth/me and
+      // re-renders if the answer differs, so the menu follows the server instead of a stale copy.
+      refreshWhoAmI();
     } catch(e) {
       logout(true);
     }
