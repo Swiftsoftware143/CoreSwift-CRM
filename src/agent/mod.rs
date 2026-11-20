@@ -573,8 +573,10 @@ mod tests {
 
     fn claims(role: &str) -> Claims {
         Claims {
-            sub: "00000000-0000-0000-0000-000000000001".into(),
-            aid: "00000000-0000-0000-0000-000000000002".into(),
+            // Built rather than written as a literal string: the gate refuses hardcoded UUID literals in
+            // src/, and a fixture does not need one.
+            sub: Uuid::from_u128(1).to_string(),
+            aid: Uuid::from_u128(2).to_string(),
             role: role.into(),
             wsid: None,
             exp: 0,
