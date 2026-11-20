@@ -200,14 +200,20 @@ async fn escalate(pool: &PgPool) -> u64 {
                          (SELECT u.email FROM users u
                            WHERE u.tenant_id = d.tenant_id
                              AND u.email IS NOT NULL
-                             AND u.role IN ('owner', 'account_owner', 'admin', 'agency_admin')
+                             -- role::text, because `user_role` on this app is
+                             -- {agency_admin, client_admin, team_member, user, company_admin, owner, member}:
+                             -- comparing the enum to a label that does not exist raises 22P02 and takes the
+                             -- whole ladder down with it. Same list the tenant shell uses.
+                             AND u.role::text IN ('owner', 'account_owner', 'admin', 'agency_admin',
+                                                  'company_admin', 'client_admin')
                            ORDER BY u.created_at LIMIT 1)
                        )
                      ELSE
                        (SELECT u.email FROM users u
                          WHERE u.tenant_id = d.tenant_id
                            AND u.email IS NOT NULL
-                           AND u.role IN ('owner', 'account_owner', 'admin', 'agency_admin')
+                           AND u.role::text IN ('owner', 'account_owner', 'admin', 'agency_admin',
+                                                'company_admin', 'client_admin')
                          ORDER BY u.created_at LIMIT 1)
                    END AS recipient
               FROM due d
