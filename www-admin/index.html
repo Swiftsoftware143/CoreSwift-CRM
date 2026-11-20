@@ -1462,6 +1462,14 @@ async function checkPlan() {
 }
 
 function showUpgradeBanner() {
+  // kanban cron 2026-11-19: a dismissal is the OPERATOR's answer and it must outrank the upsell —
+  // the same fix the tenant console has carried since 2026-10-31. Every plan-gated call answers 402
+  // and the 402 path in API.call() calls this function, so a Free workspace's gated calls re-showed
+  // the banner AFTER the boot had applied the stored dismissal: measured live on
+  // admin.coreswiftcrm.com (probe workspace, banner visible -> Dismiss -> hidden -> reload -> visible
+  // with `crm_banner_dismissed` = 1). Respect the flag; the gated pane's own lock card still explains
+  // the gate to whoever lands on it.
+  if (localStorage.getItem('crm_banner_dismissed')) return;
   document.getElementById('upgradeBanner').classList.remove('dismissed');
 }
 
@@ -2208,6 +2216,11 @@ const TAB_RENDERERS = {
     return pageHeader('Users', 'Every workspace on the platform — select rows to retire them. Probe/test workspaces are a picker, not customers: hidden until you tick Show probe workspaces',
       '<label style="display:inline-flex;align-items:center;gap:6px;margin-right:12px;font-size:13px"><input type="checkbox" id="tnShowProbes"> Show probe workspaces</label> ' +
       '<span id="tnProbeHidden" class="badge badge-warning" style="display:none;margin-right:12px"></span> ' +
+      // CSV of what the operator is LOOKING AT (2026-11-19): name, slug, owner, status, plan and the
+      // created date of every row currently drawn — probe rows only when Show probe workspaces is
+      // ticked, and the plan mix filter respected. Built from the table's own cells, so the file can
+      // never disagree with the screen. Nothing new is read from the server.
+      '<button class="btn btn-sm btn-outline" id="tnCsv" title="Download the rows currently shown as a spreadsheet file">⬇ Download CSV</button> ' +
       '<button class="btn btn-sm btn-outline" id="tnProbes" disabled>Select probes (0)</button> ' +
       '<button class="btn btn-danger btn-sm" id="tnDel" disabled>Delete selected</button>') +
     // THE PLAN MIX (2026-11-19). Filled by loadTenantsTab once every PLAN cell is painted: one chip
@@ -2997,6 +3010,51 @@ let TENANT_PLANS = {};
 let TENANT_PLAN_LABELS = {};
 let TENANT_PLAN_FILTER = null;
 
+// The CSV the operator downloads from the workspace list (2026-11-19). It is built from the TABLE
+// as drawn — same rows, same probe filter, same plan chips, same column values — so the file and
+// the screen can never disagree, and no extra request is made. Columns: Name, Slug, Owner, Status,
+// Plan, Created. The owner cell's `probe` badge is stripped, since the badge is a console hint and
+// not part of the address.
+function tenantsCsvCell(v) {
+  const s = String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function tenantsCsvText() {
+  const table = document.querySelector('#tenantsTable table');
+  if (!table) return '';
+  const lines = ['Name,Slug,Owner,Status,Plan,Created'];
+  Array.from(table.querySelectorAll('tbody tr')).forEach(tr => {
+    if (tr.style.display === 'none') return;           // hidden by the probe filter or a plan chip
+    const cells = Array.from(tr.querySelectorAll('td'));
+    if (!cells.length) return;
+    const owner = String(cells[3] ? cells[3].textContent : '').replace(/\s*\bprobe\s*$/i, '').trim();
+    const vals = [
+      cells[1] ? cells[1].textContent : '',
+      cells[2] ? cells[2].textContent : '',
+      owner,
+      cells[4] ? cells[4].textContent : '',
+      cells[5] ? cells[5].textContent : '',
+      cells[6] ? cells[6].textContent : '',
+    ];
+    lines.push(vals.map(tenantsCsvCell).join(','));
+  });
+  return lines.join('\r\n');
+}
+function downloadTenantsCsv() {
+  const text = tenantsCsvText();
+  const lines = text ? text.split('\r\n').length - 1 : 0;
+  if (!lines) { toast('There is no workspace row to export in this view.', 'error'); return; }
+  const stamp = new Date().toISOString().slice(0, 10);
+  const blob = new Blob(['\ufeff' + text], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'coreswift-workspaces-' + stamp + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  toast('Exported ' + lines + ' workspace' + (lines === 1 ? '' : 's') + ' to a CSV file.', 'success');
+}
+
 async function loadTenantsTab() {
   const el = document.getElementById('tenantsTable');
   if (!el) return;
@@ -3065,6 +3123,11 @@ async function loadTenantsTab() {
   el.innerHTML = dataTable(
     ['<input type="checkbox" id="tnAll" title="Select all">', 'Name', 'Slug', 'Owner', 'Status', 'Plan', 'Created', 'Actions'],
     rows, 'No workspaces returned.');
+
+  // Wire the export AFTER the rows exist (it reads them from the table, so it must point at the
+  // freshly drawn one, not a previous render).
+  const csvBtnNow = document.getElementById('tnCsv');
+  if (csvBtnNow) csvBtnNow.onclick = downloadTenantsCsv;
 
   // Fill the PLAN column progressively: one read per row, sequential so a long list cannot burst the
   // API, and the table is already usable while it fills. Values come from the gate's own answer
