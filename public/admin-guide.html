@@ -308,4 +308,22 @@ verify — a waiting lane reads "waiting on records" with the exact DNS rows to 
 </ol>
 <p>Each of those four answers is visible in the console, and the send log records every attempt with the reason it was refused, so the answer is read rather than guessed.</p>
 </section>
+<h2 id="admin-inbound-credential">Inbound mail: which credential is authenticating a delivery</h2>
+<p>Two credentials can authenticate a Mailgun inbound delivery, and the log says which one was used:</p>
+<ul>
+<li><strong>"authenticated by the platform webhook token"</strong> — the domain has no signing key, so the forward
+URL's platform token authenticated it. This is the default state and it receives fine. It is a shared credential
+for the fleet, not per account.</li>
+<li><strong>signature</strong> — the domain's own signing key validated the delivery. Stronger and per account.</li>
+</ul>
+<p><strong>The key is 32 hexadecimal characters</strong> (Mailgun &rarr; Settings &rarr; API Security &rarr; HTTP
+webhook signing key, press Show), account-wide, not per domain. A 50-character value with dashes is the
+<em>sending</em> API key and is now refused at the door, because accepting it looked healthy in the panel while
+refusing every delivery — the failure mode that reads to a customer as "the inbox is broken".</p>
+<p>If a wrong key is ever stored, use <strong>Remove key</strong>: with no key the receiver authenticates on the
+platform token and mail flows, whereas a wrong key refuses everything. Removing is a repair, not a downgrade.</p>
+<p>Inbound mail names the customer from the <strong>From header</strong>, not the envelope sender: a relaying
+provider rewrites the envelope to <code>bounce+&lt;hash&gt;@&lt;its domain&gt;</code>, and reading that as the sender
+mislabels the message and stops a ticket from being opened for it.</p>
+
 </body></html>
