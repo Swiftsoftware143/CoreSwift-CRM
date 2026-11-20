@@ -673,18 +673,20 @@ pub async fn update_domain(
         // a token, never padded, so trimming it is safe and removes a whole class of silent mismatch.
         Some(Some(k)) => {
             let trimmed = k.trim();
-            // A SENDING API KEY IS NOT A WEBHOOK SIGNING KEY (measured 2026-11-20): the sending key is
-            // ~51 characters and starts with `key-`; the HTTP webhook signing key is 32 hex characters.
-            // Accepting the wrong one looked perfect in the panel and refused EVERY delivery on arrival
-            // with "the configured signing key did not validate", which reads as a broken inbox rather
-            // than a wrong paste. Refuse it at the door and name the right one.
-            if trimmed.starts_with("key-") || trimmed.len() > 64 {
+            // MEASURED, not guessed (2026-11-20): the provider's HTTP webhook signing key is exactly 32
+            // hexadecimal characters. Its SENDING API key is 50 characters shaped `32hex-8hex-8hex`, and
+            // pasting THAT here was accepted, shown as "usable", and then refused every delivery on
+            // arrival. A length test alone does not catch it, so the SHAPE is enforced: 32 hex or nothing.
+            let is_signing_key =
+                trimmed.len() == 32 && trimmed.chars().all(|c| c.is_ascii_hexdigit());
+            if !is_signing_key {
                 return Err(AppError::Validation(
-                        "That looks like a sending API key, not the HTTP webhook signing key. The webhook \
-                         signing key is 32 characters — in your provider it is Settings, then API Security, \
-                         then HTTP webhook signing key. Receiving cannot work with the sending key."
-                            .into(),
-                    ));
+                    "That is not the HTTP webhook signing key. It is 32 hexadecimal characters — in your \
+                     provider: Settings, then API Security, then HTTP webhook signing key. The sending API \
+                     key (50 characters, with dashes) will not authenticate deliveries. Leave this blank \
+                     to keep receiving on the platform credential."
+                        .into(),
+                ));
             }
             (true, Some(crate::secret_box::seal(account_id, trimmed)?))
         }
