@@ -157,8 +157,8 @@ pub async fn generate(
     }
 
     // the account's own keys: every account is its own bill, so no key is a normal state
-    let keys = crate::provider_keys::model_keys(pool, tenant_id).await;
-    if keys.is_empty() {
+    let mk = crate::provider_keys::model_keys_with_source(pool, tenant_id).await;
+    if mk.keys.is_empty() {
         return Err(AppError::BadRequest(
             "Add a model key in Integration → Provider keys, and I can draft these for you. \
              Until then the knowledge base works exactly as it does now: you write the answers."
@@ -167,8 +167,16 @@ pub async fn generate(
     }
 
     let (system, user) = build_prompt(req);
-    let raw = crate::ai::router::route_to_llm("deepseek", &keys, &system, &user)
-        .await
+    let raw = crate::ai::router::route_to_llm_tracked(
+        pool,
+        tenant_id,
+        "ticket_draft",
+        "deepseek",
+        &mk,
+        &system,
+        &user,
+    )
+    .await
         .map_err(|e| {
             // BadRequest rather than Internal ON PURPOSE: the generic 500 body hides the message from the
             // person who needs it, and this is theirs to act on (a bad key, a provider outage), not a fault

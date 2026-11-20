@@ -3136,9 +3136,11 @@ async function icLoadProviders() {
   if (!wrap) return;
   let providers = [], keys = {};
   try {
-    const res = await Promise.all([API.get('/available-providers'), API.get('/provider-keys')]);
+    const res = await Promise.all([API.get('/available-providers'), API.get('/provider-keys'),
+                                   API.get('/ai/usage').catch(() => null)]);
     providers = (res[0] && res[0].items) || [];
     ((res[1] && res[1].items) || []).forEach(k => { keys[k.provider] = k; });
+    IC.aiUsage = res[2] || null;
   } catch (e) {
     wrap.innerHTML = icErr('Could not load provider keys', e.message);
     return;
@@ -3160,6 +3162,43 @@ function icRenderProviders() {
   let html = card('🔑 Provider keys (BYOK — stored on this account only)',
     '<p style="color:var(--text-secondary);margin:0">Keys your own features call. Stored per account; nothing here is a platform-wide default ' +
     'and a saved key is never shown back in full.</p>');
+
+  // WHAT THE AI HAS COST — and with whose key. An empty table used to read as "the AI is free" when the
+  // truth was "the AI is off"; this says which.
+  const u = IC.aiUsage;
+  if (u) {
+    const running = u.ai_running
+      ? '<span class="provider-status"><span class="status-dot connected"></span> running</span>'
+      : '<span class="provider-status"><span class="status-dot disconnected"></span> off</span>';
+    let body = '<p style="color:var(--text-secondary);margin:0 0 10px">Last ' +
+      escapeHtml(String(u.window_days || 30)) + ' days, this account. ' + running + '</p>';
+    if (!u.ai_running) {
+      body += '<p style="color:var(--text-secondary);margin:0">No AI key is set on this account and the ' +
+        'platform has none configured, so every AI feature is switched off rather than silently doing nothing. ' +
+        'Add a key below to turn it on.</p>';
+    } else if (!(u.providers || []).length) {
+      body += '<p style="color:var(--text-secondary);margin:0">Nothing has called a model in the last ' +
+        escapeHtml(String(u.window_days || 30)) + ' days.</p>';
+    } else {
+      body += '<div style="display:grid;gap:6px">';
+      (u.providers || []).forEach(r => {
+        body += '<div style="display:flex;justify-content:space-between;gap:10px;font-size:.8rem">' +
+          '<span>' + escapeHtml(r.provider) + '</span>' +
+          '<span style="color:var(--text-secondary)">' + escapeHtml(String(r.calls)) + ' call(s) · ' +
+          escapeHtml(String((r.tokens_in || 0) + (r.tokens_out || 0))) + ' tokens' +
+          (r.calls_on_platform_key ? ' · ' + escapeHtml(String(r.calls_on_platform_key)) + ' on the platform key' : '') +
+          '</span></div>';
+      });
+      body += '</div>';
+      const recent = (u.recent || []).slice(0, 5);
+      if (recent.length) {
+        body += '<div style="margin-top:10px;font-size:.74rem;color:var(--text-muted)">Most recent: ' +
+          recent.map(c => escapeHtml(c.feature) + ' → ' + escapeHtml(c.provider) +
+            (c.ok ? '' : ' (failed)')).join(' · ') + '</div>';
+      }
+    }
+    html += card('📊 What the AI has cost', body);
+  }
 
   if (!IC.providers.length) {
     el.innerHTML = html + '<div class="card"><div class="card-body"><div class="empty-state"><h3>No providers registered</h3>' +

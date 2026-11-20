@@ -371,3 +371,102 @@ fn compose_subject(context: &str, name: &str, assessment: &ChurnAssessment) -> S
         _ => "Update from CRM Swift".to_string(),
     }
 }
+
+/// `GET /api/ai/usage` — what the AI has actually cost this account, and with whose key.
+///
+/// Four questions an owner asks and could not answer before: how much have I used this month, on what,
+/// and how much of it ran on MY key rather than the platform's. Per-provider totals for the last thirty
+/// days plus the most recent calls, so a surprise is visible as a number and as a row.
+pub async fn usage(
+    State(state): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // The account comes from the token the middleware accepted, exactly as the sibling handlers do.
+    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+
+    let by_provider: Vec<(String, i64, i64, i64, i64)> = sqlx::query_as(
+        "SELECT provider,
+                count(*)::int8,
+                coalesce(sum(tokens_in), 0)::int8,
+                coalesce(sum(tokens_out), 0)::int8,
+                count(*) FILTER (WHERE platform_key)::int8
+           FROM ai_usage
+          WHERE tenant_id = $1 AND created_at > now() - interval '30 days'
+          GROUP BY provider
+          ORDER BY provider",
+    )
+    .bind(tenant_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let recent: Vec<(
+        chrono::DateTime<chrono::Utc>,
+        String,
+        String,
+        i32,
+        i32,
+        bool,
+        bool,
+    )> = sqlx::query_as(
+        "SELECT created_at, feature, provider, tokens_in, tokens_out, platform_key, ok
+           FROM ai_usage
+          WHERE tenant_id = $1
+          ORDER BY created_at DESC
+          LIMIT 20",
+    )
+    .bind(tenant_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let providers: Vec<serde_json::Value> = by_provider
+        .into_iter()
+        .map(|(provider, calls, tin, tout, on_platform)| {
+            serde_json::json!({
+                "provider": provider,
+                "calls": calls,
+                "tokens_in": tin,
+                "tokens_out": tout,
+                "calls_on_platform_key": on_platform,
+            })
+        })
+        .collect();
+
+    let calls: Vec<serde_json::Value> = recent
+        .into_iter()
+        .map(|(at, feature, provider, tin, tout, platform, ok)| {
+            serde_json::json!({
+                "at": at.to_rfc3339(),
+                "feature": feature,
+                "provider": provider,
+                "tokens_in": tin,
+                "tokens_out": tout,
+                "platform_key": platform,
+                "ok": ok,
+            })
+        })
+        .collect();
+
+    // HONEST ABOUT A DEAD FEATURE: an account with no key anywhere sees an empty table and would read it as
+    // "the AI is free". It is not free — it is off, and this says so.
+    let has_own_key = !crate::provider_keys::model_keys(&state.db, tenant_id)
+        .await
+        .is_empty();
+    let platform_available = ["DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
+        .iter()
+        .any(|v| {
+            std::env::var(v)
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false)
+        });
+
+    Ok(Json(serde_json::json!({
+        "window_days": 30,
+        "providers": providers,
+        "recent": calls,
+        "has_own_key": has_own_key,
+        "platform_key_available": platform_available,
+        "ai_running": has_own_key || platform_available,
+    })))
+}

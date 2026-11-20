@@ -30,6 +30,8 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/channel", axum::routing::post(handlers::suggest_channel))
         .route("/timing", axum::routing::post(handlers::suggest_timing))
         .route("/risk", axum::routing::post(handlers::assess_churn_risk))
+        // What the AI cost this account, and whether our credential paid. Beside the features that spend it.
+        .route("/usage", axum::routing::get(handlers::usage))
         // Plan gating — the admin controls this module per plan
         // (the module & feature registry is the source of truth for the admin UI — see src/module_registry).
         .layer(axum::middleware::from_fn_with_state(

@@ -1199,8 +1199,8 @@ pub async fn summarize_message(
         ));
     }
 
-    let keys = ai_keys(&state, tenant_id).await;
-    if keys.is_empty() {
+    let mk = crate::provider_keys::model_keys_with_source(&state.db, tenant_id).await;
+    if mk.keys.is_empty() {
         return Err(AppError::ServiceUnavailable(
             "AI summaries need an AI provider key on this account. Add one in Settings, then the \
              Summarise button will work."
@@ -1216,7 +1216,17 @@ pub async fn summarize_message(
                   what the sender wants.";
     let user = format!("From: {}\nSubject: {}\n\n{}", from, subject, cut);
 
-    match crate::ai::router::route_to_llm("deepseek", &keys, system, &user).await {
+    match crate::ai::router::route_to_llm_tracked(
+        &state.db,
+        tenant_id,
+        "email_summary",
+        "deepseek",
+        &mk,
+        system,
+        &user,
+    )
+    .await
+    {
         Ok(summary) => Ok(Json(json!({ "summary": summary }))),
         Err(e) => Err(AppError::ServiceUnavailable(format!(
             "The AI provider did not answer, so there is no summary: {}",
