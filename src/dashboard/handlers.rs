@@ -46,19 +46,35 @@ pub async fn stats(
     // be cast to float8 in the SELECT (same trap documented in `src/pipelines/opportunity.rs`).
     // Without the cast the decode failed on EVERY call and the old `.unwrap_or(0.0)` folded that
     // failure into a hard 0.0, so every tenant that had won a deal was told it had won nothing.
-    let total_revenue: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(value), 0)::float8 FROM opportunities \
-         WHERE tenant_id = $1 AND is_won = true",
+    //
+    // WON VALUE IS PER CURRENCY (David, 2026-11-20: multi-currency is core). One number across
+    // two currencies is not money, so `total_revenue` is only filled when the workspace's won
+    // deals sit in exactly ONE currency — otherwise it is null and `revenue_by_currency` carries
+    // the truth. A workspace with nothing won still gets 0.0 when its currency is known.
+    let revenue: Vec<(String, f64)> = sqlx::query_as(
+        "SELECT COALESCE(currency,'') AS currency, COALESCE(SUM(value),0)::float8
+           FROM opportunities WHERE tenant_id = $1 AND is_won = true
+          GROUP BY COALESCE(currency,'') ORDER BY 1",
     )
     .bind(tenant_id)
-    .fetch_one(&s.db)
+    .fetch_all(&s.db)
     .await?;
+    let revenue_by_currency: Vec<serde_json::Value> = revenue
+        .iter()
+        .map(|(cur, val)| json!({ "currency": cur, "value": val }))
+        .collect();
+    let total_revenue = match revenue.as_slice() {
+        [(_, only)] => Some(*only),
+        [] => Some(0.0),
+        _ => None,
+    };
 
     Ok(Json(json!({
         "total_contacts": total_contacts,
         "total_companies": total_companies,
         "total_opportunities": total_opportunities,
-        "total_revenue": total_revenue
+        "total_revenue": total_revenue,
+        "revenue_by_currency": revenue_by_currency
     })))
 }
 

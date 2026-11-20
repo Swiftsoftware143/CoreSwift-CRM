@@ -2120,7 +2120,7 @@ const TAB_LOADERS = {
           { icon:'👥', label:'Total Contacts', value: cnt(stats && stats.total_contacts) },
           { icon:'🏢', label:'Companies', value: cnt(stats && stats.total_companies) },
           { icon:'🎯', label:'Opportunities', value: cnt(stats && stats.total_opportunities) },
-          { icon:'💰', label:'Won Deal Value', value: money(stats && stats.total_revenue) },
+          { icon:'💰', label:'Won Deal Value', value: dashWonValue(stats) },
           { icon:'📈', label:'Pipelines', value: cnt(pipes && Array.isArray(pipes.pipelines) ? pipes.pipelines.length : null) },
           { icon:'🎫', label:'Open Tickets', value: cnt(tickets && tickets.open), note: gateNote, tip: ticketsS.note },
           { icon:'🔗', label:'Tracked Links', value: cnt(links && Array.isArray(links.links) ? links.links.length : null) },
@@ -6360,37 +6360,189 @@ function famErr(el, label, e) {
 }
 function confirmThen(msg, fn) { if (window.confirm(msg)) fn(); }
 
-// ---------------------------------------------------------------- PIPELINES
+// ---------------------------------------------------------------- PIPELINES / DEALS
+// The DEAL TAB (David, 2026-11-20 — kanban t_2df68850).
+//
+// The deal record is CoreSwift's `opportunities` table; this tab is the software-wide surface over
+// it. Nothing here is industry-specific: a workspace that needs courier fields (Xride) adds them
+// as CUSTOM FIELDS, which is the same mechanism any other industry uses.
+//
+// Money is shown per currency, never added across currencies. A workspace that has not chosen a
+// currency is asked to choose one before it can record a value — the app never assumes dollars.
 let PL_DATA = [];
+let PL_FILTER = { q: '', owner_id: '', stage_id: '', source: '', status: '', from: '', to: '', rotting: false };
+let PL_REPORT = [];
+let PL_CURRENCY = null;
+let PL_TEAM = [];
+let PL_DETAIL = null;
+
 function plCache(pid) { return PL_DATA.find(function (x) { return x.pipeline.id === pid; }) || null; }
 
+function plMoney(value, currency) {
+  if (value === null || value === undefined || value === '') return '—';
+  const n = Number(value);
+  if (!isFinite(n)) return '—';
+  // No currency, no dollar sign: an amount whose currency is unknown is not a dollar amount.
+  if (!currency) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  try {
+    return n.toLocaleString(undefined, { style: 'currency', currency: currency, maximumFractionDigits: 2 });
+  } catch (_) {
+    return currency + ' ' + n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+}
+
+function plCurrencies(deals) {
+  const seen = [];
+  (deals || []).forEach(function (d) {
+    const c = (d.currency || '').trim().toUpperCase();
+    if (c && seen.indexOf(c) === -1) seen.push(c);
+  });
+  return seen;
+}
+
+// Won value is per currency: a workspace selling in two currencies has two figures, never one
+// number that adds dollars to euros (David, 2026-11-20). `total_revenue` is null in that case.
+function dashWonValue(stats) {
+  if (!stats) return '—';
+  const rows = Array.isArray(stats.revenue_by_currency) ? stats.revenue_by_currency : [];
+  if (rows.length > 1) {
+    return rows.map(function (r) { return plMoney(r.value, r.currency); }).join(' + ');
+  }
+  if (rows.length === 1) return plMoney(rows[0].value, rows[0].currency);
+  return stats.total_revenue === null || stats.total_revenue === undefined ? '—' : money(stats.total_revenue);
+}
+
 function pipelinesShell() {
-  return pageHeader('Pipelines & Deals', 'Track deals through your sales pipeline',
+  return pageHeader('Pipelines & Deals', 'Every deal your workspace is working — by stage, by owner, by currency',
     '<button class="btn btn-primary btn-sm" onclick="plNewPipeline()">+ New Pipeline</button>' +
     '<button class="btn btn-secondary btn-sm" onclick="plCsvImportPick()">⬆ Import deals</button>' +
-    '<button class="btn btn-secondary btn-sm" onclick="csvExportDeals()">⬇ Export deals</button>') +
-  '<div id="plContent"><div class="loading-wrap"><div class="spinner"></div> Loading pipelines...</div></div>';
+    '<button class="btn btn-secondary btn-sm" onclick="csvExportDeals()">⬇ Export deals</button>' +
+    '<button class="btn btn-secondary btn-sm" onclick="plShowReport()">Reporting</button> ' +
+    '<button class="btn btn-secondary btn-sm" onclick="plDealWriterHelp()">Deal writer API</button>') +
+  '<div class="card" style="margin-bottom:16px"><div class="card-body">' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">' +
+      '<div style="flex:2 1 220px"><label style="font-size:12px;color:var(--text-secondary)">Search</label>' +
+        '<input type="text" id="plFilterQ" placeholder="Deal, note, source or external reference" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"></div>' +
+      '<div style="flex:1 1 140px"><label style="font-size:12px;color:var(--text-secondary)">Owner</label>' +
+        '<select id="plFilterOwner" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"><option value="">Anyone</option></select></div>' +
+      '<div style="flex:1 1 140px"><label style="font-size:12px;color:var(--text-secondary)">Stage</label>' +
+        '<select id="plFilterStage" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"><option value="">Any stage</option></select></div>' +
+      '<div style="flex:1 1 130px"><label style="font-size:12px;color:var(--text-secondary)">Source</label>' +
+        '<input type="text" id="plFilterSource" placeholder="Any" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"></div>' +
+      '<div style="flex:1 1 120px"><label style="font-size:12px;color:var(--text-secondary)">Status</label>' +
+        '<select id="plFilterStatus" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
+          '<option value="">All</option><option value="open">Open</option><option value="won">Won</option><option value="lost">Lost</option></select></div>' +
+      '<div style="flex:1 1 130px"><label style="font-size:12px;color:var(--text-secondary)">Created from</label>' +
+        '<input type="date" id="plFilterFrom" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"></div>' +
+      '<div style="flex:1 1 130px"><label style="font-size:12px;color:var(--text-secondary)">Created to</label>' +
+        '<input type="date" id="plFilterTo" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"></div>' +
+      '<div style="flex:0 0 auto"><label style="font-size:12px;color:var(--text-secondary)">&nbsp;</label>' +
+        '<button class="btn btn-primary btn-sm" onclick="plApplyFilters()">Filter</button> ' +
+        '<button class="btn btn-ghost btn-sm" onclick="plClearFilters()">Clear</button></div>' +
+    '</div>' +
+    '<div style="margin-top:10px;font-size:12px;color:var(--text-secondary)">' +
+      '<label style="cursor:pointer"><input type="checkbox" id="plFilterRotting" onchange="plApplyFilters()"> Only deals with no activity in 14 days</label>' +
+      ' <span id="plCurrencyNote" style="margin-left:12px"></span>' +
+    '</div>' +
+  '</div></div>' +
+  '<div id="plReport"></div>' +
+  '<div id="plContent"><div class="loading-wrap"><div class="spinner"></div> Loading deals...</div></div>';
+}
+
+function plFilterQuery() {
+  const parts = [];
+  if (PL_FILTER.q) parts.push('q=' + encodeURIComponent(PL_FILTER.q));
+  if (PL_FILTER.owner_id) parts.push('owner_id=' + encodeURIComponent(PL_FILTER.owner_id));
+  if (PL_FILTER.stage_id) parts.push('stage_id=' + encodeURIComponent(PL_FILTER.stage_id));
+  if (PL_FILTER.source) parts.push('source=' + encodeURIComponent(PL_FILTER.source));
+  if (PL_FILTER.status) parts.push('status=' + encodeURIComponent(PL_FILTER.status));
+  if (PL_FILTER.from) parts.push('from=' + PL_FILTER.from);
+  if (PL_FILTER.to) parts.push('to=' + PL_FILTER.to);
+  if (PL_FILTER.rotting) parts.push('rotting=true');
+  return parts.length ? '?' + parts.join('&') : '';
+}
+
+function plApplyFilters() {
+  PL_FILTER.q = (document.getElementById('plFilterQ') || {}).value || '';
+  PL_FILTER.owner_id = (document.getElementById('plFilterOwner') || {}).value || '';
+  PL_FILTER.stage_id = (document.getElementById('plFilterStage') || {}).value || '';
+  PL_FILTER.source = ((document.getElementById('plFilterSource') || {}).value || '').trim();
+  PL_FILTER.status = (document.getElementById('plFilterStatus') || {}).value || '';
+  PL_FILTER.from = (document.getElementById('plFilterFrom') || {}).value || '';
+  PL_FILTER.to = (document.getElementById('plFilterTo') || {}).value || '';
+  PL_FILTER.rotting = !!((document.getElementById('plFilterRotting') || {}).checked);
+  loadPipelinesTab();
+}
+
+function plClearFilters() {
+  PL_FILTER = { q: '', owner_id: '', stage_id: '', source: '', status: '', from: '', to: '', rotting: false };
+  ['plFilterQ', 'plFilterSource', 'plFilterFrom', 'plFilterTo'].forEach(function (id) {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+  ['plFilterOwner', 'plFilterStage', 'plFilterStatus'].forEach(function (id) {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+  const r = document.getElementById('plFilterRotting'); if (r) r.checked = false;
+  loadPipelinesTab();
 }
 
 async function loadPipelinesTab() {
   const el = document.getElementById('plContent');
   if (!el) return;
   try {
+    // Team (owner pickers) and the workspace currency are read once per tab visit; both are needed
+    // before a single deal can be created or filtered by owner.
+    if (!PL_TEAM.length) {
+      try { PL_TEAM = (await API.get('/deals/team')).people || []; } catch (_) {}
+    }
+    if (PL_CURRENCY === null) {
+      try { PL_CURRENCY = (await API.get('/deals/currency')).currency || ''; } catch (_) {}
+    }
+    const noteEl = document.getElementById('plCurrencyNote');
+    if (noteEl) {
+      noteEl.innerHTML = PL_CURRENCY
+        ? 'Workspace currency: <strong>' + escapeHtml(PL_CURRENCY) + '</strong>'
+        : '<span style="color:var(--bad,#ef4444)">No workspace currency set — <a href="#" onclick="plDealWriterHelp();return false">choose one</a> before recording values.</span>';
+    }
     const pipes = famList(await API.get('/pipelines'), 'pipelines');
     PL_DATA = [];
+    let stageOptions = '<option value="">Any stage</option>';
+    for (const row of pipes) {
+      const p = row.pipeline || row;
+      let stages = row.stages || [];
+      try { stages = famList(await API.get('/pipelines/' + p.id + '/stages'), 'stages'); } catch (_) {}
+      PL_DATA.push({ pipeline: p, stages: stages, opps: [] });
+      stages.forEach(function (s) {
+        stageOptions += '<option value="' + s.id + '"' + (PL_FILTER.stage_id === s.id ? ' selected' : '') + '>' +
+          escapeHtml(p.name + ' · ' + s.name) + '</option>';
+      });
+    }
+    const sel = document.getElementById('plFilterStage');
+    if (sel) sel.innerHTML = stageOptions;
+    const ownerSel = document.getElementById('plFilterOwner');
+    if (ownerSel) {
+      ownerSel.innerHTML = '<option value="">Anyone</option>' + PL_TEAM.map(function (u) {
+        return '<option value="' + u.id + '"' + (PL_FILTER.owner_id === u.id ? ' selected' : '') + '>' + escapeHtml(u.name) + '</option>';
+      }).join('');
+    }
+
+    let filtered = { deals: [], total: 0, total_value: 0, weighted_value: 0 };
+    try { filtered = await API.get('/deals' + plFilterQuery() + (plFilterQuery() ? '&' : '?') + 'per_page=100'); } catch (e) { toast('Deals: ' + e.message, 'error'); }
+    const deals = filtered.deals || [];
+    // Hand each pipeline the deals that belong to it, so the board and the table read ONE result set.
+    PL_DATA.forEach(function (entry) {
+      entry.opps = deals.filter(function (d) { return d.pipeline_id === entry.pipeline.id; });
+    });
+
     if (!pipes.length) {
       el.innerHTML = card('Pipelines', '<div class="empty-state"><div class="empty-icon">📈</div>' +
         '<h3>No pipelines yet</h3><p>Create your first sales pipeline to start tracking deals.</p></div>');
       return;
     }
+
     let h = '';
-    for (const row of pipes) {
-      const p = row.pipeline || row;
-      let stages = row.stages || [];
-      let opps = [];
-      try { stages = famList(await API.get('/pipelines/' + p.id + '/stages'), 'stages'); } catch (_) {}
-      try { opps = famList(await API.get('/pipelines/' + p.id + '/opportunities?per_page=50'), 'opportunities'); } catch (_) {}
-      PL_DATA.push({ pipeline: p, stages: stages, opps: opps });
+    for (const entry of PL_DATA) {
+      const p = entry.pipeline, stages = entry.stages, opps = entry.opps;
       const won = opps.filter(function (o) { return o.is_won; }).length;
       const lost = opps.filter(function (o) { return o.is_lost; }).length;
       const open = opps.length - won - lost;
@@ -6402,50 +6554,388 @@ async function loadPipelinesTab() {
           '<span class="badge badge-error">' + lost + ' lost</span>' +
           '<button class="btn btn-secondary btn-xs" onclick="plAddStage(\'' + p.id + '\')">+ Stage</button> ' +
           '<button class="btn btn-primary btn-xs" onclick="plAddDeal(\'' + p.id + '\')">+ Deal</button> ' +
+          '<button class="btn btn-secondary btn-xs" onclick="plStageHooks(\'' + p.id + '\')">Stage hooks</button> ' +
           '<button class="btn btn-ghost btn-xs" onclick="plDeletePipeline(\'' + p.id + '\')">Delete pipeline</button>' +
         '</div><div class="card-body">';
       h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">';
       if (!stages.length) h += '<span class="config-desc">No stages on this pipeline — add one to move deals through it.</span>';
       stages.forEach(function (s) {
+        const stageDeals = opps.filter(function (o) { return o.stage_id === s.id; });
+        const cur = plCurrencies(stageDeals);
+        // Totals are per currency: a stage holding USD and EUR deals shows two figures, never one sum.
+        const totals = cur.map(function (c) {
+          const sum = stageDeals.filter(function (o) { return (o.currency || '').toUpperCase() === c; })
+            .reduce(function (a, o) { return a + (Number(o.value) || 0); }, 0);
+          return plMoney(sum, c);
+        }).join(' + ');
         h += '<span class="badge badge-warning" style="padding:6px 10px">' + fh(s.name) +
           (s.probability !== null && s.probability !== undefined ? ' · ' + s.probability + '%' : '') +
+          (stageDeals.length ? ' · ' + stageDeals.length + ' (' + totals + ')' : '') +
           (s.is_won ? ' 🏆' : '') + (s.is_lost ? ' ✕' : '') +
           ' <a href="#" title="Edit stage" onclick="plEditStage(\'' + p.id + '\',\'' + s.id + '\');return false">✎</a>' +
           ' <a href="#" title="Delete stage" onclick="plDeleteStage(\'' + p.id + '\',\'' + s.id + '\');return false">🗑</a>' +
         '</span>';
       });
 
-      // Drag a card between stage columns to move a deal. The board and the table below it are two
-      // views of the same data; both call PATCH /api/pipelines/:pid/stages/:sid/move/:oid.
-      h += '<div style="color:var(--text-muted);font-size:12px;margin-bottom:6px">Drag a deal card between stages to move it.</div>';
+      h += '<div style="color:var(--text-muted);font-size:12px;margin-bottom:6px">Drag a deal card between stages to move it. Click a card to open the deal.</div>';
       h += plBoard(p, stages, opps);
       h += '</div>';
       const rows = opps.map(function (o) {
         const st = stages.find(function (s) { return s.id === o.stage_id; });
+        const owner = PL_TEAM.find(function (u) { return u.id === o.owner_id; });
         return [
-          fh(o.name),
-          o.value !== null && o.value !== undefined ? '$' + Number(o.value).toLocaleString() : '—',
-          fh(o.currency),
+          '<a href="#" onclick="plOpenDeal(\'' + o.id + '\');return false">' + fh(o.name) + '</a>',
+          plMoney(o.value, o.currency),
           st ? fh(st.name) : '—',
+          owner ? fh(owner.name) : (o.external_ref ? '<span class="badge badge-muted">API</span>' : '—'),
+          o.probability !== null && o.probability !== undefined ? o.probability + '%' : '—',
           o.is_won ? '<span class="badge badge-success">won</span>'
                    : (o.is_lost ? '<span class="badge badge-error">lost</span>'
                                 : '<span class="badge badge-muted">open</span>'),
+          o.external_ref ? fh(o.external_ref) : '—',
           '<select onchange="plMoveDeal(\'' + p.id + '\',\'' + o.id + '\',this.value)" ' +
             'style="padding:4px 8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
             '<option value="">Move to…</option>' +
             stages.map(function (s) { return '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'; }).join('') +
           '</select>',
+          '<button class="btn btn-ghost btn-xs" onclick="plOpenDeal(\'' + o.id + '\')">Open</button> ' +
           '<button class="btn btn-ghost btn-xs" onclick="plDeleteDeal(\'' + p.id + '\',\'' + o.id + '\')">Delete</button>'
         ];
       });
-      h += dataTable(['Deal', 'Value', 'Cur', 'Stage', 'Status', 'Move', ''], rows,
-        'No deals in this pipeline yet — use “+ Deal”.');
-      h += '</div></div>';
+      h += dataTable(['Deal', 'Value', 'Stage', 'Owner', 'Prob.', 'Status', 'Ext. ref', 'Move', ''], rows,
+        'No deals match these filters yet.');
+      h += '</div>';
     }
     el.innerHTML = h;
+
+    // The filter's own totals, above the board: what the CURRENT filter is worth, per currency.
+    const summaryEl = document.getElementById('plReport');
+    if (summaryEl) {
+      const cur = plCurrencies(deals);
+      const totalsLine = cur.length
+        ? cur.map(function (c) {
+            const rowsC = deals.filter(function (d) { return (d.currency || '').toUpperCase() === c; });
+            const total = rowsC.reduce(function (a, d) { return a + (Number(d.value) || 0); }, 0);
+            const weighted = rowsC.reduce(function (a, d) {
+              return a + ((Number(d.value) || 0) * (Number(d.probability) || 0) / 100);
+            }, 0);
+            return '<div><strong>' + c + '</strong>: ' + plMoney(total, c) + ' total · ' +
+              plMoney(weighted, c) + ' weighted</div>';
+          }).join('')
+        : '<div style="color:var(--text-secondary)">No deals match these filters.</div>';
+      summaryEl.innerHTML = '<div class="card" style="margin-bottom:16px"><div class="card-header">📊 What this filter is worth</div>' +
+        '<div class="card-body" style="font-size:13px">' + totalsLine +
+        '<div style="color:var(--text-secondary);font-size:12px;margin-top:6px">' + deals.length + ' deal(s) shown. Weighted value = value × probability. Amounts are never added across currencies.</div>' +
+        '</div></div>';
+    }
   } catch (e) { famErr(el, 'Pipelines', e); }
 }
 
+// ── reporting card (win rate, days to close, rotting) ──────────────────────────────────────
+async function plLoadReport() {
+  try {
+    const r = await API.get('/deals/report');
+    PL_REPORT = r.reports || [];
+  } catch (_) { PL_REPORT = []; }
+}
+
+async function plShowReport() {
+  await plLoadReport();
+  let body = '';
+  if (!PL_REPORT.length) body = '<p class="config-desc">No pipeline yet — create one to see reporting.</p>';
+  PL_REPORT.forEach(function (rep) {
+    body += '<h4 style="margin:12px 0 6px">' + escapeHtml(rep.pipeline_name) + ' · ' + escapeHtml(rep.currency || 'no currency') + '</h4>' +
+      '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px">' +
+        '<div><div class="config-desc">Open</div><strong>' + rep.open_count + ' · ' + plMoney(rep.open_value, rep.currency) + '</strong></div>' +
+        '<div><div class="config-desc">Weighted</div><strong>' + plMoney(rep.open_weighted_value, rep.currency) + '</strong></div>' +
+        '<div><div class="config-desc">Won</div><strong>' + rep.won_count + ' · ' + plMoney(rep.won_value, rep.currency) + '</strong></div>' +
+        '<div><div class="config-desc">Lost</div><strong>' + rep.lost_count + ' · ' + plMoney(rep.lost_value, rep.currency) + '</strong></div>' +
+        '<div><div class="config-desc">Win rate</div><strong>' + Math.round((rep.win_rate || 0) * 100) + '%</strong></div>' +
+        '<div><div class="config-desc">Avg days to close</div><strong>' + (rep.avg_days_to_close || 0) + '</strong></div>' +
+        '<div><div class="config-desc">Rotting (' + rep.rot_days + 'd)</div><strong>' + rep.rotting_count + '</strong></div>' +
+      '</div>';
+  });
+  showModal('Deal reporting', body, '<button class="btn btn-ghost" onclick="closeModal()">Close</button>', true);
+}
+
+// ── one deal: detail, timeline, follow-ups, files, custom fields ───────────────────────────
+async function plOpenDeal(id) {
+  try {
+    PL_DETAIL = await API.get('/deals/' + id);
+    plRenderDeal();
+  } catch (e) { toast('Could not open deal: ' + e.message, 'error'); }
+}
+
+function plRenderDeal() {
+  const d = PL_DETAIL;
+  if (!d) return;
+  const deal = d.deal;
+  const stageName = d.stage ? d.stage.name : '—';
+  const statusBadge = deal.is_won ? '<span class="badge badge-success">won</span>'
+    : (deal.is_lost ? '<span class="badge badge-error">lost</span>' : '<span class="badge badge-muted">open</span>');
+
+  let fields = '';
+  (d.custom_fields || []).forEach(function (f) {
+    fields += '<div class="form-group"><label>' + escapeHtml(f.label) + '</label>' +
+      '<input type="text" data-field="' + escapeHtml(f.key) + '" value="' + escapeHtml(f.value || '') + '"></div>';
+  });
+  if (!fields) fields = '<div class="config-desc">No custom fields yet — add the ones this industry needs below.</div>';
+
+  const tasks = (d.tasks || []).map(function (t) {
+    return '<div style="display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)">' +
+      '<input type="checkbox" ' + (t.completed_at ? 'checked' : '') + ' onchange="plToggleTask(\'' + t.id + '\',this.checked)">' +
+      '<span style="flex:1;' + (t.completed_at ? 'text-decoration:line-through;opacity:.6' : '') + '">' + escapeHtml(t.title) + '</span>' +
+      '<span class="config-desc">' + (t.due_date ? escapeHtml(t.due_date) : '') + '</span>' +
+      '<button class="btn btn-ghost btn-xs" onclick="plDeleteTask(\'' + t.id + '\')">✕</button></div>';
+  }).join('') || '<div class="config-desc">No follow-ups yet.</div>';
+
+  const files = (d.attachments || []).map(function (a) {
+    return '<div style="display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)">' +
+      '<a href="#" onclick="plDownloadFile(\'' + a.id + '\',\'' + escapeHtml(a.filename) + '\');return false">' + escapeHtml(a.filename) + '</a>' +
+      '<span class="config-desc">' + Math.round((a.size_bytes || 0) / 1024) + ' KB</span>' +
+      '<button class="btn btn-ghost btn-xs" onclick="plDeleteFile(\'' + a.id + '\')">✕</button></div>';
+  }).join('') || '<div class="config-desc">No files yet.</div>';
+
+  const timeline = (d.activities || []).map(function (a) {
+    return '<div style="padding:6px 0;border-bottom:1px solid var(--border)">' +
+      '<div style="font-size:13px">' + escapeHtml(a.body || a.kind) + '</div>' +
+      '<div class="config-desc">' + escapeHtml(a.kind) + ' · ' + escapeHtml((a.actor_label || 'system')) + ' · ' +
+      new Date(a.created_at).toLocaleString() + '</div></div>';
+  }).join('') || '<div class="config-desc">Nothing has happened yet.</div>';
+
+  const owner = d.owner ? d.owner.name : 'Unassigned';
+  const contact = d.contact ? d.contact.name : '—';
+  const collaborators = (d.collaborators || []).map(function (c) { return escapeHtml(c.name); }).join(', ') || '—';
+
+  const body =
+    '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px;font-size:13px">' +
+      '<div><div class="config-desc">Stage</div><strong>' + escapeHtml(stageName) + '</strong></div>' +
+      '<div><div class="config-desc">Status</div><strong>' + statusBadge + '</strong></div>' +
+      '<div><div class="config-desc">Value</div><strong>' + plMoney(deal.value, deal.currency) + '</strong></div>' +
+      '<div><div class="config-desc">Weighted</div><strong>' + plMoney(d.weighted_value, deal.currency) + '</strong></div>' +
+      '<div><div class="config-desc">Probability</div><strong>' + (deal.probability || 0) + '%</strong></div>' +
+      '<div><div class="config-desc">Owner</div><strong>' + escapeHtml(owner) + '</strong></div>' +
+      '<div><div class="config-desc">Contact</div><strong>' + escapeHtml(contact) + '</strong></div>' +
+      '<div><div class="config-desc">Company</div><strong>' + escapeHtml(d.company_name || '—') + '</strong></div>' +
+      '<div><div class="config-desc">Expected close</div><strong>' + escapeHtml(deal.expected_close_date || '—') + '</strong></div>' +
+      '<div><div class="config-desc">Days in stage</div><strong>' + (d.days_in_stage || 0) + '</strong></div>' +
+      '<div><div class="config-desc">Source</div><strong>' + escapeHtml(deal.source || '—') + '</strong></div>' +
+      '<div><div class="config-desc">External ref</div><strong>' + escapeHtml(deal.external_ref || '—') + '</strong></div>' +
+      '<div><div class="config-desc">Collaborators</div><strong>' + collaborators + '</strong></div>' +
+    '</div>' +
+    '<div class="form-group"><label>Notes</label><textarea id="plDetailNotes" rows="3">' + escapeHtml(deal.notes || '') + '</textarea></div>' +
+    '<div class="form-group"><label>Owner</label><select id="plDetailOwner"><option value="">Unassigned</option>' +
+      PL_TEAM.map(function (u) {
+        return '<option value="' + u.id + '"' + (deal.owner_id === u.id ? ' selected' : '') + '>' + escapeHtml(u.name) + '</option>';
+      }).join('') + '</select></div>' +
+    '<h4 style="margin:14px 0 6px">Custom fields</h4>' + fields +
+    '<h4 style="margin:14px 0 6px">Follow-ups</h4>' + tasks +
+    '<div style="display:flex;gap:6px;margin-top:8px">' +
+      '<input type="text" id="plNewTaskTitle" placeholder="Follow-up…" style="flex:2;padding:6px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
+      '<input type="date" id="plNewTaskDue" style="flex:1;padding:6px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
+      '<button class="btn btn-secondary btn-sm" onclick="plAddTask()">Add</button></div>' +
+    '<h4 style="margin:14px 0 6px">Files</h4>' + files +
+    '<div style="margin-top:8px"><input type="file" id="plNewFile" onchange="plUploadFile()"></div>' +
+    '<h4 style="margin:14px 0 6px">Timeline</h4>' +
+    '<div style="max-height:200px;overflow:auto">' + timeline + '</div>' +
+    '<div style="display:flex;gap:6px;margin-top:8px">' +
+      '<input type="text" id="plNewNote" placeholder="Add a note…" style="flex:1;padding:6px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
+      '<button class="btn btn-secondary btn-sm" onclick="plAddNote()">Add note</button></div>';
+
+  const footer =
+    '<button class="btn btn-ghost" onclick="closeModal()">Close</button>' +
+    '<button class="btn btn-secondary" onclick="plMarkStatus(\'lost\')">Mark lost</button>' +
+    '<button class="btn btn-secondary" onclick="plMarkStatus(\'won\')">Mark won</button>' +
+    '<button class="btn btn-primary" onclick="plSaveDeal()">Save</button>';
+
+  showModal(escapeHtml(deal.name), body, footer, true);
+}
+
+async function plSaveDeal() {
+  if (!PL_DETAIL) return;
+  const deal = PL_DETAIL.deal;
+  const body = {
+    notes: (document.getElementById('plDetailNotes') || {}).value || null,
+    owner_id: (document.getElementById('plDetailOwner') || {}).value || null
+  };
+  const fields = {};
+  document.querySelectorAll('[data-field]').forEach(function (el) {
+    fields[el.getAttribute('data-field')] = el.value;
+  });
+  if (Object.keys(fields).length) body.custom_fields = fields;
+  try {
+    await API.patch('/deals/' + deal.id, body);
+    toast('Deal saved', 'success');
+    await plOpenDeal(deal.id);
+    loadPipelinesTab();
+  } catch (e) { toast('Save failed: ' + e.message, 'error'); }
+}
+
+async function plMarkStatus(status) {
+  if (!PL_DETAIL) return;
+  const deal = PL_DETAIL.deal;
+  let lostReason = null;
+  if (status === 'lost') {
+    let reasons = [];
+    try { reasons = (await API.get('/deals/lost-reasons')).reasons || []; } catch (_) {}
+    const opts = reasons.filter(function (r) { return r.is_active; })
+      .map(function (r) { return '<option value="' + escapeHtml(r.label) + '">' + escapeHtml(r.label) + '</option>'; }).join('');
+    showModal('Why was this deal lost?',
+      '<div class="form-group"><label>Reason</label><select id="plLostReason"><option value="">No reason</option>' + opts + '</select></div>' +
+      '<div class="form-group"><label>Or write your own</label><input type="text" id="plLostReasonFree"></div>',
+      '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+      '<button class="btn btn-primary" onclick="plConfirmLost()">Mark lost</button>');
+    return;
+  }
+  try {
+    await API.post('/deals/' + deal.id + '/status', { status: status });
+    toast('Deal marked ' + status, 'success');
+    await plOpenDeal(deal.id);
+    loadPipelinesTab();
+  } catch (e) { toast('Update failed: ' + e.message, 'error'); }
+}
+
+async function plConfirmLost() {
+  if (!PL_DETAIL) return;
+  const free = ((document.getElementById('plLostReasonFree') || {}).value || '').trim();
+  const picked = (document.getElementById('plLostReason') || {}).value || '';
+  try {
+    await API.post('/deals/' + PL_DETAIL.deal.id + '/status', { status: 'lost', lost_reason: free || picked || null });
+    closeModal(); toast('Deal marked lost', 'success');
+    await plOpenDeal(PL_DETAIL.deal.id);
+    loadPipelinesTab();
+  } catch (e) { toast('Update failed: ' + e.message, 'error'); }
+}
+
+async function plAddNote() {
+  if (!PL_DETAIL) return;
+  const body = ((document.getElementById('plNewNote') || {}).value || '').trim();
+  if (!body) { toast('Write something first', 'error'); return; }
+  try {
+    await API.post('/deals/' + PL_DETAIL.deal.id + '/activities', { body: body });
+    await plOpenDeal(PL_DETAIL.deal.id);
+  } catch (e) { toast('Note failed: ' + e.message, 'error'); }
+}
+
+async function plAddTask() {
+  if (!PL_DETAIL) return;
+  const title = ((document.getElementById('plNewTaskTitle') || {}).value || '').trim();
+  if (!title) { toast('Follow-up needs a title', 'error'); return; }
+  try {
+    await API.post('/deals/' + PL_DETAIL.deal.id + '/tasks', {
+      title: title,
+      due_date: (document.getElementById('plNewTaskDue') || {}).value || null
+    });
+    await plOpenDeal(PL_DETAIL.deal.id);
+  } catch (e) { toast('Follow-up failed: ' + e.message, 'error'); }
+}
+
+async function plToggleTask(taskId, done) {
+  if (!PL_DETAIL) return;
+  try {
+    await API.patch('/deals/' + PL_DETAIL.deal.id + '/tasks/' + taskId, { completed: !!done });
+    await plOpenDeal(PL_DETAIL.deal.id);
+  } catch (e) { toast('Update failed: ' + e.message, 'error'); }
+}
+
+async function plDeleteTask(taskId) {
+  if (!PL_DETAIL) return;
+  try {
+    await API.del('/deals/' + PL_DETAIL.deal.id + '/tasks/' + taskId);
+    await plOpenDeal(PL_DETAIL.deal.id);
+  } catch (e) { toast('Delete failed: ' + e.message, 'error'); }
+}
+
+function plUploadFile() {
+  if (!PL_DETAIL) return;
+  const input = document.getElementById('plNewFile');
+  const file = input && input.files && input.files[0];
+  if (!file) return;
+  if (file.size > 6 * 1024 * 1024) { toast('Files must be 6 MB or smaller', 'error'); input.value = ''; return; }
+  const reader = new FileReader();
+  reader.onload = async function () {
+    try {
+      const b64 = String(reader.result).split(',')[1] || '';
+      await API.post('/deals/' + PL_DETAIL.deal.id + '/attachments', {
+        filename: file.name,
+        content_type: file.type || 'application/octet-stream',
+        content_base64: b64
+      });
+      toast('File attached', 'success');
+      await plOpenDeal(PL_DETAIL.deal.id);
+    } catch (e) { toast('Upload failed: ' + e.message, 'error'); }
+  };
+  reader.readAsDataURL(file);
+}
+
+function plDownloadFile(attId, filename) {
+  if (!PL_DETAIL) return;
+  // A download needs the session token, which a bare link cannot carry — fetch it and hand the
+  // browser a blob instead.
+  fetch('/api/deals/' + PL_DETAIL.deal.id + '/attachments/' + attId, {
+    headers: { 'Authorization': 'Bearer ' + STATE.token }
+  }).then(function (r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.blob();
+  }).then(function (blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename || 'attachment';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+  }).catch(function (e) { toast('Download failed: ' + e.message, 'error'); });
+}
+
+async function plDeleteFile(attId) {
+  if (!PL_DETAIL) return;
+  try {
+    await API.del('/deals/' + PL_DETAIL.deal.id + '/attachments/' + attId);
+    await plOpenDeal(PL_DETAIL.deal.id);
+  } catch (e) { toast('Delete failed: ' + e.message, 'error'); }
+}
+
+// ── the deal writer's contract, shown in the app ──────────────────────────────────────────
+function plDealWriterHelp() {
+  const origin = window.location.origin;
+  const curl = 'curl -X POST ' + origin + '/api/external/deals \\\n' +
+    "  -H 'Authorization: Bearer <your API key>' \\\n" +
+    "  -H 'Content-Type: application/json' \\\n" +
+    '  -d \'{"external_ref":"QUOTE-1042","title":"Airport transfer","value":240,' +
+    '"currency":"USD","stage":"Qualified","custom_fields":{"pickup_city":"Miami"}}\'';
+  showModal('Deal writer API',
+    '<p class="config-desc" style="margin-top:0">An outside system creates and updates deals here. ' +
+      'The <strong>external reference</strong> is the identity of the deal: send the same reference twice and the ' +
+      'second call updates the same deal instead of creating another one.</p>' +
+    '<div class="form-group"><label>1. Create an API key</label><div class="config-desc">Integration Center → API keys. ' +
+      'The key resolves the workspace; a tenant id in the body is ignored.</div></div>' +
+    '<div class="form-group"><label>2. Push the deal</label><pre style="white-space:pre-wrap;background:var(--bg-secondary);padding:10px;border-radius:6px;font-size:12px">' +
+      escapeHtml(curl) + '</pre></div>' +
+    '<div class="form-group"><label>3. Keep it in step</label><div class="config-desc">' +
+      'PATCH /api/external/deals/&lt;external_ref&gt;/stage — move a deal.<br>' +
+      'POST /api/external/deals/&lt;external_ref&gt;/status — mark it open, won or lost.<br>' +
+      'The response says <code>created: true</code> or <code>false</code>, so a re-send is visible, not silent.</div></div>' +
+    '<div class="form-group"><label>Workspace currency</label><div class="config-desc">' +
+      'A deal takes its currency from the workspace unless the push states one. Current: <strong id="plCurLabel">' +
+      (PL_CURRENCY || 'not set') + '</strong></div>' +
+      '<div style="display:flex;gap:6px;margin-top:6px">' +
+        '<input type="text" id="plCurrencyInput" maxlength="3" placeholder="USD" style="width:90px;padding:6px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
+        '<button class="btn btn-secondary btn-sm" onclick="plSaveCurrency()">Set workspace currency</button></div></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Close</button>', true);
+}
+
+async function plSaveCurrency() {
+  const code = ((document.getElementById('plCurrencyInput') || {}).value || '').trim().toUpperCase();
+  if (!code) { toast('Enter a 3-letter code', 'error'); return; }
+  try {
+    const r = await API.put('/deals/currency', { currency: code });
+    PL_CURRENCY = r.currency;
+    toast('Workspace currency set to ' + r.currency, 'success');
+    closeModal();
+    loadPipelinesTab();
+  } catch (e) { toast('Could not set currency: ' + e.message, 'error'); }
+}
+
+// ── pipelines, stages, deals (create / move / delete) ─────────────────────────────────────
 function plNewPipeline() {
   showModal('New Pipeline',
     '<div class="form-group"><label>Name</label><input type="text" id="plName"></div>' +
@@ -6531,8 +7021,8 @@ async function plQuickDeal() {
     plAddDeal(p.id);
   } catch (e) { toast(e.message, 'error'); }
 }
+
 async function plAddDeal(pid, presetStageId) {
-  // the stages of THIS pipeline, for the "Stage" selector (defaults to the first one the API would pick)
   const plp = plCache(pid);
   const stageOpts = ((plp && plp.stages) || []).map(function (s) {
     return '<option value="' + s.id + '"' + (presetStageId === s.id ? ' selected' : '') + '>' + escapeHtml(s.name) + '</option>';
@@ -6545,12 +7035,15 @@ async function plAddDeal(pid, presetStageId) {
       opts += '<option value="' + c.id + '">' + escapeHtml(nm) + '</option>';
     });
   } catch (_) {}
+  const cur = PL_CURRENCY || '';
   showModal('New Deal',
     '<div class="form-group"><label>Deal name</label><input type="text" id="dlName"></div>' +
     '<div class="form-group"><label>Contact</label><select id="dlContact">' + opts + '</select></div>' +
     '<div class="form-group"><label>Stage</label><select id="dlStage">' + stageOpts + '</select></div>' +
     '<div class="form-group"><label>Value</label><input type="number" id="dlValue" step="0.01"></div>' +
-    '<div class="form-group"><label>Currency</label><input type="text" id="dlCur" value="USD"></div>' +
+    '<div class="form-group"><label>Currency</label><input type="text" id="dlCur" maxlength="3" value="' + escapeHtml(cur) + '" placeholder="' + (cur ? '' : 'set the workspace currency first') + '"></div>' +
+    '<div class="form-group"><label>Owner</label><select id="dlOwner"><option value="">Unassigned</option>' +
+      PL_TEAM.map(function (u) { return '<option value="' + u.id + '">' + escapeHtml(u.name) + '</option>'; }).join('') + '</select></div>' +
     '<div class="form-group"><label>Probability %</label><input type="number" id="dlProb" min="0" max="100"></div>' +
     '<div class="form-group"><label>Expected close</label><input type="date" id="dlClose"></div>' +
     '<div class="form-group"><label>Notes</label><textarea id="dlNotes" rows="3"></textarea></div>',
@@ -6567,13 +7060,14 @@ async function plCreateDeal(pid) {
     stage_id: document.getElementById('dlStage').value || null,
     contact_id: document.getElementById('dlContact').value || null,
     value: val === '' ? null : parseFloat(val),
-    currency: (document.getElementById('dlCur').value || '').trim() || null,
+    currency: (document.getElementById('dlCur').value || '').trim().toUpperCase() || null,
+    owner_id: document.getElementById('dlOwner').value || null,
     probability: prob === '' ? null : parseInt(prob, 10),
     expected_close_date: document.getElementById('dlClose').value || null,
     notes: (document.getElementById('dlNotes').value || '').trim() || null
   };
   try {
-    await API.post('/pipelines/' + pid + '/opportunities', body);
+    await API.post('/deals', body);
     closeModal(); toast('Deal created', 'success'); loadPipelinesTab();
   } catch (e) { toast('Create failed: ' + e.message, 'error'); }
 }
@@ -6581,6 +7075,69 @@ function plMoveDeal(pid, oppId, stageId) {
   // the <select> path and the drag-and-drop board share one implementation
   if (!stageId) return;
   plMoveDealAsync(pid, oppId, stageId).catch(function () {});
+}
+
+function plDeleteDeal(pid, oppId) {
+  confirmThen('Delete this deal?', function () {
+    API.del('/deals/' + oppId)
+      .then(function () { toast('Deal deleted', 'success'); loadPipelinesTab(); })
+      .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+  });
+}
+
+// ── stage automation hooks (entering a stage tags the deal, or runs a workflow) ───────────
+async function plStageHooks(pid) {
+  let hooks = [], tags = [], c = plCache(pid);
+  try { hooks = (await API.get('/deals/stage-automations?pipeline_id=' + pid)).hooks || []; } catch (_) {}
+  try { tags = famList(await API.get('/tags'), 'tags'); } catch (_) {}
+  const stages = (c && c.stages) || [];
+  const rows = hooks.map(function (hk) {
+    return '<div style="display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)">' +
+      '<strong style="flex:1">' + escapeHtml(hk.stage_name) + '</strong>' +
+      '<span class="config-desc">' + (hk.action_kind === 'tag'
+        ? 'apply tag "' + escapeHtml(hk.tag_name || '') + '"'
+        : 'run StageChanged workflow') + '</span>' +
+      '<button class="btn btn-ghost btn-xs" onclick="plDeleteHook(\'' + hk.id + '\',\'' + pid + '\')">✕</button></div>';
+  }).join('') || '<div class="config-desc">No hooks yet. A hook runs when a deal ENTERS the stage.</div>';
+  const stageOpts = stages.map(function (s) { return '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'; }).join('');
+  const tagOpts = tags.map(function (t) { return '<option value="' + t.id + '">' + escapeHtml(t.name) + '</option>'; }).join('');
+  showModal('Stage automation hooks',
+    rows +
+    '<h4 style="margin:14px 0 6px">Add a hook</h4>' +
+    '<div class="form-group"><label>Stage</label><select id="plHookStage">' + stageOpts + '</select></div>' +
+    '<div class="form-group"><label>Action</label><select id="plHookKind" onchange="plHookKindChanged()">' +
+      '<option value="tag">Apply a tag</option><option value="workflow">Run the StageChanged workflow</option></select></div>' +
+    '<div class="form-group" id="plHookTagWrap"><label>Tag</label><select id="plHookTag">' + tagOpts + '</select></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Close</button>' +
+    '<button class="btn btn-primary" onclick="plCreateHook(\'' + pid + '\')">Add hook</button>', true);
+}
+
+function plHookKindChanged() {
+  const kind = (document.getElementById('plHookKind') || {}).value;
+  const wrap = document.getElementById('plHookTagWrap');
+  if (wrap) wrap.style.display = kind === 'tag' ? '' : 'none';
+}
+
+async function plCreateHook(pid) {
+  const stage_id = (document.getElementById('plHookStage') || {}).value;
+  const action_kind = (document.getElementById('plHookKind') || {}).value;
+  const tag_id = (document.getElementById('plHookTag') || {}).value || null;
+  if (!stage_id) { toast('Pick a stage', 'error'); return; }
+  if (action_kind === 'tag' && !tag_id) { toast('Pick a tag', 'error'); return; }
+  try {
+    await API.post('/deals/stage-automations', {
+      stage_id: stage_id,
+      action_kind: action_kind,
+      tag_id: action_kind === 'tag' ? tag_id : null
+    });
+    toast('Hook added', 'success');
+    plStageHooks(pid);
+  } catch (e) { toast('Hook failed: ' + e.message, 'error'); }
+}
+
+async function plDeleteHook(id, pid) {
+  try { await API.del('/deals/stage-automations/' + id); plStageHooks(pid); }
+  catch (e) { toast('Delete failed: ' + e.message, 'error'); }
 }
 
 // ---------------------------------------------------------------- DRAG & DROP BOARD
@@ -6603,12 +7160,16 @@ function plBoard(p, stages, opps) {
         '<button class="btn btn-ghost btn-xs" title="New deal on this stage" onclick="plAddDeal(\'' + p.id + '\',\'' + s.id + '\')">+</button></span>' +
       '</div>' +
       (cards.length ? cards.map(function (o) {
+        // Click opens the deal; the drag handle is the same card, so a click after a drag is
+        // suppressed by the browser's own click-cancel on dragend.
         return '<div class="pl-card" draggable="true" data-opp="' + o.id + '"' +
+          ' onclick="plOpenDeal(\'' + o.id + '\')"' +
           ' ondragstart="plDragStart(event, \'' + p.id + '\', \'' + o.id + '\')" ondragend="plDragEnd(this)"' +
           ' style="background:var(--bg-primary,#16161a);border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab">' +
-          '<div style="font-weight:600;font-size:13px">' + fh(o.name) + '</div>' +
+          '<div style="font-weight:600;font-size:13px">' + fh(o.name) +
+            (o.external_ref ? ' <span class="badge badge-muted" title="Created by an outside system">API</span>' : '') + '</div>' +
           '<div style="color:var(--text-muted);font-size:12px">' +
-            (o.value !== null && o.value !== undefined ? '$' + Number(o.value).toLocaleString() : '—') +
+            plMoney(o.value, o.currency) +
             (o.probability !== null && o.probability !== undefined ? ' · ' + o.probability + '%' : '') +
           '</div></div>';
       }).join('') : '<div style="color:var(--text-muted);font-size:12px;padding:6px">Drop a deal here</div>') +
@@ -6653,9 +7214,12 @@ function plDrop(ev, col, stageId) {
 
 function plMoveDealAsync(pid, oppId, stageId) {
   if (!stageId) return Promise.resolve();
-  return API.patch('/pipelines/' + pid + '/stages/' + stageId + '/move/' + oppId, {})
+  // The deal writer's stage route (not the raw pipelines one) so the move also records the
+  // stage clock, the history row, the timeline entry and any stage automation hook.
+  return API.post('/deals/' + oppId + '/stage', { stage_id: stageId })
     .then(function (r) {
-      toast('Deal moved to ' + (r && r.status ? r.status : 'new stage'), 'success');
+      const d = (r && r.deal) || {};
+      toast(d.is_won ? 'Deal won' : (d.is_lost ? 'Deal lost' : 'Deal moved'), 'success');
       loadPipelinesTab();
       return r;
     })
@@ -6666,13 +7230,6 @@ function plMoveDealAsync(pid, oppId, stageId) {
     });
 }
 
-function plDeleteDeal(pid, oppId) {
-  confirmThen('Delete this deal?', function () {
-    API.del('/pipelines/' + pid + '/opportunities/' + oppId)
-      .then(function () { toast('Deal deleted', 'success'); loadPipelinesTab(); })
-      .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
-  });
-}
 
 // ---------------------------------------------------------------- CAMPAIGNS
 let CM_TAGS = [];

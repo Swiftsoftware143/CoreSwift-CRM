@@ -44,14 +44,26 @@ pub struct PipelineWithStages {
     pub stages: Vec<PipelineStage>,
 }
 
+/// Money for ONE currency. Every money figure in this module is delivered in this shape, because
+/// adding two currencies together produces a number that is not money at all (David, 2026-11-20:
+/// multi-currency is core). A workspace selling in USD and EUR gets two of these, never one total.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct CurrencyAmount {
+    pub currency: String,
+    pub deal_count: i64,
+    pub total_value: f64,
+    pub weighted_value: f64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StageAnalytics {
     pub stage_id: Uuid,
     pub stage_name: String,
     pub count: i64,
-    pub total_value: f64,
     pub avg_time_in_days: f64,
     pub conversion_rate: f64,
+    /// One entry per currency held in this stage.
+    pub by_currency: Vec<CurrencyAmount>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,11 +71,12 @@ pub struct PipelineAnalytics {
     pub pipeline_id: Uuid,
     pub pipeline_name: String,
     pub total_opportunities: i64,
-    pub total_value: f64,
     pub won_count: i64,
-    pub won_value: f64,
     pub lost_count: i64,
-    pub lost_value: f64,
+    /// won / (won + lost), 0.0 when nothing has closed.
+    pub win_rate: f64,
+    /// One entry per currency held in this pipeline — the ONLY place the pipeline's money lives.
+    pub by_currency: Vec<CurrencyAmount>,
     pub stages: Vec<StageAnalytics>,
 }
 

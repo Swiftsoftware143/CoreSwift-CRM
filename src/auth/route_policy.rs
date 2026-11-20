@@ -1396,23 +1396,30 @@ mod tests {
     /// two downloads) and 1 anonymous opt-out (`/api/public/unsubscribe/:token`, merged at the root
     /// and named in [`PUBLIC_ROUTES`] because the token in the path IS the credential). Every new
     /// path is on `/api**`, so the root-level count is unchanged at 12. +1 more for the provider's
-    /// event stream (`/api/webhooks/mailgun/events`, signature-verified, anonymous). 481 mounted /
-    /// 469 on /api**.
+    /// event stream (`/api/webhooks/mailgun/events`, signature-verified, anonymous).
+    ///
+    /// +32 mounts / +32 paths (2026-11-20): the DEAL WRITER (kanban t_2df68850) — 29 on
+    /// `/api/deals` (the deal list/create, report, team, workspace currency, per-workspace custom
+    /// field definitions, the configurable lost-reason list, stage automation hooks, and the
+    /// per-deal detail/stage/status/notes/follow-ups/files arms) and 3 on `/api/external`
+    /// (`POST /deals`, `PATCH /deals/:external_ref/stage`, `POST /deals/:external_ref/status` —
+    /// the issued-key writer an outside system calls). Every new path is on `/api**`, so the
+    /// root-level count is unchanged at 14. 517 mounted / 503 on /api**.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
         let mounted = mounted_routes();
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            485,
+            517,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 471,
+            api, 503,
             "the /api mount count moved — re-read the census in the module docs"
         );
-        // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.
+        // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.
         assert_eq!(mounted.len() - api, 14);
     }
 }

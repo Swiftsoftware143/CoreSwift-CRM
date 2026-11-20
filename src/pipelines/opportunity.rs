@@ -35,7 +35,9 @@ macro_rules! opp_cols {
     () => {
         "id, tenant_id, pipeline_id, stage_id, contact_id, company_id, name, \
          notes, value::float8 AS value, currency, probability, expected_close_date, source, metadata, \
-         is_won, is_lost, lost_reason, created_at, updated_at"
+         is_won, is_lost, lost_reason, created_at, updated_at, \
+         external_ref, owner_id, last_activity_at, stage_entered_at, \
+         exchange_rate::float8 AS exchange_rate, rate_date"
     };
 }
 pub(crate) use opp_cols;
@@ -62,6 +64,19 @@ pub struct OpportunityFull {
     pub lost_reason: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// The outside system's identifier for this deal (migration 186). One ref = one deal per
+    /// workspace; a re-send updates instead of duplicating. Console-created deals have none.
+    pub external_ref: Option<String>,
+    pub owner_id: Option<Uuid>,
+    /// Last write of ANY kind (note, task, stage, API push). "Rotting" is measured against this.
+    pub last_activity_at: chrono::DateTime<chrono::Utc>,
+    /// When the deal entered its current stage — the "days in stage" clock.
+    pub stage_entered_at: chrono::DateTime<chrono::Utc>,
+    /// The rate this deal's value was recorded at, captured when it was written. NULL means no
+    /// rate was ever stored for a non-workspace-currency deal: it is reported in its OWN currency
+    /// and never folded into another currency's total (David, 2026-11-20).
+    pub exchange_rate: Option<f64>,
+    pub rate_date: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Deserialize)]

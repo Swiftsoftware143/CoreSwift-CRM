@@ -369,28 +369,35 @@ pub async fn pipeline_analytics(
     .bind(pipeline_id)
     .bind(tenant_id)
     .fetch_one(&state.db)
-    .await
-    .unwrap_or(0);
-
-    let total_value: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(value), 0)::float8 FROM opportunities WHERE pipeline_id = $1 AND tenant_id = $2"
-    ).bind(pipeline_id).bind(tenant_id).fetch_one(&state.db).await.unwrap_or(0.0);
+    .await?;
 
     let won_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM opportunities WHERE pipeline_id = $1 AND tenant_id = $2 AND is_won = true"
-    ).bind(pipeline_id).bind(tenant_id).fetch_one(&state.db).await.unwrap_or(0);
-
-    let won_value: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(value), 0)::float8 FROM opportunities WHERE pipeline_id = $1 AND tenant_id = $2 AND is_won = true"
-    ).bind(pipeline_id).bind(tenant_id).fetch_one(&state.db).await.unwrap_or(0.0);
+        "SELECT COUNT(*) FROM opportunities WHERE pipeline_id = $1 AND tenant_id = $2 AND is_won = true",
+    )
+    .bind(pipeline_id)
+    .bind(tenant_id)
+    .fetch_one(&state.db)
+    .await?;
 
     let lost_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM opportunities WHERE pipeline_id = $1 AND tenant_id = $2 AND is_lost = true"
-    ).bind(pipeline_id).bind(tenant_id).fetch_one(&state.db).await.unwrap_or(0);
+        "SELECT COUNT(*) FROM opportunities WHERE pipeline_id = $1 AND tenant_id = $2 AND is_lost = true",
+    )
+    .bind(pipeline_id)
+    .bind(tenant_id)
+    .fetch_one(&state.db)
+    .await?;
 
-    let lost_value: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(value), 0)::float8 FROM opportunities WHERE pipeline_id = $1 AND tenant_id = $2 AND is_lost = true"
-    ).bind(pipeline_id).bind(tenant_id).fetch_one(&state.db).await.unwrap_or(0.0);
+    // MONEY IS PER CURRENCY. There is deliberately no "total_value" here: this app has no
+    // exchange rate for a deal that never stored one, and adding EUR to USD would produce a
+    // figure that is not a sum of anything (David, 2026-11-20 — multi-currency is core).
+    let by_currency = money_by_currency(&state.db, tenant_id, pipeline_id, None).await?;
+
+    let closed = won_count + lost_count;
+    let win_rate = if closed > 0 {
+        won_count as f64 / closed as f64
+    } else {
+        0.0
+    };
 
     let mut stage_analytics = Vec::new();
     for stage in &stages {
@@ -400,19 +407,17 @@ pub async fn pipeline_analytics(
         .bind(stage.id)
         .bind(tenant_id)
         .fetch_one(&state.db)
-        .await
-        .unwrap_or(0);
-
-        let stage_value: f64 = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(value), 0)::float8 FROM opportunities WHERE stage_id = $1 AND tenant_id = $2"
-        ).bind(stage.id).bind(tenant_id).fetch_one(&state.db).await.unwrap_or(0.0);
+        .await?;
 
         let avg_time: f64 = sqlx::query_scalar(
             r#"SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (sh2.moved_at - sh1.moved_at)) / 86400.0), 0)::float8
                FROM opportunity_stage_history sh1
                JOIN opportunity_stage_history sh2 ON sh2.opportunity_id = sh1.opportunity_id
-               WHERE sh1.to_stage_id = $1 AND sh2.from_stage_id = $1 AND sh2.moved_at > sh1.moved_at"#
-        ).bind(stage.id).fetch_one(&state.db).await.unwrap_or(0.0);
+               WHERE sh1.to_stage_id = $1 AND sh2.from_stage_id = $1 AND sh2.moved_at > sh1.moved_at"#,
+        )
+        .bind(stage.id)
+        .fetch_one(&state.db)
+        .await?;
 
         let conv = if total_opps > 0 {
             (won_count as f64 / total_opps as f64) * 100.0
@@ -424,9 +429,10 @@ pub async fn pipeline_analytics(
             stage_id: stage.id,
             stage_name: stage.name.clone(),
             count,
-            total_value: stage_value,
-            avg_time_in_days: avg_time,
+            avg_time_in_days: (avg_time * 100.0).round() / 100.0,
             conversion_rate: (conv * 100.0).round() / 100.0,
+            by_currency: money_by_currency(&state.db, tenant_id, pipeline_id, Some(stage.id))
+                .await?,
         });
     }
 
@@ -434,11 +440,40 @@ pub async fn pipeline_analytics(
         pipeline_id,
         pipeline_name: pipeline.name,
         total_opportunities: total_opps,
-        total_value,
         won_count,
-        won_value,
         lost_count,
-        lost_value,
+        win_rate: (win_rate * 1000.0).round() / 1000.0,
+        by_currency,
         stages: stage_analytics,
     })))
+}
+
+/// Deal value grouped by currency, for a whole pipeline or one stage of it.
+///
+/// One statement, one grouping key: currency is the dimension that makes the number meaningful,
+/// and `weighted_value` (value x probability) is reported beside it so the board can show what is
+/// actually expected rather than what is hoped for.
+async fn money_by_currency(
+    db: &sqlx::PgPool,
+    tenant_id: Uuid,
+    pipeline_id: Uuid,
+    stage_id: Option<Uuid>,
+) -> Result<Vec<CurrencyAmount>, AppError> {
+    let rows: Vec<CurrencyAmount> = sqlx::query_as(
+        "SELECT COALESCE(currency,'') AS currency,
+                COUNT(*) AS deal_count,
+                COALESCE(SUM(value),0)::float8 AS total_value,
+                COALESCE(SUM(value * COALESCE(probability,0) / 100.0),0)::float8 AS weighted_value
+           FROM opportunities
+          WHERE tenant_id = $1 AND pipeline_id = $2
+            AND ($3::uuid IS NULL OR stage_id = $3)
+          GROUP BY COALESCE(currency,'')
+          ORDER BY 1",
+    )
+    .bind(tenant_id)
+    .bind(pipeline_id)
+    .bind(stage_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
 }

@@ -33,6 +33,7 @@ pub mod csv_handler;
 pub mod dashboard;
 pub mod data_mapping;
 mod db;
+pub mod deals;
 pub mod email;
 pub mod email_templates;
 mod errors;
@@ -546,6 +547,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/account-match", account_match::router(state.clone()))
         .nest("/api/companies", companies::router(state.clone()))
         .nest("/api/pipelines", pipelines::router(state.clone()))
+        .nest("/api/deals", deals::router(state.clone()))
         .nest("/api/tags", tags::router(state.clone()))
         .nest("/api/scoring", scoring::router(state.clone()))
         .nest("/api/lists", lists::router(state.clone()))
