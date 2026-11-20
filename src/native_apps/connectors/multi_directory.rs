@@ -50,7 +50,7 @@
 //! at all.
 //!
 //! `api_key` holds a Multi-Directory **bearer token** and `base_url` the deployment's HOST
-//! (e.g. `https://directory.swiftsoftware.net`). `test()` probes the AUTHENTICATED
+//! (e.g. `https://zaarhub.com`). `test()` probes the AUTHENTICATED
 //! `GET /api/v1/analytics/summary` — never `/api/v1/health` (public) and never the two
 //! public collections, which would accept any string and let `connect_app()` store whatever
 //! its test accepted.

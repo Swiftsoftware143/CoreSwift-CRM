@@ -55,7 +55,7 @@ That endpoint resolves the product by `source_app` and writes the commission.
 
 | App | Path | Port | Service | Domain |
 |-----|------|------|---------|--------|
-| Multi-Directory | `/opt/swift/multidirectory-rust` | 3001 | multidirectory | directory.swiftsoftware.net |
+| Multi-Directory | `/opt/swift/apps/multi-directory` | 8089 | multidirectory | zaarhub.com |
 | CoreSwift CRM | `/opt/swift/coreswift` | 8084 | coreswift-crm | coreswiftcrm.com |
 | FunnelSwift | `/opt/swift/funnelswift` | 8080 | funnelswift | funnelswift.net |
 | IncentiveSwift | `/opt/swift/incentiveswift` | 8083 | incentiveswift-api | incentiveswift.com |
