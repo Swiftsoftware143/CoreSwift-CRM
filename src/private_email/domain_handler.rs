@@ -660,17 +660,35 @@ pub async fn update_domain(
     // sibling credential fields use, so submitting the panel's blank input cannot disarm the
     // receiver by accident. Restated in the request-struct doc comment on
     // `UpdateDomainRequest::webhook_signing_key`.
-    let (webhook_touch, sealed_webhook): (bool, Option<String>) =
-        match req.webhook_signing_key.as_ref() {
-            None => (false, None),
-            Some(None) => (true, None),
-            Some(Some(k)) if k.trim().is_empty() => (false, None),
-            // TRIM BEFORE SEALING (measured 2026-11-20): a key pasted from a dashboard very often carries a
-            // trailing newline or a leading space, and HMAC validation then fails with the useless sentence
-            // "the configured signing key did not validate" while the stored value LOOKS right. The value is
-            // a token, never padded, so trimming it is safe and removes a whole class of silent mismatch.
-            Some(Some(k)) => (true, Some(crate::secret_box::seal(account_id, k.trim())?)),
-        };
+    let (webhook_touch, sealed_webhook): (bool, Option<String>) = match req
+        .webhook_signing_key
+        .as_ref()
+    {
+        None => (false, None),
+        Some(None) => (true, None),
+        Some(Some(k)) if k.trim().is_empty() => (false, None),
+        // TRIM BEFORE SEALING (measured 2026-11-20): a key pasted from a dashboard very often carries a
+        // trailing newline or a leading space, and HMAC validation then fails with the useless sentence
+        // "the configured signing key did not validate" while the stored value LOOKS right. The value is
+        // a token, never padded, so trimming it is safe and removes a whole class of silent mismatch.
+        Some(Some(k)) => {
+            let trimmed = k.trim();
+            // A SENDING API KEY IS NOT A WEBHOOK SIGNING KEY (measured 2026-11-20): the sending key is
+            // ~51 characters and starts with `key-`; the HTTP webhook signing key is 32 hex characters.
+            // Accepting the wrong one looked perfect in the panel and refused EVERY delivery on arrival
+            // with "the configured signing key did not validate", which reads as a broken inbox rather
+            // than a wrong paste. Refuse it at the door and name the right one.
+            if trimmed.starts_with("key-") || trimmed.len() > 64 {
+                return Err(AppError::Validation(
+                        "That looks like a sending API key, not the HTTP webhook signing key. The webhook \
+                         signing key is 32 characters — in your provider it is Settings, then API Security, \
+                         then HTTP webhook signing key. Receiving cannot work with the sending key."
+                            .into(),
+                    ));
+            }
+            (true, Some(crate::secret_box::seal(account_id, trimmed)?))
+        }
+    };
 
     // Re-entering a working key also RE-VERIFIES the domain: Mailgun is asked again, so a row added
     // while its DNS was still propagating does not stay unverified for ever — and therefore does

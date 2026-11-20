@@ -8089,7 +8089,8 @@ function peiPaintSetup() {
         '<td>' + (d.catch_all_enabled ? 'on ' + btn('turn off', 'btn-ghost', 'catch-off', d.id)
                                      : 'off ' + btn('turn on', 'btn-ghost', 'catch-on', d.id)) + '</td>' +
         '<td style="white-space:nowrap">' + btn(keyed ? 'Rotate key' : 'Set key', 'btn-primary', 'set-key', d.id) + ' ' +
-        btn('Re-check', 'btn-secondary', 'verify', d.id) + '</td></tr>';
+        btn('Re-check', 'btn-secondary', 'verify', d.id) +
+        (keyed ? ' ' + btn('Remove key', 'btn-ghost', 'unset-key', d.id) : '') + '</td></tr>';
     });
     html += '</tbody></table>';
   }
@@ -8225,6 +8226,7 @@ document.addEventListener('click', function (ev) {
   else if (action === 'add-box') peiAddBox();
   else if (action === 'set-key') peiSetKey(id);
   else if (action === 'verify') peiVerifyDomain(id);
+  else if (action === 'unset-key') peiRemoveKey(id);
   else if (action === 'catch-on') peiCatchAll(id, true);
   else if (action === 'catch-off') peiCatchAll(id, false);
 });
@@ -8362,6 +8364,17 @@ async function peiSaveKey() {
     toast('Signing key saved — deliveries can now be authenticated.');
     loadPrivateEmailTab();
   } catch (e) { toast('Could not save the key: ' + (planGateText(e) || e.message), 'error'); }
+}
+
+// Remove the signing key. Needed because a WRONG key is worse than no key: with no key the receiver
+// authenticates on the platform token, while a wrong key refuses every delivery.
+async function peiRemoveKey(domainId) {
+  if (!confirm('Remove the stored signing key for this domain?')) return;
+  try {
+    await API.patch('/private-email/domains/' + encodeURIComponent(domainId), { webhook_signing_key: null });
+    toast('Signing key removed.');
+    loadPrivateEmailTab();
+  } catch (e) { toast('Could not remove the key: ' + (planGateText(e) || e.message), 'error'); }
 }
 
 async function peiVerifyDomain(domainId) {
