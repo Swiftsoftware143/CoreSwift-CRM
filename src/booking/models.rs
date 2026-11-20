@@ -320,6 +320,19 @@ pub struct NotifySettingsInput {
     pub reminders: Option<Vec<ReminderIn>>,
     #[serde(default)]
     pub tag_rules: Option<Vec<TagRuleIn>>,
+    /// Which LIST each stage adds the booker to (or takes them out of). Independent of the tag rules:
+    /// an owner may use one, the other, or both.
+    #[serde(default)]
+    pub list_rules: Option<Vec<ListRuleIn>>,
+}
+
+/// One list rule from the console: the list, the stage it runs on, and whether it adds or removes.
+#[derive(Debug, Deserialize)]
+pub struct ListRuleIn {
+    pub list_id: String,
+    pub stage: String,
+    #[serde(default)]
+    pub mode: String,
 }
 
 #[derive(Debug, Deserialize)]

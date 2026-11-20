@@ -11345,7 +11345,15 @@ async function bkLoadNotify() {
   if (!card || !BK.current) return;
   try {
     var n = await bkCall('GET', '/calendars/' + BK.current + '/notifications');
-    BK.notify = n || { notify_emails: [], reminders: [], tag_rules: [] };
+    BK.notify = n || { notify_emails: [], reminders: [], tag_rules: [], list_rules: [] };
+  // The list picker needs the account's own lists. Loaded once, silently: a failure here must not stop
+  // the rest of the panel rendering, it leaves the picker empty with its own explanation.
+  if (!BK.lists) {
+    try {
+      var lr = await API.get('/lists');
+      BK.lists = (lr && (lr.lists || lr)) || [];
+    } catch (e) { BK.lists = []; }
+  }
     bkRenderNotify();
   } catch (e) {
     card.innerHTML = '<div class="card"><p class="muted">Could not load notification settings — ' + escapeHtml(e.message) + '</p></div>';
@@ -11355,7 +11363,7 @@ async function bkLoadNotify() {
 function bkRenderNotify() {
   var card = document.getElementById('bkNotifyCard');
   if (!card) return;
-  var n = BK.notify || { notify_emails: [], reminders: [], tag_rules: [] };
+  var n = BK.notify || { notify_emails: [], reminders: [], tag_rules: [], list_rules: [] };
   function rowList(items, render, removeFn) {
     return items.length
       ? '<div style="margin:6px 0 10px">' + items.map(function (it, i) {
@@ -11401,6 +11409,23 @@ function bkRenderNotify() {
     '</div>' +
     '<button class="btn btn-secondary btn-sm" onclick="bkAddTagRule()">Add tag rule</button>' +
     '<p class="muted" style="font-size:12px;margin:10px 0 0">Tags are matched ignoring case, so “Webinar” and “webinar” stay one tag.</p>' +
+    '<hr style="border:none;border-top:1px dashed #e2e8f0;margin:16px 0">' +
+    '<strong style="font-size:13px">Lists on the contact</strong>' +
+    '<p class="muted" style="font-size:12px;margin:2px 0 8px">A booking can put the person in a list as well as tag them — either one can be what an automation watches.</p>' +
+    rowList(n.list_rules, function (l) {
+      return escapeHtml(l.list_name || l.list_id) + ' <span class="muted">· on ' + escapeHtml(l.stage) + ' · ' +
+        (l.mode === 'remove' ? 'take out' : 'add') + '</span>';
+    }, 'bkRemoveListRule') +
+    '<div class="bk-form">' +
+    '<label>List<select id="bkNewList">' + (BK.lists || []).map(function (l) {
+      return '<option value="' + escapeHtml(l.id) + '">' + escapeHtml(l.name) + '</option>';
+    }).join('') + '</select></label>' +
+    '<label>When<select id="bkNewListStage"><option value="confirm">On confirm</option><option value="cancel">On cancel</option></select></label>' +
+    '<label>Do<select id="bkNewListMode"><option value="add">Add to list</option><option value="remove">Take out of list</option></select></label>' +
+    '</div>' +
+    '<button class="btn btn-secondary btn-sm" onclick="bkAddListRule()">Add list rule</button>' +
+    ((BK.lists && BK.lists.length) ? '' :
+      '<p class="muted" style="font-size:12px;margin:10px 0 0">No lists yet — create one under Contacts → Lists and it appears here.</p>') +
     '</div>';
 }
 
@@ -11437,6 +11462,19 @@ function bkAddTagRule() {
   bkSaveNotify();
 }
 function bkRemoveTagRule(i) { BK.notify.tag_rules.splice(i, 1); bkSaveNotify(); }
+function bkAddListRule() {
+  var sel = document.getElementById('bkNewList');
+  var listId = sel ? sel.value : '';
+  if (!listId) { bkFlash('Create a list first (Contacts \u2192 Lists).', false); return; }
+  BK.notify.list_rules = BK.notify.list_rules || [];
+  BK.notify.list_rules.push({
+    list_id: listId,
+    stage: document.getElementById('bkNewListStage').value,
+    mode: document.getElementById('bkNewListMode').value
+  });
+  bkSaveNotify();
+}
+function bkRemoveListRule(i) { BK.notify.list_rules.splice(i, 1); bkSaveNotify(); }
 
 async function bkSaveNotify() {
   try {

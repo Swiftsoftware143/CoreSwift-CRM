@@ -198,7 +198,13 @@ pub async fn on_cancelled(pool: &PgPool, order_id: Uuid) {
 }
 
 /// Find the contact for this customer, creating a minimal one if the CRM has never seen them, then
-/// apply the calendar's tag rules for the stage.
+/// apply the calendar's TAG rules and LIST rules for the stage.
+///
+/// WHY THE ENGINE IS CALLED FROM HERE (2026-11-20): this function wrote `tag_assignments` directly, so a
+/// tag applied BY A BOOKING never reached `automation::engine` — the tag existed on the contact and no
+/// automation rule watching that tag ever ran. Measured: every other tag writer
+/// (`tags::handlers`, `inbound`, `external_api`) fires the engine; this one did not. The chain David
+/// asked for — booking → tag/list → automation — was broken in its middle link.
 async fn apply_tags(pool: &PgPool, ctx: &Context, stage: &str) {
     let rules: Vec<(String, String)> = sqlx::query_as(
         "SELECT tag_name, mode FROM booking_tag_rules
@@ -209,7 +215,18 @@ async fn apply_tags(pool: &PgPool, ctx: &Context, stage: &str) {
     .fetch_all(pool)
     .await
     .unwrap_or_default();
-    if rules.is_empty() {
+
+    let list_rules: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT list_id, mode FROM booking_list_rules
+          WHERE calendar_id = $1 AND stage = $2 AND is_active",
+    )
+    .bind(ctx.calendar_id)
+    .bind(stage)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    if rules.is_empty() && list_rules.is_empty() {
         return;
     }
 
@@ -245,6 +262,73 @@ async fn apply_tags(pool: &PgPool, ctx: &Context, stage: &str) {
             .bind(contact_id)
             .execute(pool)
             .await;
+        }
+        // The fan-out every other tag writer already does: a booking that tags somebody must be able
+        // to start the automation that watches that tag.
+        let trigger = if mode == "remove" {
+            "TagRemoved"
+        } else {
+            "TagAdded"
+        };
+        crate::automation::engine::fire_tag_trigger(
+            pool,
+            ctx.tenant_id,
+            "contact",
+            contact_id,
+            tag_id,
+            trigger,
+        )
+        .await;
+    }
+
+    // ── THE LIST HALF ────────────────────────────────────────────────────────────────────────────
+    // Same two questions the tags answer, asked of a list: does "confirmed" put this person IN the
+    // list, and does "cancelled" take them out (or put them in a different one)?
+    for (list_id, mode) in list_rules {
+        if mode == "remove" {
+            let _ = sqlx::query(
+                "DELETE FROM list_members WHERE tenant_id = $1 AND list_id = $2 AND contact_id = $3",
+            )
+            .bind(ctx.tenant_id)
+            .bind(list_id)
+            .bind(contact_id)
+            .execute(pool)
+            .await;
+            crate::automation::engine::fire_list_trigger(
+                pool,
+                ctx.tenant_id,
+                contact_id,
+                list_id,
+                "ListRemoved",
+            )
+            .await;
+        } else {
+            // A replayed webhook must not add the same member twice: the unique index on
+            // (list_id, contact_id) makes this idempotent rather than a duplicate error.
+            let inserted = sqlx::query(
+                "INSERT INTO list_members (id, list_id, contact_id, tenant_id, added_manually)
+                 VALUES (gen_random_uuid(), $1, $2, $3, false)
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(list_id)
+            .bind(contact_id)
+            .bind(ctx.tenant_id)
+            .execute(pool)
+            .await
+            .map(|r| r.rows_affected())
+            .unwrap_or(0);
+            // Only a NEW membership is an event. A booking replayed against an existing member is not
+            // "they joined the list again", and firing the trigger would re-run the automation.
+            if inserted > 0 {
+                crate::automation::engine::fire_list_trigger(
+                    pool,
+                    ctx.tenant_id,
+                    contact_id,
+                    list_id,
+                    "ListAdded",
+                )
+                .await;
+            }
         }
     }
 }
