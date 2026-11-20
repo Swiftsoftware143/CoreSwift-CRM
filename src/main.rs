@@ -503,6 +503,19 @@ async fn main() -> anyhow::Result<()> {
                 body_deadline::body_read_deadline_middleware,
             )),
         )
+        // Currency rate refresh (kanban t_44c1aaa4): the fleet's n8n cron POSTs here daily with
+        // `x-internal-key`; the handler also verifies it. Mounted outside every module's auth
+        // layer because a scheduler has no session, and named in `INTERNAL_ROUTES` so the shared
+        // key is demanded at the credential boundary as well.
+        .route(
+            "/api/internal/fx-rates/refresh",
+            axum::routing::post(deals::handlers::internal_refresh_fx).layer(
+                axum::middleware::from_fn_with_state(
+                    body_read_deadline,
+                    body_deadline::body_read_deadline_middleware,
+                ),
+            ),
+        )
         // FunnelSwift tag provision webhook — auto-provision free-tier contacts
         .route(
             "/api/v1/internal/tag-provision",

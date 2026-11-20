@@ -64,6 +64,19 @@ pub struct StageAnalytics {
     pub conversion_rate: f64,
     /// One entry per currency held in this stage.
     pub by_currency: Vec<CurrencyAmount>,
+    /// This stage in the workspace's reporting currency, computed from each deal's stored rate.
+    pub reporting: ReportingMoney,
+}
+
+/// One money amount converted into the workspace's reporting currency. `unconverted_count` counts
+/// deals whose stored rate does not reach that currency — they are named, never silently added at
+/// face value.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportingMoney {
+    pub currency: String,
+    pub total_value: f64,
+    pub weighted_value: f64,
+    pub unconverted_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -77,6 +90,8 @@ pub struct PipelineAnalytics {
     pub win_rate: f64,
     /// One entry per currency held in this pipeline — the ONLY place the pipeline's money lives.
     pub by_currency: Vec<CurrencyAmount>,
+    /// The whole pipeline in the reporting currency (David's condition: totals never mix raw).
+    pub reporting: ReportingMoney,
     pub stages: Vec<StageAnalytics>,
 }
 

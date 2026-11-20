@@ -433,6 +433,7 @@ pub async fn pipeline_analytics(
             conversion_rate: (conv * 100.0).round() / 100.0,
             by_currency: money_by_currency(&state.db, tenant_id, pipeline_id, Some(stage.id))
                 .await?,
+            reporting: reporting_money(&state.db, tenant_id, pipeline_id, Some(stage.id)).await?,
         });
     }
 
@@ -444,8 +445,60 @@ pub async fn pipeline_analytics(
         lost_count,
         win_rate: (win_rate * 1000.0).round() / 1000.0,
         by_currency,
+        reporting: reporting_money(&state.db, tenant_id, pipeline_id, None).await?,
         stages: stage_analytics,
     })))
+}
+
+/// The same money, converted into the workspace's reporting currency from each deal's STORED
+/// rate. This is the number a mixed-currency workspace reads when it wants ONE figure — and it is
+/// derived from facts the deal kept, not from today's market, so a past period does not move.
+async fn reporting_money(
+    db: &sqlx::PgPool,
+    tenant_id: Uuid,
+    pipeline_id: Uuid,
+    stage_id: Option<Uuid>,
+) -> Result<ReportingMoney, AppError> {
+    let reporting = crate::deals::fx::workspace_reporting_currency(db, tenant_id)
+        .await?
+        .unwrap_or_default();
+    if reporting.is_empty() {
+        return Ok(ReportingMoney {
+            currency: String::new(),
+            total_value: 0.0,
+            weighted_value: 0.0,
+            unconverted_count: 0,
+        });
+    }
+    let row: (f64, f64, i64) = sqlx::query_as(
+        "SELECT COALESCE(SUM(x.conv),0)::float8,
+                COALESCE(SUM(x.conv * COALESCE(x.probability,0) / 100.0),0)::float8,
+                COUNT(*) FILTER (WHERE x.conv IS NULL) AS unconverted
+           FROM (
+             SELECT o.probability,
+                    CASE
+                      WHEN upper(COALESCE(o.currency,'')) = upper($4) THEN o.value
+                      WHEN o.exchange_rate IS NOT NULL
+                           AND upper(COALESCE(o.reporting_currency, o.currency)) = upper($4)
+                          THEN o.value * o.exchange_rate
+                    END AS conv
+               FROM opportunities o
+              WHERE o.tenant_id = $1 AND o.pipeline_id = $2
+                AND ($3::uuid IS NULL OR o.stage_id = $3)
+           ) x",
+    )
+    .bind(tenant_id)
+    .bind(pipeline_id)
+    .bind(stage_id)
+    .bind(&reporting)
+    .fetch_one(db)
+    .await?;
+    Ok(ReportingMoney {
+        currency: reporting,
+        total_value: row.0,
+        weighted_value: row.1,
+        unconverted_count: row.2,
+    })
 }
 
 /// Deal value grouped by currency, for a whole pipeline or one stage of it.

@@ -11,7 +11,7 @@
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use super::models::{DealReport, StageTotal};
+use super::models::{DealReport, ReportingTotals, StageTotal};
 use crate::errors::AppError;
 
 #[derive(Debug, sqlx::FromRow)]
@@ -38,6 +38,18 @@ struct StageRow {
     deal_count: i64,
     total_value: f64,
     weighted_value: f64,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct ReportingRow {
+    open_count: i64,
+    open_value: f64,
+    open_weighted: f64,
+    won_count: i64,
+    won_value: f64,
+    lost_count: i64,
+    lost_value: f64,
+    unconverted_count: i64,
 }
 
 /// One report per (pipeline, currency) the workspace actually holds deals in.
@@ -68,6 +80,74 @@ pub async fn build_report(
 
     let mut out = Vec::new();
     for (pid, pname) in pipelines {
+        // ── the reporting-currency answer, computed ONCE per pipeline ────────────────────────
+        // Every deal contributes `value` (when it already trades in the reporting currency) or
+        // `value * its OWN stored rate`. The stored rate is what makes a past quarter stable:
+        // nothing here reads today's market.
+        let reporting_currency = super::fx::workspace_reporting_currency(&state.db, tenant)
+            .await?
+            .unwrap_or_default();
+        let rep = if reporting_currency.is_empty() {
+            ReportingTotals {
+                currency: String::new(),
+                open_count: 0,
+                open_value: 0.0,
+                open_weighted_value: 0.0,
+                won_count: 0,
+                won_value: 0.0,
+                lost_count: 0,
+                lost_value: 0.0,
+                win_rate: 0.0,
+                unconverted_count: 0,
+            }
+        } else {
+            let row: ReportingRow = sqlx::query_as(
+                "SELECT
+                    COUNT(*) FILTER (WHERE NOT x.is_won AND NOT x.is_lost) AS open_count,
+                    COALESCE(SUM(x.conv) FILTER (WHERE NOT x.is_won AND NOT x.is_lost),0)::float8 AS open_value,
+                    COALESCE(SUM(x.conv * COALESCE(x.probability,0) / 100.0)
+                             FILTER (WHERE NOT x.is_won AND NOT x.is_lost),0)::float8 AS open_weighted,
+                    COUNT(*) FILTER (WHERE x.is_won) AS won_count,
+                    COALESCE(SUM(x.conv) FILTER (WHERE x.is_won),0)::float8 AS won_value,
+                    COUNT(*) FILTER (WHERE x.is_lost) AS lost_count,
+                    COALESCE(SUM(x.conv) FILTER (WHERE x.is_lost),0)::float8 AS lost_value,
+                    COUNT(*) FILTER (WHERE x.conv IS NULL) AS unconverted_count
+                   FROM (
+                     SELECT o.is_won, o.is_lost, o.probability,
+                            CASE
+                              WHEN upper(COALESCE(o.currency,'')) = upper($3) THEN o.value
+                              WHEN o.exchange_rate IS NOT NULL
+                                   AND upper(COALESCE(o.reporting_currency, o.currency)) = upper($3)
+                                  THEN o.value * o.exchange_rate
+                            END AS conv
+                       FROM opportunities o
+                      WHERE o.tenant_id = $1 AND o.pipeline_id = $2
+                   ) x",
+            )
+            .bind(tenant)
+            .bind(pid)
+            .bind(&reporting_currency)
+            .fetch_one(&state.db)
+            .await?;
+            let closed = row.won_count + row.lost_count;
+            ReportingTotals {
+                currency: reporting_currency.clone(),
+                open_count: row.open_count,
+                open_value: row.open_value,
+                open_weighted_value: row.open_weighted,
+                won_count: row.won_count,
+                won_value: row.won_value,
+                lost_count: row.lost_count,
+                lost_value: row.lost_value,
+                win_rate: if closed > 0 {
+                    (row.won_count as f64 / closed as f64 * 1000.0).round() / 1000.0
+                } else {
+                    0.0
+                },
+                unconverted_count: row.unconverted_count,
+            }
+        };
+
         // Which currencies does this pipeline actually hold? A pipeline with no deals still gets
         // one row in the workspace currency (or a blank one) so the screen is not empty-shaped.
         let currencies: Vec<String> = sqlx::query_scalar(
@@ -169,6 +249,7 @@ pub async fn build_report(
                         weighted_value: s.weighted_value,
                     })
                     .collect(),
+                reporting: rep.clone(),
             });
         }
     }

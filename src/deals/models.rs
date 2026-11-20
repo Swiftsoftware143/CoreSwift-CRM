@@ -44,6 +44,12 @@ pub struct DealFieldValue {
     pub label: String,
     pub field_type: String,
     pub value: Option<String>,
+    /// A `money` field carries the amount and its OWN currency code beside the display text, plus
+    /// the same stored rate/date the deal itself keeps (David, 2026-11-20).
+    pub money_amount: Option<f64>,
+    pub money_currency: Option<String>,
+    pub money_exchange_rate: Option<f64>,
+    pub money_reporting_currency: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -319,4 +325,25 @@ pub struct DealReport {
     pub rotting_count: i64,
     pub rot_days: i64,
     pub stages: Vec<StageTotal>,
+    /// The SAME pipeline in the workspace's reporting currency, computed from each deal's STORED
+    /// rate — the number David's amendment asks for (condition 6). Repeated on every currency row
+    /// of this pipeline because it is a property of the pipeline, not of one currency line.
+    pub reporting: ReportingTotals,
+}
+
+/// Money converted into the workspace's reporting currency, from the rate each deal stored when it
+/// was written. `unconverted_count` is the honest escape hatch: deals whose stored rate does not
+/// point at this reporting currency are counted, never silently folded in at face value.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportingTotals {
+    pub currency: String,
+    pub open_count: i64,
+    pub open_value: f64,
+    pub open_weighted_value: f64,
+    pub won_count: i64,
+    pub won_value: f64,
+    pub lost_count: i64,
+    pub lost_value: f64,
+    pub win_rate: f64,
+    pub unconverted_count: i64,
 }

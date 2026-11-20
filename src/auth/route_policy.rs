@@ -190,6 +190,14 @@
 //!        `.route(..)` calls / 460 on /api** (472 = 460 /api + the 12 root-level mounts), and those
 //!        are what `the_census_shape_is_what_the_docs_say` pins.
 //!
+//!   +3 mounts (2026-11-20, kanban t_44c1aaa4), MULTI-CURRENCY: the rate table's read and manual
+//!        refresh on the deals router (`GET /api/deals/fx-rates`, `POST /api/deals/fx-rates/refresh`
+//!        — session JWT, admin for the refresh) and the scheduler's arm
+//!        `POST /api/internal/fx-rates/refresh`, which demands the shared `x-internal-key` at the
+//!        boundary (named in [`INTERNAL_ROUTES`]) and again in its handler. The extractor now
+//!        resolves 520 mounted `.route(..)` calls / 506 on /api** (520 = 506 /api + the 14
+//!        root-level mounts), and those are what `the_census_shape_is_what_the_docs_say` pins.
+//!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
 //!        the per-module gate was doing its job. The two /api routes added since (kanban
@@ -201,7 +209,7 @@
 //!        i.e. one more than the 26 this line used to claim, and 30 after the hosted calendar
 //!        address added its two public arms (kanban t_8457bfef), and 31 after the per-calendar
 //!        path added `/api/public/calendar/site/:slug` (kanban t_d4ac5433)
-//!    16 service-to-service entries    -> INTERNAL_ROUTES (all /api, reached with the shared key)
+//!    17 service-to-service entries    -> INTERNAL_ROUTES (all /api, reached with the shared key)
 //!     2 issued-API-key entries        -> API_KEY_ROUTES  (/api/external/**)
 //!    11 served surfaces outside the boundary: the SPA mount, /track/:slug, the eight
 //!        /s/:tenant_id/** support-portal mounts and the two /s/:tenant_slug/widgets/**
@@ -223,8 +231,8 @@
 //!    so the fifteenth route under that prefix is private by default.
 //!    The census above was taken over the 14 routes that existed then; the account door
 //!    `POST /api/v1/internal/provision-free-account` joined the list after it (kanban t_e968e9ad)
-//!    and verifies the same shared key in its own handler, so the count below is 16 (the last is
-//!    the workspace-DEPROVISION door `DELETE /api/internal/tenants/:id`, kanban t_c88f907f) and a route
+//!    and verifies the same shared key in its own handler, so the count below is 17 (the last is
+//!    the currency-rate refresh `POST /api/internal/fx-rates/refresh`, kanban t_44c1aaa4) and a route
 //!    added under this prefix without an entry here stays private by default.
 //! 2. `/inbound/**` was outside any boundary at all (a root-level `nest`, no middleware, the key in
 //!    the path). It is now inside [`is_guarded_path`] with its three mounted shapes named in
@@ -491,6 +499,9 @@ pub const INTERNAL_ROUTES: &[&str] = &[
     "/api/internal/tags/assign",
     "/api/internal/tags/delete",
     "/api/internal/tags/list",
+    // The currency rate table's daily refresh (kanban t_44c1aaa4): the fleet's n8n cron posts
+    // here, and the handler verifies the same shared key. Named so the boundary demands it too.
+    "/api/internal/fx-rates/refresh",
     // The same internal calendar router is mounted twice — `/api/internal/bookings` and
     // `/api/bookings/internal` (main.rs: "alternative internal calendar creation path outside auth
     // middleware"). Both mounts are named; both demand the key.
@@ -1411,12 +1422,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            517,
+            520,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 503,
+            api, 506,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.

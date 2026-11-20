@@ -6372,9 +6372,50 @@ function confirmThen(msg, fn) { if (window.confirm(msg)) fn(); }
 let PL_DATA = [];
 let PL_FILTER = { q: '', owner_id: '', stage_id: '', source: '', status: '', from: '', to: '', rotting: false };
 let PL_REPORT = [];
-let PL_CURRENCY = null;
+let PL_CURRENCY = null;          // the workspace DEFAULT currency (what a new deal is priced in)
+let PL_REPORTING = null;         // what reports are computed in
+let PL_ISO = [];                 // the real ISO 4217 codes the server accepts
 let PL_TEAM = [];
 let PL_DETAIL = null;
+
+// Every deal carries a stored rate and the currency that rate converts INTO (David, 2026-11-20).
+// A deal already in the reporting currency is worth its own value; anything else is worth
+// value × its STORED rate — never today's market, so a past period does not move.
+function plReportingValue(deal) {
+  const v = Number(deal && deal.value);
+  if (!isFinite(v)) return null;
+  const cur = ((deal && deal.currency) || '').toUpperCase();
+  if (PL_REPORTING && cur === PL_REPORTING) return v;
+  if (PL_REPORTING && deal && deal.exchange_rate && (deal.reporting_currency || cur).toUpperCase() === PL_REPORTING) {
+    return v * Number(deal.exchange_rate);
+  }
+  return null;
+}
+
+// The currency picker is a real ISO 4217 list from the server, never free text: a three-letter
+// string that is not a currency cannot be converted, so it is refused at the source.
+function plCurrencyOptions(selected) {
+  const codes = (PL_ISO && PL_ISO.length) ? PL_ISO.slice() : [(PL_CURRENCY || 'USD')];
+  const sel = (selected || '').toUpperCase();
+  let html = '';
+  if (sel && codes.indexOf(sel) === -1) html += '<option value="' + sel + '" selected>' + escapeHtml(sel) + '</option>';
+  codes.forEach(function (c) {
+    html += '<option value="' + c + '"' + (c === sel ? ' selected' : '') + '>' + c + '</option>';
+  });
+  return html;
+}
+
+// Sum a set of deals into the reporting currency, and count the ones that cannot be converted so
+// the number is never quietly short.
+function plReportingSum(deals, weighted) {
+  let total = 0, unconverted = 0;
+  (deals || []).forEach(function (d) {
+    const v = plReportingValue(d);
+    if (v === null) { unconverted += 1; return; }
+    total += weighted ? v * (Number(d.probability) || 0) / 100 : v;
+  });
+  return { total: total, unconverted: unconverted };
+}
 
 function plCache(pid) { return PL_DATA.find(function (x) { return x.pipeline.id === pid; }) || null; }
 
@@ -6418,6 +6459,7 @@ function pipelinesShell() {
     '<button class="btn btn-secondary btn-sm" onclick="plCsvImportPick()">⬆ Import deals</button>' +
     '<button class="btn btn-secondary btn-sm" onclick="csvExportDeals()">⬇ Export deals</button>' +
     '<button class="btn btn-secondary btn-sm" onclick="plShowReport()">Reporting</button> ' +
+    '<button class="btn btn-secondary btn-sm" onclick="plDealSettings()">Deals settings</button> ' +
     '<button class="btn btn-secondary btn-sm" onclick="plDealWriterHelp()">Deal writer API</button>') +
   '<div class="card" style="margin-bottom:16px"><div class="card-body">' +
     '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">' +
@@ -6496,13 +6538,19 @@ async function loadPipelinesTab() {
       try { PL_TEAM = (await API.get('/deals/team')).people || []; } catch (_) {}
     }
     if (PL_CURRENCY === null) {
-      try { PL_CURRENCY = (await API.get('/deals/currency')).currency || ''; } catch (_) {}
+      try {
+        const cur = await API.get('/deals/currency');
+        PL_CURRENCY = cur.currency || '';
+        PL_REPORTING = cur.reporting_currency || PL_CURRENCY;
+        PL_ISO = cur.iso_currencies || [];
+      } catch (_) {}
     }
     const noteEl = document.getElementById('plCurrencyNote');
     if (noteEl) {
       noteEl.innerHTML = PL_CURRENCY
-        ? 'Workspace currency: <strong>' + escapeHtml(PL_CURRENCY) + '</strong>'
-        : '<span style="color:var(--bad,#ef4444)">No workspace currency set — <a href="#" onclick="plDealWriterHelp();return false">choose one</a> before recording values.</span>';
+        ? 'Default currency: <strong>' + escapeHtml(PL_CURRENCY) + '</strong> · reports in <strong>' +
+          escapeHtml(PL_REPORTING || PL_CURRENCY) + '</strong> · <a href="#" onclick="plDealSettings();return false">change</a> · <a href="#" onclick="plRefreshRates();return false">refresh rates</a>'
+        : '<span style="color:var(--bad,#ef4444)">No workspace currency set — <a href="#" onclick="plDealSettings();return false">choose one</a> before recording values.</span>';
     }
     const pipes = famList(await API.get('/pipelines'), 'pipelines');
     PL_DATA = [];
@@ -6568,9 +6616,13 @@ async function loadPipelinesTab() {
             .reduce(function (a, o) { return a + (Number(o.value) || 0); }, 0);
           return plMoney(sum, c);
         }).join(' + ');
+        // Beside the per-currency figures, the reporting-currency equivalent from each deal's
+        // STORED rate — one number that reconciles, and never a raw mixed sum.
+        const repSum = plReportingSum(stageDeals, false);
+        const repLine = (PL_REPORTING && cur.length ? ' ≈ ' + plMoney(repSum.total, PL_REPORTING) : '');
         h += '<span class="badge badge-warning" style="padding:6px 10px">' + fh(s.name) +
           (s.probability !== null && s.probability !== undefined ? ' · ' + s.probability + '%' : '') +
-          (stageDeals.length ? ' · ' + stageDeals.length + ' (' + totals + ')' : '') +
+          (stageDeals.length ? ' · ' + stageDeals.length + ' (' + totals + repLine + ')' : '') +
           (s.is_won ? ' 🏆' : '') + (s.is_lost ? ' ✕' : '') +
           ' <a href="#" title="Edit stage" onclick="plEditStage(\'' + p.id + '\',\'' + s.id + '\');return false">✎</a>' +
           ' <a href="#" title="Delete stage" onclick="plDeleteStage(\'' + p.id + '\',\'' + s.id + '\');return false">🗑</a>' +
@@ -6623,9 +6675,16 @@ async function loadPipelinesTab() {
               plMoney(weighted, c) + ' weighted</div>';
           }).join('')
         : '<div style="color:var(--text-secondary)">No deals match these filters.</div>';
+      const repSum = plReportingSum(deals, false);
+      const repWeighted = plReportingSum(deals, true);
+      const repLine = PL_REPORTING
+        ? '<div style="margin-top:6px"><strong>In ' + escapeHtml(PL_REPORTING) + '</strong>: ' +
+          plMoney(repSum.total, PL_REPORTING) + ' total · ' + plMoney(repWeighted.total, PL_REPORTING) +
+          ' weighted' + (repSum.unconverted ? ' · ' + repSum.unconverted + ' deal(s) could not be converted' : '') + '</div>'
+        : '';
       summaryEl.innerHTML = '<div class="card" style="margin-bottom:16px"><div class="card-header">📊 What this filter is worth</div>' +
-        '<div class="card-body" style="font-size:13px">' + totalsLine +
-        '<div style="color:var(--text-secondary);font-size:12px;margin-top:6px">' + deals.length + ' deal(s) shown. Weighted value = value × probability. Amounts are never added across currencies.</div>' +
+        '<div class="card-body" style="font-size:13px">' + totalsLine + repLine +
+        '<div style="color:var(--text-secondary);font-size:12px;margin-top:6px">' + deals.length + ' deal(s) shown. Weighted value = value × probability. Amounts are never added across currencies; the reporting line uses the rate each deal stored.</div>' +
         '</div></div>';
     }
   } catch (e) { famErr(el, 'Pipelines', e); }
@@ -6654,6 +6713,21 @@ async function plShowReport() {
         '<div><div class="config-desc">Avg days to close</div><strong>' + (rep.avg_days_to_close || 0) + '</strong></div>' +
         '<div><div class="config-desc">Rotting (' + rep.rot_days + 'd)</div><strong>' + rep.rotting_count + '</strong></div>' +
       '</div>';
+    // The same pipeline in the workspace's REPORTING currency, computed from each deal's stored
+    // rate. This is the one figure a mixed-currency workspace reads (David's condition 6).
+    const rm = rep.reporting;
+    if (rm && rm.currency) {
+      body += '<div style="margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:6px">' +
+        '<div class="config-desc">In the reporting currency (' + escapeHtml(rm.currency) + ')</div>' +
+        '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px">' +
+          '<div><div class="config-desc">Open</div><strong>' + plMoney(rm.open_value, rm.currency) + '</strong></div>' +
+          '<div><div class="config-desc">Weighted</div><strong>' + plMoney(rm.open_weighted_value, rm.currency) + '</strong></div>' +
+          '<div><div class="config-desc">Won</div><strong>' + plMoney(rm.won_value, rm.currency) + '</strong></div>' +
+          '<div><div class="config-desc">Lost</div><strong>' + plMoney(rm.lost_value, rm.currency) + '</strong></div>' +
+          '<div><div class="config-desc">Win rate</div><strong>' + Math.round((rm.win_rate || 0) * 100) + '%</strong></div>' +
+          (rm.unconverted_count ? '<div><div class="config-desc">Could not convert</div><strong>' + rm.unconverted_count + '</strong></div>' : '') +
+        '</div></div>';
+    }
   });
   showModal('Deal reporting', body, '<button class="btn btn-ghost" onclick="closeModal()">Close</button>', true);
 }
@@ -6676,6 +6750,21 @@ function plRenderDeal() {
 
   let fields = '';
   (d.custom_fields || []).forEach(function (f) {
+    if (f.field_type === 'money') {
+      // A money field is an AMOUNT PLUS ITS OWN CURRENCY CODE (David's condition 7) — the same
+      // rules as the deal's value, so it carries a code and a stored rate of its own.
+      const amt = (f.money_amount === null || f.money_amount === undefined) ? '' : Number(f.money_amount);
+      const cur = f.money_currency || deal.currency || PL_CURRENCY || '';
+      fields += '<div class="form-group"><label>' + escapeHtml(f.label) + ' <span class="config-desc">(money)</span></label>' +
+        '<div style="display:flex;gap:6px">' +
+          '<input type="number" step="0.01" data-money-amount="' + escapeHtml(f.key) + '" value="' + amt + '" placeholder="Amount" style="flex:2">' +
+          '<select data-money-currency="' + escapeHtml(f.key) + '" style="flex:1">' + plCurrencyOptions(cur) + '</select>' +
+        '</div>' +
+        '<div class="config-desc">' + (f.money_exchange_rate
+          ? ('stored rate ' + Number(f.money_exchange_rate).toFixed(6) + ' → ' + escapeHtml(f.money_reporting_currency || ''))
+          : 'no amount recorded') + '</div></div>';
+      return;
+    }
     fields += '<div class="form-group"><label>' + escapeHtml(f.label) + '</label>' +
       '<input type="text" data-field="' + escapeHtml(f.key) + '" value="' + escapeHtml(f.value || '') + '"></div>';
   });
@@ -6713,6 +6802,15 @@ function plRenderDeal() {
       '<div><div class="config-desc">Status</div><strong>' + statusBadge + '</strong></div>' +
       '<div><div class="config-desc">Value</div><strong>' + plMoney(deal.value, deal.currency) + '</strong></div>' +
       '<div><div class="config-desc">Weighted</div><strong>' + plMoney(d.weighted_value, deal.currency) + '</strong></div>' +
+      // The stored rate is a FACT of this deal: it is what reports read, and it does not move when
+      // the market does (David's condition 2).
+      '<div><div class="config-desc">Stored rate</div><strong>' +
+        (deal.exchange_rate ? ('1 ' + escapeHtml(deal.currency || '') + ' = ' + Number(deal.exchange_rate).toFixed(6) + ' ' +
+          escapeHtml(deal.reporting_currency || PL_REPORTING || '')) : '—') + '</strong>' +
+        '<div class="config-desc">' + (deal.rate_date ? 'as of ' + new Date(deal.rate_date).toLocaleDateString() : '') + '</div></div>' +
+      '<div><div class="config-desc">In ' + escapeHtml(PL_REPORTING || 'reporting') + '</div><strong>' +
+        (function () { const rv = plReportingValue(deal); return rv === null ? '—' : plMoney(rv, PL_REPORTING); })() +
+        '</strong></div>' +
       '<div><div class="config-desc">Probability</div><strong>' + (deal.probability || 0) + '%</strong></div>' +
       '<div><div class="config-desc">Owner</div><strong>' + escapeHtml(owner) + '</strong></div>' +
       '<div><div class="config-desc">Contact</div><strong>' + escapeHtml(contact) + '</strong></div>' +
@@ -6761,6 +6859,14 @@ async function plSaveDeal() {
   const fields = {};
   document.querySelectorAll('[data-field]').forEach(function (el) {
     fields[el.getAttribute('data-field')] = el.value;
+  });
+  // A money field posts amount + currency, so the server stores the rate that was true that day.
+  document.querySelectorAll('[data-money-amount]').forEach(function (el) {
+    const key = el.getAttribute('data-money-amount');
+    const raw = (el.value || '').trim();
+    if (raw === '') { fields[key] = null; return; }
+    const sel = document.querySelector('[data-money-currency="' + key + '"]');
+    fields[key] = { amount: Number(raw), currency: (sel && sel.value) || PL_CURRENCY || null };
   });
   if (Object.keys(fields).length) body.custom_fields = fields;
   try {
@@ -6923,13 +7029,62 @@ function plDealWriterHelp() {
     '<button class="btn btn-ghost" onclick="closeModal()">Close</button>', true);
 }
 
-async function plSaveCurrency() {
-  const code = ((document.getElementById('plCurrencyInput') || {}).value || '').trim().toUpperCase();
-  if (!code) { toast('Enter a 3-letter code', 'error'); return; }
+// ── deals settings: the workspace's two currencies, and the rate table they read ───────────
+// David's amendment (2026-11-20): a workspace states a DEFAULT currency (what a new deal is priced
+// in) and a REPORTING currency (what its reports are computed in). Both are picked from the real
+// ISO 4217 list, and the panel shows the rates the deals will store today.
+async function plDealSettings() {
+  if (PL_CURRENCY === null || !PL_ISO.length) {
+    try {
+      const c = await API.get('/deals/currency');
+      PL_CURRENCY = c.currency || '';
+      PL_REPORTING = c.reporting_currency || PL_CURRENCY;
+      PL_ISO = c.iso_currencies || [];
+    } catch (_) {}
+  }
+  let rates = [];
+  try { rates = (await API.get('/deals/fx-rates')).rates || []; } catch (_) {}
+  const wanted = [PL_CURRENCY, PL_REPORTING, 'USD', 'EUR', 'GBP', 'CAD', 'MXN'];
+  const shown = rates.filter(function (r) { return wanted.indexOf(r.currency) !== -1; });
+  const rateLine = shown.length
+    ? shown.map(function (r) { return r.currency + ' ' + Number(r.usd_rate).toFixed(4) + ' per USD (' + r.as_of + ')'; }).join(' · ')
+    : 'No rates in the table yet — press “Refresh rates”.';
+  showModal('Deals settings',
+    '<div class="form-group"><label>Default currency — what a new deal is priced in</label>' +
+      '<select id="dlDefaultCur">' + plCurrencyOptions(PL_CURRENCY) + '</select>' +
+      '<div class="config-desc">A deal that names no currency takes this one. A workspace with none is refused, never assumed to be dollars.</div></div>' +
+    '<div class="form-group"><label>Reporting currency — what totals and reports compute in</label>' +
+      '<select id="dlReportingCur">' + plCurrencyOptions(PL_REPORTING || PL_CURRENCY) + '</select>' +
+      '<div class="config-desc">Every deal stores the rate that converts it into this currency, on the day it was written. Changing this re-quotes open history from the rate that was true on each deal\'s own date — it never re-prices from today\'s market.</div></div>' +
+    '<div class="form-group"><label>Today\'s rates</label>' +
+      '<div class="config-desc" id="dlRateLine">' + escapeHtml(rateLine) + '</div>' +
+      '<button class="btn btn-secondary btn-sm" style="margin-top:6px" onclick="plRefreshRates(true)">Refresh rates now</button></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="plSaveCurrency()">Save</button>');
+}
+
+async function plRefreshRates(fromSettings) {
   try {
-    const r = await API.put('/deals/currency', { currency: code });
-    PL_CURRENCY = r.currency;
-    toast('Workspace currency set to ' + r.currency, 'success');
+    const r = await API.post('/deals/fx-rates/refresh', {});
+    toast('Rates refreshed: ' + (r.stored || 0) + ' currencies for ' + (r.as_of || 'today'), 'success');
+    if (fromSettings) plDealSettings();
+  } catch (e) { toast('Could not refresh rates: ' + e.message, 'error'); }
+}
+
+async function plSaveCurrency() {
+  const defEl = document.getElementById('dlDefaultCur');
+  const repEl = document.getElementById('dlReportingCur');
+  const fallback = ((document.getElementById('plCurrencyInput') || {}).value || '').trim().toUpperCase();
+  const body = {};
+  if (defEl) body.currency = defEl.value;
+  else if (fallback) body.currency = fallback;
+  if (repEl) body.reporting_currency = repEl.value;
+  if (!body.currency && !body.reporting_currency) { toast('Choose a currency', 'error'); return; }
+  try {
+    const r = await API.put('/deals/currency', body);
+    PL_CURRENCY = r.currency || PL_CURRENCY;
+    PL_REPORTING = r.reporting_currency || PL_REPORTING;
+    toast('Currencies saved' + (r.deals_requoted ? ' (' + r.deals_requoted + ' deal(s) re-quoted)' : ''), 'success');
     closeModal();
     loadPipelinesTab();
   } catch (e) { toast('Could not set currency: ' + e.message, 'error'); }
@@ -7041,7 +7196,13 @@ async function plAddDeal(pid, presetStageId) {
     '<div class="form-group"><label>Contact</label><select id="dlContact">' + opts + '</select></div>' +
     '<div class="form-group"><label>Stage</label><select id="dlStage">' + stageOpts + '</select></div>' +
     '<div class="form-group"><label>Value</label><input type="number" id="dlValue" step="0.01"></div>' +
-    '<div class="form-group"><label>Currency</label><input type="text" id="dlCur" maxlength="3" value="' + escapeHtml(cur) + '" placeholder="' + (cur ? '' : 'set the workspace currency first') + '"></div>' +
+    // Currency is chosen per deal from the real ISO list; it defaults to the workspace currency and
+    // is never assumed to be dollars (David, 2026-11-20).
+    '<div class="form-group"><label>Currency</label><select id="dlCur">' + plCurrencyOptions(cur) + '</select>' +
+      (cur ? '' : '<div class="config-desc" style="color:var(--bad,#ef4444)">No workspace currency set — choose one under “Deals settings”.</div>') + '</div>' +
+    '<div class="form-group"><label>Exchange rate <span class="config-desc">(optional — 1 unit of this currency in ' +
+      escapeHtml(PL_REPORTING || 'the reporting currency') + ')</span></label>' +
+      '<input type="number" id="dlRate" step="0.00000001" placeholder="leave empty to use today\'s stored rate"></div>' +
     '<div class="form-group"><label>Owner</label><select id="dlOwner"><option value="">Unassigned</option>' +
       PL_TEAM.map(function (u) { return '<option value="' + u.id + '">' + escapeHtml(u.name) + '</option>'; }).join('') + '</select></div>' +
     '<div class="form-group"><label>Probability %</label><input type="number" id="dlProb" min="0" max="100"></div>' +
@@ -7061,6 +7222,10 @@ async function plCreateDeal(pid) {
     contact_id: document.getElementById('dlContact').value || null,
     value: val === '' ? null : parseFloat(val),
     currency: (document.getElementById('dlCur').value || '').trim().toUpperCase() || null,
+    exchange_rate: (function () {
+      const r = ((document.getElementById('dlRate') || {}).value || '').trim();
+      return r === '' ? null : parseFloat(r);
+    })(),
     owner_id: document.getElementById('dlOwner').value || null,
     probability: prob === '' ? null : parseInt(prob, 10),
     expected_close_date: document.getElementById('dlClose').value || null,

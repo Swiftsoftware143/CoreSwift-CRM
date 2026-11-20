@@ -13,6 +13,7 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use super::fx;
 use super::models::*;
 use super::writer::{self, Actor};
 use crate::audit;
@@ -133,10 +134,16 @@ pub async fn list(
 
     // Totals for the SAME filter, not for the whole workspace: a stage total under a filter that
     // ignored the filter is a lie the eye cannot catch.
-    let totals = sqlx::query_as::<_, (i64, f64, f64)>(
-        "SELECT COUNT(*),
-                COALESCE(SUM(value),0)::float8,
-                COALESCE(SUM(value * COALESCE(probability,0) / 100.0),0)::float8
+    //
+    // And money is NEVER added across currencies (David, 2026-11-20): the raw SUM is returned
+    // per currency, and the single number the response offers is the REPORTING-currency
+    // equivalent computed from each deal's STORED rate — never a mixed sum that reads as one
+    // figure. `total_value` stays null when the result holds more than one currency, because a
+    // scalar there would be exactly the meaningless number this rule forbids.
+    let by_currency: Vec<(String, i64, f64, f64)> = sqlx::query_as(
+        "SELECT COALESCE(currency,'') AS currency, COUNT(*) AS deal_count,
+                COALESCE(SUM(value),0)::float8 AS total_value,
+                COALESCE(SUM(value * COALESCE(probability,0) / 100.0),0)::float8 AS weighted_value
            FROM opportunities o
           WHERE o.tenant_id = $1
             AND ($2::uuid IS NULL OR o.pipeline_id = $2)
@@ -154,7 +161,9 @@ pub async fn list(
                  OR COALESCE(o.notes,'') ILIKE $9
                  OR COALESCE(o.source,'') ILIKE $9
                  OR COALESCE(o.external_ref,'') ILIKE $9)
-            AND (NOT $10::bool OR o.last_activity_at < NOW() - ($11::int * INTERVAL '1 day'))",
+            AND (NOT $10::bool OR o.last_activity_at < NOW() - ($11::int * INTERVAL '1 day'))
+          GROUP BY COALESCE(currency,'')
+          ORDER BY 1",
     )
     .bind(tenant)
     .bind(params.pipeline_id)
@@ -167,16 +176,94 @@ pub async fn list(
     .bind(q.as_deref())
     .bind(params.rotting.unwrap_or(false))
     .bind(rot_days as i32)
-    .fetch_one(&state.db)
+    .fetch_all(&state.db)
     .await?;
+
+    let reporting_currency = super::fx::workspace_reporting_currency(&state.db, tenant).await?;
+    let mut reporting_total = 0.0f64;
+    let mut reporting_weighted = 0.0f64;
+    let mut unconverted = 0i64;
+    if let Some(rc) = reporting_currency.as_deref() {
+        let row: (f64, f64, i64) = sqlx::query_as(
+            "SELECT
+                COALESCE(SUM(CASE
+                    WHEN upper(COALESCE(currency,'')) = upper($12) THEN value
+                    WHEN exchange_rate IS NOT NULL
+                         AND upper(COALESCE(reporting_currency, currency)) = upper($12)
+                        THEN value * exchange_rate
+                 END),0)::float8 AS reporting_value,
+                COALESCE(SUM((CASE
+                    WHEN upper(COALESCE(currency,'')) = upper($12) THEN value
+                    WHEN exchange_rate IS NOT NULL
+                         AND upper(COALESCE(reporting_currency, currency)) = upper($12)
+                        THEN value * exchange_rate
+                 END) * COALESCE(probability,0) / 100.0),0)::float8 AS reporting_weighted,
+                COUNT(*) FILTER (WHERE
+                    upper(COALESCE(currency,'')) <> upper($12)
+                    AND (exchange_rate IS NULL
+                         OR upper(COALESCE(reporting_currency, currency)) <> upper($12))
+                ) AS unconverted
+               FROM opportunities o
+              WHERE o.tenant_id = $1
+                AND ($2::uuid IS NULL OR o.pipeline_id = $2)
+                AND ($3::uuid IS NULL OR o.stage_id = $3)
+                AND ($4::uuid IS NULL OR o.owner_id = $4)
+                AND ($5::text IS NULL OR o.source = $5)
+                AND ($6::text IS NULL
+                     OR ($6 = 'won' AND o.is_won)
+                     OR ($6 = 'lost' AND o.is_lost)
+                     OR ($6 = 'open' AND NOT o.is_won AND NOT o.is_lost))
+                AND ($7::date IS NULL OR o.created_at >= $7)
+                AND ($8::date IS NULL OR o.created_at < ($8::date + 1))
+                AND ($9::text IS NULL
+                     OR o.name ILIKE $9
+                     OR COALESCE(o.notes,'') ILIKE $9
+                     OR COALESCE(o.source,'') ILIKE $9
+                     OR COALESCE(o.external_ref,'') ILIKE $9)
+                AND (NOT $10::bool OR o.last_activity_at < NOW() - ($11::int * INTERVAL '1 day'))",
+        )
+        .bind(tenant)
+        .bind(params.pipeline_id)
+        .bind(params.stage_id)
+        .bind(params.owner_id)
+        .bind(params.source.as_deref())
+        .bind(status.as_deref())
+        .bind(params.from)
+        .bind(params.to)
+        .bind(q.as_deref())
+        .bind(params.rotting.unwrap_or(false))
+        .bind(rot_days as i32)
+        .bind(rc)
+        .fetch_one(&state.db)
+        .await?;
+        reporting_total = row.0;
+        reporting_weighted = row.1;
+        unconverted = row.2;
+    }
+
+    let deal_count: i64 = by_currency.iter().map(|r| r.1).sum();
+    let single_currency = by_currency.len() == 1;
+    let totals_by_currency: Vec<serde_json::Value> = by_currency
+        .iter()
+        .map(|(c, n, total, weighted)| {
+            json!({ "currency": c, "deal_count": n, "total_value": total, "weighted_value": weighted })
+        })
+        .collect();
 
     Ok(Json(json!({
         "deals": deals,
         "page": page,
         "per_page": per_page,
-        "total": totals.0,
-        "total_value": totals.1,
-        "weighted_value": totals.2,
+        "total": deal_count,
+        "total_value": if single_currency { Some(by_currency[0].2) } else { None },
+        "weighted_value": if single_currency { Some(by_currency[0].3) } else { None },
+        "totals_by_currency": totals_by_currency,
+        "reporting": {
+            "currency": reporting_currency,
+            "total_value": reporting_currency.as_ref().map(|_| reporting_total),
+            "weighted_value": reporting_currency.as_ref().map(|_| reporting_weighted),
+            "unconverted_count": unconverted,
+        },
     })))
 }
 
@@ -270,7 +357,10 @@ pub async fn get(
     .await?;
 
     let custom_fields: Vec<DealFieldValue> = sqlx::query_as(
-        "SELECT d.id AS field_id, d.key, d.label, d.field_type, v.value
+        "SELECT d.id AS field_id, d.key, d.label, d.field_type, v.value,
+                v.money_amount::float8 AS money_amount, v.money_currency,
+                v.money_exchange_rate::float8 AS money_exchange_rate,
+                v.money_reporting_currency
            FROM deal_custom_fields d
            LEFT JOIN deal_field_values v ON v.field_id = d.id AND v.opportunity_id = $1
           WHERE d.tenant_id = $2 AND d.is_active
@@ -1010,10 +1100,10 @@ pub async fn create_field(
         .unwrap_or("text");
     if !matches!(
         field_type,
-        "text" | "number" | "date" | "boolean" | "url" | "select"
+        "text" | "number" | "money" | "date" | "boolean" | "url" | "select"
     ) {
         return Err(AppError::Validation(
-            "field_type must be text/number/date/boolean/url/select".to_string(),
+            "field_type must be text/number/money/date/boolean/url/select".to_string(),
         ));
     }
     let field: DealFieldDefinition = sqlx::query_as(
@@ -1301,8 +1391,10 @@ fn _value_marker(_v: Value) {}
 
 #[derive(Debug, serde::Deserialize)]
 pub struct CurrencySetting {
-    /// 3-letter ISO code, e.g. "USD", "EUR", "GBP".
-    pub currency: String,
+    /// 3-letter ISO 4217 code, e.g. "USD", "EUR", "GBP".
+    pub currency: Option<String>,
+    /// What reports are computed in. Defaults to `currency` when a workspace only states one.
+    pub reporting_currency: Option<String>,
 }
 
 pub async fn get_currency(
@@ -1310,15 +1402,24 @@ pub async fn get_currency(
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant = tenant_of(&claims)?;
-    let currency = writer::workspace_default_currency(&state.db, tenant).await?;
+    let (default, reporting) = fx::workspace_currencies(&state.db, tenant).await?;
     // `set: false` is the console's cue to ask the human, not to print a bracket of dollars.
-    Ok(Json(
-        json!({ "currency": currency, "set": currency.is_some() }),
-    ))
+    Ok(Json(json!({
+        "currency": default,
+        "reporting_currency": reporting,
+        "set": default.is_some(),
+        "iso_currencies": fx::ISO_4217,
+    })))
 }
 
-/// Set the workspace's own currency. Merges one key into `tenants.settings`, so it can never
-/// clobber branding, booking or integration settings that share the column.
+/// Set the workspace's currencies (default and reporting). Merges two keys into
+/// `tenants.settings`, so it can never clobber branding, booking or integration settings that
+/// share the column. Both codes are validated against the real ISO 4217 list — a free-text code
+/// would store a figure nothing can convert.
+///
+/// Changing the REPORTING currency re-quotes every deal in the workspace using the rate that was
+/// true on each deal's own rate date, so the switch does not silently re-price history from
+/// today's market (David's condition: a past won deal's value does not move).
 pub async fn set_currency(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -1328,21 +1429,88 @@ pub async fn set_currency(
     if !crate::auth::middleware::is_account_admin(&claims.role) {
         return Err(AppError::Forbidden);
     }
-    let code = req.currency.trim().to_uppercase();
-    if code.len() != 3 || !code.chars().all(|c| c.is_ascii_alphabetic()) {
+    if req.currency.is_none() && req.reporting_currency.is_none() {
         return Err(AppError::Validation(
-            "currency must be a 3-letter code, e.g. USD, EUR, GBP".to_string(),
+            "send `currency` (the workspace default) and/or `reporting_currency`".to_string(),
         ));
     }
-    sqlx::query(
-        "UPDATE tenants SET settings = jsonb_set(COALESCE(settings,'{}'::jsonb),
-                                                 '{default_currency}', to_jsonb($2::text), true),
-                updated_at = NOW()
-          WHERE id = $1",
-    )
-    .bind(tenant)
-    .bind(&code)
-    .execute(&state.db)
-    .await?;
-    Ok(Json(json!({ "currency": code, "set": true })))
+    let default = req.currency.as_deref().map(fx::normalize_iso).transpose()?;
+    let reporting = req
+        .reporting_currency
+        .as_deref()
+        .map(fx::normalize_iso)
+        .transpose()?;
+
+    let (default, reporting) =
+        fx::set_workspace_currencies(&state.db, tenant, default.as_deref(), reporting.as_deref())
+            .await?;
+
+    let mut requoted = 0u64;
+    if let Some(rc) = reporting.as_deref() {
+        // Only a CHANGE of destination needs a re-quote: re-running it on every save would move
+        // rates around for no reason.
+        requoted = fx::requote_tenant(&state.db, tenant, rc).await?;
+    }
+    Ok(Json(json!({
+        "currency": default,
+        "reporting_currency": reporting,
+        "set": default.is_some(),
+        "deals_requoted": requoted,
+    })))
+}
+
+/// The rate table's latest row per currency — what the console's settings panel shows, and what a
+/// human reads when a cross-currency deal needs a rate.
+pub async fn get_fx_rates(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
+    let _tenant = tenant_of(&claims)?;
+    let rows = fx::latest_rates(&state.db).await?;
+    let rates: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|(currency, usd_rate, as_of)| {
+            json!({ "currency": currency, "usd_rate": usd_rate, "as_of": as_of })
+        })
+        .collect();
+    Ok(Json(json!({ "rates": rates })))
+}
+
+/// Pull a fresh snapshot of the rate table from the provider. Driven by the fleet's n8n cron with
+/// the shared internal key; also reachable by an account admin from the console, because a
+/// workspace whose rates are a week stale should not have to wait for a scheduler.
+pub async fn refresh_fx_rates(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
+    let _tenant = tenant_of(&claims)?;
+    if !crate::auth::middleware::is_account_admin(&claims.role) {
+        return Err(AppError::Forbidden);
+    }
+    let (stored, as_of) = fx::refresh_rates(&state.db).await?;
+    Ok(Json(
+        json!({ "stored": stored, "as_of": as_of, "message": format!("{stored} rates stored for {as_of}") }),
+    ))
+}
+
+/// The same refresh, for the fleet's scheduler (n8n cron): no session, the shared internal key is
+/// the credential — checked here and again at the credential boundary (`INTERNAL_ROUTES`). The
+/// scheduled path exists because a rate table that only moves when a human presses a button is a
+/// rate table that silently ages.
+pub async fn internal_refresh_fx(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> ApiResult<impl IntoResponse> {
+    let key = headers
+        .get("x-internal-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let expected = state.config.internal_sync_key.clone();
+    if expected.is_empty() || key != expected {
+        return Err(AppError::Unauthorized);
+    }
+    let (stored, as_of) = fx::refresh_rates(&state.db).await?;
+    Ok(Json(
+        json!({ "stored": stored, "as_of": as_of, "message": format!("{stored} rates stored for {as_of}") }),
+    ))
 }

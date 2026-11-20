@@ -102,34 +102,17 @@ pub async fn workspace_default_currency(
     db: &PgPool,
     tenant_id: Uuid,
 ) -> Result<Option<String>, AppError> {
-    let settings: Option<Value> = sqlx::query_scalar("SELECT settings FROM tenants WHERE id = $1")
-        .bind(tenant_id)
-        .fetch_optional(db)
-        .await?;
-    Ok(settings.and_then(|s| {
-        ["default_currency", "currency"]
-            .iter()
-            .find_map(|k| s.get(k).and_then(|v| v.as_str()).map(str::to_string))
-            .map(|c| c.trim().to_uppercase())
-            .filter(|c| !c.is_empty())
-    }))
+    Ok(super::fx::workspace_currencies(db, tenant_id).await?.0)
 }
 
 /// Resolve the deal's currency: what the caller said → what the deal already held → what the
 /// workspace chose. Never a guess. `None` is refused by the caller with a sentence naming both
-/// remedies.
+/// remedies. A code that is not a real ISO 4217 currency is refused here, not stored and
+/// discovered later as an unconvertible row.
 fn normalize_currency(raw: Option<&str>) -> Result<Option<String>, AppError> {
     match raw.map(str::trim).filter(|c| !c.is_empty()) {
         None => Ok(None),
-        Some(c) => {
-            let up = c.to_uppercase();
-            if up.len() != 3 || !up.chars().all(|ch| ch.is_ascii_alphabetic()) {
-                return Err(AppError::Validation(format!(
-                    "currency must be a 3-letter code — got \"{c}\""
-                )));
-            }
-            Ok(Some(up))
-        }
+        Some(c) => super::fx::normalize_iso(c).map(Some),
     }
 }
 
@@ -502,6 +485,10 @@ fn normalize_field_key(raw: &str) -> String {
 
 fn infer_type(v: &Value) -> &'static str {
     match v {
+        // A money custom field is an AMOUNT PLUS A CURRENCY CODE (David, 2026-11-20), so an object
+        // that carries `amount` is typed `money` and gets the same stored-rate treatment as the
+        // deal's own value. A bare number on a field that is already `money` stays money.
+        Value::Object(o) if o.get("amount").is_some() => "money",
         Value::Number(_) => "number",
         Value::Bool(_) => "boolean",
         Value::String(s) => {
@@ -520,6 +507,115 @@ fn infer_type(v: &Value) -> &'static str {
     }
 }
 
+/// The amount and currency a money custom field carries. Accepts
+/// `{"amount": 1200, "currency": "EUR"}`, a bare number (currency = the deal's own), or the
+/// display shape `{"value": "1200.00 EUR"}` a form round-trips.
+fn parse_money(val: &Value) -> Result<Option<(f64, Option<String>)>, AppError> {
+    match val {
+        Value::Number(n) => n
+            .as_f64()
+            .filter(|f| f.is_finite())
+            .map(|f| Some((f, None)))
+            .ok_or_else(|| AppError::Validation("money amount is not a finite number".to_string())),
+        Value::Object(o) => {
+            let amount = match o.get("amount") {
+                Some(Value::Number(n)) => n.as_f64(),
+                Some(Value::String(s)) => s.trim().replace(',', "").parse::<f64>().ok(),
+                _ => None,
+            };
+            let Some(amount) = amount.filter(|a| a.is_finite()) else {
+                return Err(AppError::Validation(
+                    "a money custom field needs a numeric `amount`".to_string(),
+                ));
+            };
+            let currency = o
+                .get("currency")
+                .and_then(|c| c.as_str())
+                .map(str::trim)
+                .filter(|c| !c.is_empty())
+                .map(|c| super::fx::normalize_iso(c))
+                .transpose()?;
+            Ok(Some((amount, currency)))
+        }
+        Value::String(s) => {
+            let raw = s.trim();
+            if raw.is_empty() {
+                return Ok(None);
+            }
+            // "1200.00 EUR" — the display text the form shows.
+            let mut parts = raw.split_whitespace();
+            let amount = parts.next().unwrap_or("").replace(',', "").parse::<f64>();
+            let code = parts
+                .next()
+                .map(|c| super::fx::normalize_iso(c))
+                .transpose()?;
+            match amount {
+                Ok(a) if a.is_finite() => Ok(Some((a, code))),
+                _ => Err(AppError::Validation(format!(
+                    "\"{raw}\" is not a money value — send amount and currency"
+                ))),
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Resolve a money amount into the three stored facts a report needs: the amount, its currency,
+/// and the rate+date that convert it into the workspace's reporting currency. Same contract as the
+/// deal's own value — no guessed currency, no guessed rate.
+async fn price_money(
+    state: &AppState,
+    tenant_id: Uuid,
+    deal_id: Uuid,
+    amount: f64,
+    currency: Option<String>,
+) -> Result<(f64, String, f64, chrono::DateTime<Utc>, String), AppError> {
+    let (deal_currency, reporting) = {
+        let deal_cur: Option<String> = sqlx::query_scalar(
+            "SELECT currency FROM opportunities WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(deal_id)
+        .bind(tenant_id)
+        .fetch_optional(&state.db)
+        .await?
+        .flatten();
+        let (default_cur, rep) = super::fx::workspace_currencies(&state.db, tenant_id).await?;
+        (
+            deal_cur.or(default_cur).unwrap_or_default(),
+            rep.unwrap_or_default(),
+        )
+    };
+    let reporting = if reporting.is_empty() {
+        deal_currency.clone()
+    } else {
+        reporting
+    };
+    let currency = currency
+        .or_else(|| (!deal_currency.is_empty()).then(|| deal_currency.clone()))
+        .ok_or_else(|| {
+            AppError::Validation(
+                "this workspace has no currency — choose one before recording a money field"
+                    .to_string(),
+            )
+        })?;
+    if reporting.is_empty() {
+        return Err(AppError::Validation(
+            "this workspace has no reporting currency — choose one under Deals → Settings"
+                .to_string(),
+        ));
+    }
+    let (rate, day) = super::fx::rate_between(&state.db, &currency, &reporting, None)
+        .await?
+        .ok_or_else(|| {
+            AppError::Validation(format!(
+                "no exchange rate for {currency} into {reporting}: refresh the rate table under \
+                 Deals → Settings"
+            ))
+        })?;
+    let when = day.and_hms_opt(0, 0, 0).unwrap_or_default().and_utc();
+    Ok((amount, currency, rate, when, reporting))
+}
+
 fn scalar_to_string(v: &Value) -> Option<String> {
     match v {
         Value::String(s) => Some(s.clone()),
@@ -533,6 +629,9 @@ fn scalar_to_string(v: &Value) -> Option<String> {
 /// Write the caller's custom data points, auto-provisioning a definition the first time a key is
 /// seen. This is how the industry layer arrives: Xride Dispatch sends `service_level`,
 /// `pickup_city`, … and the workspace gets those fields without anyone opening an admin screen.
+///
+/// A field typed `money` is stored as an amount + its own currency + the same stored rate/date the
+/// deal itself carries, so it obeys "every money value is an amount plus a currency code".
 async fn write_custom_fields(
     state: &AppState,
     tenant_id: Uuid,
@@ -545,11 +644,11 @@ async fn write_custom_fields(
         let key = normalize_field_key(raw_key);
         let label = raw_key.trim().to_string();
         let field_type = infer_type(val);
-        let field_id: Uuid = sqlx::query_scalar(
+        let (field_id, stored_type): (Uuid, String) = sqlx::query_as(
             "INSERT INTO deal_custom_fields (tenant_id, key, label, field_type, source_app)
              VALUES ($1,$2,$3,$4,$5)
              ON CONFLICT (tenant_id, key) DO UPDATE SET updated_at = NOW()
-             RETURNING id",
+             RETURNING id, field_type",
         )
         .bind(tenant_id)
         .bind(&key)
@@ -558,6 +657,55 @@ async fn write_custom_fields(
         .bind(source_app)
         .fetch_one(&state.db)
         .await?;
+
+        // The definition wins over the inferred type: a field the workspace already typed `money`
+        // stays money even when this push sent a bare number.
+        if stored_type == "money" {
+            match parse_money(val)? {
+                Some((amount, currency)) => {
+                    let (amount, currency, rate, when, reporting) =
+                        price_money(state, tenant_id, deal_id, amount, currency).await?;
+                    let text = format!("{amount:.2} {currency}");
+                    sqlx::query(
+                        "INSERT INTO deal_field_values
+                             (opportunity_id, field_id, value, money_amount, money_currency,
+                              money_exchange_rate, money_rate_date, money_reporting_currency)
+                         VALUES ($1,$2,$3,$4::numeric,$5,$6::numeric,$7,$8)
+                         ON CONFLICT (opportunity_id, field_id) DO UPDATE
+                            SET value = EXCLUDED.value,
+                                money_amount = EXCLUDED.money_amount,
+                                money_currency = EXCLUDED.money_currency,
+                                money_exchange_rate = EXCLUDED.money_exchange_rate,
+                                money_rate_date = EXCLUDED.money_rate_date,
+                                money_reporting_currency = EXCLUDED.money_reporting_currency,
+                                updated_at = NOW()",
+                    )
+                    .bind(deal_id)
+                    .bind(field_id)
+                    .bind(&text)
+                    .bind(amount)
+                    .bind(&currency)
+                    .bind(rate)
+                    .bind(when)
+                    .bind(&reporting)
+                    .execute(&state.db)
+                    .await?;
+                    written.push(format!("{key}={text}"));
+                }
+                None => {
+                    sqlx::query(
+                        "DELETE FROM deal_field_values WHERE opportunity_id = $1 AND field_id = $2",
+                    )
+                    .bind(deal_id)
+                    .bind(field_id)
+                    .execute(&state.db)
+                    .await?;
+                    written.push(format!("{key} cleared"));
+                }
+            }
+            continue;
+        }
+
         let Some(text) = scalar_to_string(val) else {
             sqlx::query(
                 "DELETE FROM deal_field_values WHERE opportunity_id = $1 AND field_id = $2",
@@ -925,7 +1073,8 @@ pub async fn upsert(
     // Order: what the caller said -> what the deal already held -> what the workspace chose.
     // There is NO USD fallback: a workspace with no stated currency is refused, with the two
     // remedies named, because inventing a currency silently misprices every deal it touches.
-    let workspace_currency = workspace_default_currency(&state.db, tenant_id).await?;
+    let (workspace_currency, workspace_reporting) =
+        super::fx::workspace_currencies(&state.db, tenant_id).await?;
     let effective_currency = normalize_currency(req.currency.as_deref())?
         .or_else(|| {
             existing
@@ -950,29 +1099,58 @@ pub async fn upsert(
         None
     };
 
-    // The rate is captured WITH the deal: a same-currency amount has a rate of exactly 1; a
-    // cross-currency amount stores the rate the caller supplied (or none — it is then reported in
-    // its own currency and never folded into another).
-    let (exchange_rate, rate_date) = match req.exchange_rate {
-        Some(r) => {
+    // ── the rate (the stored fact a past report reads) ─────────────────────────────────────
+    // `exchange_rate` converts 1 unit of the deal's currency INTO the reporting currency, and
+    // `rate_date` is the day it was true. Order:
+    //   1. what the caller sent (a manual rate is a legitimate fallback);
+    //   2. the rate the deal ALREADY carries, when this push is not changing its currency — so
+    //      editing a note never re-prices a won deal;
+    //   3. the rate table for today, from the daily refresh.
+    // A cross-currency deal that cannot be quoted is REFUSED with both remedies named; it is never
+    // given a guessed rate and never left with a rate-less amount.
+    let reporting_currency = workspace_reporting
+        .clone()
+        .unwrap_or_else(|| effective_currency.clone());
+    let kept_rate = if currency_bind.is_none() {
+        existing.as_ref().and_then(|d| {
+            d.exchange_rate.map(|r| {
+                (
+                    r,
+                    d.rate_date,
+                    d.reporting_currency.clone().unwrap_or_default(),
+                )
+            })
+        })
+    } else {
+        None
+    };
+    let (exchange_rate, rate_date, rate_reporting) = match (req.exchange_rate, kept_rate) {
+        (Some(r), _) => {
             if !(r.is_finite()) || r <= 0.0 {
                 return Err(AppError::Validation(
                     "exchange_rate must be a number greater than zero".to_string(),
                 ));
             }
-            (Some(r), Some(Utc::now()))
+            (Some(r), Some(Utc::now()), reporting_currency.clone())
         }
-        None => {
-            let same_as_workspace = workspace_currency
-                .as_ref()
-                .map(|w| *w == effective_currency)
-                .unwrap_or(false);
-            if same_as_workspace {
-                (Some(1.0), Some(Utc::now()))
-            } else {
-                (None, None)
+        (None, Some((r, when, rc))) if rc.eq_ignore_ascii_case(&reporting_currency) => {
+            (Some(r), when, reporting_currency.clone())
+        }
+        _ => match super::fx::rate_between(&state.db, &effective_currency, &reporting_currency, None)
+            .await?
+        {
+            Some((rate, day)) => (
+                Some(rate),
+                Some(day.and_hms_opt(0, 0, 0).unwrap_or_default().and_utc()),
+                reporting_currency.clone(),
+            ),
+            None => {
+                return Err(AppError::Validation(format!(
+                    "no exchange rate for {effective_currency} into {reporting_currency}: send \
+                     `exchange_rate` with the deal, or refresh the rate table under Deals → Settings"
+                )))
             }
-        }
+        },
     };
 
     // A 'won'/'lost' push with no stage named should land on the pipeline's closed stage, so the
@@ -1047,9 +1225,9 @@ pub async fn upsert(
                 "INSERT INTO opportunities
                    (id, tenant_id, pipeline_id, stage_id, contact_id, company_id, name, notes, value,
                     currency, probability, expected_close_date, source, metadata, is_won, is_lost,
-                    lost_reason, external_ref, owner_id, exchange_rate, rate_date,
+                    lost_reason, external_ref, owner_id, exchange_rate, rate_date, reporting_currency,
                     last_activity_at, stage_entered_at)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::float8,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::float8,$21,NOW(),NOW())
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::float8,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::float8,$21,$22,NOW(),NOW())
                  RETURNING ",
                 opp_cols!()
             ))
@@ -1078,6 +1256,7 @@ pub async fn upsert(
             .bind(owner_id)
             .bind(exchange_rate)
             .bind(rate_date)
+            .bind(&rate_reporting)
             .fetch_one(&state.db)
             .await?;
 
@@ -1132,6 +1311,7 @@ pub async fn upsert(
                     stage_entered_at = COALESCE($20, stage_entered_at),
                     exchange_rate = COALESCE($21::float8, exchange_rate),
                     rate_date = COALESCE($22, rate_date),
+                    reporting_currency = COALESCE($23, reporting_currency),
                     updated_at = NOW(), last_activity_at = NOW()
                   WHERE id = $1 AND tenant_id = $2 RETURNING ",
                 opp_cols!()
@@ -1158,6 +1338,7 @@ pub async fn upsert(
             .bind(stage_entered_at)
             .bind(exchange_rate)
             .bind(rate_date)
+            .bind(&rate_reporting)
             .fetch_one(&state.db)
             .await?;
 

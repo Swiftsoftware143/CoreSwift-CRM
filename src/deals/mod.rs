@@ -10,6 +10,7 @@
 //! Nothing industry-specific lives here. The courier fields the Xride account needs are written
 //! by that account into `deal_custom_fields` — the same mechanism any other industry uses.
 
+pub mod fx;
 pub mod handlers;
 pub mod models;
 pub mod reporting;
@@ -32,6 +33,9 @@ pub fn router(state: AppState) -> Router<AppState> {
         // ── workspace currency (multi-currency is core) ─────────────────────────────────────
         .route("/currency", get(handlers::get_currency))
         .route("/currency", put(handlers::set_currency))
+        // ── the rate table the stored per-deal rates come from ──────────────────────────────
+        .route("/fx-rates", get(handlers::get_fx_rates))
+        .route("/fx-rates/refresh", post(handlers::refresh_fx_rates))
         // ── per-workspace custom field definitions (the industry layer) ─────────────────────
         .route("/custom-fields", get(handlers::list_fields))
         .route("/custom-fields", post(handlers::create_field))
