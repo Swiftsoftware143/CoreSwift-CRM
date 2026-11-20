@@ -930,6 +930,20 @@ POST /api/lists/:id/members</pre>
     priority. The ticket list shows the answer deadline as a countdown that turns amber inside the last hour and red once it has passed, and
     <strong>Due soon</strong> lists only what is unanswered and due within four hours &mdash; soonest deadline first, because that is the order the
     work has to be done in. A clock is only set when a policy exists: an account with no policy gets an empty deadline rather than a wrong one.</p>
+    <h3>The agent — what it may do on its own, and what waits for you</h3>
+    <p>Your desk has help: an agent that can read a ticket and propose an action. It is <strong>off until you
+    switch it on</strong>, and it only ever asks for things on a fixed list — leave an internal note, change
+    the priority, tag the customer, add them to a list, hand the ticket to a teammate, or escalate it. An
+    action that is not on that list cannot be proposed at all, so nothing can be invented behind your back.</p>
+    <p>Two numbers govern money. A <strong>per-action limit</strong> and a workspace <strong>ceiling</strong>,
+    and the smaller one decides: anything above either waits for you, with the reason recorded on the row. A
+    per-action limit can never be set above the ceiling — that would be two numbers where the smaller one
+    decides nothing.</p>
+    <p>Everything it asks for appears on the Agent screen with <strong>Approve</strong> and
+    <strong>Refuse</strong>. Approving carries it out and records the result; a refusal is kept as a record,
+    because "the agent asked for this and was told no" is worth knowing. An action that fails records
+    <em>why</em> rather than disappearing — a silent no-op would be worse than a refusal.</p>
+
     <h3>What the AI has cost you — and with whose key</h3>
     <p>Every AI feature in this workspace now keeps a tally: which feature called a model, which provider
     answered, how many tokens went in and out, and whether your own key or the platform's paid for it. The
