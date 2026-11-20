@@ -47,6 +47,23 @@ pub async fn fire_tag_trigger(
     }
 }
 
+/// Does this account's plan include automations at all?
+///
+/// ONE question, asked in ONE place, because the three trigger paths were answering it differently:
+/// measured 2026-11-20, the tag path refused to fire for a workspace whose plan carries no automations,
+/// while the list path and the score path did not — so the same workspace could run an automation
+/// through a list that it could not run through a tag. A gate that only some doors check is not a gate.
+async fn automations_enabled(db: &PgPool, tenant_id: Uuid) -> bool {
+    match crate::module_registry::resolve(db, tenant_id, "automation").await {
+        Ok(m) => m.enabled,
+        Err(e) => {
+            tracing::warn!(tenant = %tenant_id, error = %e,
+                "automation entitlement could not be resolved; refusing to fire (fail closed)");
+            false
+        }
+    }
+}
+
 pub async fn evaluate_tag_triggers(
     db: &PgPool,
     tenant_id: Uuid,
@@ -62,10 +79,7 @@ pub async fn evaluate_tag_triggers(
     // not include automations would keep firing every rule it had. Refusing here is a NO-FIRE, not an
     // error: the callers are fire-and-forget (`fire_tag_trigger`), and a plan without automations
     // simply runs none. The `no_plan` arm still grants (module_registry, ARM (a)).
-    if !crate::module_registry::resolve(db, tenant_id, "automation")
-        .await?
-        .enabled
-    {
+    if !automations_enabled(db, tenant_id).await {
         return Ok(());
     }
 
@@ -125,6 +139,9 @@ pub async fn fire_score_trigger(
     total_score: i32,
     category: &str,
 ) {
+    if !automations_enabled(db, tenant_id).await {
+        return;
+    }
     let Ok(rules) = sqlx::query_as::<_, AutomationRule>(concat!("SELECT ", rule_columns!(), " FROM automation_rules WHERE tenant_id=$1 AND trigger_type='ScoreChanged' AND is_active IS NOT FALSE"))
         .bind(tenant_id).fetch_all(db).await else { return };
     for rule in rules {
@@ -162,6 +179,11 @@ pub async fn fire_list_trigger(
     list_id: Uuid,
     trigger_type: &str,
 ) {
+    // The entitlement question, asked here too (see `automations_enabled`): without it this path was
+    // the way around the gate the tag path honours.
+    if !automations_enabled(db, tenant_id).await {
+        return;
+    }
     // `trigger_type` is a plain varchar(50) column — the dropped `::trigger_type` cast named an
     // enum type that does not exist in this database (42704), which silently turned every
     // list-triggered rule into a no-op (the `let Ok(...) else { return }` below swallowed it).
