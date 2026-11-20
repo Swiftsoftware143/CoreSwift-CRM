@@ -800,7 +800,7 @@ GET /api/deals/report     (win rate, average days to close, deals rotting in a s
 GET /api/pipelines
 POST /api/pipelines
 GET /api/pipelines/:pipeline_id/opportunities</pre>
-    <p><strong>Money is an amount plus a currency code.</strong> A workspace states two currencies under Deals \u2192 Deals settings: a <strong>default currency</strong> (what a new deal is priced in when nobody says otherwise) and a <strong>reporting currency</strong> (what totals and reports are computed in). Every deal keeps the <strong>exchange rate</strong> it was recorded at and <strong>the date that rate was true</strong>, so a past quarter never moves when the market does. Stage totals, the filter summary and the report show each currency separately <em>and</em> the reporting-currency equivalent built from those stored rates \u2014 never one number that adds dollars to euros. A money <strong>custom field</strong> follows the same rules: its own amount, its own currency code and its own stored rate. Rates come from a table refreshed daily; <em>Refresh rates</em> in Deals settings pulls today\u2019s figures on demand.
+    <p><strong>Money is an amount plus a currency code.</strong> A workspace states two currencies under Deals \u2192 Deals settings: a <strong>default currency</strong> (what a new deal is priced in when nobody says otherwise \u2014 <strong>the US dollar is the standing default</strong>, so a workspace that has not chosen one prices and reports in USD, and nobody is asked to pick a currency before their first deal) and a <strong>reporting currency</strong> (what totals and reports are computed in). Every deal keeps the <strong>exchange rate</strong> it was recorded at and <strong>the date that rate was true</strong>, so a past quarter never moves when the market does. Stage totals, the filter summary and the report show each currency separately <em>and</em> the reporting-currency equivalent built from those stored rates \u2014 never one number that adds dollars to euros. A money <strong>custom field</strong> follows the same rules: its own amount, its own currency code and its own stored rate. Rates come from a table refreshed daily; <em>Refresh rates</em> in Deals settings pulls today\u2019s figures on demand.
     <p><strong>Deal writer API.</strong> An outside system (for example a dispatch system turning an unbooked quote into a deal) writes deals with an issued API key:</p>
     <pre>POST /api/external/deals
   { "external_ref": "QUOTE-1042", "title": "Airport transfer", "value": 240,
@@ -930,6 +930,16 @@ POST /api/lists/:id/members</pre>
     priority. The ticket list shows the answer deadline as a countdown that turns amber inside the last hour and red once it has passed, and
     <strong>Due soon</strong> lists only what is unanswered and due within four hours &mdash; soonest deadline first, because that is the order the
     work has to be done in. A clock is only set when a policy exists: an account with no policy gets an empty deadline rather than a wrong one.</p>
+    <h3>What the AI has cost you — and with whose key</h3>
+    <p>Every AI feature in this workspace now keeps a tally: which feature called a model, which provider
+    answered, how many tokens went in and out, and whether your own key or the platform's paid for it. The
+    AI panel shows the last thirty days by provider, the most recent calls, and how many ran on the platform
+    key rather than yours.</p>
+    <p>It also tells you the truth when the AI is <strong>off</strong>. An empty tally used to read as
+    &ldquo;free&rdquo; when the real answer was &ldquo;no key is set&rdquo;: the panel now says so plainly,
+    with the field to fix it right underneath. Failed calls are recorded too &mdash; a provider refusing a
+    key is exactly the thing worth seeing, and a tally that counted only successes could never show it.</p>
+
     <h3>How a customer signs in — and how they get back in</h3>
     <p>The customer page is your own: your name, your logo and your colour, taken from the same branding you set for
     your email, so the message they receive and the page they open from it look like one company.</p>
