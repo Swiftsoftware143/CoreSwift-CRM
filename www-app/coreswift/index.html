@@ -4210,6 +4210,13 @@ function planGateText(e){
 // Live list for the Automation Rules panel. GET /api/automation/rules answers
 // {"rules":[{name,trigger_type,action_type,is_active,...}]} (src/automation/handlers.rs::list_rules).
 async function loadRulesTab(){
+  // A rule that sends email needs the automation lane; say so before they build one that cannot run.
+  try {
+    const mrReady = await loadMailReadiness();
+    const mrBanner = mailLaneBanner(mrReady, 'automation', 'Email actions in these rules cannot send yet.');
+    const mrPanel = document.getElementById('tabPanels');
+    if (mrBanner && mrPanel) mrPanel.insertAdjacentHTML('afterbegin', mrBanner);
+  } catch (e) {}
   const el=document.getElementById('rulesList');
   if(!el) return;
   try {
@@ -7499,7 +7506,73 @@ async function cmSubmitBuild() {
   } catch (e) { toast('Build failed: ' + e.message, 'error'); }
 }
 
+// ── THE MAIL GATE (David, 2026-11-20) ─────────────────────────────────────────────────────────────
+// "Once they try to go to a feature that requires any of them, that gate will stop them from breaking
+// anything on their end or assuming the system doesn't work."
+//
+// A feature that needs mail asks this first. If the lane is not ready the feature is REPLACED by the
+// setup it needs — not a dead button and not a silent no-op. The answer comes from the server
+// (`/private-email/readiness`), so the gate cannot disagree with what the send path will do.
+let MAIL_READY = null;
+
+async function loadMailReadiness(force) {
+  if (MAIL_READY && !force) return MAIL_READY;
+  try { MAIL_READY = await API.get('/private-email/readiness'); }
+  catch (e) { MAIL_READY = null; }
+  return MAIL_READY;
+}
+
+function mailLane(ready, lane) {
+  const lanes = (ready && ready.lanes) || [];
+  return lanes.filter(function (l) { return l.lane === lane; })[0] || null;
+}
+
+// Returns the blocking screen, or null when the lane is ready. `what` names the feature so the words
+// belong to the page the person actually opened.
+// A lane that is missing but does not have to stop the whole page: say what will not work, on the page
+// where it will not work, with the fix one click away. Used by pages that are useful without mail
+// (rules that tag or score, tickets that still queue) but send mail as part of their job.
+function mailLaneBanner(ready, lane, effect) {
+  const l = mailLane(ready, lane);
+  if (!l || l.ready) return '';
+  return '<div class="card" style="border-left:3px solid #f59e0b;margin-bottom:12px">' +
+    '<strong>' + escapeHtml(effect) + '</strong>' +
+    '<div style="margin-top:6px;font-size:13px">' + escapeHtml(l.reason || '') + '</div>' +
+    (l.action ? '<div style="margin-top:6px;font-size:12.5px;opacity:.85">' + escapeHtml(l.action) + '</div>' : '') +
+    '<div style="margin-top:10px"><button class="btn btn-primary btn-xs" onclick="switchTab(\'inbox\')">Set up email</button></div>' +
+    '</div>';
+}
+
+function mailGateScreen(ready, lane, what) {
+  const l = mailLane(ready, lane);
+  if (!l || l.ready) return null;
+  return pageHeader(what, 'This feature sends or receives mail, so it needs one thing set up first',
+      '<button class="btn btn-primary btn-sm" onclick="switchTab(\'inbox\')">Set it up</button> ' +
+      '<button class="btn btn-secondary btn-sm" onclick="mailGateRetry()">I have just set it up</button>') +
+    '<div class="card" style="border-left:3px solid #f59e0b">' +
+    '<strong>' + escapeHtml(l.title || lane) + '</strong>' +
+    '<div style="margin-top:8px">' + escapeHtml(l.reason || 'This lane is not ready.') + '</div>' +
+    (l.action ? '<div style="margin-top:8px;opacity:.85"><strong>What to do:</strong> ' + escapeHtml(l.action) + '</div>' : '') +
+    (l.identity ? '<div style="margin-top:8px;font-size:12.5px;opacity:.75">It will send or receive as <code>' + escapeHtml(String(l.identity)) + '</code>.</div>' : '') +
+    '<div style="margin-top:12px"><button class="btn btn-primary btn-sm" onclick="switchTab(\'inbox\')">Open email setup</button></div>' +
+    '<div style="margin-top:8px;font-size:12px;opacity:.7">Nothing has been broken by stopping here — no message was queued or sent.</div>' +
+    '</div>';
+}
+
+async function mailGateRetry() {
+  MAIL_READY = null;
+  await loadMailReadiness(true);
+  const t = document.querySelector('.nav-item.active, [data-tab].active');
+  const id = t && t.getAttribute('data-tab');
+  if (id && TAB_LOADERS[id]) TAB_LOADERS[id]();
+  else if (id) switchTab(id);
+}
+
 async function loadCampaignsTab() {
+  // Campaigns exist to send, and sending is the automation lane. Gate on the server's own answer.
+  const ready = await loadMailReadiness();
+  const blocked = mailGateScreen(ready, 'automation', 'Campaigns');
+  if (blocked) { document.getElementById('tabPanels').innerHTML = blocked; return; }
   const el = document.getElementById('cmContent');
   if (!el) return;
   try {

@@ -28,6 +28,9 @@ pub const MAX_PRIVATE_EMAIL_BODY_BYTES: usize = 26 * 1024 * 1024;
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
         // Domain management
+        // Mail readiness: one truthful answer per lane, so a feature that needs mail can gate on it
+        // instead of silently doing nothing (David, 2026-11-20).
+        .route("/readiness", axum::routing::get(domain_handler::readiness))
         .route("/domains", axum::routing::get(domain_handler::list_domains))
         .route("/domains", axum::routing::post(domain_handler::add_domain))
         .route(

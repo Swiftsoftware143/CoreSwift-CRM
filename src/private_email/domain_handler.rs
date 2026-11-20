@@ -231,6 +231,121 @@ pub async fn add_domain(
     }
 }
 
+/// MAIL READINESS — "can this workspace actually send and receive, and what is missing if not".
+///
+/// WHY THIS EXISTS (David, 2026-11-20): the three mail identities were real but invisible, so a new
+/// workspace reached a feature that needs mail, the feature quietly did nothing useful, and the honest
+/// conclusion was "the system doesn't work". A gate needs a single truthful answer to ask, so this
+/// answers per lane: what it is, whether it is ready, and — when it is not — the exact reason in the
+/// words a non-technical owner can act on.
+///
+/// The lane rules are the app's own, not a second opinion:
+///   * ordinary (system) mail leaves from the OLDEST verified Mailgun domain;
+///   * automation leaves from `mg.<that domain>` and cannot exist without it;
+///   * inbound needs a verified domain AND a readable signing key, because the receiver fails closed.
+///
+/// `blocking` is the difference between a warning and a wall: system mail still goes out on the shared
+/// platform identity, so it warns; automation and inbound have no fallback at all, so they block.
+pub async fn readiness(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        domain: String,
+        verified: bool,
+        provider_type: Option<String>,
+        has_key: bool,
+    }
+
+    let rows: Vec<Row> = sqlx::query_as(
+        // Oldest first: the server's own rule for "which domain is the account's main sender"
+        // (providers::account_main_domain) is ORDER BY created_at ASC, and the answer must match it.
+        "SELECT domain, COALESCE(verified, false) AS verified, provider_type, \
+                (webhook_signing_key_encrypted IS NOT NULL \
+                 AND length(webhook_signing_key_encrypted) > 0) AS has_key \
+           FROM private_email_domains WHERE tenant_id = $1 ORDER BY created_at ASC",
+    )
+    .bind(account_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    let is_mailgun = |r: &Row| r.provider_type.as_deref().unwrap_or("mailgun") == "mailgun";
+    let main = rows
+        .iter()
+        .find(|r| r.verified && is_mailgun(r))
+        .map(|r| r.domain.clone());
+    let inbound_ready = rows
+        .iter()
+        .any(|r| r.verified && is_mailgun(r) && r.has_key);
+    let awaiting_key: Vec<String> = rows
+        .iter()
+        .filter(|r| r.verified && is_mailgun(r) && !r.has_key)
+        .map(|r| r.domain.clone())
+        .collect();
+
+    let automation_domain = main.as_ref().map(|d| format!("mg.{d}"));
+
+    let setup_hint =
+        "Open Email Domains, add your domain, add the records it shows, press Re-check, \
+                      then Set key with your provider's HTTP webhook signing key.";
+
+    let lanes = json!([
+        {
+            "lane": "system",
+            "title": "Ordinary mail (receipts, invitations, password resets, replies)",
+            "ready": main.is_some(),
+            "blocking": false,
+            "identity": main.as_ref().map(|d| format!("noreply@{d}")),
+            "reason": if main.is_some() { serde_json::Value::Null } else { json!(
+                "No verified domain yet, so these messages leave on the shared platform identity — your customer sees our name, not yours, and your reputation is not what is being built."
+            ) },
+            "action": if main.is_some() { "Nothing to do." } else { "Add and verify your own domain to send receipts under your own name." },
+        },
+        {
+            "lane": "automation",
+            "title": "Automation mail (rules, sequences, campaigns)",
+            "ready": automation_domain.is_some(),
+            "blocking": true,
+            "identity": automation_domain,
+            "reason": if automation_domain.is_some() { serde_json::Value::Null } else { json!(
+                "An automation has no sending identity without a verified domain: there is no base domain to build the automation subdomain from, so every automation email is refused before it leaves."
+            ) },
+            "action": if automation_domain.is_some() { "Nothing to do." } else { setup_hint },
+        },
+        {
+            "lane": "inbox",
+            "title": "Inbound mail (the shared inbox, replying as support@)",
+            "ready": inbound_ready,
+            "blocking": true,
+            "identity": main.as_ref().map(|d| format!("anything@{d}")),
+            "reason": if inbound_ready { serde_json::Value::Null } else { json!(
+                if awaiting_key.is_empty() {
+                    "No verified domain yet, so nothing can arrive.".to_string()
+                } else {
+                    format!(
+                        "Mail sent to {} is refused on arrival: the inbound signing key is not set, and the receiver fails closed rather than accept a delivery it cannot authenticate.",
+                        awaiting_key.join(", ")
+                    )
+                }
+            ) },
+            "action": if inbound_ready { "Nothing to do." } else { setup_hint },
+            "domains_awaiting_key": awaiting_key,
+        },
+    ]);
+
+    Ok(Json(json!({
+        "lanes": lanes,
+        "main_domain": main,
+        "automation_domain": automation_domain,
+        "any_blocking": !inbound_ready || main.is_none(),
+        "domain_count": rows.len(),
+    })))
+}
+
 pub async fn list_domains(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
