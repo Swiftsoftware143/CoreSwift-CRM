@@ -371,24 +371,44 @@ async fn telnyx_api_request(
     Ok((status, resp_body))
 }
 
-/// Deduct one credit from the tenant's plan balance
-async fn deduct_credit(db: &sqlx::PgPool, tenant_id: Uuid) -> Result<bool, AppError> {
-    let result = sqlx::query_scalar::<_, Option<i32>>(
+/// Spend one inbound-call credit, and answer whether there was one to spend.
+///
+/// The statement decrements ONLY a purse that holds at least one credit, and returns the balance
+/// the spend left behind, so the charge and the answer can never disagree:
+///
+/// * `Some(remaining)` — one credit was spent; the call is paid for and may be answered.
+/// * `None` — nothing was spent, because the purse was empty (or the workspace has no plan row).
+///
+/// Measured 2026-11-20 (kanban t_e2017eb0's follow-up): the previous statement decremented
+/// unconditionally and RETURNED THE POST-DECREMENT BALANCE, which the caller tested with
+/// `balance > 0`. A workspace holding exactly one credit was therefore answered with a hangup AND
+/// had that credit burnt, so a single inbound call needed a balance of two and the last credit
+/// could never be spent. Testing the pre-decrement balance (`> 0` in the WHERE clause) and refusing
+/// no earlier than the empty purse is what makes one credit equal one answered call.
+///
+/// `tenant_plans` has no `is_active` column — its lifecycle column is `status`, and a tenant has at
+/// most one row (`tenant_plans_tenant_id_key`). The purse is deliberately NOT gated on `status`: a
+/// workspace that canceled or is past due still owns credits it already paid for, and hanging up on
+/// its callers would charge the customer twice. An empty purse, an absent row, or a NULL balance are
+/// the only refusals — and none of them costs the workspace anything.
+async fn deduct_credit(
+    conn: &mut sqlx::PgConnection,
+    tenant_id: Uuid,
+) -> Result<Option<i32>, AppError> {
+    let remaining = sqlx::query_scalar::<_, i32>(
         "UPDATE tenant_plans
-         SET credit_balance = GREATEST(COALESCE(credit_balance, 0) - 1, 0),
+         SET credit_balance = COALESCE(credit_balance, 0) - 1,
              lifetime_credits = COALESCE(lifetime_credits, 0) + 1,
              updated_at = NOW()
          WHERE tenant_id = $1
+           AND COALESCE(credit_balance, 0) > 0
          RETURNING credit_balance",
     )
     .bind(tenant_id)
-    .fetch_optional(db)
+    .fetch_optional(conn)
     .await?;
 
-    match result {
-        Some(Some(balance)) => Ok(balance > 0),
-        _ => Ok(false), // no plan row — no credits
-    }
+    Ok(remaining)
 }
 
 /// Resolve tenant_id from a called phone number (Telnyx inbound calls/SMS)
@@ -648,13 +668,28 @@ async fn process_voice_event(state: &AppState, body: &Value) -> ApiResult<Value>
         }
     };
 
-    // Check BYOK — if using own key, skip credit deduction
+    // Check BYOK — a workspace on its own Telnyx key skips the platform purse entirely.
     let byok = tenant_has_own_telnyx(&state.db, tenant_id).await?;
+
+    // The spend and the two rows it pays for are ONE unit of work. Telnyx retries a non-2xx
+    // delivery, so a credit committed before a failed INSERT would be charged a second time when the
+    // retry lands — one answered call must cost exactly one credit and write exactly two rows.
+    let mut tx = state.db.begin().await?;
+
     if !byok {
-        let has_credits = deduct_credit(&state.db, tenant_id).await?;
-        if !has_credits {
-            tracing::warn!("Tenant {} insufficient credits for inbound call", tenant_id);
-            return Ok(json!({"commands": [{"type": "hangup"}]}));
+        match deduct_credit(&mut tx, tenant_id).await? {
+            Some(remaining) => tracing::info!(
+                "Tenant {} spent 1 inbound-call credit, {} left",
+                tenant_id,
+                remaining
+            ),
+            None => {
+                tracing::warn!(
+                    "Tenant {} has no inbound-call credit left — hanging up, nothing spent",
+                    tenant_id
+                );
+                return Ok(json!({ "commands": [{ "type": "hangup" }] }));
+            }
         }
     }
 
@@ -678,7 +713,7 @@ async fn process_voice_event(state: &AppState, body: &Value) -> ApiResult<Value>
     .bind(&normalized_caller)
     .bind(&normalized_called)
     .bind(now)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await?;
 
     // Record call log
@@ -691,8 +726,11 @@ async fn process_voice_event(state: &AppState, body: &Value) -> ApiResult<Value>
     .bind(&normalized_caller)
     .bind(&normalized_called)
     .bind(if byok { None } else { Some(1.0_f64) })
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await?;
+
+    // Both rows landed, so the call is paid for: only now does the credit leave the purse.
+    tx.commit().await?;
 
     tracing::info!(
         "Processed Telnyx inbound call for tenant {}: call_id={}",
