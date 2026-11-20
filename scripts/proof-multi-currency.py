@@ -17,6 +17,9 @@ What it proves, one to one with the card's pass conditions:
   3. a deal pushed through the external API with no currency takes the workspace DEFAULT (EUR here,
      not USD);
   4. a money custom field persists with its own currency code and the deal form still loads.
+
+No market value is ever asserted as a constant: every expected rate is READ from `fx_rates` (or
+from the rate the deal itself stored), so the daily rate refresh cannot turn this harness red.
 """
 import argparse
 import base64
@@ -108,10 +111,55 @@ def close(a, b, tol=0.02):
     return abs(float(a) - float(b)) <= tol
 
 
+# ── rates are READ from the table, never asserted as market facts ────────────────────────────
+# The app's own rule (src/deals/fx.rs): the live rate for a currency is its LATEST row by
+# `as_of`, and a cross rate is `to / from` rounded to 8 places. This harness derives every
+# expected rate the same way, so a daily refresh changes the inputs and never the verdict.
+def usd_rows(currency, limit=2):
+    """The newest `limit` rates for a currency: units of it per 1 USD."""
+    raw = psql(
+        "select usd_rate::text from fx_rates where upper(currency) = upper('%s') "
+        "order by as_of desc limit %d" % (currency.replace("'", ""), limit)
+    )
+    return [float(x) for x in raw.splitlines() if x.strip()]
+
+
+def cross_rates(frm, to, limit=2):
+    """Every cross rate the app could have used at write time (a superset: either leg may be the
+    row from just before a refresh). Same-currency is 1 by definition."""
+    if frm.upper() == to.upper():
+        return [1.0]
+    tos, froms = usd_rows(to, limit), usd_rows(frm, limit)
+    if not tos or not froms:
+        raise RuntimeError(f"fx_rates has no row for {frm}->{to}")
+    return sorted({round(t / f, 8) for t in tos for f in froms if f > 0})
+
+
+def rate_is(stored, candidates, tol=1e-6):
+    """True when a stored rate is one of the rates the table held — never a fixed number."""
+    return stored is not None and any(close(stored, c, tol) for c in candidates)
+
+
+def stored_rates(ids):
+    """The rate each deal stored when it was written — the fact every report sums."""
+    listing = ",".join("'%s'" % i for i in ids if i)
+    if not listing:
+        return {}
+    raw = psql(
+        "select id::text || '|' || coalesce(exchange_rate::text, '') from opportunities "
+        "where id in (%s)" % listing
+    )
+    return {k: (float(v) if v else None) for k, v in (ln.split("|", 1) for ln in raw.splitlines())}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://127.0.0.1:8084")
     args = ap.parse_args()
+
+    # The amounts the probe deals are written with. Every expected money figure below is computed
+    # from these and from the rates the app actually stored — no market rate appears in this file.
+    EXT_VALUE, EUR_VALUE, GBP_VALUE = 500.0, 1000.0, 1000.0
 
     # ── 0. the schema is live ────────────────────────────────────────────────────────────────
     check(
@@ -183,17 +231,19 @@ def main():
         check("probe stage created", st in (200, 201) and sid, f"HTTP {st} {stage}")
 
         # ── 2. CONDITION 3: external push with NO currency takes the workspace default ────
+        live_eur_usd = cross_rates("EUR", "USD")
         st, ext = call(
             args.base, "POST", "/api/external/deals", bearer=key,
             body={
                 "external_ref": f"MC-{tag}-NOCUR",
                 "title": "Quote with no currency stated",
-                "value": 500,
+                "value": EXT_VALUE,
                 "pipeline_id": pid,
                 "stage_id": sid,
             },
         )
         deal = ext.get("deal") or ext
+        ext_id = deal.get("id")
         check(
             "external API: a deal with no currency takes the workspace default (EUR), never USD",
             st in (200, 201) and deal.get("currency") == "EUR",
@@ -202,34 +252,37 @@ def main():
         # The push answers with the currency; the STORED rate is read back from the deal itself
         # (and the database), which is what a report actually uses.
         stored_ext = {}
-        if deal.get("id"):
-            deal_ids.append(deal["id"])
-            st2, det = call(args.base, "GET", f"/api/deals/{deal['id']}", token=token)
+        if ext_id:
+            deal_ids.append(ext_id)
+            st2, det = call(args.base, "GET", f"/api/deals/{ext_id}", token=token)
             stored_ext = det.get("deal") or {}
         db_rate = psql(
             "select coalesce(exchange_rate::text,'')||'|'||upper(coalesce(reporting_currency,''))||'|'||"
-            f"case when rate_date is null then '' else 'dated' end from opportunities where id='{deal.get('id')}'"
+            f"case when rate_date is null then '' else 'dated' end from opportunities where id='{ext_id}'"
         )
+        # The expected rate is the EUR→USD rate the table held when the deal was written — read
+        # from that table, never a seed value. Both readings bracket a refresh landing mid-run.
         check(
-            "that deal stores a rate and a rate date (1 EUR = 1.08695652 USD)",
-            close(stored_ext.get("exchange_rate") or 0, 1.08695652, 1e-6)
+            "that deal stores the live EUR→USD rate (from fx_rates) and a rate date",
+            rate_is(stored_ext.get("exchange_rate"), live_eur_usd + cross_rates("EUR", "USD"))
             and stored_ext.get("rate_date")
             and (stored_ext.get("reporting_currency") or "").upper() == "USD"
             and db_rate.split("|")[1] == "USD"
             and db_rate.split("|")[2] == "dated",
-            f"rate={stored_ext.get('exchange_rate')} reporting={stored_ext.get('reporting_currency')} db={db_rate}",
+            f"rate={stored_ext.get('exchange_rate')} fx_rates={cross_rates('EUR', 'USD')} "
+            f"reporting={stored_ext.get('reporting_currency')} db={db_rate}",
         )
 
         # ── 3. CONDITION 1: two currencies in ONE pipeline, never one raw total ───────────
         st, d_eur = call(
             args.base, "POST", "/api/deals", token=token,
-            body={"name": "EUR deal", "value": 1000, "currency": "EUR",
+            body={"name": "EUR deal", "value": EUR_VALUE, "currency": "EUR",
                   "pipeline_id": pid, "stage_id": sid, "probability": 50},
         )
         eur = d_eur.get("deal") or d_eur
         st2, d_gbp = call(
             args.base, "POST", "/api/deals", token=token,
-            body={"name": "GBP deal", "value": 1000, "currency": "GBP",
+            body={"name": "GBP deal", "value": GBP_VALUE, "currency": "GBP",
                   "pipeline_id": pid, "stage_id": sid, "probability": 50},
         )
         gbp = d_gbp.get("deal") or d_gbp
@@ -246,23 +299,33 @@ def main():
             f"HTTP {st} rows={list(by_cur)}",
         )
         check(
-            "each currency row sums only its own deals (EUR 1500 = 500 + 1000)",
-            close(by_cur.get("EUR", {}).get("total_value", -1), 1500)
-            and close(by_cur.get("GBP", {}).get("total_value", -1), 1000),
+            "each currency row sums only its own deals (EUR = external + EUR deal)",
+            close(by_cur.get("EUR", {}).get("total_value", -1), EXT_VALUE + EUR_VALUE)
+            and close(by_cur.get("GBP", {}).get("total_value", -1), GBP_VALUE),
             f"EUR={by_cur.get('EUR', {}).get('total_value')} GBP={by_cur.get('GBP', {}).get('total_value')}",
         )
-        # 500 EUR + 1000 EUR at 1.08695652 = 1630.43 USD; 1000 GBP at 1.26582278 = 1265.82 USD
-        expected_reporting = 1500 * 1.08695652 + 1000 * 1.26582278
+        # The report sums `value * exchange_rate` per deal, from the rate each deal STORED. So the
+        # expectation is built from those very rates, read back from the deals just written — not
+        # from a market rate that a daily refresh has moved.
+        booked = stored_rates([ext_id, eur.get("id"), gbp.get("id")])
+        ext_rate, eur_rate, gbp_rate = (
+            booked.get(ext_id), booked.get(eur.get("id")), booked.get(gbp.get("id"))
+        )
+        expected_reporting = (
+            EXT_VALUE * (ext_rate or 0) + EUR_VALUE * (eur_rate or 0) + GBP_VALUE * (gbp_rate or 0)
+        )
         rep = an.get("reporting") or {}
         check(
-            "analytics reporting equivalent reconciles by hand (2352.78-ish USD)",
+            "analytics reporting equivalent equals the sum of the deals' own stored rates",
             rep.get("currency") == "USD" and close(rep.get("total_value", -1), expected_reporting, 0.5),
-            f"got {rep.get('total_value')} expected {expected_reporting:.2f}",
+            f"got {rep.get('total_value')} expected {expected_reporting:.5f} from stored rates {booked}",
         )
+        raw_mixed = EXT_VALUE + EUR_VALUE + GBP_VALUE
         check(
-            "no reported figure is the meaningless raw 2000/2500 mix",
-            not close(rep.get("total_value", 0), 2500 + 0, 0.5) and not close(rep.get("total_value", 0), 2000, 0.5),
-            f"got {rep.get('total_value')}",
+            "no reported figure is the meaningless raw mix of the two currencies' amounts",
+            not close(rep.get("total_value", 0), raw_mixed, 0.5)
+            and not close(rep.get("total_value", 0), EUR_VALUE + GBP_VALUE, 0.5),
+            f"got {rep.get('total_value')} (adding raw amounts would give {raw_mixed})",
         )
 
         st, listing = call(args.base, "GET", f"/api/deals?pipeline_id={pid}&per_page=50", token=token)
@@ -285,8 +348,8 @@ def main():
         rep_won_before = (rows[0].get("reporting") or {}).get("won_value") if rows else None
         check(
             "the report shows the won deal in its own currency AND the reporting currency",
-            close(won_before or -1, 1000) and close(rep_won_before or -1, 1086.96, 0.5),
-            f"won_eur={won_before} won_usd={rep_won_before}",
+            close(won_before or -1, EUR_VALUE) and close(rep_won_before or -1, EUR_VALUE * (eur_rate or 0), 0.5),
+            f"won_eur={won_before} won_usd={rep_won_before} stored_rate={eur_rate}",
         )
 
         # Move the market: a brand-new EUR row at double the rate.
@@ -308,8 +371,8 @@ def main():
         stored = (detail.get("deal") or {})
         check(
             "the deal still carries the rate it was written with",
-            close(stored.get("exchange_rate") or 0, 1.08695652, 1e-6),
-            f"rate={stored.get('exchange_rate')}",
+            close(stored.get("exchange_rate") or 0, eur_rate or 0, 1e-6),
+            f"rate={stored.get('exchange_rate')} written_with={eur_rate}",
         )
         psql(f"delete from fx_rates where source='proof-shock'")
 
@@ -319,6 +382,7 @@ def main():
             body={"key": "deposit", "label": "Deposit", "field_type": "money"},
         )
         check("a money custom field can be defined", st in (200, 201), f"HTTP {st} {fld}")
+        live_gbp_usd = cross_rates("GBP", "USD")
         st, _ = call(
             args.base, "PATCH", f"/api/deals/{gbp['id']}", token=token,
             body={"custom_fields": {"deposit": {"amount": 250, "currency": "GBP"}}},
@@ -330,14 +394,14 @@ def main():
             if f.get("key") == "deposit":
                 money = f
         check(
-            "the money field persists with its OWN currency and stored rate",
+            "the money field persists with its OWN currency and the live rate",
             st == 200 and money is not None
             and money.get("field_type") == "money"
             and close(money.get("money_amount") or -1, 250)
             and (money.get("money_currency") or "") == "GBP"
-            and close(money.get("money_exchange_rate") or 0, 1.26582278, 1e-6)
+            and rate_is(money.get("money_exchange_rate"), live_gbp_usd + cross_rates("GBP", "USD"))
             and (money.get("money_reporting_currency") or "") == "USD",
-            f"HTTP {st} money={money}",
+            f"HTTP {st} money={money} fx_rates={cross_rates('GBP', 'USD')}",
         )
         check(
             "the deal form still loads with the money field on it (no break)",
