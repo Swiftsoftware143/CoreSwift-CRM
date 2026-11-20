@@ -342,7 +342,28 @@ fn parse_fields(get: &dyn Fn(&str) -> Option<String>) -> Option<InboundEmail> {
     let message_id = get("Message-Id");
     let in_reply_to = get("In-Reply-To");
 
-    let from = extract_email_address(&sender);
+    // THE PERSON WHO WROTE IN IS THE `From` HEADER, NOT THE ENVELOPE SENDER (measured 2026-11-20).
+    // A provider that relays a message rewrites its envelope sender to a bounce address
+    // (`bounce+<hash>@<its domain>`), and reading the envelope meant the inbox showed that machine
+    // address instead of the customer's, a reply went to the bounce address, and the message was then
+    // classified machine-generated so no ticket was ever opened for it. The header is what the human
+    // sent; the envelope is only a fallback when no header was posted.
+    let header_from = get("message-headers")
+        .and_then(|raw| {
+            serde_json::from_str::<Vec<(String, String)>>(&raw)
+                .ok()
+                .and_then(|hdrs| {
+                    hdrs.into_iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case("from"))
+                        .map(|(_, v)| v)
+                })
+        })
+        .unwrap_or_default();
+    let from = if header_from.trim().is_empty() {
+        extract_email_address(&sender)
+    } else {
+        extract_email_address(&header_from)
+    };
     let to = extract_email_address(&recipient);
 
     if from.is_empty() || to.is_empty() {
