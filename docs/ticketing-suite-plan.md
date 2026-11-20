@@ -84,7 +84,13 @@ running container and the live database, not read off the code.
 1. **Anonymous arms belong on `PUBLIC_ROUTES`.** Both new open endpoints first landed on
    `API_KEY_ROUTES` and answered 401 "Authentication required" live while reading as open in the code.
    A unit test now fails if any `/public/` or `/unsubscribe` path sits on a credential list.
-2. **The customer console has NO publisher.** `scripts/publish-admin-consoles.sh` mirrors
+2. **Never put backticks in a `git -m` message from a shell.** A commit whose body named a host as a
+   backticked placeholder lost its quoting, the shell ran the placeholder as a command, git read the
+   fragments as pathspecs (`error: pathspec 'domain.' did not match any file(s)`) and the commit — and
+   therefore the deploy chained after it — never happened, twice, with no visible failure in the chat.
+   Write the message to a file and commit with `-F`. This is the same class of silent failure as the
+   no-op `jsonb_set`: a command that reports success while doing nothing.
+3. **The customer console has NO publisher.** `scripts/publish-admin-consoles.sh` mirrors
    `www-admin/` → `nginx/www-admin/<slug>/` only. `www-app/<slug>/index.html` is served from
    `nginx/www-app/<slug>/` and nothing in the fleet copies repo → served for it, so a committed console
    change stays invisible until someone copies it by hand (done here). Until a publisher exists, any
