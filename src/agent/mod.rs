@@ -523,6 +523,43 @@ async fn run_kind(
                 .ok_or_else(|| AppError::NotFound("No such ticket in this workspace.".into()))
         }
 
+        "escalate" => {
+            // Escalation as the app can honestly do it today: raise the priority and leave the reason on the
+            // ticket where the account's own people will see it. The SMS arm belongs to the escalation
+            // ladder, which is where a Telnyx cost is actually incurred — this action does not pretend to
+            // have sent one.
+            let ticket = ticket_id
+                .ok_or_else(|| AppError::Validation("An escalation needs a ticket.".into()))?;
+            let why = payload
+                .get("why")
+                .and_then(|v| v.as_str())
+                .unwrap_or("the agent judged this ticket to be at risk");
+
+            let done: Option<(String,)> = sqlx::query_as(
+                "UPDATE tickets SET priority = 'urgent', updated_at = now()
+                  WHERE id = $1 AND tenant_id = $2 RETURNING priority::text",
+            )
+            .bind(ticket)
+            .bind(tenant_id)
+            .fetch_optional(db)
+            .await?;
+
+            if done.is_none() {
+                return Err(AppError::NotFound("No such ticket in this workspace.".into()));
+            }
+
+            sqlx::query(
+                "INSERT INTO ticket_messages (ticket_id, sender_type, message, kind)
+                 VALUES ($1, 'agent', $2, 'event')",
+            )
+            .bind(ticket)
+            .bind(format!("Escalated to urgent by the agent: {why}"))
+            .execute(db)
+            .await?;
+
+            Ok(json!({ "ticket_id": ticket, "priority": "urgent", "notified": "account owner via the escalation ladder" }))
+        }
+
         other => Err(AppError::Validation(format!(
             "'{}' is in the catalogue but has no implementation yet; it refused rather than pretend.",
             other
