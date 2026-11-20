@@ -226,6 +226,24 @@ async fn propose_action(
         ));
     }
 
+    // THE TICKET MUST BE THIS WORKSPACE'S — checked BEFORE the row is written, because the ledger's foreign
+    // key would otherwise turn a bad id into a 500 from the database. A caller learns "no such ticket in
+    // this workspace", which is both true and actionable, and a ticket id belonging to another account
+    // never even reaches the ledger.
+    if let Some(ticket_id) = body.ticket_id {
+        let owned: Option<(Uuid,)> =
+            sqlx::query_as("SELECT id FROM tickets WHERE id = $1 AND tenant_id = $2")
+                .bind(ticket_id)
+                .bind(tenant_id)
+                .fetch_optional(&s.db)
+                .await?;
+        if owned.is_none() {
+            return Err(AppError::NotFound(
+                "No such ticket in this workspace.".into(),
+            ));
+        }
+    }
+
     let cost = if spends { body.cost_cents.max(0) } else { 0 };
 
     // 2. the money rule, applied to the number that is STORED
