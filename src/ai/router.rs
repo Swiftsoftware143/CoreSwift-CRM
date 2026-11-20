@@ -305,7 +305,9 @@ async fn record_usage(
 /// Use AI to compose a personalized follow-up message with fallback chain.
 /// Tries DeepSeek first → OpenAI → Anthropic → template fallback.
 pub async fn ai_compose_follow_up(
-    api_keys: &std::collections::HashMap<String, String>,
+    db: &sqlx::PgPool,
+    tenant_id: uuid::Uuid,
+    mk: &crate::provider_keys::ModelKeys,
     contact_name: &str,
     business_name: &str,
     context: &str,
@@ -325,8 +327,19 @@ pub async fn ai_compose_follow_up(
         The goal is to get them to take the next action in their onboarding checklist."
     );
 
-    // Try primary DeepSeek first, fall through OpenAI → Anthropic
-    match route_to_llm("deepseek", api_keys, system, &user).await {
+    // Try primary DeepSeek first, fall through OpenAI → Anthropic. TRACKED, because this is a model call
+    // somebody pays for and the usage table is the only place that fact is kept.
+    match route_to_llm_tracked(
+        db,
+        tenant_id,
+        "ai_compose_follow_up",
+        "deepseek",
+        mk,
+        system,
+        &user,
+    )
+    .await
+    {
         Ok(text) => text,
         Err(e) => {
             tracing::warn!(error = %e, "All LLM providers failed, falling back to template");

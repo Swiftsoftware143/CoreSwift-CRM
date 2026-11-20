@@ -243,11 +243,13 @@ pub async fn compose_for_contact(
 
     // Try AI-powered composition via DeepSeek (with OpenAI/Anthropic fallback)
     // ONE resolver: the sealed per-account store the console writes, never a second field.
-    let api_keys = crate::provider_keys::model_keys(db, tid).await;
+    let mk = crate::provider_keys::model_keys_with_source(db, tid).await;
 
-    let body = if !api_keys.is_empty() {
+    let body = if !mk.keys.is_empty() {
         crate::ai::router::ai_compose_follow_up(
-            &api_keys,
+            db,
+            tid,
+            &mk,
             &name,
             &name, // business_name same as contact name for now
             context,
