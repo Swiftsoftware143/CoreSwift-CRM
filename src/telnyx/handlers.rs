@@ -279,34 +279,63 @@ pub fn validate_public_key(raw: &str) -> Result<String, String> {
     })
 }
 
-/// Check if tenant has their own Telnyx key (BYOK) via provider_keys table.
-async fn tenant_has_own_telnyx(db: &sqlx::PgPool, tenant_id: Uuid) -> Result<bool, AppError> {
-    let count = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM provider_keys WHERE tenant_id = $1 AND provider = 'telnyx' AND is_active = true"
-    )
-    .bind(tenant_id)
-    .fetch_one(db)
-    .await?;
-    Ok(count > 0)
+/// Which Telnyx credential a request will use, and whose it is.
+///
+/// `tenant_owned` is answered by the SAME lookup that chose the key, so the meter ("does this
+/// workspace pay the platform for this call?") and the billing ("which credential is the Telnyx
+/// API call signed with?") can never disagree — kanban t_62712bc7.
+struct TelnyxKey {
+    api_key: String,
+    /// true only when `api_key` came out of THIS workspace's own BYOK slot.
+    tenant_owned: bool,
 }
 
-/// Get the tenant's Telnyx API key: prefer BYOK, fall back to global config.
-async fn resolve_telnyx_api_key(db: &sqlx::PgPool, tenant_id: Uuid) -> Result<String, AppError> {
-    // Try BYOK first
-    let byok_key: Option<String> = sqlx::query_scalar(
+/// The workspace's own Telnyx key, or `None` when its slot holds nothing usable.
+///
+/// THE one rule behind every "is this workspace on its own Telnyx key?" question. A ROW is not a
+/// key: the slot must be active AND its sealed value must OPEN to a non-empty string. An empty
+/// slot (`api_key = ''` is exactly what this app stores for "no key") or a value that cannot be
+/// authenticated falls through to the platform key — so it must also be METERED as platform usage.
+/// Judging BYOK by a row count instead let a workspace skip the credit meter while its calls were
+/// billed to the platform key (measured 2026-11-20: a workspace held `api_key = ''`,
+/// `is_active = true`, and the row-count test called that BYOK).
+async fn tenant_telnyx_key(db: &sqlx::PgPool, tenant_id: Uuid) -> Result<Option<String>, AppError> {
+    let stored: Option<String> = sqlx::query_scalar(
         "SELECT api_key FROM provider_keys WHERE tenant_id = $1 AND provider = 'telnyx' AND is_active = true"
     )
     .bind(tenant_id)
     .fetch_optional(db)
     .await?;
 
-    if let Some(key) = byok_key {
-        // decrypt before use (CS-21); an empty slot or an unreadable value falls through to the
-        // central config, which is the same user-visible behaviour as "no key stored"
-        let key = crate::secret_box::open(tenant_id, &key);
-        if !key.is_empty() {
-            return Ok(key);
-        }
+    let Some(stored) = stored else {
+        return Ok(None);
+    };
+    // decrypt before use (CS-21); `open` never fails — an empty slot and an unauthenticated value
+    // both come back empty, which is the same user-visible state as "no key stored".
+    let key = crate::secret_box::open(tenant_id, &stored);
+    if key.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(key))
+}
+
+/// Is this workspace on its OWN Telnyx key? (Metering, number purchase/release.)
+async fn tenant_has_own_telnyx(db: &sqlx::PgPool, tenant_id: Uuid) -> Result<bool, AppError> {
+    Ok(tenant_telnyx_key(db, tenant_id).await?.is_some())
+}
+
+/// Get the Telnyx key for this workspace: prefer BYOK, fall back to global config.
+///
+/// Returns WHICH key and WHOSE it is in one answer, because the callers that meter a request
+/// (`webhook`, `send_sms`) must not be able to reach a different verdict than the one that signed
+/// it — kanban t_62712bc7.
+async fn resolve_telnyx_key(db: &sqlx::PgPool, tenant_id: Uuid) -> Result<TelnyxKey, AppError> {
+    // Try BYOK first (the same content-aware rule the meter uses).
+    if let Some(api_key) = tenant_telnyx_key(db, tenant_id).await? {
+        return Ok(TelnyxKey {
+            api_key,
+            tenant_owned: true,
+        });
     }
 
     // Fall back to a centrally-configured deployment.
@@ -333,7 +362,10 @@ async fn resolve_telnyx_api_key(db: &sqlx::PgPool, tenant_id: Uuid) -> Result<St
         ));
     }
 
-    Ok(global.api_key)
+    Ok(TelnyxKey {
+        api_key: global.api_key,
+        tenant_owned: false,
+    })
 }
 
 /// Call the Telnyx REST API
@@ -344,7 +376,7 @@ async fn telnyx_api_request(
     path: &str,
     body: Option<Value>,
 ) -> Result<(reqwest::StatusCode, Value), AppError> {
-    let api_key = resolve_telnyx_api_key(db, tenant_id).await?;
+    let api_key = resolve_telnyx_key(db, tenant_id).await?.api_key;
     let url = format!("https://api.telnyx.com/v2{}", path);
     let client = reqwest::Client::new();
 
@@ -469,10 +501,13 @@ pub async fn send_sms(
         )));
     }
 
-    // Resolve API key and send
-    let api_key = resolve_telnyx_api_key(&state.db, tenant_id).await?;
-    let messaging_profile_id = if tenant_has_own_telnyx(&state.db, tenant_id).await? {
-        None // BYOK — Telnyx manages via API key
+    // Resolve API key and send. ONE resolution answers both questions — which credential signs this
+    // send, and whether this workspace pays the platform for it — so the messaging profile and the
+    // key can never come from different sides (kanban t_62712bc7).
+    let telnyx_key = resolve_telnyx_key(&state.db, tenant_id).await?;
+    let api_key = telnyx_key.api_key;
+    let messaging_profile_id = if telnyx_key.tenant_owned {
+        None // BYOK — Telnyx manages the profile via the account key
     } else {
         // Use global config's messaging profile
         get_global_config(&state.db)
@@ -669,6 +704,11 @@ async fn process_voice_event(state: &AppState, body: &Value) -> ApiResult<Value>
     };
 
     // Check BYOK — a workspace on its own Telnyx key skips the platform purse entirely.
+    //
+    // This is the SAME lookup `resolve_telnyx_key` uses to decide which credential an outbound
+    // call carries (kanban t_62712bc7). It used to be a row COUNT, so a workspace holding an empty
+    // BYOK slot was exempted from the meter while its calls were billed to the PLATFORM key; the
+    // slot now has to hold a sealed value that opens to a non-empty key, or the call is metered.
     let byok = tenant_has_own_telnyx(&state.db, tenant_id).await?;
 
     // The spend and the two rows it pays for are ONE unit of work. Telnyx retries a non-2xx
