@@ -62,3 +62,31 @@ The drift was smaller than the counts suggested, and it is now reconciled on `fe
 
 Re-check before building: `git rev-list --left-right --count main...HEAD` must read `0 <n>`.
 
+## Where the compliance work stands (2026-11-20)
+
+Email compliance is BUILT and LIVE on `app.coreswiftcrm.com`; every claim below was proved against the
+running container and the live database, not read off the code.
+
+| Piece | State | Proof |
+|---|---|---|
+| One gate in front of every send (opt-out, allowance, footer, one-click headers, send log) | live | `providers::deliver` is the single chokepoint; attempts logged in `email_message_log` |
+| Provider reports (delivered / bounced / complained / failed) | live | real Mailgun reports recorded and attributed; a real permanent failure suppressed that address for that account only |
+| Opt-out page (no login) | live | full document; invalid link answers 410 with guidance |
+| Campaign checkboxes on that page | live | temporary campaign showed by name; one-campaign opt-out stayed narrow; stop-everything blocked the account |
+| Per-account page wording (6 lines, owner/admin) | live | saved, rendered on the public page, cleared back to defaults |
+| Blocked-address list + two CSVs | live | console tab |
+| Isolation: own-domain allowance vs shared identity | live | 2000/day own domain, 100/day shared, transactional never capped |
+| Reputation watchdog (0.30% complaints / 5% bounces) | live | pauses that account's bulk lane only |
+| Domains screen, three lanes | live | inbox from verified domains; automation/calendar suggest subdomains; foreign host refused (400); clearing falls back |
+
+### Two fleet facts learned the hard way here
+
+1. **Anonymous arms belong on `PUBLIC_ROUTES`.** Both new open endpoints first landed on
+   `API_KEY_ROUTES` and answered 401 "Authentication required" live while reading as open in the code.
+   A unit test now fails if any `/public/` or `/unsubscribe` path sits on a credential list.
+2. **The customer console has NO publisher.** `scripts/publish-admin-consoles.sh` mirrors
+   `www-admin/` → `nginx/www-admin/<slug>/` only. `www-app/<slug>/index.html` is served from
+   `nginx/www-app/<slug>/` and nothing in the fleet copies repo → served for it, so a committed console
+   change stays invisible until someone copies it by hand (done here). Until a publisher exists, any
+   change to `www-app/coreswift/index.html` must be followed by that copy, and the repo/served pair
+   re-checked.
