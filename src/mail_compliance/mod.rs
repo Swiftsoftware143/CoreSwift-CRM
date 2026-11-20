@@ -1283,6 +1283,245 @@ async fn put_unsubscribe_page(
     }
 }
 
+#[derive(Deserialize)]
+struct LanesIn {
+    automation_host: Option<String>,
+    calendar_host: Option<String>,
+}
+
+/// A hostname the account may claim for a lane: a plain DNS name, no scheme, no path, no port.
+fn clean_host(v: Option<String>) -> Option<String> {
+    let h = v?.trim().to_lowercase();
+    if h.is_empty() {
+        return None;
+    }
+    let ok = h.len() <= 253
+        && h.contains('.')
+        && h.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        && !h.starts_with('.')
+        && !h.ends_with('.')
+        && !h.starts_with('-');
+    if ok {
+        Some(h)
+    } else {
+        None
+    }
+}
+
+/// Is this host a subdomain of a domain the account has actually claimed? A lane runs on the
+/// customer's OWN name or not at all — otherwise the screen would let one account advertise an address
+/// on somebody else's domain.
+fn under_claimed_domain(host: &str, claimed: &[String]) -> bool {
+    claimed.iter().any(|d| {
+        let d = d.trim().to_lowercase();
+        !d.is_empty() && (host == d || host.ends_with(&format!(".{d}")))
+    })
+}
+
+async fn resolves(host: &str) -> bool {
+    match tokio::net::lookup_host((host, 443)).await {
+        Ok(mut addrs) => addrs.next().is_some(),
+        Err(_) => false,
+    }
+}
+
+/// `GET /api/mail-compliance/domains` — one domain, three lanes (David, 2026-11-18).
+///
+/// The INBOX lane is the domain the account already verified for mail; the AUTOMATION lane is a
+/// subdomain of it that carries campaigns so a bad blast cannot damage the name that carries replies;
+/// the CALENDAR lane is the host a public booking page is advertised on. Each lane answers for itself:
+/// a lane is offered only when its OWN records verify.
+async fn get_domains(State(state): State<AppState>, Extension(c): Extension<Claims>) -> Response {
+    let Some(tenant_id) = tenant_of(&c) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "no tenant" })),
+        )
+            .into_response();
+    };
+
+    let rows = sqlx::query_as::<_, (String, Option<String>, bool)>(
+        "SELECT domain, inbound_provider, verified FROM private_email_domains
+          WHERE tenant_id = $1 ORDER BY created_at",
+    )
+    .bind(tenant_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let settings = tenant_settings(&state.db, tenant_id).await;
+    let chosen = |lane: &str, key: &str| -> Option<String> {
+        settings
+            .get("domains")
+            .and_then(|d| d.get(lane))
+            .and_then(|l| l.get(key))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    };
+
+    let claimed: Vec<String> = rows.iter().map(|(d, _, _)| d.clone()).collect();
+    let primary = claimed.first().cloned();
+
+    let inbox: Vec<Value> = rows
+        .iter()
+        .map(|(domain, provider, verified)| {
+            json!({
+                "domain": domain,
+                "provider": provider,
+                "verified": verified,
+                "state": if *verified { "active" } else { "waiting_on_records" },
+            })
+        })
+        .collect();
+
+    // Automation: a subdomain of the account's own domain. Never the root — that is the whole point.
+    let automation_host =
+        chosen("automation", "host").or_else(|| primary.as_ref().map(|d| format!("mg.{d}")));
+    let automation_verified = match automation_host.as_deref() {
+        Some(h) => {
+            let host_claimed = claimed.iter().any(|d| d.eq_ignore_ascii_case(h));
+            host_claimed && resolves(h).await
+        }
+        None => false,
+    };
+    let automation = json!({
+        "lane": "automation",
+        "host": automation_host,
+        "state": if primary.is_none() {
+            "needs_a_domain"
+        } else if automation_verified {
+            "active"
+        } else {
+            "waiting_on_records"
+        },
+        "why": "Campaigns and sequences send from here, so a bad blast cannot damage the name your \
+                replies come from.",
+        "records_hint": automation_host.as_ref().map(|h| json!([
+            {"record": "CNAME", "name": format!("{h}"), "value": "mailgun.org (or the value your provider shows when you add this subdomain)"},
+            {"record": "TXT", "name": format!("{h}"), "value": "v=spf1 include:mailgun.org ~all"},
+            {"record": "TXT", "name": format!("{}.domainkey.{}", "k1", h), "value": "the DKIM value your provider shows for this subdomain"}
+        ])),
+    });
+
+    // Calendar: the host a booking page is advertised on. Resolution is the whole test — a booking
+    // page that does not resolve is a lost appointment, so it is never advertised early.
+    let calendar_host =
+        chosen("calendar", "host").or_else(|| primary.as_ref().map(|d| format!("booking.{d}")));
+    let calendar_verified = match calendar_host.as_deref() {
+        Some(h) => resolves(h).await,
+        None => false,
+    };
+    let calendar = json!({
+        "lane": "calendar",
+        "host": calendar_host,
+        "state": if primary.is_none() {
+            "needs_a_domain"
+        } else if calendar_verified {
+            "active"
+        } else {
+            "waiting_on_records"
+        },
+        "why": "Public booking pages for your own customers. Until the name resolves, pages are served \
+                on the platform host so nothing is ever dead.",
+        "records_hint": calendar_host.as_ref().map(|h| json!([
+            {"record": "CNAME", "name": format!("{h}"), "value": "inbox.coreswiftcrm.com"}
+        ])),
+    });
+
+    Json(json!({
+        "inbox": inbox,
+        "automation": automation,
+        "calendar": calendar,
+        "can_edit": is_manager(&c),
+    }))
+    .into_response()
+}
+
+/// `PUT /api/mail-compliance/domains` — record the hostnames the account wants for its two optional
+/// lanes. Only names under a domain the account has already claimed are accepted.
+async fn put_domains(
+    State(state): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Json(body): Json<LanesIn>,
+) -> Response {
+    let Some(tenant_id) = tenant_of(&c) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "no tenant" })),
+        )
+            .into_response();
+    };
+    if !is_manager(&c) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "only the account owner or an admin can change this" })),
+        )
+            .into_response();
+    }
+    let claimed: Vec<String> = sqlx::query_scalar::<_, String>(
+        "SELECT domain FROM private_email_domains WHERE tenant_id = $1",
+    )
+    .bind(tenant_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let automation = clean_host(body.automation_host);
+    let calendar = clean_host(body.calendar_host);
+    for (lane, host) in [("automation", &automation), ("calendar", &calendar)] {
+        if let Some(h) = host {
+            if !under_claimed_domain(h, &claimed) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": format!(
+                            "the {lane} lane must be a subdomain of a domain this account has added"
+                        )
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    let patch = json!({
+        "automation": {"host": automation},
+        "calendar": {"host": calendar},
+    });
+    let result = sqlx::query(
+        "UPDATE tenants
+            SET settings = jsonb_set(
+                  coalesce(settings, '{}'::jsonb), '{domains}',
+                  coalesce(settings->'domains', '{}'::jsonb) || $2::jsonb, true)
+          WHERE id = $1",
+    )
+    .bind(tenant_id)
+    .bind(&patch)
+    .execute(&state.db)
+    .await;
+    match result {
+        Ok(_) => {
+            // A cleared lane must fall back to the suggested host, exactly like the page wording.
+            let _ = sqlx::query(
+                "UPDATE tenants SET settings = jsonb_strip_nulls(settings) WHERE id = $1",
+            )
+            .bind(tenant_id)
+            .execute(&state.db)
+            .await;
+            Json(json!({ "saved": true })).into_response()
+        }
+        Err(e) => {
+            tracing::error!("domain lane save failed for tenant {tenant_id}: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "not saved" })),
+            )
+                .into_response()
+        }
+    }
+}
+
 fn csv_response(name: &str, body: String) -> Response {
     let disposition = HeaderValue::from_str(&format!("attachment; filename=\"{name}\""))
         .unwrap_or_else(|_| HeaderValue::from_static("attachment"));
@@ -1315,6 +1554,7 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/unsubscribe-page",
             get(get_unsubscribe_page).put(put_unsubscribe_page),
         )
+        .route("/domains", get(get_domains).put(put_domains))
         // The session layer this surface never had (kanban t_bec0f198). Every handler below takes
         // `Extension<Claims>` and scopes by `tenant_of(&c)`, and the app-wide credential boundary
         // only REFUSES an anonymous caller — it does not put `Claims` on the request. Without this

@@ -12482,6 +12482,11 @@ async function mcLoad() {
     cp = await API.get('/mail-compliance/unsubscribe-page');
   } catch (e) { cp = null; }
   MC.copy = cp;
+  var lanes = null;
+  try {
+    lanes = await API.get('/mail-compliance/domains');
+  } catch (e) { lanes = null; }
+  MC.lanes = lanes;
   MC.rows = list;
   mcRender(ov || {}, list, wrap);
 }
@@ -12544,6 +12549,52 @@ function mcRender(ov, list, wrap) {
       '<p>An unsubscribe, a hard bounce or a spam complaint adds an address here automatically.</p>' +
       '</div></div></div>';
 
+    var L = MC.lanes || {};
+    function laneChip(state) {
+      var map = {
+        active: ['#065f46', '#d1fae5', 'Verified'],
+        waiting_on_records: ['#92400e', '#fef3c7', 'Waiting on records'],
+        needs_a_domain: ['#374151', '#e5e7eb', 'Add a domain first'],
+        not_set_up: ['#374151', '#e5e7eb', 'Not set up']
+      };
+      var c = map[state] || map.not_set_up;
+      return '<span style="font-size:11px;font-weight:700;color:' + c[0] + ';background:' + c[1] +
+        ';border-radius:10px;padding:2px 8px">' + c[2] + '</span>';
+    }
+    function laneRecords(hint) {
+      if (!hint || !hint.length) return '';
+      return '<div style="margin-top:8px"><table style="width:100%;font-size:12px"><thead><tr>' +
+        '<th style="text-align:left">Type</th><th style="text-align:left">Name</th>' +
+        '<th style="text-align:left">Value</th></tr></thead><tbody>' +
+        hint.map(function (r) {
+          return '<tr><td>' + mcEsc(r.record) + '</td><td style="word-break:break-all">' +
+            mcEsc(r.name) + '</td><td style="word-break:break-all;color:#555">' + mcEsc(r.value) + '</td></tr>';
+        }).join('') + '</tbody></table></div>';
+    }
+    var inboxRows = (L.inbox || []).map(function (d) {
+      return '<div style="display:flex;gap:8px;align-items:center;padding:6px 0">' +
+        '<strong>' + mcEsc(d.domain) + '</strong>' + laneChip(d.verified ? 'active' : 'waiting_on_records') +
+        '<span class="form-hint" style="margin:0">' + mcEsc(d.provider || '') + '</span></div>';
+    }).join('') || '<p class="form-hint">No domain added yet. Add one under Private email to start the inbox lane.</p>';
+    var autoL = L.automation || {};
+    var calL = L.calendar || {};
+    var canEditLanes = !!(L.can_edit);
+    var lanesCard = '<div class="card"><div class="card-header">Your domains \u2014 three lanes</div><div class="card-body">' +
+      '<p class="form-hint">One domain, three jobs. Each lane is offered only once its own records verify, so a control can never send from the wrong address.</p>' +
+      '<div style="display:grid;gap:14px">' +
+      '<div><div style="display:flex;gap:8px;align-items:center"><strong>Inbox</strong></div>' + inboxRows + '</div>' +
+      '<div style="border-top:1px solid #eee;padding-top:10px"><div style="display:flex;gap:8px;align-items:center">' +
+      '<strong>Automation</strong>' + laneChip(autoL.state) + '<span class="form-hint" style="margin:0">' + mcEsc(autoL.host || '') + '</span></div>' +
+      '<p class="form-hint">' + mcEsc(autoL.why || '') + '</p>' + laneRecords(autoL.records_hint) + '</div>' +
+      '<div style="border-top:1px solid #eee;padding-top:10px"><div style="display:flex;gap:8px;align-items:center">' +
+      '<strong>Calendar</strong>' + laneChip(calL.state) + '<span class="form-hint" style="margin:0">' + mcEsc(calL.host || '') + '</span></div>' +
+      '<p class="form-hint">' + mcEsc(calL.why || '') + '</p>' + laneRecords(calL.records_hint) + '</div>' +
+      (canEditLanes ? '<div style="border-top:1px solid #eee;padding-top:10px;display:grid;gap:8px">' +
+        '<label class="form-label">Automation host<input class="form-input" id="mcLaneAutomation" value="' + mcEsc(autoL.host || '') + '"></label>' +
+        '<label class="form-label">Calendar host<input class="form-input" id="mcLaneCalendar" value="' + mcEsc(calL.host || '') + '"></label>' +
+        '<div><button class="btn btn-secondary btn-sm" data-ops="mc-save-lanes" onclick="mcSaveLanes()">Save lane names</button></div>' +
+        '</div>' : '') +
+      '</div></div></div>';
     var eff = (MC.copy && MC.copy.effective) || {};
   var canEdit = !!(MC.copy && MC.copy.can_edit);
   var nCamp = (MC.copy && MC.copy.campaigns) || 0;
@@ -12573,7 +12624,18 @@ var downloads = '<div class="card"><div class="card-header">Downloads</div><div 
     '</div></div></div>';
 
   wrap.innerHTML = '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">' + tiles + '</div>' +
-    copyCard + form + table + downloads;
+    lanesCard + copyCard + form + table + downloads;
+}
+
+async function mcSaveLanes() {
+  function v(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
+  try {
+    await API.put('/mail-compliance/domains', {
+      automation_host: v('mcLaneAutomation'), calendar_host: v('mcLaneCalendar')
+    });
+    toast('Lane names saved');
+    if (typeof mcLoad === 'function') mcLoad();
+  } catch (e) { toast(e.message || 'Could not save the lane names', 'error'); }
 }
 
 async function mcSaveCopy() {
