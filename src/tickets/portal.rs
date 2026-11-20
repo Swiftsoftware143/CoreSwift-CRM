@@ -162,10 +162,20 @@ pub async fn page(State(s): State<AppState>, Path(tenant_id): Path<Uuid>) -> Res
         .filter(|n| !n.trim().is_empty())
         .or(tenant_name)
         .unwrap_or_else(|| "Support".to_string());
+    // A COLOUR GOES INTO A STYLESHEET, WHERE HTML-ESCAPING PROTECTS NOTHING. Measured live
+    // 2026-11-20: a brand_color of `red;background:url(x)` was written straight into the <style> block
+    // and the page carried `background:url(x)` twice. The settings write already validates the hex, but
+    // this page must not depend on another door having done so — a stored value that is not a plain
+    // #rgb/#rrggbb/#rrggbbaa colour is ignored here and the default is used.
     let brand_colour = branding
         .as_ref()
-        .map(|b| b.brand_color.clone())
-        .filter(|c| !c.trim().is_empty())
+        .map(|b| b.brand_color.trim().to_string())
+        .filter(|c| {
+            let hex = c.strip_prefix('#').unwrap_or("");
+            !hex.is_empty()
+                && hex.chars().all(|ch| ch.is_ascii_hexdigit())
+                && matches!(hex.len(), 3 | 6 | 8)
+        })
         .unwrap_or_else(|| crate::branding::DEFAULT_BRAND_COLOR.to_string());
     let logo = match branding.as_ref() {
         Some(b) if !b.logo_url.trim().is_empty() => format!(
