@@ -794,6 +794,24 @@ async fn main() -> anyhow::Result<()> {
                 with_deadline.layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024));
             inbound
         })
+        // THE OTHER SHAPE OF THE SAME ADDRESS (measured 2026-11-20). Mailgun's per-event webhooks live at
+        // `/api/webhooks/mailgun/events`, so a customer setting up RECEIVING copies that shape and posts to
+        // `/api/webhooks/mailgun/inbound` — one segment different, and the app answered 401 "Authentication
+        // required" because nothing is mounted there. A wrong guess by a customer is not an attack; it is
+        // the most likely typo in the product, so both shapes answer, with the identical handler and the
+        // identical body limits.
+        .route("/api/webhooks/mailgun/inbound", {
+            let with_deadline: axum::routing::MethodRouter<AppState> = axum::routing::post(
+                private_email::webhook_handler::inbound_webhook,
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                body_read_deadline,
+                body_deadline::body_read_deadline_middleware,
+            ));
+            let inbound: axum::routing::MethodRouter<AppState> =
+                with_deadline.layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024));
+            inbound
+        })
         // SendGrid Inbound Parse (kanban t_04db9228). SendGrid signs nothing, so the per-domain
         // token in the path IS the credential: the handler resolves the domain BY it through a
         // unique index and refuses an unknown one before reading a field. The 25 MB body limit sits

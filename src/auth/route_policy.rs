@@ -391,6 +391,9 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // used to be processed anyway and made such a domain an anonymous writer of contacts/tickets/
     // events (kanban t_7f134e77, reproduced live 2026-10-11).
     "/api/v1/webhooks/mailgun/inbound",
+    // The same receiver at the OTHER shape customers copy from the events webhook (measured 2026-11-20:
+    // a customer posted here and got 401 because nothing was mounted). Same handler, same authentication.
+    "/api/webhooks/mailgun/inbound",
     // SendGrid's Inbound Parse receiver (kanban t_04db9228). SendGrid signs nothing — its inbound
     // parse has no HMAC and no shared-secret header — so the credential is the per-domain token in
     // the path: the handler resolves the domain BY that token (unique index) and refuses an unknown
@@ -1429,12 +1432,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            526,
+            527,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 512,
+            api, 513,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.
