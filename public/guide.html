@@ -342,6 +342,24 @@
         data-calendar="consultations"
         data-mode="popup"
         data-label="Book a call"&gt;&lt;/script&gt;</code></pre>
+    <p><strong>Where the button sits, and when the calendar opens by itself.</strong> The pop&#8209;up is configurable, because a booking prompt that appears the wrong way does more harm than no prompt:</p>
+    <ul>
+      <li><code>data-position</code> &mdash; <code>bottom-right</code> (default), <code>bottom-left</code>, <code>top-right</code>, <code>top-left</code>.</li>
+      <li><code>data-trigger</code> &mdash; <code>click</code> (default, the visitor asks), <code>delay</code> (open by itself), <code>exit</code> (when the pointer leaves the page), or <code>delay-exit</code> (whichever happens first).</li>
+      <li><code>data-delay</code> &mdash; seconds before a <code>delay</code> trigger fires. Default 10, capped at 120.</li>
+      <li><code>data-once</code> &mdash; how often an <em>automatic</em> open may happen: <code>session</code> (default), <code>day</code>, <code>week</code>, <code>ever</code>, or <code>off</code> for every visit.</li>
+      <li><code>data-hide-mobile="true"</code> &mdash; render nothing at all on small screens.</li>
+    </ul>
+    <p>Four rules are built in and are not optional. <strong>A click always works</strong> &mdash; it is the visitor asking. An automatic open happens <strong>at most once per <code>data-once</code> window, tracked per calendar</strong>. Someone who has <strong>already completed a booking is never auto-prompted again</strong>. And <strong>exit&#8209;intent never fires on touch screens</strong>, where there is no pointer to leave &mdash; a timer pretending to be exit&#8209;intent is just a pop&#8209;up nobody asked for.</p>
+    <pre><code>&lt;script src="https://booking.coreswiftcrm.com/embed.js"
+        data-calendar="consultations"
+        data-mode="popup"
+        data-label="Book a call"
+        data-position="bottom-left"
+        data-trigger="delay"
+        data-delay="15"
+        data-once="day"&gt;&lt;/script&gt;</code></pre>
+
     <p><strong>3. Inside your own pop&#8209;up, panel or section</strong> &mdash; if you already have a modal, add <code>data-fill="container"</code> and the calendar fills the box you give it instead of reporting its own height. Whatever sizes your container decides the size and the calendar scrolls inside it, so there are no gaps and nothing is cut off.</p>
     <pre><code>&lt;div id="booking-modal-body" style="height:min(88vh,900px)"&gt;
   &lt;div id="my-bookings" style="height:100%"&gt;&lt;/div&gt;
