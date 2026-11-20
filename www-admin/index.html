@@ -88,6 +88,17 @@ a:hover{color:var(--accent-hover)}
 .nav-divider{padding:8px 20px;font-size:.7rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px}
 .nav-item{display:flex;align-items:center;gap:10px;padding:9px 20px;cursor:pointer;color:var(--text-secondary);font-size:.88rem;transition:all .15s;border-left:3px solid transparent;white-space:nowrap;background:none;border:0;border-left:3px solid transparent;font-family:inherit;box-sizing:border-box;width:100%;text-align:left}
 .nav-item:hover{color:var(--text-primary);background:var(--bg-hover)}
+/* FIND A SCREEN (2026-11-20). This console's sidebar carries 61 entries (54 on the customer
+   side); scrolling it to reach one screen is the slowest thing an operator does all day. One
+   filter box, no new data: it hides the entries that do not match, expands the groups that
+   hold a match, and restores the exact view you had when the box is cleared. Purely local —
+   nothing is fetched, nothing is saved. */
+.sidebar-search-wrap{padding:8px 12px 4px}
+.sidebar-search{width:100%;box-sizing:border-box;padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-primary);color:var(--text-primary);font-size:13px;font-family:inherit}
+.sidebar-search::placeholder{color:var(--text-secondary,#64748b)}
+.sidebar-search:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px rgba(37,99,235,.15)}
+.sidebar.collapsed .sidebar-search-wrap{display:none}
+.sidebar-search-empty{padding:6px 16px 10px;font-size:12px;color:var(--text-secondary,#64748b)}
 .nav-item.active{color:#fff;background:var(--accent-subtle);border-left-color:var(--accent)}
 .nav-item .nav-icon{width:20px;text-align:center;flex-shrink:0;font-size:1rem}
 .nav-item .nav-text{flex:1}
@@ -315,8 +326,15 @@ tr:hover td{background:var(--bg-hover)}
       <span class="sidebar-logo">🏢</span>
       <span class="sidebar-brand sidebar-brand-text">CoreSwift CRM</span>
     </div>
+    <div class="sidebar-search-wrap">
+      <input id="sidebarSearch" class="sidebar-search" type="search" autocomplete="off"
+             placeholder="Find a screen…  /" aria-label="Filter the sidebar screens"
+             oninput="filterSidebar(this.value)"
+             onkeydown="if(event.key==='Escape'){event.preventDefault();this.value='';filterSidebar('');}">
+    </div>
     <nav class="sidebar-nav" id="sidebarNav">
     </nav>
+    <div class="sidebar-search-empty" id="sidebarSearchEmpty" style="display:none">No screen matches that.</div>
     <div class="sidebar-footer">
       <!-- The admin guide, on THIS origin (fleet guide-path standard, kanban t_d767f3f8):
            the admin surface serves /admin-guide.html; the console nav links it same-origin
@@ -1385,6 +1403,75 @@ function renderSidebar() {
     }
   });
 }
+
+// ── FIND A SCREEN (2026-11-20) ───────────────────────────────────────────────────────────────
+// 61 sidebar entries (54 for a customer) with no way to jump to one by name. This filters what is
+// already rendered — it fetches nothing and stores nothing — and it remembers which groups were
+// open so clearing the box gives the operator back exactly the sidebar they had.
+function filterSidebar(raw) {
+  const q = String(raw || '').trim().toLowerCase();
+  const nav = document.getElementById('sidebarNav');
+  if (!nav) return;
+  const divider = nav.querySelectorAll('.nav-divider');
+  const groups = Array.prototype.slice.call(nav.querySelectorAll('.nav-group-items'));
+  const empty = document.getElementById('sidebarSearchEmpty');
+  if (!q) {
+    nav.querySelectorAll('.nav-item').forEach(function (el) { el.style.display = ''; });
+    divider.forEach(function (el) { el.style.display = ''; });
+    groups.forEach(function (g) {
+      g.style.display = '';
+      const wasOpen = !!(filterSidebar._open && filterSidebar._open[g.id]);
+      g.classList.toggle('expanded', wasOpen);
+      const btn = nav.querySelector('[data-group="' + g.id + '"]');
+      if (btn) btn.classList.toggle('group-expanded', wasOpen);
+    });
+    if (empty) empty.style.display = 'none';
+    filterSidebar._open = null;
+    return;
+  }
+  if (!filterSidebar._open) {
+    filterSidebar._open = {};
+    groups.forEach(function (g) { filterSidebar._open[g.id] = g.classList.contains('expanded'); });
+  }
+  divider.forEach(function (el) { el.style.display = 'none'; });
+  let shown = 0;
+  nav.querySelectorAll('.nav-item[data-tab]').forEach(function (el) {
+    const label = String(el.getAttribute('aria-label') || el.textContent || '').toLowerCase();
+    const hit = label.indexOf(q) > -1;
+    el.style.display = hit ? '' : 'none';
+    if (hit) shown++;
+  });
+  groups.forEach(function (g) {
+    const btn = nav.querySelector('[data-group="' + g.id + '"]');
+    const groupLabel = btn ? String(btn.getAttribute('aria-label') || '').toLowerCase() : '';
+    // A group whose own NAME matches keeps all of its screens: searching "admin" should show the
+    // Admin Settings drawer, not hide it because no child is literally called "admin".
+    const children = Array.prototype.slice.call(g.querySelectorAll('.nav-item[data-tab]'));
+    if (groupLabel.indexOf(q) > -1) {
+      children.forEach(function (el) { el.style.display = ''; shown++; });
+    }
+    const any = children.some(function (el) { return el.style.display !== 'none'; });
+    g.style.display = any ? '' : 'none';
+    g.classList.toggle('expanded', any);
+    if (btn) {
+      btn.style.display = any ? '' : 'none';
+      btn.classList.toggle('group-expanded', any);
+    }
+  });
+  if (empty) empty.style.display = shown ? 'none' : '';
+}
+
+// "/" jumps to the box from anywhere except a field the user is already typing in.
+document.addEventListener('keydown', function (e) {
+  if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+  const box = document.getElementById('sidebarSearch');
+  if (!box) return;
+  e.preventDefault();
+  box.focus();
+  box.select();
+});
 
 function toggleGroup(gid) {
   const items = document.getElementById(gid);
