@@ -631,6 +631,52 @@ fn support_alert_bodies(
     (text, html)
 }
 
+/// Is this requester the OPERATOR himself? (kanban fix 2026-11-20)
+///
+/// The synthetic-requester predicate can only recognise a proof run by its ADDRESS SHAPE, and an
+/// operator filing from his own workspace uses his REAL address — so the alert whose recipient is
+/// the operator pages him about his own request. Measured on this install: three
+/// "A support request needs an answer: Upgrade request: …" alerts landed in
+/// `swiftsoftware143@yahoo.com` (a platform admin) on 2026-11-11/12, every one of them his own
+/// plan request. The gate therefore has to be IDENTITY-based:
+///
+/// 1. the address belongs to a live platform-admin account (`users.is_platform_admin` — the one
+///    authority column this app trusts; never the tenant role vocabulary), or
+/// 2. the address IS the configured operator alert address (mailing it would be self-mail).
+///
+/// The ticket row is untouched: it is the demand record the queue reads. Only the mail goes away.
+/// A failed lookup FAILS OPEN (logs, returns None) — a broken query must never silence a real
+/// customer's alert.
+async fn operator_self_request(db: &PgPool, requester: &str) -> Option<&'static str> {
+    let addr = requester.trim().to_lowercase();
+    if addr.is_empty() {
+        return None;
+    }
+    match sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM users \
+          WHERE lower(email) = $1 AND is_platform_admin IS TRUE AND closed_at IS NULL)",
+    )
+    .bind(&addr)
+    .fetch_one(db)
+    .await
+    {
+        Ok(true) => return Some("requester is a platform admin"),
+        Ok(false) => {}
+        Err(e) => tracing::warn!(
+            error = %e,
+            "self-request identity check failed; the operator alert is NOT suppressed"
+        ),
+    }
+    if let Some(operator) =
+        crate::communications::platform_mail_config::operator_alert_email(db).await
+    {
+        if operator.trim().eq_ignore_ascii_case(&addr) {
+            return Some("requester is the configured operator address");
+        }
+    }
+    None
+}
+
 /// Tell the OPERATOR that somebody wrote to support (2026-11-09).
 ///
 /// WHY THIS EXISTS (measured live on the sibling apps the same day): `POST /api/public/support-request`
@@ -669,6 +715,19 @@ pub async fn send_support_request_operator_alert(
             reason = reason,
             requester = %reply_to,
             "operator alert WITHHELD: the requester is a synthetic (harness) identity"
+        );
+        return Ok(());
+    }
+
+    // ── THE OPERATOR'S OWN REQUEST IS NOT A CUSTOMER WAITING (2026-11-20) ──────────────────────
+    // Identity gate, after the shape gate: a real address defeats every synthetic predicate, so a
+    // request filed from the operator's own workspace pages him about his own filing. Suppress the
+    // MAIL only — the ticket row above stays, because it is the demand record the queue reads.
+    if let Some(reason) = operator_self_request(db, reply_to).await {
+        tracing::info!(
+            reason = reason,
+            requester = %reply_to,
+            "operator self-request: alert suppressed"
         );
         return Ok(());
     }
