@@ -1243,6 +1243,22 @@ async fn sendgrid_records(
 /// Each row says, in one sentence, what the record does — MX = where mail is delivered, SPF = proves
 /// we may send for you, DKIM = signs your mail — because the page's rule is no jargon and no dead
 /// ends.
+/// THE ADDRESS A CUSTOMER PASTES INTO THEIR PROVIDER (David, 2026-11-20).
+///
+/// Every account needs this, not just the one being set up by hand: the receiver is one endpoint for the
+/// whole app, and it works out the account from the recipient address — so the SAME URL is correct for
+/// every domain and every workspace. It is served from the app rather than hardcoded in a screen so a
+/// deployment on another host answers with its own address.
+pub fn inbound_webhook_url() -> String {
+    let base = std::env::var("APP_PUBLIC_URL")
+        .or_else(|_| std::env::var("PUBLIC_APP_URL"))
+        .unwrap_or_else(|_| "https://app.coreswiftcrm.com".to_string());
+    format!(
+        "{}/api/v1/webhooks/mailgun/inbound",
+        base.trim_end_matches('/')
+    )
+}
+
 pub async fn domain_records(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -1259,9 +1275,11 @@ pub async fn domain_records(
         bool,
         String,
         Option<String>,
+        bool,
     )> = sqlx::query_as(
         r#"SELECT domain, mailgun_region, mailgun_api_key, api_key_id, provider_type, verified,
-                      inbound_provider, inbound_token
+                      inbound_provider, inbound_token,
+                      COALESCE(webhook_signing_key_encrypted, '') <> '' AS has_signing_key
              FROM private_email_domains WHERE id = $1 AND tenant_id = $2"#,
     )
     .bind(domain_id)
@@ -1279,6 +1297,7 @@ pub async fn domain_records(
         verified,
         inbound_provider,
         inbound_token,
+        signing_key_configured,
     ) = row.ok_or_else(|| AppError::NotFound("Domain not found".into()))?;
 
     // RECEIVING is what decides which records a customer has to add (kanban t_04db9228). The old
@@ -1454,6 +1473,15 @@ pub async fn domain_records(
         ],
         "receiving_ok": receiving_ok,
         "sending_ok": sending_ok,
+        // ── WHERE TO POST THE MAIL (David, 2026-11-20) ────────────────────────────────────────────────
+        // The records above make mail ARRIVE at Mailgun; this URL is what turns the arrived mail into
+        // messages inside this account. Without it the domain looks perfect and receives nothing. Shown on
+        // every domain's setup page because every account has to paste it into its own Mailgun.
+        "inbound_webhook_url": inbound_webhook_url(),
+        // The one thing the URL alone cannot do: prove the delivery came from Mailgun. The domain's own
+        // webhook signing key does that, and the page states whether it has one rather than letting the
+        // customer believe the URL was the whole job.
+        "inbound_signing_key_configured": signing_key_configured,
         // The branded link the inbox tab opens, and whether it is the branded name or the shared one.
         "branded": branded.as_str(),
         "branded_url": format!("https://inbox.{}", domain),

@@ -10298,7 +10298,31 @@ async function peShowDomainRecords(domainId) {
             + '</tr></thead><tbody>' + rows + '</tbody></table>'
           : '<p style="font-size:13px;color:var(--text-secondary)">Your provider reports no records for this group.</p>');
     }).join('');
+    // ── WHERE TO POST THE MAIL (David, 2026-11-20) ──────────────────────────────────────────────────
+    // The DNS records only get mail as far as the provider. This URL is what turns arrived mail into
+    // messages in this account, and EVERY account needs it, so it is shown on every domain rather than
+    // left to a setup call. The signing key next to it is stated as a fact, not a hint: a URL with no key
+    // leaves the receiver refusing deliveries, which reads as "mail is broken" when it is really
+    // "the proof is missing".
+    var hook = '';
+    if (r && r.inbound_webhook_url) {
+      hook = '<h4 style="margin:16px 0 4px">Where your mail provider posts incoming mail</h4>'
+        + '<p style="font-size:12px;color:var(--text-secondary);margin:0 0 6px">'
+        + 'Paste this into your mail provider as the webhook / route destination (Mailgun: Routes, '
+        + 'or the domain\'s receiving settings). It is the same address for every domain.</p>'
+        + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+        + '<code style="word-break:break-all">' + escapeHtml(r.inbound_webhook_url) + '</code>'
+        + '<button class="btn btn-ghost btn-xs" data-copy="' + escapeHtmlAttr(r.inbound_webhook_url) + '">Copy</button>'
+        + '</div>'
+        + (r.inbound_signing_key_configured
+            ? '<p style="font-size:12px;color:#065f46;margin:8px 0 0">Signing key: <strong>set</strong> — deliveries are authenticated.</p>'
+            : '<p style="font-size:12px;color:#92400e;margin:8px 0 0">Signing key: <strong>not set</strong> — your provider will reach this '
+              + 'address and CoreSwift will refuse every delivery, because nothing proves it came from your provider. '
+              + 'Paste the domain\'s <em>webhook signing key</em> (Mailgun: the domain\'s own settings, a 32-character '
+              + 'value — not the sending API key) into the signing key field, then send yourself a test.</p>');
+    }
     body.innerHTML = (html || '<p>Your mail provider returned no records for this domain.</p>')
+      + hook
       + '<p style="font-size:12px;color:var(--text-secondary);margin-top:10px">Add these at your DNS host (Cloudflare: DNS &rarr; Records), then press <strong>Re-check</strong> on the domain row. Mail records stay DNS-only (grey cloud); the branded inbox CNAME is the one exception.</p>';
     Array.prototype.forEach.call(body.querySelectorAll('[data-copy]'), function (b) {
       b.onclick = function () {

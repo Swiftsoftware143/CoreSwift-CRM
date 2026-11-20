@@ -930,6 +930,23 @@ POST /api/lists/:id/members</pre>
     priority. The ticket list shows the answer deadline as a countdown that turns amber inside the last hour and red once it has passed, and
     <strong>Due soon</strong> lists only what is unanswered and due within four hours &mdash; soonest deadline first, because that is the order the
     work has to be done in. A clock is only set when a policy exists: an account with no policy gets an empty deadline rather than a wrong one.</p>
+    <h3>Making your own domain receive mail</h3>
+    <p>Adding a domain gives you a checklist of DNS records. Those records get mail <em>as far as your mail
+    provider</em>. The last step is the one people miss: your provider has to be told <strong>where to post
+    what arrives</strong>, or the mail sits at the provider and never reaches your inbox here.</p>
+    <p>Open the domain and press <strong>DNS records</strong>. Under the records you will find <strong>Where
+    your mail provider posts incoming mail</strong> with a copy button. Paste that address into your provider
+    as a webhook or route destination — the same address works for every domain, because CoreSwift works out
+    whose mail it is from the address it was sent to.</p>
+    <p>Next to it you will see whether your <strong>signing key</strong> is set. This matters more than it
+    sounds: the posting address is public, so anyone could send it a fake message. The signing key is what
+    proves a delivery really came from your provider. Without it, mail reaches us and is <em>refused</em> —
+    which looks like &ldquo;receiving is broken&rdquo; when the truth is &ldquo;nothing proves where it came
+    from&rdquo;. Your provider shows that key on the domain's own settings page as a short value, distinct
+    from the longer key used for sending, and the screen says plainly which state you are in.</p>
+    <p>When both are done, send a message from an outside address to one of your mailboxes. If it lands in
+    your inbox, the whole chain is working: DNS, your provider, the posting address, the signing key.</p>
+
     <h3>The agent — what it may do on its own, and what waits for you</h3>
     <p>Your desk has help: an agent that can read a ticket and propose an action. It is <strong>off until you
     switch it on</strong>, and it only ever asks for things on a fixed list — leave an internal note, change
