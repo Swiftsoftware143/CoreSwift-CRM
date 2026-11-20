@@ -8010,13 +8010,22 @@ function peiPaintList() {
     rows.forEach(function (t) {
       const id = escapeHtml(t.id);
       const bold = t.is_read ? '' : 'font-weight:600';
-      html += '<tr class="pei-row" data-id="' + id + '" style="cursor:pointer;border-top:1px solid rgba(128,128,128,.25);' + bold + '">' +
-        '<td style="padding:8px">' + escapeHtml(peiWho(t)) + '</td>' +
-        '<td style="padding:8px">' + escapeHtml(t.subject || '(no subject)') +
-        (t.has_attachments ? ' <span title="has files" style="opacity:.7">\uD83D\uDCCE</span>' : '') + '</td>' +
-        '<td style="padding:8px;opacity:.8">' + escapeHtml(t.address || '') + '</td>' +
-        '<td style="padding:8px;white-space:nowrap;opacity:.8">' + escapeHtml(peiWhen(t.received_at)) + '</td>' +
-        '<td style="padding:8px;opacity:.8">' + (t.is_read ? (t.is_ticket ? 'ticket' : 'read') : 'unread') + '</td></tr>';
+      html += '<tr class="pei-row" data-id="' + escapeHtmlAttr(String(t.id)) + '" data-pei="open" data-id2="' + escapeHtmlAttr(String(t.id)) + '" ' +
+        'style="cursor:pointer;border-top:1px solid rgba(128,128,128,.28);' + bold + '">' +
+        '<td style="padding:10px 8px;white-space:nowrap">' +
+          (t.is_read ? '' : '<span title="unread" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#3b82f6;margin-right:7px"></span>') +
+          escapeHtml(peiWho(t)) + '</td>' +
+        '<td style="padding:10px 8px">' + escapeHtml(t.subject || '(no subject)') +
+          (t.has_attachments ? ' <span title="has files" style="opacity:.7">\uD83D\uDCCE</span>' : '') +
+          (t.preview || t.snippet ? '<div style="font-size:11.5px;opacity:.6;margin-top:2px">' + escapeHtml(String(t.preview || t.snippet).slice(0, 90)) + '</div>' : '') + '</td>' +
+        '<td style="padding:10px 8px;opacity:.8">' + escapeHtml(t.address || '') + '</td>' +
+        '<td style="padding:10px 8px;white-space:nowrap;opacity:.8">' + escapeHtml(peiWhen(t.received_at)) + '</td>' +
+        '<td style="padding:10px 8px;white-space:nowrap">' +
+          (PEI.folder === 'trash'
+            ? '<button class="btn btn-ghost btn-xs" data-pei="move" data-id="' + escapeHtmlAttr(String(t.id)) + '" data-id2="inbox">Restore</button>'
+            : '<button class="btn btn-ghost btn-xs" data-pei="move" data-id="' + escapeHtmlAttr(String(t.id)) + '" data-id2="spam" title="Mark as spam">Spam</button> ' +
+              '<button class="btn btn-ghost btn-xs" data-pei="move" data-id="' + escapeHtmlAttr(String(t.id)) + '" data-id2="trash" title="Move to trash">Trash</button>') +
+        '</td></tr>';
     });
     html += '</tbody></table>';
   }
@@ -8025,10 +8034,8 @@ function peiPaintList() {
 
   const cb = document.getElementById('peiUnreadOnly');
   if (cb) cb.onchange = function () { PEI.unreadOnly = !!cb.checked; peiPaintList(); };
-  const rs = document.querySelectorAll('.pei-row');
-  for (let i = 0; i < rs.length; i++) {
-    rs[i].onclick = function () { peiOpen(this.getAttribute('data-id')); };
-  }
+  // Row clicks are handled by the ONE delegated listener (data-pei="open"), so a row inside a table
+  // and a button inside that row cannot both fire.
 }
 
 // Who this workspace can send from, and what it currently holds. The SETUP half lives in the
@@ -8174,10 +8181,11 @@ document.addEventListener('click', function (ev) {
   if (!t) return;
   const action = t.getAttribute('data-pei');
   const id = t.getAttribute('data-id');
+  const id2 = t.getAttribute('data-id2');
   if (action === 'folder') { PEI.folder = id; loadPrivateEmailTab(); }
   else if (action === 'compose') peiCompose();
-  else if (action === 'move') peiMove(window.__peiMoveId, id);
-  else if (action === 'open') peiOpen(id);
+  else if (action === 'move') peiMove(id, id2);
+  else if (action === 'open') peiOpen(id2 || id);
   else if (action === 'add-domain') peiAddDomain();
   else if (action === 'add-box') peiAddBox();
   else if (action === 'set-key') peiSetKey(id);

@@ -541,7 +541,11 @@ pub async fn update_domain(
             None => (false, None),
             Some(None) => (true, None),
             Some(Some(k)) if k.trim().is_empty() => (false, None),
-            Some(Some(k)) => (true, Some(crate::secret_box::seal(account_id, k)?)),
+            // TRIM BEFORE SEALING (measured 2026-11-20): a key pasted from a dashboard very often carries a
+            // trailing newline or a leading space, and HMAC validation then fails with the useless sentence
+            // "the configured signing key did not validate" while the stored value LOOKS right. The value is
+            // a token, never padded, so trimming it is safe and removes a whole class of silent mismatch.
+            Some(Some(k)) => (true, Some(crate::secret_box::seal(account_id, k.trim())?)),
         };
 
     // Re-entering a working key also RE-VERIFIES the domain: Mailgun is asked again, so a row added

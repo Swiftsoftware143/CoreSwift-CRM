@@ -877,6 +877,10 @@ const MENU = [
     { id:'notifications', icon:'🔔', label:'Notifications' },
     { id:'telnyx', icon:'📱', label:'Telnyx SMS/Voice' },
   ]},
+  // A TOP-LEVEL DEALS TAB (David, 2026-11-20): "they should be a whole separate tab that says deals".
+  // The deal writer is its own job — pricing, stages, owned money — not a sub-page of pipeline setup,
+  // so it gets its own entry that opens the deals workspace directly.
+  { id:'deals', icon:'💰', label:'Deals' },
   { id:'tickets', icon:'🎫', label:'Support Tickets' },
   // THE ACTION AGENT (ticketing suite item 1). Its own screen because what it does — acting on a
   // customer's record — deserves to be visible, with its limits and its waiting list in one place.
@@ -8601,6 +8605,8 @@ function imDeleteMapping(id) {
 
 // ---- wiring overrides: replace the placeholder/fake renderers and loaders ----
 TAB_RENDERERS['pipelines'] = pipelinesShell;
+// The Deals tab opens the deals workspace itself (same screen, its own entry in the menu).
+TAB_RENDERERS['deals'] = pipelinesShell;
 TAB_RENDERERS['campaigns'] = campaignsShell;
 TAB_RENDERERS['lists'] = listsShell;
 // ── Agent ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -10892,6 +10898,7 @@ TAB_LOADERS['email-settings'] = loadInboxTab;
 TAB_LOADERS['calendar'] = loadCalendarTab;
 
 TAB_LOADERS['pipelines'] = loadPipelinesTab;
+TAB_LOADERS['deals'] = loadPipelinesTab;
 TAB_LOADERS['campaigns'] = loadCampaignsTab;
 TAB_LOADERS['lists'] = loadListsTab;
 TAB_LOADERS['lead-scoring'] = loadScoringTab;
