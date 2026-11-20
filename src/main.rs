@@ -9,6 +9,7 @@
 pub mod account;
 pub mod account_match;
 pub mod admin_actions;
+pub mod agent;
 pub mod ai;
 mod alerts;
 pub mod analytics;
@@ -610,6 +611,9 @@ async fn main() -> anyhow::Result<()> {
             personal_api_keys::router(state.clone()),
         )
         .nest("/api/analytics", analytics::router(state.clone()))
+        // THE ACTION AGENT (ticketing suite item 1): limits, the ledger, and the door every action goes
+        // through. Acting on a customer's record deserves its own mount, not a corner of another module.
+        .nest("/api/agent", agent::router(state.clone()))
         .nest("/api/ai", ai::router(state.clone()))
         // Billing (plan tiers, feature toggles)
         .nest("/api/campaigns", campaigns::router(state.clone()))

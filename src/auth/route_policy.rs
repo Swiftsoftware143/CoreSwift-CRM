@@ -740,6 +740,13 @@ mod tests {
             src: include_str!("../ai/mod.rs"),
             func: "router",
         },
+        // THE ACTION AGENT. It is censused like every other module, because an action that changes a
+        // customer's record must not be able to arrive on a route the count does not know about.
+        Nest {
+            prefix: "/api/agent",
+            src: include_str!("../agent/mod.rs"),
+            func: "router",
+        },
         Nest {
             prefix: "/api/campaigns",
             src: include_str!("../campaigns/mod.rs"),
@@ -1422,12 +1429,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            521,
+            526,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 507,
+            api, 512,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.

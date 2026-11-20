@@ -878,6 +878,9 @@ const MENU = [
     { id:'telnyx', icon:'📱', label:'Telnyx SMS/Voice' },
   ]},
   { id:'tickets', icon:'🎫', label:'Support Tickets' },
+  // THE ACTION AGENT (ticketing suite item 1). Its own screen because what it does — acting on a
+  // customer's record — deserves to be visible, with its limits and its waiting list in one place.
+  { id:'agent', icon:'🤖', label:'Agent' },
   { id:'knowledge', icon:'📚', label:'Knowledge Base' },
   { type:'group', icon:'📬', label:'Inbox', children:[
     { id:'inbox', icon:'📬', label:'Shared Inbox' },
@@ -8600,6 +8603,110 @@ function imDeleteMapping(id) {
 TAB_RENDERERS['pipelines'] = pipelinesShell;
 TAB_RENDERERS['campaigns'] = campaignsShell;
 TAB_RENDERERS['lists'] = listsShell;
+// ── Agent ────────────────────────────────────────────────────────────────────────────────────────────────
+// Limits, the catalogue of things it may ask for, and everything waiting for a person. Nothing here acts
+// on its own: approving is a button a human presses, and a refusal is kept as a record.
+function agentShell() {
+  return pageHeader('Agent', 'What the agent may do on its own, and what is waiting for you',
+    '<button class="btn btn-secondary btn-sm" onclick="agentLoad()">Refresh</button>') +
+    '<div id="agentLimits"><div class="loading-wrap"><div class="spinner"></div> Loading…</div></div>' +
+    '<div id="agentQueue" style="margin-top:16px"></div>' +
+    '<div id="agentKinds" style="margin-top:16px"></div>';
+}
+
+async function agentLoad() {
+  const limitsEl = document.getElementById('agentLimits');
+  const queueEl = document.getElementById('agentQueue');
+  const kindsEl = document.getElementById('agentKinds');
+  if (!limitsEl) return;
+  let limits = null, actions = [], kinds = [];
+  try {
+    const res = await Promise.all([
+      API.get('/agent/limits'),
+      API.get('/agent/actions'),
+      API.get('/agent/kinds')
+    ]);
+    limits = res[0]; actions = (res[1] && res[1].actions) || []; kinds = (res[2] && res[2].kinds) || [];
+  } catch (e) {
+    limitsEl.innerHTML = icErr('Could not load the agent', e.message);
+    return;
+  }
+  const money = (c) => '$' + (Number(c || 0) / 100).toFixed(2);
+  const on = !!(limits && limits.enabled);
+  let h = card('⚖️ What it may do on its own',
+    '<p style="color:var(--text-secondary);margin:0 0 10px">The agent is <strong>' + (on ? 'ON' : 'OFF') +
+    '</strong> for this workspace. Anything above either limit waits for you — it is never done quietly.</p>' +
+    '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">' +
+      '<label style="font-size:.78rem;color:var(--text-secondary)">Per action<br>' +
+        '<input id="agentPerAction" type="number" min="0" step="1" value="' +
+          escapeHtmlAttr(String(limits ? limits.per_action_cents : 0)) + '" style="width:130px"></label>' +
+      '<label style="font-size:.78rem;color:var(--text-secondary)">Ceiling (cents)<br>' +
+        '<input id="agentCeiling" type="number" min="0" step="1" value="' +
+          escapeHtmlAttr(String(limits ? limits.ceiling_cents : 0)) + '" style="width:130px"></label>' +
+      '<label style="font-size:.78rem;color:var(--text-secondary);display:flex;align-items:center;gap:6px">' +
+        '<input id="agentEnabled" type="checkbox"' + (on ? ' checked' : '') + '> Enabled</label>' +
+      '<button class="btn btn-primary btn-sm" onclick="agentSaveLimits()">Save</button>' +
+    '</div>' +
+    '<p style="color:var(--text-muted);font-size:.74rem;margin:10px 0 0">Currently ' + money(limits && limits.per_action_cents) +
+      ' per action, ceiling ' + money(limits && limits.ceiling_cents) + '. A per-action limit can never exceed the ceiling.</p>');
+  limitsEl.innerHTML = h;
+
+  if (!actions.length) {
+    queueEl.innerHTML = card('📋 Nothing waiting', '<p style="color:var(--text-secondary);margin:0">The agent has not asked to do anything.</p>');
+  } else {
+    let rows = '<div style="overflow:auto"><table class="table"><thead><tr><th>When</th><th>Action</th><th>Status</th><th>Why</th><th></th></tr></thead><tbody>';
+    actions.forEach(function (a) {
+      var badge = a.status === 'executed' ? 'badge-primary'
+        : a.status === 'failed' ? 'badge-danger'
+        : a.status === 'refused' ? 'badge-muted' : 'badge-warning';
+      var why = a.held_because || a.reason || a.detail || '';
+      var buttons = (a.status === 'proposed' || a.status === 'approved')
+        ? '<button class="btn btn-primary btn-xs" onclick="agentDecide(\'' + a.id + '\',\'approve\')">Approve</button> ' +
+          '<button class="btn btn-secondary btn-xs" onclick="agentDecide(\'' + a.id + '\',\'refuse\')">Refuse</button>'
+        : '';
+      rows += '<tr><td>' + (a.created_at ? new Date(a.created_at).toLocaleString() : '') + '</td>' +
+        '<td>' + escapeHtml(a.kind) + '</td>' +
+        '<td><span class="badge ' + badge + '">' + escapeHtml(a.status) + '</span></td>' +
+        '<td style="font-size:.78rem;color:var(--text-secondary)">' + escapeHtml(why) + '</td>' +
+        '<td>' + buttons + '</td></tr>';
+    });
+    rows += '</tbody></table></div>';
+    queueEl.innerHTML = card('📋 What it asked for', rows);
+  }
+
+  if (kinds.length) {
+    var body = '<ul style="margin:0;padding-left:18px;color:var(--text-secondary);font-size:.82rem">' +
+      kinds.map(function (k) {
+        return '<li><strong>' + escapeHtml(k.label) + '</strong> — ' + escapeHtml(k.description) +
+          (k.spends ? ' <span class="badge badge-warning">spends money</span>' : '') + '</li>';
+      }).join('') + '</ul>';
+    kindsEl.innerHTML = card('🧾 What it can ask for', body);
+  }
+}
+
+async function agentSaveLimits() {
+  var body = {
+    per_action_cents: parseInt(document.getElementById('agentPerAction').value || '0', 10),
+    ceiling_cents: parseInt(document.getElementById('agentCeiling').value || '0', 10),
+    enabled: document.getElementById('agentEnabled').checked
+  };
+  try {
+    await API.put('/agent/limits', body);
+    toast('Agent limits saved');
+    agentLoad();
+  } catch (e) { toast('Could not save: ' + e.message, 'error'); }
+}
+
+async function agentDecide(id, what) {
+  try {
+    await API.post('/agent/actions/' + id + '/' + what, {});
+    toast(what === 'approve' ? 'Approved and carried out' : 'Refused');
+    agentLoad();
+  } catch (e) { toast('Could not ' + what + ': ' + e.message, 'error'); }
+}
+
+TAB_RENDERERS['agent'] = agentShell;
+TAB_LOADERS['agent'] = agentLoad;
 TAB_RENDERERS['lead-scoring'] = scoringShell;
 TAB_RENDERERS['analytics'] = analyticsShell;
 TAB_RENDERERS['tags'] = tagsShell;
