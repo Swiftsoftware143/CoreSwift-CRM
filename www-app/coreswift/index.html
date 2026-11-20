@@ -6489,7 +6489,12 @@ function dashWonValue(stats) {
     return rows.map(function (r) { return plMoney(r.value, r.currency); }).join(' + ');
   }
   if (rows.length === 1) return plMoney(rows[0].value, rows[0].currency);
-  return stats.total_revenue === null || stats.total_revenue === undefined ? '—' : money(stats.total_revenue);
+  // No currency named anywhere → no currency symbol: `plMoney` with a blank code prints the
+  // number alone. (`money()` was never defined; this tile threw before the deal tab's own
+  // formatter existed, and the dashboard showed a red "money is not defined" instead of a figure.)
+  return stats.total_revenue === null || stats.total_revenue === undefined
+    ? '—'
+    : plMoney(stats.total_revenue, PL_CURRENCY || '');
 }
 
 function pipelinesShell() {
