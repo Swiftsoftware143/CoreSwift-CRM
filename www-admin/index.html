@@ -7858,16 +7858,116 @@ function peiPaintList() {
 function peiPaintSetup() {
   const el = document.getElementById('peiSetup');
   if (!el) return;
-  const doms = (PEI.domains || []).map(function (d) { return escapeHtml(d.domain || d.name || ''); }).filter(Boolean);
   const boxes = (PEI.boxes || []).map(function (b) { return escapeHtml(b.email_address || b.address || ''); }).filter(Boolean);
-  let html = '<div class="card"><strong>This workspace&rsquo;s mailboxes</strong>' +
-    '<div style="margin-top:6px;font-size:13px;opacity:.85">' +
-    'Domains: ' + (doms.length ? doms.join(', ') : 'none yet') + '<br>' +
-    'Addresses you can reply from: ' + (boxes.length ? boxes.join(', ') : 'none yet') +
-    '</div>' +
-    '<div style="margin-top:10px;font-size:13px;opacity:.8">Domains and mailboxes are set up by the workspace owner under <strong>Email Domains &amp; Sending</strong> in their own console. This screen reads and answers the mail.</div>' +
-    '</div>';
+  const domains = PEI.domains || [];
+
+  // ── THE SETUP CONTROLS BELONG HERE (measured 2026-11-20) ─────────────────────────────────────
+  // This panel used to read the domains and then tell the operator to go and finish in the
+  // customer's own console — which an impersonated session cannot reach, so an operator could see
+  // "no key, inbound refused" and had no way to fix it. The endpoints were always there; the screen
+  // was not. Everything below calls the same routes the customer screen calls, as the impersonated
+  // workspace, so the operator can finish a workspace's mail without a customer login.
+  let rows = '';
+  if (!domains.length) {
+    rows = '<p style="font-size:13px;opacity:.8">No domain on this workspace yet.</p>';
+  } else {
+    rows = '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="text-align:left">' +
+      '<th>Domain</th><th>Verified</th><th>Receiving</th><th>Catch-all</th><th></th></tr></thead><tbody>';
+    domains.forEach(function (d) {
+      const keyed = d.webhook_signing_key_status === 'usable';
+      const receiving = (d.inbound_provider || 'mailgun') === 'none'
+        ? '<span class="badge">send only</span>'
+        : (keyed
+            ? '<span class="badge badge-success">signing key set</span>'
+            : '<span class="badge badge-warning">no key — inbound refused</span>');
+      rows += '<tr>' +
+        '<td><code>' + escapeHtml(d.domain || '') + '</code></td>' +
+        '<td>' + (d.verified ? '<span class="badge badge-success">verified</span>' : '<span class="badge badge-warning">waiting</span>') + '</td>' +
+        '<td>' + receiving + '</td>' +
+        '<td>' + (d.catch_all_enabled ? 'on' : 'off') + '</td>' +
+        '<td style="white-space:nowrap">' +
+          '<button class="btn btn-primary btn-xs" onclick="peiSetKey(\'' + d.id + '\')">' + (keyed ? 'Rotate key' : 'Set key') + '</button> ' +
+          '<button class="btn btn-secondary btn-xs" onclick="peiVerifyDomain(\'' + d.id + '\')">Re-check</button> ' +
+          '<button class="btn btn-ghost btn-xs" onclick="peiShowRecords(\'' + d.id + '\')">Where mail posts &amp; DNS</button>' +
+        '</td></tr>';
+    });
+    rows += '</tbody></table>';
+  }
+
+  const html = '<div class="card"><strong>Domains &amp; receiving — this workspace</strong>' +
+    '<div style="margin-top:8px">' + rows + '</div>' +
+    '<div style="margin-top:10px;font-size:12px;opacity:.75">' +
+    'Addresses you can reply from: ' + (boxes.length ? boxes.join(', ') : 'none yet') + '. ' +
+    'A domain with no signing key still SENDS; it cannot receive, because nothing proves an inbound delivery came from the provider. ' +
+    'The key is the domain&rsquo;s own value (Mailgun &rarr; Send &rarr; Domains &rarr; the domain &rarr; Webhook signing key) — a short value, not the longer sending API key.' +
+    '</div></div>';
   el.innerHTML = html;
+}
+
+// Paste (or rotate) the domain's inbound signing key. Same route the customer screen uses.
+function peiSetKey(domainId) {
+  const d = (PEI.domains || []).filter(function (x) { return String(x.id) === String(domainId); })[0] || {};
+  const dom = d.domain || 'this domain';
+  showModal('Inbound signing key — ' + escapeHtml(dom),
+    '<p style="font-size:13px;opacity:.85">Mailgun signs every inbound delivery with this domain&rsquo;s key. Paste it here and CoreSwift can verify what arrives. Without it, every delivery for this domain is refused.</p>' +
+    '<div class="form-group"><label>Webhook signing key for ' + escapeHtml(dom) + '</label>' +
+    '<input id="peiKeyInput" type="password" autocomplete="off" placeholder="paste the key from the domain&rsquo;s Mailgun settings" style="width:100%"></div>' +
+    (d.webhook_signing_key_status === 'usable'
+      ? '<p style="font-size:12px;opacity:.75">A key is stored (' + escapeHtml(String(d.webhook_signing_key_length || 0)) + ' characters). It is never shown again — saving a new one rotates it.</p>'
+      : ''),
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="peiSaveKey(\'' + domainId + '\')">Save key</button>');
+}
+
+async function peiSaveKey(domainId) {
+  const input = document.getElementById('peiKeyInput');
+  const value = (input && input.value || '').trim();
+  if (!value) { toast('Paste the key first.', 'error'); return; }
+  try {
+    await API.patch('/private-email/domains/' + encodeURIComponent(domainId), { webhook_signing_key: value });
+    closeModal();
+    toast('Signing key saved — deliveries can now be authenticated.');
+    loadPrivateEmailTab();
+  } catch (e) { toast('Could not save the key: ' + (planGateText(e) || e.message), 'error'); }
+}
+
+// Re-read the provider's own state for this domain (verification can land after it was added).
+async function peiVerifyDomain(domainId) {
+  try {
+    await API.post('/private-email/domains/' + encodeURIComponent(domainId) + '/verify', {});
+    toast('Re-checked with the provider.');
+    loadPrivateEmailTab();
+  } catch (e) { toast('Re-check failed: ' + (planGateText(e) || e.message), 'error'); }
+}
+
+// The records to add AND the address the provider must post to — with the key state beside it.
+async function peiShowRecords(domainId) {
+  showModal('Mail for this domain',
+    '<div id="peiRecBody"><div class="loading-wrap"><div class="spinner"></div> Asking the provider...</div></div>',
+    '<button class="btn btn-secondary" onclick="closeModal()">Close</button>');
+  const body = document.getElementById('peiRecBody');
+  try {
+    const r = await API.get('/private-email/domains/' + encodeURIComponent(domainId) + '/records');
+    let html = '';
+    if (r && r.inbound_webhook_url) {
+      html += '<div class="form-group"><label>Where the provider posts incoming mail</label>' +
+        '<code style="word-break:break-all">' + escapeHtml(r.inbound_webhook_url) + '</code>' +
+        '<button class="btn btn-ghost btn-xs" data-copy="' + escapeHtmlAttr(r.inbound_webhook_url) + '">Copy</button></div>' +
+        '<p style="font-size:12px;opacity:.8">Signing key: <strong>' + (r.inbound_signing_key_configured ? 'set' : 'not set — inbound refused') + '</strong></p>';
+    }
+    const groups = (r && r.groups) || [];
+    groups.forEach(function (g) {
+      const recs = (g.records || []).map(function (x) {
+        return '<tr><td>' + escapeHtml(x.type || '') + '</td><td><code style="word-break:break-all">' + escapeHtml(x.name || '') +
+          '</code></td><td><code style="word-break:break-all">' + escapeHtml(x.value || '') + '</code></td></tr>';
+      }).join('');
+      html += '<h4 style="margin:14px 0 4px">' + escapeHtml(g.title || 'Records') + '</h4>' +
+        (recs ? '<table style="width:100%;font-size:12px"><tbody>' + recs + '</tbody></table>' : '<p style="font-size:12px;opacity:.75">The provider reports no records for this group.</p>');
+    });
+    body.innerHTML = html || '<p>The provider returned nothing for this domain.</p>';
+  } catch (e) {
+    body.innerHTML = '<p style="color:#b91c1c">Could not read the records: ' + escapeHtml(planGateText(e) || e.message) + '</p>';
+  }
 }
 
 async function peiOpen(id) {
