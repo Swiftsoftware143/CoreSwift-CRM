@@ -198,6 +198,7 @@
     <a href="#marketing">Marketing</a>
     <a href="#operations">Events, Portfolio &amp; Lists</a>
     <a href="#support-portal">Support</a>
+    <a href="#email-compliance">Email compliance</a>
     <a href="#automation-features">Automation</a>
     <a href="#tags-lists">Tags &amp; Lists</a>
     <a href="#tag-to-free-account">Tag to free account</a>
@@ -993,6 +994,74 @@ POST /api/public/contact</pre>
     <strong>Paid tier:</strong> Support tickets (embed widget + admin support panel + customer portal) + custom domain (use your own <code>support.yourdomain.com</code>) + email-to-ticket parsing + priority support.</p>
     <p>The public intake arms are <strong>not</strong> plan-gated, by decision: the embed widget script at <code>/s/&lt;tenant-id&gt;/widget.js</code> and the customer portal page are served on every plan, and a visitor's request is accepted and stored — a customer's request is never refused because of your plan, so nothing is lost either way. What a Free workspace gets instead of silence: the <strong>Dashboard</strong> shows a <strong>Customer requests you cannot open</strong> notice naming how many requests are waiting, the workspace dropdown flags them (<code>⚠ cannot open</code>), and <code>GET /api/auth/me/usage</code> carries the three fields the notice is built from (<code>tickets</code>, <code>tickets_readable</code>, <code>support_intake_unreadable</code>). Stored requests appear in <strong>Support Tickets</strong> the moment the plan includes it.</p>
     <p>Chatbot integrations are API-only on all tiers — you connect your own chatbot, we handle the ticket routing.</p>
+  </div>
+</section>
+
+<!-- ======= EMAIL COMPLIANCE ======= -->
+<section id="email-compliance">
+  <h2 class="sec-title"><span class="sec-num">✉️</span> Email Compliance &amp; Deliverability</h2>
+
+  <div class="card">
+    <h3>Every message you send leaves a record you can prove</h3>
+    <p>CoreSwift sends on your behalf &mdash; receipts, notifications, campaigns, support replies. Three questions matter for every one of them:
+    <em>did it arrive</em>, <em>who asked me to stop</em>, and <em>can I show the evidence</em>. The <strong>Mail compliance</strong> tab answers all three.</p>
+    <ul>
+      <li><strong>Delivery rate</strong> &mdash; how much of your mail the provider actually delivered.</li>
+      <li><strong>Bounce rate</strong> &mdash; how much of your list no longer exists. A high number is a list problem, not a sending problem.</li>
+      <li><strong>Complaint rate</strong> &mdash; how often someone pressed "this is spam". The ceiling is <strong>0.30%</strong>; above it, mailbox providers start refusing your mail outright. The figure is shown against that ceiling, never on its own.</li>
+    </ul>
+    <p>These are computed from the delivery reports your provider sends back, as they arrive. Until the first report lands the tab says so plainly instead of showing a tidy zero.</p>
+  </div>
+
+  <div class="card">
+    <h3>Nobody can be mailed after they ask you to stop</h3>
+    <p>Every non-essential message carries an opt-out link, and that link opens a page with no login to remember: it lists the campaigns that person is actually in, with a
+    tick box beside each, plus one choice to stop everything. One tick on one campaign stops that campaign only &mdash; it does not quietly end every other message you send them.</p>
+    <p>Receipts, password resets and security notices are <strong>not</strong> stoppable. That is the law and it is also the point: nobody should lose their reset link because they
+    unsubscribed from a newsletter.</p>
+    <p>An unsubscribe is honoured immediately and remembered permanently &mdash; including across a re-imported list, so nobody can be resurrected by accident. Any mail that is known
+    to be dead (a hard bounce) or hostile (a spam complaint) is blocked automatically, for your account only.</p>
+  </div>
+
+  <div class="card">
+    <h3>Your own words on your own opt-out page</h3>
+    <p>Title, explanation, the stop-everything label, the button, and the two confirmation lines are yours to write, in the Mail compliance tab. Clear a box and that line falls
+    back to the default wording rather than leaving a blank page. Only an owner or an admin can change them.</p>
+    <p>Give real thought to two of those lines: say plainly what the person is stopping, and make the confirmation say the change is saved. Those two sentences are what turns an
+    annoyed recipient into somebody who stays on your list for the mail they still want.</p>
+  </div>
+
+  <div class="card">
+    <h3>Take your list with you &mdash; and take your blocks with you</h3>
+    <p>Two downloads, both yours alone:</p>
+    <ul>
+      <li><strong>Every contact address (CSV)</strong> &mdash; one address per line, made for pasting into an email-checking service so you can clean a list before you send to it.</li>
+      <li><strong>Do-not-mail list (CSV)</strong> &mdash; every address that unsubscribed, hard-bounced or complained, with the reason and the date.</li>
+    </ul>
+    <p>You can also add an address by hand, and lift a block you know was wrong.</p>
+  </div>
+
+  <div class="card">
+    <h3>Your domains &mdash; one domain, three lanes</h3>
+    <p>Add a domain once, and then decide which jobs it does. Each lane is separate on purpose, because each carries its own sending reputation and its own DNS records.</p>
+    <ul>
+      <li><strong>Inbox</strong> &mdash; <code>you@yourdomain.com</code>. Real conversations with real people. The warmest lane; protect it.</li>
+      <li><strong>Automation</strong> &mdash; <code>mg.yourdomain.com</code>. Campaigns and sequences send from here, so a bad blast can never damage the name your replies come from.
+      Its replies point back at your inbox lane, so anyone who answers a campaign reaches a person.</li>
+      <li><strong>Calendar</strong> &mdash; <code>booking.yourdomain.com</code>. Public booking pages for your customers. Until that name resolves, pages are served from the platform
+      address so nothing is ever dead.</li>
+    </ul>
+    <p><strong>A lane only offers itself once its own records verify.</strong> Mail compliance &rarr; Your domains shows each lane with its status and the exact DNS records to add:
+    a verified lane reads <em>Verified</em>, and one still waiting says <em>Waiting on records</em> instead of pretending to work. A name you enter must sit under a domain you have
+    already added &mdash; the screen will not let an account advertise an address on a domain it does not own.</p>
+  </div>
+
+  <div class="card">
+    <h3>Sending reputation, and what sharing one means</h3>
+    <p>Sending reputation belongs to a <em>domain</em>. On your own verified domain, your reputation is your own: another account's mistake cannot touch it, and their complaint can
+    never silence your mail.</p>
+    <p>While you send on the platform's shared address, you share that reputation with everyone else &mdash; so the shared address carries a much smaller daily allowance than a domain of
+    your own. That is not a limit on you; it is what stops one careless sender from silencing everybody's password resets. Connect a domain to lift it.</p>
   </div>
 </section>
 

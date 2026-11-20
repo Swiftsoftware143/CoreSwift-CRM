@@ -263,4 +263,49 @@ workspace itself. The workspace, its people and its data stay, and another owner
   refusal sentence; 4) <em>Remove this domain</em> with a wrong name removes nothing and says so,
   and with the exact name answers <code>200</code> and the row disappears.</p>
 </section>
+
+<section>
+<h2>Email compliance — the numbers, the opt-outs, and the three lanes</h2>
+<p>Every message this app sends on a workspace's behalf now leaves evidence, and every workspace can see its own. Nothing here is estimated by the app: the delivery, bounce and
+complaint numbers come from the provider's own reports, arriving on a signed webhook and matched back to the account that sent the message.</p>
+
+<h3>What the Mail compliance tab answers</h3>
+<ul>
+  <li><strong>Delivery rate</strong> — accepted <em>and</em> delivered, not merely "we handed it over".</li>
+  <li><strong>Bounce rate</strong> — the share of a list that no longer exists. Above roughly 5% it is a list problem; the workspace's bulk lane pauses itself and the workspace is told to clean the list.</li>
+  <li><strong>Complaint rate</strong> — spam reports. The mailbox providers' ceiling is <strong>0.30%</strong>; crossing it is how a sending domain stops working for everyone who uses it.</li>
+</ul>
+<p>Until the first report arrives the tab says so instead of showing zeros, and the daily allowance is counted from the send log, never from a counter that can drift.</p>
+
+<h3>What is never stoppable, on purpose</h3>
+<p>Receipts, password resets, security notices <em>and the operator's own support-request alert</em> are transactional: a customer's "unsubscribe from everything" cannot silence them.
+That classification was wrong once — the operator alert was a stoppable class, so an owner who unsubscribed stopped being told somebody had asked for help. If you ever add a new
+message type, ask which of these it is before it ships: <em>can the recipient's preference be allowed to lose this message?</em> If the answer is no, it is transactional.</p>
+
+<h3>The do-not-mail list belongs to the workspace, never to the platform</h3>
+<p>One workspace's opt-out must never silence another workspace's mail to the same person, so suppression is stored per account. When a workspace asks why an address is blocked,
+read <em>their</em> list — never copy a block from another account "to be safe", and never lift one that came from a hard bounce or a complaint: those are harm control, not
+preference.</p>
+
+<h3>The opt-out page and its wording</h3>
+<p>The page lists the campaigns that address is actually in, each with its own tick box, plus one stop-everything choice. A tick on one campaign stops only that campaign. The
+wording (title, explanation, stop-everything label, button, and the two confirmation lines) is per workspace and edited from the Mail compliance tab by an owner or an admin;
+clearing a line restores the platform default rather than leaving a blank page.</p>
+
+<h3>Three lanes, one domain</h3>
+<p>A workspace adds a domain once and then chooses its jobs. <strong>Inbox</strong> carries human replies; <strong>automation</strong> (<code>mg.</code>) carries campaigns so a bad
+blast cannot damage the name replies come from; <strong>calendar</strong> (<code>booking.</code>) serves public booking pages. Each lane is offered only when its own records
+verify — a waiting lane reads "waiting on records" with the exact DNS rows to add, and a host must sit under a domain the account has already added.</p>
+<p>While a workspace sends on the platform's shared identity it shares that reputation with every other account, so the shared identity carries a small daily allowance
+(100/day by default) and an owned domain carries a large one (2,000/day). Transactional mail is never capped: a cap there is an outage.</p>
+
+<h3>When a customer says "my mail isn't arriving"</h3>
+<ol>
+  <li>Their <strong>complaint and bounce rates</strong> — a paused bulk lane explains the silence and names the fix.</li>
+  <li>Whether the address is on <strong>their</strong> do-not-mail list, and why (unsubscribed / hard bounce / complaint).</li>
+  <li>Whether the <strong>lane is verified</strong>, or still waiting on DNS.</li>
+  <li>Whether they are on the <strong>shared identity allowance</strong> and have spent it.</li>
+</ol>
+<p>Each of those four answers is visible in the console, and the send log records every attempt with the reason it was refused, so the answer is read rather than guessed.</p>
+</section>
 </body></html>
