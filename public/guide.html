@@ -397,9 +397,11 @@ Response:
   "total_contacts": 42,
   "total_companies": 15,
   "total_opportunities": 28,
-  "total_revenue": 5000.00
+  "total_revenue": 5000.00,
+  "revenue_by_currency": [ { "currency": "USD", "value": 5000.00 } ]
 }</pre>
-    <p><code>total_contacts</code> is a count of your active contacts — the ones shown in the contact list. <code>total_companies</code> and <code>total_opportunities</code> are row counts for your account. <code>total_revenue</code> is money, not a count: it is the sum of <code>opportunities.value</code> over the opportunities you have marked won, and <code>0</code> when you have none. These four are the whole response — no other key is returned.</p>
+    <p><code>total_contacts</code> is a count of your active contacts — the ones shown in the contact list. <code>total_companies</code> and <code>total_opportunities</code> are row counts for your account. <code>total_revenue</code> is money, not a count: it is the sum of <code>opportunities.value</code> over the opportunities you have marked won.</p>
+    <p><strong>Money is never added across currencies.</strong> <code>revenue_by_currency</code> is the won value in each currency your deals are written in. When your won deals sit in exactly one currency, <code>total_revenue</code> repeats that figure (and is <code>0</code> when you have won nothing yet); when they sit in two or more, <code>total_revenue</code> is <code>null</code> and only <code>revenue_by_currency</code> carries the answer — a single number there would add dollars to euros.</p>
   </div>
   <div class="card">
     <h3>Pipeline Summary</h3>
@@ -787,11 +789,27 @@ PATCH /api/companies/:id</pre>
   </div>
   <div class="card">
     <h3>Pipelines &amp; Deals</h3>
-    <p>Manage sales pipelines with custom stages. Track deals through pipeline stages with value, probability, and stage tracking.</p>
-    <pre>GET /api/pipelines
+    <p>Manage sales pipelines with custom stages. Track deals through pipeline stages with value, probability, and stage tracking. The <strong>Pipelines &amp; Deals</strong> screen is the deal tab: a drag-and-drop board and a table over the same deals, a search box and filters for owner, stage, source, date and “no activity in 14 days”, per-stage totals and weighted value (value × probability), and a deal detail page with its custom fields, owner and collaborators, follow-ups with due dates, file attachments and a full activity timeline.</p>
+    <pre>GET /api/deals            (search, owner/stage/source/date/rotting filters, totals)
+POST /api/deals
+GET /api/deals/:id        (deal + custom fields + collaborators + timeline + follow-ups + files)
+PATCH /api/deals/:id
+POST /api/deals/:id/stage (move; records history + runs the stage's hooks)
+POST /api/deals/:id/status (open / won / lost with a configurable lost reason)
+GET /api/deals/report     (win rate, average days to close, deals rotting in a stage)
+GET /api/pipelines
 POST /api/pipelines
-GET /api/pipelines/:pipeline_id/opportunities
-POST /api/pipelines/:pipeline_id/opportunities</pre>
+GET /api/pipelines/:pipeline_id/opportunities</pre>
+    <p><strong>Money is per currency.</strong> Stage totals, the filter summary and the report are grouped by currency; nothing adds one currency to another. Set the workspace currency once (Deals → Deal writer API → workspace currency) and every deal without an explicit currency uses it. A deal stores the exchange rate it was recorded at, so a past quarter does not move when rates do.</p>
+    <p><strong>Deal writer API.</strong> An outside system (for example a dispatch system turning an unbooked quote into a deal) writes deals with an issued API key:</p>
+    <pre>POST /api/external/deals
+  { "external_ref": "QUOTE-1042", "title": "Airport transfer", "value": 240,
+    "currency": "USD", "stage": "Qualified",
+    "custom_fields": { "pickup_city": "Miami" } }
+
+PATCH /api/external/deals/:external_ref/stage   { "stage": "Proposal" }
+POST  /api/external/deals/:external_ref/status  { "status": "won" }</pre>
+    <p><strong>One external reference is one deal.</strong> The first push creates the deal; every later push with the same reference updates that deal and answers <code>"created": false</code> instead of making a second one. <strong>Custom fields</strong> are how an industry adds what it needs — a courier account adds service level, pickup and drop-off city, job date and quote reference; nothing industry-specific is in the core.</p>
   </div>
 </section>
 
@@ -912,6 +930,17 @@ POST /api/lists/:id/members</pre>
     priority. The ticket list shows the answer deadline as a countdown that turns amber inside the last hour and red once it has passed, and
     <strong>Due soon</strong> lists only what is unanswered and due within four hours &mdash; soonest deadline first, because that is the order the
     work has to be done in. A clock is only set when a policy exists: an account with no policy gets an empty deadline rather than a wrong one.</p>
+    <h3>How a customer signs in — and how they get back in</h3>
+    <p>The customer page is your own: your name, your logo and your colour, taken from the same branding you set for
+    your email, so the message they receive and the page they open from it look like one company.</p>
+    <p>There are two ways in. <strong>Email me a sign-in link</strong> mails them a link that works once and expires in
+    thirty minutes &mdash; nothing to remember. The other way is the email address they wrote in with plus the
+    reference from any of their requests, which stays as the fallback for a workspace whose mail is not set up yet.</p>
+    <p>The link carries its one-time token in a part of the address a web server never receives, so it cannot be
+    picked out of a server log, and it is stored only as a scrambled fingerprint &mdash; a copy of the database yields
+    no working links. Asking for a link always answers the same way, whether or not that address has ever written in,
+    so the page cannot be used to find out who your customers are.</p>
+
     <h3>Finding one ticket</h3>
     <p>The box above the queue searches the whole account, not just the view you are looking at, because &ldquo;where is ticket 42&rdquo; has one
     answer. Type a <strong>ticket number</strong> (42, #42 or CS-42), an <strong>email address</strong>, a <strong>name</strong>, or a word from the
