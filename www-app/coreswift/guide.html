@@ -2095,6 +2095,27 @@ once.</p>
     the record.</p>
   </div>
 </section>
+<h2 id="mail-readiness">Before a mail feature will work: what it needs</h2>
+<p>Three different identities send and receive your mail, and each one is set up separately. If one is missing,
+the feature that needs it stops and tells you why — it does not fail quietly.</p>
+<ul>
+<li><strong>Ordinary mail</strong> — receipts, invitations, password resets, and your replies. It leaves as
+<code>noreply@yourdomain</code>. Until you verify your own domain it uses the shared platform identity, which
+means your customer sees our name rather than yours.</li>
+<li><strong>Automation mail</strong> — anything a rule, a sequence or a campaign sends. It leaves as
+<code>mg.yourdomain</code>, kept separate on purpose so a large send cannot damage the reputation of the address
+your receipts use. It cannot send at all until your domain is verified, because there is no base domain to build
+the subdomain from.</li>
+<li><strong>Inbound mail</strong> — the shared inbox you read and reply from. It needs your domain <em>and</em>
+the inbound signing key, because a delivery that cannot be authenticated is refused.</li>
+</ul>
+<p><strong>How to set any of them up:</strong> Email Domains &rarr; add your domain &rarr; add the records the
+page shows you &rarr; press <em>Re-check</em> until it reads verified &rarr; press <em>Set key</em> and paste your
+provider's HTTP webhook signing key (<code>mailgun &rarr; Settings &rarr; API Security</code>). The posting address
+for inbound mail is on the same page.</p>
+<p>When you open Campaigns before that is done, the screen is replaced by this setup with the exact reason —
+and nothing is sent or queued while it is stopped. Once the lane is ready the feature opens normally.</p>
+
 </body>
 </html>
 
