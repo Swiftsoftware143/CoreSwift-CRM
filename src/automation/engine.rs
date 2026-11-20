@@ -47,6 +47,23 @@ pub async fn fire_tag_trigger(
     }
 }
 
+/// Does this account's plan include automations at all?
+///
+/// ONE question, asked in ONE place, because the three trigger paths were answering it differently:
+/// measured 2026-11-20, the tag path refused to fire for a workspace whose plan carries no automations,
+/// while the list path and the score path did not — so the same workspace could run an automation
+/// through a list that it could not run through a tag. A gate that only some doors check is not a gate.
+async fn automations_enabled(db: &PgPool, tenant_id: Uuid) -> bool {
+    match crate::module_registry::resolve(db, tenant_id, "automation").await {
+        Ok(m) => m.enabled,
+        Err(e) => {
+            tracing::warn!(tenant = %tenant_id, error = %e,
+                "automation entitlement could not be resolved; refusing to fire (fail closed)");
+            false
+        }
+    }
+}
+
 pub async fn evaluate_tag_triggers(
     db: &PgPool,
     tenant_id: Uuid,
@@ -62,10 +79,7 @@ pub async fn evaluate_tag_triggers(
     // not include automations would keep firing every rule it had. Refusing here is a NO-FIRE, not an
     // error: the callers are fire-and-forget (`fire_tag_trigger`), and a plan without automations
     // simply runs none. The `no_plan` arm still grants (module_registry, ARM (a)).
-    if !crate::module_registry::resolve(db, tenant_id, "automation")
-        .await?
-        .enabled
-    {
+    if !automations_enabled(db, tenant_id).await {
         return Ok(());
     }
 
@@ -125,6 +139,9 @@ pub async fn fire_score_trigger(
     total_score: i32,
     category: &str,
 ) {
+    if !automations_enabled(db, tenant_id).await {
+        return;
+    }
     let Ok(rules) = sqlx::query_as::<_, AutomationRule>(concat!("SELECT ", rule_columns!(), " FROM automation_rules WHERE tenant_id=$1 AND trigger_type='ScoreChanged' AND is_active IS NOT FALSE"))
         .bind(tenant_id).fetch_all(db).await else { return };
     for rule in rules {
@@ -162,6 +179,11 @@ pub async fn fire_list_trigger(
     list_id: Uuid,
     trigger_type: &str,
 ) {
+    // The entitlement question, asked here too (see `automations_enabled`): without it this path was
+    // the way around the gate the tag path honours.
+    if !automations_enabled(db, tenant_id).await {
+        return;
+    }
     // `trigger_type` is a plain varchar(50) column — the dropped `::trigger_type` cast named an
     // enum type that does not exist in this database (42704), which silently turned every
     // list-triggered rule into a no-op (the `let Ok(...) else { return }` below swallowed it).
@@ -186,6 +208,84 @@ pub async fn fire_list_trigger(
                     {
                         tracing::warn!(rule = %rule.id, action = %rule.action_type, error = %e, "Automation action failed");
                     }
+                }
+            }
+        }
+    }
+}
+
+/// Fire a tenant's `StageChanged` automations when a DEAL enters a stage.
+///
+/// The label has been accepted by `POST /api/automation/rules` since the engine shipped, but
+/// nothing emitted it: measured 2026-11-20, `grep -rn StageChanged src/` found the rule-creation
+/// validation and no caller, so every StageChanged rule a customer wrote was decorative. This is
+/// the emitter, reached from the ONE deal writer (`crate::deals::writer::fire_stage_hooks`) — a
+/// stage move, a status transition that lands on a closed stage, and an API push onto a stage all
+/// pass through it.
+///
+/// WHO CALLS THIS: only `fire_stage_hooks`, and only when the stage carries an active
+/// `deal_stage_automations` row with `action_kind = 'workflow'`. That opt-in is deliberate: a
+/// stage with no hook must not run a rule somebody wrote months ago for a different stage.
+pub async fn fire_stage_trigger(
+    db: &PgPool,
+    tenant_id: Uuid,
+    opportunity_id: Uuid,
+    stage_id: Uuid,
+    moved_by: Option<Uuid>,
+) {
+    if !automations_enabled(db, tenant_id).await {
+        return;
+    }
+    // Legacy label first, then the dotted spelling, so a rule written either way fires.
+    for trigger_type in ["StageChanged", "stage.changed"] {
+        let Ok(rules) = sqlx::query_as::<_, AutomationRule>(concat!(
+            "SELECT ",
+            rule_columns!(),
+            " FROM automation_rules WHERE tenant_id=$1 AND trigger_type=$2 AND is_active IS NOT FALSE"
+        ))
+        .bind(tenant_id)
+        .bind(trigger_type)
+        .fetch_all(db)
+        .await
+        else {
+            return;
+        };
+
+        for rule in rules {
+            let matches =
+                if let Some(sid) = rule.trigger_config.get("stage_id").and_then(|v| v.as_str()) {
+                    if sid == "*" {
+                        true
+                    } else {
+                        Uuid::parse_str(sid)
+                            .map(|id| id == stage_id)
+                            .unwrap_or(false)
+                    }
+                } else if let Some(ids) = rule
+                    .trigger_config
+                    .get("stage_ids")
+                    .and_then(|v| v.as_array())
+                {
+                    ids.iter()
+                        .any(|v| v.as_str().and_then(|s| Uuid::parse_str(s).ok()) == Some(stage_id))
+                } else {
+                    // A rule with no stage filter means "any stage" — that is the only sensible
+                    // reading, and it makes the label usable without editing the rule first.
+                    true
+                };
+
+            if matches {
+                if let Err(e) =
+                    actions::execute_action(db, &rule, tenant_id, "opportunity", opportunity_id)
+                        .await
+                {
+                    tracing::warn!(
+                        rule = %rule.id,
+                        action = %rule.action_type,
+                        moved_by = ?moved_by,
+                        error = %e,
+                        "Automation action failed"
+                    );
                 }
             }
         }

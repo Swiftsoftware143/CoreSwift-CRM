@@ -626,6 +626,12 @@ pub async fn import_opportunities(
     let mut skipped = 0i64;
     let mut errors: Vec<String> = Vec::new();
 
+    // MONEY IS AMOUNT + CURRENCY (David, 2026-11-20). A CSV import that let the column default
+    // decide would file every row as USD, so the workspace's own currency is resolved once, up
+    // front, and an account that has not chosen one is told so instead of importing silently.
+    let currency_col = field_of("currency");
+    let default_money = crate::deals::fx::quote(&state.db, account_id, None).await?;
+
     for (n, record) in records.into_iter().enumerate() {
         let row_num = n + 1;
         let get = |idx: Option<usize>| -> String {
@@ -784,11 +790,30 @@ pub async fn import_opportunities(
             .await?
         };
 
+        // A per-row currency column wins when present; otherwise every row is in the workspace's
+        // own currency. Either way the row carries a rate and a rate date.
+        let row_currency = get(currency_col);
+        let money = if row_currency.is_empty()
+            || row_currency.eq_ignore_ascii_case(&default_money.currency)
+        {
+            default_money.clone()
+        } else {
+            match crate::deals::fx::quote(&state.db, account_id, Some(&row_currency)).await {
+                Ok(m) => m,
+                Err(e) => {
+                    errors.push(format!("Row {}: {}", row_num, e));
+                    skipped += 1;
+                    continue;
+                }
+            }
+        };
+
         let res = sqlx::query(
             r#"INSERT INTO opportunities
                  (id, tenant_id, pipeline_id, stage_id, contact_id, company_id, name,
-                  value, probability, expected_close_date, source)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8::numeric,$9,$10,'import')"#,
+                  value, probability, expected_close_date, source,
+                  currency, exchange_rate, rate_date, reporting_currency)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8::numeric,$9,$10,'import',$11,$12::numeric,$13,$14)"#,
         )
         .bind(Uuid::new_v4())
         .bind(account_id)
@@ -800,6 +825,10 @@ pub async fn import_opportunities(
         .bind(value)
         .bind(probability)
         .bind(expected_close)
+        .bind(&money.currency)
+        .bind(money.rate)
+        .bind(money.rate_date)
+        .bind(&money.reporting_currency)
         .execute(&state.db)
         .await;
 

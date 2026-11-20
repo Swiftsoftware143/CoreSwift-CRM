@@ -272,8 +272,8 @@ async fn distil_with_model(
     subject: &str,
     contact_name: Option<&str>,
 ) -> Option<Draft> {
-    let keys = crate::provider_keys::model_keys(pool, tenant_id).await;
-    if keys.is_empty() {
+    let mk = crate::provider_keys::model_keys_with_source(pool, tenant_id).await;
+    if mk.keys.is_empty() {
         return None;
     }
 
@@ -303,7 +303,17 @@ never the person's name or details.\n- The title is the question in the customer
         "Ticket subject: {subject}\n\nConversation:\n{transcript}\nWrite the article as JSON."
     );
 
-    let raw = match crate::ai::router::route_to_llm("deepseek", &keys, system, &user).await {
+    let raw = match crate::ai::router::route_to_llm_tracked(
+        pool,
+        tenant_id,
+        "ticket_learn",
+        "deepseek",
+        &mk,
+        system,
+        &user,
+    )
+    .await
+    {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(error = %e, "the model could not tidy a solved ticket; falling back to the rules");

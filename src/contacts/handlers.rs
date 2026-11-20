@@ -379,6 +379,17 @@ pub async fn delete(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+
+    // WHICH contact went, read BEFORE the row does: once the row is gone there is nothing left to
+    // name it in the trail, and "a contact was deleted" is worth much less than which one.
+    let gone: Option<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT first_name, last_name, email FROM contacts WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(id)
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await?;
 
     let result = sqlx::query("DELETE FROM contacts WHERE id = $1 AND tenant_id = $2")
         .bind(id)
@@ -388,6 +399,21 @@ pub async fn delete(
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound(format!("Contact {} not found", id)));
+    }
+
+    if let Some((first, last, email)) = gone {
+        let name = format!("{first} {last}").trim().to_string();
+        audit::logger::log_event(
+            &state.db,
+            account_id,
+            Some(user_id),
+            "contact.deleted",
+            "contact",
+            Some(id),
+            Some(json!({"name": name, "email": email})),
+            None,
+        )
+        .await;
     }
 
     Ok(Json(json!({"message": "Contact deleted successfully"})))

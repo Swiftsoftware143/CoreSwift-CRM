@@ -34,17 +34,18 @@
     o[key] = val;
     try { localStorage.setItem(LS_KEY, JSON.stringify(o)); } catch(e) {}
   }
-  /* Retired 2026-11-10 with the per-screen auto-open: the panel no longer keys "has this browser
-     ever seen a guide" off one global flag. A screen's own dismissal lives in `inline_guide_closed`
-     (below), so `inline_guide_seen` is no longer read or written. */
-  /* kanban (2026-11-10) — the operator asked for the guide to open BY DEFAULT ON EVERY SCREEN, not
-     once ever. `autoOpenedKeys` records the screens this page load has already auto-opened (the SPA
-     repaints constantly, and re-opening under the user would be the old annoyance in reverse);
-     `closedThisLoad` records the screens the user closed by hand this load, so the observer cannot
-     pop them back. Persistence is per screen: "Don't show this again" pins ONE screen closed in
-     `inline_guide_closed`, and the round ? button always reopens it. */
-  var autoOpenedKeys = {};
-  var closedThisLoad = {};
+  /* kanban t_ff948669 — has this browser ever seen the panel open? `seenAnyGuide(true)` records it,
+     `seenAnyGuide()` reads it. If localStorage is unavailable (private mode, blocked storage) the
+     read answers TRUE, i.e. "already seen": the panel then never auto-opens rather than opening on
+     every single load, which is the annoyance this flag exists to remove. */
+  var SEEN_KEY = 'inline_guide_seen';
+  /* Set the first time this page load decides to auto-open, so the MutationObserver (which re-runs
+     updateGuide whenever the SPA paints) cannot close the panel again a moment after it opened. */
+  var autoOpenedThisLoad = false;
+  function seenAnyGuide(mark) {
+    if (mark) { try { localStorage.setItem(SEEN_KEY, '1'); } catch(e) {} return true; }
+    try { return localStorage.getItem(SEEN_KEY) === '1'; } catch(e) { return true; }
+  }
   function esc(s) {
     if (!s) return '';
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -133,39 +134,26 @@
         '</div>' +
       '</div>';
     document.body.appendChild(widget);
+    // MOUNTED, BUT NOT SHOWN, WITHOUT A SESSION. The console swaps its login form for the application without
+    // reloading, so hiding (rather than refusing to mount) is what lets the guide appear the moment somebody
+    // signs in — no reload, no second mount, one owner of the element.
+    widget.style.display = hasSession() ? '' : 'none';
 
     toggle = document.getElementById('ig-toggle');
     panel = document.getElementById('ig-panel');
     var closeBtn = document.getElementById('ig-close');
     var dismissBtn = document.getElementById('ig-dismiss');
 
-    toggle.addEventListener('click', function(){
-      /* Reopening by hand clears this load's hand-close for the screen, so the observer cannot
-         shut it again a moment later. */
-      if (!panel.classList.contains('open')) delete closedThisLoad[getPageKey()];
-      panel.classList.toggle('open');
-    });
-    closeBtn.addEventListener('click', function(){
-      /* Closed by hand on THIS screen for this page load only: it must not pop back from the
-         SPA's next repaint, and it must not be remembered as "don't show again". */
-      closedThisLoad[getPageKey()] = true;
-      panel.classList.remove('open');
-    });
+    toggle.addEventListener('click', function(){ panel.classList.toggle('open'); });
+    closeBtn.addEventListener('click', function(){ panel.classList.remove('open'); });
     dismissBtn.addEventListener('click', function(){
       setClosed(getPageKey(), true);
-      closedThisLoad[getPageKey()] = true;
       panel.classList.remove('open');
-      /* The round ? button is NOT hidden: the operator asked for the guide to be always
-         reopenable, so "Don't show this again" silences the automatic opening only. */
+      toggle.style.display = 'none';
     });
   }
 
   function getPageKey() {
-    /* A SPA host that switches screens in JS (CoreSwift's tabs, FunnelSwift's) never touches the
-       path or the hash, so keying on the URL alone would collapse every screen onto ONE key: one
-       dismissal would silence the guide across the whole console. `forcedKey` is the screen the
-       host told the widget is open (window.inlineGuidePage), so it wins. */
-    if (forcedKey) return forcedKey;
     var path = window.location.pathname.replace(/\/+$/, '') + window.location.search;
     var hash = window.location.hash.replace(/^#/, '');
     return hash || path;
@@ -197,17 +185,19 @@
       actionsEl.innerHTML = '';
     }
 
-    // Show the panel by default on every screen the operator has not dismissed
-    if (closed === true || closedThisLoad[key]) {
-      /* Pinned closed on THIS screen ("Don't show this again"), or closed by hand this load. */
+    // Show panel if not dismissed
+    if (closed === true) {
       panel.classList.remove('open');
-    } else if (!autoOpenedKeys[key]) {
-      /* Open by default, once per screen per page load — the operator's spec: opens by default,
-         skippable, always reopenable. autoOpenedKeys stops the SPA's constant repaints from
-         re-opening it under the user; closedThisLoad (above) stops a hand-close being undone; and
-         the round ? button, which is never hidden, always reopens it. */
-      autoOpenedKeys[key] = true;
+    } else if (!autoOpenedThisLoad && !seenAnyGuide()) {
+      /* First screen this browser has ever opened: show it once, and leave it open for this page
+         load (autoOpenedThisLoad stops the observer from closing it under the user). */
+      autoOpenedThisLoad = true;
+      seenAnyGuide(true);
       panel.classList.add('open');
+    } else {
+      /* kanban t_ff948669 — and after that, STAY CLOSED. It used to re-open on every screen load,
+         covering the dashboard it describes; the round ? button is always there to open it. */
+      panel.classList.remove('open');
     }
   }
 
@@ -235,4 +225,52 @@
   if (document.getElementById('app')) {
     observer.observe(document.getElementById('app'), { childList: true, subtree: true });
   }
+
+  // ── session gate: NEVER IN FRONT OF THE LOGIN (David, 2026-11-18) ─────────────────────────────
+  // Both the console and the admin panel serve their login form from the SAME page that later becomes
+  // the application, so a widget that mounts on load appears to a stranger who has not signed in —
+  // and the page it then explains is one they cannot see. There is one session key in both surfaces
+  // (`crm_token`), so the widget waits for it: it mounts when a session exists, and it removes itself
+  // if the session goes away (sign-out).
+  //
+  // 2026-11-19 (measured in Chromium on app.coreswiftcrm.com): these three helpers were inserted
+  // INSIDE the hashchange listener above, so they were out of scope everywhere else. `createWidget()`
+  // threw "hasSession is not defined" BEFORE it wired the toggle, and the timer threw
+  // "syncWithSession is not defined" — the guide "?" button did nothing on every CoreSwift page load
+  // and the console logged two ReferenceErrors plus a null-`style` TypeError. They belong at IIFE
+  // scope, where the timer and createWidget() can both reach them.
+  function hasSession() {
+    try { return !!localStorage.getItem('crm_token'); } catch (e) { return false; }
+  }
+
+  // Bring the widget in line with the session, whenever that changes: shown after a login, removed
+  // after a sign-out. Cheap, idempotent, and it cannot produce two widgets because it never creates one.
+  function syncWithSession() {
+    var widgetEl = document.getElementById('inline-guide-widget');
+    var toggleEl = document.getElementById('ig-toggle');
+    if (!hasSession()) {
+      // Signed out: take the whole widget out of the page. `widgetCreated` is reset so the NEXT
+      // sign-in on this same page (the console swaps its form for the app without a reload) builds
+      // a fresh, fully wired widget instead of leaving a stripped one behind.
+      if (widgetEl) widgetEl.remove();
+      if (widgetCreated) {
+        widgetCreated = false;
+        widget = toggle = panel = null;
+      }
+      return;
+    }
+    // Signed in: if the widget is missing (sign-in after a sign-out on the same page, or a host that
+    // wiped document.body), build it now. updateGuide() is the ONE builder; this only nudges it.
+    if (!widgetEl || !toggleEl) {
+      widgetCreated = false;
+      widget = toggle = panel = null;
+      updateGuide();
+      return;
+    }
+    widgetEl.style.display = '';
+  }
+
+  // One timer, one owner: a login shows the guide, a sign-out removes it.
+  setInterval(syncWithSession, 2000);
+  syncWithSession();
 })();

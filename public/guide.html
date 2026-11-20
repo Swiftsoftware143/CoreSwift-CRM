@@ -198,6 +198,7 @@
     <a href="#marketing">Marketing</a>
     <a href="#operations">Events, Portfolio &amp; Lists</a>
     <a href="#support-portal">Support</a>
+    <a href="#email-compliance">Email compliance</a>
     <a href="#automation-features">Automation</a>
     <a href="#tags-lists">Tags &amp; Lists</a>
     <a href="#tag-to-free-account">Tag to free account</a>
@@ -326,6 +327,54 @@
     <p><strong>Your calendar&rsquo;s own look.</strong> Colours and font are yours: brand colour, text colour, page background, one of seven font stacks, and a logo. Save it and the booking page wears it immediately — including when it is embedded on your own site.</p>
     <p><strong>What customers get told.</strong> A confirmation when they book, with what they bought, when it runs, what it cost and the manage link. The confirmation invites a reply, and the reply reaches the address you set on your sending domain — so a customer with a question gets a person.</p>
   </div>
+
+  <div class="card">
+    <h3>Putting your calendar on your own website</h3>
+    <p>One file, three shapes. Paste the snippet on your site and the calendar keeps its own origin, so your page never touches your customers&rsquo; booking details and a change here can never break your site.</p>
+    <p><strong>1. Inline</strong> &mdash; the calendar sits in the page and resizes itself as the visitor filters or picks.</p>
+    <pre><code>&lt;div id="my-bookings"&gt;&lt;/div&gt;
+&lt;script src="https://booking.coreswiftcrm.com/embed.js"
+        data-calendar="consultations"
+        data-mode="inline"
+        data-target="my-bookings"&gt;&lt;/script&gt;</code></pre>
+    <p><strong>2. Pop&#8209;up</strong> &mdash; a floating button in the corner of your site opens the calendar over the page, so a visitor never leaves what they were reading. The pop&#8209;up is part of the snippet: you do not build it, and pressing Escape or the &times; closes it (a finished booking closes it too).</p>
+    <pre><code>&lt;script src="https://booking.coreswiftcrm.com/embed.js"
+        data-calendar="consultations"
+        data-mode="popup"
+        data-label="Book a call"&gt;&lt;/script&gt;</code></pre>
+    <p><strong>What a booking does to the CRM.</strong> A confirmed booking can <em>tag</em> the person, put them in a <em>list</em>, or both &mdash; and either one can be what an automation watches, so a booked appointment can start a sequence, notify a salesperson or move a deal. Rules are per calendar and per stage: <em>on confirm</em> and <em>on cancel</em>, each able to add or remove. If the booker is not in your CRM yet, a contact is created from their name and email so the tag or list has somewhere to land.</p>
+    <p>Tag rules and list rules are separate settings on purpose: an owner may want only a tag (a lightweight mark), only a list (a membership they mail to), or both. Neither is a reminder &mdash; reminders are their own settings and still run on their own schedule.</p>
+
+    <p><strong>Where the button sits, and when the calendar opens by itself.</strong> The pop&#8209;up is configurable, because a booking prompt that appears the wrong way does more harm than no prompt:</p>
+    <ul>
+      <li><code>data-position</code> &mdash; <code>bottom-right</code> (default), <code>bottom-left</code>, <code>top-right</code>, <code>top-left</code>.</li>
+      <li><code>data-trigger</code> &mdash; <code>click</code> (default, the visitor asks), <code>delay</code> (open by itself), <code>exit</code> (when the pointer leaves the page), or <code>delay-exit</code> (whichever happens first).</li>
+      <li><code>data-delay</code> &mdash; seconds before a <code>delay</code> trigger fires. Default 10, capped at 120.</li>
+      <li><code>data-once</code> &mdash; how often an <em>automatic</em> open may happen: <code>session</code> (default), <code>day</code>, <code>week</code>, <code>ever</code>, or <code>off</code> for every visit.</li>
+      <li><code>data-hide-mobile="true"</code> &mdash; render nothing at all on small screens.</li>
+    </ul>
+    <p>Four rules are built in and are not optional. <strong>A click always works</strong> &mdash; it is the visitor asking. An automatic open happens <strong>at most once per <code>data-once</code> window, tracked per calendar</strong>. Someone who has <strong>already completed a booking is never auto-prompted again</strong>. And <strong>exit&#8209;intent never fires on touch screens</strong>, where there is no pointer to leave &mdash; a timer pretending to be exit&#8209;intent is just a pop&#8209;up nobody asked for.</p>
+    <pre><code>&lt;script src="https://booking.coreswiftcrm.com/embed.js"
+        data-calendar="consultations"
+        data-mode="popup"
+        data-label="Book a call"
+        data-position="bottom-left"
+        data-trigger="delay"
+        data-delay="15"
+        data-once="day"&gt;&lt;/script&gt;</code></pre>
+
+    <p><strong>3. Inside your own pop&#8209;up, panel or section</strong> &mdash; if you already have a modal, add <code>data-fill="container"</code> and the calendar fills the box you give it instead of reporting its own height. Whatever sizes your container decides the size and the calendar scrolls inside it, so there are no gaps and nothing is cut off.</p>
+    <pre><code>&lt;div id="booking-modal-body" style="height:min(88vh,900px)"&gt;
+  &lt;div id="my-bookings" style="height:100%"&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;script src="https://booking.coreswiftcrm.com/embed.js"
+        data-calendar="consultations"
+        data-mode="inline"
+        data-fill="container"
+        data-min-height="420"
+        data-target="my-bookings"&gt;&lt;/script&gt;</code></pre>
+    <p>Without <code>data-fill</code> the calendar reports its own height (clamped so a long list of dates cannot make your page enormous). With it, the container is in charge &mdash; which is what you want inside a pop&#8209;up.</p>
+  </div>
 </section>
 
 <!-- ======= 2. DASHBOARD ======= -->
@@ -348,9 +397,11 @@ Response:
   "total_contacts": 42,
   "total_companies": 15,
   "total_opportunities": 28,
-  "total_revenue": 5000.00
+  "total_revenue": 5000.00,
+  "revenue_by_currency": [ { "currency": "USD", "value": 5000.00 } ]
 }</pre>
-    <p><code>total_contacts</code> is a count of your active contacts — the ones shown in the contact list. <code>total_companies</code> and <code>total_opportunities</code> are row counts for your account. <code>total_revenue</code> is money, not a count: it is the sum of <code>opportunities.value</code> over the opportunities you have marked won, and <code>0</code> when you have none. These four are the whole response — no other key is returned.</p>
+    <p><code>total_contacts</code> is a count of your active contacts — the ones shown in the contact list. <code>total_companies</code> and <code>total_opportunities</code> are row counts for your account. <code>total_revenue</code> is money, not a count: it is the sum of <code>opportunities.value</code> over the opportunities you have marked won.</p>
+    <p><strong>Money is never added across currencies.</strong> <code>revenue_by_currency</code> is the won value in each currency your deals are written in. When your won deals sit in exactly one currency, <code>total_revenue</code> repeats that figure (and is <code>0</code> when you have won nothing yet); when they sit in two or more, <code>total_revenue</code> is <code>null</code> and only <code>revenue_by_currency</code> carries the answer — a single number there would add dollars to euros.</p>
   </div>
   <div class="card">
     <h3>Pipeline Summary</h3>
@@ -738,11 +789,27 @@ PATCH /api/companies/:id</pre>
   </div>
   <div class="card">
     <h3>Pipelines &amp; Deals</h3>
-    <p>Manage sales pipelines with custom stages. Track deals through pipeline stages with value, probability, and stage tracking.</p>
-    <pre>GET /api/pipelines
+    <p>Manage sales pipelines with custom stages. Track deals through pipeline stages with value, probability, and stage tracking. The <strong>Pipelines &amp; Deals</strong> screen is the deal tab: a drag-and-drop board and a table over the same deals, a search box and filters for owner, stage, source, date and “no activity in 14 days”, per-stage totals and weighted value (value × probability), and a deal detail page with its custom fields, owner and collaborators, follow-ups with due dates, file attachments and a full activity timeline.</p>
+    <pre>GET /api/deals            (search, owner/stage/source/date/rotting filters, totals)
+POST /api/deals
+GET /api/deals/:id        (deal + custom fields + collaborators + timeline + follow-ups + files)
+PATCH /api/deals/:id
+POST /api/deals/:id/stage (move; records history + runs the stage's hooks)
+POST /api/deals/:id/status (open / won / lost with a configurable lost reason)
+GET /api/deals/report     (win rate, average days to close, deals rotting in a stage)
+GET /api/pipelines
 POST /api/pipelines
-GET /api/pipelines/:pipeline_id/opportunities
-POST /api/pipelines/:pipeline_id/opportunities</pre>
+GET /api/pipelines/:pipeline_id/opportunities</pre>
+    <p><strong>Money is an amount plus a currency code.</strong> A workspace states two currencies under Deals \u2192 Deals settings: a <strong>default currency</strong> (what a new deal is priced in when nobody says otherwise \u2014 <strong>the US dollar is the standing default</strong>, so a workspace that has not chosen one prices and reports in USD, and nobody is asked to pick a currency before their first deal) and a <strong>reporting currency</strong> (what totals and reports are computed in). Every deal keeps the <strong>exchange rate</strong> it was recorded at and <strong>the date that rate was true</strong>, so a past quarter never moves when the market does. Stage totals, the filter summary and the report show each currency separately <em>and</em> the reporting-currency equivalent built from those stored rates \u2014 never one number that adds dollars to euros. A money <strong>custom field</strong> follows the same rules: its own amount, its own currency code and its own stored rate. Rates come from a table refreshed daily; <em>Refresh rates</em> in Deals settings pulls today\u2019s figures on demand.
+    <p><strong>Deal writer API.</strong> An outside system (for example a dispatch system turning an unbooked quote into a deal) writes deals with an issued API key:</p>
+    <pre>POST /api/external/deals
+  { "external_ref": "QUOTE-1042", "title": "Airport transfer", "value": 240,
+    "currency": "USD", "stage": "Qualified",
+    "custom_fields": { "pickup_city": "Miami" } }
+
+PATCH /api/external/deals/:external_ref/stage   { "stage": "Proposal" }
+POST  /api/external/deals/:external_ref/status  { "status": "won" }</pre>
+    <p><strong>One external reference is one deal.</strong> The first push creates the deal; every later push with the same reference updates that deal and answers <code>"created": false</code> instead of making a second one. <strong>Custom fields</strong> are how an industry adds what it needs — a courier account adds service level, pickup and drop-off city, job date and quote reference; nothing industry-specific is in the core.</p>
   </div>
 </section>
 
@@ -863,6 +930,27 @@ POST /api/lists/:id/members</pre>
     priority. The ticket list shows the answer deadline as a countdown that turns amber inside the last hour and red once it has passed, and
     <strong>Due soon</strong> lists only what is unanswered and due within four hours &mdash; soonest deadline first, because that is the order the
     work has to be done in. A clock is only set when a policy exists: an account with no policy gets an empty deadline rather than a wrong one.</p>
+    <h3>What the AI has cost you — and with whose key</h3>
+    <p>Every AI feature in this workspace now keeps a tally: which feature called a model, which provider
+    answered, how many tokens went in and out, and whether your own key or the platform's paid for it. The
+    AI panel shows the last thirty days by provider, the most recent calls, and how many ran on the platform
+    key rather than yours.</p>
+    <p>It also tells you the truth when the AI is <strong>off</strong>. An empty tally used to read as
+    &ldquo;free&rdquo; when the real answer was &ldquo;no key is set&rdquo;: the panel now says so plainly,
+    with the field to fix it right underneath. Failed calls are recorded too &mdash; a provider refusing a
+    key is exactly the thing worth seeing, and a tally that counted only successes could never show it.</p>
+
+    <h3>How a customer signs in — and how they get back in</h3>
+    <p>The customer page is your own: your name, your logo and your colour, taken from the same branding you set for
+    your email, so the message they receive and the page they open from it look like one company.</p>
+    <p>There are two ways in. <strong>Email me a sign-in link</strong> mails them a link that works once and expires in
+    thirty minutes &mdash; nothing to remember. The other way is the email address they wrote in with plus the
+    reference from any of their requests, which stays as the fallback for a workspace whose mail is not set up yet.</p>
+    <p>The link carries its one-time token in a part of the address a web server never receives, so it cannot be
+    picked out of a server log, and it is stored only as a scrambled fingerprint &mdash; a copy of the database yields
+    no working links. Asking for a link always answers the same way, whether or not that address has ever written in,
+    so the page cannot be used to find out who your customers are.</p>
+
     <h3>Finding one ticket</h3>
     <p>The box above the queue searches the whole account, not just the view you are looking at, because &ldquo;where is ticket 42&rdquo; has one
     answer. Type a <strong>ticket number</strong> (42, #42 or CS-42), an <strong>email address</strong>, a <strong>name</strong>, or a word from the
@@ -993,6 +1081,74 @@ POST /api/public/contact</pre>
     <strong>Paid tier:</strong> Support tickets (embed widget + admin support panel + customer portal) + custom domain (use your own <code>support.yourdomain.com</code>) + email-to-ticket parsing + priority support.</p>
     <p>The public intake arms are <strong>not</strong> plan-gated, by decision: the embed widget script at <code>/s/&lt;tenant-id&gt;/widget.js</code> and the customer portal page are served on every plan, and a visitor's request is accepted and stored — a customer's request is never refused because of your plan, so nothing is lost either way. What a Free workspace gets instead of silence: the <strong>Dashboard</strong> shows a <strong>Customer requests you cannot open</strong> notice naming how many requests are waiting, the workspace dropdown flags them (<code>⚠ cannot open</code>), and <code>GET /api/auth/me/usage</code> carries the three fields the notice is built from (<code>tickets</code>, <code>tickets_readable</code>, <code>support_intake_unreadable</code>). Stored requests appear in <strong>Support Tickets</strong> the moment the plan includes it.</p>
     <p>Chatbot integrations are API-only on all tiers — you connect your own chatbot, we handle the ticket routing.</p>
+  </div>
+</section>
+
+<!-- ======= EMAIL COMPLIANCE ======= -->
+<section id="email-compliance">
+  <h2 class="sec-title"><span class="sec-num">✉️</span> Email Compliance &amp; Deliverability</h2>
+
+  <div class="card">
+    <h3>Every message you send leaves a record you can prove</h3>
+    <p>CoreSwift sends on your behalf &mdash; receipts, notifications, campaigns, support replies. Three questions matter for every one of them:
+    <em>did it arrive</em>, <em>who asked me to stop</em>, and <em>can I show the evidence</em>. The <strong>Mail compliance</strong> tab answers all three.</p>
+    <ul>
+      <li><strong>Delivery rate</strong> &mdash; how much of your mail the provider actually delivered.</li>
+      <li><strong>Bounce rate</strong> &mdash; how much of your list no longer exists. A high number is a list problem, not a sending problem.</li>
+      <li><strong>Complaint rate</strong> &mdash; how often someone pressed "this is spam". The ceiling is <strong>0.30%</strong>; above it, mailbox providers start refusing your mail outright. The figure is shown against that ceiling, never on its own.</li>
+    </ul>
+    <p>These are computed from the delivery reports your provider sends back, as they arrive. Until the first report lands the tab says so plainly instead of showing a tidy zero.</p>
+  </div>
+
+  <div class="card">
+    <h3>Nobody can be mailed after they ask you to stop</h3>
+    <p>Every non-essential message carries an opt-out link, and that link opens a page with no login to remember: it lists the campaigns that person is actually in, with a
+    tick box beside each, plus one choice to stop everything. One tick on one campaign stops that campaign only &mdash; it does not quietly end every other message you send them.</p>
+    <p>Receipts, password resets and security notices are <strong>not</strong> stoppable. That is the law and it is also the point: nobody should lose their reset link because they
+    unsubscribed from a newsletter.</p>
+    <p>An unsubscribe is honoured immediately and remembered permanently &mdash; including across a re-imported list, so nobody can be resurrected by accident. Any mail that is known
+    to be dead (a hard bounce) or hostile (a spam complaint) is blocked automatically, for your account only.</p>
+  </div>
+
+  <div class="card">
+    <h3>Your own words on your own opt-out page</h3>
+    <p>Title, explanation, the stop-everything label, the button, and the two confirmation lines are yours to write, in the Mail compliance tab. Clear a box and that line falls
+    back to the default wording rather than leaving a blank page. Only an owner or an admin can change them.</p>
+    <p>Give real thought to two of those lines: say plainly what the person is stopping, and make the confirmation say the change is saved. Those two sentences are what turns an
+    annoyed recipient into somebody who stays on your list for the mail they still want.</p>
+  </div>
+
+  <div class="card">
+    <h3>Take your list with you &mdash; and take your blocks with you</h3>
+    <p>Two downloads, both yours alone:</p>
+    <ul>
+      <li><strong>Every contact address (CSV)</strong> &mdash; one address per line, made for pasting into an email-checking service so you can clean a list before you send to it.</li>
+      <li><strong>Do-not-mail list (CSV)</strong> &mdash; every address that unsubscribed, hard-bounced or complained, with the reason and the date.</li>
+    </ul>
+    <p>You can also add an address by hand, and lift a block you know was wrong.</p>
+  </div>
+
+  <div class="card">
+    <h3>Your domains &mdash; one domain, three lanes</h3>
+    <p>Add a domain once, and then decide which jobs it does. Each lane is separate on purpose, because each carries its own sending reputation and its own DNS records.</p>
+    <ul>
+      <li><strong>Inbox</strong> &mdash; <code>you@yourdomain.com</code>. Real conversations with real people. The warmest lane; protect it.</li>
+      <li><strong>Automation</strong> &mdash; <code>mg.yourdomain.com</code>. Campaigns and sequences send from here, so a bad blast can never damage the name your replies come from.
+      Its replies point back at your inbox lane, so anyone who answers a campaign reaches a person.</li>
+      <li><strong>Calendar</strong> &mdash; <code>booking.yourdomain.com</code>. Public booking pages for your customers. Until that name resolves, pages are served from the platform
+      address so nothing is ever dead.</li>
+    </ul>
+    <p><strong>A lane only offers itself once its own records verify.</strong> Mail compliance &rarr; Your domains shows each lane with its status and the exact DNS records to add:
+    a verified lane reads <em>Verified</em>, and one still waiting says <em>Waiting on records</em> instead of pretending to work. A name you enter must sit under a domain you have
+    already added &mdash; the screen will not let an account advertise an address on a domain it does not own.</p>
+  </div>
+
+  <div class="card">
+    <h3>Sending reputation, and what sharing one means</h3>
+    <p>Sending reputation belongs to a <em>domain</em>. On your own verified domain, your reputation is your own: another account's mistake cannot touch it, and their complaint can
+    never silence your mail.</p>
+    <p>While you send on the platform's shared address, you share that reputation with everyone else &mdash; so the shared address carries a much smaller daily allowance than a domain of
+    your own. That is not a limit on you; it is what stops one careless sender from silencing everybody's password resets. Connect a domain to lift it.</p>
   </div>
 </section>
 
@@ -1815,6 +1971,7 @@ once.</p>
 <p><strong>It follows the plan, not the domain.</strong> On this plan ladder catch-all is included from <strong>Professional</strong> upward &mdash; Professional, Enterprise and Agency &mdash; and is not sold on Free or Starter. Pressing the button on a plan that does not include it answers with the plan that unlocks it and what it costs, and nothing changes. If the workspace later moves back to a plan without it, your setting is remembered but mail to an unknown address is refused again; the column then reads <strong>off &mdash; not on your plan</strong>, with a <strong>Clear</strong> button that forgets the setting.</p>
 <p><strong>What catch-all is not.</strong> It does not create addresses. A catch-all message is not a mailbox, cannot be signed into, and does not start a trial &mdash; it is one bucket inside the inbox you already have.</p>
 
+<p><strong>Which mail opens a ticket.</strong> Mail from a <em>person</em> opens a ticket. Reports from mail servers (DMARC, bounces, delivery failures), newsletters and marketing blasts still arrive in your inbox, but they do not open a ticket &mdash; so the work queue holds only mail somebody wrote. If one of those really needs an answer, open it and press <strong>Turn into a ticket</strong>.</p>
 <h2>Your logo and signature on outgoing mail</h2>
 <p><strong>One logo and one workspace signature, both applied automatically.</strong> Open <strong>Email Branding</strong> in the workspace menu: upload the company logo, then fill in the signature &mdash; name, title, company, phone and one short line &mdash; and press <strong>Save signature</strong>. From then on every new message and every reply opens with the logo and the signature already in place under the text you type, so you type only the subject and the message.</p>
 <p><strong>You never size the logo.</strong> Any PNG, JPEG, GIF or WebP up to 2 MB is accepted and the app resizes it for email, so it looks sharp and the right size in Gmail, Outlook and Apple Mail on a phone as well as on a desktop. The preview on the Email Branding screen shows what your customers will see.</p>

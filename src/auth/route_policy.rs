@@ -190,6 +190,14 @@
 //!        `.route(..)` calls / 460 on /api** (472 = 460 /api + the 12 root-level mounts), and those
 //!        are what `the_census_shape_is_what_the_docs_say` pins.
 //!
+//!   +3 mounts (2026-11-20, kanban t_44c1aaa4), MULTI-CURRENCY: the rate table's read and manual
+//!        refresh on the deals router (`GET /api/deals/fx-rates`, `POST /api/deals/fx-rates/refresh`
+//!        — session JWT, admin for the refresh) and the scheduler's arm
+//!        `POST /api/internal/fx-rates/refresh`, which demands the shared `x-internal-key` at the
+//!        boundary (named in [`INTERNAL_ROUTES`]) and again in its handler. The extractor now
+//!        resolves 520 mounted `.route(..)` calls / 506 on /api** (520 = 506 /api + the 14
+//!        root-level mounts), and those are what `the_census_shape_is_what_the_docs_say` pins.
+//!
 //!   live, with NO credential, against 127.0.0.1:8084:
 //!   324 of the 347 /api mounts THAT EXISTED WHEN THIS CENSUS WAS TAKEN answered 401 (or 405) —
 //!        the per-module gate was doing its job. The two /api routes added since (kanban
@@ -201,7 +209,7 @@
 //!        i.e. one more than the 26 this line used to claim, and 30 after the hosted calendar
 //!        address added its two public arms (kanban t_8457bfef), and 31 after the per-calendar
 //!        path added `/api/public/calendar/site/:slug` (kanban t_d4ac5433)
-//!    16 service-to-service entries    -> INTERNAL_ROUTES (all /api, reached with the shared key)
+//!    17 service-to-service entries    -> INTERNAL_ROUTES (all /api, reached with the shared key)
 //!     2 issued-API-key entries        -> API_KEY_ROUTES  (/api/external/**)
 //!    11 served surfaces outside the boundary: the SPA mount, /track/:slug, the eight
 //!        /s/:tenant_id/** support-portal mounts and the two /s/:tenant_slug/widgets/**
@@ -223,8 +231,8 @@
 //!    so the fifteenth route under that prefix is private by default.
 //!    The census above was taken over the 14 routes that existed then; the account door
 //!    `POST /api/v1/internal/provision-free-account` joined the list after it (kanban t_e968e9ad)
-//!    and verifies the same shared key in its own handler, so the count below is 16 (the last is
-//!    the workspace-DEPROVISION door `DELETE /api/internal/tenants/:id`, kanban t_c88f907f) and a route
+//!    and verifies the same shared key in its own handler, so the count below is 17 (the last is
+//!    the currency-rate refresh `POST /api/internal/fx-rates/refresh`, kanban t_44c1aaa4) and a route
 //!    added under this prefix without an entry here stays private by default.
 //! 2. `/inbound/**` was outside any boundary at all (a root-level `nest`, no middleware, the key in
 //!    the path). It is now inside [`is_guarded_path`] with its three mounted shapes named in
@@ -452,6 +460,22 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/public/booking/manage/:token/reschedule",
     "/api/public/booking/manage/:token/rebook",
     "/inbound/v3/:key_prefix/:event_type",
+    // The opt-out itself (2026-11-19). Anonymous BY NECESSITY and the token in the path is the whole
+    // credential: the person clicking it has no session, and the mailbox provider's one-click arm
+    // (RFC 8058 `List-Unsubscribe-Post`) posts here with no human at all. It reads one signed token
+    // (account + address + mail class) and writes one suppression row for THAT account — it can
+    // neither read nor name another tenant's data, and it cannot lift a suppression.
+    "/api/public/unsubscribe/:token",
+    // The provider's event stream (delivered / bounced / complained / dropped). Anonymous because a
+    // provider has no session; the HMAC signature over timestamp+token is the credential, verified
+    // before a row is written. It attributes an event only to the account this app itself logged as
+    // the sender of the message the event names — a body cannot choose a tenant.
+    //
+    // BOTH of these were first appended to `API_KEY_ROUTES` by mistake, which is why they answered
+    // 401 "Authentication required" live: a route on the wrong list is anonymous in the docs and
+    // private in production, and no unit test can tell the two apart. `anonymous_arms_are_on_the
+    // _public_list` below pins the CLASS, not these two paths.
+    "/api/webhooks/mailgun/events",
 ];
 
 /// Service-to-service routes: reachable with the app's own shared key and nothing else.
@@ -475,6 +499,9 @@ pub const INTERNAL_ROUTES: &[&str] = &[
     "/api/internal/tags/assign",
     "/api/internal/tags/delete",
     "/api/internal/tags/list",
+    // The currency rate table's daily refresh (kanban t_44c1aaa4): the fleet's n8n cron posts
+    // here, and the handler verifies the same shared key. Named so the boundary demands it too.
+    "/api/internal/fx-rates/refresh",
     // The same internal calendar router is mounted twice — `/api/internal/bookings` and
     // `/api/bookings/internal` (main.rs: "alternative internal calendar creation path outside auth
     // middleware"). Both mounts are named; both demand the key.
@@ -504,6 +531,12 @@ pub const INTERNAL_ROUTES: &[&str] = &[
 pub const API_KEY_ROUTES: &[&str] = &[
     "/api/external/lists",
     "/api/external/contacts",
+    // The DEAL WRITER (kanban t_2df68850): an outside system creates/updates a deal by its
+    // external reference, moves its stage, and sets won/lost. The key resolves the workspace and
+    // `external_ref` is unique per workspace, so a re-send updates rather than duplicating.
+    "/api/external/deals",
+    "/api/external/deals/:external_ref/stage",
+    "/api/external/deals/:external_ref/status",
     // The data-mapping intake: a sibling app reports one event with the account's issued key. The
     // tenant comes from the key, never from the payload, so a caller cannot name another tenant.
     "/api/data-mapping/events",
@@ -688,6 +721,11 @@ mod tests {
             func: "router",
         },
         Nest {
+            prefix: "/api/deals",
+            src: include_str!("../deals/mod.rs"),
+            func: "router",
+        },
+        Nest {
             prefix: "/api/personal-api-keys",
             src: include_str!("../personal_api_keys.rs"),
             func: "router",
@@ -700,6 +738,13 @@ mod tests {
         Nest {
             prefix: "/api/ai",
             src: include_str!("../ai/mod.rs"),
+            func: "router",
+        },
+        // THE ACTION AGENT. It is censused like every other module, because an action that changes a
+        // customer's record must not be able to arrive on a route the count does not know about.
+        Nest {
+            prefix: "/api/agent",
+            src: include_str!("../agent/mod.rs"),
             func: "router",
         },
         Nest {
@@ -926,6 +971,19 @@ mod tests {
             src: include_str!("../calendar_host/mod.rs"),
             func: "public_router",
         },
+        // The email-compliance surface (2026-11-19). The opt-out arms are merged at the ROOT, so
+        // their prefix is empty and the census reads their FULL paths — which is the point: an
+        // anonymous route that the census cannot see is an anonymous route nobody reviews.
+        Nest {
+            prefix: "/api/mail-compliance",
+            src: include_str!("../mail_compliance/mod.rs"),
+            func: "router",
+        },
+        Nest {
+            prefix: "",
+            src: include_str!("../mail_compliance/mod.rs"),
+            func: "public_router",
+        },
     ];
 
     /// The body of `fn <func>`, assuming rustfmt puts the closing brace at column 0.
@@ -1007,6 +1065,37 @@ mod tests {
             }
         }
         out
+    }
+
+    /// A route on the WRONG list is anonymous in the docs and private in production, and nothing
+    /// else catches it: the mounted-route census passes either way and `cargo check` never looks.
+    /// Measured 2026-11-19: the opt-out and the provider's event receiver were appended to
+    /// `API_KEY_ROUTES` by mistake and answered 401 "Authentication required" on the live box while
+    /// the code read as if they were open. This pins the CLASS.
+    #[test]
+    fn anonymous_surfaces_are_never_filed_as_key_or_internal_routes() {
+        for entry in API_KEY_ROUTES.iter().chain(INTERNAL_ROUTES.iter()) {
+            // `/public/` and `/unsubscribe` are customer-facing by definition: the person has no
+            // session. (`/webhooks/` alone is NOT the signal — `/api/v1/webhooks/cross-app/tag-sync`
+            // is a sibling-app push that legitimately carries an issued API key, so the provider
+            // receiver is pinned by name in the test below instead.)
+            assert!(
+                !entry.contains("/public/") && !entry.contains("/unsubscribe"),
+                "{entry:?} is an anonymous surface filed on a credential list — it will answer 401 \
+                 while the docs say open"
+            );
+        }
+    }
+
+    /// The two arms a stranger or a provider must reach with NO credential: the one-click opt-out
+    /// (RFC 8058) and the provider's event receiver. Their credential is the signed token / the HMAC
+    /// signature, never a bearer.
+    #[test]
+    fn the_optout_and_the_provider_receiver_are_public() {
+        assert!(super::is_public_route("/api/public/unsubscribe/abc.def"));
+        assert!(super::is_public_route("/api/webhooks/mailgun/events"));
+        assert!(!super::is_api_key_route("/api/public/unsubscribe/abc.def"));
+        assert!(!super::is_internal_route("/api/webhooks/mailgun/events"));
     }
 
     #[test]
@@ -1314,21 +1403,41 @@ mod tests {
     /// `NESTS`, which is what made `"/api/public/booking/c/:slug"` checkable on the public allowlist at
     /// all. The instrument saw more routes because the product has more routes; the root-level count is
     /// unchanged at 12, which is the tell that no new surface was mounted outside /api**.
+    ///
+    /// +2 mounts / +2 paths (2026-11-20): the customer portal's emailed sign-in link — `/link` (mail one)
+    /// and `/link/consume` (exchange it). Both are ROOT-level `/s/...` routes: that surface is OUTSIDE the
+    /// credential boundary (like every other portal arm), which is why they are in no allowlist. 485
+    /// mounted / 471 on /api** / 14 root-level.
+    ///
+    /// +6 mounts / +6 paths (2026-11-19): the email-compliance surface — 5 on
+    /// `/api/mail-compliance` (the delivery evidence, the suppression list, its remove arm, and the
+    /// two downloads) and 1 anonymous opt-out (`/api/public/unsubscribe/:token`, merged at the root
+    /// and named in [`PUBLIC_ROUTES`] because the token in the path IS the credential). Every new
+    /// path is on `/api**`, so the root-level count is unchanged at 12. +1 more for the provider's
+    /// event stream (`/api/webhooks/mailgun/events`, signature-verified, anonymous).
+    ///
+    /// +32 mounts / +32 paths (2026-11-20): the DEAL WRITER (kanban t_2df68850) — 29 on
+    /// `/api/deals` (the deal list/create, report, team, workspace currency, per-workspace custom
+    /// field definitions, the configurable lost-reason list, stage automation hooks, and the
+    /// per-deal detail/stage/status/notes/follow-ups/files arms) and 3 on `/api/external`
+    /// (`POST /deals`, `PATCH /deals/:external_ref/stage`, `POST /deals/:external_ref/status` —
+    /// the issued-key writer an outside system calls). Every new path is on `/api**`, so the
+    /// root-level count is unchanged at 14. 517 mounted / 503 on /api**.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
         let mounted = mounted_routes();
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            474,
+            526,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 462,
+            api, 512,
             "the /api mount count moved — re-read the census in the module docs"
         );
-        // ...and the 12 root-level mounts are the served surfaces plus the inbound receivers.
-        assert_eq!(mounted.len() - api, 12);
+        // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.
+        assert_eq!(mounted.len() - api, 14);
     }
 }

@@ -35,7 +35,9 @@ macro_rules! opp_cols {
     () => {
         "id, tenant_id, pipeline_id, stage_id, contact_id, company_id, name, \
          notes, value::float8 AS value, currency, probability, expected_close_date, source, metadata, \
-         is_won, is_lost, lost_reason, created_at, updated_at"
+         is_won, is_lost, lost_reason, created_at, updated_at, \
+         external_ref, owner_id, last_activity_at, stage_entered_at, \
+         exchange_rate::float8 AS exchange_rate, rate_date, reporting_currency"
     };
 }
 pub(crate) use opp_cols;
@@ -62,6 +64,22 @@ pub struct OpportunityFull {
     pub lost_reason: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// The outside system's identifier for this deal (migration 186). One ref = one deal per
+    /// workspace; a re-send updates instead of duplicating. Console-created deals have none.
+    pub external_ref: Option<String>,
+    pub owner_id: Option<Uuid>,
+    /// Last write of ANY kind (note, task, stage, API push). "Rotting" is measured against this.
+    pub last_activity_at: chrono::DateTime<chrono::Utc>,
+    /// When the deal entered its current stage — the "days in stage" clock.
+    pub stage_entered_at: chrono::DateTime<chrono::Utc>,
+    /// The rate this deal's value was recorded at, captured when it was written. NULL means no
+    /// rate was ever stored for a non-workspace-currency deal: it is reported in its OWN currency
+    /// and never folded into another currency's total (David, 2026-11-20).
+    pub exchange_rate: Option<f64>,
+    pub rate_date: Option<chrono::DateTime<chrono::Utc>>,
+    /// The currency the stored rate converts INTO (the workspace's reporting currency at write
+    /// time), so a rate is never a number with no destination.
+    pub reporting_currency: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -217,10 +235,15 @@ pub async fn create(
         _ => first_stage.id,
     };
 
+    // MONEY IS AMOUNT + CURRENCY (David, 2026-11-20): this legacy route must not fall back to the
+    // column's `DEFAULT 'USD'`, so it resolves the same way the deal writer does.
+    let money = crate::deals::fx::quote(&state.db, tenant_id, req.currency.as_deref()).await?;
+
     let sql = concat!(
         "INSERT INTO opportunities (id, tenant_id, pipeline_id, stage_id, contact_id, company_id, \
-            name, notes, value, currency, probability, expected_close_date, source, metadata) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::float8,$10,$11,$12,$13,$14) RETURNING ",
+            name, notes, value, currency, probability, expected_close_date, source, metadata, \
+            exchange_rate, rate_date, reporting_currency) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::float8,$10,$11,$12,$13,$14,$15::float8,$16,$17) RETURNING ",
         opp_cols!()
     );
     // ── WHO THIS DEAL IS ABOUT ────────────────────────────────────────────────────────────────
@@ -313,11 +336,14 @@ pub async fn create(
         .bind(&req.name)
         .bind(&req.notes)
         .bind(req.value)
-        .bind(&req.currency)
+        .bind(&money.currency)
         .bind(req.probability)
         .bind(req.expected_close_date)
         .bind(&req.source)
         .bind(&req.metadata)
+        .bind(money.rate)
+        .bind(money.rate_date)
+        .bind(&money.reporting_currency)
         .fetch_one(&state.db)
         .await?;
 
@@ -362,6 +388,14 @@ pub async fn update(
     Json(req): Json<UpdateOpportunityRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    // Only an explicit currency change re-quotes; an edit that leaves money alone must not move a
+    // stored rate (David's condition: a past deal's reported value does not shift).
+    let money = match req.currency.as_deref() {
+        Some(c) if !c.trim().is_empty() => {
+            Some(crate::deals::fx::quote(&state.db, tenant_id, Some(c)).await?)
+        }
+        _ => None,
+    };
     let sql = concat!(
         r#"UPDATE opportunities SET name = COALESCE($1,name), notes = COALESCE($2,notes),
             value = COALESCE($3::float8,value), currency = COALESCE($4,currency),
@@ -369,6 +403,9 @@ pub async fn update(
             probability = COALESCE($7,probability), expected_close_date = COALESCE($8,expected_close_date),
             metadata = COALESCE($9,metadata), is_won = COALESCE($10,is_won),
             is_lost = COALESCE($11,is_lost), lost_reason = COALESCE($12,lost_reason),
+            exchange_rate = COALESCE($16::float8, exchange_rate),
+            rate_date = COALESCE($17, rate_date),
+            reporting_currency = COALESCE($18, reporting_currency),
             updated_at = NOW()
            WHERE id = $13 AND pipeline_id = $14 AND tenant_id = $15 RETURNING "#,
         opp_cols!()
@@ -377,7 +414,7 @@ pub async fn update(
         .bind(&req.name)
         .bind(&req.notes)
         .bind(req.value)
-        .bind(&req.currency)
+        .bind(money.as_ref().map(|m| m.currency.as_str()))
         .bind(req.contact_id)
         .bind(req.company_id)
         .bind(req.probability)
@@ -389,6 +426,9 @@ pub async fn update(
         .bind(id)
         .bind(pipeline_id)
         .bind(tenant_id)
+        .bind(money.as_ref().map(|m| m.rate))
+        .bind(money.as_ref().map(|m| m.rate_date))
+        .bind(money.as_ref().map(|m| m.reporting_currency.as_str()))
         .fetch_optional(&state.db)
         .await?
         .ok_or(AppError::NotFound(format!("Opportunity {} not found", id)))?;
@@ -415,6 +455,17 @@ pub async fn delete(
     Path((pipeline_id, id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+    // The deal's name and value, read before the row goes (see contacts::delete).
+    let gone: Option<(String, Option<f64>)> = sqlx::query_as(
+        "SELECT name, value::float8 FROM opportunities \
+          WHERE id = $1 AND pipeline_id = $2 AND tenant_id = $3",
+    )
+    .bind(id)
+    .bind(pipeline_id)
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await?;
     let r = sqlx::query(
         "DELETE FROM opportunities WHERE id = $1 AND pipeline_id = $2 AND tenant_id = $3",
     )
@@ -425,6 +476,19 @@ pub async fn delete(
     .await?;
     if r.rows_affected() == 0 {
         return Err(AppError::NotFound(format!("Opportunity {} not found", id)));
+    }
+    if let Some((name, value)) = gone {
+        audit::logger::log_event(
+            &state.db,
+            tenant_id,
+            Some(user_id),
+            "opportunity.deleted",
+            "opportunity",
+            Some(id),
+            Some(json!({"name": name, "value": value})),
+            None,
+        )
+        .await;
     }
     Ok(Json(json!({"message": "Opportunity deleted successfully"})))
 }

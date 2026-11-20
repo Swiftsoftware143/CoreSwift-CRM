@@ -345,7 +345,8 @@ pub async fn test_config(
 
     let cfg =
         providers::platform_test_config(tenant_id, msg_id, &to, &subject, &text, &transport.mail());
-    let outcome = providers::deliver(&cfg).await;
+    let outcome =
+        providers::deliver(&state.db, &cfg, crate::mail_compliance::CLASS_TRANSACTIONAL).await;
     if let Err(e) = providers::record_attempt(&state.db, msg_id, &outcome).await {
         tracing::error!(msg = %msg_id, error = %e, "failed to record the platform test send");
     }

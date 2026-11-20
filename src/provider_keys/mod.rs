@@ -49,10 +49,52 @@ pub fn router(state: AppState) -> Router<AppState> {
 ///
 /// Settings are still read afterwards as a fallback, so an account that was configured the old way keeps
 /// working; the sealed store always wins, because that is the one the console writes.
+/// The model credentials for one account, and where each one came from.
+///
+/// THE PLATFORM FALLBACK IS EXPLICIT, NOT SILENT. An account with no key of its own used to get nothing —
+/// every AI path failed at a provider nobody had configured, and the console showed an empty key list while
+/// the feature simply did not work. Now the platform's own credential answers instead (when one is
+/// configured), and the caller is TOLD that it did: `platform` lists those providers, so the call can be
+/// recorded against our spend rather than the customer's.
+pub struct ModelKeys {
+    pub keys: std::collections::HashMap<String, String>,
+    /// Providers answered by the PLATFORM credential — these cost us, not the account.
+    pub platform: std::collections::HashSet<String>,
+}
+
+impl ModelKeys {
+    /// True when this account has no credential of its own for that provider.
+    pub fn on_platform_key(&self, provider: &str) -> bool {
+        self.platform.contains(&provider.to_ascii_lowercase())
+    }
+}
+
+/// The platform's own model credentials, by provider, from the environment.
+///
+/// Read once per call rather than cached: a key rotated into the environment takes effect without a
+/// restart, and this runs a handful of times a minute at most, never in a hot loop.
+fn platform_key(provider: &str) -> Option<String> {
+    let var = match provider {
+        "deepseek" => "DEEPSEEK_API_KEY",
+        "openai" => "OPENAI_API_KEY",
+        "anthropic" => "ANTHROPIC_API_KEY",
+        _ => return None,
+    };
+    std::env::var(var)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
 pub async fn model_keys(
     db: &sqlx::PgPool,
     tenant_id: uuid::Uuid,
 ) -> std::collections::HashMap<String, String> {
+    model_keys_with_source(db, tenant_id).await.keys
+}
+
+/// The same lookup, with the source of each key kept.
+pub async fn model_keys_with_source(db: &sqlx::PgPool, tenant_id: uuid::Uuid) -> ModelKeys {
     use std::collections::HashMap;
 
     let mut map = HashMap::new();
@@ -98,5 +140,22 @@ pub async fn model_keys(
         }
     }
 
-    map
+    // THE PLATFORM FALLBACK, applied per provider and only where the account has nothing. Recorded in
+    // `platform`, so a call made with our credential is billed to us in the usage table instead of
+    // disappearing into a customer's totals.
+    let mut platform = std::collections::HashSet::new();
+    for provider in ["deepseek", "openai", "anthropic"] {
+        if map.contains_key(provider) {
+            continue;
+        }
+        if let Some(key) = platform_key(provider) {
+            map.insert(provider.to_string(), key);
+            platform.insert(provider.to_string());
+        }
+    }
+
+    ModelKeys {
+        keys: map,
+        platform,
+    }
 }

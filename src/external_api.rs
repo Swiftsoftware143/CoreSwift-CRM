@@ -29,6 +29,31 @@
 //!     GET  /api/external/lists     → { "lists": [ {id, name, description, list_type, member_count, is_active} ] }
 //!     POST /api/external/contacts  → 201 { id, source_app, list_assigned, tags_applied, auto_created_fields }
 //!
+//! ## DEAL WRITER (David, 2026-11-20 — kanban t_2df68850)
+//!     POST  /api/external/deals                            → 201 created / 200 updated
+//!     PATCH /api/external/deals/:external_ref/stage        → { stage_id | stage: "<name>" }
+//!     POST  /api/external/deals/:external_ref/status       → { status: open|won|lost, lost_reason? }
+//!
+//! **`external_ref` is required on every deal push and it is the dedupe key.** One ref = one
+//! deal in the workspace: the first push creates, every later push with the same ref updates
+//! that deal and answers `"created": false`. The uniqueness is a database index
+//! (`uq_opportunities_tenant_external_ref`), so it holds even when two pushes race. XRide
+//! Dispatch sends its quote id here, which is what makes "an unbooked quote becomes a deal, and
+//! a re-send updates the same deal" true rather than hoped for.
+//!
+//! Field mapping for `POST /api/external/deals`:
+//!   `external_ref` (required) · `title` or `name` · `value` · `currency` (3-letter; defaults to
+//!   the WORKSPACE currency, never to USD — a workspace with no currency is refused and told to
+//!   choose one) · `exchange_rate` (stored with the deal, stamped `rate_date`, so a past period
+//!   never moves) · `probability` (0-100; otherwise the stage's own default) ·
+//!   `expected_close_date` (YYYY-MM-DD) · `pipeline_id`/`pipeline` (name) · `stage_id`/`stage`
+//!   (name) · `contact_id`/`contact_email`+`contact_name` · `company_id`/`company_name` ·
+//!   `owner_id`/`owner_email` · `source` · `notes` · `status` · `lost_reason` ·
+//!   `custom_fields` (object — each key is a per-workspace field, auto-provisioned on first use) ·
+//!   `metadata` (jsonb) · `collaborator_ids`.
+//! A workspace with no pipeline gets one created on the first push ("Sales Pipeline", six
+//! stages), so a brand-new account can accept its first quote without a human in the loop.
+//!
 //! ## POST /api/external/contacts — field mapping
 //!   Built-in keys map straight to contact columns: email, phone, first_name, last_name,
 //!   company, title / job_title, gender, city, state, country, postal_code,
@@ -691,9 +716,206 @@ pub async fn external_push_contact(
     ))
 }
 
+// ── DEAL WRITER (David, 2026-11-20 — kanban t_2df68850) ─────────────────────────────────────
+//
+// An outside system (XRide Dispatch is the first) turns an unbooked quote into a deal and keeps
+// it in step here. The ONE rule that matters: `external_ref` identifies the deal. Send the same
+// ref twice and the second call UPDATES the deal it created — it never makes a second one. That
+// is enforced by a unique index on `(tenant_id, external_ref)`, so it holds even if two pushes
+// race.
+//
+// `tenant_id` in the body is ignored, exactly like the contacts surface: the key resolves the
+// workspace. Every id in the body is verified against that workspace.
+
+/// A readable name for the credential, so the deal's timeline says which system wrote it.
+async fn key_label(s: &AppState, key_id: Uuid) -> String {
+    let name: Option<String> =
+        sqlx::query_scalar("SELECT name FROM personal_api_keys WHERE id = $1")
+            .bind(key_id)
+            .fetch_optional(&s.db)
+            .await
+            .ok()
+            .flatten();
+    match name {
+        Some(n) if !n.trim().is_empty() => format!("{} (API key)", n.trim()),
+        _ => "outside system (API key)".to_string(),
+    }
+}
+
+/// POST /api/external/deals
+pub async fn external_upsert_deal(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> ApiResult<impl IntoResponse> {
+    let (tenant_id, key_id) = resolve_key(&s, &headers).await?;
+    let obj = body
+        .as_object()
+        .ok_or_else(|| AppError::BadRequest("body must be an object".into()))?;
+    let req: crate::deals::models::DealUpsert = serde_json::from_value(Value::Object(obj.clone()))
+        .map_err(|e| {
+            // The refusal names the field: a bare "invalid body" costs the caller a debugging
+            // session, and this endpoint is meant to be wired from another codebase.
+            AppError::Validation(format!("deal body could not be read: {e}"))
+        })?;
+    if req
+        .external_ref
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .is_empty()
+    {
+        return Err(AppError::Validation(
+            "external_ref is required: it is what makes a re-send update this deal instead of \
+             creating a second one"
+                .to_string(),
+        ));
+    }
+    let label = key_label(&s, key_id).await;
+    let actor = crate::deals::writer::Actor {
+        user_id: None,
+        label: &label,
+    };
+    let outcome = crate::deals::writer::upsert(&s, tenant_id, req, &actor).await?;
+    let status = if outcome.created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((
+        status,
+        Json(json!({
+            "id": outcome.deal.id,
+            "external_ref": outcome.deal.external_ref,
+            "created": outcome.created,
+            "matched_by": outcome.matched_by,
+            "stage_moved": outcome.stage_moved,
+            "pipeline_created": outcome.pipeline_created,
+            "title": outcome.deal.name,
+            "stage_id": outcome.deal.stage_id,
+            "pipeline_id": outcome.deal.pipeline_id,
+            "value": outcome.deal.value,
+            "currency": outcome.deal.currency,
+            "probability": outcome.deal.probability,
+            "status": if outcome.deal.is_won { "won" }
+                      else if outcome.deal.is_lost { "lost" }
+                      else { "open" },
+        })),
+    ))
+}
+
+async fn deal_by_external_ref(
+    s: &AppState,
+    tenant_id: Uuid,
+    external_ref: &str,
+) -> Result<Uuid, AppError> {
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM opportunities WHERE tenant_id = $1 AND external_ref = $2",
+    )
+    .bind(tenant_id)
+    .bind(external_ref)
+    .fetch_optional(&s.db)
+    .await?
+    .ok_or_else(|| {
+        AppError::NotFound(format!(
+            "no deal in this workspace carries external reference {external_ref}"
+        ))
+    })
+}
+
+/// PATCH /api/external/deals/:external_ref/stage — the outside system moves the deal.
+pub async fn external_deal_stage(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(external_ref): axum::extract::Path<String>,
+    Json(body): Json<Value>,
+) -> ApiResult<impl IntoResponse> {
+    let (tenant_id, key_id) = resolve_key(&s, &headers).await?;
+    let deal_id = deal_by_external_ref(&s, tenant_id, &external_ref).await?;
+    let label = key_label(&s, key_id).await;
+    let actor = crate::deals::writer::Actor {
+        user_id: None,
+        label: &label,
+    };
+    let stage_id = body
+        .get("stage_id")
+        .and_then(|v| v.as_str())
+        .and_then(|v| Uuid::parse_str(v).ok());
+    let stage_name = body.get("stage").and_then(|v| v.as_str());
+    let stage_id = match (stage_id, stage_name) {
+        (Some(id), _) => id,
+        (None, Some(name)) => {
+            let deal_pipeline: Uuid =
+                sqlx::query_scalar("SELECT pipeline_id FROM opportunities WHERE id = $1")
+                    .bind(deal_id)
+                    .fetch_one(&s.db)
+                    .await?;
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM pipeline_stages WHERE pipeline_id = $1 AND lower(name) = lower($2) LIMIT 1",
+            )
+            .bind(deal_pipeline)
+            .bind(name)
+            .fetch_optional(&s.db)
+            .await?
+            .ok_or_else(|| {
+                AppError::Validation(format!("stage \"{name}\" does not exist on this pipeline"))
+            })?
+        }
+        (None, None) => {
+            return Err(AppError::Validation(
+                "stage_id or stage is required".to_string(),
+            ))
+        }
+    };
+    let (deal, moved) =
+        crate::deals::writer::move_stage(&s, tenant_id, deal_id, stage_id, &actor).await?;
+    Ok(Json(json!({
+        "id": deal.id,
+        "external_ref": deal.external_ref,
+        "moved": moved,
+        "stage_id": deal.stage_id,
+        "status": if deal.is_won { "won" } else if deal.is_lost { "lost" } else { "open" },
+    })))
+}
+
+/// POST /api/external/deals/:external_ref/status — won / lost / reopened.
+pub async fn external_deal_status(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(external_ref): axum::extract::Path<String>,
+    Json(body): Json<Value>,
+) -> ApiResult<impl IntoResponse> {
+    let (tenant_id, key_id) = resolve_key(&s, &headers).await?;
+    let deal_id = deal_by_external_ref(&s, tenant_id, &external_ref).await?;
+    let status = body
+        .get("status")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::Validation("status is required (open|won|lost)".to_string()))?;
+    let lost_reason = body.get("lost_reason").and_then(|v| v.as_str());
+    let label = key_label(&s, key_id).await;
+    let actor = crate::deals::writer::Actor {
+        user_id: None,
+        label: &label,
+    };
+    let deal =
+        crate::deals::writer::set_status(&s, tenant_id, deal_id, status, lost_reason, &actor)
+            .await?;
+    Ok(Json(json!({
+        "id": deal.id,
+        "external_ref": deal.external_ref,
+        "stage_id": deal.stage_id,
+        "is_won": deal.is_won,
+        "is_lost": deal.is_lost,
+        "lost_reason": deal.lost_reason,
+    })))
+}
+
 pub fn router() -> axum::Router<AppState> {
-    use axum::routing::{get, post};
+    use axum::routing::{get, patch, post};
     axum::Router::new()
         .route("/lists", get(external_list_lists))
         .route("/contacts", post(external_push_contact))
+        .route("/deals", post(external_upsert_deal))
+        .route("/deals/:external_ref/stage", patch(external_deal_stage))
+        .route("/deals/:external_ref/status", post(external_deal_status))
 }

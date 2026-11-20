@@ -516,7 +516,7 @@ async fn deliver_message(
     let cfg =
         providers::load_delivery_config(db, msg_id, tenant_id, channel, to, subject, body).await;
 
-    let outcome = providers::deliver(&cfg).await;
+    let outcome = providers::deliver(db, &cfg, crate::mail_compliance::CLASS_BULK).await;
 
     // The ONE recording policy, shared with the worker poll: sent with the provider's message id,
     // a permanent failure, or a transient one requeued with backoff. Two bugs used to live here:

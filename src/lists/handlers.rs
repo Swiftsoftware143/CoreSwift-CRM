@@ -1,4 +1,5 @@
 use super::models::*;
+use crate::audit;
 use crate::auth::Claims;
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
@@ -86,6 +87,14 @@ pub async fn delete(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    let uid = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
+    // The name, read before the row goes (see contacts::delete).
+    let gone: Option<String> =
+        sqlx::query_scalar("SELECT name FROM lists WHERE id=$1 AND tenant_id=$2")
+            .bind(id)
+            .bind(t)
+            .fetch_optional(&s.db)
+            .await?;
     let r = sqlx::query("DELETE FROM lists WHERE id=$1 AND tenant_id=$2")
         .bind(id)
         .bind(t)
@@ -93,6 +102,19 @@ pub async fn delete(
         .await?;
     if r.rows_affected() == 0 {
         return Err(AppError::NotFound(format!("List {id} not found")));
+    }
+    if let Some(name) = gone {
+        audit::logger::log_event(
+            &s.db,
+            t,
+            Some(uid),
+            "list.deleted",
+            "list",
+            Some(id),
+            Some(json!({"name": name})),
+            None,
+        )
+        .await;
     }
     Ok(Json(json!({"message":"Deleted"})))
 }

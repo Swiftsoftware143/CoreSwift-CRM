@@ -127,6 +127,7 @@
  }
  .tool-pill.replaced { border-color: var(--accent-teal); color: var(--accent-teal); background: var(--glow-teal); }
  .tool-strip-label { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.1em; }
+ .tool-strip-note { font-size: 0.85rem; color: var(--text-muted); max-width: 620px; margin: 14px auto 0; }
 
  /* SECTION HEADERS */
  .section-title { text-align: center; font-size: 2rem; font-weight: 700; margin: 60px 0 30px; }
@@ -271,6 +272,19 @@
   <!-- cs-site:head:end -->
 </head>
 <body>
+<div id="cookie-banner" style="position:fixed;bottom:0;left:0;right:0;background:#0f172a;color:#e2e8f0;z-index:99999;padding:16px 24px;font-family:system-ui,sans-serif;font-size:13px;box-shadow:0 -4px 20px rgba(0,0,0,.4);display:none">
+  <div style="max-width:1100px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+    <div style="flex:1;min-width:250px">
+      <strong style="font-size:14px">🍪 Cookie Consent</strong>
+      <p style="margin:4px 0 0;color:#94a3b8;line-height:1.5"><span class="cb-long">We use cookies for analytics, security, and to improve your experience. By continuing, you agree to our </span><a href="/privacy.html" style="color:#38bdf8">Privacy Policy</a> and <a href="/terms.html" style="color:#38bdf8">Terms of Service</a>.</p>
+    </div>
+    <div style="display:flex;gap:8px;flex-shrink:0">
+      <button onclick="acceptCookies()" style="background:#2563eb;color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px">Accept All</button>
+      <button onclick="declineCookies()" style="background:transparent;color:#94a3b8;border:1px solid #475569;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:13px">Decline</button>
+    </div>
+  </div>
+</div>
+
 <style>.suite{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;padding:10px 24px;background:#0f172a;border-bottom:1px solid #1e293b}.suite-brand{font-weight:800;color:#38bdf8;text-decoration:none;font-size:14px;margin-right:4px;white-space:nowrap}.suite-links{display:flex;flex-wrap:wrap;gap:6px 16px}.suite-links a{color:#cbd5e1;text-decoration:none;font-size:13px;white-space:nowrap}.suite-links a:hover{color:#38bdf8}</style>
 <nav class="suite" aria-label="Our Suite">
   <a class="suite-brand" href="https://swiftsoftware.net">SwiftSoftware</a>
@@ -280,6 +294,7 @@
  <header class="container">
   <a href="/" class="logo" aria-label="CoreSwift CRM home">CoreSwift<span>CRM</span></a>
   <div class="nav-btns">
+   <a href="/inbox" style="color:var(--text-muted);text-decoration:none;font-weight:600;font-size:0.9rem">Inbox</a>
    <a href="/pricing" style="color:var(--text-muted);text-decoration:none;font-weight:600;font-size:0.9rem">Pricing</a>
    <a href="https://app.coreswiftcrm.com/login" class="btn-outline">Sign In</a>
    <a href="https://app.coreswiftcrm.com/register/" class="cta-button" style="padding: 10px 20px; font-size: 0.875rem;">Get Started Free</a>
@@ -292,7 +307,7 @@
   <section class="hero">
    <div class="badge">Free Tier — Full Core CRM Included</div>
    <h1>One CRM That Replaces <span class="hero-gradient">6+ Separate Tools</span></h1>
-   <p class="subtitle">Automated follow-up sequences. Built-in calendar &amp; bookings. SMS &amp; email campaigns. Deal pipelines. Event management. All included in the free tier — not scattered across six different subscriptions.</p>
+   <p class="subtitle">The free tier includes the full core CRM — contacts, pipelines, campaigns and SMS, calendar and bookings. Automations and AI scoring start on the Professional plan; paid plans also add private mailboxes, support tickets, and higher limits on contacts, users, pipelines and integrations.</p>
    <a href="https://app.coreswiftcrm.com/register/" class="cta-button">Start Free — No Credit Card</a>
   </section>
 
@@ -309,12 +324,13 @@
     <span class="tool-pill replaced">Slack follow-up bots</span>
     <span class="tool-pill">…and more</span>
    </div>
+   <p class="tool-strip-note">Automation and app integrations — Zapier / Make, Slack follow-up bots — are part of what CoreSwift can replace on a paid plan. The free tier is the core CRM.</p>
   </div>
 
   <!-- STACK VS STACK -->
   <div class="stack-vs">
    <h2 class="section-title">What You'd Pay Elsewhere vs. CoreSwift CRM</h2>
-   <p class="section-subtitle">To get all the features CoreSwift CRM includes for free, here's what you'd need to subscribe to separately.</p>
+   <p class="section-subtitle">Here's what the features CoreSwift CRM includes would cost you as separate subscriptions.</p>
    <div class="stack-boxes">
     <div class="stack-box many">
      <h3>Their Stack</h3>
@@ -340,25 +356,25 @@
       <li>Pipeline automation rules &amp; a scheduled follow-up queue</li>
       <li>Event &amp; campaign management</li>
      </ul>
-     <div class="stack-price free">$0 — All on the Free Tier</div>
+     <div class="stack-price free">$0 — free tier: the core CRM. Automation, webhooks and routing are on paid plans.</div>
     </div>
    </div>
   </div>
 
   <!-- FEATURE CARDS -->
   <h2 class="section-title">Everything Your Sales Team Needs — Built In</h2>
-  <p class="section-subtitle">No plugins. No third-party subscriptions. Every core feature ships with the free tier.</p>
+  <p class="section-subtitle">No plugins. No third-party subscriptions. The free tier covers the core CRM; automation, round-robin routing and AI are Professional-plan features.</p>
   <div class="feature-grid">
 
    <div class="feature-card">
     <div class="feature-icon">🔄</div>
-    <h3>Automated Follow-Up Sequences</h3>
+    <h3>Automated Follow-Up Sequences (Professional plan)</h3>
     <p>Set follow-up rules once — when a lead enters a stage or gets tagged — and CoreSwift CRM takes it from there. SMS, email, and internal nudges go out the moment the trigger happens, without you lifting a finger.</p>
    </div>
 
    <div class="feature-card">
     <div class="feature-icon">🎯</div>
-    <h3>Round-Robin Lead Routing</h3>
+    <h3>Round-Robin Lead Routing (Professional plan)</h3>
     <p>New leads are distributed fairly across your team via round robin, so no rep is starved and no lead sits unclaimed — no cherry-picking, no delays, no missed revenue.</p>
    </div>
 
@@ -388,7 +404,7 @@
 
    <div class="feature-card">
     <div class="feature-icon">🔔</div>
-    <h3>In-App Alerts &amp; Automation Rules</h3>
+    <h3>In-App Alerts &amp; Automation Rules (Professional plan)</h3>
     <p>Build IF-THIS-THEN-THAT rules on your own triggers — a tag is added, a lead's score changes — and get a notification in the workspace the moment one fires. The header bell keeps the unread count, so nothing slips through the cracks.</p>
    </div>
 
@@ -406,12 +422,12 @@
    <table>
     <thead><tr><th>Capability</th><th class="highlight-col">CoreSwift CRM</th><th>GoHighLevel</th><th>HubSpot</th></tr></thead>
     <tbody>
-     <tr><td>Automated Follow-Up</td><td class="highlight-col win">Built-in, Trigger-Based</td><td class="meh">Workflow Builder Required</td><td class="lose">Marketing Hub Upgrade</td></tr>
-     <tr><td>AI Lead Scoring &amp; Routing</td><td class="highlight-col win">Native — Paid Plans</td><td class="lose">Not Available</td><td class="lose">Enterprise Only</td></tr>
+     <tr><td>Automated Follow-Up</td><td class="highlight-col lose">&#10007;</td><td class="meh">Workflow Builder Required</td><td class="lose">Marketing Hub Upgrade</td></tr>
+     <tr><td>AI Lead Scoring &amp; Routing</td><td class="highlight-col lose">&#10007;</td><td class="lose">Not Available</td><td class="lose">Enterprise Only</td></tr>
      <tr><td>Built-in Calendar &amp; Bookings</td><td class="highlight-col win">Included Free</td><td class="meh">Basic Calendar Only</td><td class="lose">Separate Meetings Tool</td></tr>
      <tr><td>SMS &amp; Email Campaigns</td><td class="highlight-col win">Built-in Both</td><td class="win">Built-in Both</td><td class="meh">Email Only / SMS Add-On</td></tr>
      <tr><td>Event &amp; Campaign Tracking</td><td class="highlight-col win">Included Free</td><td class="meh">Limited</td><td class="lose">Marketing Hub Add-On</td></tr>
-     <tr><td>Private Email (Send &amp; Route)</td><td class="highlight-col win">Native (Mailgun/SMTP) — Paid Add-On</td><td class="lose">Third-Party Only</td><td class="lose">Third-Party Only</td></tr>
+     <tr><td>Private Email (Send &amp; Route)</td><td class="highlight-col lose">&#10007;</td><td class="lose">Third-Party Only</td><td class="lose">Third-Party Only</td></tr>
      <tr><td>Free Tier</td><td class="highlight-col win">Full Core Features</td><td class="lose">No Free Plan</td><td class="meh">Limited Free CRM</td></tr>
     </tbody>
    </table>
@@ -426,7 +442,7 @@
      <tr><td>Booking Pages</td><td class="highlight-col win">Included Free</td><td class="meh">Free (Basic)</td></tr>
      <tr><td>CRM-Linked Meetings</td><td class="highlight-col win">Auto-logged to Contact Timeline</td><td class="lose">Requires Zapier/Integration</td></tr>
      <tr><td>Google Calendar Sync</td><td class="highlight-col win">Included</td><td class="win">Included</td></tr>
-     <tr><td>Team Round Robin</td><td class="highlight-col win">Included Free</td><td class="lose">Paid plan only</td></tr>
+     <tr><td>Team Round Robin</td><td class="highlight-col lose">&#10007;</td><td class="lose">&#10007;</td></tr>
      <tr><td>Monthly Cost</td><td class="highlight-col win">$0</td><td class="lose">$10/seat/month</td></tr>
     </tbody>
    </table>
@@ -475,6 +491,7 @@
      <p>Incoming mail automatically matches to existing contacts. Trigger-based auto-replies tied to pipeline stages and tags.</p>
     </div>
    </div>
+   <p style="text-align:center;color:var(--text-muted);max-width:640px;margin:32px auto 0;">Only need the mailbox? The Inbox plan is a door of its own — one private mailbox on your own domain, with none of the CRM to pay for. <a href="/inbox" style="color:var(--text-main);font-weight:600;">See the Inbox plan &rarr;</a></p>
   </div>
 
   <!-- FAQ -->
@@ -482,19 +499,19 @@
   <div class="faq-container">
    <details>
     <summary>How does CoreSwift CRM automate follow-ups?</summary>
-    <p>Set your follow-up rules once — "when a lead enters this stage, send an SMS and an email." CoreSwift CRM fires the actions the moment the trigger happens. No copy-paste follow-up, no forgotten leads.</p>
+    <p>Automation starts on the Professional plan. There you set your follow-up rules once — "when a lead enters this stage, send an SMS and an email" — and CoreSwift CRM fires them the moment the trigger happens.</p>
    </details>
    <details>
     <summary>Is AI included in the free plan?</summary>
-    <p>AI scoring &amp; helpers are part of the paid plans. The free tier includes the full core CRM — contacts, pipelines, automated follow-ups, campaigns, and round-robin lead routing. When you reach a feature your plan does not cover, the console shows an upgrade prompt.</p>
+    <p>AI scoring &amp; helpers are part of the paid plans. The free tier includes the full core CRM — contacts, pipelines, campaigns and SMS, calendar and bookings; automations and AI scoring start on the Professional plan. When you reach a feature your plan does not cover, the console shows an upgrade prompt.</p>
    </details>
    <details>
     <summary>Do I really not need Calendly anymore?</summary>
-    <p>If you're using Calendly for basic scheduling and you want those meetings automatically linked to your CRM contacts — CoreSwift CRM's built-in calendar does that for free. Booking pages, Google Calendar sync, and team round robin are all included.</p>
+    <p>If you're using Calendly for basic scheduling and you want those meetings automatically linked to your CRM contacts — CoreSwift CRM's built-in calendar does that for free. Booking pages and Google Calendar sync are included free. Team round robin is a Professional-plan feature.</p>
    </details>
    <details>
     <summary>How much does CoreSwift CRM cost?</summary>
-    <p>The core platform is free — full pipelines, follow-up automation, calendar, SMS/email campaigns, event management, and cross-app sync. Paid plans add AI scoring &amp; helpers, private mailboxes, support tickets, and higher limits, and are available inside the platform when you're ready to scale.</p>
+    <p>The free tier includes the full core CRM — contacts, pipelines, campaigns and SMS, calendar and bookings. Automations and AI scoring start on the Professional plan; paid plans also add private mailboxes, support tickets, and higher limits on contacts, users, pipelines and integrations. Plans are available inside the platform when you're ready to scale.</p>
    </details>
    <details>
     <summary>Does it work with the rest of the SwiftSoftware suite?</summary>
@@ -520,18 +537,23 @@
  </footer>
 
 <!-- Cookie Consent Banner -->
-<div id="cookie-banner" style="position:fixed;bottom:0;left:0;right:0;background:#0f172a;color:#e2e8f0;z-index:99999;padding:16px 24px;font-family:system-ui,sans-serif;font-size:13px;box-shadow:0 -4px 20px rgba(0,0,0,.4);display:none">
-  <div style="max-width:1100px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
-    <div style="flex:1;min-width:250px">
-      <strong style="font-size:14px">🍪 Cookie Consent</strong>
-      <p style="margin:4px 0 0;color:#94a3b8;line-height:1.5">We use cookies for analytics, security, and to improve your experience. By continuing, you agree to our <a href="/privacy.html" style="color:#38bdf8">Privacy Policy</a> and <a href="/terms.html" style="color:#38bdf8">Terms of Service</a>.</p>
-    </div>
-    <div style="display:flex;gap:8px;flex-shrink:0">
-      <button onclick="acceptCookies()" style="background:#2563eb;color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px">Accept All</button>
-      <button onclick="declineCookies()" style="background:transparent;color:#94a3b8;border:1px solid #475569;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:13px">Decline</button>
-    </div>
-  </div>
-</div>
+<style>
+#cookie-banner{position:static !important;left:auto !important;right:auto !important;bottom:auto !important;
+  width:auto !important;max-width:none !important;border-radius:0 !important;border-bottom:1px solid #1e293b !important;
+  padding:8px 16px !important;box-shadow:0 2px 10px rgba(0,0,0,.35) !important}
+#cookie-banner>div{max-width:none !important;flex-direction:row !important;align-items:center !important;
+  gap:12px !important;flex-wrap:wrap !important}
+#cookie-banner>div>div{min-width:0 !important}
+#cookie-banner p{margin:0 !important;font-size:12px !important;line-height:1.4 !important}
+#cookie-banner .cb-long{display:none !important}
+#cookie-banner strong{font-size:12px !important;white-space:nowrap !important}
+#cookie-banner button{padding:5px 14px !important;font-size:12px !important}
+@media (max-width:640px){
+  #cookie-banner{left:auto !important;right:auto !important;bottom:auto !important;max-width:none !important;
+    padding:6px 10px !important;border-radius:0 !important}
+  #cookie-banner button{padding:4px 10px !important;font-size:11px !important}
+}
+</style>
 <script>
 (function(){
   var choice = localStorage.getItem('cookie_consent');

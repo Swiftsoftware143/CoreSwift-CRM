@@ -1512,7 +1512,11 @@ pub async fn manage_rebook(pool: &PgPool, token: &str) -> Result<OrderWithBookin
 pub struct NotifySettings {
     pub notify_emails: Vec<serde_json::Value>,
     pub reminders: Vec<serde_json::Value>,
+    /// Tag rules: which tag a stage adds or removes.
     pub tag_rules: Vec<serde_json::Value>,
+    /// List rules: which LIST a stage adds the booker to, or removes them from. Same stages as the
+    /// tag rules, and the two are deliberately independent — an owner may want only one, or both.
+    pub list_rules: Vec<serde_json::Value>,
 }
 
 pub async fn get_notify_settings(
@@ -1543,6 +1547,18 @@ pub async fn get_notify_settings(
     .fetch_all(pool)
     .await?;
 
+    let list_rules: Vec<(Uuid, String, String, String)> = sqlx::query_as(
+        "SELECT r.list_id, l.name, r.stage, r.mode
+           FROM booking_list_rules r
+           JOIN lists l ON l.id = r.list_id AND l.tenant_id = r.tenant_id
+          WHERE r.calendar_id = $1 AND r.is_active
+          ORDER BY r.stage, l.name",
+    )
+    .bind(calendar_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
     Ok(NotifySettings {
         notify_emails: emails
             .into_iter()
@@ -1558,6 +1574,14 @@ pub async fn get_notify_settings(
             .into_iter()
             .map(|(tag_name, stage, mode)| {
                 serde_json::json!({ "tag_name": tag_name, "stage": stage, "mode": mode })
+            })
+            .collect(),
+        list_rules: list_rules
+            .into_iter()
+            .map(|(list_id, list_name, stage, mode)| {
+                serde_json::json!({
+                    "list_id": list_id, "list_name": list_name, "stage": stage, "mode": mode
+                })
             })
             .collect(),
     })
@@ -1628,6 +1652,45 @@ pub async fn set_notify_settings(
     rules.sort();
     rules.dedup();
 
+    // List rules: the list must belong to THIS account, the stage must be one we run, and the mode
+    // must be add or remove. A list id from another tenant is refused rather than silently dropped —
+    // a rule that appears saved and does nothing is how a customer loses trust in the screen.
+    let mut list_rules: Vec<(Uuid, String, String)> = Vec::new();
+    for l in body.list_rules.unwrap_or_default() {
+        let list_id = Uuid::parse_str(l.list_id.trim())
+            .map_err(|_| BookingError::invalid("a list rule needs a list"))?;
+        let owned: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM lists WHERE id = $1 AND tenant_id = $2")
+                .bind(list_id)
+                .bind(tenant)
+                .fetch_optional(pool)
+                .await?;
+        if owned.is_none() {
+            return Err(BookingError::invalid(
+                "that list does not belong to this account",
+            ));
+        }
+        let stage = l.stage.trim().to_lowercase();
+        let mode = if l.mode.trim().is_empty() {
+            "add".to_string()
+        } else {
+            l.mode.trim().to_lowercase()
+        };
+        if stage != "confirm" && stage != "cancel" {
+            return Err(BookingError::invalid(
+                "a list rule runs on confirm or on cancel",
+            ));
+        }
+        if mode != "add" && mode != "remove" {
+            return Err(BookingError::invalid(
+                "a list rule adds or removes membership",
+            ));
+        }
+        list_rules.push((list_id, stage, mode));
+    }
+    list_rules.sort();
+    list_rules.dedup();
+
     let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM booking_notify_emails WHERE calendar_id = $1")
         .bind(calendar_id)
@@ -1638,6 +1701,10 @@ pub async fn set_notify_settings(
         .execute(&mut *tx)
         .await?;
     sqlx::query("DELETE FROM booking_tag_rules WHERE calendar_id = $1")
+        .bind(calendar_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM booking_list_rules WHERE calendar_id = $1")
         .bind(calendar_id)
         .execute(&mut *tx)
         .await?;
@@ -1674,6 +1741,19 @@ pub async fn set_notify_settings(
         .bind(tenant)
         .bind(calendar_id)
         .bind(name)
+        .bind(stage)
+        .bind(mode)
+        .execute(&mut *tx)
+        .await?;
+    }
+    for (list_id, stage, mode) in &list_rules {
+        sqlx::query(
+            "INSERT INTO booking_list_rules (id, tenant_id, calendar_id, list_id, stage, mode)
+             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+        )
+        .bind(tenant)
+        .bind(calendar_id)
+        .bind(list_id)
         .bind(stage)
         .bind(mode)
         .execute(&mut *tx)

@@ -9,6 +9,7 @@
 pub mod account;
 pub mod account_match;
 pub mod admin_actions;
+pub mod agent;
 pub mod ai;
 mod alerts;
 pub mod analytics;
@@ -33,6 +34,7 @@ pub mod csv_handler;
 pub mod dashboard;
 pub mod data_mapping;
 mod db;
+pub mod deals;
 pub mod email;
 pub mod email_templates;
 mod errors;
@@ -49,6 +51,7 @@ pub mod integration_center;
 pub mod integrations;
 pub mod lists;
 pub mod lists_internal;
+pub mod mail_compliance;
 pub mod messages;
 pub mod module_registry;
 pub mod monitoring;
@@ -501,6 +504,19 @@ async fn main() -> anyhow::Result<()> {
                 body_deadline::body_read_deadline_middleware,
             )),
         )
+        // Currency rate refresh (kanban t_44c1aaa4): the fleet's n8n cron POSTs here daily with
+        // `x-internal-key`; the handler also verifies it. Mounted outside every module's auth
+        // layer because a scheduler has no session, and named in `INTERNAL_ROUTES` so the shared
+        // key is demanded at the credential boundary as well.
+        .route(
+            "/api/internal/fx-rates/refresh",
+            axum::routing::post(deals::handlers::internal_refresh_fx).layer(
+                axum::middleware::from_fn_with_state(
+                    body_read_deadline,
+                    body_deadline::body_read_deadline_middleware,
+                ),
+            ),
+        )
         // FunnelSwift tag provision webhook — auto-provision free-tier contacts
         .route(
             "/api/v1/internal/tag-provision",
@@ -545,6 +561,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/account-match", account_match::router(state.clone()))
         .nest("/api/companies", companies::router(state.clone()))
         .nest("/api/pipelines", pipelines::router(state.clone()))
+        .nest("/api/deals", deals::router(state.clone()))
         .nest("/api/tags", tags::router(state.clone()))
         .nest("/api/scoring", scoring::router(state.clone()))
         .nest("/api/lists", lists::router(state.clone()))
@@ -557,6 +574,10 @@ async fn main() -> anyhow::Result<()> {
         )
         // Unified Inbox — protected CRUD for messages
         .nest("/api/messages", messages::router(state.clone()))
+        .nest(
+            "/api/mail-compliance",
+            mail_compliance::router(state.clone()),
+        )
         .nest(
             "/api/internal/tenants",
             tenants_internal::router().layer(axum::middleware::from_fn_with_state(
@@ -590,6 +611,9 @@ async fn main() -> anyhow::Result<()> {
             personal_api_keys::router(state.clone()),
         )
         .nest("/api/analytics", analytics::router(state.clone()))
+        // THE ACTION AGENT (ticketing suite item 1): limits, the ledger, and the door every action goes
+        // through. Acting on a customer's record deserves its own mount, not a corner of another module.
+        .nest("/api/agent", agent::router(state.clone()))
         .nest("/api/ai", ai::router(state.clone()))
         // Billing (plan tiers, feature toggles)
         .nest("/api/campaigns", campaigns::router(state.clone()))
@@ -886,6 +910,18 @@ async fn main() -> anyhow::Result<()> {
                 ),
             ),
         )
+        // Sign-in by emailed one-time link (migration 185). Anonymous by necessity: the person clicking
+        // it has no session, and the token IS the credential. It travels in a URL FRAGMENT, which browsers
+        // never send to a server, so it cannot land in an access log; the row at rest holds only its hash,
+        // and it is single-use.
+        .route(
+            "/s/:tenant_id/support/link",
+            axum::routing::post(tickets::portal::link),
+        )
+        .route(
+            "/s/:tenant_id/support/link/consume",
+            axum::routing::post(tickets::portal::consume_link),
+        )
         .route(
             "/s/:tenant_id/support/tickets",
             axum::routing::get(tickets::portal::list)
@@ -924,6 +960,7 @@ async fn main() -> anyhow::Result<()> {
         // hang off the `/api/widgets` nest, where the nest prefix doubled the path and NOTHING served
         // the advertised URL; the authenticated widget CRUD stays on that nest.
         .merge(support_widgets::public_router(state.clone()))
+        .merge(mail_compliance::public_router(state.clone()))
         // Layer stack (inner to outer = last to first in call order)
         .layer(CompressionLayer::new())
         .layer(axum::middleware::from_fn(security_headers_middleware))
@@ -967,6 +1004,30 @@ async fn main() -> anyhow::Result<()> {
         loop {
             crate::booking::notify::run_reminders(&db_for_reminders).await;
             tokio::time::sleep(crate::booking::notify::REMINDER_TICK).await;
+        }
+    });
+
+    // Campaign runner: a fixed tick that sends whatever campaign step is due. It announces itself for
+    // the same reason the reminders above do — a task that dies silently looks exactly like a task
+    // whose work is never due, and that ambiguity is what let campaigns sit unsent with no symptom.
+    // Its own rule set lives in `campaigns::runner`: a campaign opt-out is honoured before a message is
+    // even built, and the account-wide gate (suppression, allowance, watchdog, footer) still applies.
+    let db_for_campaigns = state.db.clone();
+    tokio::spawn(async move {
+        tracing::info!("campaign runner tick started");
+        loop {
+            let report = crate::campaigns::runner::run_due(&db_for_campaigns).await;
+            if report.processed > 0 {
+                tracing::info!(
+                    processed = report.processed,
+                    sent = report.sent,
+                    opted_out = report.opted_out,
+                    completed = report.completed,
+                    refused = report.refused,
+                    "campaign runner tick"
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         }
     });
 

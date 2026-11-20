@@ -517,9 +517,22 @@ pub async fn enroll_contact(
     Path(id): Path<Uuid>,
     Json(r): Json<EnrollContactRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let _tid = parse_tenant(&c)?;
+    let tid = parse_tenant(&c)?;
 
-    // Get total steps
+    // ── THE CAMPAIGN MUST BE THIS ACCOUNT'S (measured 2026-11-20) ────────────────────────────────
+    // This handler read the tenant and then never used it: a signed-in user could enrol a contact
+    // into ANOTHER tenant's campaign, and the step count it returned came from that other account's
+    // rows. Tenancy is decided by the campaign's own row here, not by anything the caller sends.
+    let owned: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM email_campaigns WHERE id = $1 AND tenant_id = $2")
+            .bind(id)
+            .bind(tid)
+            .fetch_optional(&s.db)
+            .await?;
+    if owned.is_none() {
+        return Err(AppError::NotFound("Campaign".into()));
+    }
+
     // COUNT(*) is bigint, not int4: decoding it into i32 fails at runtime and the
     // old `.unwrap_or(0)` turned that DB error into "Campaign has no steps" for
     // every enroll call.
@@ -534,7 +547,6 @@ pub async fn enroll_contact(
         return Err(AppError::Validation("Campaign has no steps".into()));
     }
 
-    // Get first step's delay to calculate next_send_at
     let first_step = sqlx::query_as::<_, CampaignStep>(
         "SELECT * FROM email_campaign_steps WHERE campaign_id = $1 ORDER BY step_order LIMIT 1",
     )
@@ -548,16 +560,54 @@ pub async fn enroll_contact(
 
     let entity_type = r.entity_type.unwrap_or("contact".into());
 
+    // ── THE PERSON, AND WHETHER THEY WANT THIS CAMPAIGN AT ALL ───────────────────────────────────
+    // An address that opted out of THIS campaign cannot be enrolled into it. Without this the
+    // unsubscribe page's per-campaign choice would be a note nobody reads: a customer could re-add
+    // the person and the runner would send on the next tick, which is exactly the "we stopped it, then
+    // it started again" experience that turns a complaint into a blocklisting.
+    if entity_type == "contact" {
+        let found = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT email FROM contacts WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(r.entity_id)
+        .bind(tid)
+        .fetch_optional(&s.db)
+        .await?;
+        let Some(maybe_email) = found else {
+            return Err(AppError::NotFound("Contact".into()));
+        };
+        let Some(address) = maybe_email.filter(|e| e.contains('@')) else {
+            return Err(AppError::Validation(
+                "that contact has no email address, so a campaign cannot reach them".into(),
+            ));
+        };
+        if crate::mail_compliance::campaign_opted_out(&s.db, tid, &address, id).await {
+            return Err(AppError::Validation(
+                "that address has unsubscribed from this campaign — enrolling them again would \
+                 restart mail they asked to stop"
+                    .into(),
+            ));
+        }
+    }
+
+    // `current_step` counts the steps ALREADY SENT, so a new enrolment starts at 0. It used to start
+    // at 1 while the runner sends `current_step + 1`, which would have skipped step one entirely and
+    // sent step two first.
     let enrollment = sqlx::query_as::<_, CampaignEnrollment>(
         r#"INSERT INTO email_campaign_enrollments
            (id, campaign_id, entity_type, entity_id, current_step, total_steps, status, next_send_at)
-           VALUES ($1, $2, $3, $4, 1, $5, 'active', $6)
+           VALUES ($1, $2, $3, $4, 0, $5, 'active', $6)
            ON CONFLICT DO NOTHING
-           RETURNING *"#
+           RETURNING *"#,
     )
-    .bind(Uuid::new_v4()).bind(id).bind(&entity_type).bind(r.entity_id)
-    .bind(total_steps as i32).bind(next_send)
-    .fetch_optional(&s.db).await?;
+    .bind(Uuid::new_v4())
+    .bind(id)
+    .bind(&entity_type)
+    .bind(r.entity_id)
+    .bind(total_steps as i32)
+    .bind(next_send)
+    .fetch_optional(&s.db)
+    .await?;
 
     Ok((StatusCode::CREATED, Json(json!(enrollment))))
 }

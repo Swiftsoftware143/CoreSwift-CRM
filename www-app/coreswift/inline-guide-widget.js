@@ -134,6 +134,10 @@
         '</div>' +
       '</div>';
     document.body.appendChild(widget);
+    // MOUNTED, BUT NOT SHOWN, WITHOUT A SESSION. The console swaps its login form for the application without
+    // reloading, so hiding (rather than refusing to mount) is what lets the guide appear the moment somebody
+    // signs in — no reload, no second mount, one owner of the element.
+    widget.style.display = hasSession() ? '' : 'none';
 
     toggle = document.getElementById('ig-toggle');
     panel = document.getElementById('ig-panel');
@@ -221,4 +225,52 @@
   if (document.getElementById('app')) {
     observer.observe(document.getElementById('app'), { childList: true, subtree: true });
   }
+
+  // ── session gate: NEVER IN FRONT OF THE LOGIN (David, 2026-11-18) ─────────────────────────────
+  // Both the console and the admin panel serve their login form from the SAME page that later becomes
+  // the application, so a widget that mounts on load appears to a stranger who has not signed in —
+  // and the page it then explains is one they cannot see. There is one session key in both surfaces
+  // (`crm_token`), so the widget waits for it: it mounts when a session exists, and it removes itself
+  // if the session goes away (sign-out).
+  //
+  // 2026-11-19 (measured in Chromium on app.coreswiftcrm.com): these three helpers were inserted
+  // INSIDE the hashchange listener above, so they were out of scope everywhere else. `createWidget()`
+  // threw "hasSession is not defined" BEFORE it wired the toggle, and the timer threw
+  // "syncWithSession is not defined" — the guide "?" button did nothing on every CoreSwift page load
+  // and the console logged two ReferenceErrors plus a null-`style` TypeError. They belong at IIFE
+  // scope, where the timer and createWidget() can both reach them.
+  function hasSession() {
+    try { return !!localStorage.getItem('crm_token'); } catch (e) { return false; }
+  }
+
+  // Bring the widget in line with the session, whenever that changes: shown after a login, removed
+  // after a sign-out. Cheap, idempotent, and it cannot produce two widgets because it never creates one.
+  function syncWithSession() {
+    var widgetEl = document.getElementById('inline-guide-widget');
+    var toggleEl = document.getElementById('ig-toggle');
+    if (!hasSession()) {
+      // Signed out: take the whole widget out of the page. `widgetCreated` is reset so the NEXT
+      // sign-in on this same page (the console swaps its form for the app without a reload) builds
+      // a fresh, fully wired widget instead of leaving a stripped one behind.
+      if (widgetEl) widgetEl.remove();
+      if (widgetCreated) {
+        widgetCreated = false;
+        widget = toggle = panel = null;
+      }
+      return;
+    }
+    // Signed in: if the widget is missing (sign-in after a sign-out on the same page, or a host that
+    // wiped document.body), build it now. updateGuide() is the ONE builder; this only nudges it.
+    if (!widgetEl || !toggleEl) {
+      widgetCreated = false;
+      widget = toggle = panel = null;
+      updateGuide();
+      return;
+    }
+    widgetEl.style.display = '';
+  }
+
+  // One timer, one owner: a login shows the guide, a sign-out removes it.
+  setInterval(syncWithSession, 2000);
+  syncWithSession();
 })();

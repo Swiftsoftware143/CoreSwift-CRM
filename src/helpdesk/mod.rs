@@ -13,6 +13,7 @@ pub mod kb;
 pub mod learn;
 pub mod merge;
 pub mod reports;
+pub mod sentiment;
 pub mod sla;
 
 pub use ingest::{ingest_inbound, IngestOutcome};

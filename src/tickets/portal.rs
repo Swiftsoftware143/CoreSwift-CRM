@@ -129,11 +129,69 @@ fn normalise_email(raw: &str) -> String {
 
 // ── Page ─────────────────────────────────────────────────────────────────
 
-/// `GET /s/:tenant_id/support` — the portal document. The tenant id is public (it is already in
-/// every embed snippet), so it is safe to inline; the page stores the grant in `sessionStorage`
-/// and sends it as a header, never as a URL.
-pub async fn page(Path(tenant_id): Path<Uuid>) -> Response {
-    let html = PORTAL_HTML.replace("__TENANT_ID__", &tenant_id.to_string());
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// `GET /s/:tenant_id/support` — the portal document.
+///
+/// The tenant id is public (it is already in every embed snippet), so it is safe to inline; the page
+/// stores the grant in `sessionStorage` and sends it as a header, never as a URL.
+///
+/// THE PAGE IS BRANDED FROM THE ACCOUNT, NOT FROM A LITERAL (2026-11-20). The audit for this work
+/// recorded "no tenant branding", and a support portal that answers in somebody else's colours is the
+/// first thing a customer notices. The name, the accent colour and the logo come from the SAME
+/// `tenants.settings -> 'email_branding'` document the transactional email renderer already reads, so the
+/// mail and the page a customer opens from it cannot disagree. Every value is HTML-escaped: this is
+/// user-supplied text being written into markup.
+pub async fn page(State(s): State<AppState>, Path(tenant_id): Path<Uuid>) -> Response {
+    let branding = crate::branding::load(&s.db, tenant_id).await;
+    let tenant_name: Option<String> = sqlx::query_scalar("SELECT name FROM tenants WHERE id = $1")
+        .bind(tenant_id)
+        .fetch_optional(&s.db)
+        .await
+        .ok()
+        .flatten();
+
+    let brand_name = branding
+        .as_ref()
+        .map(|b| b.brand_name.clone())
+        .filter(|n| !n.trim().is_empty())
+        .or(tenant_name)
+        .unwrap_or_else(|| "Support".to_string());
+    // A COLOUR GOES INTO A STYLESHEET, WHERE HTML-ESCAPING PROTECTS NOTHING. Measured live
+    // 2026-11-20: a brand_color of `red;background:url(x)` was written straight into the <style> block
+    // and the page carried `background:url(x)` twice. The settings write already validates the hex, but
+    // this page must not depend on another door having done so — a stored value that is not a plain
+    // #rgb/#rrggbb/#rrggbbaa colour is ignored here and the default is used.
+    let brand_colour = branding
+        .as_ref()
+        .map(|b| b.brand_color.trim().to_string())
+        .filter(|c| {
+            let hex = c.strip_prefix('#').unwrap_or("");
+            !hex.is_empty()
+                && hex.chars().all(|ch| ch.is_ascii_hexdigit())
+                && matches!(hex.len(), 3 | 6 | 8)
+        })
+        .unwrap_or_else(|| crate::branding::DEFAULT_BRAND_COLOR.to_string());
+    let logo = match branding.as_ref() {
+        Some(b) if !b.logo_url.trim().is_empty() => format!(
+            "<img src=\"{src}\" alt=\"{name}\" style=\"max-height:40px;max-width:220px; \
+             display:block\">",
+            src = esc(&b.logo_url),
+            name = esc(&brand_name)
+        ),
+        _ => String::new(),
+    };
+
+    let html = PORTAL_HTML
+        .replace("__TENANT_ID__", &tenant_id.to_string())
+        .replace("__BRAND_NAME__", &esc(&brand_name))
+        .replace("__BRAND_COLOR__", &esc(&brand_colour))
+        .replace("__BRAND_LOGO__", &logo);
     (
         StatusCode::OK,
         [
@@ -200,6 +258,138 @@ pub async fn login(
         "token": mint_grant(&s, tenant_id, &email)?,
         "email": email,
         "tenant_name": tenant_name.unwrap_or_default(),
+    })))
+}
+
+// ── Sign-in by emailed one-time link ─────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct LinkRequest {
+    pub email: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LinkConsume {
+    pub token: String,
+}
+
+/// A short, unguessable token. 32 bytes of OS randomness, base64url — never derived from the address,
+/// because a token that can be computed from what the caller already knows is not a second factor of any
+/// kind.
+fn mint_link_token() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn hash_link_token(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(token.as_bytes());
+    hex::encode(h.finalize())
+}
+
+/// `POST /s/:tenant_id/support/link` — mail a one-time sign-in link.
+///
+/// The answer is the SAME whether or not that address has ever written in: a support portal must not be
+/// a way to discover who is a customer. The mail is only sent when a ticket actually exists.
+pub async fn link(
+    State(s): State<AppState>,
+    Path(tenant_id): Path<Uuid>,
+    Json(body): Json<LinkRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let email = normalise_email(&body.email);
+    if !email.contains('@') {
+        return Err(AppError::Validation(
+            "Enter the email address you used when you contacted us.".into(),
+        ));
+    }
+
+    let owns: Option<(Uuid,)> = sqlx::query_as(&concat!(
+        "SELECT t.id FROM tickets t WHERE t.tenant_id = $1 AND ",
+        owner_predicate!(),
+        " LIMIT 1"
+    ))
+    .bind(tenant_id)
+    .bind(&email)
+    .fetch_optional(&s.db)
+    .await?;
+
+    if owns.is_some() {
+        let token = mint_link_token();
+        sqlx::query(
+            "INSERT INTO portal_login_tokens (tenant_id, address, token_hash, expires_at)
+             VALUES ($1, $2, $3, now() + interval '30 minutes')",
+        )
+        .bind(tenant_id)
+        .bind(&email)
+        .bind(hash_link_token(&token))
+        .execute(&s.db)
+        .await?;
+
+        // THE TOKEN TRAVELS IN THE FRAGMENT, NOT THE QUERY. A fragment is never sent to a server, so the
+        // sign-in credential cannot land in any access log — the same reason this portal already refuses
+        // to carry its session grant in a query string (kanban t_a724790f).
+        let link = format!("https://app.coreswiftcrm.com/s/{tenant_id}/support#t={token}");
+        if let Err(e) = crate::email::send_template_email(
+            &s.db,
+            tenant_id,
+            &email,
+            "support_portal_link",
+            &json!({ "link": link }),
+        )
+        .await
+        {
+            // The customer is told the same thing either way (no enumeration), but the failure must be
+            // visible to the operator: a link that was never delivered looks exactly like one that was.
+            tracing::warn!(tenant = %tenant_id, error = %e, "support portal sign-in link could not be sent");
+        }
+    }
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "sent": true,
+            "detail": "If that address has written to this team, a sign-in link is on its way. \
+                       It works once and expires in 30 minutes."
+        })),
+    ))
+}
+
+/// `POST /s/:tenant_id/support/link/consume` — exchange the emailed token for the session grant.
+///
+/// One use only, and only before it expires. The row is marked used in the SAME statement that finds it,
+/// so two browser tabs racing the same link cannot both get in.
+pub async fn consume_link(
+    State(s): State<AppState>,
+    Path(tenant_id): Path<Uuid>,
+    Json(body): Json<LinkConsume>,
+) -> ApiResult<impl IntoResponse> {
+    let token = body.token.trim();
+    if token.len() < 20 {
+        return Err(AppError::Unauthorized);
+    }
+    let hash = hash_link_token(token);
+
+    let address: Option<String> = sqlx::query_scalar(
+        "UPDATE portal_login_tokens
+            SET used_at = now()
+          WHERE tenant_id = $1 AND token_hash = $2 AND used_at IS NULL AND expires_at > now()
+          RETURNING address",
+    )
+    .bind(tenant_id)
+    .bind(&hash)
+    .fetch_optional(&s.db)
+    .await?;
+
+    let Some(address) = address else {
+        return Err(AppError::Unauthorized);
+    };
+
+    Ok(Json(json!({
+        "token": mint_grant(&s, tenant_id, &address)?,
+        "email": address,
     })))
 }
 
@@ -374,6 +564,10 @@ pub async fn reply(
     .bind(&message)
     .fetch_one(&s.db)
     .await?;
+
+    // The customer's own words are the best reading of how this is going. The tag is a floor: a later
+    // polite message does not erase the one where they said they were leaving.
+    crate::helpdesk::sentiment::apply(&s.db, ticket_id, &message).await;
 
     sqlx::query(
         "UPDATE tickets SET updated_at = NOW(), \

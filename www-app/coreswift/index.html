@@ -110,6 +110,17 @@ a:hover{color:var(--accent-hover)}
 .nav-divider{padding:8px 20px;font-size:.7rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px}
 .nav-item{display:flex;align-items:center;gap:10px;padding:9px 20px;cursor:pointer;color:var(--text-secondary);font-size:.88rem;transition:all .15s;border-left:3px solid transparent;white-space:nowrap;background:none;border:0;border-left:3px solid transparent;font-family:inherit;box-sizing:border-box;width:100%;text-align:left}
 .nav-item:hover{color:var(--text-primary);background:var(--bg-hover)}
+/* FIND A SCREEN (2026-11-20). This console's sidebar carries 61 entries (54 on the customer
+   side); scrolling it to reach one screen is the slowest thing an operator does all day. One
+   filter box, no new data: it hides the entries that do not match, expands the groups that
+   hold a match, and restores the exact view you had when the box is cleared. Purely local —
+   nothing is fetched, nothing is saved. */
+.sidebar-search-wrap{padding:8px 12px 4px}
+.sidebar-search{width:100%;box-sizing:border-box;padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-primary);color:var(--text-primary);font-size:13px;font-family:inherit}
+.sidebar-search::placeholder{color:var(--text-secondary,#64748b)}
+.sidebar-search:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px rgba(37,99,235,.15)}
+.sidebar.collapsed .sidebar-search-wrap{display:none}
+.sidebar-search-empty{padding:6px 16px 10px;font-size:12px;color:var(--text-secondary,#64748b)}
 .nav-item.active{color:#fff;background:var(--accent-subtle);border-left-color:var(--accent)}
 .nav-item .nav-icon{width:20px;text-align:center;flex-shrink:0;font-size:1rem}
 .nav-item .nav-text{flex:1}
@@ -327,8 +338,15 @@ tr:hover td{background:var(--bg-hover)}
       <span class="sidebar-logo">🏢</span>
       <span class="sidebar-brand sidebar-brand-text">CoreSwift CRM</span>
     </div>
+    <div class="sidebar-search-wrap">
+      <input id="sidebarSearch" class="sidebar-search" type="search" autocomplete="off"
+             placeholder="Find a screen…  /" aria-label="Filter the sidebar screens"
+             oninput="filterSidebar(this.value)"
+             onkeydown="if(event.key==='Escape'){event.preventDefault();this.value='';filterSidebar('');}">
+    </div>
     <nav class="sidebar-nav" id="sidebarNav">
     </nav>
+    <div class="sidebar-search-empty" id="sidebarSearchEmpty" style="display:none">No screen matches that.</div>
     <div class="sidebar-footer">
       <!-- The user guide, on THIS origin (fleet guide-path standard, kanban t_d767f3f8): the app
            surface serves /guide.html; the shell links it in the sidebar footer beside Collapse. -->
@@ -860,6 +878,9 @@ const MENU = [
     { id:'telnyx', icon:'📱', label:'Telnyx SMS/Voice' },
   ]},
   { id:'tickets', icon:'🎫', label:'Support Tickets' },
+  // THE ACTION AGENT (ticketing suite item 1). Its own screen because what it does — acting on a
+  // customer's record — deserves to be visible, with its limits and its waiting list in one place.
+  { id:'agent', icon:'🤖', label:'Agent' },
   { id:'knowledge', icon:'📚', label:'Knowledge Base' },
   { type:'group', icon:'📬', label:'Inbox', children:[
     { id:'inbox', icon:'📬', label:'Shared Inbox' },
@@ -901,7 +922,13 @@ const SETTINGS_MENU = [
   { id:'webhooks', icon:'🔗', label:'Webhooks' },
   // Per-TENANT email branding (kanban t_feab8aff, ported from t_c06a32eb). Lives in the
   // workspace's OWN settings menu: the logo and name are the ACCOUNT's, set by the account.
-  { id:'branding', icon:'🎨', label:'Email Branding' }
+  { id:'branding', icon:'🎨', label:'Email Branding' },
+  // Mail compliance (kanban t_bec0f198): the delivery evidence, the per-account do-not-mail
+  // list, its remove arm and the two CSV downloads. The API has shipped all of it since
+  // migration 181 and no console screen called any of it. It sits with the account's OWN
+  // settings because the suppression list is PER ACCOUNT (one customer's opt-out must never
+  // silence another customer's mail to the same human).
+  { id:'mail-compliance', icon:'🛡️', label:'Mail compliance' }
 ];
 
 const ADMIN_MENU = [
@@ -982,6 +1009,75 @@ function renderSidebar() {
     }
   });
 }
+
+// ── FIND A SCREEN (2026-11-20) ───────────────────────────────────────────────────────────────
+// 61 sidebar entries (54 for a customer) with no way to jump to one by name. This filters what is
+// already rendered — it fetches nothing and stores nothing — and it remembers which groups were
+// open so clearing the box gives the operator back exactly the sidebar they had.
+function filterSidebar(raw) {
+  const q = String(raw || '').trim().toLowerCase();
+  const nav = document.getElementById('sidebarNav');
+  if (!nav) return;
+  const divider = nav.querySelectorAll('.nav-divider');
+  const groups = Array.prototype.slice.call(nav.querySelectorAll('.nav-group-items'));
+  const empty = document.getElementById('sidebarSearchEmpty');
+  if (!q) {
+    nav.querySelectorAll('.nav-item').forEach(function (el) { el.style.display = ''; });
+    divider.forEach(function (el) { el.style.display = ''; });
+    groups.forEach(function (g) {
+      g.style.display = '';
+      const wasOpen = !!(filterSidebar._open && filterSidebar._open[g.id]);
+      g.classList.toggle('expanded', wasOpen);
+      const btn = nav.querySelector('[data-group="' + g.id + '"]');
+      if (btn) btn.classList.toggle('group-expanded', wasOpen);
+    });
+    if (empty) empty.style.display = 'none';
+    filterSidebar._open = null;
+    return;
+  }
+  if (!filterSidebar._open) {
+    filterSidebar._open = {};
+    groups.forEach(function (g) { filterSidebar._open[g.id] = g.classList.contains('expanded'); });
+  }
+  divider.forEach(function (el) { el.style.display = 'none'; });
+  let shown = 0;
+  nav.querySelectorAll('.nav-item[data-tab]').forEach(function (el) {
+    const label = String(el.getAttribute('aria-label') || el.textContent || '').toLowerCase();
+    const hit = label.indexOf(q) > -1;
+    el.style.display = hit ? '' : 'none';
+    if (hit) shown++;
+  });
+  groups.forEach(function (g) {
+    const btn = nav.querySelector('[data-group="' + g.id + '"]');
+    const groupLabel = btn ? String(btn.getAttribute('aria-label') || '').toLowerCase() : '';
+    // A group whose own NAME matches keeps all of its screens: searching "admin" should show the
+    // Admin Settings drawer, not hide it because no child is literally called "admin".
+    const children = Array.prototype.slice.call(g.querySelectorAll('.nav-item[data-tab]'));
+    if (groupLabel.indexOf(q) > -1) {
+      children.forEach(function (el) { el.style.display = ''; shown++; });
+    }
+    const any = children.some(function (el) { return el.style.display !== 'none'; });
+    g.style.display = any ? '' : 'none';
+    g.classList.toggle('expanded', any);
+    if (btn) {
+      btn.style.display = any ? '' : 'none';
+      btn.classList.toggle('group-expanded', any);
+    }
+  });
+  if (empty) empty.style.display = shown ? 'none' : '';
+}
+
+// "/" jumps to the box from anywhere except a field the user is already typing in.
+document.addEventListener('keydown', function (e) {
+  if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+  const box = document.getElementById('sidebarSearch');
+  if (!box) return;
+  e.preventDefault();
+  box.focus();
+  box.select();
+});
 
 function toggleGroup(gid) {
   const items = document.getElementById(gid);
@@ -2027,7 +2123,7 @@ const TAB_LOADERS = {
           { icon:'👥', label:'Total Contacts', value: cnt(stats && stats.total_contacts) },
           { icon:'🏢', label:'Companies', value: cnt(stats && stats.total_companies) },
           { icon:'🎯', label:'Opportunities', value: cnt(stats && stats.total_opportunities) },
-          { icon:'💰', label:'Won Deal Value', value: money(stats && stats.total_revenue) },
+          { icon:'💰', label:'Won Deal Value', value: dashWonValue(stats) },
           { icon:'📈', label:'Pipelines', value: cnt(pipes && Array.isArray(pipes.pipelines) ? pipes.pipelines.length : null) },
           { icon:'🎫', label:'Open Tickets', value: cnt(tickets && tickets.open), note: gateNote, tip: ticketsS.note },
           { icon:'🔗', label:'Tracked Links', value: cnt(links && Array.isArray(links.links) ? links.links.length : null) },
@@ -2053,7 +2149,7 @@ const TAB_LOADERS = {
     // moment any one of them is non-zero, so it never becomes permanent furniture.
     // `ticketsS.gated` is deliberately NOT part of the predicate: a 402 is the plan gate talking,
     // not a missing read (a Free workspace has no support tickets at all).
-    (function paintFirstSteps(){
+    (async function paintFirstSteps(){
       const box = document.getElementById('firstSteps');
       if (!box) return;
       if (!stats || !pipes || !links) { box.innerHTML = ''; return; }
@@ -2068,26 +2164,57 @@ const TAB_LOADERS = {
       // follows the same rule, so it never offers a screen whose API answers 403.
       const role = (STATE.user && STATE.user.role) || 'member';
       const canInvite = role === 'owner' || role === 'admin';
+      // A SEAT THE PLAN DOES NOT INCLUDE IS NOT A STEP THE OWNER CAN TAKE (2026-11-20).
+      // Measured live on a fresh Free signup: this card opened with "Invite your team" while
+      // POST /api/auth/team/invite answered 402 "Your plan includes 1 person, and 1 is already in
+      // use." — i.e. the first thing a new customer was told to do was the one thing the plan
+      // forbids. The numbers below come from the SAME ledger the invite gate enforces:
+      // GET /api/auth/team/members returns `seats: {limit, used}` computed by the server (measured
+      // on the Free plan: {"limit":1,"used":1}), so this card and that refusal cannot disagree.
+      // A failed or silent read keeps the previous behaviour — a hidden control that would have
+      // worked is a worse defect than an offered one that refuses.
+      let seatsFull = false, seatNote = '';
+      if (canInvite) {
+        try {
+          const team = await API.get('/auth/team/members');
+          const seats = team && team.seats;
+          if (seats && typeof seats.limit === 'number' && typeof seats.used === 'number'
+              && seats.used >= seats.limit) {
+            seatsFull = true;
+            seatNote = 'Your plan includes ' + seats.limit + (seats.limit === 1 ? ' person' : ' people')
+                     + ' and ' + (seats.used === 1 ? 'that seat is' : 'all of them are') + ' already in use.';
+          }
+        } catch (_) {}
+      }
       const steps = [
         ['Add your first contact',
          'The person you are going to sell to. A whole spreadsheet can come in at once with Import CSV, on the same screen.',
-         'contacts'],
+         'contacts', 'Add your first contact'],
         ['Set up a pipeline',
          'The stages a deal moves through, so a won deal has somewhere to land and the Won Deal Value tile can count it.',
-         'pipelines'],
-        ['Invite your team',
-         'Bring in the people who work the deals. Each person gets their own sign-in in this workspace.',
-         'team'],
-      ].filter((s) => s[2] !== 'team' || canInvite);
+         'pipelines', 'Set up a pipeline'],
+      ];
+      if (canInvite) {
+        if (seatsFull) {
+          // The upsell names the actual ceiling instead of offering a button that can only refuse.
+          steps.push(['Invite your team',
+            seatNote + ' A plan with more seats adds them — nothing changes for the people already here.',
+            'billing', 'See plans']);
+        } else {
+          steps.push(['Invite your team',
+            'Bring in the people who work the deals. Each person gets their own sign-in in this workspace.',
+            'team', 'Invite your team']);
+        }
+      }
       let h = '<div class="card" data-first-steps="1" style="margin-bottom:16px"><div class="card-body">';
       h += '<h3 style="margin:0 0 4px">Get set up</h3>';
-      h += '<p style="color:var(--text-secondary);font-size:13px;margin:0 0 12px">Three steps and this workspace is ready to work. This card goes away once you have done any one of them.</p>';
+      h += '<p style="color:var(--text-secondary);font-size:13px;margin:0 0 12px">' + (steps.length === 3 ? 'Three steps' : steps.length + ' steps') + ' and this workspace is ready to work. This card goes away once you have done any one of them.</p>';
       steps.forEach((s, i) => {
         h += '<div style="display:flex;gap:12px;align-items:flex-start;padding:10px 0' + (i ? ';border-top:1px solid #e2e8f0' : '') + '">';
         h += '<div style="flex:0 0 24px;height:24px;border-radius:50%;background:#eef2ff;color:#4338ca;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center">' + (i + 1) + '</div>';
         h += '<div style="flex:1"><div style="font-weight:600;font-size:14px">' + escapeHtml(s[0]) + '</div>';
         h += '<div style="color:var(--text-secondary);font-size:12px;margin:2px 0 6px;max-width:60ch">' + escapeHtml(s[1]) + '</div>';
-        h += '<button type="button" class="btn btn-primary btn-sm" data-first-step="' + s[2] + '" onclick="switchTab(\'' + s[2] + '\')">' + escapeHtml(s[0]) + '</button></div></div>';
+        h += '<button type="button" class="btn btn-primary btn-sm" data-first-step="' + s[2] + '" onclick="switchTab(\'' + s[2] + '\')">' + escapeHtml(s[3] || s[0]) + '</button></div></div>';
       });
       h += '</div></div>';
       box.innerHTML = h;
@@ -3012,9 +3139,11 @@ async function icLoadProviders() {
   if (!wrap) return;
   let providers = [], keys = {};
   try {
-    const res = await Promise.all([API.get('/available-providers'), API.get('/provider-keys')]);
+    const res = await Promise.all([API.get('/available-providers'), API.get('/provider-keys'),
+                                   API.get('/ai/usage').catch(() => null)]);
     providers = (res[0] && res[0].items) || [];
     ((res[1] && res[1].items) || []).forEach(k => { keys[k.provider] = k; });
+    IC.aiUsage = res[2] || null;
   } catch (e) {
     wrap.innerHTML = icErr('Could not load provider keys', e.message);
     return;
@@ -3036,6 +3165,43 @@ function icRenderProviders() {
   let html = card('🔑 Provider keys (BYOK — stored on this account only)',
     '<p style="color:var(--text-secondary);margin:0">Keys your own features call. Stored per account; nothing here is a platform-wide default ' +
     'and a saved key is never shown back in full.</p>');
+
+  // WHAT THE AI HAS COST — and with whose key. An empty table used to read as "the AI is free" when the
+  // truth was "the AI is off"; this says which.
+  const u = IC.aiUsage;
+  if (u) {
+    const running = u.ai_running
+      ? '<span class="provider-status"><span class="status-dot connected"></span> running</span>'
+      : '<span class="provider-status"><span class="status-dot disconnected"></span> off</span>';
+    let body = '<p style="color:var(--text-secondary);margin:0 0 10px">Last ' +
+      escapeHtml(String(u.window_days || 30)) + ' days, this account. ' + running + '</p>';
+    if (!u.ai_running) {
+      body += '<p style="color:var(--text-secondary);margin:0">No AI key is set on this account and the ' +
+        'platform has none configured, so every AI feature is switched off rather than silently doing nothing. ' +
+        'Add a key below to turn it on.</p>';
+    } else if (!(u.providers || []).length) {
+      body += '<p style="color:var(--text-secondary);margin:0">Nothing has called a model in the last ' +
+        escapeHtml(String(u.window_days || 30)) + ' days.</p>';
+    } else {
+      body += '<div style="display:grid;gap:6px">';
+      (u.providers || []).forEach(r => {
+        body += '<div style="display:flex;justify-content:space-between;gap:10px;font-size:.8rem">' +
+          '<span>' + escapeHtml(r.provider) + '</span>' +
+          '<span style="color:var(--text-secondary)">' + escapeHtml(String(r.calls)) + ' call(s) · ' +
+          escapeHtml(String((r.tokens_in || 0) + (r.tokens_out || 0))) + ' tokens' +
+          (r.calls_on_platform_key ? ' · ' + escapeHtml(String(r.calls_on_platform_key)) + ' on the platform key' : '') +
+          '</span></div>';
+      });
+      body += '</div>';
+      const recent = (u.recent || []).slice(0, 5);
+      if (recent.length) {
+        body += '<div style="margin-top:10px;font-size:.74rem;color:var(--text-muted)">Most recent: ' +
+          recent.map(c => escapeHtml(c.feature) + ' → ' + escapeHtml(c.provider) +
+            (c.ok ? '' : ' (failed)')).join(' · ') + '</div>';
+      }
+    }
+    html += card('📊 What the AI has cost', body);
+  }
 
   if (!IC.providers.length) {
     el.innerHTML = html + '<div class="card"><div class="card-body"><div class="empty-state"><h3>No providers registered</h3>' +
@@ -4169,6 +4335,152 @@ async function loadMessagesTab(){
     el.innerHTML='<p style="color:var(--text-secondary)">Messages unavailable: '+escapeHtml(String(e.message||e))+'</p>';
   }
 }
+// ── Received mail (2026-11-19) ───────────────────────────────────────────────────────────────────
+// MEASURED WHY: the console's mail tab renders domains, mailboxes, auto-replies, keys and the send
+// card, and never a single received message — while this workspace held 78 in
+// `private_email_messages` (GET /api/private-email/messages = 200; the counts read reports inbox: 78).
+// The page's only other message list reads `/api/messages`, the UNIFIED OUTBOUND table (total 0), so a
+// customer's letter had no screen at all. POST /private-email/messages/:id/summarize had no control
+// either, though its own doc comment calls it "this button".
+//
+// Placement: an entry point in the header that opens a list in a modal, then the message in the same
+// modal. It is deliberately self-contained — the mail tab repaints from its own awaited reads and
+// replaces its container, so anything appended inside it is wiped a moment later (measured).
+//
+// Rules kept: bodies are rendered as TEXT (escapeHtml + pre-wrap), never as HTML — a customer's mail is
+// untrusted input and this page holds a session; and the Summarise control exists only when the counts
+// read says `ai_summary` is true, so nobody is offered a button whose route would answer 503.
+var peInboxAiSummary = false;
+
+function peEsc(s) { return escapeHtml(String(s == null ? '' : s)); }
+
+// An id inside an HTML attribute that is itself delimited by double quotes: entity-escape the quotes
+// and keep only UUID-safe characters, so the attribute cannot be closed early (measured: JSON.stringify
+// here produced onclick="peOpenMessage("uuid")", which threw on click).
+function peAttrId(id) {
+  const safe = String(id == null ? '' : id).replace(/[^A-Za-z0-9-]/g, '');
+  return '&quot;' + safe + '&quot;';
+}
+
+function peMessageText(m) {
+  const plain = String((m && m.body_plain) || '').trim();
+  if (plain) return plain;
+  return String((m && m.body_html) || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+async function peShowInbox() {
+  let list = [];
+  try {
+    const r = await API.get('/private-email/messages?limit=50');
+    list = (r && Array.isArray(r.messages)) ? r.messages : [];
+  } catch (e) {
+    showModal('Received mail',
+      '<div style="color:#b91c1c">Could not read the inbox: ' + peEsc((e && e.message) ? e.message : e) + '</div>',
+      '<button class="btn btn-ghost" onclick="closeModal()">Close</button>');
+    return;
+  }
+  try {
+    const c = await API.get('/private-email/messages/counts');
+    peInboxAiSummary = !!(c && c.ai_summary);
+  } catch (e) {
+    peInboxAiSummary = false;
+  }
+  if (!list.length) {
+    showModal('Received mail',
+      '<p style="color:var(--text-secondary)">No received messages yet.</p>',
+      '<button class="btn btn-ghost" onclick="closeModal()">Close</button>');
+    return;
+  }
+  const rows = list.map(function (m) {
+    const sub = peEsc(m.subject || '(no subject)');
+    const from = peEsc(m.from_name || m.from_address || '');
+    const when = peEsc(String(m.received_at || '').replace('T', ' ').slice(0, 16));
+    return '<div class="config-item" style="cursor:pointer" onclick="peOpenMessage(' + peAttrId(m.id) + ')">' +
+      '<div class="config-info"><div class="config-label">' + sub + '</div>' +
+      '<div class="config-desc">' + from + (when ? ' \u00b7 ' + when : '') +
+      (m.is_read === false ? ' \u00b7 unread' : '') + '</div></div>' +
+      '<span class="btn btn-ghost btn-xs">Open</span></div>';
+  });
+  showModal('Received mail (' + list.length + ')',
+    '<p style="font-size:12px;color:var(--text-secondary)">The last ' + list.length +
+    ' message(s) this workspace received. Open one to read it.</p><div class="config-list">' + rows.join('') + '</div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Close</button>', true);
+}
+
+async function peOpenMessage(id) {
+  if (!id) return;
+  let m = null;
+  try {
+    const r = await API.get('/private-email/messages/' + encodeURIComponent(id));
+    m = (r && r.message) ? r.message : r;
+  } catch (e) {
+    toast('Could not open that message: ' + ((e && e.message) ? e.message : e), 'error');
+    return;
+  }
+  if (!m || !m.id) { toast('That message could not be read', 'error'); return; }
+  const fromName = String(m.from_name || '');
+  const fromAddr = String(m.from_address || '');
+  const from = fromName && fromAddr ? fromName + ' <' + fromAddr + '>' : (fromAddr || fromName);
+  const when = String(m.received_at || '').replace('T', ' ').slice(0, 16);
+  const meta = [from, when, m.to_address ? ('to ' + String(m.to_address)) : '']
+    .filter(function (x) { return !!x; }).join(' \u00b7 ');
+  const body = peMessageText(m) || '(this message has no readable text)';
+  const html =
+    '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">' + peEsc(meta) + '</div>' +
+    '<div style="white-space:pre-wrap;max-height:50vh;overflow:auto">' + peEsc(body) + '</div>' +
+    '<div id="peSummary" style="margin-top:12px"></div>';
+  const footer =
+    '<button class="btn btn-ghost" onclick="peShowInbox()">Back</button>' +
+    '<button class="btn btn-ghost" onclick="closeModal()">Close</button>' +
+    (peInboxAiSummary ? '<button class="btn btn-primary" id="peSummariseBtn">Summarise this message</button>' : '');
+  showModal(peEsc(m.subject || '(no subject)'), html, footer, true);
+  const b = document.getElementById('peSummariseBtn');
+  if (b) b.addEventListener('click', function () { peSummariseMessage(String(m.id), b); });
+}
+
+// The server's own sentence is shown verbatim: "AI summaries need an AI provider key …" and
+// "This message has no text to summarise." are both written for the operator.
+async function peSummariseMessage(id, btn) {
+  const out = document.getElementById('peSummary');
+  if (btn) btn.disabled = true;
+  if (out) out.innerHTML = '<div style="font-size:12px;color:var(--text-secondary)">Summarising\u2026</div>';
+  try {
+    const r = await API.post('/private-email/messages/' + encodeURIComponent(id) + '/summarize', {});
+    const s = (r && r.summary) ? String(r.summary) : '';
+    if (out) {
+      out.innerHTML = s
+        ? '<div class="card"><div class="card-body"><div style="font-size:11px;text-transform:uppercase;color:var(--text-secondary);margin-bottom:6px">Summary</div><div style="white-space:pre-wrap">' + peEsc(s) + '</div></div></div>'
+        : '<div style="color:#b45309">The summariser answered with nothing, so there is no summary to show.</div>';
+    }
+  } catch (e) {
+    if (out) out.innerHTML = '<div style="color:#b91c1c">' + peEsc((e && e.message) ? e.message : e) + '</div>';
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// One entry point, installed once the console has painted a header (bounded retries).
+function peInstallInboxButton(n) {
+  n = n || 0;
+  if (document.getElementById('peInboxBtn')) return;
+  const host = document.querySelector('.topbar') || document.querySelector('header') ||
+               document.querySelector('.header') || document.querySelector('.topbar-actions');
+  if (!host) { if (n < 40) setTimeout(function () { peInstallInboxButton(n + 1); }, 250); return; }
+  const b = document.createElement('button');
+  b.id = 'peInboxBtn';
+  b.className = 'btn btn-ghost btn-sm';
+  b.type = 'button';
+  b.title = 'Read the mail this workspace has received';
+  b.textContent = '\uD83D\uDCEC Received mail';
+  b.addEventListener('click', function () { peShowInbox(); });
+  host.appendChild(b);
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', function () { peInstallInboxButton(0); });
+} else {
+  peInstallInboxButton(0);
+}
+
 // CS-22: the old modal only toasted "Ticket created" and posted nothing.
 function showAddTicketModal(){
   showModal('New Ticket',
@@ -5777,6 +6089,21 @@ function planLabel(slug) {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
 }
 
+// A stored period end that is already in the PAST must never be printed as an upcoming event.
+// Measured 2026-11-19: every workspace whose paid period had ended was told "The next charge is on
+// <a date two weeks ago>" — the sentence asserts a future the calendar has already passed.
+function periodEndInPast(iso) {
+  if (!iso) return false;
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return t < today.getTime();
+}
+function periodEndDate(iso) {
+  try { return iso ? new Date(iso).toLocaleDateString() : ''; } catch (e) { return ''; }
+}
+
 async function loadBillState() {
   const el = document.getElementById('billCard');
   if (!el) return;
@@ -5818,7 +6145,10 @@ async function loadBillState() {
       return;
     }
     const next = b.current_period_ends_at
-      ? ' The next charge is on ' + when(b.current_period_ends_at) + '.'
+      ? (periodEndInPast(b.current_period_ends_at)
+          ? ' The period this plan was paid for ended on ' + periodEndDate(b.current_period_ends_at)
+            + ', and no renewal has been recorded since \u2014 so nothing has been charged for the time after it.'
+          : ' The next charge is on ' + periodEndDate(b.current_period_ends_at) + '.')
       : '';
     el.innerHTML = card('Your bill',
       '<div class="stats-grid">'
@@ -5887,7 +6217,13 @@ async function loadSubscriptionState() {
         (onFree
           ? 'You are on the Free plan \u2014 there is no paid subscription to cancel.'
           : active
-            ? 'Cancelling drops this account to the Free plan immediately. ' + (ends ? 'Current period ends ' + new Date(ends).toLocaleDateString() + '.' : '')
+            ? 'Cancelling drops this account to the Free plan immediately. '
+              + (ends
+                  ? (periodEndInPast(ends)
+                      ? 'The period that was paid for ended on ' + periodEndDate(ends)
+                        + ', and no renewal has been recorded since.'
+                      : 'Current period ends ' + periodEndDate(ends) + '.')
+                  : '')
             : 'No paid subscription is active.') +
       '</p>');
     const btn = document.getElementById('cancelSubBtn');
@@ -6066,37 +6402,246 @@ function famErr(el, label, e) {
 }
 function confirmThen(msg, fn) { if (window.confirm(msg)) fn(); }
 
-// ---------------------------------------------------------------- PIPELINES
+// ---------------------------------------------------------------- PIPELINES / DEALS
+// The DEAL TAB (David, 2026-11-20 — kanban t_2df68850).
+//
+// The deal record is CoreSwift's `opportunities` table; this tab is the software-wide surface over
+// it. Nothing here is industry-specific: a workspace that needs courier fields (Xride) adds them
+// as CUSTOM FIELDS, which is the same mechanism any other industry uses.
+//
+// Money is shown per currency, never added across currencies. David's standing rule (2026-11-20):
+// the US DOLLAR is the default currency, so a workspace that has not chosen one prices its deals in
+// USD and reports in USD — nobody is asked to choose one first, and a first deal is never refused.
 let PL_DATA = [];
+let PL_FILTER = { q: '', owner_id: '', stage_id: '', source: '', status: '', from: '', to: '', rotting: false };
+let PL_REPORT = [];
+let PL_CURRENCY = null;          // the workspace DEFAULT currency (what a new deal is priced in)
+let PL_REPORTING = null;         // what reports are computed in
+let PL_CURRENCY_SOURCE = null;   // 'workspace' (chosen here) or 'standing_default' (USD by rule)
+let PL_ISO = [];                 // the real ISO 4217 codes the server accepts
+let PL_TEAM = [];
+let PL_DETAIL = null;
+
+// Every deal carries a stored rate and the currency that rate converts INTO (David, 2026-11-20).
+// A deal already in the reporting currency is worth its own value; anything else is worth
+// value × its STORED rate — never today's market, so a past period does not move.
+function plReportingValue(deal) {
+  const v = Number(deal && deal.value);
+  if (!isFinite(v)) return null;
+  const cur = ((deal && deal.currency) || '').toUpperCase();
+  if (PL_REPORTING && cur === PL_REPORTING) return v;
+  if (PL_REPORTING && deal && deal.exchange_rate && (deal.reporting_currency || cur).toUpperCase() === PL_REPORTING) {
+    return v * Number(deal.exchange_rate);
+  }
+  return null;
+}
+
+// The currency picker is a real ISO 4217 list from the server, never free text: a three-letter
+// string that is not a currency cannot be converted, so it is refused at the source.
+function plCurrencyOptions(selected) {
+  const codes = (PL_ISO && PL_ISO.length) ? PL_ISO.slice() : [(PL_CURRENCY || 'USD')];
+  const sel = (selected || '').toUpperCase();
+  let html = '';
+  if (sel && codes.indexOf(sel) === -1) html += '<option value="' + sel + '" selected>' + escapeHtml(sel) + '</option>';
+  codes.forEach(function (c) {
+    html += '<option value="' + c + '"' + (c === sel ? ' selected' : '') + '>' + c + '</option>';
+  });
+  return html;
+}
+
+// Sum a set of deals into the reporting currency, and count the ones that cannot be converted so
+// the number is never quietly short.
+function plReportingSum(deals, weighted) {
+  let total = 0, unconverted = 0;
+  (deals || []).forEach(function (d) {
+    const v = plReportingValue(d);
+    if (v === null) { unconverted += 1; return; }
+    total += weighted ? v * (Number(d.probability) || 0) / 100 : v;
+  });
+  return { total: total, unconverted: unconverted };
+}
+
 function plCache(pid) { return PL_DATA.find(function (x) { return x.pipeline.id === pid; }) || null; }
 
+function plMoney(value, currency) {
+  if (value === null || value === undefined || value === '') return '—';
+  const n = Number(value);
+  if (!isFinite(n)) return '—';
+  // No currency, no dollar sign: an amount whose currency is unknown is not a dollar amount.
+  if (!currency) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  try {
+    return n.toLocaleString(undefined, { style: 'currency', currency: currency, maximumFractionDigits: 2 });
+  } catch (_) {
+    return currency + ' ' + n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+}
+
+function plCurrencies(deals) {
+  const seen = [];
+  (deals || []).forEach(function (d) {
+    const c = (d.currency || '').trim().toUpperCase();
+    if (c && seen.indexOf(c) === -1) seen.push(c);
+  });
+  return seen;
+}
+
+// Won value is per currency: a workspace selling in two currencies has two figures, never one
+// number that adds dollars to euros (David, 2026-11-20). `total_revenue` is null in that case.
+function dashWonValue(stats) {
+  if (!stats) return '—';
+  const rows = Array.isArray(stats.revenue_by_currency) ? stats.revenue_by_currency : [];
+  if (rows.length > 1) {
+    return rows.map(function (r) { return plMoney(r.value, r.currency); }).join(' + ');
+  }
+  if (rows.length === 1) return plMoney(rows[0].value, rows[0].currency);
+  // No currency named anywhere → no currency symbol: `plMoney` with a blank code prints the
+  // number alone. (`money()` was never defined; this tile threw before the deal tab's own
+  // formatter existed, and the dashboard showed a red "money is not defined" instead of a figure.)
+  return stats.total_revenue === null || stats.total_revenue === undefined
+    ? '—'
+    : plMoney(stats.total_revenue, PL_CURRENCY || '');
+}
+
 function pipelinesShell() {
-  return pageHeader('Pipelines & Deals', 'Track deals through your sales pipeline',
+  return pageHeader('Pipelines & Deals', 'Every deal your workspace is working — by stage, by owner, by currency',
     '<button class="btn btn-primary btn-sm" onclick="plNewPipeline()">+ New Pipeline</button>' +
     '<button class="btn btn-secondary btn-sm" onclick="plCsvImportPick()">⬆ Import deals</button>' +
-    '<button class="btn btn-secondary btn-sm" onclick="csvExportDeals()">⬇ Export deals</button>') +
-  '<div id="plContent"><div class="loading-wrap"><div class="spinner"></div> Loading pipelines...</div></div>';
+    '<button class="btn btn-secondary btn-sm" onclick="csvExportDeals()">⬇ Export deals</button>' +
+    '<button class="btn btn-secondary btn-sm" onclick="plShowReport()">Reporting</button> ' +
+    '<button class="btn btn-secondary btn-sm" onclick="plDealSettings()">Deals settings</button> ' +
+    '<button class="btn btn-secondary btn-sm" onclick="plDealWriterHelp()">Deal writer API</button>') +
+  '<div class="card" style="margin-bottom:16px"><div class="card-body">' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">' +
+      '<div style="flex:2 1 220px"><label style="font-size:12px;color:var(--text-secondary)">Search</label>' +
+        '<input type="text" id="plFilterQ" placeholder="Deal, note, source or external reference" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"></div>' +
+      '<div style="flex:1 1 140px"><label style="font-size:12px;color:var(--text-secondary)">Owner</label>' +
+        '<select id="plFilterOwner" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"><option value="">Anyone</option></select></div>' +
+      '<div style="flex:1 1 140px"><label style="font-size:12px;color:var(--text-secondary)">Stage</label>' +
+        '<select id="plFilterStage" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"><option value="">Any stage</option></select></div>' +
+      '<div style="flex:1 1 130px"><label style="font-size:12px;color:var(--text-secondary)">Source</label>' +
+        '<input type="text" id="plFilterSource" placeholder="Any" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"></div>' +
+      '<div style="flex:1 1 120px"><label style="font-size:12px;color:var(--text-secondary)">Status</label>' +
+        '<select id="plFilterStatus" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
+          '<option value="">All</option><option value="open">Open</option><option value="won">Won</option><option value="lost">Lost</option></select></div>' +
+      '<div style="flex:1 1 130px"><label style="font-size:12px;color:var(--text-secondary)">Created from</label>' +
+        '<input type="date" id="plFilterFrom" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"></div>' +
+      '<div style="flex:1 1 130px"><label style="font-size:12px;color:var(--text-secondary)">Created to</label>' +
+        '<input type="date" id="plFilterTo" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"></div>' +
+      '<div style="flex:0 0 auto"><label style="font-size:12px;color:var(--text-secondary)">&nbsp;</label>' +
+        '<button class="btn btn-primary btn-sm" onclick="plApplyFilters()">Filter</button> ' +
+        '<button class="btn btn-ghost btn-sm" onclick="plClearFilters()">Clear</button></div>' +
+    '</div>' +
+    '<div style="margin-top:10px;font-size:12px;color:var(--text-secondary)">' +
+      '<label style="cursor:pointer"><input type="checkbox" id="plFilterRotting" onchange="plApplyFilters()"> Only deals with no activity in 14 days</label>' +
+      ' <span id="plCurrencyNote" style="margin-left:12px"></span>' +
+    '</div>' +
+  '</div></div>' +
+  '<div id="plReport"></div>' +
+  '<div id="plContent"><div class="loading-wrap"><div class="spinner"></div> Loading deals...</div></div>';
+}
+
+function plFilterQuery() {
+  const parts = [];
+  if (PL_FILTER.q) parts.push('q=' + encodeURIComponent(PL_FILTER.q));
+  if (PL_FILTER.owner_id) parts.push('owner_id=' + encodeURIComponent(PL_FILTER.owner_id));
+  if (PL_FILTER.stage_id) parts.push('stage_id=' + encodeURIComponent(PL_FILTER.stage_id));
+  if (PL_FILTER.source) parts.push('source=' + encodeURIComponent(PL_FILTER.source));
+  if (PL_FILTER.status) parts.push('status=' + encodeURIComponent(PL_FILTER.status));
+  if (PL_FILTER.from) parts.push('from=' + PL_FILTER.from);
+  if (PL_FILTER.to) parts.push('to=' + PL_FILTER.to);
+  if (PL_FILTER.rotting) parts.push('rotting=true');
+  return parts.length ? '?' + parts.join('&') : '';
+}
+
+function plApplyFilters() {
+  PL_FILTER.q = (document.getElementById('plFilterQ') || {}).value || '';
+  PL_FILTER.owner_id = (document.getElementById('plFilterOwner') || {}).value || '';
+  PL_FILTER.stage_id = (document.getElementById('plFilterStage') || {}).value || '';
+  PL_FILTER.source = ((document.getElementById('plFilterSource') || {}).value || '').trim();
+  PL_FILTER.status = (document.getElementById('plFilterStatus') || {}).value || '';
+  PL_FILTER.from = (document.getElementById('plFilterFrom') || {}).value || '';
+  PL_FILTER.to = (document.getElementById('plFilterTo') || {}).value || '';
+  PL_FILTER.rotting = !!((document.getElementById('plFilterRotting') || {}).checked);
+  loadPipelinesTab();
+}
+
+function plClearFilters() {
+  PL_FILTER = { q: '', owner_id: '', stage_id: '', source: '', status: '', from: '', to: '', rotting: false };
+  ['plFilterQ', 'plFilterSource', 'plFilterFrom', 'plFilterTo'].forEach(function (id) {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+  ['plFilterOwner', 'plFilterStage', 'plFilterStatus'].forEach(function (id) {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+  const r = document.getElementById('plFilterRotting'); if (r) r.checked = false;
+  loadPipelinesTab();
 }
 
 async function loadPipelinesTab() {
   const el = document.getElementById('plContent');
   if (!el) return;
   try {
+    // Team (owner pickers) and the workspace currency are read once per tab visit; both are needed
+    // before a single deal can be created or filtered by owner.
+    if (!PL_TEAM.length) {
+      try { PL_TEAM = (await API.get('/deals/team')).people || []; } catch (_) {}
+    }
+    if (PL_CURRENCY === null) {
+      try {
+        const cur = await API.get('/deals/currency');
+        PL_CURRENCY = cur.currency || '';
+        PL_REPORTING = cur.reporting_currency || PL_CURRENCY;
+        PL_CURRENCY_SOURCE = cur.source || null;
+        PL_ISO = cur.iso_currencies || [];
+      } catch (_) {}
+    }
+    const noteEl = document.getElementById('plCurrencyNote');
+    if (noteEl) {
+      noteEl.innerHTML = PL_CURRENCY
+        ? 'Default currency: <strong>' + escapeHtml(PL_CURRENCY) + '</strong>' +
+          (PL_CURRENCY_SOURCE === 'standing_default' ? ' <span class="config-desc">(the standing default — set another per workspace)</span>' : '') +
+          ' · reports in <strong>' + escapeHtml(PL_REPORTING || PL_CURRENCY) + '</strong> · <a href="#" onclick="plDealSettings();return false">change</a> · <a href="#" onclick="plRefreshRates();return false">refresh rates</a>'
+        : '';
+    }
     const pipes = famList(await API.get('/pipelines'), 'pipelines');
     PL_DATA = [];
+    let stageOptions = '<option value="">Any stage</option>';
+    for (const row of pipes) {
+      const p = row.pipeline || row;
+      let stages = row.stages || [];
+      try { stages = famList(await API.get('/pipelines/' + p.id + '/stages'), 'stages'); } catch (_) {}
+      PL_DATA.push({ pipeline: p, stages: stages, opps: [] });
+      stages.forEach(function (s) {
+        stageOptions += '<option value="' + s.id + '"' + (PL_FILTER.stage_id === s.id ? ' selected' : '') + '>' +
+          escapeHtml(p.name + ' · ' + s.name) + '</option>';
+      });
+    }
+    const sel = document.getElementById('plFilterStage');
+    if (sel) sel.innerHTML = stageOptions;
+    const ownerSel = document.getElementById('plFilterOwner');
+    if (ownerSel) {
+      ownerSel.innerHTML = '<option value="">Anyone</option>' + PL_TEAM.map(function (u) {
+        return '<option value="' + u.id + '"' + (PL_FILTER.owner_id === u.id ? ' selected' : '') + '>' + escapeHtml(u.name) + '</option>';
+      }).join('');
+    }
+
+    let filtered = { deals: [], total: 0, total_value: 0, weighted_value: 0 };
+    try { filtered = await API.get('/deals' + plFilterQuery() + (plFilterQuery() ? '&' : '?') + 'per_page=100'); } catch (e) { toast('Deals: ' + e.message, 'error'); }
+    const deals = filtered.deals || [];
+    // Hand each pipeline the deals that belong to it, so the board and the table read ONE result set.
+    PL_DATA.forEach(function (entry) {
+      entry.opps = deals.filter(function (d) { return d.pipeline_id === entry.pipeline.id; });
+    });
+
     if (!pipes.length) {
       el.innerHTML = card('Pipelines', '<div class="empty-state"><div class="empty-icon">📈</div>' +
         '<h3>No pipelines yet</h3><p>Create your first sales pipeline to start tracking deals.</p></div>');
       return;
     }
+
     let h = '';
-    for (const row of pipes) {
-      const p = row.pipeline || row;
-      let stages = row.stages || [];
-      let opps = [];
-      try { stages = famList(await API.get('/pipelines/' + p.id + '/stages'), 'stages'); } catch (_) {}
-      try { opps = famList(await API.get('/pipelines/' + p.id + '/opportunities?per_page=50'), 'opportunities'); } catch (_) {}
-      PL_DATA.push({ pipeline: p, stages: stages, opps: opps });
+    for (const entry of PL_DATA) {
+      const p = entry.pipeline, stages = entry.stages, opps = entry.opps;
       const won = opps.filter(function (o) { return o.is_won; }).length;
       const lost = opps.filter(function (o) { return o.is_lost; }).length;
       const open = opps.length - won - lost;
@@ -6108,50 +6653,497 @@ async function loadPipelinesTab() {
           '<span class="badge badge-error">' + lost + ' lost</span>' +
           '<button class="btn btn-secondary btn-xs" onclick="plAddStage(\'' + p.id + '\')">+ Stage</button> ' +
           '<button class="btn btn-primary btn-xs" onclick="plAddDeal(\'' + p.id + '\')">+ Deal</button> ' +
+          '<button class="btn btn-secondary btn-xs" onclick="plStageHooks(\'' + p.id + '\')">Stage hooks</button> ' +
           '<button class="btn btn-ghost btn-xs" onclick="plDeletePipeline(\'' + p.id + '\')">Delete pipeline</button>' +
         '</div><div class="card-body">';
       h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">';
       if (!stages.length) h += '<span class="config-desc">No stages on this pipeline — add one to move deals through it.</span>';
       stages.forEach(function (s) {
+        const stageDeals = opps.filter(function (o) { return o.stage_id === s.id; });
+        const cur = plCurrencies(stageDeals);
+        // Totals are per currency: a stage holding USD and EUR deals shows two figures, never one sum.
+        const totals = cur.map(function (c) {
+          const sum = stageDeals.filter(function (o) { return (o.currency || '').toUpperCase() === c; })
+            .reduce(function (a, o) { return a + (Number(o.value) || 0); }, 0);
+          return plMoney(sum, c);
+        }).join(' + ');
+        // Beside the per-currency figures, the reporting-currency equivalent from each deal's
+        // STORED rate — one number that reconciles, and never a raw mixed sum.
+        const repSum = plReportingSum(stageDeals, false);
+        const repLine = (PL_REPORTING && cur.length ? ' ≈ ' + plMoney(repSum.total, PL_REPORTING) : '');
         h += '<span class="badge badge-warning" style="padding:6px 10px">' + fh(s.name) +
           (s.probability !== null && s.probability !== undefined ? ' · ' + s.probability + '%' : '') +
+          (stageDeals.length ? ' · ' + stageDeals.length + ' (' + totals + repLine + ')' : '') +
           (s.is_won ? ' 🏆' : '') + (s.is_lost ? ' ✕' : '') +
           ' <a href="#" title="Edit stage" onclick="plEditStage(\'' + p.id + '\',\'' + s.id + '\');return false">✎</a>' +
           ' <a href="#" title="Delete stage" onclick="plDeleteStage(\'' + p.id + '\',\'' + s.id + '\');return false">🗑</a>' +
         '</span>';
       });
 
-      // Drag a card between stage columns to move a deal. The board and the table below it are two
-      // views of the same data; both call PATCH /api/pipelines/:pid/stages/:sid/move/:oid.
-      h += '<div style="color:var(--text-muted);font-size:12px;margin-bottom:6px">Drag a deal card between stages to move it.</div>';
+      h += '<div style="color:var(--text-muted);font-size:12px;margin-bottom:6px">Drag a deal card between stages to move it. Click a card to open the deal.</div>';
       h += plBoard(p, stages, opps);
       h += '</div>';
       const rows = opps.map(function (o) {
         const st = stages.find(function (s) { return s.id === o.stage_id; });
+        const owner = PL_TEAM.find(function (u) { return u.id === o.owner_id; });
         return [
-          fh(o.name),
-          o.value !== null && o.value !== undefined ? '$' + Number(o.value).toLocaleString() : '—',
-          fh(o.currency),
+          '<a href="#" onclick="plOpenDeal(\'' + o.id + '\');return false">' + fh(o.name) + '</a>',
+          plMoney(o.value, o.currency),
           st ? fh(st.name) : '—',
+          owner ? fh(owner.name) : (o.external_ref ? '<span class="badge badge-muted">API</span>' : '—'),
+          o.probability !== null && o.probability !== undefined ? o.probability + '%' : '—',
           o.is_won ? '<span class="badge badge-success">won</span>'
                    : (o.is_lost ? '<span class="badge badge-error">lost</span>'
                                 : '<span class="badge badge-muted">open</span>'),
+          o.external_ref ? fh(o.external_ref) : '—',
           '<select onchange="plMoveDeal(\'' + p.id + '\',\'' + o.id + '\',this.value)" ' +
             'style="padding:4px 8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
             '<option value="">Move to…</option>' +
             stages.map(function (s) { return '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'; }).join('') +
           '</select>',
+          '<button class="btn btn-ghost btn-xs" onclick="plOpenDeal(\'' + o.id + '\')">Open</button> ' +
           '<button class="btn btn-ghost btn-xs" onclick="plDeleteDeal(\'' + p.id + '\',\'' + o.id + '\')">Delete</button>'
         ];
       });
-      h += dataTable(['Deal', 'Value', 'Cur', 'Stage', 'Status', 'Move', ''], rows,
-        'No deals in this pipeline yet — use “+ Deal”.');
-      h += '</div></div>';
+      h += dataTable(['Deal', 'Value', 'Stage', 'Owner', 'Prob.', 'Status', 'Ext. ref', 'Move', ''], rows,
+        'No deals match these filters yet.');
+      h += '</div>';
     }
     el.innerHTML = h;
+
+    // The filter's own totals, above the board: what the CURRENT filter is worth, per currency.
+    const summaryEl = document.getElementById('plReport');
+    if (summaryEl) {
+      const cur = plCurrencies(deals);
+      const totalsLine = cur.length
+        ? cur.map(function (c) {
+            const rowsC = deals.filter(function (d) { return (d.currency || '').toUpperCase() === c; });
+            const total = rowsC.reduce(function (a, d) { return a + (Number(d.value) || 0); }, 0);
+            const weighted = rowsC.reduce(function (a, d) {
+              return a + ((Number(d.value) || 0) * (Number(d.probability) || 0) / 100);
+            }, 0);
+            return '<div><strong>' + c + '</strong>: ' + plMoney(total, c) + ' total · ' +
+              plMoney(weighted, c) + ' weighted</div>';
+          }).join('')
+        : '<div style="color:var(--text-secondary)">No deals match these filters.</div>';
+      const repSum = plReportingSum(deals, false);
+      const repWeighted = plReportingSum(deals, true);
+      const repLine = PL_REPORTING
+        ? '<div style="margin-top:6px"><strong>In ' + escapeHtml(PL_REPORTING) + '</strong>: ' +
+          plMoney(repSum.total, PL_REPORTING) + ' total · ' + plMoney(repWeighted.total, PL_REPORTING) +
+          ' weighted' + (repSum.unconverted ? ' · ' + repSum.unconverted + ' deal(s) could not be converted' : '') + '</div>'
+        : '';
+      summaryEl.innerHTML = '<div class="card" style="margin-bottom:16px"><div class="card-header">📊 What this filter is worth</div>' +
+        '<div class="card-body" style="font-size:13px">' + totalsLine + repLine +
+        '<div style="color:var(--text-secondary);font-size:12px;margin-top:6px">' + deals.length + ' deal(s) shown. Weighted value = value × probability. Amounts are never added across currencies; the reporting line uses the rate each deal stored.</div>' +
+        '</div></div>';
+    }
   } catch (e) { famErr(el, 'Pipelines', e); }
 }
 
+// ── reporting card (win rate, days to close, rotting) ──────────────────────────────────────
+async function plLoadReport() {
+  try {
+    const r = await API.get('/deals/report');
+    PL_REPORT = r.reports || [];
+  } catch (_) { PL_REPORT = []; }
+}
+
+async function plShowReport() {
+  await plLoadReport();
+  let body = '';
+  if (!PL_REPORT.length) body = '<p class="config-desc">No pipeline yet — create one to see reporting.</p>';
+  PL_REPORT.forEach(function (rep) {
+    body += '<h4 style="margin:12px 0 6px">' + escapeHtml(rep.pipeline_name) + ' · ' + escapeHtml(rep.currency || 'no currency') + '</h4>' +
+      '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px">' +
+        '<div><div class="config-desc">Open</div><strong>' + rep.open_count + ' · ' + plMoney(rep.open_value, rep.currency) + '</strong></div>' +
+        '<div><div class="config-desc">Weighted</div><strong>' + plMoney(rep.open_weighted_value, rep.currency) + '</strong></div>' +
+        '<div><div class="config-desc">Won</div><strong>' + rep.won_count + ' · ' + plMoney(rep.won_value, rep.currency) + '</strong></div>' +
+        '<div><div class="config-desc">Lost</div><strong>' + rep.lost_count + ' · ' + plMoney(rep.lost_value, rep.currency) + '</strong></div>' +
+        '<div><div class="config-desc">Win rate</div><strong>' + Math.round((rep.win_rate || 0) * 100) + '%</strong></div>' +
+        '<div><div class="config-desc">Avg days to close</div><strong>' + (rep.avg_days_to_close || 0) + '</strong></div>' +
+        '<div><div class="config-desc">Rotting (' + rep.rot_days + 'd)</div><strong>' + rep.rotting_count + '</strong></div>' +
+      '</div>';
+    // The same pipeline in the workspace's REPORTING currency, computed from each deal's stored
+    // rate. This is the one figure a mixed-currency workspace reads (David's condition 6).
+    const rm = rep.reporting;
+    if (rm && rm.currency) {
+      body += '<div style="margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:6px">' +
+        '<div class="config-desc">In the reporting currency (' + escapeHtml(rm.currency) + ')</div>' +
+        '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px">' +
+          '<div><div class="config-desc">Open</div><strong>' + plMoney(rm.open_value, rm.currency) + '</strong></div>' +
+          '<div><div class="config-desc">Weighted</div><strong>' + plMoney(rm.open_weighted_value, rm.currency) + '</strong></div>' +
+          '<div><div class="config-desc">Won</div><strong>' + plMoney(rm.won_value, rm.currency) + '</strong></div>' +
+          '<div><div class="config-desc">Lost</div><strong>' + plMoney(rm.lost_value, rm.currency) + '</strong></div>' +
+          '<div><div class="config-desc">Win rate</div><strong>' + Math.round((rm.win_rate || 0) * 100) + '%</strong></div>' +
+          (rm.unconverted_count ? '<div><div class="config-desc">Could not convert</div><strong>' + rm.unconverted_count + '</strong></div>' : '') +
+        '</div></div>';
+    }
+  });
+  showModal('Deal reporting', body, '<button class="btn btn-ghost" onclick="closeModal()">Close</button>', true);
+}
+
+// ── one deal: detail, timeline, follow-ups, files, custom fields ───────────────────────────
+async function plOpenDeal(id) {
+  try {
+    PL_DETAIL = await API.get('/deals/' + id);
+    plRenderDeal();
+  } catch (e) { toast('Could not open deal: ' + e.message, 'error'); }
+}
+
+function plRenderDeal() {
+  const d = PL_DETAIL;
+  if (!d) return;
+  const deal = d.deal;
+  const stageName = d.stage ? d.stage.name : '—';
+  const statusBadge = deal.is_won ? '<span class="badge badge-success">won</span>'
+    : (deal.is_lost ? '<span class="badge badge-error">lost</span>' : '<span class="badge badge-muted">open</span>');
+
+  let fields = '';
+  (d.custom_fields || []).forEach(function (f) {
+    if (f.field_type === 'money') {
+      // A money field is an AMOUNT PLUS ITS OWN CURRENCY CODE (David's condition 7) — the same
+      // rules as the deal's value, so it carries a code and a stored rate of its own.
+      const amt = (f.money_amount === null || f.money_amount === undefined) ? '' : Number(f.money_amount);
+      const cur = f.money_currency || deal.currency || PL_CURRENCY || '';
+      fields += '<div class="form-group"><label>' + escapeHtml(f.label) + ' <span class="config-desc">(money)</span></label>' +
+        '<div style="display:flex;gap:6px">' +
+          '<input type="number" step="0.01" data-money-amount="' + escapeHtml(f.key) + '" value="' + amt + '" placeholder="Amount" style="flex:2">' +
+          '<select data-money-currency="' + escapeHtml(f.key) + '" style="flex:1">' + plCurrencyOptions(cur) + '</select>' +
+        '</div>' +
+        '<div class="config-desc">' + (f.money_exchange_rate
+          ? ('stored rate ' + Number(f.money_exchange_rate).toFixed(6) + ' → ' + escapeHtml(f.money_reporting_currency || ''))
+          : 'no amount recorded') + '</div></div>';
+      return;
+    }
+    fields += '<div class="form-group"><label>' + escapeHtml(f.label) + '</label>' +
+      '<input type="text" data-field="' + escapeHtml(f.key) + '" value="' + escapeHtml(f.value || '') + '"></div>';
+  });
+  if (!fields) fields = '<div class="config-desc">No custom fields yet — add the ones this industry needs below.</div>';
+
+  const tasks = (d.tasks || []).map(function (t) {
+    return '<div style="display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)">' +
+      '<input type="checkbox" ' + (t.completed_at ? 'checked' : '') + ' onchange="plToggleTask(\'' + t.id + '\',this.checked)">' +
+      '<span style="flex:1;' + (t.completed_at ? 'text-decoration:line-through;opacity:.6' : '') + '">' + escapeHtml(t.title) + '</span>' +
+      '<span class="config-desc">' + (t.due_date ? escapeHtml(t.due_date) : '') + '</span>' +
+      '<button class="btn btn-ghost btn-xs" onclick="plDeleteTask(\'' + t.id + '\')">✕</button></div>';
+  }).join('') || '<div class="config-desc">No follow-ups yet.</div>';
+
+  const files = (d.attachments || []).map(function (a) {
+    return '<div style="display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)">' +
+      '<a href="#" onclick="plDownloadFile(\'' + a.id + '\',\'' + escapeHtml(a.filename) + '\');return false">' + escapeHtml(a.filename) + '</a>' +
+      '<span class="config-desc">' + Math.round((a.size_bytes || 0) / 1024) + ' KB</span>' +
+      '<button class="btn btn-ghost btn-xs" onclick="plDeleteFile(\'' + a.id + '\')">✕</button></div>';
+  }).join('') || '<div class="config-desc">No files yet.</div>';
+
+  const timeline = (d.activities || []).map(function (a) {
+    return '<div style="padding:6px 0;border-bottom:1px solid var(--border)">' +
+      '<div style="font-size:13px">' + escapeHtml(a.body || a.kind) + '</div>' +
+      '<div class="config-desc">' + escapeHtml(a.kind) + ' · ' + escapeHtml((a.actor_label || 'system')) + ' · ' +
+      new Date(a.created_at).toLocaleString() + '</div></div>';
+  }).join('') || '<div class="config-desc">Nothing has happened yet.</div>';
+
+  const owner = d.owner ? d.owner.name : 'Unassigned';
+  const contact = d.contact ? d.contact.name : '—';
+  const collaborators = (d.collaborators || []).map(function (c) { return escapeHtml(c.name); }).join(', ') || '—';
+
+  const body =
+    '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px;font-size:13px">' +
+      '<div><div class="config-desc">Stage</div><strong>' + escapeHtml(stageName) + '</strong></div>' +
+      '<div><div class="config-desc">Status</div><strong>' + statusBadge + '</strong></div>' +
+      '<div><div class="config-desc">Value</div><strong>' + plMoney(deal.value, deal.currency) + '</strong></div>' +
+      '<div><div class="config-desc">Weighted</div><strong>' + plMoney(d.weighted_value, deal.currency) + '</strong></div>' +
+      // The stored rate is a FACT of this deal: it is what reports read, and it does not move when
+      // the market does (David's condition 2).
+      '<div><div class="config-desc">Stored rate</div><strong>' +
+        (deal.exchange_rate ? ('1 ' + escapeHtml(deal.currency || '') + ' = ' + Number(deal.exchange_rate).toFixed(6) + ' ' +
+          escapeHtml(deal.reporting_currency || PL_REPORTING || '')) : '—') + '</strong>' +
+        '<div class="config-desc">' + (deal.rate_date ? 'as of ' + new Date(deal.rate_date).toLocaleDateString() : '') + '</div></div>' +
+      '<div><div class="config-desc">In ' + escapeHtml(PL_REPORTING || 'reporting') + '</div><strong>' +
+        (function () { const rv = plReportingValue(deal); return rv === null ? '—' : plMoney(rv, PL_REPORTING); })() +
+        '</strong></div>' +
+      '<div><div class="config-desc">Probability</div><strong>' + (deal.probability || 0) + '%</strong></div>' +
+      '<div><div class="config-desc">Owner</div><strong>' + escapeHtml(owner) + '</strong></div>' +
+      '<div><div class="config-desc">Contact</div><strong>' + escapeHtml(contact) + '</strong></div>' +
+      '<div><div class="config-desc">Company</div><strong>' + escapeHtml(d.company_name || '—') + '</strong></div>' +
+      '<div><div class="config-desc">Expected close</div><strong>' + escapeHtml(deal.expected_close_date || '—') + '</strong></div>' +
+      '<div><div class="config-desc">Days in stage</div><strong>' + (d.days_in_stage || 0) + '</strong></div>' +
+      '<div><div class="config-desc">Source</div><strong>' + escapeHtml(deal.source || '—') + '</strong></div>' +
+      '<div><div class="config-desc">External ref</div><strong>' + escapeHtml(deal.external_ref || '—') + '</strong></div>' +
+      '<div><div class="config-desc">Collaborators</div><strong>' + collaborators + '</strong></div>' +
+    '</div>' +
+    '<div class="form-group"><label>Notes</label><textarea id="plDetailNotes" rows="3">' + escapeHtml(deal.notes || '') + '</textarea></div>' +
+    '<div class="form-group"><label>Owner</label><select id="plDetailOwner"><option value="">Unassigned</option>' +
+      PL_TEAM.map(function (u) {
+        return '<option value="' + u.id + '"' + (deal.owner_id === u.id ? ' selected' : '') + '>' + escapeHtml(u.name) + '</option>';
+      }).join('') + '</select></div>' +
+    '<h4 style="margin:14px 0 6px">Custom fields</h4>' + fields +
+    '<h4 style="margin:14px 0 6px">Follow-ups</h4>' + tasks +
+    '<div style="display:flex;gap:6px;margin-top:8px">' +
+      '<input type="text" id="plNewTaskTitle" placeholder="Follow-up…" style="flex:2;padding:6px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
+      '<input type="date" id="plNewTaskDue" style="flex:1;padding:6px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
+      '<button class="btn btn-secondary btn-sm" onclick="plAddTask()">Add</button></div>' +
+    '<h4 style="margin:14px 0 6px">Files</h4>' + files +
+    '<div style="margin-top:8px"><input type="file" id="plNewFile" onchange="plUploadFile()"></div>' +
+    '<h4 style="margin:14px 0 6px">Timeline</h4>' +
+    '<div style="max-height:200px;overflow:auto">' + timeline + '</div>' +
+    '<div style="display:flex;gap:6px;margin-top:8px">' +
+      '<input type="text" id="plNewNote" placeholder="Add a note…" style="flex:1;padding:6px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
+      '<button class="btn btn-secondary btn-sm" onclick="plAddNote()">Add note</button></div>';
+
+  const footer =
+    '<button class="btn btn-ghost" onclick="closeModal()">Close</button>' +
+    '<button class="btn btn-secondary" onclick="plMarkStatus(\'lost\')">Mark lost</button>' +
+    '<button class="btn btn-secondary" onclick="plMarkStatus(\'won\')">Mark won</button>' +
+    '<button class="btn btn-primary" onclick="plSaveDeal()">Save</button>';
+
+  showModal(escapeHtml(deal.name), body, footer, true);
+}
+
+async function plSaveDeal() {
+  if (!PL_DETAIL) return;
+  const deal = PL_DETAIL.deal;
+  const body = {
+    notes: (document.getElementById('plDetailNotes') || {}).value || null,
+    owner_id: (document.getElementById('plDetailOwner') || {}).value || null
+  };
+  const fields = {};
+  document.querySelectorAll('[data-field]').forEach(function (el) {
+    fields[el.getAttribute('data-field')] = el.value;
+  });
+  // A money field posts amount + currency, so the server stores the rate that was true that day.
+  document.querySelectorAll('[data-money-amount]').forEach(function (el) {
+    const key = el.getAttribute('data-money-amount');
+    const raw = (el.value || '').trim();
+    if (raw === '') { fields[key] = null; return; }
+    const sel = document.querySelector('[data-money-currency="' + key + '"]');
+    fields[key] = { amount: Number(raw), currency: (sel && sel.value) || PL_CURRENCY || null };
+  });
+  if (Object.keys(fields).length) body.custom_fields = fields;
+  try {
+    await API.patch('/deals/' + deal.id, body);
+    toast('Deal saved', 'success');
+    await plOpenDeal(deal.id);
+    loadPipelinesTab();
+  } catch (e) { toast('Save failed: ' + e.message, 'error'); }
+}
+
+async function plMarkStatus(status) {
+  if (!PL_DETAIL) return;
+  const deal = PL_DETAIL.deal;
+  let lostReason = null;
+  if (status === 'lost') {
+    let reasons = [];
+    try { reasons = (await API.get('/deals/lost-reasons')).reasons || []; } catch (_) {}
+    const opts = reasons.filter(function (r) { return r.is_active; })
+      .map(function (r) { return '<option value="' + escapeHtml(r.label) + '">' + escapeHtml(r.label) + '</option>'; }).join('');
+    showModal('Why was this deal lost?',
+      '<div class="form-group"><label>Reason</label><select id="plLostReason"><option value="">No reason</option>' + opts + '</select></div>' +
+      '<div class="form-group"><label>Or write your own</label><input type="text" id="plLostReasonFree"></div>',
+      '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+      '<button class="btn btn-primary" onclick="plConfirmLost()">Mark lost</button>');
+    return;
+  }
+  try {
+    await API.post('/deals/' + deal.id + '/status', { status: status });
+    toast('Deal marked ' + status, 'success');
+    await plOpenDeal(deal.id);
+    loadPipelinesTab();
+  } catch (e) { toast('Update failed: ' + e.message, 'error'); }
+}
+
+async function plConfirmLost() {
+  if (!PL_DETAIL) return;
+  const free = ((document.getElementById('plLostReasonFree') || {}).value || '').trim();
+  const picked = (document.getElementById('plLostReason') || {}).value || '';
+  try {
+    await API.post('/deals/' + PL_DETAIL.deal.id + '/status', { status: 'lost', lost_reason: free || picked || null });
+    closeModal(); toast('Deal marked lost', 'success');
+    await plOpenDeal(PL_DETAIL.deal.id);
+    loadPipelinesTab();
+  } catch (e) { toast('Update failed: ' + e.message, 'error'); }
+}
+
+async function plAddNote() {
+  if (!PL_DETAIL) return;
+  const body = ((document.getElementById('plNewNote') || {}).value || '').trim();
+  if (!body) { toast('Write something first', 'error'); return; }
+  try {
+    await API.post('/deals/' + PL_DETAIL.deal.id + '/activities', { body: body });
+    await plOpenDeal(PL_DETAIL.deal.id);
+  } catch (e) { toast('Note failed: ' + e.message, 'error'); }
+}
+
+async function plAddTask() {
+  if (!PL_DETAIL) return;
+  const title = ((document.getElementById('plNewTaskTitle') || {}).value || '').trim();
+  if (!title) { toast('Follow-up needs a title', 'error'); return; }
+  try {
+    await API.post('/deals/' + PL_DETAIL.deal.id + '/tasks', {
+      title: title,
+      due_date: (document.getElementById('plNewTaskDue') || {}).value || null
+    });
+    await plOpenDeal(PL_DETAIL.deal.id);
+  } catch (e) { toast('Follow-up failed: ' + e.message, 'error'); }
+}
+
+async function plToggleTask(taskId, done) {
+  if (!PL_DETAIL) return;
+  try {
+    await API.patch('/deals/' + PL_DETAIL.deal.id + '/tasks/' + taskId, { completed: !!done });
+    await plOpenDeal(PL_DETAIL.deal.id);
+  } catch (e) { toast('Update failed: ' + e.message, 'error'); }
+}
+
+async function plDeleteTask(taskId) {
+  if (!PL_DETAIL) return;
+  try {
+    await API.del('/deals/' + PL_DETAIL.deal.id + '/tasks/' + taskId);
+    await plOpenDeal(PL_DETAIL.deal.id);
+  } catch (e) { toast('Delete failed: ' + e.message, 'error'); }
+}
+
+function plUploadFile() {
+  if (!PL_DETAIL) return;
+  const input = document.getElementById('plNewFile');
+  const file = input && input.files && input.files[0];
+  if (!file) return;
+  if (file.size > 6 * 1024 * 1024) { toast('Files must be 6 MB or smaller', 'error'); input.value = ''; return; }
+  const reader = new FileReader();
+  reader.onload = async function () {
+    try {
+      const b64 = String(reader.result).split(',')[1] || '';
+      await API.post('/deals/' + PL_DETAIL.deal.id + '/attachments', {
+        filename: file.name,
+        content_type: file.type || 'application/octet-stream',
+        content_base64: b64
+      });
+      toast('File attached', 'success');
+      await plOpenDeal(PL_DETAIL.deal.id);
+    } catch (e) { toast('Upload failed: ' + e.message, 'error'); }
+  };
+  reader.readAsDataURL(file);
+}
+
+function plDownloadFile(attId, filename) {
+  if (!PL_DETAIL) return;
+  // A download needs the session token, which a bare link cannot carry — fetch it and hand the
+  // browser a blob instead.
+  fetch('/api/deals/' + PL_DETAIL.deal.id + '/attachments/' + attId, {
+    headers: { 'Authorization': 'Bearer ' + STATE.token }
+  }).then(function (r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.blob();
+  }).then(function (blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename || 'attachment';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+  }).catch(function (e) { toast('Download failed: ' + e.message, 'error'); });
+}
+
+async function plDeleteFile(attId) {
+  if (!PL_DETAIL) return;
+  try {
+    await API.del('/deals/' + PL_DETAIL.deal.id + '/attachments/' + attId);
+    await plOpenDeal(PL_DETAIL.deal.id);
+  } catch (e) { toast('Delete failed: ' + e.message, 'error'); }
+}
+
+// ── the deal writer's contract, shown in the app ──────────────────────────────────────────
+function plDealWriterHelp() {
+  const origin = window.location.origin;
+  const curl = 'curl -X POST ' + origin + '/api/external/deals \\\n' +
+    "  -H 'Authorization: Bearer <your API key>' \\\n" +
+    "  -H 'Content-Type: application/json' \\\n" +
+    '  -d \'{"external_ref":"QUOTE-1042","title":"Airport transfer","value":240,' +
+    '"currency":"USD","stage":"Qualified","custom_fields":{"pickup_city":"Miami"}}\'';
+  showModal('Deal writer API',
+    '<p class="config-desc" style="margin-top:0">An outside system creates and updates deals here. ' +
+      'The <strong>external reference</strong> is the identity of the deal: send the same reference twice and the ' +
+      'second call updates the same deal instead of creating another one.</p>' +
+    '<div class="form-group"><label>1. Create an API key</label><div class="config-desc">Integration Center → API keys. ' +
+      'The key resolves the workspace; a tenant id in the body is ignored.</div></div>' +
+    '<div class="form-group"><label>2. Push the deal</label><pre style="white-space:pre-wrap;background:var(--bg-secondary);padding:10px;border-radius:6px;font-size:12px">' +
+      escapeHtml(curl) + '</pre></div>' +
+    '<div class="form-group"><label>3. Keep it in step</label><div class="config-desc">' +
+      'PATCH /api/external/deals/&lt;external_ref&gt;/stage — move a deal.<br>' +
+      'POST /api/external/deals/&lt;external_ref&gt;/status — mark it open, won or lost.<br>' +
+      'The response says <code>created: true</code> or <code>false</code>, so a re-send is visible, not silent.</div></div>' +
+    '<div class="form-group"><label>Workspace currency</label><div class="config-desc">' +
+      'A deal takes its currency from the workspace unless the push states one. Current: <strong id="plCurLabel">' +
+      (PL_CURRENCY || 'not set') + '</strong></div>' +
+      '<div style="display:flex;gap:6px;margin-top:6px">' +
+        '<input type="text" id="plCurrencyInput" maxlength="3" placeholder="USD" style="width:90px;padding:6px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
+        '<button class="btn btn-secondary btn-sm" onclick="plSaveCurrency()">Set workspace currency</button></div></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Close</button>', true);
+}
+
+// ── deals settings: the workspace's two currencies, and the rate table they read ───────────
+// David's amendment (2026-11-20): a workspace states a DEFAULT currency (what a new deal is priced
+// in) and a REPORTING currency (what its reports are computed in). Both are picked from the real
+// ISO 4217 list, and the panel shows the rates the deals will store today.
+async function plDealSettings() {
+  if (PL_CURRENCY === null || !PL_ISO.length) {
+    try {
+      const c = await API.get('/deals/currency');
+      PL_CURRENCY = c.currency || '';
+      PL_REPORTING = c.reporting_currency || PL_CURRENCY;
+      PL_CURRENCY_SOURCE = c.source || null;
+      PL_ISO = c.iso_currencies || [];
+    } catch (_) {}
+  }
+  let rates = [];
+  try { rates = (await API.get('/deals/fx-rates')).rates || []; } catch (_) {}
+  const wanted = [PL_CURRENCY, PL_REPORTING, 'USD', 'EUR', 'GBP', 'CAD', 'MXN'];
+  const shown = rates.filter(function (r) { return wanted.indexOf(r.currency) !== -1; });
+  const rateLine = shown.length
+    ? shown.map(function (r) { return r.currency + ' ' + Number(r.usd_rate).toFixed(4) + ' per USD (' + r.as_of + ')'; }).join(' · ')
+    : 'No rates in the table yet — press “Refresh rates”.';
+  showModal('Deals settings',
+    '<div class="form-group"><label>Default currency — what a new deal is priced in</label>' +
+      '<select id="dlDefaultCur">' + plCurrencyOptions(PL_CURRENCY) + '</select>' +
+      '<div class="config-desc">A deal that names no currency takes this one. <strong>USD is the standing default</strong> — a workspace that has not chosen here is a dollar workspace, and a first deal is never refused for the want of a default.</div></div>' +
+    '<div class="form-group"><label>Reporting currency — what totals and reports compute in</label>' +
+      '<select id="dlReportingCur">' + plCurrencyOptions(PL_REPORTING || PL_CURRENCY) + '</select>' +
+      '<div class="config-desc">Every deal stores the rate that converts it into this currency, on the day it was written. Changing this re-quotes open history from the rate that was true on each deal\'s own date — it never re-prices from today\'s market.</div></div>' +
+    '<div class="form-group"><label>Today\'s rates</label>' +
+      '<div class="config-desc" id="dlRateLine">' + escapeHtml(rateLine) + '</div>' +
+      '<button class="btn btn-secondary btn-sm" style="margin-top:6px" onclick="plRefreshRates(true)">Refresh rates now</button></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="plSaveCurrency()">Save</button>');
+}
+
+async function plRefreshRates(fromSettings) {
+  try {
+    const r = await API.post('/deals/fx-rates/refresh', {});
+    toast('Rates refreshed: ' + (r.stored || 0) + ' currencies for ' + (r.as_of || 'today'), 'success');
+    if (fromSettings) plDealSettings();
+  } catch (e) { toast('Could not refresh rates: ' + e.message, 'error'); }
+}
+
+async function plSaveCurrency() {
+  const defEl = document.getElementById('dlDefaultCur');
+  const repEl = document.getElementById('dlReportingCur');
+  const fallback = ((document.getElementById('plCurrencyInput') || {}).value || '').trim().toUpperCase();
+  const body = {};
+  if (defEl) body.currency = defEl.value;
+  else if (fallback) body.currency = fallback;
+  if (repEl) body.reporting_currency = repEl.value;
+  if (!body.currency && !body.reporting_currency) { toast('Choose a currency', 'error'); return; }
+  try {
+    const r = await API.put('/deals/currency', body);
+    PL_CURRENCY = r.currency || PL_CURRENCY;
+    PL_REPORTING = r.reporting_currency || PL_REPORTING;
+    PL_CURRENCY_SOURCE = 'workspace';
+    toast('Currencies saved' + (r.deals_requoted ? ' (' + r.deals_requoted + ' deal(s) re-quoted)' : ''), 'success');
+    closeModal();
+    loadPipelinesTab();
+  } catch (e) { toast('Could not set currency: ' + e.message, 'error'); }
+}
+
+// ── pipelines, stages, deals (create / move / delete) ─────────────────────────────────────
 function plNewPipeline() {
   showModal('New Pipeline',
     '<div class="form-group"><label>Name</label><input type="text" id="plName"></div>' +
@@ -6237,8 +7229,8 @@ async function plQuickDeal() {
     plAddDeal(p.id);
   } catch (e) { toast(e.message, 'error'); }
 }
+
 async function plAddDeal(pid, presetStageId) {
-  // the stages of THIS pipeline, for the "Stage" selector (defaults to the first one the API would pick)
   const plp = plCache(pid);
   const stageOpts = ((plp && plp.stages) || []).map(function (s) {
     return '<option value="' + s.id + '"' + (presetStageId === s.id ? ' selected' : '') + '>' + escapeHtml(s.name) + '</option>';
@@ -6251,12 +7243,22 @@ async function plAddDeal(pid, presetStageId) {
       opts += '<option value="' + c.id + '">' + escapeHtml(nm) + '</option>';
     });
   } catch (_) {}
+  const cur = PL_CURRENCY || '';
   showModal('New Deal',
     '<div class="form-group"><label>Deal name</label><input type="text" id="dlName"></div>' +
     '<div class="form-group"><label>Contact</label><select id="dlContact">' + opts + '</select></div>' +
     '<div class="form-group"><label>Stage</label><select id="dlStage">' + stageOpts + '</select></div>' +
     '<div class="form-group"><label>Value</label><input type="number" id="dlValue" step="0.01"></div>' +
-    '<div class="form-group"><label>Currency</label><input type="text" id="dlCur" value="USD"></div>' +
+    // Currency is chosen per deal from the real ISO list. It starts at the workspace default, which
+    // is USD unless the workspace set another one — the standing default (David, 2026-11-20), so
+    // there is always a code here and a first deal is never refused.
+    '<div class="form-group"><label>Currency</label><select id="dlCur">' + plCurrencyOptions(cur) + '</select>' +
+      (cur ? '' : '<div class="config-desc">Using the standing default currency, USD.</div>') + '</div>' +
+    '<div class="form-group"><label>Exchange rate <span class="config-desc">(optional — 1 unit of this currency in ' +
+      escapeHtml(PL_REPORTING || 'the reporting currency') + ')</span></label>' +
+      '<input type="number" id="dlRate" step="0.00000001" placeholder="leave empty to use today\'s stored rate"></div>' +
+    '<div class="form-group"><label>Owner</label><select id="dlOwner"><option value="">Unassigned</option>' +
+      PL_TEAM.map(function (u) { return '<option value="' + u.id + '">' + escapeHtml(u.name) + '</option>'; }).join('') + '</select></div>' +
     '<div class="form-group"><label>Probability %</label><input type="number" id="dlProb" min="0" max="100"></div>' +
     '<div class="form-group"><label>Expected close</label><input type="date" id="dlClose"></div>' +
     '<div class="form-group"><label>Notes</label><textarea id="dlNotes" rows="3"></textarea></div>',
@@ -6273,13 +7275,18 @@ async function plCreateDeal(pid) {
     stage_id: document.getElementById('dlStage').value || null,
     contact_id: document.getElementById('dlContact').value || null,
     value: val === '' ? null : parseFloat(val),
-    currency: (document.getElementById('dlCur').value || '').trim() || null,
+    currency: (document.getElementById('dlCur').value || '').trim().toUpperCase() || null,
+    exchange_rate: (function () {
+      const r = ((document.getElementById('dlRate') || {}).value || '').trim();
+      return r === '' ? null : parseFloat(r);
+    })(),
+    owner_id: document.getElementById('dlOwner').value || null,
     probability: prob === '' ? null : parseInt(prob, 10),
     expected_close_date: document.getElementById('dlClose').value || null,
     notes: (document.getElementById('dlNotes').value || '').trim() || null
   };
   try {
-    await API.post('/pipelines/' + pid + '/opportunities', body);
+    await API.post('/deals', body);
     closeModal(); toast('Deal created', 'success'); loadPipelinesTab();
   } catch (e) { toast('Create failed: ' + e.message, 'error'); }
 }
@@ -6287,6 +7294,69 @@ function plMoveDeal(pid, oppId, stageId) {
   // the <select> path and the drag-and-drop board share one implementation
   if (!stageId) return;
   plMoveDealAsync(pid, oppId, stageId).catch(function () {});
+}
+
+function plDeleteDeal(pid, oppId) {
+  confirmThen('Delete this deal?', function () {
+    API.del('/deals/' + oppId)
+      .then(function () { toast('Deal deleted', 'success'); loadPipelinesTab(); })
+      .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
+  });
+}
+
+// ── stage automation hooks (entering a stage tags the deal, or runs a workflow) ───────────
+async function plStageHooks(pid) {
+  let hooks = [], tags = [], c = plCache(pid);
+  try { hooks = (await API.get('/deals/stage-automations?pipeline_id=' + pid)).hooks || []; } catch (_) {}
+  try { tags = famList(await API.get('/tags'), 'tags'); } catch (_) {}
+  const stages = (c && c.stages) || [];
+  const rows = hooks.map(function (hk) {
+    return '<div style="display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)">' +
+      '<strong style="flex:1">' + escapeHtml(hk.stage_name) + '</strong>' +
+      '<span class="config-desc">' + (hk.action_kind === 'tag'
+        ? 'apply tag "' + escapeHtml(hk.tag_name || '') + '"'
+        : 'run StageChanged workflow') + '</span>' +
+      '<button class="btn btn-ghost btn-xs" onclick="plDeleteHook(\'' + hk.id + '\',\'' + pid + '\')">✕</button></div>';
+  }).join('') || '<div class="config-desc">No hooks yet. A hook runs when a deal ENTERS the stage.</div>';
+  const stageOpts = stages.map(function (s) { return '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'; }).join('');
+  const tagOpts = tags.map(function (t) { return '<option value="' + t.id + '">' + escapeHtml(t.name) + '</option>'; }).join('');
+  showModal('Stage automation hooks',
+    rows +
+    '<h4 style="margin:14px 0 6px">Add a hook</h4>' +
+    '<div class="form-group"><label>Stage</label><select id="plHookStage">' + stageOpts + '</select></div>' +
+    '<div class="form-group"><label>Action</label><select id="plHookKind" onchange="plHookKindChanged()">' +
+      '<option value="tag">Apply a tag</option><option value="workflow">Run the StageChanged workflow</option></select></div>' +
+    '<div class="form-group" id="plHookTagWrap"><label>Tag</label><select id="plHookTag">' + tagOpts + '</select></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Close</button>' +
+    '<button class="btn btn-primary" onclick="plCreateHook(\'' + pid + '\')">Add hook</button>', true);
+}
+
+function plHookKindChanged() {
+  const kind = (document.getElementById('plHookKind') || {}).value;
+  const wrap = document.getElementById('plHookTagWrap');
+  if (wrap) wrap.style.display = kind === 'tag' ? '' : 'none';
+}
+
+async function plCreateHook(pid) {
+  const stage_id = (document.getElementById('plHookStage') || {}).value;
+  const action_kind = (document.getElementById('plHookKind') || {}).value;
+  const tag_id = (document.getElementById('plHookTag') || {}).value || null;
+  if (!stage_id) { toast('Pick a stage', 'error'); return; }
+  if (action_kind === 'tag' && !tag_id) { toast('Pick a tag', 'error'); return; }
+  try {
+    await API.post('/deals/stage-automations', {
+      stage_id: stage_id,
+      action_kind: action_kind,
+      tag_id: action_kind === 'tag' ? tag_id : null
+    });
+    toast('Hook added', 'success');
+    plStageHooks(pid);
+  } catch (e) { toast('Hook failed: ' + e.message, 'error'); }
+}
+
+async function plDeleteHook(id, pid) {
+  try { await API.del('/deals/stage-automations/' + id); plStageHooks(pid); }
+  catch (e) { toast('Delete failed: ' + e.message, 'error'); }
 }
 
 // ---------------------------------------------------------------- DRAG & DROP BOARD
@@ -6309,12 +7379,16 @@ function plBoard(p, stages, opps) {
         '<button class="btn btn-ghost btn-xs" title="New deal on this stage" onclick="plAddDeal(\'' + p.id + '\',\'' + s.id + '\')">+</button></span>' +
       '</div>' +
       (cards.length ? cards.map(function (o) {
+        // Click opens the deal; the drag handle is the same card, so a click after a drag is
+        // suppressed by the browser's own click-cancel on dragend.
         return '<div class="pl-card" draggable="true" data-opp="' + o.id + '"' +
+          ' onclick="plOpenDeal(\'' + o.id + '\')"' +
           ' ondragstart="plDragStart(event, \'' + p.id + '\', \'' + o.id + '\')" ondragend="plDragEnd(this)"' +
           ' style="background:var(--bg-primary,#16161a);border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:6px;cursor:grab">' +
-          '<div style="font-weight:600;font-size:13px">' + fh(o.name) + '</div>' +
+          '<div style="font-weight:600;font-size:13px">' + fh(o.name) +
+            (o.external_ref ? ' <span class="badge badge-muted" title="Created by an outside system">API</span>' : '') + '</div>' +
           '<div style="color:var(--text-muted);font-size:12px">' +
-            (o.value !== null && o.value !== undefined ? '$' + Number(o.value).toLocaleString() : '—') +
+            plMoney(o.value, o.currency) +
             (o.probability !== null && o.probability !== undefined ? ' · ' + o.probability + '%' : '') +
           '</div></div>';
       }).join('') : '<div style="color:var(--text-muted);font-size:12px;padding:6px">Drop a deal here</div>') +
@@ -6359,9 +7433,12 @@ function plDrop(ev, col, stageId) {
 
 function plMoveDealAsync(pid, oppId, stageId) {
   if (!stageId) return Promise.resolve();
-  return API.patch('/pipelines/' + pid + '/stages/' + stageId + '/move/' + oppId, {})
+  // The deal writer's stage route (not the raw pipelines one) so the move also records the
+  // stage clock, the history row, the timeline entry and any stage automation hook.
+  return API.post('/deals/' + oppId + '/stage', { stage_id: stageId })
     .then(function (r) {
-      toast('Deal moved to ' + (r && r.status ? r.status : 'new stage'), 'success');
+      const d = (r && r.deal) || {};
+      toast(d.is_won ? 'Deal won' : (d.is_lost ? 'Deal lost' : 'Deal moved'), 'success');
       loadPipelinesTab();
       return r;
     })
@@ -6372,13 +7449,6 @@ function plMoveDealAsync(pid, oppId, stageId) {
     });
 }
 
-function plDeleteDeal(pid, oppId) {
-  confirmThen('Delete this deal?', function () {
-    API.del('/pipelines/' + pid + '/opportunities/' + oppId)
-      .then(function () { toast('Deal deleted', 'success'); loadPipelinesTab(); })
-      .catch(function (e) { toast('Delete failed: ' + e.message, 'error'); });
-  });
-}
 
 // ---------------------------------------------------------------- CAMPAIGNS
 let CM_TAGS = [];
@@ -7533,6 +8603,110 @@ function imDeleteMapping(id) {
 TAB_RENDERERS['pipelines'] = pipelinesShell;
 TAB_RENDERERS['campaigns'] = campaignsShell;
 TAB_RENDERERS['lists'] = listsShell;
+// ── Agent ────────────────────────────────────────────────────────────────────────────────────────────────
+// Limits, the catalogue of things it may ask for, and everything waiting for a person. Nothing here acts
+// on its own: approving is a button a human presses, and a refusal is kept as a record.
+function agentShell() {
+  return pageHeader('Agent', 'What the agent may do on its own, and what is waiting for you',
+    '<button class="btn btn-secondary btn-sm" onclick="agentLoad()">Refresh</button>') +
+    '<div id="agentLimits"><div class="loading-wrap"><div class="spinner"></div> Loading…</div></div>' +
+    '<div id="agentQueue" style="margin-top:16px"></div>' +
+    '<div id="agentKinds" style="margin-top:16px"></div>';
+}
+
+async function agentLoad() {
+  const limitsEl = document.getElementById('agentLimits');
+  const queueEl = document.getElementById('agentQueue');
+  const kindsEl = document.getElementById('agentKinds');
+  if (!limitsEl) return;
+  let limits = null, actions = [], kinds = [];
+  try {
+    const res = await Promise.all([
+      API.get('/agent/limits'),
+      API.get('/agent/actions'),
+      API.get('/agent/kinds')
+    ]);
+    limits = res[0]; actions = (res[1] && res[1].actions) || []; kinds = (res[2] && res[2].kinds) || [];
+  } catch (e) {
+    limitsEl.innerHTML = icErr('Could not load the agent', e.message);
+    return;
+  }
+  const money = (c) => '$' + (Number(c || 0) / 100).toFixed(2);
+  const on = !!(limits && limits.enabled);
+  let h = card('⚖️ What it may do on its own',
+    '<p style="color:var(--text-secondary);margin:0 0 10px">The agent is <strong>' + (on ? 'ON' : 'OFF') +
+    '</strong> for this workspace. Anything above either limit waits for you — it is never done quietly.</p>' +
+    '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">' +
+      '<label style="font-size:.78rem;color:var(--text-secondary)">Per action<br>' +
+        '<input id="agentPerAction" type="number" min="0" step="1" value="' +
+          escapeHtmlAttr(String(limits ? limits.per_action_cents : 0)) + '" style="width:130px"></label>' +
+      '<label style="font-size:.78rem;color:var(--text-secondary)">Ceiling (cents)<br>' +
+        '<input id="agentCeiling" type="number" min="0" step="1" value="' +
+          escapeHtmlAttr(String(limits ? limits.ceiling_cents : 0)) + '" style="width:130px"></label>' +
+      '<label style="font-size:.78rem;color:var(--text-secondary);display:flex;align-items:center;gap:6px">' +
+        '<input id="agentEnabled" type="checkbox"' + (on ? ' checked' : '') + '> Enabled</label>' +
+      '<button class="btn btn-primary btn-sm" onclick="agentSaveLimits()">Save</button>' +
+    '</div>' +
+    '<p style="color:var(--text-muted);font-size:.74rem;margin:10px 0 0">Currently ' + money(limits && limits.per_action_cents) +
+      ' per action, ceiling ' + money(limits && limits.ceiling_cents) + '. A per-action limit can never exceed the ceiling.</p>');
+  limitsEl.innerHTML = h;
+
+  if (!actions.length) {
+    queueEl.innerHTML = card('📋 Nothing waiting', '<p style="color:var(--text-secondary);margin:0">The agent has not asked to do anything.</p>');
+  } else {
+    let rows = '<div style="overflow:auto"><table class="table"><thead><tr><th>When</th><th>Action</th><th>Status</th><th>Why</th><th></th></tr></thead><tbody>';
+    actions.forEach(function (a) {
+      var badge = a.status === 'executed' ? 'badge-primary'
+        : a.status === 'failed' ? 'badge-danger'
+        : a.status === 'refused' ? 'badge-muted' : 'badge-warning';
+      var why = a.held_because || a.reason || a.detail || '';
+      var buttons = (a.status === 'proposed' || a.status === 'approved')
+        ? '<button class="btn btn-primary btn-xs" onclick="agentDecide(\'' + a.id + '\',\'approve\')">Approve</button> ' +
+          '<button class="btn btn-secondary btn-xs" onclick="agentDecide(\'' + a.id + '\',\'refuse\')">Refuse</button>'
+        : '';
+      rows += '<tr><td>' + (a.created_at ? new Date(a.created_at).toLocaleString() : '') + '</td>' +
+        '<td>' + escapeHtml(a.kind) + '</td>' +
+        '<td><span class="badge ' + badge + '">' + escapeHtml(a.status) + '</span></td>' +
+        '<td style="font-size:.78rem;color:var(--text-secondary)">' + escapeHtml(why) + '</td>' +
+        '<td>' + buttons + '</td></tr>';
+    });
+    rows += '</tbody></table></div>';
+    queueEl.innerHTML = card('📋 What it asked for', rows);
+  }
+
+  if (kinds.length) {
+    var body = '<ul style="margin:0;padding-left:18px;color:var(--text-secondary);font-size:.82rem">' +
+      kinds.map(function (k) {
+        return '<li><strong>' + escapeHtml(k.label) + '</strong> — ' + escapeHtml(k.description) +
+          (k.spends ? ' <span class="badge badge-warning">spends money</span>' : '') + '</li>';
+      }).join('') + '</ul>';
+    kindsEl.innerHTML = card('🧾 What it can ask for', body);
+  }
+}
+
+async function agentSaveLimits() {
+  var body = {
+    per_action_cents: parseInt(document.getElementById('agentPerAction').value || '0', 10),
+    ceiling_cents: parseInt(document.getElementById('agentCeiling').value || '0', 10),
+    enabled: document.getElementById('agentEnabled').checked
+  };
+  try {
+    await API.put('/agent/limits', body);
+    toast('Agent limits saved');
+    agentLoad();
+  } catch (e) { toast('Could not save: ' + e.message, 'error'); }
+}
+
+async function agentDecide(id, what) {
+  try {
+    await API.post('/agent/actions/' + id + '/' + what, {});
+    toast(what === 'approve' ? 'Approved and carried out' : 'Refused');
+    agentLoad();
+  } catch (e) { toast('Could not ' + what + ': ' + e.message, 'error'); }
+}
+
+TAB_RENDERERS['agent'] = agentShell;
+TAB_LOADERS['agent'] = agentLoad;
 TAB_RENDERERS['lead-scoring'] = scoringShell;
 TAB_RENDERERS['analytics'] = analyticsShell;
 TAB_RENDERERS['tags'] = tagsShell;
@@ -10737,7 +11911,7 @@ window.appGuidePages = {
   messages:        { title: "Messages", desc: "Individual emails or texts you send to one contact from inside the CRM.", actions: ["Compose a message", "Pick a contact", "See the delivery result"] },
   notifications:   { title: "Notifications", desc: "Alerts about activity in your workspace that needs your attention.", actions: ["Read an alert", "Clear one you have handled"] },
   telnyx:          { title: "Telnyx SMS/Voice", desc: "Send texts and place calls through your connected Telnyx number.", actions: ["Connect your Telnyx account", "Send a text", "Check the message log"] },
-  tickets:         { title: "Support Tickets", desc: "Support requests raised in your workspace and their status.", actions: ["Open a ticket", "Reply and change its status"] },
+  tickets:         { title: "Support Tickets", desc: "Support requests raised in your workspace and their status. Only mail a person wrote opens a ticket — server reports (DMARC, bounces), newsletters and marketing blasts stay in the Shared Inbox, and any message can be turned into a ticket by hand.", actions: ["Open a ticket", "Reply and change its status"] },
   branding:        { title: "Email Branding", desc: "One logo and one signature for every message this workspace sends. Upload the logo once — the app resizes it so it renders in Gmail, Outlook and Apple Mail on a phone or a desktop — then fill in the signature (name, title, company, phone and a short line) and press Save signature. Compose and every reply then open with both already in place; an individual address can use its own wording from the mail client's Signature button.", actions: ["Upload the company logo (PNG, JPEG, GIF or WebP — no size to choose)", "Fill in the signature and press Save signature", "Read the preview: it is the message the mailer really produces", "Send yourself a test email to see it in your own inbox"] },
   inbox:           { title: "Shared Inbox", desc: "Your mail in one place: every message that arrived at your workspace's addresses. CoreSwift does not host your mail \u2014 you bring your own domain, and sending and receiving are TWO separate choices: send through your own Mailgun account or any SMTP service (Amazon SES, SendGrid, Postmark, Google Workspace), and receive through Mailgun or SendGrid. The setup page is three steps: the domain plus the keys those choices need, the mail records (MX, SPF/DKIM) each with a Copy button and a live Active / Waiting / Needs attention badge, then the inbox itself. The API key is the sending key (Mailgun \u2192 Settings \u2192 API Keys \u2192 Private API key, it starts key-) and the webhook signing key is the receiving key (Mailgun \u2192 Send \u2192 Domains \u2192 your domain \u2192 Webhook signing key); without the second one the domain can only send. One extra CNAME makes inbox.yourbusiness.com open your mail, and it is the only record that must be Proxied (orange cloud) \u2014 the mail records stay grey. Nothing is charged and no mailbox exists until the records verify, and the 30-day clock starts at your first verified inbox. When it ends the address still receives and only sending pauses: Keep inbox \u2014 $1/mo or Upgrade CRM brings sending back on the spot, and nothing is ever deleted. The meter at the bottom of the left column is your storage, with a banner and one email at 50, 75 and 99 per cent.", actions: ["Pick an address to narrow the list", "Open a message, star it, or file it under a label", "Received files: press a file's chip to open it in place (a picture or PDF draws on screen, with Download beside it), or press the ↓ arrow to save a copy", "Follow the three setup steps and press Check again when the records show Active", "LOG IN on an inbox row opens your branded address once it is live", "Receive-only? Use Keep inbox \u2014 $1/mo or Upgrade CRM to restore sending", "Catch-all is switched on Email Domains & Sending, not here", "Change how a domain RECEIVES (Mailgun, SendGrid, or nowhere) under the domain on the setup page \u2014 sending is untouched by it"] },
   "email-settings":{ title: "Email Domains & Sending", desc: "The sending half of your mail: the domains you send from with their Catch-all switch and their keys, the mailboxes on each domain, auto-replies and a form to send from a mailbox. The Catch-all column accepts mail for addresses that do not exist on the domain and files it under Everything else (MISC); it is sold by the plan \u2014 on this ladder from Professional ($79) upward \u2014 and the plan is checked when mail arrives, so a workspace moved down keeps the setting remembered while unmatched mail is refused: the cell then reads \u201coff \u2014 not on your plan\u201d with a Clear button. Mailboxes are counted per plan, and at the ceiling the answer names the plan that adds more and charges nothing.", actions: ["Enable or disable catch-all on a domain", "Add a domain, choose how it sends and how it receives, and paste only the keys those choices need; Check again after the records go Active", "DNS records shows the exact MX, SPF and DKIM values a domain needs, with a Copy button, for any domain \u2014 not just while the account has no inbox", "Remove this domain deletes a domain you no longer want (and the inboxes on it; mail already received stays) after you type its name to confirm", "Create a mailbox \u2014 the button stays disabled until receiving and sending both verify"] },
@@ -10755,7 +11929,7 @@ window.appGuidePages = {
   webhooks:        { title: "Webhooks", desc: "Send your workspace's events out to another system in real time.", actions: ["Add an endpoint", "Pick which events it receives"] },
   portfolio:       { title: "Portfolio Companies", desc: "Platform operator view: the businesses managed on this platform. Sync New Company gives a company its own workspace and owner login, emails the owner the login details, and converts a record that has no account behind it \u2014 pressing it again only refreshes the details.", actions: ["Open a company", "Change its plan", "Press \ud83d\udd04 Sync New Company to give a record its own account \u2014 the owner is emailed the login"] },
   users:           { title: "Users", desc: "Platform operator view: every user account across the platform with the workspace it belongs to. This list is read-only — no screen on it creates a person; people join a workspace through that workspace's own Team & Invites.", actions: ["Look up a person and the workspace they belong to", "Add somebody from the tenant console under Team & Invites"] },
-  billing:         { title: "Billing & Plans", desc: "Your bill, the plan this workspace is on, and every plan it could move to. Nothing on this screen changes the plan by itself. Your bill states the one amount due, says there is one subscription, names any plan that ended when the workspace last moved, and gives the next charge date. Each tier that is not yours carries Request this plan, which tells our team which workspace is asking and charges nothing; a tier that already has a payment page also shows Open payment page, and pressing it files the same request first. When the team has written how to pay, a How to pay for a paid plan block sits at the bottom of the plan list with their own directions. Cancel subscription drops the workspace to the Free plan as soon as you confirm.", actions: ["Read Your bill — the amount, the single subscription and the next charge date", "Press Request this plan on a tier you want — our team makes the change and nothing is charged here", "Open payment page where a tier shows one, then your request is already filed", "Cancel subscription to drop back to Free at once — it asks you to confirm first"] },
+  billing:         { title: "Billing & Plans", desc: "Your bill, the plan this workspace is on, and every plan it could move to. Nothing on this screen changes the plan by itself. Your bill states the one amount due, says there is one subscription, names any plan that ended when the workspace last moved, and states either the next charge date or — when the paid period has already ended and no renewal is on record — the date that period ended, with the fact that nothing has been charged since. Each tier that is not yours carries Request this plan, which tells our team which workspace is asking and charges nothing; a tier that already has a payment page also shows Open payment page, and pressing it files the same request first. When the team has written how to pay, a How to pay for a paid plan block sits at the bottom of the plan list with their own directions. Cancel subscription drops the workspace to the Free plan as soon as you confirm.", actions: ["Read Your bill — the amount, the single subscription and either the next charge date or the date the paid period ended", "Press Request this plan on a tier you want — our team makes the change and nothing is charged here", "Open payment page where a tier shows one, then your request is already filed", "Cancel subscription to drop back to Free at once — it asks you to confirm first"] },
   widgets:         { title: "Widgets", desc: "Platform operator view: embeddable pieces you can add to a customer's site.", actions: ["Create a widget"] },
   "native-apps":   { title: "Native Apps", desc: "Platform operator view: the mobile and desktop apps offered to customers.", actions: ["Review the apps"] },
   "audit-log":     { title: "Audit Log", desc: "Platform operator view: a record of who changed what, for accountability.", actions: ["Filter by user or action"] },
@@ -10769,6 +11943,22 @@ window.appGuidePages = {
 // ---------------------------------------------------------------- AUDIT LOG
 // Rows are GET /api/audit (tenant-scoped, newest first). The CSV is built from exactly the rows this
 // panel read, so pressing Export can never produce a file the screen did not show.
+//
+// WHAT A ROW CHANGED, in words. Every trail row carries a `changes` document, and the delete paths
+// record the record's own name there (contacts: name + email; companies / lists / tags / pipelines /
+// deals: name) — deliberately read BEFORE the delete, because afterwards there is no row left to
+// look it up. Without this column the panel named a record only by an 8-character id, so
+// "contact.deleted" could not be acted on; that was a screen that looked complete and told nobody
+// which record went.
+function auditRecord(r) {
+  var c = r && r.changes;
+  if (typeof c === 'string') { try { c = JSON.parse(c); } catch (_) { return c; } }
+  if (!c || typeof c !== 'object') return '';
+  var name = c.name || c.subject || c.plan_slug || '';
+  var extra = (c.email && String(c.email) !== String(name)) ? ' \u2014 ' + c.email : '';
+  if (!name && c.value !== undefined && c.value !== null) name = '$' + c.value;
+  return name ? String(name) + extra : Object.keys(c).slice(0, 4).join(', ');
+}
 let AUDIT_ROWS = [];
 async function loadAuditTab() {
   const el = document.getElementById('auditContent');
@@ -10777,11 +11967,10 @@ async function loadAuditTab() {
     const res = await API.get('/audit?per_page=100');
     const rows = famList(res, 'logs');
     AUDIT_ROWS = rows;
-    el.innerHTML = dataTable(['When', 'Action', 'Entity', 'Entity id', 'By', 'IP'],
+    el.innerHTML = dataTable(['When', 'Action', 'Entity', 'Record', 'By', 'IP'],
       rows.map(function (r) {
         return [r.created_at ? new Date(r.created_at).toLocaleString() : '\u2014',
-          fh(r.action), fh(r.entity_type),
-          '<code style="font-size:.72rem">' + fh(r.entity_id ? String(r.entity_id).slice(0, 8) : '\u2014') + '</code>',
+          fh(r.action), fh(r.entity_type), fh(auditRecord(r)),
           fh(r.user_id ? String(r.user_id).slice(0, 8) : 'the platform'),
           fh(r.ip_address)];
       }), 'Nothing recorded for this workspace yet \u2014 entries appear as people change things.');
@@ -10793,8 +11982,10 @@ async function loadAuditTab() {
 }
 function auditExportCsv() {
   if (!AUDIT_ROWS.length) { toast('Nothing to export yet', 'error'); return; }
-  const cols = ['created_at', 'action', 'entity_type', 'entity_id', 'user_id', 'ip_address'];
+  // `changes` rides along: the name of what was removed lives nowhere else once the row is gone.
+  const cols = ['created_at', 'action', 'entity_type', 'entity_id', 'changes', 'user_id', 'ip_address'];
   const esc = function (v) {
+    if (v && typeof v === 'object') { try { v = JSON.stringify(v); } catch (_) { v = String(v); } }
     v = (v === null || v === undefined) ? '' : String(v);
     return '"' + v.replace(/"/g, '""') + '"';
   };
@@ -11152,7 +12343,15 @@ async function bkLoadNotify() {
   if (!card || !BK.current) return;
   try {
     var n = await bkCall('GET', '/calendars/' + BK.current + '/notifications');
-    BK.notify = n || { notify_emails: [], reminders: [], tag_rules: [] };
+    BK.notify = n || { notify_emails: [], reminders: [], tag_rules: [], list_rules: [] };
+  // The list picker needs the account's own lists. Loaded once, silently: a failure here must not stop
+  // the rest of the panel rendering, it leaves the picker empty with its own explanation.
+  if (!BK.lists) {
+    try {
+      var lr = await API.get('/lists');
+      BK.lists = (lr && (lr.lists || lr)) || [];
+    } catch (e) { BK.lists = []; }
+  }
     bkRenderNotify();
   } catch (e) {
     card.innerHTML = '<div class="card"><p class="muted">Could not load notification settings — ' + escapeHtml(e.message) + '</p></div>';
@@ -11162,7 +12361,7 @@ async function bkLoadNotify() {
 function bkRenderNotify() {
   var card = document.getElementById('bkNotifyCard');
   if (!card) return;
-  var n = BK.notify || { notify_emails: [], reminders: [], tag_rules: [] };
+  var n = BK.notify || { notify_emails: [], reminders: [], tag_rules: [], list_rules: [] };
   function rowList(items, render, removeFn) {
     return items.length
       ? '<div style="margin:6px 0 10px">' + items.map(function (it, i) {
@@ -11208,6 +12407,23 @@ function bkRenderNotify() {
     '</div>' +
     '<button class="btn btn-secondary btn-sm" onclick="bkAddTagRule()">Add tag rule</button>' +
     '<p class="muted" style="font-size:12px;margin:10px 0 0">Tags are matched ignoring case, so “Webinar” and “webinar” stay one tag.</p>' +
+    '<hr style="border:none;border-top:1px dashed #e2e8f0;margin:16px 0">' +
+    '<strong style="font-size:13px">Lists on the contact</strong>' +
+    '<p class="muted" style="font-size:12px;margin:2px 0 8px">A booking can put the person in a list as well as tag them — either one can be what an automation watches.</p>' +
+    rowList(n.list_rules, function (l) {
+      return escapeHtml(l.list_name || l.list_id) + ' <span class="muted">· on ' + escapeHtml(l.stage) + ' · ' +
+        (l.mode === 'remove' ? 'take out' : 'add') + '</span>';
+    }, 'bkRemoveListRule') +
+    '<div class="bk-form">' +
+    '<label>List<select id="bkNewList">' + (BK.lists || []).map(function (l) {
+      return '<option value="' + escapeHtml(l.id) + '">' + escapeHtml(l.name) + '</option>';
+    }).join('') + '</select></label>' +
+    '<label>When<select id="bkNewListStage"><option value="confirm">On confirm</option><option value="cancel">On cancel</option></select></label>' +
+    '<label>Do<select id="bkNewListMode"><option value="add">Add to list</option><option value="remove">Take out of list</option></select></label>' +
+    '</div>' +
+    '<button class="btn btn-secondary btn-sm" onclick="bkAddListRule()">Add list rule</button>' +
+    ((BK.lists && BK.lists.length) ? '' :
+      '<p class="muted" style="font-size:12px;margin:10px 0 0">No lists yet — create one under Contacts → Lists and it appears here.</p>') +
     '</div>';
 }
 
@@ -11244,6 +12460,19 @@ function bkAddTagRule() {
   bkSaveNotify();
 }
 function bkRemoveTagRule(i) { BK.notify.tag_rules.splice(i, 1); bkSaveNotify(); }
+function bkAddListRule() {
+  var sel = document.getElementById('bkNewList');
+  var listId = sel ? sel.value : '';
+  if (!listId) { bkFlash('Create a list first (Contacts \u2192 Lists).', false); return; }
+  BK.notify.list_rules = BK.notify.list_rules || [];
+  BK.notify.list_rules.push({
+    list_id: listId,
+    stage: document.getElementById('bkNewListStage').value,
+    mode: document.getElementById('bkNewListMode').value
+  });
+  bkSaveNotify();
+}
+function bkRemoveListRule(i) { BK.notify.list_rules.splice(i, 1); bkSaveNotify(); }
 
 async function bkSaveNotify() {
   try {
@@ -12222,8 +13451,309 @@ window.addEventListener('beforeunload', function (ev) {
   if (DM.dirty) { ev.preventDefault(); ev.returnValue = 'You have unsaved mapping changes.'; return ev.returnValue; }
 });
 
+/* ==========================================================================================
+ * MAIL COMPLIANCE (kanban t_bec0f198)
+ * ------------------------------------------------------------------------------------------
+ * Everything this account sends passes one gate: transactional (receipts, password resets)
+ * cannot be opted out of but is still refused to a known-bad address; notification and bulk
+ * mail can be stopped. This page is the screen for that gate: what was sent, what the provider
+ * did with it, who has asked this account to stop, and the two downloads a customer takes to an
+ * address-verification service.
+ *
+ * Two things the panel refuses to fake:
+ *   * A RATE with no mail behind it. Over an account that has sent nothing, the API reports
+ *     `no_events_yet` and the tiles say so — never a red "0.0% delivered".
+ *   * A CEILING without the number. The complaint rate is shown against the 0.3% limit the
+ *     mailbox providers actually enforce, because the limit is the actionable fact.
+ * ========================================================================================== */
+
+window.MC = { rows: [] };
+
+var MC_CLASSES = [
+  { id: 'all', label: 'Everything except receipts' },
+  { id: 'bulk', label: 'Campaigns and sequences only' },
+  { id: 'notification', label: 'Notifications only' }
+];
+
+TAB_RENDERERS['mail-compliance'] = function () {
+  return pageHeader(
+    'Mail compliance',
+    'What this account sent, what the provider did with it, and who asked us to stop',
+    '<button class="btn btn-secondary btn-sm" data-ops="mc-refresh" onclick="mcLoad()">↻ Reload</button>'
+  ) + '<div id="mcWrap"><div class="loading-wrap"><div class="spinner"></div> Loading…</div></div>';
+};
+TAB_LOADERS['mail-compliance'] = async function () { await mcLoad(); };
+
+function mcEsc(v) { return escapeHtml(v == null ? '' : String(v)); }
+
+function mcTile(label, value, note) {
+  return '<div class="stat-tile" style="flex:1 1 150px;min-width:150px">' +
+    '<div class="stat-label" style="font-size:12px;color:var(--text-muted)">' + mcEsc(label) + '</div>' +
+    '<div class="stat-value" style="font-size:22px;font-weight:700">' + mcEsc(value) + '</div>' +
+    (note ? '<div class="form-hint" style="margin:2px 0 0">' + mcEsc(note) + '</div>' : '') +
+    '</div>';
+}
+
+async function mcLoad() {
+  var wrap = document.getElementById('mcWrap');
+  if (!wrap) return;
+  var ov = null, list = [];
+  try {
+    ov = await API.get('/mail-compliance/overview');
+  } catch (e) {
+    wrap.innerHTML = '<div class="card"><div class="card-body"><p>Delivery evidence could not be read: ' +
+      mcEsc(e.message) + '</p></div></div>';
+    return;
+  }
+  try {
+    var r = await API.get('/mail-compliance/suppressions');
+    list = (r && r.suppressions) || [];
+  } catch (e) {
+    wrap.innerHTML = '<div class="card"><div class="card-body"><p>The do-not-mail list could not be read: ' +
+      mcEsc(e.message) + '</p></div></div>';
+    return;
+  }
+  var cp = null;
+  try {
+    cp = await API.get('/mail-compliance/unsubscribe-page');
+  } catch (e) { cp = null; }
+  MC.copy = cp;
+  var lanes = null;
+  try {
+    lanes = await API.get('/mail-compliance/domains');
+  } catch (e) { lanes = null; }
+  MC.lanes = lanes;
+  MC.rows = list;
+  mcRender(ov || {}, list, wrap);
+}
+
+function mcRender(ov, list, wrap) {
+  var rates = ov.rates || {};
+  var tiles = '';
+  if (rates.no_events_yet) {
+    tiles = mcTile('Mail sent (30 days)', String(rates.sent || 0), 'No delivery events yet — rates appear once the provider reports.');
+  } else {
+    tiles =
+      mcTile('Mail sent (30 days)', String(rates.sent || 0)) +
+      mcTile('Delivered', (rates.delivery_rate || 0) + '%', String(rates.delivered || 0) + ' messages') +
+      mcTile('Bounced', (rates.bounce_rate || 0) + '%', String(rates.bounced || 0) + ' messages') +
+      mcTile('Complained', (rates.complaint_rate || 0) + '%',
+        'Ceiling ' + (rates.complaint_rate_ceiling || 0.3) + '% — above it, mailbox providers start refusing this sender');
+  }
+  tiles += mcTile('On the do-not-mail list', String(ov.suppressed || 0),
+    String(ov.suppressed_last_30d || 0) + ' added in the last 30 days');
+
+  var options = MC_CLASSES.map(function (c) {
+    return '<option value="' + mcEsc(c.id) + '">' + mcEsc(c.label) + '</option>';
+  }).join('');
+
+  var form = '<div class="card">' +
+    '<div class="card-header">Stop mailing an address</div>' +
+    '<div class="card-body">' +
+    '<p class="form-hint">Adding an address here stops the mail this account sends to it. A receipt or a ' +
+    'password reset still goes out — the law exempts those — but nothing else will.</p>' +
+    '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">' +
+    '<div class="form-group" style="margin:0;flex:1 1 260px">' +
+    '<label class="form-label" for="mcAddress">Email address</label>' +
+    '<input class="form-input" id="mcAddress" type="email" autocomplete="off" placeholder="person@example.com" ' +
+    'onkeydown="if(event.key===\'Enter\'){event.preventDefault();mcAdd();}"></div>' +
+    '<div class="form-group" style="margin:0;flex:0 1 220px">' +
+    '<label class="form-label" for="mcClass">What to stop</label>' +
+    '<select class="form-input" id="mcClass">' + options + '</select></div>' +
+    '<button class="btn btn-primary" data-ops="mc-add" onclick="mcAdd()">Add to list</button>' +
+    '</div></div></div>';
+
+  var rows = list.map(function (r) {
+    var when = String(r.created_at || '').replace('T', ' ').slice(0, 19);
+    return '<tr>' +
+      '<td>' + mcEsc(r.address) + '</td>' +
+      '<td>' + mcEsc(r.mail_class) + '</td>' +
+      '<td>' + mcEsc(r.reason) + '</td>' +
+      '<td>' + mcEsc(r.source || '—') + '</td>' +
+      '<td>' + mcEsc(when) + '</td>' +
+      '<td><button class="btn btn-ghost btn-sm" data-ops="mc-remove" onclick="mcRemove(\'' +
+        mcEsc(r.id) + '\')">Remove</button></td>' +
+      '</tr>';
+  }).join('');
+
+  var table = list.length
+    ? '<div class="card"><div class="table-wrap"><table><thead><tr>' +
+      '<th>Address</th><th>Stops</th><th>Why</th><th>Source</th><th>Added</th><th></th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table></div></div>'
+    : '<div class="card"><div class="card-body"><div class="empty-state">' +
+      '<div class="empty-icon">🛡️</div><h3>Nobody has asked this account to stop</h3>' +
+      '<p>An unsubscribe, a hard bounce or a spam complaint adds an address here automatically.</p>' +
+      '</div></div></div>';
+
+    var L = MC.lanes || {};
+    function laneChip(state) {
+      var map = {
+        active: ['#065f46', '#d1fae5', 'Verified'],
+        waiting_on_records: ['#92400e', '#fef3c7', 'Waiting on records'],
+        needs_a_domain: ['#374151', '#e5e7eb', 'Add a domain first'],
+        not_set_up: ['#374151', '#e5e7eb', 'Not set up']
+      };
+      var c = map[state] || map.not_set_up;
+      return '<span style="font-size:11px;font-weight:700;color:' + c[0] + ';background:' + c[1] +
+        ';border-radius:10px;padding:2px 8px">' + c[2] + '</span>';
+    }
+    function laneRecords(hint) {
+      if (!hint || !hint.length) return '';
+      return '<div style="margin-top:8px"><table style="width:100%;font-size:12px"><thead><tr>' +
+        '<th style="text-align:left">Type</th><th style="text-align:left">Name</th>' +
+        '<th style="text-align:left">Value</th></tr></thead><tbody>' +
+        hint.map(function (r) {
+          return '<tr><td>' + mcEsc(r.record) + '</td><td style="word-break:break-all">' +
+            mcEsc(r.name) + '</td><td style="word-break:break-all;color:#555">' + mcEsc(r.value) + '</td></tr>';
+        }).join('') + '</tbody></table></div>';
+    }
+    var inboxRows = (L.inbox || []).map(function (d) {
+      return '<div style="display:flex;gap:8px;align-items:center;padding:6px 0">' +
+        '<strong>' + mcEsc(d.domain) + '</strong>' + laneChip(d.verified ? 'active' : 'waiting_on_records') +
+        '<span class="form-hint" style="margin:0">' + mcEsc(d.provider || '') + '</span></div>';
+    }).join('') || '<p class="form-hint">No domain added yet. Add one under Private email to start the inbox lane.</p>';
+    var autoL = L.automation || {};
+    var calL = L.calendar || {};
+    var canEditLanes = !!(L.can_edit);
+    var lanesCard = '<div class="card"><div class="card-header">Your domains \u2014 three lanes</div><div class="card-body">' +
+      '<p class="form-hint">One domain, three jobs. Each lane is offered only once its own records verify, so a control can never send from the wrong address.</p>' +
+      '<div style="display:grid;gap:14px">' +
+      '<div><div style="display:flex;gap:8px;align-items:center"><strong>Inbox</strong></div>' + inboxRows + '</div>' +
+      '<div style="border-top:1px solid #eee;padding-top:10px"><div style="display:flex;gap:8px;align-items:center">' +
+      '<strong>Automation</strong>' + laneChip(autoL.state) + '<span class="form-hint" style="margin:0">' + mcEsc(autoL.host || '') + '</span></div>' +
+      '<p class="form-hint">' + mcEsc(autoL.why || '') + '</p>' + laneRecords(autoL.records_hint) + '</div>' +
+      '<div style="border-top:1px solid #eee;padding-top:10px"><div style="display:flex;gap:8px;align-items:center">' +
+      '<strong>Calendar</strong>' + laneChip(calL.state) + '<span class="form-hint" style="margin:0">' + mcEsc(calL.host || '') + '</span></div>' +
+      '<p class="form-hint">' + mcEsc(calL.why || '') + '</p>' + laneRecords(calL.records_hint) + '</div>' +
+      (canEditLanes ? '<div style="border-top:1px solid #eee;padding-top:10px;display:grid;gap:8px">' +
+        '<label class="form-label">Automation host<input class="form-input" id="mcLaneAutomation" value="' + mcEsc(autoL.host || '') + '"></label>' +
+        '<label class="form-label">Calendar host<input class="form-input" id="mcLaneCalendar" value="' + mcEsc(calL.host || '') + '"></label>' +
+        '<div><button class="btn btn-secondary btn-sm" data-ops="mc-save-lanes" onclick="mcSaveLanes()">Save lane names</button></div>' +
+        '</div>' : '') +
+      '</div></div></div>';
+    var eff = (MC.copy && MC.copy.effective) || {};
+  var canEdit = !!(MC.copy && MC.copy.can_edit);
+  var nCamp = (MC.copy && MC.copy.campaigns) || 0;
+  var copyCard = '<div class="card"><div class="card-header">The opt-out page: your words</div><div class="card-body">' +
+    '<p class="form-hint">This is what a person sees when they click unsubscribe. Leave a box empty to use the platform\u2019s wording for that line.</p>' +
+    (canEdit ? (
+      '<div style="display:grid;gap:10px">' +
+      '<label class="form-label">Title<input class="form-input" id="mcCopyTitle" value="' + mcEsc(eff.title || '') + '"></label>' +
+      '<label class="form-label">Explanation<input class="form-input" id="mcCopyIntro" value="' + mcEsc(eff.intro || '') + '"></label>' +
+      '<label class="form-label">Label on the stop-everything box<input class="form-input" id="mcCopyAll" value="' + mcEsc(eff.all_label || '') + '"></label>' +
+      '<label class="form-label">Button label<input class="form-input" id="mcCopyButton" value="' + mcEsc(eff.button_label || '') + '"></label>' +
+      '<label class="form-label">After they submit \u2014 title<input class="form-input" id="mcCopyDoneTitle" value="' + mcEsc(eff.done_title || '') + '"></label>' +
+      '<label class="form-label">After they submit \u2014 message<input class="form-input" id="mcCopyDoneBody" value="' + mcEsc(eff.done_body || '') + '"></label>' +
+      '<div><button class="btn btn-primary btn-sm" data-ops="mc-save-copy" onclick="mcSaveCopy()">Save page wording</button></div>' +
+      '</div>'
+    ) : '<p class="form-hint">Only the account owner or an admin can change this page.</p>') +
+    '<p class="form-hint" style="margin-top:10px">Campaigns appear on that page automatically from this account\u2019s own list \u2014 ' +
+    nCamp + ' campaign' + (nCamp === 1 ? '' : 's') + ' today, each with its own checkbox, plus a stop-everything choice.</p>' +
+    '</div></div>';
+var downloads = '<div class="card"><div class="card-header">Downloads</div><div class="card-body">' +
+    '<p class="form-hint">Both files are this account\u2019s only.</p>' +
+    '<div style="display:flex;gap:10px;flex-wrap:wrap">' +
+    '<button class="btn btn-secondary btn-sm" data-ops="mc-csv-suppressions" ' +
+    'onclick="mcDownload(\'/mail-compliance/suppressions.csv\',\'suppressions.csv\')">⬇ Do-not-mail list (CSV)</button>' +
+    '<button class="btn btn-secondary btn-sm" data-ops="mc-csv-addresses" ' +
+    'onclick="mcDownload(\'/mail-compliance/addresses.csv\',\'contact-addresses.csv\')">⬇ Every contact address (CSV)</button>' +
+    '</div></div></div>';
+
+  wrap.innerHTML = '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">' + tiles + '</div>' +
+    lanesCard + copyCard + form + table + downloads;
+}
+
+async function mcSaveLanes() {
+  function v(id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; }
+  try {
+    await API.put('/mail-compliance/domains', {
+      automation_host: v('mcLaneAutomation'), calendar_host: v('mcLaneCalendar')
+    });
+    toast('Lane names saved');
+    if (typeof mcLoad === 'function') mcLoad();
+  } catch (e) { toast(e.message || 'Could not save the lane names', 'error'); }
+}
+
+async function mcSaveCopy() {
+  function v(id) {
+    var el = document.getElementById(id);
+    return el ? el.value.trim() : '';
+  }
+  try {
+    var r = await API.put('/mail-compliance/unsubscribe-page', {
+      title: v('mcCopyTitle'), intro: v('mcCopyIntro'),
+      all_label: v('mcCopyAll'), button_label: v('mcCopyButton'),
+      done_title: v('mcCopyDoneTitle'), done_body: v('mcCopyDoneBody')
+    });
+    if (r && r.effective) { MC.copy = MC.copy || {}; MC.copy.effective = r.effective; }
+    toast('Opt-out page wording saved');
+  } catch (e) {
+    toast(e.message || 'Could not save the wording', 'error');
+  }
+}
+
+async function mcAdd() {
+  var addrEl = document.getElementById('mcAddress');
+  var clsEl = document.getElementById('mcClass');
+  var address = ((addrEl && addrEl.value) || '').trim();
+  if (address.indexOf('@') < 1) {
+    toast('Enter the email address to stop mailing', 'error');
+    if (addrEl) addrEl.focus();
+    return;
+  }
+  try {
+    // `reason` is a fixed vocabulary on the server (manual / unsubscribed / hard_bounce /
+    // complaint / provider). An address added HERE was added by hand, so it is 'manual' — never
+    // a free-text note, which the column's CHECK would refuse.
+    await API.post('/mail-compliance/suppressions', {
+      address: address,
+      mail_class: (clsEl && clsEl.value) || 'all',
+      reason: 'manual'
+    });
+    toast('Added ' + address + ' to the do-not-mail list', 'success');
+    if (addrEl) addrEl.value = '';
+    await mcLoad();
+  } catch (e) {
+    toast('Could not add that address: ' + e.message, 'error');
+  }
+}
+
+async function mcRemove(id) {
+  var row = null;
+  for (var i = 0; i < MC.rows.length; i++) {
+    if (String(MC.rows[i].id) === String(id)) { row = MC.rows[i]; break; }
+  }
+  var label = row ? row.address : 'this address';
+  if (typeof confirm === 'function' &&
+      !confirm('Remove ' + label + ' from the do-not-mail list? Mail to them may resume.')) return;
+  try {
+    await API.del('/mail-compliance/suppressions/' + encodeURIComponent(id));
+    toast('Removed ' + label + ' from the do-not-mail list', 'success');
+    await mcLoad();
+  } catch (e) {
+    toast('Could not remove that address: ' + e.message, 'error');
+  }
+}
+
+async function mcDownload(path, filename) {
+  try {
+    // The route is behind the session, so a plain link would be an anonymous request and be
+    // refused: fetch it with the token and hand the browser a blob, like the attachment downloads.
+    var res = await fetch('/api' + path, { headers: { 'Authorization': 'Bearer ' + STATE.token } });
+    if (!res.ok) { toast('Could not download that file (' + res.status + ')', 'error'); return; }
+    var blob = await res.blob();
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
 </script>
-<script src="/inline-guide-widget.js?v=20261106a"></script>
+<script src="/inline-guide-widget.js?v=20261119a"></script>
 <script src="/private-email-inbox.js?v=20261112j"></script>
 
 <!--B209-FEEDBACK-APP-->

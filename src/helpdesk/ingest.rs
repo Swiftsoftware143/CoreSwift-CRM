@@ -99,6 +99,7 @@ pub async fn ingest_inbound(
     if junk::is_noise(
         &inbound.subject,
         &inbound.from,
+        &inbound.body_plain,
         inbound.is_auto_generated,
         &own,
     ) {
@@ -234,6 +235,9 @@ pub async fn ingest_inbound(
         stored_message,
     )
     .await?;
+
+    // How they sounded, recorded in the same transaction that filed the message.
+    crate::helpdesk::sentiment::apply_tx(tx, ticket_id, &inbound.body_plain).await;
 
     tracing::info!(ticket = %ticket_id, number, tenant = %tenant_id, "opened a ticket from inbound mail");
     Ok(IngestOutcome::Created { ticket_id, number })

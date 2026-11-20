@@ -156,6 +156,14 @@ pub async fn delete(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+    // The name, read before the row goes (see contacts::delete).
+    let gone: Option<String> =
+        sqlx::query_scalar("SELECT name FROM companies WHERE id = $1 AND tenant_id = $2")
+            .bind(id)
+            .bind(tenant_id)
+            .fetch_optional(&state.db)
+            .await?;
     let r = sqlx::query("DELETE FROM companies WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tenant_id)
@@ -163,6 +171,19 @@ pub async fn delete(
         .await?;
     if r.rows_affected() == 0 {
         return Err(AppError::NotFound(format!("Company {} not found", id)));
+    }
+    if let Some(name) = gone {
+        audit::logger::log_event(
+            &state.db,
+            tenant_id,
+            Some(user_id),
+            "company.deleted",
+            "company",
+            Some(id),
+            Some(json!({"name": name})),
+            None,
+        )
+        .await;
     }
     Ok(Json(json!({"message": "Company deleted successfully"})))
 }

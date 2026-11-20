@@ -578,11 +578,12 @@ fn default_site_settings() -> serde_json::Value {
         "schema_json": "{\"@context\":\"https://schema.org\",\"@type\":\"SoftwareApplication\",\"name\":\"CoreSwift CRM\",\"applicationCategory\":\"BusinessApplication\",\"description\":\"All-in-one CRM platform with automated follow-ups, smart pipelines, and built-in calendar.\"}",
         "legal_tos": "", "legal_privacy": "", "legal_refunds": "",
         // The hero copy is the SERVED page's own bytes, entity and markup included: the shipped
-        // headline carries the gradient `<span>` and the shipped sub-headline carries `&amp;`. The
-        // applier writes both VERBATIM (they are hero HTML, not prose), so a row whose hero equals
+        // headline carries the gradient `<span>` and the shipped sub-headline carries `&amp;`.
+        // The applier writes both VERBATIM (they are hero HTML, not prose), so a row whose hero equals
         // the shipped one renders the page byte-for-byte and `--check` reads `unchanged`
-        // (kanban t_9dede800).
-        "homepage": { "headline": "One CRM That Replaces <span class=\"hero-gradient\">6+ Separate Tools</span>", "subheadline": "Automated follow-up sequences. Built-in calendar &amp; bookings. SMS &amp; email campaigns. Deal pipelines. Event management. All included in the free tier — not scattered across six different subscriptions." }
+        // (kanban t_9dede800). The sub-headline is the free-tier truth line (kanban t_7a503291):
+        // it names what the free tier includes and puts automation + AI scoring on Professional.
+        "homepage": { "headline": "One CRM That Replaces <span class=\"hero-gradient\">6+ Separate Tools</span>", "subheadline": "The free tier includes the full core CRM — contacts, pipelines, campaigns and SMS, calendar and bookings. Automations and AI scoring start on the Professional plan; paid plans also add private mailboxes, support tickets, and higher limits on contacts, users, pipelines and integrations." }
     })
 }
 
@@ -714,10 +715,15 @@ mod tests {
         assert_eq!(d["canonical_url"], "https://coreswiftcrm.com/");
         let h = d["homepage"]["headline"].as_str().unwrap();
         assert!(h.starts_with("One CRM That Replaces <span class=\"hero-gradient\">"));
-        assert!(d["homepage"]["subheadline"]
-            .as_str()
-            .unwrap()
-            .contains("&amp;"));
+        // The shipped sub-headline IS the served page's own copy — the free-tier truth line
+        // (kanban t_7a503291). Comparing against the served bytes is the real guard: a default
+        // that only resembles the page would make the first apply rewrite the live hero.
+        let sh = d["homepage"]["subheadline"].as_str().unwrap();
+        assert!(sh.starts_with("The free tier includes the full core CRM"));
+        assert!(sh.contains("Automations and AI scoring start on the Professional plan"));
+        if let Ok(served) = fs::read_to_string("/opt/swift/nginx/www/coreswift/index.html") {
+            assert!(served.contains(&format!("<p class=\"subtitle\">{}</p>", sh)));
+        }
     }
 
     #[test]
