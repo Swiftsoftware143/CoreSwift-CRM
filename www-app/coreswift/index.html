@@ -9719,6 +9719,30 @@ const PE = { domains: [], boxes: [], autoReplies: [], support: null, keys: [], k
 // button in the Mailboxes list always points at the name that works today.
 const MAIL_CLIENT_URL = 'https://inbox.coreswiftcrm.com/';
 
+/* SESSION HANDOFF TO THE MAIL CLIENT (2026-11-20). The mailboxes card says "Open inbox opens the mail
+   client where you read and answer what arrives" and the guide says the chosen address travels in the
+   URL — but the button carried neither the session nor the address: the customer landed on a login
+   form with a password they saw once, in the welcome email. Rewrite the href on the way out with the
+   mailbox's own address (?address=) and the SAME session in the URL FRAGMENT (#token=...). A fragment is
+   never sent to a server, so the token cannot land in an nginx access log or a Referer header; the mail
+   client stores it as its own session and strips it before its first render. DELEGATED, capture phase,
+   because the mailbox table is re-rendered after every add/edit. */
+document.addEventListener('click', function (ev) {
+  var a = ev.target && ev.target.closest ? ev.target.closest('a[href^="https://inbox.coreswiftcrm.com"]') : null;
+  if (!a) return;
+  var t = '';
+  try { t = localStorage.getItem('crm_token') || ''; } catch (e) {}
+  var addr = '';
+  try {
+    var tr = a.closest('tr');
+    var code = tr && tr.querySelector('code');
+    if (code) addr = (code.textContent || '').trim();
+  } catch (e) {}
+  var u = 'https://inbox.coreswiftcrm.com/' + (addr ? '?address=' + encodeURIComponent(addr) : '');
+  if (t) u += '#token=' + encodeURIComponent(t);
+  a.href = u;
+}, true);
+
 function inboxShell() {
   return pageHeader('Private Email', 'Send from your own domains, auto-reply, and turn forwarded mail into tickets',
     '<button class="btn btn-secondary btn-sm" onclick="switchTab(\'integrations\')">🔑 Mail provider keys</button>') +

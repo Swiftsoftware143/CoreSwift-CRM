@@ -40,6 +40,22 @@
     picked: false
   };
 
+  // ── Session handoff from the console (2026-11-20) ────────────────────────────────────────────
+  // The CRM's "Open inbox ↗" button promises the same account; until now it opened this client with no
+  // session, so the customer landed on a login form with a password they saw once, in the welcome
+  // email. The console now hands the SAME session in the URL FRAGMENT (#token=...), which a browser
+  // never sends to a server, so the token cannot land in an nginx access log or a Referer header. Take
+  // it into this client's own session store, then strip the fragment so a reload or a bookmark does not
+  // carry it. An expired/invalid handoff is harmless: boot() answers 401 and the login screen renders.
+  (function takeHandoff() {
+    var m = /(?:^#|&)token=([^&]+)/.exec(location.hash || '');
+    if (!m) return;
+    var t = '';
+    try { t = decodeURIComponent(m[1]); } catch (e) { t = ''; }
+    if (t) { S.token = t; try { localStorage.setItem(TOKEN_KEY, t); } catch (e) {} }
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { location.hash = ''; }
+  })();
+
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
