@@ -7855,71 +7855,231 @@ function peiPaintList() {
 // Who this workspace can send from, and what it currently holds. The SETUP half lives in the
 // tenant's own console (Email Domains & Sending); this panel states the current state so an
 // operator reading mail knows which From addresses exist, and says where to add one.
+// ── PRIVATE EMAIL: THE WORKSPACE'S OWN SETUP (David, 2026-11-20) ───────────────────────────────────
+// Every step a customer needs is a control on this panel: add the domain, add mailboxes, switch
+// catch-all, paste the inbound signing key, re-check DNS, and read the records with the posting
+// address. Modelled on the provider-style setup page a business owner already knows: the records sit
+// ON the page with their state, and the steps are numbered so "what is left" needs no explaining.
+// Handlers are delegated from data attributes — no quoted inline JS, so a domain id can never break
+// the markup.
 function peiPaintSetup() {
   const el = document.getElementById('peiSetup');
   if (!el) return;
   const boxes = (PEI.boxes || []).map(function (b) { return escapeHtml(b.email_address || b.address || ''); }).filter(Boolean);
   const domains = PEI.domains || [];
 
-  // ── THE SETUP CONTROLS BELONG HERE (measured 2026-11-20) ─────────────────────────────────────
-  // This panel used to read the domains and then tell the operator to go and finish in the
-  // customer's own console — which an impersonated session cannot reach, so an operator could see
-  // "no key, inbound refused" and had no way to fix it. The endpoints were always there; the screen
-  // was not. Everything below calls the same routes the customer screen calls, as the impersonated
-  // workspace, so the operator can finish a workspace's mail without a customer login.
-  let rows = '';
+  const btn = function (label, style, action, id) {
+    return '<button class="btn ' + style + ' btn-xs" data-pei="' + action + '"' +
+      (id ? ' data-id="' + escapeHtmlAttr(id) + '"' : '') + '>' + label + '</button>';
+  };
+
+  let html = '<div class="card"><strong>Domains &amp; receiving — this workspace</strong><div style="margin:10px 0">' +
+    '<button class="btn btn-primary btn-sm" data-pei="add-domain">+ Add domain</button>' +
+    (domains.length ? ' <button class="btn btn-secondary btn-sm" data-pei="add-box">+ Add mailbox</button>' : '') +
+    '</div>';
+
   if (!domains.length) {
-    rows = '<p style="font-size:13px;opacity:.8">No domain on this workspace yet.</p>';
+    html += '<div style="padding:14px;border-left:3px solid #f59e0b;background:rgba(245,158,11,.07);border-radius:6px">' +
+      '<strong>No domain on this workspace yet — nothing can arrive.</strong>' +
+      '<div style="font-size:13px;margin-top:6px;line-height:1.55">' +
+      '<b>1.</b> Press <b>+ Add domain</b> and enter the domain you receive mail on. You will need that domain\'s Mailgun API key (Mailgun &rarr; Settings &rarr; API keys).<br>' +
+      '<b>2.</b> The records to add at your DNS host appear right here — MX, SPF and DKIM. Add them exactly as shown.<br>' +
+      '<b>3.</b> Press <b>Re-check</b> until the domain reads verified, then <b>Set key</b> with your account\'s HTTP webhook signing key (Mailgun &rarr; Settings &rarr; API Security &rarr; Show).<br>' +
+      '<b>4.</b> Add a mailbox, and point your provider at the posting address shown below.<br>' +
+      'Sending and receiving are separate: a domain can send as soon as it verifies, while receiving waits for step 3.' +
+      '</div></div>';
   } else {
-    rows = '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="text-align:left">' +
+    html += '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="text-align:left">' +
       '<th>Domain</th><th>Verified</th><th>Receiving</th><th>Catch-all</th><th></th></tr></thead><tbody>';
     domains.forEach(function (d) {
       const keyed = d.webhook_signing_key_status === 'usable';
       const receiving = (d.inbound_provider || 'mailgun') === 'none'
         ? '<span class="badge">send only</span>'
-        : (keyed
-            ? '<span class="badge badge-success">signing key set</span>'
-            : '<span class="badge badge-warning">no key — inbound refused</span>');
-      rows += '<tr>' +
-        '<td><code>' + escapeHtml(d.domain || '') + '</code></td>' +
-        '<td>' + (d.verified ? '<span class="badge badge-success">verified</span>' : '<span class="badge badge-warning">waiting</span>') + '</td>' +
+        : (keyed ? '<span class="badge badge-success">signing key set</span>'
+                 : '<span class="badge badge-warning">no key — inbound refused</span>');
+      html += '<tr><td><code>' + escapeHtml(d.domain || '') + '</code></td>' +
+        '<td>' + (d.verified ? '<span class="badge badge-success">verified</span>' : '<span class="badge badge-warning">waiting on DNS</span>') + '</td>' +
         '<td>' + receiving + '</td>' +
-        '<td>' + (d.catch_all_enabled ? 'on' : 'off') + '</td>' +
-        '<td style="white-space:nowrap">' +
-          '<button class="btn btn-primary btn-xs" onclick="peiSetKey(\'' + d.id + '\')">' + (keyed ? 'Rotate key' : 'Set key') + '</button> ' +
-          '<button class="btn btn-secondary btn-xs" onclick="peiVerifyDomain(\'' + d.id + '\')">Re-check</button> ' +
-          '<button class="btn btn-ghost btn-xs" onclick="peiShowRecords(\'' + d.id + '\')">Where mail posts &amp; DNS</button>' +
-        '</td></tr>';
+        '<td>' + (d.catch_all_enabled ? 'on ' + btn('turn off', 'btn-ghost', 'catch-off', d.id)
+                                     : 'off ' + btn('turn on', 'btn-ghost', 'catch-on', d.id)) + '</td>' +
+        '<td style="white-space:nowrap">' + btn(keyed ? 'Rotate key' : 'Set key', 'btn-primary', 'set-key', d.id) + ' ' +
+        btn('Re-check', 'btn-secondary', 'verify', d.id) + '</td></tr>';
     });
-    rows += '</tbody></table>';
+    html += '</tbody></table>';
   }
 
-  const html = '<div class="card"><strong>Domains &amp; receiving — this workspace</strong>' +
-    '<div style="margin-top:8px">' + rows + '</div>' +
-    '<div style="margin-top:10px;font-size:12px;opacity:.75">' +
-    'Addresses you can reply from: ' + (boxes.length ? boxes.join(', ') : 'none yet') + '. ' +
-    'A domain with no signing key still SENDS; it cannot receive, because nothing proves an inbound delivery came from the provider. ' +
-    'The key is the domain&rsquo;s own value (Mailgun &rarr; Send &rarr; Domains &rarr; the domain &rarr; Webhook signing key) — a short value, not the longer sending API key.' +
-    '</div></div>';
+  html += '<div style="margin-top:10px;font-size:12px;opacity:.75">Addresses you can reply from: ' +
+    (boxes.length ? boxes.join(', ') : 'none yet') +
+    '. A domain with no signing key still SENDS; it cannot receive, because nothing proves an inbound delivery came from your provider.</div></div>';
+
+  const guideId = domains.length
+    ? ((PEI.guideDomain && domains.some(function (d) { return String(d.id) === String(PEI.guideDomain); })) ? PEI.guideDomain : domains[0].id)
+    : null;
+  PEI.guideDomain = guideId;
+  if (guideId) {
+    html += '<div id="peiGuide" style="margin-top:16px"><div class="card"><div class="loading-wrap"><div class="spinner"></div> Reading this domain&rsquo;s records from your provider...</div></div></div>';
+  }
   el.innerHTML = html;
+  if (guideId) peiLoadGuide(guideId);
 }
 
-// Paste (or rotate) the domain's inbound signing key. Same route the customer screen uses.
+// The numbered checklist plus the records, on the page. Each line is done or says exactly what to do.
+async function peiLoadGuide(domainId) {
+  const el = document.getElementById('peiGuide');
+  if (!el) return;
+  const d = (PEI.domains || []).filter(function (x) { return String(x.id) === String(domainId); })[0] || {};
+  let r = null;
+  try { r = await API.get('/private-email/domains/' + encodeURIComponent(domainId) + '/records'); } catch (e) { r = null; }
+  if (!r) { el.innerHTML = ''; return; }
+
+  const keyed = !!r.inbound_signing_key_configured;
+  const verified = !!d.verified;
+  const boxes = (PEI.boxes || []).filter(function (b) { return String(b.domain_id) === String(domainId); });
+  const line = function (n, ok, title, detail) {
+    return '<div style="display:flex;gap:10px;padding:9px 0;border-top:1px solid rgba(128,128,128,.18)">' +
+      '<div style="flex:0 0 22px;font-weight:700;color:' + (ok ? '#059669' : '#b45309') + '">' + (ok ? '&#10003;' : n) + '</div>' +
+      '<div style="flex:1"><strong>' + title + '</strong>' +
+      (detail ? '<div style="font-size:12.5px;opacity:.85;margin-top:2px">' + detail + '</div>' : '') +
+      '</div></div>';
+  };
+
+  let recRows = '';
+  (r.groups || []).forEach(function (g) {
+    if (g.key === 'branded') return;
+    (g.records || []).forEach(function (x) {
+      recRows += '<tr><td><strong>' + escapeHtml(x.type || '') + '</strong></td>' +
+        '<td><code style="word-break:break-all">' + escapeHtml(x.name || '') + '</code></td>' +
+        '<td><code style="word-break:break-all">' + escapeHtml(x.value || '') + '</code>' +
+        (x.purpose ? '<div style="font-size:11px;opacity:.7">' + escapeHtml(x.purpose) + '</div>' : '') + '</td>' +
+        '<td>' + (x.priority == null ? '' : escapeHtml(String(x.priority))) + '</td>' +
+        '<td>' + (x.valid === true ? '<span class="badge badge-success">active</span>'
+                 : x.valid === false ? '<span class="badge badge-warning">waiting</span>'
+                 : '<span class="badge">add this</span>') + '</td>' +
+        '<td><button class="btn btn-ghost btn-xs" data-copy="' + escapeHtmlAttr(x.value || '') + '">Copy</button></td></tr>';
+    });
+  });
+
+  el.innerHTML = '<div class="card"><strong>Set up ' + escapeHtml(d.domain || 'this domain') + '</strong>' +
+    '<div style="margin-top:6px">' +
+    line(1, true, 'Domain added', escapeHtml(d.domain || '')) +
+    line(2, verified, 'DNS records added and verified',
+      verified ? 'Your provider reports this domain as active.'
+               : 'Add the records below at your DNS host, then press Re-check. This is the step that usually takes longest — DNS can take a while to appear.') +
+    line(3, keyed, 'Inbound signing key set',
+      keyed ? 'Inbound deliveries are authenticated.'
+            : 'Without this the domain accepts nothing: your provider posts the mail and CoreSwift refuses it, because nothing proves where it came from.') +
+    line(4, boxes.length > 0, 'At least one mailbox',
+      boxes.length ? escapeHtml(boxes.map(function (b) { return b.email_address; }).join(', ')) : 'An address on this domain you can read and reply from.') +
+    line(5, keyed && verified && boxes.length > 0, 'Point your provider at the posting address',
+      'In Mailgun this domain&rsquo;s receiving forwards to the address below. It is the same address for every workspace.') +
+    '</div>' +
+    '<div style="margin-top:8px;font-size:12px;background:rgba(128,128,128,.08);padding:8px;border-radius:6px;word-break:break-all">' +
+    '<strong>Posting address:</strong> <code>' + escapeHtml(r.inbound_webhook_url || '') + '</code> ' +
+    '<button class="btn btn-ghost btn-xs" data-copy="' + escapeHtmlAttr(r.inbound_webhook_url || '') + '">Copy</button></div>' +
+    '<div style="margin-top:10px">' + '<button class="btn btn-primary btn-xs" data-pei="set-key" data-id="' + escapeHtmlAttr(domainId) + '">' + (keyed ? 'Rotate key' : 'Set key') + '</button> ' +
+    '<button class="btn btn-secondary btn-xs" data-pei="verify" data-id="' + escapeHtmlAttr(domainId) + '">Re-check</button> ' +
+    '<button class="btn btn-secondary btn-xs" data-pei="add-box">Add mailbox</button></div>' +
+    (recRows
+      ? '<h4 style="margin:16px 0 4px">The records to add</h4>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr style="text-align:left">' +
+        '<th>Type</th><th>Name</th><th>Value</th><th>Priority</th><th>Status</th><th></th></tr></thead><tbody>' +
+        recRows + '</tbody></table>' +
+        '<p style="font-size:12px;opacity:.7;margin-top:6px">Mail records stay DNS-only (grey cloud). Add them exactly as shown, then press Re-check.</p>'
+      : '<p style="font-size:12px;opacity:.8;margin-top:10px">Your provider reports no records for this domain — if it is verified there, DNS is already done.</p>') +
+    '</div>';
+}
+
+// One delegated listener for every control in this panel.
+document.addEventListener('click', function (ev) {
+  const t = ev.target.closest ? ev.target.closest('[data-pei]') : null;
+  if (!t) return;
+  const action = t.getAttribute('data-pei');
+  const id = t.getAttribute('data-id');
+  if (action === 'add-domain') peiAddDomain();
+  else if (action === 'add-box') peiAddBox();
+  else if (action === 'set-key') peiSetKey(id);
+  else if (action === 'verify') peiVerifyDomain(id);
+  else if (action === 'catch-on') peiCatchAll(id, true);
+  else if (action === 'catch-off') peiCatchAll(id, false);
+});
+
+function peiAddDomain() {
+  showModal('Add a domain',
+    '<p style="font-size:13px;opacity:.85">The domain you want to receive on. It must be in your Mailgun account, or addable with the key below.</p>' +
+    '<div class="form-group"><label>Domain</label><input id="peiNewDomain" placeholder="yourdomain.com" autocomplete="off" style="width:100%"></div>' +
+    '<div class="form-group"><label>Label (optional)</label><input id="peiNewLabel" placeholder="Support" autocomplete="off" style="width:100%"></div>' +
+    '<div class="form-group"><label>Mailgun API key</label><input id="peiNewKey" type="password" autocomplete="off" placeholder="key-... (Mailgun, Settings, API keys)" style="width:100%">' +
+    '<div style="font-size:12px;opacity:.75;margin-top:4px">Used to create and verify this domain. Stored sealed. Not the webhook signing key.</div></div>' +
+    '<div class="form-group"><label>Region</label><select id="peiNewRegion"><option value="us">US</option><option value="eu">EU</option></select></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="peiSaveDomain()">Add domain</button>');
+}
+
+async function peiSaveDomain() {
+  const domain = (document.getElementById('peiNewDomain').value || '').trim().toLowerCase();
+  const label = (document.getElementById('peiNewLabel').value || '').trim();
+  const apiKey = (document.getElementById('peiNewKey').value || '').trim();
+  const region = document.getElementById('peiNewRegion').value || 'us';
+  if (!domain) { toast('Enter the domain.', 'error'); return; }
+  if (!apiKey) { toast('Paste the Mailgun API key for this account.', 'error'); return; }
+  try {
+    const body = { domain: domain, mailgun_api_key: apiKey, mailgun_region: region };
+    if (label) body.label = label;
+    const r = await API.post('/private-email/domains', body);
+    closeModal();
+    toast('Domain added. The records to add are on the page now.');
+    const d = (r && (r.domain || r)) || {};
+    if (d.id) PEI.guideDomain = d.id;
+    loadPrivateEmailTab();
+  } catch (e) { toast('Could not add the domain: ' + (planGateText(e) || e.message), 'error'); }
+}
+
+function peiAddBox() {
+  const domains = PEI.domains || [];
+  const opts = domains.map(function (d) { return '<option value="' + escapeHtmlAttr(d.id) + '">' + escapeHtml(d.domain || '') + '</option>'; }).join('');
+  showModal('Add a mailbox',
+    '<div class="form-group"><label>Domain</label><select id="peiBoxDomain" style="width:100%">' + opts + '</select></div>' +
+    '<div class="form-group"><label>Address (before the @)</label><input id="peiBoxLocal" placeholder="support" autocomplete="off" style="width:100%"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="peiSaveBox()">Add mailbox</button>');
+}
+
+async function peiSaveBox() {
+  const domainId = document.getElementById('peiBoxDomain').value;
+  const local = (document.getElementById('peiBoxLocal').value || '').trim().toLowerCase();
+  if (!local) { toast('Enter the address part before the @.', 'error'); return; }
+  try {
+    await API.post('/private-email/boxes', { domain_id: domainId, local_part: local });
+    closeModal();
+    toast('Mailbox added.');
+    loadPrivateEmailTab();
+  } catch (e) { toast('Could not add the mailbox: ' + (planGateText(e) || e.message), 'error'); }
+}
+
+async function peiCatchAll(domainId, want) {
+  try {
+    await API.patch('/private-email/domains/' + encodeURIComponent(domainId), { catch_all_enabled: !!want });
+    toast(want ? 'Catch-all on — every address on that domain now arrives.' : 'Catch-all off.');
+    loadPrivateEmailTab();
+  } catch (e) { toast(planGateText(e) || e.message, 'error'); }
+}
+
+// Paste (or rotate) the inbound signing key.
 function peiSetKey(domainId) {
   const d = (PEI.domains || []).filter(function (x) { return String(x.id) === String(domainId); })[0] || {};
   const dom = d.domain || 'this domain';
   showModal('Inbound signing key — ' + escapeHtml(dom),
-    '<p style="font-size:13px;opacity:.85">Mailgun signs every inbound delivery with this domain&rsquo;s key. Paste it here and CoreSwift can verify what arrives. Without it, every delivery for this domain is refused.</p>' +
-    '<div class="form-group"><label>Webhook signing key for ' + escapeHtml(dom) + '</label>' +
-    '<input id="peiKeyInput" type="password" autocomplete="off" placeholder="paste the key from the domain&rsquo;s Mailgun settings" style="width:100%"></div>' +
+    '<p style="font-size:13px;opacity:.85">Mailgun signs every inbound delivery with your account&rsquo;s <strong>HTTP webhook signing key</strong> (Mailgun &rarr; Settings &rarr; API Security &rarr; Show). It is account-wide, so one value covers every domain. Without it, every delivery for this domain is refused.</p>' +
+    '<div class="form-group"><label>Webhook signing key</label><input id="peiKeyInput" type="password" autocomplete="off" style="width:100%"></div>' +
     (d.webhook_signing_key_status === 'usable'
-      ? '<p style="font-size:12px;opacity:.75">A key is stored (' + escapeHtml(String(d.webhook_signing_key_length || 0)) + ' characters). It is never shown again — saving a new one rotates it.</p>'
-      : ''),
+      ? '<p style="font-size:12px;opacity:.75">A key is stored (' + escapeHtml(String(d.webhook_signing_key_length || 0)) + ' characters). Saving a new one rotates it.</p>' : ''),
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
-    '<button class="btn btn-primary" onclick="peiSaveKey(\'' + domainId + '\')">Save key</button>');
+    '<button class="btn btn-primary" onclick="peiSaveKey()">Save key</button>');
+  window.__peiKeyDomain = domainId;
 }
 
-async function peiSaveKey(domainId) {
+async function peiSaveKey() {
+  const domainId = window.__peiKeyDomain;
   const input = document.getElementById('peiKeyInput');
   const value = (input && input.value || '').trim();
   if (!value) { toast('Paste the key first.', 'error'); return; }
@@ -7931,43 +8091,12 @@ async function peiSaveKey(domainId) {
   } catch (e) { toast('Could not save the key: ' + (planGateText(e) || e.message), 'error'); }
 }
 
-// Re-read the provider's own state for this domain (verification can land after it was added).
 async function peiVerifyDomain(domainId) {
   try {
     await API.post('/private-email/domains/' + encodeURIComponent(domainId) + '/verify', {});
     toast('Re-checked with the provider.');
     loadPrivateEmailTab();
   } catch (e) { toast('Re-check failed: ' + (planGateText(e) || e.message), 'error'); }
-}
-
-// The records to add AND the address the provider must post to — with the key state beside it.
-async function peiShowRecords(domainId) {
-  showModal('Mail for this domain',
-    '<div id="peiRecBody"><div class="loading-wrap"><div class="spinner"></div> Asking the provider...</div></div>',
-    '<button class="btn btn-secondary" onclick="closeModal()">Close</button>');
-  const body = document.getElementById('peiRecBody');
-  try {
-    const r = await API.get('/private-email/domains/' + encodeURIComponent(domainId) + '/records');
-    let html = '';
-    if (r && r.inbound_webhook_url) {
-      html += '<div class="form-group"><label>Where the provider posts incoming mail</label>' +
-        '<code style="word-break:break-all">' + escapeHtml(r.inbound_webhook_url) + '</code>' +
-        '<button class="btn btn-ghost btn-xs" data-copy="' + escapeHtmlAttr(r.inbound_webhook_url) + '">Copy</button></div>' +
-        '<p style="font-size:12px;opacity:.8">Signing key: <strong>' + (r.inbound_signing_key_configured ? 'set' : 'not set — inbound refused') + '</strong></p>';
-    }
-    const groups = (r && r.groups) || [];
-    groups.forEach(function (g) {
-      const recs = (g.records || []).map(function (x) {
-        return '<tr><td>' + escapeHtml(x.type || '') + '</td><td><code style="word-break:break-all">' + escapeHtml(x.name || '') +
-          '</code></td><td><code style="word-break:break-all">' + escapeHtml(x.value || '') + '</code></td></tr>';
-      }).join('');
-      html += '<h4 style="margin:14px 0 4px">' + escapeHtml(g.title || 'Records') + '</h4>' +
-        (recs ? '<table style="width:100%;font-size:12px"><tbody>' + recs + '</tbody></table>' : '<p style="font-size:12px;opacity:.75">The provider reports no records for this group.</p>');
-    });
-    body.innerHTML = html || '<p>The provider returned nothing for this domain.</p>';
-  } catch (e) {
-    body.innerHTML = '<p style="color:#b91c1c">Could not read the records: ' + escapeHtml(planGateText(e) || e.message) + '</p>';
-  }
 }
 
 async function peiOpen(id) {
