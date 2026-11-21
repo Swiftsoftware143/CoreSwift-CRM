@@ -32,6 +32,35 @@
   --shadow-sm:0 1px 2px rgba(0,0,0,.3);--shadow:0 4px 12px rgba(0,0,0,.4);
   --shadow-lg:0 8px 32px rgba(0,0,0,.5);
 }
+/* ── DAY MODE (David, 2026-11-21: "make sure all the apps have night and day mode so it doesn't
+   always have to be so black"). One attribute on <html> swaps every surface, because the whole console
+   is already painted from these variables — no rule below has to know which theme is active. Chosen for
+   readability in daylight: near-white page, white cards, near-black text, and a slightly deeper accent
+   so the primary buttons keep their contrast against a light background. */
+html[data-theme="light"]{
+  --bg-primary:#f6f7fb;--bg-secondary:#eef0f6;--bg-card:#ffffff;
+  --bg-hover:#e9ecf4;--bg-active:#dfe3f2;
+  --text-primary:#16181d;--text-secondary:#4b5563;--text-muted:#77808f;
+  --accent:#4f46e5;--accent-hover:#4338ca;--accent-subtle:rgba(79,70,229,.10);
+  --success:#15803d;--warning:#b45309;--error:#b91c1c;
+  --border:#dde1ea;--border-light:#c9cfdb;
+  --shadow-sm:0 1px 2px rgba(16,24,40,.06);--shadow:0 4px 12px rgba(16,24,40,.08);
+  --shadow-lg:0 8px 32px rgba(16,24,40,.12);
+}
+html[data-theme="light"] body{background:var(--bg-primary);color:var(--text-primary)}
+html[data-theme="light"] img,
+html[data-theme="light"] svg{color-scheme:light}
+html[data-theme="light"] .sidebar,
+html[data-theme="light"] .topbar,
+html[data-theme="light"] .card,
+html[data-theme="light"] .modal,
+html[data-theme="light"] .table-wrap,
+html[data-theme="light"] input,
+html[data-theme="light"] select,
+html[data-theme="light"] textarea,
+html[data-theme="light"] pre{color-scheme:light}
+html{color-scheme:dark}
+html[data-theme="light"]{color-scheme:light}
 body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg-primary);color:var(--text-primary);display:flex;min-height:100vh;overflow:hidden;line-height:1.5}
 a{color:var(--accent);text-decoration:none}
 a:hover{color:var(--accent-hover)}
@@ -305,7 +334,10 @@ tr:hover td{background:var(--bg-hover)}
     .bk-flash.good { color:#059669; }
     .bk-flash.bad { color:#dc2626; }
 </style>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/favicon.svg"></head>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/favicon.svg"><script id="theme-boot">/* Day/night, applied before first paint (see themeApply below). */
+(function(){try{var t=localStorage.getItem('crm_theme');if(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)t='light';document.documentElement.setAttribute('data-theme',t==='light'?'light':'dark');}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();
+</script>
+</head>
 <body>
 
 
@@ -365,6 +397,10 @@ tr:hover td{background:var(--bg-hover)}
         <span class="nav-icon">✨</span>
         <span class="nav-text">What's new</span>
       </a>
+      <button class="collapse-btn" onclick="themeToggle()" title="Switch day / night mode">
+        <span class="nav-icon" id="themeToggleSide">🌙</span>
+        <span class="nav-text">Day / night</span>
+      </button>
       <button class="collapse-btn" onclick="toggleSidebar()">
         <span id="collapseIcon">◀</span>
         <span class="nav-text">Collapse</span>
@@ -379,6 +415,7 @@ tr:hover td{background:var(--bg-hover)}
         <span class="header-title" id="pageTitle">Dashboard</span>
       </div>
       <div class="header-right">
+        <button id="themeToggle" class="btn btn-ghost btn-sm" onclick="themeToggle()" title="Switch day / night mode" style="margin-right:6px">🌙</button>
         <button class="user-btn" id="notifBell" onclick="switchTab('notifications')" title="Notifications">
           <span style="font-size:1rem">🔔</span>
           <span id="notifBadge" style="display:none;margin-left:2px;background:var(--error,#e5484d);color:#fff;border-radius:9px;padding:1px 6px;font-size:.68rem;font-weight:600">0</span>
@@ -785,6 +822,32 @@ async function doLogin() {
     loginBusy = false;
   }
 }
+
+// ── NIGHT / DAY MODE (David, 2026-11-21) ─────────────────────────────────────────────────────────
+// The theme is one attribute on <html>, so every screen follows without a single component knowing
+// about it. It is read from storage and applied in the <head> BEFORE the body paints: without that,
+// a person who chose day mode gets a black flash on every reload, which reads as a broken setting.
+var THEME_KEY = 'crm_theme';
+function themeApply(name) {
+  var t = (name === 'light') ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', t);
+  try { localStorage.setItem(THEME_KEY, t); } catch (e) {}
+  var b = document.getElementById('themeToggle');
+  if (b) { b.textContent = (t === 'light') ? '\uD83C\uDF19' : '\uD83C\uDF12'; b.title = (t === 'light') ? 'Switch to night mode' : 'Switch to day mode'; }
+  var s2 = document.getElementById('themeToggleSide');
+  if (s2) s2.textContent = (t === 'light') ? '\uD83C\uDF19' : '\uD83C\uDF12';
+}
+function themeToggle() {
+  themeApply(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
+}
+(function themeBoot() {
+  var saved = null;
+  try { saved = localStorage.getItem(THEME_KEY); } catch (e) {}
+  // No choice stored yet: follow the operating system, so a Mac or Windows user in light mode is not
+  // handed a black console on their first visit.
+  if (!saved && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) saved = 'light';
+  document.documentElement.setAttribute('data-theme', saved === 'light' ? 'light' : 'dark');
+})();
 
 function logout(silent) {
   // Server-side session invalidation. POST /api/auth/logout blacklists this token in
@@ -1690,6 +1753,10 @@ const TAB_RENDERERS = {
         '<div style="color:var(--text-secondary);font-size:13px">' + body + '</div>' + (extra || '') + '</div></div>';
     }
 
+    // ORDER MATTERS AND IT IS THE REFERENCE ORDER (David, 2026-11-21): steps → the key → ready to
+    // connect with Test connection → how it works → the questions → ideas → what it can read → what it
+    // will not do → developer drawer. The key and the test sit ABOVE the questions, because a person
+    // setting this up needs the credential before they care what they can ask.
     return pageHeader('Connect AI with CoreSwift',
         'Ask Claude or ChatGPT about your contacts, tags and deals — and have it find things for you') +
 
@@ -1704,21 +1771,22 @@ const TAB_RENDERERS = {
           'For ChatGPT and Claude on the web. There is no app to install: you give your AI client this account&#39;s ' +
           'API key so every answer is scoped to <strong>your</strong> data and nobody else&#39;s.</p>' +
         '<div id="mcpSteps"></div>' +
-        '<div style="margin-top:6px;padding:12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-secondary)">' +
-          '<div style="font-weight:600;margin-bottom:4px">Ready to connect</div>' +
-          '<div style="font-size:13px;color:var(--text-secondary);margin-bottom:10px">Your account: <strong id="mcpAccountEmail">this account</strong></div>' +
-          '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-            '<button class="btn btn-primary btn-sm" onclick="mcpJumpTo(\'mcpKeyWrap\')">View &amp; copy my key</button>' +
-            '<button class="btn btn-secondary btn-sm" onclick="mcpCheckServer(this)">Test connection</button>' +
-            '<button class="btn btn-secondary btn-sm" onclick="tlCopyUrl(MCP_CONFIG_TEXT, this)">Copy my setup</button>' +
-            '<button class="btn btn-ghost btn-sm" onclick="mcpJumpTo(\'mcpAdvanced\')">Advanced setup</button>' +
-          '</div>' +
-          '<div id="mcpCheckOut" style="font-size:12px;color:var(--text-muted);margin-top:8px"></div>' +
-        '</div>') +
+        '') +
 
       // ── the key itself, in its own card so it is impossible to miss
       card('Your API key',
         '<div id="mcpKeyWrap"><div class="loading-wrap"><div class="spinner"></div> Loading your API key...</div></div>') +
+
+      card('Ready to connect',
+        '<p style="color:var(--text-secondary);font-size:13px;margin:0 0 10px">Your account: <strong id="mcpAccountEmail">this account</strong>' +
+        ' — the AI reads this account and no other.</p>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+          '<button class="btn btn-primary btn-sm" onclick="mcpJumpTo(\'mcpKeyWrap\')">View &amp; copy my key</button>' +
+          '<button class="btn btn-secondary btn-sm" onclick="mcpCheckServer(this)">Test connection</button>' +
+          '<button class="btn btn-secondary btn-sm" onclick="tlCopyUrl(MCP_CONFIG_TEXT, this)">Copy my setup</button>' +
+          '<button class="btn btn-ghost btn-sm" onclick="mcpJumpTo(\'mcpAdvanced\')">Advanced setup</button>' +
+        '</div>' +
+        '<div id="mcpCheckOut" style="font-size:12px;color:var(--text-muted);margin-top:8px"></div>') +
 
       card('How the connection works',
         '<p style="color:var(--text-secondary);font-size:13px;margin:0;max-width:70ch">We do not keep a list of the apps you have ' +
@@ -1730,8 +1798,10 @@ const TAB_RENDERERS = {
         label('WHAT CAN I ASK CORESWIFT?') +
         '<p style="color:var(--text-secondary);margin-bottom:12px;max-width:70ch">Say any of these — or anything like them — to your AI app. ' +
         'Every one is a question, because this connection reads and never writes.</p>' +
-        label('FIND &amp; MANAGE') +
-        twoColumns([
+        label('WHAT CAN I ASK CORESWIFT?') +
+        '<p style="color:var(--text-secondary);margin-bottom:10px;max-width:70ch">Say any of these — or anything like them — to your AI app. ' +
+        'Open a group to see the questions; every one is a question, because this connection reads and never writes.</p>' +
+        mcpAccordion('Find &amp; manage', 'Who is in your account, what carries which tag, which deals are where', [
           'Show me my contacts.',
           'Find the contact with the email jane@example.com.',
           'What tags do I have, and how many people are on each?',
@@ -1739,8 +1809,7 @@ const TAB_RENDERERS = {
           'Which deals are sitting in the Booked stage?',
           'Which support tickets are still waiting for a reply?'
         ]) +
-        '<div style="height:14px"></div>' + label('LOOK AT MY BUSINESS') +
-        twoColumns([
+        mcpAccordion('Look at my business', 'Ask it to read the account and tell you what it finds', [
           'Summarise the health of my contact list.',
           'Which of my contacts have gone quiet, and what should I do about them?',
           'What bookings came in this week?',
@@ -1748,8 +1817,7 @@ const TAB_RENDERERS = {
           'Compare my Hot Leads list with my VIP Customer tag — who is in both?',
           'Which deals did we lose this month?'
         ]) +
-        '<div style="height:14px"></div>' + label('MAIL &amp; DELIVERY') +
-        twoColumns([
+        mcpAccordion('Mail &amp; delivery', 'Domains, campaigns, and who asked not to be written to', [
           'Is my sending domain verified?',
           'What did the last few customers write to us about?',
           'Which campaigns are running, and who is enrolled in them?',
@@ -3710,6 +3778,31 @@ function mcpPaintSteps() {
     step(4, 'Save it, then ask a question.',
       'Try “What bookings came in this week?” If nothing is offered as a tool, the key is the thing to replace.');
   host.innerHTML = (MCP_CLIENT === 'chatgpt') ? chatgpt : claude;
+}
+
+
+// The example questions live in accordions (David, 2026-11-21): three open groups of six cards made the
+// page very long, and a person scanning for "what can I ask" wants the headings first, not the wall.
+// Inside each group the questions keep the two-column layout and their own Copy buttons.
+function mcpAccordion(title, hint, items) {
+  function card(q) {
+    return '<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;' +
+      'padding:9px 11px;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:7px">' +
+      '<span style="font-size:13px">' + escapeHtml(q) + '</span>' +
+      '<button class="btn btn-ghost btn-xs" onclick="tlCopyUrl(' + JSON.stringify(q).replace(/"/g, '&quot;') + ', this)">Copy</button></div>';
+  }
+  var left = items.filter(function (_, i) { return i % 2 === 0; }).map(card).join('');
+  var right = items.filter(function (_, i) { return i % 2 === 1; }).map(card).join('');
+  return '<details style="border-bottom:1px solid var(--border);padding:10px 0">' +
+    '<summary style="cursor:pointer;display:flex;align-items:center;gap:10px;flex-wrap:wrap">' +
+      '<span style="font-weight:600">' + title + '</span>' +
+      '<span style="color:var(--text-muted);font-size:12px">' + items.length + ' questions</span>' +
+      '<span style="flex:1"></span>' +
+      '<span style="color:var(--text-secondary);font-size:12px">' + hint + '</span>' +
+    '</summary>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">' +
+      '<div>' + left + '</div><div>' + right + '</div>' +
+    '</div></details>';
 }
 
 function mcpJumpTo(id) {

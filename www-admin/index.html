@@ -18,6 +18,35 @@
   --shadow-sm:0 1px 2px rgba(0,0,0,.3);--shadow:0 4px 12px rgba(0,0,0,.4);
   --shadow-lg:0 8px 32px rgba(0,0,0,.5);
 }
+/* ── DAY MODE (David, 2026-11-21: "make sure all the apps have night and day mode so it doesn't
+   always have to be so black"). One attribute on <html> swaps every surface, because the whole console
+   is already painted from these variables — no rule below has to know which theme is active. Chosen for
+   readability in daylight: near-white page, white cards, near-black text, and a slightly deeper accent
+   so the primary buttons keep their contrast against a light background. */
+html[data-theme="light"]{
+  --bg-primary:#f6f7fb;--bg-secondary:#eef0f6;--bg-card:#ffffff;
+  --bg-hover:#e9ecf4;--bg-active:#dfe3f2;
+  --text-primary:#16181d;--text-secondary:#4b5563;--text-muted:#77808f;
+  --accent:#4f46e5;--accent-hover:#4338ca;--accent-subtle:rgba(79,70,229,.10);
+  --success:#15803d;--warning:#b45309;--error:#b91c1c;
+  --border:#dde1ea;--border-light:#c9cfdb;
+  --shadow-sm:0 1px 2px rgba(16,24,40,.06);--shadow:0 4px 12px rgba(16,24,40,.08);
+  --shadow-lg:0 8px 32px rgba(16,24,40,.12);
+}
+html[data-theme="light"] body{background:var(--bg-primary);color:var(--text-primary)}
+html[data-theme="light"] img,
+html[data-theme="light"] svg{color-scheme:light}
+html[data-theme="light"] .sidebar,
+html[data-theme="light"] .topbar,
+html[data-theme="light"] .card,
+html[data-theme="light"] .modal,
+html[data-theme="light"] .table-wrap,
+html[data-theme="light"] input,
+html[data-theme="light"] select,
+html[data-theme="light"] textarea,
+html[data-theme="light"] pre{color-scheme:light}
+html{color-scheme:dark}
+html[data-theme="light"]{color-scheme:light}
 body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg-primary);color:var(--text-primary);display:flex;min-height:100vh;overflow:hidden;line-height:1.5}
 a{color:var(--accent);text-decoration:none}
 a:hover{color:var(--accent-hover)}
@@ -293,7 +322,10 @@ tr:hover td{background:var(--bg-hover)}
 
 .hidden{display:none!important}
 </style>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/favicon.svg"></head>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/favicon.svg"><script id="theme-boot">/* Day/night, applied before first paint (see themeApply below). */
+(function(){try{var t=localStorage.getItem('crm_theme');if(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)t='light';document.documentElement.setAttribute('data-theme',t==='light'?'light':'dark');}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();
+</script>
+</head>
 <body>
 
 
@@ -370,6 +402,7 @@ tr:hover td{background:var(--bg-hover)}
         <span class="header-title" id="pageTitle">Dashboard</span>
       </div>
       <div class="header-right">
+      <button id="themeToggle" class="btn btn-ghost btn-sm" onclick="themeToggle()" title="Switch day / night mode" style="margin-right:6px">🌙</button>
         <div class="dropdown">
           <button class="user-btn" onclick="toggleUserMenu()">
             <div class="avatar" id="userAvatar">S</div>
@@ -1168,6 +1201,32 @@ async function doLogin() {
     loginBusy = false;
   }
 }
+
+// ── NIGHT / DAY MODE (David, 2026-11-21) ─────────────────────────────────────────────────────────
+// The theme is one attribute on <html>, so every screen follows without a single component knowing
+// about it. It is read from storage and applied in the <head> BEFORE the body paints: without that,
+// a person who chose day mode gets a black flash on every reload, which reads as a broken setting.
+var THEME_KEY = 'crm_theme';
+function themeApply(name) {
+  var t = (name === 'light') ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', t);
+  try { localStorage.setItem(THEME_KEY, t); } catch (e) {}
+  var b = document.getElementById('themeToggle');
+  if (b) { b.textContent = (t === 'light') ? '\uD83C\uDF19' : '\uD83C\uDF12'; b.title = (t === 'light') ? 'Switch to night mode' : 'Switch to day mode'; }
+  var s2 = document.getElementById('themeToggleSide');
+  if (s2) s2.textContent = (t === 'light') ? '\uD83C\uDF19' : '\uD83C\uDF12';
+}
+function themeToggle() {
+  themeApply(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
+}
+(function themeBoot() {
+  var saved = null;
+  try { saved = localStorage.getItem(THEME_KEY); } catch (e) {}
+  // No choice stored yet: follow the operating system, so a Mac or Windows user in light mode is not
+  // handed a black console on their first visit.
+  if (!saved && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) saved = 'light';
+  document.documentElement.setAttribute('data-theme', saved === 'light' ? 'light' : 'dark');
+})();
 
 function logout(silent) {
   STATE.token = null;
