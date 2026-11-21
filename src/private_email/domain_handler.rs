@@ -803,11 +803,58 @@ pub async fn update_domain(
         current.ok_or_else(|| AppError::NotFound("Domain not found".into()))?;
     let next_provider = receiving.clone().unwrap_or(current_provider);
 
+    // HOW IT SENDS (kanban B208). Three real choices, each with code behind it: Mailgun's API,
+    // SMTP.com's HTTP API, and `smtp_relay` — the customer's own mail server. Anything else is
+    // refused here rather than stored, because a provider token with no arm behind it would leave
+    // every send failing with "unknown email provider" while the panel claimed the domain was set.
+    if let Some(p) = req.sending_provider.as_deref().map(str::trim) {
+        if !matches!(p, "mailgun" | "smtp" | "smtp_relay") {
+            return Err(AppError::Validation(
+                "sending_provider must be one of: mailgun, smtp, smtp_relay.".to_string(),
+            ));
+        }
+        if p == "smtp_relay" {
+            let host_now = req
+                .smtp_host
+                .as_deref()
+                .map(str::trim)
+                .filter(|h| !h.is_empty())
+                .map(str::to_string);
+            if host_now.is_none() {
+                // Refused, not saved-and-unusable: a relay with no host makes every automation send
+                // fail, and the panel would look configured.
+                // `smtp_host` is NULL on a Mailgun domain, so the column decodes as an Option — asking for a
+                // plain String answered 500 "unexpected null" (measured live 2026-11-21).
+                let stored: Option<String> = sqlx::query_scalar::<_, Option<String>>(
+                    "SELECT smtp_host FROM private_email_domains WHERE id = $1 AND tenant_id = $2",
+                )
+                .bind(domain_id)
+                .bind(account_id)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(AppError::Database)?
+                .flatten();
+                if stored.unwrap_or_default().trim().is_empty() {
+                    return Err(AppError::Validation(
+                        "Sending through your own mail server needs its host — for example \
+                         smtp.postmarkapp.com. Nothing was saved."
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+    }
+
     // THE SECOND DOOR (kanban t_04db9228): adding a Mailgun-receiving domain without its signing key
     // is refused on the create path, so switching an existing domain TO Mailgun without one must be
     // refused the same way — otherwise the switch succeeds, the panel says "receiving: Mailgun", and
     // every delivery is then refused by the receiver with a message about a key nobody was asked for.
-    if next_provider == "mailgun" {
+    // ONLY WHEN RECEIVING IS BEING SWITCHED (measured live 2026-11-21): this guard runs on
+    // `next_provider`, which equals the CURRENT value when the request says nothing about receiving.
+    // So changing only the SENDING transport was refused for want of an inbound webhook key, on a
+    // domain that already receives fine on the platform token. A choice nobody made must not require
+    // a credential.
+    if receiving.is_some() && next_provider == "mailgun" {
         let stored_key_works = current_hook_key
             .as_deref()
             .filter(|k| !k.trim().is_empty())
@@ -847,6 +894,11 @@ pub async fn update_domain(
             inbound_provider = $10,
             inbound_mode = $11,
             inbound_token = $12,
+            provider_type = COALESCE($13, provider_type),
+            smtp_host = COALESCE($14, smtp_host),
+            smtp_port = COALESCE($15, smtp_port),
+            smtp_username = COALESCE($16, smtp_username),
+            smtp_tls = COALESCE($17, smtp_tls),
             updated_at = NOW()
         WHERE id = $1 AND tenant_id = $2
         RETURNING *
@@ -864,6 +916,28 @@ pub async fn update_domain(
     .bind(&next_provider)
     .bind(next_mode)
     .bind(&next_token)
+    // The five sending columns (kanban B208): a trimmed, non-empty value replaces what is stored;
+    // empty/omitted keeps it, the same convention every credential write in this app follows.
+    .bind(
+        req.sending_provider
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty()),
+    )
+    .bind(
+        req.smtp_host
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty()),
+    )
+    .bind(req.smtp_port)
+    .bind(
+        req.smtp_username
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty()),
+    )
+    .bind(req.smtp_tls)
     .fetch_optional(&state.db)
     .await
     .map_err(AppError::Database)?;

@@ -10928,6 +10928,7 @@ function inboxShell() {
     '<br>' +
     '<div id="peSupport"><div class="loading-wrap"><div class="spinner"></div> Loading support box...</div></div>' +
     '<br><div id="peDomains"><div class="loading-wrap"><div class="spinner"></div> Loading domains...</div></div>' +
+    '<div id="peRelay" style="margin-top:16px"></div>' +
     '<br><div id="peBoxes"></div>' +
     // EVERY MESSAGE, WHICHEVER ADDRESS IT CAME TO (David, 2026-11-15). This panel is the reason the work
     // order exists: mail to info@ and david@ was stored and then invisible, because the only place mail
@@ -11716,6 +11717,94 @@ async function peSend() {
 // (validate_mailgun_domain does GET /v3/domains/<domain> with that key), so a platform-wide key is
 // not an option for a customer's own domain; when Mailgun RECEIVES only, the same key is used to
 // show and re-check the domain's records — the copy under the field says which of the two it is.
+
+// ── HOW THIS ACCOUNT SENDS (kanban B208, 2026-11-21) ─────────────────────────────────────────────
+// The send path has carried three transports for a while — Mailgun's API, SMTP.com's HTTP API, and a
+// generic SMTP relay — but nothing in the product could CHOOSE one, so an account was tied to Mailgun
+// by the absence of a control rather than on purpose. This is that control: point a verified domain at
+// your own server (Amazon SES, Postmark, Google Workspace, your host) and every automation, campaign
+// and receipt for that domain leaves through it instead.
+async function peRenderRelay() {
+  const el = document.getElementById('peRelay');
+  if (!el) return;
+  let domains = [];
+  try { const d = await API.get('/private-email/domains'); domains = Array.isArray(d) ? d : ((d && (d.items || d.domains)) || []); } catch (e) { el.innerHTML = ''; return; }
+  if (!domains.length) { el.innerHTML = ''; return; }
+  const rows = domains.map(function (d) {
+    const name = d.domain || d.name || '';
+    const how = d.provider_type || d.sending_provider || 'mailgun';
+    const label = how === 'smtp_relay' ? '<span class="badge badge-success">your own mail server</span>'
+      : how === 'smtp' ? '<span class="badge badge-muted">SMTP.com (vendor)</span>'
+      : '<span class="badge badge-muted">Mailgun</span>';
+    return '<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--border,#2a2a2a)">' +
+      '<strong style="flex:1;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(name) + '</strong>' + label +
+      '<button type="button" class="btn btn-ghost btn-xs" data-perelay="' + escapeHtmlAttr(String(d.id)) + '" data-pedomain="' + escapeHtmlAttr(name) + '">Change</button>' +
+      '</div>';
+  }).join('');
+  el.innerHTML = card('How this account sends',
+    '<p style="color:var(--text-secondary);margin:0 0 10px">Mail can leave through Mailgun or through <strong>your own mail server</strong> — Amazon SES, Postmark, Google Workspace, or any SMTP host you already pay for. Switching moves nothing else: your inboxes, history and records stay exactly where they are.</p>' +
+    rows +
+    '<p style="color:var(--text-secondary);font-size:12px;margin:12px 0 0">A domain on your own server needs the DNS records your new provider gives you; the records table above belongs to Mailgun.</p>');
+}
+
+function peRelayModal(domainId, domainName) {
+  const cur = (PE.domains || []).find(function (d) { return String(d.id) === String(domainId); }) || {};
+  const how = cur.provider_type || cur.sending_provider || 'mailgun';
+  showModal('How ' + domainName + ' sends',
+    '<div class="form-group"><label>Transport</label><select id="peRelayKind" onchange="peRelayFields()">' +
+      '<option value="mailgun"' + (how === 'mailgun' ? ' selected' : '') + '>Mailgun (its API)</option>' +
+      '<option value="smtp_relay"' + (how === 'smtp_relay' ? ' selected' : '') + '>My own mail server (SMTP)</option>' +
+    '</select></div>' +
+    '<div id="peRelayBody">' +
+    '<p style="color:var(--text-secondary);font-size:12px;margin:0 0 10px">Your server needs a host, a username and a password. If the username is an email address, the From uses that address.</p>' +
+    '<div class="form-group"><label>Host</label><input type="text" id="peRelayHost" placeholder="smtp.postmarkapp.com"></div>' +
+    '<div class="form-group"><label>Port</label><input type="number" id="peRelayPort" placeholder="587" min="1" max="65535"></div>' +
+    '<div class="form-group"><label>Username</label><input type="text" id="peRelayUser" placeholder="often your sending address"></div>' +
+    '<div class="form-group"><label>Password</label><input type="password" id="peRelayPass" placeholder="leave blank to keep the stored one"></div>' +
+    '<label style="display:flex;gap:8px;align-items:center;font-size:13px"><input type="checkbox" id="peRelayTls" checked> Use TLS (STARTTLS)</label>' +
+    '</div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="peRelaySave">Save</button>');
+  peRelayFields();
+  const save = document.getElementById('peRelaySave');
+  if (save) save.onclick = function () { peRelaySave(domainId); };
+}
+
+function peRelayFields() {
+  const k = document.getElementById('peRelayKind');
+  const body = document.getElementById('peRelayBody');
+  if (k && body) body.style.display = (k.value === 'smtp_relay') ? '' : 'none';
+}
+
+async function peRelaySave(domainId) {
+  const kind = document.getElementById('peRelayKind').value;
+  const payload = { sending_provider: kind };
+  if (kind === 'smtp_relay') {
+    const host = (document.getElementById('peRelayHost').value || '').trim();
+    const port = (document.getElementById('peRelayPort').value || '').trim();
+    const user = (document.getElementById('peRelayUser').value || '').trim();
+    const pass = (document.getElementById('peRelayPass').value || '').trim();
+    if (!host) { toast('Your server needs a host — for example smtp.postmarkapp.com', 'error'); return; }
+    payload.smtp_host = host;
+    if (port) payload.smtp_port = parseInt(port, 10);
+    if (user) payload.smtp_username = user;
+    if (pass) payload.smtp_password = pass;
+    payload.smtp_tls = document.getElementById('peRelayTls').checked;
+  }
+  try {
+    await API.patch('/private-email/domains/' + encodeURIComponent(domainId), payload);
+    closeModal();
+    toast(kind === 'smtp_relay' ? 'This domain now sends through your own mail server' : 'This domain sends through Mailgun again', 'success');
+    peRenderRelay();
+  } catch (e) { toast('Could not change it: ' + (e.message || e), 'error'); }
+}
+
+document.addEventListener('click', function (ev) {
+  const t = ev.target; if (!t || !t.closest) return;
+  const b = t.closest('[data-perelay]');
+  if (b) { ev.preventDefault(); peRelayModal(b.getAttribute('data-perelay'), b.getAttribute('data-pedomain') || 'this domain'); }
+});
+
 function peProviderFields() {
   const p = document.getElementById('peNewProvider');
   if (!p) return;

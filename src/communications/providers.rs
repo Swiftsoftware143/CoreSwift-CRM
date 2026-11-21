@@ -413,6 +413,7 @@ pub fn platform_send_config(
         smtp_port: None,
         smtp_username: None,
         smtp_password: None,
+        smtp_tls: true,
         from_email: Some(mail.from.clone()),
         from_name: None,
         whatsapp_phone_number_id: None,
@@ -479,6 +480,9 @@ pub struct DeliveryConfig {
     pub smtp_port: Option<u16>,
     pub smtp_username: Option<String>,
     pub smtp_password: Option<String>,
+    /// STARTTLS for the customer's OWN relay (`smtp_relay`). Default true; a relay on port 25 or a
+    /// test sink says false explicitly. Vendor `smtp` (SMTP.com's HTTP API) ignores this.
+    pub smtp_tls: bool,
     pub from_email: Option<String>,
     pub from_name: Option<String>,
     pub whatsapp_phone_number_id: Option<String>,
@@ -724,6 +728,11 @@ async fn deliver_email(cfg: &DeliveryConfig, headers: &[(String, String)]) -> De
         // opt-out footer, which is what the law requires. The provider-level headers are a
         // Mailgun-only nicety (Gmail/Yahoo render a one-click button from them).
         "smtp" => deliver_via_smtp(cfg).await,
+        // THE CUSTOMER'S OWN MAIL SERVER (kanban B208, 2026-11-21). "smtp" above is the VENDOR
+        // SMTP.com's HTTP API; this arm speaks SMTP to whatever the account configured — Amazon SES,
+        // Postmark, Google Workspace, their own host — so an account is not tied to Mailgun or to one
+        // vendor. Same compliance gate, same pause switch, same log: only the transport differs.
+        "smtp_relay" => deliver_via_own_smtp(cfg).await,
         other => DeliveryOutcome::permanent(format!("Unknown email provider: {}", other)),
     }
 }
@@ -855,6 +864,105 @@ async fn deliver_via_mailgun(
 }
 
 /// Send email via SMTP.com REST API
+/// Deliver through the account's OWN SMTP server (kanban B208).
+///
+/// This is the arm that removes the lock-in: the account's sending domain says
+/// `provider_type = 'smtp_relay'` and carries its own host, port, user and password, and this sends
+/// with them. It deliberately REUSES `private_email::providers::smtp::SmtpProvider` rather than
+/// speaking SMTP a second time — that provider already carries the pause switch, the multipart body,
+/// the inline logo and the attachments, so the two lanes cannot drift.
+async fn deliver_via_own_smtp(cfg: &DeliveryConfig) -> DeliveryOutcome {
+    let host = match cfg.smtp_host.as_deref().map(str::trim).filter(|h| !h.is_empty()) {
+        Some(h) => h.to_string(),
+        None => {
+            return DeliveryOutcome::permanent(format!(
+                "{NOT_CONFIGURED_PREFIX}: this account sends through its own mail server but no SMTP host is set"
+            ))
+        }
+    };
+    let from = match cfg
+        .from_email
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+    {
+        Some(f) => f.to_string(),
+        None => {
+            return DeliveryOutcome::permanent(format!(
+            "{NOT_CONFIGURED_PREFIX}: no sending address is set for this account's own mail server"
+        ))
+        }
+    };
+
+    let provider_cfg = crate::private_email::providers::ProviderConfig {
+        tenant_id: cfg.tenant_id,
+        domain_id: Uuid::nil(),
+        domain: cfg.mailgun_domain.clone().unwrap_or_default(),
+        provider_type: "smtp".to_string(),
+        encrypted_api_key: None,
+        region: None,
+        smtp_host: Some(host.clone()),
+        smtp_port: cfg.smtp_port.map(|p| p as i32),
+        smtp_username: cfg.smtp_username.clone(),
+        // The password is stored SEALED on the domain row; load_provider_config opens it, and this
+        // field carries the opened value only for the length of this call.
+        encrypted_smtp_password: cfg.smtp_password.clone(),
+        smtp_tls: cfg.smtp_tls,
+        inbound_mode: "none".to_string(),
+        encrypted_webhook_key: None,
+        inbound_provider: "none".to_string(),
+    };
+
+    let provider = crate::private_email::providers::provider_for(&provider_cfg);
+    let subject = cfg.subject.clone().unwrap_or_default();
+    let html = cfg.html.clone().unwrap_or_default();
+    // `body` is the plain-text part; when the caller only has HTML, the same bytes stand in for the
+    // text part rather than sending an empty one (a message with no text part scores worse).
+    let text = if cfg.body.trim().is_empty() {
+        html.clone()
+    } else {
+        cfg.body.clone()
+    };
+    let html_part = if html.trim().is_empty() {
+        text.clone()
+    } else {
+        html
+    };
+
+    let result = provider
+        .send(
+            &provider_cfg,
+            &from,
+            &cfg.to,
+            &[],
+            &[],
+            &subject,
+            &text,
+            &html_part,
+            None,
+            &[],
+            None,
+        )
+        .await;
+
+    if result.success {
+        DeliveryOutcome::sent("smtp_relay", result.provider_message_id)
+    } else {
+        let reason = result
+            .error
+            .unwrap_or_else(|| "the mail server refused the message".to_string());
+        // A relay that cannot be reached is retryable; a refused credential is not. The message text
+        // decides, so a temporary failure is not recorded as permanent (and vice versa).
+        let permanent = reason.contains("not configured")
+            || reason.contains("paused")
+            || reason.contains("Authentication")
+            || reason.contains("authentication");
+        let mut outcome = DeliveryOutcome::permanent(format!("own mail server ({host}): {reason}"));
+        outcome.permanent = permanent;
+        outcome
+    }
+}
+
 async fn deliver_via_smtp(cfg: &DeliveryConfig) -> DeliveryOutcome {
     let api_key = match &cfg.smtp_password {
         Some(k) => k,
@@ -1248,6 +1356,7 @@ pub async fn load_delivery_config(
             .map(|p| p as u16),
         smtp_username: field("smtp_username"),
         smtp_password: field("smtp_password"),
+        smtp_tls: true,
         from_email: resolved.from,
         from_name: field("from_name"),
     }
@@ -1358,6 +1467,70 @@ pub async fn account_primary_inbox(
 /// sent with the account's own Mailgun credential, and a reply is redirected to the account's
 /// private inbox (`h:Reply-To`). This is the lane-split half of David's rule (kanban t_044d5d62):
 /// the ordinary `load_delivery_config` keeps the main-domain identity, this one never touches it.
+/// The account's OWN SMTP relay for a base domain, when it has configured one.
+///
+/// `provider_type = 'smtp_relay'` on the sending-domain row is the flag; the host/port/user/password
+/// live on the same row and the password is SEALED, so this opens it with the app's own
+/// `load_provider_config` rather than reading the column raw. Returns `None` when the account has not
+/// chosen its own relay, which leaves the Mailgun ladder byte-for-byte as it was.
+struct OwnSmtpLane {
+    host: String,
+    port: Option<u16>,
+    username: Option<String>,
+    password: Option<String>,
+    tls: bool,
+    from_email: String,
+}
+
+async fn own_smtp_lane(db: &PgPool, tenant_id: Uuid, base_domain: &str) -> Option<OwnSmtpLane> {
+    let row: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, provider_type FROM private_email_domains \
+          WHERE tenant_id = $1 AND domain = $2 ORDER BY created_at ASC LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(base_domain)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten();
+
+    let (domain_id, provider_type) = row?;
+    if !provider_type.eq_ignore_ascii_case("smtp_relay") {
+        return None;
+    }
+
+    let cfg = match crate::private_email::send_handler::load_provider_config(
+        db, domain_id, tenant_id,
+    )
+    .await
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(tenant = %tenant_id, domain = %base_domain, error = %e,
+                "own-SMTP lane selected but its configuration could not be read — this send will be refused, not silently sent as Mailgun");
+            return None;
+        }
+    };
+
+    let host = cfg.smtp_host.clone().filter(|h| !h.trim().is_empty())?;
+    // Many relays require From to be the authenticated mailbox; when the username IS an address, use
+    // it, otherwise send as the account's own domain address.
+    let from_email = cfg
+        .smtp_username
+        .clone()
+        .filter(|u| u.contains('@'))
+        .unwrap_or_else(|| format!("noreply@{base_domain}"));
+
+    Some(OwnSmtpLane {
+        host,
+        port: cfg.smtp_port.map(|p| p as u16),
+        username: cfg.smtp_username.clone(),
+        password: cfg.encrypted_smtp_password.clone(),
+        tls: cfg.smtp_tls,
+        from_email,
+    })
+}
+
 pub async fn load_automation_delivery_config(
     db: &PgPool,
     msg_id: Uuid,
@@ -1392,6 +1565,42 @@ pub async fn load_automation_delivery_config(
     };
 
     let reply_to = account_primary_inbox(db, tenant_id, &base_domain).await;
+
+    // ── THE ACCOUNT'S OWN MAIL SERVER WINS WHEN IT IS SET (kanban B208, 2026-11-21) ────────────
+    // A customer who brings their own relay (SES, Postmark, their host) is not locked to Mailgun:
+    // the sending domain carries `provider_type = 'smtp_relay'` plus its own host/port/user/password,
+    // and this lane sends through THAT. Read before the Mailgun ladder so an account holding both
+    // does what its configuration says, and fall through silently when it holds neither.
+    if let Some(own) = own_smtp_lane(db, tenant_id, &base_domain).await {
+        return DeliveryConfig {
+            tenant_id,
+            msg_id,
+            channel: "email".to_string(),
+            to: to.to_string(),
+            subject,
+            body: body.to_string(),
+            is_html,
+            html: None,
+            email_provider: "smtp_relay".to_string(),
+            sms_provider: "telnyx".to_string(),
+            transport: TransportSource::Tenant,
+            byok_source: Some(ByokSource::PrivateEmail.as_str()),
+            mailgun_url: None,
+            reply_to,
+            mailgun_domain: Some(automation_domain.to_string()),
+            mailgun_api_key: None,
+            telnyx_api_key: None,
+            smtp_host: Some(own.host),
+            smtp_port: own.port,
+            smtp_username: own.username,
+            smtp_password: own.password,
+            smtp_tls: own.tls,
+            from_email: Some(own.from_email),
+            from_name: None,
+            whatsapp_phone_number_id: None,
+            whatsapp_api_token: None,
+        };
+    }
 
     let (transport, url, api_key, byok_source) = match key {
         Some((api_key, region)) => (
@@ -1433,6 +1642,7 @@ pub async fn load_automation_delivery_config(
         smtp_port: None,
         smtp_username: None,
         smtp_password: None,
+        smtp_tls: true,
         from_email: Some(format!("noreply@{automation_domain}")),
         from_name: None,
         whatsapp_phone_number_id: None,
@@ -1596,6 +1806,7 @@ mod tests {
             smtp_port: None,
             smtp_username: None,
             smtp_password: None,
+            smtp_tls: true,
             from_email: None,
             from_name: None,
             whatsapp_phone_number_id: None,
@@ -1980,5 +2191,131 @@ mod tests {
                 "{addr} is not RFC-reserved and must still be dispatched"
             );
         }
+    }
+    // ── THE ACCOUNT'S OWN MAIL SERVER (kanban B208) ────────────────────────────────────────────────
+    // Proves the `smtp_relay` arm reaches a REAL SMTP server and hands it the message. The sink is a
+    // socket this test owns on 127.0.0.1, so nothing leaves the box and no credential is involved.
+    // EMAIL_SENDING_PAUSED is unset for this test only, in this process: the deployment's own value is
+    // never touched.
+    #[tokio::test]
+    async fn own_smtp_relay_delivers_to_the_customers_server() {
+        use std::io::{BufRead, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind sink");
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _peer)) = listener.accept() {
+                let mut writer = match stream.try_clone() {
+                    Ok(w) => w,
+                    Err(_) => return,
+                };
+                let _ = writer.write_all(b"220 sink ESMTP\r\n");
+                let mut reader = std::io::BufReader::new(stream);
+                let mut in_data = false;
+                let mut body = String::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    let trimmed = line.trim_end_matches(['\r', '\n']).to_string();
+                    if in_data {
+                        if trimmed == "." {
+                            let _ = writer.write_all(b"250 OK queued\r\n");
+                            let _ = tx.send(body.clone());
+                            in_data = false;
+                            continue;
+                        }
+                        body.push_str(&trimmed);
+                        body.push('\n');
+                        continue;
+                    }
+                    let upper = trimmed.to_ascii_uppercase();
+                    if upper.starts_with("EHLO") || upper.starts_with("HELO") {
+                        let _ =
+                            writer.write_all(b"250-sink\r\n250-AUTH PLAIN LOGIN\r\n250 HELP\r\n");
+                    } else if upper.starts_with("MAIL FROM") || upper.starts_with("RCPT TO") {
+                        let _ = writer.write_all(b"250 OK\r\n");
+                    } else if upper.starts_with("AUTH") || upper == "*" {
+                        // Accept whatever the client offers: this sink is only here to receive the body.
+                        let _ = writer.write_all(b"235 2.7.0 authentication succeeded\r\n");
+                    } else if upper.starts_with("DATA") {
+                        let _ = writer.write_all(b"354 go ahead\r\n");
+                        in_data = true;
+                    } else if upper.starts_with("QUIT") {
+                        let _ = writer.write_all(b"221 bye\r\n");
+                        break;
+                    } else {
+                        let _ = writer.write_all(b"250 OK\r\n");
+                    }
+                }
+            }
+        });
+
+        let previous = std::env::var("EMAIL_SENDING_PAUSED").ok();
+        std::env::remove_var("EMAIL_SENDING_PAUSED");
+
+        let mut cfg = email_cfg("buyer@coreswiftcrm.com");
+        cfg.email_provider = "smtp_relay".to_string();
+        cfg.smtp_host = Some("127.0.0.1".to_string());
+        cfg.smtp_port = Some(port);
+        cfg.smtp_username = Some("relay-user".to_string());
+        cfg.smtp_password = Some("relay-pass".to_string());
+        cfg.smtp_tls = false;
+        cfg.from_email = Some("noreply@xridedrivers.com".to_string());
+        cfg.mailgun_domain = Some("mg.xridedrivers.com".to_string());
+        cfg.subject = Some("Relay proof".to_string());
+        cfg.body = "This message took the account own mail server.".to_string();
+
+        let outcome = deliver_email(&cfg, &[]).await;
+
+        if let Some(prev) = previous {
+            std::env::set_var("EMAIL_SENDING_PAUSED", prev);
+        }
+
+        assert!(
+            outcome.ok,
+            "the own-relay arm must deliver, got: {:?}",
+            outcome.error
+        );
+        assert_eq!(outcome.provider.as_deref(), Some("smtp_relay"));
+        let received = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap_or_else(|_| String::new());
+        assert!(
+            received.contains("took the account own mail server"),
+            "the customer server never received the body; got: {received}"
+        );
+        assert!(
+            received.contains("noreply@xridedrivers.com"),
+            "the From was not the account own address"
+        );
+    }
+
+    /// A relay with no host must be REFUSED with the app's not-configured marker, never silently
+    /// fall back onto Mailgun — that fallback would send a customer's automation mail on an identity
+    /// they did not choose.
+    #[tokio::test]
+    async fn own_smtp_relay_without_a_host_is_refused_not_fallen_back() {
+        let previous = std::env::var("EMAIL_SENDING_PAUSED").ok();
+        std::env::remove_var("EMAIL_SENDING_PAUSED");
+        let mut cfg = email_cfg("buyer@coreswiftcrm.com");
+        cfg.email_provider = "smtp_relay".to_string();
+        cfg.smtp_host = None;
+        cfg.mailgun_url = Some("https://api.mailgun.net/v3/example.invalid/messages".to_string());
+        cfg.mailgun_api_key = Some("invented".to_string());
+        let outcome = deliver_email(&cfg, &[]).await;
+        if let Some(prev) = previous {
+            std::env::set_var("EMAIL_SENDING_PAUSED", prev);
+        }
+        assert!(!outcome.ok);
+        assert!(outcome.permanent);
+        let err = outcome.error.unwrap_or_default();
+        assert!(
+            err.contains("no SMTP host is set"),
+            "the refusal must name the missing host, got: {err}"
+        );
     }
 }

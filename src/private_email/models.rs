@@ -259,6 +259,22 @@ pub struct UpdateDomainRequest {
     /// Re-enter a domain's SMTP password (`provider_type = "smtp"`), same contract as above.
     #[serde(default)]
     pub smtp_password: Option<String>,
+    /// HOW THIS DOMAIN SENDS: `mailgun` (its API), `smtp` (SMTP.com's HTTP API), or `smtp_relay` —
+    /// the CUSTOMER'S OWN mail server (SES, Postmark, Google Workspace, their host). Added with
+    /// kanban B208: the three choices existed in the database and in the send path, but no request
+    /// could set them, so an account could not actually leave Mailgun from the product.
+    #[serde(default)]
+    pub sending_provider: Option<String>,
+    /// The relay's own settings (`smtp_relay` only). Empty/omitted leaves the stored value alone.
+    #[serde(default)]
+    pub smtp_host: Option<String>,
+    #[serde(default)]
+    pub smtp_port: Option<i32>,
+    #[serde(default)]
+    pub smtp_username: Option<String>,
+    /// STARTTLS. `None` leaves it; false is for a relay on port 25 and for a local test sink.
+    #[serde(default)]
+    pub smtp_tls: Option<bool>,
     /// Switch HOW this domain RECEIVES (kanban t_04db9228): `mailgun`, `sendgrid`, or `none`.
     ///
     /// This is a separate choice from sending, and switching it changes nothing about how the
