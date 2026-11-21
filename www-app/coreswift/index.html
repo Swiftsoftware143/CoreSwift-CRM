@@ -2651,7 +2651,7 @@ const TAB_LOADERS = {
           escapeHtml(t.contact_name || t.contact_email || t.requester || '—'),
           // The SAME assignment the shared inbox writes (kanban t_5f314e9a): one conversation, two
           // views. A ticket raised by hand has no conversation behind it, so it shows nobody.
-          escapeHtml((t.assigned_member && (t.assigned_member.name || t.assigned_member.email)) || '—'),
+          tkAssignCell(t),
           ticketDueCell(t),
           escapeHtml(t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'),
           `<button class="btn btn-ghost btn-xs" onclick="openTicket('${t.id}')">View</button>`
@@ -5371,6 +5371,74 @@ function ticketDueCell(t) {
   const rest = live.slice(1).map(x => x.text).join(' · ');
   return '<span style="color:' + colour + ';font-weight:600">' + w.text + '</span>'
     + (rest ? '<span style="color:var(--text-muted);font-weight:400"> · ' + rest + '</span>' : '');
+}
+
+
+// ── ASSIGN A TICKET TO A TEAMMATE (kanban B204) ────────────────────────────────────────────────
+// The queue has always DISPLAYED who a ticket belongs to, but nothing in the console could SET it: the
+// only writer was the shared inbox, so a hand-raised ticket stayed unassigned for ever and the column
+// was decoration. The button carries the ticket id in a data attribute and one delegated listener does
+// the work — no inline onclick with quoted ids, because a stray quote in that pattern has broken this
+// console twice.
+function tkAssignCell(t) {
+  const who = (t.assigned_member && (t.assigned_member.name || t.assigned_member.email)) || '';
+  if (!canManageTeam()) return escapeHtml(who || '—');
+  return '<button class="btn btn-ghost btn-xs" data-tk-assign="' + escapeHtmlAttr(String(t.id)) + '" ' +
+    'title="Assign this ticket to a teammate">' + (who ? escapeHtml(who) : 'Assign…') + '</button>';
+}
+
+document.addEventListener('click', function (ev) {
+  const btn = ev.target && ev.target.closest ? ev.target.closest('[data-tk-assign]') : null;
+  if (!btn) return;
+  ev.preventDefault();
+  tkAssign(btn.getAttribute('data-tk-assign'));
+});
+
+async function tkAssign(ticketId) {
+  let members = [];
+  try {
+    const d = await API.get('/auth/team/members');
+    members = (d && (d.members || d.team || d.users)) || [];
+  } catch (e) {
+    toast('Could not load the team list: ' + e.message, 'error');
+    return;
+  }
+  const active = members.filter(function (m) { return m && m.is_active !== false; });
+  if (!active.length) {
+    toast('No teammates yet — invite someone under Settings, Team & Invites.', 'info');
+    return;
+  }
+  const opts = active.map(function (m) {
+    const label = (m.name || m.email || m.id) + (m.role ? ' · ' + m.role : '');
+    return '<option value="' + escapeHtmlAttr(String(m.id)) + '">' + escapeHtml(label) + '</option>';
+  }).join('');
+  showModal('Assign this ticket',
+    '<p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px">Pick the teammate who owns this conversation.</p>' +
+    '<div class="form-group"><label>Teammate</label><select id="tkAssignSel">' + opts + '</select></div>' +
+    '<label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-top:10px">' +
+      '<input type="checkbox" id="tkAssignClear"> Leave it unassigned</label>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="tkAssignSaveBtn">Assign</button>');
+  const save = document.getElementById('tkAssignSaveBtn');
+  if (save) save.onclick = function () { tkAssignSave(ticketId); };
+}
+
+async function tkAssignSave(ticketId) {
+  const clear = document.getElementById('tkAssignClear');
+  const sel = document.getElementById('tkAssignSel');
+  // `assigned_to: null` means "not provided" on this route, so clearing needs its own flag — that is
+  // how a ticket gets put BACK in the queue instead of staying assigned for ever.
+  const body = (clear && clear.checked)
+    ? { clear_assignee: true }
+    : { assigned_to: (sel ? sel.value : null) };
+  try {
+    await API.call('PATCH', '/tickets/' + ticketId, body);
+    closeModal();
+    toast(body.assigned_to ? 'Ticket assigned' : 'Ticket left unassigned', 'success');
+    switchTab('tickets');   // repaint from the server rather than guessing locally
+  } catch (e) {
+    toast('Could not assign: ' + e.message, 'error');
+  }
 }
 
 async function openTicket(id) {

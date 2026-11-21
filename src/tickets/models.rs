@@ -57,6 +57,11 @@ pub struct UpdateTicketRequest {
     pub status: Option<String>,
     pub priority: Option<String>,
     pub assigned_to: Option<uuid::Uuid>,
+    /// `assigned_to: null` cannot mean "clear" — serde reads it as "not provided", so a ticket could be
+    /// assigned and never put back in the queue. This flag is the explicit door: send it true and the
+    /// column is set to NULL regardless of `assigned_to`.
+    #[serde(default)]
+    pub clear_assignee: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

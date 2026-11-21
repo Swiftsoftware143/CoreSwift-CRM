@@ -164,14 +164,28 @@ async fn assigned_members_for(
     if ticket_ids.is_empty() {
         return Ok(out);
     }
+    // TWO SOURCES, ONE ANSWER (measured 2026-11-21): a conversation records its owner on the newest
+    // linked message, and a ticket raised by hand records it on `tickets.assigned_to`. Reading only the
+    // message source meant an operator who assigned a hand-raised ticket saw the column stay EMPTY —
+    // a stored assignment that painted as nothing, which is the silent-no-op class. The message still
+    // wins for a real conversation (that is where a reply is answered from); the ticket's own column is
+    // the fallback when there is no conversation behind it.
     let rows = sqlx::query(
-        r#"SELECT DISTINCT ON (m.ticket_id)
-                  m.ticket_id, u.id AS user_id, u.name, u.email
-             FROM private_email_messages m
-             JOIN users u ON u.id = m.assigned_user_id
-            WHERE m.ticket_id = ANY($1)
-              AND u.is_active = true
-            ORDER BY m.ticket_id, m.received_at DESC"#,
+        r#"SELECT DISTINCT ON (x.ticket_id) x.ticket_id, x.user_id, x.name, x.email
+             FROM (
+                   SELECT m.ticket_id, u.id AS user_id, u.name, u.email, 0 AS rank,
+                          m.received_at AS at
+                     FROM private_email_messages m
+                     JOIN users u ON u.id = m.assigned_user_id
+                    WHERE m.ticket_id = ANY($1) AND u.is_active = true
+                   UNION ALL
+                   SELECT t.id AS ticket_id, u.id AS user_id, u.name, u.email, 1 AS rank,
+                          t.updated_at AS at
+                     FROM tickets t
+                     JOIN users u ON u.id = t.assigned_to
+                    WHERE t.id = ANY($1) AND u.is_active = true
+             ) x
+            ORDER BY x.ticket_id, x.rank, x.at DESC"#,
     )
     .bind(ticket_ids)
     .fetch_all(db)
@@ -279,7 +293,13 @@ pub async fn update_ticket(
     let new_description = body.description.unwrap_or(ticket.description);
     let new_status = body.status.unwrap_or(ticket.status);
     let new_priority = body.priority.unwrap_or(ticket.priority);
-    let new_assigned_to = body.assigned_to.or(ticket.assigned_to);
+    // Three states, and they must stay distinct: an id assigns, `clear_assignee` empties, and saying
+    // nothing leaves the current owner alone.
+    let new_assigned_to = if body.clear_assignee {
+        None
+    } else {
+        body.assigned_to.or(ticket.assigned_to)
+    };
 
     // `solved_at` is the ticket's own record of when it was closed, and the resolution clock reads it.
     // It is cleared when a ticket goes back into the queue, so a reopened ticket cannot carry a solve
