@@ -528,12 +528,45 @@ function hideLockedPaneActions(planMessage) {
 }
 
 const API = {
+  // Exchange the stored refresh token for a new access token. Returns true when the session was
+  // extended, false when the refresh token is gone or refused (then the caller signs out).
+  async tryRefresh() {
+    let rt = null;
+    try { rt = localStorage.getItem('crm_refresh'); } catch (_) { return false; }
+    if (!rt) return false;
+    try {
+      const r = await fetch('/api/auth/refresh', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: rt })
+      });
+      if (!r.ok) return false;
+      const d = await r.json();
+      const tok = d.token || d.access_token || d.accessToken;
+      if (!tok) return false;
+      STATE.token = tok;
+      localStorage.setItem('crm_token', tok);
+      if (d.refresh_token) localStorage.setItem('crm_refresh', d.refresh_token);
+      return true;
+    } catch (_) { return false; }
+  },
   async call(method, path, body) {
     const headers = { 'Content-Type': 'application/json' };
     if (STATE.token) headers['Authorization'] = `Bearer ${STATE.token}`;
     const opts = { method, headers };
     if (body) opts.body = JSON.stringify(body);
-    const res = await fetch('/api' + path, opts);
+    let res = await fetch('/api' + path, opts);
+    // ONE SILENT REFRESH (2026-11-21). POST /api/auth/refresh existed with no caller, so an
+    // expiring token ended the session in the middle of a form. Try the refresh token once, replay
+    // the request, and only sign out if THAT fails — a live session should not be interrupted by a
+    // clock.
+    if (res.status === 401 && !opts.__retried) {
+      const fresh = await API.tryRefresh();
+      if (fresh) {
+        opts.__retried = true;
+        headers['Authorization'] = `Bearer ${STATE.token}`;
+        res = await fetch('/api' + path, opts);
+      }
+    }
     if (res.status === 401) { logout(true); throw new Error('Session expired'); }
     if (res.status === 402) {
       showUpgradeBanner();
@@ -824,6 +857,9 @@ async function doLogin() {
     STATE.user = Object.assign({ email: email, name: email.split('@')[0] }, acct);
     if (!STATE.user.role) STATE.user.role = 'member';
     localStorage.setItem('crm_token', STATE.token);
+    // The sign-in response has always carried a refresh token and nothing stored it, so a session
+    // simply DIED mid-work ("Session expired" - measured twice in one sitting). Keep it.
+    try { if (data && data.refresh_token) localStorage.setItem('crm_refresh', data.refresh_token); } catch (_) {}
     localStorage.setItem('crm_user', JSON.stringify(STATE.user));
     showApp();
     toast('Welcome back, ' + (STATE.user.name || STATE.user.email), 'success');
