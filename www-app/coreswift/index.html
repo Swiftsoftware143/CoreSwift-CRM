@@ -2220,7 +2220,10 @@ function renderSiteConfigForm() {
   html += input('ga_id', 'Google Analytics ID', 'e.g. G-XXXXXXXXXX or UA-XXXXX-X', 'text', 'G-XXXXXXXXXX');
   html += input('gtm_id', 'Google Tag Manager ID', 'e.g. GTM-XXXXXXX', 'text', 'GTM-XXXXXXX');
   html += input('head_scripts', 'Head Scripts', 'Custom scripts in <head> (one per line)', 'textarea', '<scr' + 'ipt>...</scr' + 'ipt>');
-  html += input('body_scripts', 'Body Scripts', 'Custom scripts before </body>', 'textarea', '<scr' + 'ipt>...</scr' + 'ipt>');
+  html += input('body_scripts', 'Body Scripts', 'Custom scripts before <script>/* themeSyncOnLoad: after a reload the switch must describe what it will DO, so the icon
+   and label are refreshed from the stored choice (the boot script already set the attribute). */
+document.addEventListener('DOMContentLoaded',function(){try{themeApply(document.documentElement.getAttribute('data-theme')||'dark');}catch(e){}});</script>
+</body>', 'textarea', '<scr' + 'ipt>...</scr' + 'ipt>');
   html += '</div></div></div>';
 
   // Homepage
