@@ -16,8 +16,20 @@ pre code{background:none;padding:0}a{color:#1d4ed8}
   pre { overflow-x: auto; max-width: 100%; }
   code { overflow-wrap: anywhere; }
 }
-</style><script id="cs-theme-boot">/* day/night, applied before first paint (shared: cs-theme-shared) */
-(function(){try{var t=localStorage.getItem('cs_theme');if(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)t='dark';if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();
+</style><script id="cs-theme-boot">/* day/night, applied before first paint (shared: cs-theme-shared)
+   THE CHOICE HAS TO CROSS SUBDOMAINS (CEO correction, 2026-11-21): localStorage is per-ORIGIN, so a
+   choice made on app.coreswiftcrm.com was invisible on booking./admin./inbox. — four products wearing
+   one name. The value therefore lives in a cookie on the registrable domain, which every subdomain
+   sends back; localStorage is kept as a per-origin fallback for a browser that refuses cookies. */
+(function(){
+  function fromCookie(){try{var m=document.cookie.match(/(?:^|;\s*)cs_theme=(dark|light)/);return m?m[1]:null;}catch(e){return null;}}
+  try{
+    var t=fromCookie();
+    if(!t){try{t=localStorage.getItem('cs_theme');}catch(e){}}
+    if(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)t='dark';
+    if(t)document.documentElement.setAttribute('data-theme',t);
+  }catch(e){}
+})();
 </script>
 <style id="cs-theme-shared">
   /* Shared day/night palette for the standalone CoreSwift pages. Additive: it only reacts to the
@@ -427,6 +439,7 @@ each field is what an AI agent addresses it by.</li>
 <em>Waiting to go out</em> list is the server's outbound queue.</li>
 <li><strong>Score destinations</strong> (Lead Scoring) is where a score is delivered when it changes.</li>
 </ul>
+<p><strong>Day / night is shared, not per address.</strong> The choice lives in a cookie on <code>coreswiftcrm.com</code>, so a customer who switches on the booking page finds the console, the inbox and the guides already switched. Browser storage is only the fallback — the console reads the cookie FIRST, because reading its own storage first silently undid a choice made on another address.</p>
 <p>The <strong>Get set up</strong> card on a customer's Dashboard is the fastest way to see what an account is
 still missing: nine checks, read from their real data, each with a button to the screen that closes it. Nine of
 nine means the account is working. It is also the first thing to look at when a customer says the product does
@@ -436,11 +449,18 @@ nothing.</p>
 (function(){
   function label(){var t=document.documentElement.getAttribute('data-theme')==='dark';
     var b=document.getElementById('csThemeBtn');
-    if(b) b.innerHTML=(t?'\u2600\uFE0F <span>Day mode</span>':'\uD83C\uDF12 <span>Night mode</span>');}
+    if(b) b.innerHTML=(t?'&#9728;&#65039; <span>Day mode</span>':'&#127770; <span>Night mode</span>');}
+  function remember(v){
+    try{localStorage.setItem('cs_theme',v);}catch(e){}
+    /* Same cookie WorkflowSwift uses, for the same reason: set once on any CoreSwift address and every
+       other subdomain sends it back, so the switch holds across app., booking., admin. and inbox. */
+    try{document.cookie='cs_theme=;path=/;max-age=0';}catch(e){}   /* drop any host-only twin first */
+    try{document.cookie='cs_theme='+v+';domain=coreswiftcrm.com;path=/;max-age=31536000;SameSite=Lax';}catch(e){}
+  }
   function flip(){
     var next=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';
     document.documentElement.setAttribute('data-theme',next);
-    try{localStorage.setItem('cs_theme',next);}catch(e){}
+    remember(next);
     label();
   }
   function mount(){

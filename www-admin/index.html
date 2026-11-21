@@ -323,7 +323,19 @@ tr:hover td{background:var(--bg-hover)}
 .hidden{display:none!important}
 </style>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/favicon.svg"><script id="theme-boot">/* Day/night, applied before first paint (see themeApply below). */
-(function(){try{var t=localStorage.getItem('crm_theme');if(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)t='light';document.documentElement.setAttribute('data-theme',t==='light'?'light':'dark');}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();
+/* THE CHOICE CROSSES SUBDOMAINS (CEO correction, 2026-11-21): localStorage is per-ORIGIN, so a
+   choice made in this console was invisible on booking./inbox. and vice versa. The shared value is a
+   cookie on coreswiftcrm.com — the same one the standalone pages use — with localStorage kept as the
+   per-origin fallback. */
+(function(){
+  function fromCookie(){try{var m=document.cookie.match(/(?:^|;\s*)cs_theme=(dark|light)/);return m?m[1]:null;}catch(e){return null;}}
+  try{
+    var t=fromCookie();
+    if(!t){try{t=localStorage.getItem('crm_theme');}catch(e){}}
+    if(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)t='light';
+    document.documentElement.setAttribute('data-theme',t==='light'?'light':'dark');
+  }catch(e){document.documentElement.setAttribute('data-theme','dark');}
+})();
 </script>
 </head>
 <body>
@@ -1211,6 +1223,10 @@ function themeApply(name) {
   var t = (name === 'light') ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', t);
   try { localStorage.setItem(THEME_KEY, t); } catch (e) {}
+  // And the SHARED value, so the choice made here holds on booking./inbox. and in the guides — the
+  // cookie is the only store every *.coreswiftcrm.com origin can read (CEO correction, 2026-11-21).
+  try { document.cookie = 'cs_theme=;path=/;max-age=0'; } catch (e) {}
+  try { document.cookie = 'cs_theme=' + t + ';domain=coreswiftcrm.com;path=/;max-age=31536000;SameSite=Lax'; } catch (e) {}
   var b = document.getElementById('themeToggle');
   if (b) { b.textContent = (t === 'light') ? '\uD83C\uDF19' : '\uD83C\uDF12'; b.title = (t === 'light') ? 'Switch to night mode' : 'Switch to day mode'; }
   var s2 = document.getElementById('themeToggleSide');
@@ -1220,9 +1236,14 @@ function themeToggle() {
   themeApply(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
 }
 (function themeBoot() {
-  var saved = null;
-  try { saved = localStorage.getItem(THEME_KEY); } catch (e) {}
-  // No choice stored yet: follow the operating system, so a Mac or Windows user in light mode is not
+  // THE SHARED COOKIE WINS (CEO correction, 2026-11-21). This function runs AFTER the <head> boot, so
+  // reading localStorage first here would undo a choice made on another CoreSwift address — which is
+  // exactly what happened: pressing night on the booking page, then opening the console, answered day.
+  var cookie = null;
+  try { var m = document.cookie.match(/(?:^|;\s*)cs_theme=(dark|light)/); cookie = m ? m[1] : null; } catch (e) {}
+  var saved = cookie;
+  if (!saved) { try { saved = localStorage.getItem(THEME_KEY); } catch (e) {} }
+  // Nothing anywhere: follow the operating system, so a Mac or Windows user in light mode is not
   // handed a black console on their first visit.
   if (!saved && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) saved = 'light';
   document.documentElement.setAttribute('data-theme', saved === 'light' ? 'light' : 'dark');

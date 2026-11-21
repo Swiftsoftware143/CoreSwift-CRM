@@ -117,7 +117,15 @@
   }
 </style>
 <script id="theme-boot">/* Night/day applied before first paint, so the inbox never flashes white. */
-(function(){try{var t=localStorage.getItem('cs_mail_theme');if(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)t='dark';if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();
+(function(){
+  function fromCookie(){try{var m=document.cookie.match(/(?:^|;\s*)cs_theme=(dark|light)/);return m?m[1]:null;}catch(e){return null;}}
+  try{
+    var t=fromCookie();
+    if(!t){try{t=localStorage.getItem('cs_mail_theme');}catch(e){}}
+    if(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)t='dark';
+    if(t)document.documentElement.setAttribute('data-theme',t);
+  }catch(e){}
+})();
 </script>
 </head>
 <body>
@@ -133,6 +141,9 @@ function csThemeApply(name) {
   var t = (name === 'dark') ? 'dark' : 'light';
   document.documentElement.setAttribute('data-theme', t);
   try { localStorage.setItem('cs_mail_theme', t); } catch (e) {}
+  // the SHARED value, so the inbox agrees with the console and the guides (CEO correction, 2026-11-21)
+  try { document.cookie = 'cs_theme=;path=/;max-age=0'; } catch (e) {}
+  try { document.cookie = 'cs_theme=' + t + ';domain=coreswiftcrm.com;path=/;max-age=31536000;SameSite=Lax'; } catch (e) {}
   var lab = document.getElementById('csThemeLabel');
   if (lab) lab.textContent = (t === 'dark') ? 'Day mode' : 'Night mode';
   var b = document.getElementById('csThemeToggle');

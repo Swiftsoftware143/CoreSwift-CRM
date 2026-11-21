@@ -177,8 +177,20 @@
   }
   @media (max-width: 480px) { .grid { grid-template-columns: 1fr; } }
 </style>
-<script id="cs-theme-boot">/* day/night, applied before first paint (shared: cs-theme-shared) */
-(function(){try{var t=localStorage.getItem('cs_theme');if(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)t='dark';if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();
+<script id="cs-theme-boot">/* day/night, applied before first paint (shared: cs-theme-shared)
+   THE CHOICE HAS TO CROSS SUBDOMAINS (CEO correction, 2026-11-21): localStorage is per-ORIGIN, so a
+   choice made on app.coreswiftcrm.com was invisible on booking./admin./inbox. — four products wearing
+   one name. The value therefore lives in a cookie on the registrable domain, which every subdomain
+   sends back; localStorage is kept as a per-origin fallback for a browser that refuses cookies. */
+(function(){
+  function fromCookie(){try{var m=document.cookie.match(/(?:^|;\s*)cs_theme=(dark|light)/);return m?m[1]:null;}catch(e){return null;}}
+  try{
+    var t=fromCookie();
+    if(!t){try{t=localStorage.getItem('cs_theme');}catch(e){}}
+    if(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)t='dark';
+    if(t)document.documentElement.setAttribute('data-theme',t);
+  }catch(e){}
+})();
 </script>
 <style id="cs-theme-shared">
   /* Shared day/night palette for the standalone CoreSwift pages. Additive: it only reacts to the
@@ -2204,14 +2216,18 @@ are assigned to them — not the whole desk — and a ticket that is not theirs 
 showing a conversation that belongs to someone else. If a member sees an empty queue, nothing is broken: nothing
 has been assigned to them yet.</p>
 
-<h2 id="day-and-night">Day and night, on every page</h2>
-<p>Every CoreSwift page has a switch, and the choice follows you: pick night on the booking page and the guide,
-the sign-in screen and the inbox are night too, on whichever address you are on.</p>
+<h2 id="day-and-night">Day and night, on every page and every address</h2>
+<p>Every CoreSwift page has a switch, and <strong>the choice is remembered across all of them</strong>: press it
+once on the booking page and the console, the sign-in screen, the inbox and the guides are all that theme too,
+whichever CoreSwift address you are on.</p>
 <ul>
 <li>In the console: the moon icon in the header, or <strong>Day / night</strong> in the sidebar.</li>
 <li>Every other page, including this guide: the small switch in the bottom-left corner.</li>
-<li>Nothing is stored on our side — the choice lives in your browser, and until you make one it follows your
-computer's own light or dark setting.</li>
+<li>It is remembered in a small cookie on <code>coreswiftcrm.com</code> — the only store every subdomain can
+read — with your browser's own storage as a backup. Nothing about it is stored on our side, and until you choose,
+it follows your computer's light or dark setting.</li>
+<li>If your browser refuses cookies, the switch still works; the choice just stays with the address you set it
+on.</li>
 </ul>
 
 <h2 id="account-vs-workspace">An account and a workspace are not the same thing</h2>
@@ -2231,11 +2247,18 @@ hover, instead of failing when you press it.</li>
 (function(){
   function label(){var t=document.documentElement.getAttribute('data-theme')==='dark';
     var b=document.getElementById('csThemeBtn');
-    if(b) b.innerHTML=(t?'\u2600\uFE0F <span>Day mode</span>':'\uD83C\uDF12 <span>Night mode</span>');}
+    if(b) b.innerHTML=(t?'&#9728;&#65039; <span>Day mode</span>':'&#127770; <span>Night mode</span>');}
+  function remember(v){
+    try{localStorage.setItem('cs_theme',v);}catch(e){}
+    /* Same cookie WorkflowSwift uses, for the same reason: set once on any CoreSwift address and every
+       other subdomain sends it back, so the switch holds across app., booking., admin. and inbox. */
+    try{document.cookie='cs_theme=;path=/;max-age=0';}catch(e){}   /* drop any host-only twin first */
+    try{document.cookie='cs_theme='+v+';domain=coreswiftcrm.com;path=/;max-age=31536000;SameSite=Lax';}catch(e){}
+  }
   function flip(){
     var next=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';
     document.documentElement.setAttribute('data-theme',next);
-    try{localStorage.setItem('cs_theme',next);}catch(e){}
+    remember(next);
     label();
   }
   function mount(){

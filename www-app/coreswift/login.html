@@ -29,8 +29,20 @@ button:disabled{opacity:.6;cursor:not-allowed}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid #0b1220;border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:6px}
 @keyframes sp{to{transform:rotate(360deg)}}
 </style>
-<script id="cs-theme-boot">/* day/night, applied before first paint (shared: cs-theme-shared) */
-(function(){try{var t=localStorage.getItem('cs_theme');if(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)t='dark';if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();
+<script id="cs-theme-boot">/* day/night, applied before first paint (shared: cs-theme-shared)
+   THE CHOICE HAS TO CROSS SUBDOMAINS (CEO correction, 2026-11-21): localStorage is per-ORIGIN, so a
+   choice made on app.coreswiftcrm.com was invisible on booking./admin./inbox. — four products wearing
+   one name. The value therefore lives in a cookie on the registrable domain, which every subdomain
+   sends back; localStorage is kept as a per-origin fallback for a browser that refuses cookies. */
+(function(){
+  function fromCookie(){try{var m=document.cookie.match(/(?:^|;\s*)cs_theme=(dark|light)/);return m?m[1]:null;}catch(e){return null;}}
+  try{
+    var t=fromCookie();
+    if(!t){try{t=localStorage.getItem('cs_theme');}catch(e){}}
+    if(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)t='dark';
+    if(t)document.documentElement.setAttribute('data-theme',t);
+  }catch(e){}
+})();
 </script>
 <style id="cs-theme-shared">
   /* Shared day/night palette for the standalone CoreSwift pages. Additive: it only reacts to the
@@ -559,11 +571,18 @@ button:disabled{opacity:.6;cursor:not-allowed}
 (function(){
   function label(){var t=document.documentElement.getAttribute('data-theme')==='dark';
     var b=document.getElementById('csThemeBtn');
-    if(b) b.innerHTML=(t?'\u2600\uFE0F <span>Day mode</span>':'\uD83C\uDF12 <span>Night mode</span>');}
+    if(b) b.innerHTML=(t?'&#9728;&#65039; <span>Day mode</span>':'&#127770; <span>Night mode</span>');}
+  function remember(v){
+    try{localStorage.setItem('cs_theme',v);}catch(e){}
+    /* Same cookie WorkflowSwift uses, for the same reason: set once on any CoreSwift address and every
+       other subdomain sends it back, so the switch holds across app., booking., admin. and inbox. */
+    try{document.cookie='cs_theme=;path=/;max-age=0';}catch(e){}   /* drop any host-only twin first */
+    try{document.cookie='cs_theme='+v+';domain=coreswiftcrm.com;path=/;max-age=31536000;SameSite=Lax';}catch(e){}
+  }
   function flip(){
     var next=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';
     document.documentElement.setAttribute('data-theme',next);
-    try{localStorage.setItem('cs_theme',next);}catch(e){}
+    remember(next);
     label();
   }
   function mount(){
