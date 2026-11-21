@@ -56,6 +56,37 @@ fn row_json(r: &sqlx::postgres::PgRow) -> serde_json::Value {
 }
 
 /// GET /api/workspaces
+
+/// Why a workspace in this account cannot be deleted, if it cannot. The delete door and the list both
+/// call this: a list that says "deletable" and a door that refuses is the drift this function prevents.
+async fn delete_blocked_reason(db: &sqlx::PgPool, tid: Uuid) -> Result<Option<String>, AppError> {
+    let (tname, tslug, tportfolio): (String, String, Option<bool>) =
+        sqlx::query_as("SELECT name, slug, is_portfolio FROM tenants WHERE id = $1")
+            .bind(tid)
+            .fetch_optional(db)
+            .await
+            .map_err(AppError::Database)?
+            .ok_or_else(|| AppError::NotFound("Workspace not found.".into()))?;
+    if let Some(marker) = crate::tenant_purge::protected_marker(&tname, &tslug) {
+        return Ok(Some(format!(
+            "This is a portfolio business ('{marker}') and its workspaces cannot be deleted."
+        )));
+    }
+    if tportfolio.unwrap_or(false) {
+        return Ok(Some(
+            "This is a portfolio business and its workspaces cannot be deleted.".to_string(),
+        ));
+    }
+    if let Some(company) =
+        crate::tenant_purge::portfolio_registry_hit(db, tid, &tname, &tslug).await?
+    {
+        return Ok(Some(format!(
+            "This is the portfolio business '{company}' and its workspaces cannot be deleted."
+        )));
+    }
+    Ok(None)
+}
+
 pub async fn list_workspaces(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -70,7 +101,23 @@ pub async fn list_workspaces(
     .await
     .map_err(AppError::Database)?;
 
-    let items: Vec<serde_json::Value> = rows.iter().map(row_json).collect();
+    // CAN THIS BE DELETED? The list says so, because the delete door refuses for a portfolio business
+    // and a control that can only ever answer 409 is worse than no control (measured 2026-11-21: every
+    // workspace in a portfolio account offered Delete and every press answered "cannot be deleted").
+    // One lookup per request, and the reason travels with the row so the console can explain it in place.
+    let blocked: Option<String> = delete_blocked_reason(&state.db, tid).await.ok().flatten();
+    let items: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let mut v = row_json(r);
+            v["can_delete"] = json!(blocked.is_none() && rows.len() > 1);
+            v["delete_blocked_reason"] = match &blocked {
+                Some(reason) => json!(reason),
+                None => serde_json::Value::Null,
+            };
+            v
+        })
+        .collect();
     Ok(Json(json!({ "count": items.len(), "workspaces": items })))
 }
 

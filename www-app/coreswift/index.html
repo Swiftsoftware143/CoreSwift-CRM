@@ -12544,7 +12544,13 @@ async function renderWsMenu() {
       (cur ? '' : '<button class="btn btn-ghost btn-xs" onclick="wsSwitch(' + i + ')">Switch</button>') +
       (admin ? '<button class="btn btn-ghost btn-xs" onclick="wsRename(' + i + ')">Rename</button>' : '') +
       (admin && !w.is_default ? '<button class="btn btn-ghost btn-xs" onclick="wsMakeDefault(' + i + ')">Make default</button>' : '') +
-      (admin ? '<button class="btn btn-danger btn-xs" onclick="wsDelete(' + i + ')">Delete</button>' : '') +
+      // A control that can only ever answer 409 is worse than no control. The server now says whether
+      // this workspace can be deleted, and why not when it cannot, so the row explains itself in place.
+      (admin
+        ? (w.can_delete === false
+            ? '<button class="btn btn-ghost btn-xs" disabled title="' + escapeHtmlAttr(w.delete_blocked_reason || 'This account must keep at least one workspace') + '">Delete</button>'
+            : '<button class="btn btn-danger btn-xs" onclick="wsDelete(' + i + ')" data-can-delete="1">Delete</button>')
+        : '') +
       '</div>';
   });
   h += '<div class="dropdown-divider"></div>';
