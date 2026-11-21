@@ -866,6 +866,38 @@ async fn insert_booking(
         return Err(AppError::Validation("No slots available".into()));
     }
 
+    // ── A PRICED SLOT IS NOT FREE (kanban B220, 2026-11-21) ────────────────────────────────────────
+    // `calendar_slots.price_override` and `booking_resources.price_cents` both exist and the console
+    // sells "individually priced positions", but NOTHING in this app ever took a payment: the booking
+    // was created `active`, `price_paid` stayed null and the customer got the slot for nothing. A
+    // priced slot is now REFUSED, in the open, while this deployment has no payment provider to charge
+    // through — a refusal that costs a sale is honest; giving the product away while the calendar says
+    // it costs money is not, and it teaches the buyer that the price is decorative.
+    let price_cents: Option<i64> = sqlx::query_scalar::<_, Option<rust_decimal::Decimal>>(
+        "SELECT price_override FROM calendar_slots WHERE id = $1",
+    )
+    .bind(slot.id)
+    .fetch_optional(db)
+    .await
+    .map_err(AppError::Database)?
+    .flatten()
+    .map(|d| {
+        (d * rust_decimal::Decimal::from(100))
+            .round()
+            .to_string()
+            .parse::<i64>()
+            .unwrap_or(0)
+    });
+
+    if let Some(cents) = price_cents.filter(|c| *c > 0) {
+        let amount = format!("{}.{:02}", cents / 100, cents % 100);
+        return Err(AppError::Validation(format!(
+            "This slot is priced at {amount} and card payments are not set up for this business yet, so \
+             it cannot be booked — nothing was reserved and nothing was charged. The business can take \
+             bookings for free slots until payments are switched on."
+        )));
+    }
+
     let start_date = chrono::NaiveDate::parse_from_str(&body.start_date, "%Y-%m-%d")
         .map_err(|_| AppError::Validation("Invalid start_date format (YYYY-MM-DD)".into()))?;
     let days = body.duration_days.unwrap_or(slot.default_duration_days);
