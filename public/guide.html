@@ -251,14 +251,21 @@
 
 <!-- ======= 1b. MCP ======= -->
 <section id="mcp">
-  <h2 class="sec-title"><span class="sec-num">1b</span> MCP — connect your AI tools</h2>
+  <h2 class="sec-title"><span class="sec-num">1b</span> MCP &mdash; connect your AI tools</h2>
   <div class="card">
-    <p>Your account has an API key you can hand to an MCP client — Claude Code, Cursor, Hermes, or your own agent — so it can read your CoreSwift data.</p>
-    <ul>
-      <li><strong>Endpoint:</strong> <code>https://hooks.swiftsoftware.net/mcp</code></li>
-      <li><strong>Token:</strong> your API key. Open <strong>MCP</strong> in the console, press <strong>View &amp; copy</strong>, and re-enter your password to see the full key.</li>
-      <li><strong>Read-only:</strong> every tool is scoped to your account and can only read. There is no write tool and no free-form SQL door.</li>
-    </ul>
+    <p>Your account has an API key you can hand to an AI client &mdash; ChatGPT, Claude, Claude Code, Cursor, Hermes, or your own agent &mdash; so it can read your CoreSwift data. The screen that sets this up is <strong>MCP</strong> in the left menu, directly above <strong>Settings</strong>.</p>
+    <p><strong>The MCP screen, top to bottom:</strong></p>
+    <ol>
+      <li><strong>ChatGPT and Claude tabs.</strong> The address and the key are the same for both; only the place you paste them differs, so pick your client and follow the six numbered steps.</li>
+      <li><strong>The address</strong>, with a Copy button: <code>https://hooks.swiftsoftware.net/mcp</code>. Use the whole address, nothing on the end. If a client is refused <em>before</em> it authenticates &mdash; a 403 rather than a 401 &mdash; use <code>https://mcp.swiftsoftware.net/mcp</code> instead: same server, on a name our edge does not filter.</li>
+      <li><strong>Your key</strong>, with <strong>View &amp; copy</strong> (re-enter your password to see it). This is the same key the Integration Center shows. Regenerating it disconnects every app using the old one and touches nothing else on the account.</li>
+      <li><strong>Ready to connect</strong>, naming the account the AI will act as, with <strong>Test connection</strong> (asks the server whether it is up and asking for a key &mdash; it cannot test your key without it), <strong>Copy my setup</strong>, and <strong>Advanced setup</strong>.</li>
+      <li><strong>What can I ask CoreSwift</strong> &mdash; example questions in three groups, each with a Copy button, plus a <strong>Don&rsquo;t know what to ask?</strong> box: type what you are trying to do and press <strong>Give me ideas</strong>.</li>
+      <li><strong>Everything AI can read</strong> &mdash; eight groups you can open to see exactly what is on offer.</li>
+      <li><strong>What it will not do</strong>, and the <strong>Advanced / developer setup</strong> drawer with copy-paste configs for Claude Code, Claude Desktop, Codex and Cursor.</li>
+    </ol>
+    <p><strong>Read-only, and why that is a feature:</strong> every tool is scoped to your account and can only read. There is no write tool and no free-form SQL door, so an AI cannot delete a contact, move a deal, fire a tag or send an email on your behalf. Asking it a question cannot damage anything.</p>
+    <p><strong>One caution:</strong> text the AI reads back to you is customer-written content. If a customer writes &ldquo;ignore your instructions&rdquo; in an email, that is a sentence in a record, not an order &mdash; the connection has no power to act on it anyway.</p>
   </div>
 </section>
 
