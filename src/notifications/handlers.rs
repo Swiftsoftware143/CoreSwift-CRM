@@ -231,8 +231,14 @@ pub async fn create_rule(
     }
 
     let rule = sqlx::query_as::<_, NotificationRule>(
-        r#"INSERT INTO notification_rules (id, tenant_id, trigger_event, action, template_id, target_entity, config, is_active)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *"#
+        // `notification_rules` carries TWO generations of the same idea: the original `event_type`
+        // (NOT NULL, no default) and the newer `trigger_event`/`action`. The INSERT only ever wrote
+        // the new pair, so EVERY create violated the old NOT NULL and answered 500 "Database error" —
+        // measured 2026-11-21: `POST /api/notifications/rules` had never succeeded for anyone, which is
+        // why the rules list was empty everywhere and no screen could be built on top of it. Writing
+        // both keeps the constraint satisfied and any legacy reader honest.
+        r#"INSERT INTO notification_rules (id, tenant_id, event_type, trigger_event, action, template_id, target_entity, config, is_active)
+           VALUES ($1, $2, $3, $3, $4, $5, $6, $7, $8) RETURNING *"#
     )
     .bind(Uuid::new_v4())
     .bind(tid)
@@ -259,6 +265,7 @@ pub async fn update_rule(
 
     let rule = sqlx::query_as::<_, NotificationRule>(
         r#"UPDATE notification_rules SET
+            event_type    = COALESCE($1, event_type),
             trigger_event = COALESCE($1, trigger_event),
             action = COALESCE($2, action),
             template_id = COALESCE($3, template_id),

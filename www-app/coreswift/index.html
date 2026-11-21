@@ -1963,8 +1963,11 @@ const TAB_RENDERERS = {
     // ever called. This page + the header bell now drive those routes.
     return pageHeader('Notifications', 'Platform notifications and alerts',
       '<button class="btn btn-secondary btn-sm" onclick="markAllNotificationsRead()">✓ Mark all read</button>') +
-    '<div id="notifList"><div class="loading-wrap"><div class="spinner"></div> Loading notifications...</div></div>';
+    '<div id="notifList"><div class="loading-wrap"><div class="spinner"></div> Loading notifications...</div></div>' +
+    '<div id="ntRulesWrap" style="margin-top:16px"></div>';
   },
+
+
 
   'telnyx': () => telnyxShell(),
 
@@ -7141,6 +7144,7 @@ function pipelinesShell() {
     '<button class="btn btn-secondary btn-sm" onclick="plShowReport()">Reporting</button> ' +
     '<button class="btn btn-secondary btn-sm" onclick="plDealSettings()">Deals settings</button> ' +
     '<button class="btn btn-secondary btn-sm" onclick="plDealWriterHelp()">Deal writer API</button>') +
+  '<div id="dlFieldsWrap" style="margin-bottom:16px"></div>' +
   '<div class="card" style="margin-bottom:16px"><div class="card-body">' +
     '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">' +
       '<div style="flex:2 1 220px"><label style="font-size:12px;color:var(--text-secondary)">Search</label>' +
@@ -8496,7 +8500,8 @@ function scoringShell() {
   return pageHeader('Lead Scoring', 'Score leads from real rules, thresholds and history',
     '<button class="btn btn-primary btn-sm" onclick="scNewRule()">+ Add Criterion</button> ' +
     '<button class="btn btn-secondary btn-sm" onclick="scNewThreshold()">+ Add Threshold</button>') +
-  '<div id="scContent"><div class="loading-wrap"><div class="spinner"></div> Loading scoring engine...</div></div>';
+  '<div id="scContent"><div class="loading-wrap"><div class="spinner"></div> Loading scoring engine...</div></div>' +
+  '<div id="scWebhooksWrap" style="margin-top:16px"></div>';
 }
 async function loadScoringTab() {
   const el = document.getElementById('scContent');
@@ -8914,7 +8919,10 @@ async function ckAdvance(instanceId, currentStage) {
 // ---------------------------------------------------------------- ROUND ROBIN
 let RR_TEAMS = [];
 function roundRobinShell() {
+  // "Hand a lead to the team" was the missing half: POST /api/round-robin/assign had no caller, so the
+  // teams on this screen rotated for nobody. The button only appears once a team exists to rotate.
   return pageHeader('Round Robin', 'Teams, members and assignment history',
+    '<button class="btn btn-secondary btn-sm" onclick="rrAssignLead()">Hand a lead to the team</button> ' +
     '<button class="btn btn-primary btn-sm" onclick="rrNewTeam()">+ New Team</button>') +
   '<div id="rrContent"><div class="loading-wrap"><div class="spinner"></div> Loading teams...</div></div>';
 }
@@ -9061,6 +9069,7 @@ function monitoringShell() {
   return pageHeader('Monitoring', 'Account health signals and thresholds',
     '<button class="btn btn-primary btn-sm" onclick="monNewThreshold()">+ New Threshold</button> ' +
     '<button class="btn btn-secondary btn-sm" onclick="loadMonitoringTab()">↻ Refresh</button>') +
+  '<div id="monHealthWrap"></div>' +
   '<div id="monContent"><div class="loading-wrap"><div class="spinner"></div> Loading monitoring...</div></div>';
 }
 async function loadMonitoringTab() {
@@ -9333,6 +9342,157 @@ function imDeleteMapping(id) {
 // ---- wiring overrides: replace the placeholder/fake renderers and loaders ----
 TAB_RENDERERS['pipelines'] = pipelinesShell;
 // The Deals tab opens the deals workspace itself (same screen, its own entry in the menu).
+
+// ── DEAL CUSTOM FIELDS (2026-11-21) ───────────────────────────────────────────────────────────────
+// GET/POST/PATCH/DELETE /api/deals/custom-fields has existed since the deal writer and had NO caller
+// anywhere in this console: measured on a live account, the table held two fields ("Drop-off city",
+// a date) that no screen would ever show. A deal field nobody can add or remove is a feature that
+// only exists for the API.
+var DLF = { rows: [] };
+
+async function dlLoadFields() {
+  const el = document.getElementById('dlFieldsWrap');
+  if (!el) return;
+  let rows = [];
+  try {
+    const d = await API.get('/deals/custom-fields');
+    rows = (d && Array.isArray(d.fields)) ? d.fields : [];
+  } catch (e) {
+    el.innerHTML = card('Deal fields', '<p style="color:var(--text-secondary)">Could not read your deal fields: ' + escapeHtml(e.message || String(e)) + '</p>');
+    return;
+  }
+  DLF.rows = rows;
+  const body = '<p style="color:var(--text-secondary);margin:0 0 10px">The extra details this account records on a deal, beyond amount and stage — a drop-off city, a reference number, a date. Ask an AI agent for them by these keys.</p>' +
+    '<div style="margin-bottom:10px"><button type="button" class="btn btn-primary btn-sm" data-dlf-add="1">+ Add a field</button></div>' +
+    (rows.length
+      ? dataTable(['Name', 'Key', 'Type', 'State', ''], rows.map(function (f) {
+          return [
+            '<strong>' + escapeHtml(f.label) + '</strong>',
+            '<code>' + escapeHtml(f.key) + '</code>',
+            escapeHtml(f.field_type || 'text'),
+            f.is_active === false ? '<span class="badge badge-muted">off</span>' : '<span class="badge badge-success">on</span>',
+            '<button type="button" class="btn btn-ghost btn-xs" data-dlf-del="' + escapeHtmlAttr(String(f.id)) + '" data-dlf-label="' + escapeHtmlAttr(f.label) + '">Remove</button>'
+          ];
+        }), '')
+      : '<p style="color:var(--text-secondary);font-size:13px">No deal fields yet. Most accounts add one or two — anything the amount and the stage cannot say.</p>');
+  el.innerHTML = card('Deal fields', body);
+}
+
+function dlAddField() {
+  showModal('Add a deal field',
+    '<div class="form-group"><label>Name it</label><input type="text" id="dlfLabel" placeholder="Drop-off city" autofocus></div>' +
+    '<div class="form-group"><label>Type</label><select id="dlfType">' +
+      '<option value="text">Text</option><option value="number">Number</option>' +
+      '<option value="money">Money</option><option value="date">Date</option>' +
+      '<option value="select">Pick from a list</option><option value="checkbox">Yes / no</option></select></div>' +
+    '<p style="color:var(--text-secondary);font-size:12px;margin:0">The key AI agents and imports use is made from the name, so it stays predictable.</p>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="dlfSave">Add field</button>');
+  document.getElementById('dlfSave').onclick = async function () {
+    const label = (document.getElementById('dlfLabel').value || '').trim();
+    const field_type = document.getElementById('dlfType').value;
+    if (!label) { toast('Give the field a name first', 'error'); return; }
+    try {
+      await API.post('/deals/custom-fields', { label: label, field_type: field_type });
+      closeModal(); toast('Field added', 'success'); dlLoadFields();
+    } catch (e) { toast('Could not add it: ' + (e.message || e), 'error'); }
+  };
+}
+
+async function dlDeleteField(id, label) {
+  if (!confirm('Remove the deal field "' + label + '"? Values already recorded on deals are left alone; the field stops appearing.')) return;
+  try { await API.del('/deals/custom-fields/' + encodeURIComponent(id)); toast('Field removed', 'success'); dlLoadFields(); }
+  catch (e) { toast('Could not remove it: ' + (e.message || e), 'error'); }
+}
+
+document.addEventListener('click', function (ev) {
+  const t = ev.target; if (!t || !t.closest) return;
+  if (t.closest('[data-dlf-add]')) { ev.preventDefault(); dlAddField(); return; }
+  const del = t.closest('[data-dlf-del]');
+  if (del) { ev.preventDefault(); dlDeleteField(del.getAttribute('data-dlf-del'), del.getAttribute('data-dlf-label') || 'this field'); }
+});
+
+// ── NOTIFICATION RULES (2026-11-21) ──────────────────────────────────────────────────────────────
+// The page above drives the feed. The RULES that decide what lands in it (and the outbox the engine
+// drains) had no screen: GET/POST /api/notifications/rules, PATCH/DELETE /:id, GET /api/notifications/queue.
+var NTR = { rules: [] };
+
+async function ntLoadRules() {
+  const el = document.getElementById('ntRulesWrap');
+  if (!el) return;
+  let rules = [], queue = [];
+  try { const d = await API.get('/notifications/rules'); rules = (d && Array.isArray(d.rules)) ? d.rules : []; } catch (_) {}
+  try { const q = await API.get('/notifications/queue'); queue = (q && Array.isArray(q.items)) ? q.items : []; } catch (_) {}
+  NTR.rules = rules;
+  const ruleRows = rules.map(function (r) {
+    return [
+      '<strong>' + escapeHtml(r.trigger_event || '—') + '</strong>',
+      escapeHtml(r.action || '—'),
+      escapeHtml(r.target_entity || '—'),
+      r.is_active === false ? '<span class="badge badge-muted">paused</span>' : '<span class="badge badge-success">live</span>',
+      '<button type="button" class="btn btn-ghost btn-xs" data-ntr-toggle="' + escapeHtmlAttr(String(r.id)) + '" data-ntr-active="' + (r.is_active === false ? '0' : '1') + '">' + (r.is_active === false ? 'Switch on' : 'Pause') + '</button> ' +
+      '<button type="button" class="btn btn-ghost btn-xs" data-ntr-del="' + escapeHtmlAttr(String(r.id)) + '">Remove</button>'
+    ];
+  });
+  const qRows = queue.slice(0, 10).map(function (i) {
+    return [escapeHtml(i.title || i.trigger_event || i.kind || '—'), escapeHtml(String(i.created_at || '').slice(0, 16).replace('T', ' ')), escapeHtml(i.status || (i.sent ? 'sent' : 'waiting'))];
+  });
+  const body =
+    '<p style="color:var(--text-secondary);margin:0 0 10px">What CoreSwift does on your behalf when something happens — a deal goes quiet, a form is filled in, a booking lands. These are the rules behind the alerts in the list above.</p>' +
+    '<div style="margin-bottom:10px"><button type="button" class="btn btn-primary btn-sm" data-ntr-add="1">+ New rule</button></div>' +
+    (rules.length ? dataTable(['When', 'Do', 'About', 'State', ''], ruleRows, '') :
+      '<p style="color:var(--text-secondary);font-size:13px">No rules yet. A rule is "when X happens, do Y" — start with the one thing you keep doing by hand.</p>') +
+    (queue.length ? '<h4 style="margin:18px 0 6px">Waiting to go out (' + queue.length + ')</h4>' + dataTable(['What', 'When', 'State'], qRows, '') : '');
+  el.innerHTML = card('Alert rules', body);
+}
+
+function ntAddRule() {
+  showModal('New alert rule',
+    '<div class="form-group"><label>When this happens</label><input type="text" id="ntrTrigger" placeholder="deal.stalled" autofocus>' +
+      '<p style="color:var(--text-secondary);font-size:12px;margin:4px 0 0">The event name this system publishes — for example <code>deal.stalled</code>, <code>contact.created</code>, <code>booking.confirmed</code>.</p></div>' +
+    // These four are the API's own enum (src/notifications/handlers.rs valid_actions). An invented
+    // "webhook" option here answered 422 on save — the screen must not offer a value the route refuses.
+    '<div class="form-group"><label>Do this</label><select id="ntrAction">' +
+      '<option value="in_app">Put it in this feed</option>' +
+      '<option value="send_email">Send an email</option>' +
+      '<option value="send_sms">Send a text message</option>' +
+      '<option value="send_whatsapp">Send a WhatsApp message</option></select></div>' +
+    '<div class="form-group"><label>About (optional)</label><input type="text" id="ntrTarget" placeholder="deal"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" id="ntrSave">Create rule</button>');
+  document.getElementById('ntrSave').onclick = async function () {
+    const trigger_event = (document.getElementById('ntrTrigger').value || '').trim();
+    const action = document.getElementById('ntrAction').value;
+    const target_entity = (document.getElementById('ntrTarget').value || '').trim();
+    if (!trigger_event) { toast('Name the event first', 'error'); return; }
+    try {
+      await API.post('/notifications/rules', { trigger_event: trigger_event, action: action, target_entity: target_entity || null, is_active: true });
+      closeModal(); toast('Rule created', 'success'); ntLoadRules();
+    } catch (e) { toast('Could not create it: ' + (e.message || e), 'error'); }
+  };
+}
+
+document.addEventListener('click', async function (ev) {
+  const t = ev.target; if (!t || !t.closest) return;
+  if (t.closest('[data-ntr-add]')) { ev.preventDefault(); ntAddRule(); return; }
+  const tg = t.closest('[data-ntr-toggle]');
+  if (tg) {
+    ev.preventDefault();
+    const id = tg.getAttribute('data-ntr-toggle');
+    const nowActive = tg.getAttribute('data-ntr-active') === '1';
+    try { await API.call('PATCH', '/notifications/rules/' + encodeURIComponent(id), { is_active: !nowActive }); toast(nowActive ? 'Rule paused' : 'Rule switched on', 'success'); ntLoadRules(); }
+    catch (e) { toast('Could not change it: ' + (e.message || e), 'error'); }
+    return;
+  }
+  const del = t.closest('[data-ntr-del]');
+  if (del) {
+    ev.preventDefault();
+    if (!confirm('Remove this alert rule? Nothing already sent is affected.')) return;
+    try { await API.del('/notifications/rules/' + encodeURIComponent(del.getAttribute('data-ntr-del'))); toast('Rule removed', 'success'); ntLoadRules(); }
+    catch (e) { toast('Could not remove it: ' + (e.message || e), 'error'); }
+  }
+});
+
 TAB_RENDERERS['deals'] = pipelinesShell;
 TAB_RENDERERS['campaigns'] = campaignsShell;
 TAB_RENDERERS['lists'] = listsShell;
@@ -9440,6 +9600,113 @@ async function agentDecide(id, what) {
 
 TAB_RENDERERS['agent'] = agentShell;
 TAB_LOADERS['agent'] = agentLoad;
+
+// ── SCORING WEBHOOKS + ROUND-ROBIN ASSIGNMENT (2026-11-21) ───────────────────────────────────────
+// Two more endpoint families with no caller anywhere:
+//   GET/POST /api/scoring/webhooks, DELETE /:id  — where a lead's score is delivered
+//   POST     /api/round-robin/assign             — actually hand a lead to a teammate
+// The Lead Scoring screen showed thresholds and history but never the destinations, and the Round
+// Robin screen listed teams that could never be used.
+var SCW = { rows: [] };
+
+async function scLoadWebhooks() {
+  const el = document.getElementById('scWebhooksWrap');
+  if (!el) return;
+  let rows = [];
+  try { const d = await API.get('/scoring/webhooks'); rows = (d && Array.isArray(d.webhooks)) ? d.webhooks : []; } catch (_) {}
+  SCW.rows = rows;
+  const body = '<p style="color:var(--text-secondary);margin:0 0 10px">Where a lead score is delivered when it changes — your own automation, a Slack hook, an n8n workflow. Leave this empty and scores stay inside CoreSwift.</p>' +
+    '<div style="margin-bottom:10px"><button type="button" class="btn btn-primary btn-sm" data-scw-add="1">+ Add an address</button></div>' +
+    (rows.length
+      ? dataTable(['Name', 'Address', ''], rows.map(function (w) {
+          return ['<strong>' + escapeHtml(w.name || '—') + '</strong>', '<code style="word-break:break-all">' + escapeHtml(w.url || '') + '</code>',
+                  '<button type="button" class="btn btn-ghost btn-xs" data-scw-del="' + escapeHtmlAttr(String(w.id)) + '">Remove</button>'];
+        }), '')
+      : '<p style="color:var(--text-secondary);font-size:13px">No destinations yet — a score nobody receives is a number on a screen.</p>');
+  el.innerHTML = card('Score destinations', body);
+}
+
+function scAddWebhook() {
+  showModal('Add a score destination',
+    '<div class="form-group"><label>Name</label><input type="text" id="scwName" placeholder="n8n lead router" autofocus></div>' +
+    '<div class="form-group"><label>Web address</label><input type="text" id="scwUrl" placeholder="https://…"></div>' +
+    // `min_score` is REQUIRED by POST /api/scoring/webhooks (its absence answered 422 "missing field
+    // min_score"), so the form asks for it instead of letting the save fail.
+    '<div class="form-group"><label>Send when the score is at least</label><input type="number" id="scwMin" value="50" min="0"></div>' +
+    '<div class="form-group"><label>Send when the score is at most (optional)</label><input type="number" id="scwMax" placeholder="no limit"></div>' +
+    '<div class="form-group"><label>Signing secret (optional)</label><input type="text" id="scwSecret" placeholder="leave empty if the receiver does not check one">' +
+      '<p style="color:var(--text-secondary);font-size:12px;margin:4px 0 0">Stored encrypted; it travels as a signature header so the receiver can prove the call came from you.</p></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="scwSave">Add</button>');
+  document.getElementById('scwSave').onclick = async function () {
+    const name = (document.getElementById('scwName').value || '').trim();
+    const url = (document.getElementById('scwUrl').value || '').trim();
+    const secret = (document.getElementById('scwSecret').value || '').trim();
+    const minRaw = (document.getElementById('scwMin').value || '').trim();
+    const maxRaw = (document.getElementById('scwMax').value || '').trim();
+    if (!name || !url) { toast('A name and a web address are both needed', 'error'); return; }
+    const min_score = minRaw === '' ? 0 : parseInt(minRaw, 10);
+    if (!isFinite(min_score) || min_score < 0) { toast('The minimum score has to be a number of 0 or more', 'error'); return; }
+    try {
+      await API.post('/scoring/webhooks', {
+        name: name, url: url, min_score: min_score,
+        max_score: maxRaw === '' ? null : parseInt(maxRaw, 10),
+        headers: secret ? { 'X-Signature-Secret': secret } : {}
+      });
+      closeModal(); toast('Destination added', 'success'); scLoadWebhooks();
+    } catch (e) { toast('Could not add it: ' + (e.message || e), 'error'); }
+  };
+}
+
+async function rrAssignLead() {
+  let teams = [];
+  try { teams = (await API.get('/round-robin/teams')) || []; } catch (_) {}
+  teams = Array.isArray(teams) ? teams : [];
+  if (!teams.length) { toast('Create a team first — assignment needs one to rotate around.', 'info'); return; }
+  const opts = teams.map(function (t) { return '<option value="' + escapeHtmlAttr(String(t.id)) + '">' + escapeHtml(t.name || t.id) + '</option>'; }).join('');
+  showModal('Hand a lead to the team',
+    '<p style="color:var(--text-secondary);font-size:13px;margin:0 0 12px">Round robin gives the next lead to the next person in turn, so the work spreads instead of landing on whoever answers first.</p>' +
+    '<div class="form-group"><label>Team</label><select id="rrTeam">' + opts + '</select></div>' +
+    '<div class="form-group"><label>Contact email (optional)</label><input type="text" id="rrContact" placeholder="the person being handed over"></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="rrGo">Assign now</button>');
+  document.getElementById('rrGo').onclick = async function () {
+    const team_id = document.getElementById('rrTeam').value;
+    const email = (document.getElementById('rrContact').value || '').trim();
+    let contact_id = null;
+    if (email) {
+      try {
+        const found = await API.get('/contacts/search?q=' + encodeURIComponent(email));
+        const list = (found && (found.contacts || found.items)) || [];
+        const hit = list.find(function (c) { return (c.email || '').toLowerCase() === email.toLowerCase(); });
+        contact_id = hit ? hit.id : null;
+        if (!contact_id) { toast('No contact with that email — the lead is assigned without one.', 'info'); }
+      } catch (_) {}
+    }
+    try {
+      const r = await API.post('/round-robin/assign', { team_id: team_id, contact_id: contact_id });
+      closeModal();
+      const who = (r && (r.assigned_to_name || r.assigned_to_email || (r.member && (r.member.name || r.member.email)))) || 'the next person in turn';
+      toast('Assigned to ' + who, 'success');
+      if (typeof loadRoundRobinTab === 'function') loadRoundRobinTab();
+    } catch (e) { toast('Could not assign: ' + (e.message || e), 'error'); }
+  };
+}
+
+function scBindOnce() {
+  if (window.__scwBound) return;
+  window.__scwBound = true;
+  document.addEventListener('click', async function (ev) {
+    const t = ev.target; if (!t || !t.closest) return;
+    if (t.closest('[data-scw-add]')) { ev.preventDefault(); scAddWebhook(); return; }
+    const del = t.closest('[data-scw-del]');
+    if (del) {
+      ev.preventDefault();
+      if (!confirm('Remove this destination? Scores stop being delivered there.')) return;
+      try { await API.del('/scoring/webhooks/' + encodeURIComponent(del.getAttribute('data-scw-del'))); toast('Removed', 'success'); scLoadWebhooks(); }
+      catch (e) { toast('Could not remove it: ' + (e.message || e), 'error'); }
+    }
+  });
+}
+
 TAB_RENDERERS['lead-scoring'] = scoringShell;
 TAB_RENDERERS['analytics'] = analyticsShell;
 TAB_RENDERERS['tags'] = tagsShell;
@@ -9876,6 +10143,40 @@ TAB_LOADERS['duplicates'] = loadDuplicatesTab;
 
 TAB_RENDERERS['checklists'] = checklistsShell;
 TAB_RENDERERS['round-robin'] = roundRobinShell;
+
+// ── TWO HEALTH ENDPOINTS THAT NO SCREEN ASKED (2026-11-21) ────────────────────────────────────────
+// GET /api/data-mapping/health and GET /api/admin/health both answer, and nothing displayed either.
+// They are one-line "is this actually working" answers, so they belong where the work happens rather
+// than in a tab of their own.
+async function dmShowHealth() {
+  const el = document.getElementById('dmHealthWrap');
+  if (!el) return;
+  try {
+    const h = await API.get('/data-mapping/health');
+    el.innerHTML = '<div class="card"><div class="card-body" style="font-size:13px">' +
+      '<span class="badge ' + (h && h.ok ? 'badge-success' : 'badge-danger') + '">' + (h && h.ok ? 'mapping service reachable' : 'mapping service not answering') + '</span>' +
+      '<span style="color:var(--text-secondary);margin-left:8px">A mapping cannot run while this is red.</span></div></div>';
+  } catch (e) {
+    el.innerHTML = '<div class="card"><div class="card-body" style="font-size:13px"><span class="badge badge-danger">mapping service not answering</span>' +
+      '<span style="color:var(--text-secondary);margin-left:8px">' + escapeHtml(e.message || String(e)) + '</span></div></div>';
+  }
+}
+async function monShowHealth() {
+  const el = document.getElementById('monHealthWrap');
+  if (!el) return;
+  try {
+    const h = await API.get('/admin/health');
+    const ok = h && (h.status === 'healthy' || h.status === 'ok');
+    el.innerHTML = '<div class="card" style="margin-bottom:16px"><div class="card-body" style="font-size:13px">' +
+      '<span class="badge ' + (ok ? 'badge-success' : 'badge-danger') + '">' + escapeHtml((h && h.status) || 'unknown') + '</span>' +
+      '<span style="color:var(--text-secondary);margin-left:8px">database ' + escapeHtml((h && h.database) || '?') +
+      ' · service ' + escapeHtml((h && h.service) || '?') + '</span></div></div>';
+  } catch (e) {
+    el.innerHTML = '<div class="card" style="margin-bottom:16px"><div class="card-body" style="font-size:13px">' +
+      '<span class="badge badge-danger">health check refused</span><span style="color:var(--text-secondary);margin-left:8px">' + escapeHtml(e.message || String(e)) + '</span></div></div>';
+  }
+}
+
 TAB_RENDERERS['monitoring'] = monitoringShell;
 TAB_RENDERERS['widgets'] = widgetsShell;
 
@@ -11625,15 +11926,16 @@ TAB_LOADERS['email-settings'] = loadInboxTab;
 TAB_LOADERS['calendar'] = loadCalendarTab;
 
 TAB_LOADERS['pipelines'] = loadPipelinesTab;
-TAB_LOADERS['deals'] = loadPipelinesTab;
+TAB_LOADERS['deals'] = function () { loadPipelinesTab(); dlLoadFields(); };
+TAB_LOADERS['notifications'] = function () { ntLoadRules(); };
 TAB_LOADERS['campaigns'] = loadCampaignsTab;
 TAB_LOADERS['lists'] = loadListsTab;
-TAB_LOADERS['lead-scoring'] = loadScoringTab;
+TAB_LOADERS['lead-scoring'] = function () { loadScoringTab(); scLoadWebhooks(); scBindOnce(); };
 TAB_LOADERS['analytics'] = loadAnalyticsTab;
 TAB_LOADERS['tags'] = loadTagsTab;
 TAB_LOADERS['checklists'] = loadChecklistsTab;
 TAB_LOADERS['round-robin'] = loadRoundRobinTab;
-TAB_LOADERS['monitoring'] = loadMonitoringTab;
+TAB_LOADERS['monitoring'] = function () { loadMonitoringTab(); monShowHealth(); };
 TAB_LOADERS['widgets'] = loadWidgetsTab;
 
 // ═══ t_4b6f1a5c residual dead-endpoint wiring ═══
@@ -12848,9 +13150,10 @@ TAB_RENDERERS['data-mapping'] = () => pageHeader(
   'Data mapping',
   'Map another app’s fields into this account’s contacts — add a new source by configuration, not code',
   '<button class="btn btn-secondary btn-sm" data-ops="dm-refresh" onclick="dmInit()">↻ Reload fields</button>'
-) + '<div id="dmWrap"><div class="loading-wrap"><div class="spinner"></div> Loading mappings…</div></div>';
+) + '<div id="dmHealthWrap" style="margin-bottom:16px"></div>' +
+  '<div id="dmWrap"><div class="loading-wrap"><div class="spinner"></div> Loading mappings…</div></div>';
 
-TAB_LOADERS['data-mapping'] = async () => { await dmInit(); };
+TAB_LOADERS['data-mapping'] = async () => { await dmInit(); dmShowHealth(); };
 
 /* ==========================================================================================
  * BOOKING ENGINE console page
