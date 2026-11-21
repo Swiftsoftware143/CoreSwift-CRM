@@ -55,6 +55,12 @@ pub async fn broadcast_portfolio_sync(
         ("ADASwift", 8087),
         ("IncentiveSwift", 8083),
         ("MissedCallRespondr", 8088),
+        // XrideDispatch (2026-11-21): the dispatch app was created after this list was written, so a
+        // portfolio company existed in the CRM and nowhere in dispatch — the owner's own businesses
+        // stop being mirrored the moment a new sibling app ships unless somebody remembers this array.
+        // Dispatch is a RECEIVER, not a snapshot: it upserts on `portfolio_id`, retires on a delete and
+        // creates no account or key of its own (nothing logs into dispatch as a portfolio company).
+        ("XrideDispatch", 8102),
     ];
 
     for (app_name, port) in targets {
