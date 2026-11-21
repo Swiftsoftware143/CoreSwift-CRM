@@ -1776,9 +1776,15 @@ const TAB_RENDERERS = {
   },
   'users': () => {
     // Read-only on purpose: there is no platform route that creates a user in an arbitrary
-    // workspace, and the old "+ Add User" button faked one with a modal that toasted success and
-    // sent nothing. People join a workspace through that workspace's own invite flow.
-    return pageHeader('Users', 'Every user on the platform, with the workspace they belong to') +
+    // account, and the old "+ Add User" button faked one with a modal that toasted success and sent
+    // nothing. People join an account through that account's own invite flow.
+    //
+    // PORTFOLIO COMPANIES ARE NOT HERE BY DEFAULT (David, 2026-11-21): they are a separate
+    // population with their own screen, and mixing them in meant scrolling past every customer to
+    // find one. The toggle brings them back for anyone who wants the whole platform in one table.
+    return pageHeader('Users', 'The people on the platform, with the account they belong to',
+        '<label style="display:inline-flex;align-items:center;gap:6px;font-size:.85rem">' +
+        '<input type="checkbox" id="usersIncludePortfolio" onchange="loadUsersTab()"> Include portfolio companies</label>') +
     '<div id="usersTable"><div class="loading-wrap"><div class="spinner"></div> Loading users...</div></div>';
   },
   'billing': () => {
@@ -2465,7 +2471,11 @@ const TAB_LOADERS = {
     const el = document.getElementById('usersTable');
     if (!el) return;
     try {
-      const d = await API.get('/admin/users?per_page=50');
+      // Portfolio companies are excluded by the SERVER unless asked for (David, 2026-11-21): the
+      // page is about customers, and the owner's own companies have their own screen with an Open
+      // button. The toggle asks for them back, and then every row says which it is.
+      const wantPortfolio = !!(document.getElementById('usersIncludePortfolio') || {}).checked;
+      const d = await API.get('/admin/users?per_page=50' + (wantPortfolio ? '&include_portfolio=true' : ''));
       const allUsers = (d && d.users) || [];
       const testUsers = allUsers.filter(u => csIsTestIdentity(u.email));
       const users = CS_SHOW_TEST_USERS ? allUsers : allUsers.filter(u => !csIsTestIdentity(u.email));
@@ -2473,7 +2483,7 @@ const TAB_LOADERS = {
         escapeHtml(u.name || '—'),
         escapeHtml(u.email || '—'),
         `<span class="badge ${u.is_platform_admin?'badge-primary':'badge-muted'}">${escapeHtml(roleLabel(u.role))}${u.is_platform_admin?' · platform':''}</span>`,
-        escapeHtml(u.tenant_name || '—'),
+        escapeHtml(u.tenant_name || '—') + (u.is_portfolio ? ' <span class="badge badge-muted">portfolio</span>' : ''),
         escapeHtml(u.created_at ? new Date(u.created_at).toLocaleDateString() : '—')
       ]);
       const note = testUsers.length
@@ -2483,7 +2493,7 @@ const TAB_LOADERS = {
           + (CS_SHOW_TEST_USERS ? 'Hide test identities' : 'Show ' + testUsers.length + ' test identities') + '</button></p>'
         : '';
       el.innerHTML = dataTable(
-        ['Name','Email','Role','Workspace','Created'], rows,
+        ['Name','Email','Role','Account','Created'], rows,
         'No users yet.'
       ) + note;
     } catch(e) {
@@ -2499,14 +2509,24 @@ const TAB_LOADERS = {
     try {
       const data = await API.get('/admin/portfolio-companies');
       const companies = (data && data.portfolio_companies) || [];
-      const rows = companies.map(c => [
+      // PORTFOLIO COMPANIES ARE OPENED FROM HERE (David, 2026-11-21). They were mixed into the Users
+      // list, so finding one meant scrolling past every customer — and this screen, the one that
+      // exists for them, offered no way in. The Open button impersonates the company's OWN account
+      // (account_tenant_id, not the owner's tenant that every portfolio row shares).
+      const rows = companies.map(c => {
+        const openable = !!c.account_tenant_id;
+        return [
         escapeHtml(c.name || '—'),
         escapeHtml(c.slug || '—'),
         escapeHtml(c.email || '—'),
         c.is_active ? '<span class="badge badge-success">active</span>' : '<span class="badge badge-muted">inactive</span>',
         escapeHtml(c.created_at ? new Date(c.created_at).toLocaleDateString() : '—'),
+        (openable
+          ? `<button class="btn btn-primary btn-xs" data-ops="portfolio-open" onclick="pfImpersonate('${c.account_tenant_id}','${escapeHtmlAttr(c.name || '')}')">Open</button> `
+          : `<button class="btn btn-ghost btn-xs" disabled title="This company has no account yet">No account</button> `) +
         `<button class="btn btn-ghost btn-xs" data-ops="portfolio-targets-open" onclick="showTargetsModal('${c.id}','${escapeHtmlAttr(c.name || '')}')">Targets</button>`
-      ]);
+        ];
+      });
       el.innerHTML = dataTable(['Company','Slug','Email','Status','Created',''], rows,
         'No portfolio companies yet — add one, or run a cross-app sync.');
     } catch(e) {
@@ -12055,6 +12075,26 @@ async function wsLoadBusinesses() {
     }).join('');
   } catch (e) {
     el.innerHTML = '<span style="font-size:.8rem;color:var(--text-secondary)">Could not load businesses</span>';
+  }
+}
+
+/* Open a portfolio company's own account, from the Portfolio screen (David, 2026-11-21).
+   Same impersonation call the business switcher uses; the difference is WHO you are opening — a
+   portfolio company, chosen from the list that exists for them, rather than hunted for among
+   customers. */
+async function pfImpersonate(accountTenantId, name) {
+  if (!accountTenantId) { toast('This company has no account yet.', 'error'); return; }
+  try {
+    const d = await API.post('/admin/impersonate', { tenant_id: accountTenantId });
+    const tok = (d && (d.impersonation_token || d.access_token)) || '';
+    if (!tok) throw new Error('No token returned');
+    STATE.token = tok;
+    localStorage.setItem('crm_token', tok);
+    localStorage.removeItem('crm_workspace');
+    try { localStorage.setItem('crm_impersonating', name || 'portfolio company'); } catch (e) {}
+    window.location.reload();
+  } catch (e) {
+    toast((e && e.message) ? e.message : 'Could not open that company', 'error');
   }
 }
 

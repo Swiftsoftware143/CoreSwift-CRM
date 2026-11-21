@@ -735,6 +735,12 @@ pub async fn list_all_portfolio_companies(
     struct PortfolioRow {
         id: Uuid,
         tenant_id: Option<Uuid>,
+        /// The company's OWN CoreSwift account. `tenant_id` above is the OWNER's account (every
+        /// portfolio row shares it), so impersonation must use this one — the owner's own companies
+        /// live in their own accounts and that is the account to open.
+        account_tenant_id: Option<Uuid>,
+        account_name: Option<String>,
+        user_count: i64,
         name: String,
         slug: Option<String>,
         email: Option<String>,
@@ -744,8 +750,13 @@ pub async fn list_all_portfolio_companies(
     }
 
     let companies = sqlx::query_as::<_, PortfolioRow>(
-        r#"SELECT id, tenant_id, name, slug, email, description, is_active, created_at
-           FROM portfolio_companies ORDER BY name ASC"#,
+        r#"SELECT p.id, p.tenant_id, p.account_tenant_id,
+                  t.name AS account_name,
+                  (SELECT COUNT(*) FROM users u WHERE u.tenant_id = p.account_tenant_id) AS user_count,
+                  p.name, p.slug, p.email, p.description, p.is_active, p.created_at
+             FROM portfolio_companies p
+             LEFT JOIN tenants t ON t.id = p.account_tenant_id
+            ORDER BY p.name ASC"#,
     )
     .fetch_all(&s.db)
     .await?;
@@ -874,25 +885,51 @@ pub async fn list_all_users(
         is_active: bool,
         is_platform_admin: bool,
         created_at: String,
+        /// true when this person belongs to a PORTFOLIO company rather than a customer.
+        is_portfolio: bool,
     }
+
+    // ── PORTFOLIO IS NOT A CUSTOMER LIST (David, 2026-11-21) ──────────────────────────────────
+    // The owner's own companies were mixed into this list, so finding one meant scrolling past every
+    // customer: "if I have a hundred users or even a thousand users I have to go through all those to
+    // find my portfolio accounts". They are a separate population and belong on the Portfolio screen,
+    // which now offers impersonation directly. Default: customers only. `?include_portfolio=true`
+    // brings them back for anyone who wants the whole platform in one table, and every row says which
+    // it is so the two can never be confused again.
+    let include_portfolio = p
+        .get("include_portfolio")
+        .and_then(|v| {
+            v.as_bool().or_else(|| {
+                v.as_str()
+                    .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+            })
+        })
+        .unwrap_or(false);
 
     let users = sqlx::query_as::<_, AdminUserRow>(
         r#"SELECT u.id::text AS id, u.tenant_id::text AS tenant_id, t.name AS tenant_name,
                   u.name, u.email, u.role::text AS role, u.is_active, u.is_platform_admin,
-                  u.created_at::text AS created_at
+                  u.created_at::text AS created_at,
+                  EXISTS (SELECT 1 FROM portfolio_companies pc WHERE pc.account_tenant_id = u.tenant_id) AS is_portfolio
            FROM users u
            LEFT JOIN tenants t ON t.id = u.tenant_id
+           WHERE $3 OR NOT EXISTS (SELECT 1 FROM portfolio_companies pc WHERE pc.account_tenant_id = u.tenant_id)
            ORDER BY u.created_at DESC
            LIMIT $1 OFFSET $2"#,
     )
     .bind(per_page)
     .bind(offset)
+    .bind(include_portfolio)
     .fetch_all(&s.db)
     .await?;
 
-    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
-        .fetch_one(&s.db)
-        .await?;
+    let total: i64 = sqlx::query_scalar(
+        r#"SELECT COUNT(*) FROM users u
+            WHERE $1 OR NOT EXISTS (SELECT 1 FROM portfolio_companies pc WHERE pc.account_tenant_id = u.tenant_id)"#,
+    )
+    .bind(include_portfolio)
+    .fetch_one(&s.db)
+    .await?;
 
     Ok(Json(json!({
         "users": users,
