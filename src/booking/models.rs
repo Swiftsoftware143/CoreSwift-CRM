@@ -277,6 +277,12 @@ pub struct NewOrder {
     pub customer_email: String,
     pub contact_id: Option<Uuid>,
     pub notes: Option<String>,
+    /// Optional, because a booking must never depend on a phone number.
+    #[serde(default)]
+    pub phone: Option<String>,
+    /// What the buyer ticked, stored with the order. Absent means NO consent: `Option` -> false.
+    #[serde(default)]
+    pub sms_opt_in: Option<bool>,
     pub items: Vec<OrderItemInput>,
 }
 

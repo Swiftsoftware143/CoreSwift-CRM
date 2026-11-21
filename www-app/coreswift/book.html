@@ -413,6 +413,11 @@
       '</div>' +
       '<label class="field">Your name<input id="buyerName" placeholder="Alex Morgan" autocomplete="name"></label>' +
       '<label class="field">Email<input id="buyerEmail" type="email" placeholder="you@company.com" autocomplete="email"></label>' +
+      // PHONE IS OPTIONAL AND THE CONSENT IS EXPLICIT (David, 2026-11-21): a number with no tick is
+      // not permission, so the checkbox is unticked by default and the text says what it is for. The
+      // phone field exists so the opt-in has somewhere to live; the booking never requires it.
+      '<label class="field">Phone (optional)<input id="buyerPhone" type="tel" placeholder="+1 305 555 0100" autocomplete="tel"></label>' +
+      '<label class="field consent"><input id="buyerSmsOk" type="checkbox"> <span>Text me about this booking and updates. Message rates may apply, and you can reply STOP at any time to stop them.</span></label>' +
       '<label class="field">Anything we should know?<input id="buyerNote" placeholder="Optional"></label>' +
       '<button class="cta" id="payBtn"' + (picked.length ? '' : ' disabled') + ' onclick="BKUI.reserve()">' +
         (picked.length ? 'Reserve & pay' : 'Pick a slot to continue') + '</button>' +
@@ -484,6 +489,8 @@
       if (STATE.busy) return;
       var name = (el('buyerName') || {}).value || '';
       var email = (el('buyerEmail') || {}).value || '';
+      var phone = (el('buyerPhone') || {}).value || '';
+      var smsOk = !!(el('buyerSmsOk') || {}).checked;
       if (!name.trim() || !email.trim()) { alert('Your name and email are needed so we can send the confirmation.'); return; }
       var items = Object.keys(STATE.picked).map(function (k) {
         var a = STATE.avail.filter(function (x) { return keyOf(x) === k; })[0];
@@ -496,6 +503,9 @@
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer_name: name.trim(), customer_email: email.trim(),
+          // Optional, and the consent travels with the order as the buyer gave it.
+          phone: phone.trim() || null,
+          sms_opt_in: !!smsOk,
           notes: (el('buyerNote') || {}).value || '', items: items
         })
       }).then(function (order) {

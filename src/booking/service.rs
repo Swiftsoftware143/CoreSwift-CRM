@@ -941,8 +941,8 @@ pub async fn create_order(
 
     let order = sqlx::query_as::<_, Order>(
         "INSERT INTO booking_orders
-           (tenant_id, calendar_id, contact_id, customer_name, customer_email, subtotal_cents, discount_cents, total_cents, bundle_id, hold_expires_at, notes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *",
+           (tenant_id, calendar_id, contact_id, customer_name, customer_email, subtotal_cents, discount_cents, total_cents, bundle_id, hold_expires_at, notes, phone, sms_opt_in)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *",
     )
     .bind(cal.tenant_id)
     .bind(cal.id)
@@ -954,7 +954,9 @@ pub async fn create_order(
     .bind(q.total_cents)
     .bind(q.bundle_id)
     .bind(hold_until)
-    .bind(input.notes.unwrap_or_default())
+    .bind(input.notes.clone().unwrap_or_default())
+    .bind(input.phone.as_deref().map(str::trim).filter(|p| !p.is_empty()))
+    .bind(input.sms_opt_in.unwrap_or(false))
     .fetch_one(&mut *tx)
     .await?;
 
@@ -1918,6 +1920,10 @@ pub async fn admin_create_booking(
             customer_email: email,
             contact_id: None,
             notes: notes.filter(|n| !n.trim().is_empty()),
+            // The operator filling a position by hand has no buyer consent to record: the buyer did not
+            // tick anything in front of them. Both stay empty rather than being guessed.
+            phone: None,
+            sms_opt_in: None,
             items: vec![item],
         },
     )

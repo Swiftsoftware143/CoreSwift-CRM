@@ -28,13 +28,31 @@ struct Context {
     customer_email: String,
     total_cents: i64,
     manage_token: String,
+    /// What the buyer typed, if anything, and whether they ticked the text consent.
+    phone: Option<String>,
+    sms_opt_in: bool,
     lines: Vec<Line>,
 }
 
 async fn load(pool: &PgPool, order_id: Uuid) -> Option<Context> {
-    let row = sqlx::query_as::<_, (Uuid, Uuid, String, String, String, String, i64, String)>(
+    let row = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            Uuid,
+            String,
+            String,
+            String,
+            String,
+            i64,
+            String,
+            Option<String>,
+            bool,
+        ),
+    >(
         "SELECT o.tenant_id, o.calendar_id, c.name, c.timezone,
-                o.customer_name, o.customer_email, o.total_cents, o.manage_token
+                o.customer_name, o.customer_email, o.total_cents, o.manage_token,
+                o.phone, COALESCE(o.sms_opt_in, false)
            FROM booking_orders o
            JOIN booking_calendars c ON c.id = o.calendar_id
           WHERE o.id = $1",
@@ -72,6 +90,8 @@ async fn load(pool: &PgPool, order_id: Uuid) -> Option<Context> {
         customer_email: row.5,
         total_cents: row.6,
         manage_token: row.7,
+        phone: row.8.clone(),
+        sms_opt_in: row.9,
         lines,
     })
 }
@@ -234,6 +254,93 @@ async fn apply_tags(pool: &PgPool, ctx: &Context, stage: &str) {
         Some(id) => id,
         None => return,
     };
+
+    // ── THE PHONE NUMBER AND THE TEXT CONSENT (David, 2026-11-21) ───────────────────────────────
+    // A number is a contact detail; the TICK is permission. The number is saved either way, the tag is
+    // applied only when the buyer ticked the box, and the tag is what puts them in the Text Opt-Ins list
+    // (rule: TagAdded SMS Opt-In -> AddToList). Nothing is inferred from a phone number alone.
+    if stage == "confirm" {
+        if let Some(phone) = ctx
+            .phone
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+        {
+            let _ = sqlx::query("UPDATE contacts SET phone = $1, updated_at = now() WHERE id = $2 AND tenant_id = $3")
+                .bind(phone)
+                .bind(contact_id)
+                .bind(ctx.tenant_id)
+                .execute(pool)
+                .await;
+        }
+        if ctx.sms_opt_in {
+            if let Some(opt_in) = ensure_tag(pool, ctx.tenant_id, "SMS Opt-In").await {
+                let _ = sqlx::query(
+                    "INSERT INTO tag_assignments (id, tenant_id, tag_id, entity_type, entity_id) \
+                     VALUES (gen_random_uuid(), $1, $2, 'contact', $3) ON CONFLICT DO NOTHING",
+                )
+                .bind(ctx.tenant_id)
+                .bind(opt_in)
+                .bind(contact_id)
+                .execute(pool)
+                .await;
+                crate::automation::engine::fire_tag_trigger(
+                    pool,
+                    ctx.tenant_id,
+                    "contact",
+                    contact_id,
+                    opt_in,
+                    "TagAdded",
+                )
+                .await;
+            }
+        }
+    }
+
+    // ── REPEAT CUSTOMER (David, 2026-11-21) ─────────────────────────────────────────────────────
+    // "Second booking -> Repeat Customer". The trigger vocabulary has no counter, so the fact is read
+    // where it is known: how many bookings this contact already had BEFORE this one. Confirmed only,
+    // because a cancelled booking never made anyone a returning customer.
+    if stage == "confirm" {
+        // This booking is already confirmed when the tags are applied, so TWO confirmed bookings for
+        // the same person means one of them came before this one. Counted through the order's contact
+        // AND the customer's address, because an order placed before the contact existed carries no
+        // contact_id and would otherwise make a returning customer look new.
+        let prior: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM booking_bookings b \
+               JOIN booking_orders o ON o.id = b.order_id \
+              WHERE b.tenant_id = $1 AND o.status = 'confirmed' \
+                AND (o.contact_id = $2 OR lower(o.customer_email) = lower($3))",
+        )
+        .bind(ctx.tenant_id)
+        .bind(contact_id)
+        .bind(&ctx.customer_email)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+        if prior >= 2 {
+            if let Some(repeat) = ensure_tag(pool, ctx.tenant_id, "Repeat Customer").await {
+                let _ = sqlx::query(
+                    "INSERT INTO tag_assignments (id, tenant_id, tag_id, entity_type, entity_id) \
+                     VALUES (gen_random_uuid(), $1, $2, 'contact', $3) ON CONFLICT DO NOTHING",
+                )
+                .bind(ctx.tenant_id)
+                .bind(repeat)
+                .bind(contact_id)
+                .execute(pool)
+                .await;
+                crate::automation::engine::fire_tag_trigger(
+                    pool,
+                    ctx.tenant_id,
+                    "contact",
+                    contact_id,
+                    repeat,
+                    "TagAdded",
+                )
+                .await;
+            }
+        }
+    }
 
     for (tag_name, mode) in rules {
         let tag_id = match ensure_tag(pool, ctx.tenant_id, &tag_name).await {

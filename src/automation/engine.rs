@@ -300,9 +300,27 @@ pub async fn fire_stage_trigger(
                 };
 
             if matches {
+                // A DEAL IS ABOUT A PERSON (measured 2026-11-21): the stage trigger passed the
+                // opportunity itself, so an "AddTag" action tagged the DEAL and the customer never got
+                // the tag — "won deal -> customer gets the Customer tag" was impossible to express.
+                // The opportunity's contact is the subject when it has one; the deal stays the subject
+                // only when the deal carries no contact.
+                let contact: Option<Uuid> = sqlx::query_scalar(
+                    "SELECT contact_id FROM opportunities WHERE id = $1 AND tenant_id = $2",
+                )
+                .bind(opportunity_id)
+                .bind(tenant_id)
+                .fetch_optional(db)
+                .await
+                .ok()
+                .flatten()
+                .flatten();
+                let (entity_type, entity_id) = match contact {
+                    Some(c) => ("contact", c),
+                    None => ("opportunity", opportunity_id),
+                };
                 if let Err(e) =
-                    actions::execute_action(db, &rule, tenant_id, "opportunity", opportunity_id)
-                        .await
+                    actions::execute_action(db, &rule, tenant_id, entity_type, entity_id).await
                 {
                     tracing::warn!(
                         rule = %rule.id,
