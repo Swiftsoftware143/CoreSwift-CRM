@@ -806,6 +806,8 @@ function logout(silent) {
   STATE.user = null;
   localStorage.removeItem('crm_token');
   localStorage.removeItem('crm_user');
+  // The impersonation label is session state; leaving it behind describes a session that has ended.
+  localStorage.removeItem('crm_impersonating');
   document.getElementById('appWrap').style.display = 'none';
   document.getElementById('loginScreen').style.display = 'flex';
   if (!silent) toast('Signed out', 'info');
@@ -830,7 +832,7 @@ function showApp() {
   // never paint an empty screen.
   try {
     const wanted = new URLSearchParams(window.location.search).get('tab');
-    const known = [...MENU, ...SETTINGS_MENU, ...ADMIN_MENU].flatMap(it => it.type === 'group' && it.children ? it.children.map(c => c.id) : [it.id]);
+    const known = [...MENU, ...SETTINGS_MENU, ...ADMIN_MENU, ...BOTTOM_MENU].flatMap(it => it.type === 'group' && it.children ? it.children.map(c => c.id) : [it.id]);
     if (wanted && known.indexOf(wanted) >= 0) switchTab(wanted);
   } catch (_) { /* a malformed query string must never block the console */ }
   checkPlan();
@@ -910,9 +912,16 @@ const MENU = [
     { id:'checklists', icon:'✅', label:'Checklists' },
     { id:'round-robin', icon:'🔄', label:'Round Robin' }
   ]},
-  // MCP — the fleet slot directly above Settings (docs/fleet-mcp-nav-convention.md). Same label,
-  // same position relative to Settings, same panel in every app. Every tool CoreSwift exposes is a
-  // SELECT: there is no write door and no free-form SQL tool.
+  // (MCP used to sit here, directly above Settings. Owner ruling 2026-11-21 moved it to the BOTTOM
+  // of the user's own menu — see BOTTOM_MENU below and docs/fleet-mcp-screen-design-spec.md.)
+];
+
+// THE BOTTOM SLOT (owner, 2026-11-21): "the MCP tab must be in the USER's left-hand menu, at the
+// BOTTOM of it — reachable by every signed-in user, not only the operator, and not buried in
+// settings." It renders after SETTINGS and after the platform-only ADMIN group, so its position is
+// the same for a customer and for an operator. Every tool CoreSwift exposes is a SELECT: there is no
+// write door and no free-form SQL tool.
+const BOTTOM_MENU = [
   { id:'mcp', icon:'🔌', label:'MCP' }
 ];
 
@@ -1013,6 +1022,8 @@ function renderSidebar() {
     h += '<div class="nav-divider">── ADMIN ──</div>';
     ADMIN_MENU.forEach(it => item(it, false));
   }
+  // MCP is the LAST entry in the menu for every signed-in user, customer or operator alike.
+  BOTTOM_MENU.forEach(it => item(it, false));
   nav.innerHTML = h;
 
   // Restore expanded groups
@@ -1120,7 +1131,7 @@ function switchTab(tabId) {
 }
 
 function getTabLabel(id) {
-  const all = [...MENU, ...SETTINGS_MENU, ...ADMIN_MENU];
+  const all = [...MENU, ...SETTINGS_MENU, ...ADMIN_MENU, ...BOTTOM_MENU];
   for (const it of all) {
     if (it.id === id) return it.label;
     if (it.type === 'group' && it.children) {
@@ -1603,46 +1614,199 @@ const TAB_RENDERERS = {
   },
 
   'mcp': () => {
-    // Fleet MCP panel — same slot above Settings (docs/fleet-mcp-nav-convention.md). Read-only by
-    // construction: CoreSwift exposes SELECT-only tools, no write door, no free-form SQL door.
-    // The API-key card is first, so a user never has to leave this page to grab their token.
-    return pageHeader('MCP', 'Connect your AI tools to read this account') +
-      card('🔑 Your API key',
-        '<div id="mcpKeyWrap"><div class="loading-wrap"><div class="spinner"></div> Loading your API key...</div></div>') +
-      card('MCP — connect your AI tools',
-        '<p style="color:var(--text-secondary);margin-bottom:14px">Point any MCP client (Claude Code, Cursor, Hermes, or your own agent) at the endpoint below and it can read this account&#39;s CoreSwift data. Read-only.</p>' +
-        '<h3 style="font-weight:700;margin:14px 0 6px">Endpoint</h3>' +
-        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">' +
-          '<code style="padding:6px 10px;background:var(--bg-secondary);border-radius:var(--radius)">https://hooks.swiftsoftware.net/mcp</code>' +
-          '<button class="btn btn-secondary btn-sm" onclick="tlCopyUrl(\'https://hooks.swiftsoftware.net/mcp\', this)">Copy</button>' +
-          // A CLIENT TRAP, MEASURED (2026-11-21): the edge in front of the primary name refuses one
-          // user-agent signature with a 403 BEFORE authentication, which reads exactly like a rejected
-          // key. The same server answers on a name the edge does not filter, so say so here rather than
-          // letting a customer debug a key that is fine.
-          '<div style="font-size:12px;opacity:.8;margin-top:6px">If a client is refused by our edge before it ever authenticates — a 403 rather than a 401 — use <code>https://mcp.swiftsoftware.net/mcp</code>: the same server, on a name the edge does not filter.</div>' +
-        '</div>' +
-        '<h3 style="font-weight:700;margin:14px 0 6px">Your token</h3>' +
-        '<p style="color:var(--text-secondary);margin-bottom:14px">The API key above is what an MCP client uses to authenticate. Treat it like a password: anyone holding it can read this account.</p>' +
-        '<h3 style="font-weight:700;margin:14px 0 6px">What it can read</h3>' +
-        '<p style="color:var(--text-secondary);margin-bottom:8px">These are the read-only tools this app exposes to an account credential — the real tool names, every one scoped to this account.</p>' +
-        '<ul style="list-style:disc;padding-left:20px;color:var(--text-secondary);margin-bottom:8px">' +
-          '<li><code>coreswift_search_contacts</code> — contacts by name, email or company</li>' +
-          '<li><code>coreswift_contact_count</code> — how many active contacts this account holds</li>' +
-          '<li><code>coreswift_list_lists</code> — lists with their member counts</li>' +
-          '<li><code>coreswift_private_email_messages</code> — this account&#39;s private-email messages: sender, direction, subject and a body excerpt</li>' +
-        '</ul>' +
-        '<ul style="list-style:disc;padding-left:20px;color:var(--text-secondary);margin-bottom:8px">' +
-          MCP_ENTITY_SPECS.map(function (s) {
-            return '<li><code>' + s[0] + '_summary</code> / <code>' + s[0] + '_search</code> — ' + s[1] + '</li>';
-          }).join('') +
-        '</ul>' +
-        '<p style="color:var(--text-muted);font-size:12px">Each row above is two tools: <code>&lt;name&gt;_summary</code> answers counts and an overview, <code>&lt;name&gt;_search</code> returns the searchable rows newest first, capped at 200. Every tool is a SELECT and tenant-scoped: an account token can only ever return this account&#39;s rows. There is no write tool and no free-form SQL door, and the operator-wide tools are refused for an account credential.</p>' +
-        '<h3 style="font-weight:700;margin:14px 0 6px">Connect</h3>' +
-        '<p style="color:var(--text-secondary);margin-bottom:8px">Paste this into your MCP client config (Claude Desktop, Cursor, or any other MCP client). Replace <code>YOUR_API_KEY</code> with this account&#39;s key.</p>' +
-        '<pre style="background:var(--bg-secondary);padding:12px;border-radius:var(--radius);font-size:12px;overflow-x:auto;margin:0">' + escapeHtml(MCP_CONFIG_TEXT) + '</pre>' +
-        '<button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="tlCopyUrl(MCP_CONFIG_TEXT, this)">Copy config</button>');
-  },
+    // ── CONNECT AI WITH CORESWIFT — rebuilt 2026-11-21 to match David's reference screen ─────────
+    // Shape taken from the Global Control page he sent: breadcrumb, big promise, CLIENT TABS, an
+    // uppercase "connect with…" label, numbered steps with a copyable ADDRESS row, a connected-apps
+    // block, "ready to connect" with the account named, prompts in TWO columns with Copy buttons,
+    // a "don't know what to ask" input, a capability accordion (icon + title + grey description),
+    // "what it will not do", and a developer drawer with a tab strip.
+    //
+    // THREE HONEST DIFFERENCES, because the reference does things this product cannot:
+    //  1. It connects "with one click" over OAuth. CoreSwift authenticates with the account's own API
+    //     key, so the steps say that instead of printing "choose OAuth".
+    //  2. It lists the apps you connected. We keep no such list — the key IS the connection — so that
+    //     block says so and names the one action that revokes everything (regenerate the key).
+    //  3. Its examples add contacts and fire tags. CoreSwift's MCP is READ-ONLY by construction (the
+    //     database role is SELECT-only), so every example is a question and the limitations state
+    //     plainly that nothing is written.
+    const caps = [
+      ['Contacts & companies', 'Find, read and count the people and organisations in your account',
+        /^(contacts|companies|contact_field_values|contact_custom_fields)$/],
+      ['Tags & lists', 'Your tags, who is on them, and the lists they feed',
+        /^(tags|tag_categories|tag_assignments|lists|list_members)$/],
+      ['Deals & pipelines', 'The boards you have built, the deals on them, and their history',
+        /^(pipelines|pipeline_stages|opportunities|deal_activities|deal_tasks)$/],
+      ['Tickets & helpdesk', 'Support tickets, the inboxes they arrive in, and what was said',
+        /^(tickets|ticket_inboxes|ticket_messages|cs_messages)$/],
+      ['Bookings & calendars', 'Calendars, the times on offer, what was booked and who booked it',
+        /^(booking|calendar_slots|calendar_hosts|slot_bookings|call_logs)/],
+      ['Mail & campaigns', 'Domains and mailboxes, what was sent, campaigns and who opted out',
+        /^(private_email_domains|private_email_boxes|outbound_messages|email_campaigns|email_campaign_enrollments|email_campaign_optouts|tracked_links)$/],
+      ['Automation & history', 'The rules you have set up, and the events they produced',
+        /^(automation_rules|score_rules|notification_rules|webhook_endpoints|events|feedback)$/],
+      ['Account & settings', 'The account itself: people, plans and the shape of your setup',
+        /./]
+    ];
+    const listed = MCP_ENTITY_SPECS.map(function (r) { return { key: r[0].replace(/^coreswift_/, ''), label: r[1] }; });
+    const used = {};
+    const accordion = caps.map(function (c) {
+      const mine = listed.filter(function (e) {
+        if (used[e.key]) return false;
+        if (c[2].test(e.key)) { used[e.key] = true; return true; }
+        return false;
+      });
+      if (!mine.length) return '';
+      return '<details style="border-bottom:1px solid var(--border);padding:10px 0">' +
+        '<summary style="cursor:pointer;display:flex;align-items:center;gap:10px">' +
+          '<span style="font-weight:600">' + c[0] + '</span>' +
+          '<span style="color:var(--text-muted);font-size:12px">' + mine.length + ' kinds</span>' +
+          '<span style="flex:1"></span>' +
+          '<span style="color:var(--text-secondary);font-size:12px;text-align:right">' + c[1] + '</span>' +
+        '</summary>' +
+        '<div style="color:var(--text-secondary);font-size:13px;padding:8px 0 4px 2px">' + mine.map(function (e) { return e.label; }).join(' · ') + '</div>' +
+        '</details>';
+    }).join('');
 
+    function label(t) {
+      return '<div style="font-size:11px;letter-spacing:.09em;color:var(--text-muted);font-weight:700;margin-bottom:8px">' + t + '</div>';
+    }
+    function promptCard(q) {
+      return '<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;' +
+        'padding:9px 11px;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:7px;background:var(--card-bg,#fff)">' +
+        '<span style="font-size:13px">' + escapeHtml(q) + '</span>' +
+        '<button class="btn btn-ghost btn-xs" onclick="tlCopyUrl(' + JSON.stringify(q).replace(/"/g, '&quot;') + ', this)">Copy</button></div>';
+    }
+    function twoColumns(items) {
+      var left = items.filter(function (_, i) { return i % 2 === 0; }).map(promptCard).join('');
+      var right = items.filter(function (_, i) { return i % 2 === 1; }).map(promptCard).join('');
+      return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
+        '<div>' + left + '</div><div>' + right + '</div></div>';
+    }
+    function step(n, heading, body, extra) {
+      return '<div style="display:flex;gap:12px;margin-bottom:14px">' +
+        '<div style="flex:0 0 26px;height:26px;border-radius:50%;background:var(--accent);color:#fff;' +
+          'display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700">' + n + '</div>' +
+        '<div style="flex:1"><div style="font-weight:600;margin-bottom:2px">' + heading + '</div>' +
+        '<div style="color:var(--text-secondary);font-size:13px">' + body + '</div>' + (extra || '') + '</div></div>';
+    }
+
+    return pageHeader('Connect AI with CoreSwift',
+        'Ask Claude or ChatGPT about your contacts, tags and deals — and have it find things for you') +
+
+      // ── CLIENT TABS + numbered steps
+      card('',
+        '<div style="display:flex;gap:8px;margin-bottom:12px">' +
+          '<button class="btn btn-primary btn-sm" id="mcpTabChatgpt" onclick="mcpClient(\'chatgpt\')">ChatGPT</button>' +
+          '<button class="btn btn-ghost btn-sm" id="mcpTabClaude" onclick="mcpClient(\'claude\')">Claude</button>' +
+        '</div>' +
+        label('CONNECT WITH YOUR API KEY') +
+        '<p style="color:var(--text-secondary);margin-bottom:14px;max-width:70ch" id="mcpClientIntro">' +
+          'For ChatGPT and Claude on the web. There is no app to install: you give your AI client this account&#39;s ' +
+          'API key so every answer is scoped to <strong>your</strong> data and nobody else&#39;s.</p>' +
+        '<div id="mcpSteps"></div>' +
+        '<div style="margin-top:6px;padding:12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-secondary)">' +
+          '<div style="font-weight:600;margin-bottom:4px">Ready to connect</div>' +
+          '<div style="font-size:13px;color:var(--text-secondary);margin-bottom:10px">Your account: <strong id="mcpAccountEmail">this account</strong></div>' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+            '<button class="btn btn-primary btn-sm" onclick="mcpJumpTo(\'mcpKeyWrap\')">View &amp; copy my key</button>' +
+            '<button class="btn btn-secondary btn-sm" onclick="mcpCheckServer(this)">Test connection</button>' +
+            '<button class="btn btn-secondary btn-sm" onclick="tlCopyUrl(MCP_CONFIG_TEXT, this)">Copy my setup</button>' +
+            '<button class="btn btn-ghost btn-sm" onclick="mcpJumpTo(\'mcpAdvanced\')">Advanced setup</button>' +
+          '</div>' +
+          '<div id="mcpCheckOut" style="font-size:12px;color:var(--text-muted);margin-top:8px"></div>' +
+        '</div>') +
+
+      // ── the key itself, in its own card so it is impossible to miss
+      card('Your API key',
+        '<div id="mcpKeyWrap"><div class="loading-wrap"><div class="spinner"></div> Loading your API key...</div></div>') +
+
+      card('How the connection works',
+        '<p style="color:var(--text-secondary);font-size:13px;margin:0;max-width:70ch">We do not keep a list of the apps you have ' +
+        'connected — your key is the connection. That means one action disconnects everything at once: regenerate ' +
+        'the key above and every client using the old one stops working immediately.</p>') +
+
+      // ── what you can ask, in two columns like the reference
+      card('',
+        label('WHAT CAN I ASK CORESWIFT?') +
+        '<p style="color:var(--text-secondary);margin-bottom:12px;max-width:70ch">Say any of these — or anything like them — to your AI app. ' +
+        'Every one is a question, because this connection reads and never writes.</p>' +
+        label('FIND &amp; MANAGE') +
+        twoColumns([
+          'Show me my contacts.',
+          'Find the contact with the email jane@example.com.',
+          'What tags do I have, and how many people are on each?',
+          'Who is in my Consultation Bookings list right now?',
+          'Which deals are sitting in the Booked stage?',
+          'Which support tickets are still waiting for a reply?'
+        ]) +
+        '<div style="height:14px"></div>' + label('LOOK AT MY BUSINESS') +
+        twoColumns([
+          'Summarise the health of my contact list.',
+          'Which of my contacts have gone quiet, and what should I do about them?',
+          'What bookings came in this week?',
+          'Look at my tags and tell me which ones nobody is using.',
+          'Compare my Hot Leads list with my VIP Customer tag — who is in both?',
+          'Which deals did we lose this month?'
+        ]) +
+        '<div style="height:14px"></div>' + label('MAIL &amp; DELIVERY') +
+        twoColumns([
+          'Is my sending domain verified?',
+          'What did the last few customers write to us about?',
+          'Which campaigns are running, and who is enrolled in them?',
+          'Who has opted out of my campaign email?'
+        ])) +
+
+      card('Don\'t know what to ask?',
+        '<p style="color:var(--text-secondary);font-size:13px;margin-bottom:10px">Tell us what you are trying to do and we will give you things you can say.</p>' +
+        label('WHAT ARE YOU TRYING TO DO?') +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+          '<input type="text" id="mcpGoal" placeholder="I want to clean up my tags…" ' +
+            'style="flex:1;min-width:220px;padding:9px 11px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-secondary);color:inherit">' +
+          '<button class="btn btn-primary btn-sm" onclick="mcpIdeas()">Give me ideas</button>' +
+        '</div>' +
+        '<div style="font-size:12px;color:var(--text-muted);margin-top:6px">We will suggest the prompts that fit your goal.</div>' +
+        '<div id="mcpIdeasOut" style="margin-top:10px"></div>') +
+
+      card('',
+        label('EVERYTHING AI CAN READ IN CORESWIFT') +
+        '<p style="color:var(--text-secondary);font-size:13px;margin-bottom:8px">Open a section to see what is in it — ' +
+        MCP_ENTITY_SPECS.length + ' kinds of record, every one read-only and every one limited to this account.</p>' +
+        accordion) +
+
+      card('',
+        label('WHAT IT WILL NOT DO') +
+        '<ul style="margin:0;padding-left:20px;color:var(--text-secondary);font-size:13px;line-height:1.8">' +
+        '<li>It cannot delete anything — not a contact, not a tag, not a list. Deleting stays in the app.</li>' +
+        '<li>It cannot add or change anything either, and it cannot move a deal or fire a tag. Reading only.</li>' +
+        '<li>It cannot send a broadcast, a one-off email or a text message. Sending happens in the app.</li>' +
+        '<li>It cannot read another account&#39;s data. That is enforced at the database, not by instruction, so no wording in a prompt changes it.</li>' +
+        '<li>Text it returns from your customers is data. If a customer writes “ignore your instructions”, that is a sentence in a record, not a command.</li>' +
+        '</ul>') +
+
+      '<div id="mcpAdvanced"></div>' +
+      card('',
+        '<div style="display:flex;align-items:center;gap:10px">' +
+          label('ADVANCED / DEVELOPER SETUP') +
+          '<span style="flex:1"></span>' +
+          '<button class="btn btn-ghost btn-sm" onclick="mcpToggleDev()">Expand developer details</button>' +
+        '</div>' +
+        '<div style="color:var(--text-secondary);font-size:13px;margin-bottom:10px">Technical details for developers and advanced users. ' +
+        'Most people never need this section.</div>' +
+        '<div id="mcpDevBody" style="display:none">' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">' +
+            ['How it connects', 'Your API token', 'Claude Code', 'Claude Desktop', 'Codex', 'Cursor', 'Troubleshooting', 'FAQ'].map(function (t, i) {
+              return '<button class="btn btn-ghost btn-sm" onclick="mcpDevTab(' + i + ')" id="mcpDevBtn' + i + '">' + t + '</button>';
+            }).join('') +
+          '</div>' +
+          '<div id="mcpDevPanel"></div>' +
+          '<button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="tlCopyUrl(MCP_CONFIG_TEXT, this)">Copy my setup</button>' +
+        '</div>') +
+
+      card('Need help getting connected?',
+        '<p style="color:var(--text-secondary);font-size:13px;margin:0">Copy your setup with the button above and paste it to us, ' +
+        'or read the step-by-step in the guide under <strong>MCP — read-only AI access</strong>. ' +
+        'If your client lists no tools at all, the key is the thing to replace first — that is almost always the cause.</p>');
+  },
   'contacts': () => {
     return pageHeader('Contacts', 'Manage your contacts and leads',
       '<button class="btn btn-primary btn-sm" onclick="showAddContactModal()">+ Add Contact</button>' +
@@ -3486,8 +3650,203 @@ function icRenderLeadSources() {
 
 // MCP page: surface the account's API key inline so a user never has to leave the page to grab the
 // token an MCP client needs. Reveal/copy reuses the Integration Center flow (password-gated).
+// ── MCP page helpers (2026-11-21) ───────────────────────────────────────────────────────────────
+// Small behaviours the reference screen has and this one needs: a server check that tells the truth,
+// an idea generator that does not invent capabilities we do not have, and a developer drawer that
+// switches panels instead of dumping every client's config at once.
+// Which client the steps are for. ChatGPT and Claude differ in where the "add a connector" door is,
+// and nothing else — the address and the key are the same, which is the point.
+var MCP_CLIENT = 'chatgpt';
+function mcpClient(which) {
+  MCP_CLIENT = which;
+  var a = document.getElementById('mcpTabChatgpt'), b = document.getElementById('mcpTabClaude');
+  if (a && b) {
+    a.className = which === 'chatgpt' ? 'btn btn-primary btn-sm' : 'btn btn-ghost btn-sm';
+    b.className = which === 'claude' ? 'btn btn-primary btn-sm' : 'btn btn-ghost btn-sm';
+  }
+  mcpPaintSteps();
+}
+function mcpToggleDev() {
+  var b = document.getElementById('mcpDevBody');
+  if (!b) return;
+  var open = b.style.display !== 'none';
+  b.style.display = open ? 'none' : 'block';
+  if (!open && !document.getElementById('mcpDevPanel').innerHTML) mcpDevTab(0);
+}
+function mcpPaintSteps() {
+  var host = document.getElementById('mcpSteps');
+  if (!host) return;
+  var address = '<div style="margin-top:6px"><div style="font-size:11px;color:var(--text-muted);letter-spacing:.08em;font-weight:700">ADDRESS</div>' +
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px">' +
+    '<code style="padding:6px 10px;background:var(--bg-secondary);border-radius:var(--radius)">https://hooks.swiftsoftware.net/mcp</code>' +
+    '<button class="btn btn-ghost btn-xs" onclick="tlCopyUrl(\'https://hooks.swiftsoftware.net/mcp\', this)">Copy</button></div>' +
+    '<div style="font-size:12px;opacity:.85;margin-top:6px">The whole address, nothing on the end. ' +
+    'If your client is refused by our edge before it authenticates (a 403, not a 401), use ' +
+    '<code>https://mcp.swiftsoftware.net/mcp</code> — same server, unfiltered name.</div></div>';
+  function step(n, heading, body, extra) {
+    return '<div style="display:flex;gap:12px;margin-bottom:14px">' +
+      '<div style="flex:0 0 26px;height:26px;border-radius:50%;background:var(--accent);color:#fff;' +
+        'display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700">' + n + '</div>' +
+      '<div style="flex:1"><div style="font-weight:600;margin-bottom:2px">' + heading + '</div>' +
+      '<div style="color:var(--text-secondary);font-size:13px">' + body + '</div>' + (extra || '') + '</div></div>';
+  }
+  var chatgpt = step(1, 'Open chatgpt.com on a computer, not your phone.',
+      'This cannot be set up in the ChatGPT phone app.') +
+    step(2, 'Switch on developer mode in ChatGPT’s settings.',
+      'On a Plus or Pro account it is under Security and login. On a Business, Enterprise or Education account it is ' +
+      'under Apps then Advanced settings, and an administrator may have to allow it first.') +
+    step(3, 'Open Apps and press the plus (+) to add one. Call it CoreSwift.',
+      'Some accounts call these Plugins or Connectors instead.') +
+    step(4, 'Paste this address into the address box.', 'The whole address, exactly as shown.', address) +
+    step(5, 'Where it asks how to sign in, choose API key (Bearer token).',
+      'There is no OAuth approval here. Paste the key from the card below into the token field.') +
+    step(6, 'Press Create, then ask it a question.',
+      'Try “Show me my contacts.” If no tools appear, the key was rejected — regenerate it and paste the new one.');
+  var claude = step(1, 'Open Claude on the web, on a computer.',
+      'Settings then Connectors then Add custom connector. The Claude phone app cannot add one.') +
+    step(2, 'Name it CoreSwift and paste the address below.', 'The whole address, nothing on the end.', address) +
+    step(3, 'Choose to authenticate with a token, and paste your API key.',
+      'The key is on the card below. Claude sends it as a bearer token on every request.') +
+    step(4, 'Save it, then ask a question.',
+      'Try “What bookings came in this week?” If nothing is offered as a tool, the key is the thing to replace.');
+  host.innerHTML = (MCP_CLIENT === 'chatgpt') ? chatgpt : claude;
+}
+
+function mcpJumpTo(id) {
+  var el = document.getElementById(id);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// The check asks the server whether it is there, WITHOUT the key. A 401 means "reachable, and it
+// wants a key", which is exactly the state a customer is in before they paste one. Saying "connected"
+// here would be a lie, so the wording reports reachability only.
+function mcpCheckServer(btn) {
+  var out = document.getElementById('mcpCheckOut');
+  var label = btn ? btn.innerText : '';
+  if (btn) { btn.disabled = true; btn.innerText = 'Checking…'; }
+  fetch('https://mcp.swiftsoftware.net/mcp', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} })
+  }).then(function (r) {
+    if (out) out.textContent = (r.status === 401)
+      ? 'The server answered and asked for a key — that is the right state. Paste your key into the client.'
+      : 'The server answered with status ' + r.status + '. If your client reports nothing, regenerate the key.';
+  }).catch(function () {
+    if (out) out.textContent = 'This browser could not reach the server (it may be blocked on your network). The service itself is up — check from the client.';
+  }).then(function () {
+    if (btn) { btn.disabled = false; btn.innerText = label || 'Check the server answers'; }
+  });
+}
+
+// Ideas are generated from OUR data model, never from a capability we do not have: every suggestion
+// is a question, because this connection is read-only.
+function mcpIdeas() {
+  var box = document.getElementById('mcpGoal');
+  var out = document.getElementById('mcpIdeasOut');
+  if (!out) return;
+  var goal = ((box && box.value) || '').toLowerCase();
+  var ideas = [];
+  if (/tag/.test(goal)) {
+    ideas = ['What tags do I have, and how many people are on each?',
+             'Look at my tags and tell me which ones nobody is using.',
+             'Who has the tag ' + '\u201CCustomer\u201D' + '?'];
+  } else if (/list/.test(goal)) {
+    ideas = ['What lists do I have?', 'Who is in my Consultation Bookings list?',
+             'Which contacts are on my Quotes to Follow Up list?'];
+  } else if (/deal|pipeline|quote|sale/.test(goal)) {
+    ideas = ['Which deals are in each stage right now?',
+             'Which deals did we lose this month?',
+             'Show me the activity on my newest deal.'];
+  } else if (/booking|calendar|appointment/.test(goal)) {
+    ideas = ['What bookings came in this week?', 'Which calendars are open for booking?',
+             'Which resources can be booked, and for how long?'];
+  } else if (/email|mail|campaign|domain/.test(goal)) {
+    ideas = ['Is my sending domain verified?', 'Which campaigns are running, and who is enrolled?',
+             'Who has opted out of my campaign email?'];
+  } else if (/ticket|support|inbox|reply/.test(goal)) {
+    ideas = ['Which support tickets are still waiting for a reply?',
+             'What did the last few customers write to us about?',
+             'Summarise this week\u2019s tickets.'];
+  } else {
+    ideas = ['Show me my contacts.', 'Summarise the health of my contact list.',
+             'Which of my contacts have gone quiet?', 'What bookings came in this week?'];
+  }
+  out.innerHTML = ideas.map(function (q) {
+    return '<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;' +
+      'padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:6px">' +
+      '<span style="font-size:13px">' + escapeHtml(q) + '</span>' +
+      '<button class="btn btn-ghost btn-xs" onclick="tlCopyUrl(' + JSON.stringify(q).replace(/"/g, '&quot;') + ', this)">Copy</button></div>';
+  }).join('');
+}
+
+// The developer drawer. Each panel is real: the endpoint, the token route, and the three clients
+// people actually use. No panel claims a feature we do not have.
+var MCP_DEV_PANELS = [
+  '<h4 style="margin:0 0 8px">How it connects</h4>' +
+  '<p style="color:var(--text-secondary);font-size:13px;margin:0">Your AI client sends JSON-RPC over HTTPS to the address above. ' +
+  'Every request carries your API key as a bearer token. The server hashes the key, finds the account it belongs to, ' +
+  'and applies that account as a filter on every query — there is no parameter that can widen it. ' +
+  'The database user behind it can only run SELECT.</p>',
+  '<h4 style="margin:0 0 8px">Your API token</h4>' +
+  '<p style="color:var(--text-secondary);font-size:13px;margin:0 0 10px">One key per account. Press View &amp; copy at the top of this page, ' +
+  'or open the Integration Center. Regenerating it disconnects every app using the old key.</p>' +
+  '<button class="btn btn-secondary btn-sm" onclick="mcpJumpTo(\'mcpKeyWrap\')">Show my key</button>',
+  '<h4 style="margin:0 0 8px">Claude Code</h4>' +
+  '<pre style="background:var(--bg-secondary);padding:12px;border-radius:var(--radius);font-size:12px;overflow-x:auto;margin:0">' +
+  'claude mcp add --transport http coreswift \\\n  https://hooks.swiftsoftware.net/mcp \\\n  --header "Authorization: Bearer YOUR_API_KEY"</pre>',
+  '<h4 style="margin:0 0 8px">Claude Desktop</h4>' +
+  '<p style="color:var(--text-secondary);font-size:13px;margin:0 0 8px">Settings, then Connectors, then Add custom connector. ' +
+  'Paste the address and choose to authenticate with a token. Or add it to the config file:</p>' +
+  '<pre style="background:var(--bg-secondary);padding:12px;border-radius:var(--radius);font-size:12px;overflow-x:auto;margin:0">' +
+  escapeHtml(MCP_CONFIG_TEXT) + '</pre>',
+  '<h4 style="margin:0 0 8px">Cursor</h4>' +
+  '<p style="color:var(--text-secondary);font-size:13px;margin:0 0 8px">Settings, then MCP, then add a server of type <code>http</code> ' +
+  'with the address above and the Authorization header carrying your key.</p>' +
+  '<pre style="background:var(--bg-secondary);padding:12px;border-radius:var(--radius);font-size:12px;overflow-x:auto;margin:0">' +
+  escapeHtml(MCP_CONFIG_TEXT) + '</pre>',
+  '<h4 style="margin:0 0 8px">Codex</h4>' +
+  '<p style="color:var(--text-secondary);font-size:13px;margin:0 0 8px">Codex reads the same config shape as Claude Desktop. ' +
+  'Add it as an HTTP MCP server with the address above and the Authorization header carrying your key.</p>' +
+  '<pre style="background:var(--bg-secondary);padding:12px;border-radius:var(--radius);font-size:12px;overflow-x:auto;margin:0">' +
+  escapeHtml(MCP_CONFIG_TEXT) + '</pre>',
+  '<h4 style="margin:0 0 8px">FAQ</h4>' +
+  '<ul style="margin:0;padding-left:20px;color:var(--text-secondary);font-size:13px;line-height:1.8">' +
+  '<li><strong>Does it cost anything?</strong> No. It is your own account reading its own data.</li>' +
+  '<li><strong>Can I connect more than one app?</strong> Yes, with the same key. Regenerating the key disconnects all of them.</li>' +
+  '<li><strong>Who can use it?</strong> Anyone holding the key can read the account, so treat it like a password.</li>' +
+  '<li><strong>Why do I see zero rows?</strong> Because that part of the account is empty, or the rows are outside it. ' +
+  'Zero is an answer, not an error.</li>' +
+  '</ul>',
+  '<h4 style="margin:0 0 8px">Troubleshooting</h4>' +
+  '<ul style="margin:0;padding-left:20px;color:var(--text-secondary);font-size:13px;line-height:1.8">' +
+  '<li><strong>No tools appear.</strong> The key was rejected. Regenerate it and paste the new one.</li>' +
+  '<li><strong>A 403 before any sign-in.</strong> The edge in front of the primary name filtered your client. Use ' +
+  '<code>https://mcp.swiftsoftware.net/mcp</code>.</li>' +
+  '<li><strong>It answers but returns nothing.</strong> That is usually correct: a scope that genuinely holds no rows answers zero. ' +
+  'Ask for something you know exists.</li>' +
+  '<li><strong>You want it to add a contact.</strong> It cannot, by design. Reading only.</li>' +
+  '</ul>'
+];
+function mcpDevTab(i) {
+  var panel = document.getElementById('mcpDevPanel');
+  if (!panel) return;
+  panel.innerHTML = MCP_DEV_PANELS[i] || '';
+  MCP_DEV_PANELS.forEach(function (_, j) {
+    var b = document.getElementById('mcpDevBtn' + j);
+    if (b) b.style.opacity = (j === i) ? '1' : '.6';
+  });
+}
+
 async function mcpLoadKey() {
+  // Paint the client steps first: they are the top of the page, and a blank step list reads as a
+  // broken screen while the key request is still in flight.
+  try { mcpPaintSteps(); } catch (e) {}
   const el = document.getElementById('mcpKeyWrap');
+  // The page names the account the key belongs to ("Ready to connect — your account: …"), so the
+  // person can see WHICH account their AI client will be reading before they paste anything.
+  const who = document.getElementById('mcpAccountEmail');
+  if (who && STATE.user && STATE.user.email) who.textContent = STATE.user.email;
   if (!el) return;
   try {
     const d = await API.get('/personal-api-keys');

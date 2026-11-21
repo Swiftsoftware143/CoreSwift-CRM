@@ -1179,6 +1179,10 @@ function logout(silent) {
   localStorage.removeItem(IMP_ORIG_KEY);
   localStorage.removeItem(IMP_NAME_KEY);
   localStorage.removeItem(IMP_ID_KEY);
+  // THE BANNER IS PART OF THE SESSION, NOT PART OF THE PAGE (David, 2026-11-21). It is a fixed element
+  // appended straight to <body>, so hiding #appWrap left it floating over the LOGIN screen — a red
+  // bar saying "Viewing as <customer>" on a screen where nobody is signed in. Remove the element itself.
+  impRemoveBanner();
   document.getElementById('appWrap').style.display = 'none';
   document.getElementById('loginScreen').style.display = 'flex';
   if (!silent) toast('Signed out', 'info');
@@ -1982,6 +1986,12 @@ const IMP_NAME_KEY = 'crm_imp_name';
 const IMP_ID_KEY = 'crm_imp_id';
 let TENANT_NAMES = {};   // id -> name, filled from the list the operator clicked in
 
+// The banner outlives #appWrap because it lives on <body>. One place tears it down, so no path can
+// leave a red "viewing as" bar over the sign-in card.
+function impRemoveBanner() {
+  var b = document.getElementById('imp-banner');
+  if (b && b.parentNode) b.parentNode.removeChild(b);
+}
 function showImpersonationBanner(name) {
   let b = document.getElementById('imp-banner');
   if (!b) { b = document.createElement('div'); b.id = 'imp-banner'; document.body.appendChild(b); }
@@ -7482,8 +7492,11 @@ window.addEventListener('DOMContentLoaded', () => {
   }
   // An impersonation session survives a reload: the operator must never lose the way back out of a
   // customer's workspace, and a screen with no banner would read as their own account.
-  if (localStorage.getItem(IMP_ORIG_KEY)) {
+  if (localStorage.getItem(IMP_ORIG_KEY) && STATE.token && STATE.user) {
     showImpersonationBanner(localStorage.getItem(IMP_NAME_KEY) || '');
+  } else {
+    // stale keys with no session: drop them rather than let the next load paint a banner over the login
+    impRemoveBanner();
   }
 });
 
