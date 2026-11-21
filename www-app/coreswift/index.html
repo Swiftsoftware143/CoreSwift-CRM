@@ -6616,6 +6616,7 @@ async function loadPipelinesTab() {
     // before a single deal can be created or filtered by owner.
     if (!PL_TEAM.length) {
       try { PL_TEAM = (await API.get('/deals/team')).people || []; } catch (_) {}
+      try { await plLoadSources(); } catch (_) {}
     }
     if (PL_CURRENCY === null) {
       try {
@@ -7277,6 +7278,12 @@ async function plAddDeal(pid, presetStageId) {
   const cur = PL_CURRENCY || '';
   showModal('New Deal',
     '<div class="form-group"><label>Deal name</label><input type="text" id="dlName"></div>' +
+    // WHERE THE DEAL CAME FROM (David, 2026-11-21): the workspace names its own sources, so a deal says
+    // "Website Quote Form" without anyone retyping it, and the filter matches the same words.
+    '<div class="form-group"><label>Source</label><select id="dlSource">' +
+      '<option value="">Not recorded</option>' +
+      ((window.PL_SOURCES || []).map(function (x) { return '<option value="' + escapeHtmlAttr(x) + '">' + escapeHtml(x) + '</option>'; }).join('')) +
+    '</select></div>' +
     '<div class="form-group"><label>Contact</label><select id="dlContact">' + opts + '</select></div>' +
     '<div class="form-group"><label>Stage</label><select id="dlStage">' + stageOpts + '</select></div>' +
     '<div class="form-group"><label>Value</label><input type="number" id="dlValue" step="0.01"></div>' +
@@ -7296,6 +7303,32 @@ async function plAddDeal(pid, presetStageId) {
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
     '<button class="btn btn-primary" onclick="plCreateDeal(\'' + pid + '\')">Create</button>');
 }
+// The workspace's own deal sources, loaded once. Empty means the workspace named none, and the form
+// simply offers "Not recorded" rather than inventing a list for somebody else's business.
+let PL_SOURCES = null;
+window.PL_SOURCES = [];
+async function plLoadSources() {
+  if (PL_SOURCES) return PL_SOURCES;
+  PL_SOURCES = [];
+  try {
+    // The workspace's own settings, read with the workspace id from the session's own claim. An
+    // account id is not guessed from the account list: the token says which workspace this is.
+    var aid = '';
+    try {
+      var tk = localStorage.getItem('crm_token') || '';
+      var payload = JSON.parse(atob((tk.split('.')[1] || '').replace(/-/g, '+').replace(/_/g, '/')));
+      aid = payload.aid || payload.account_id || payload.tenant_id || '';
+    } catch (_) {}
+    if (aid) {
+      const r = await API.get('/account/' + encodeURIComponent(aid) + '/settings');
+      const list = (r && r.settings && r.settings.deal_sources) || [];
+      if (Array.isArray(list)) PL_SOURCES = list.filter(function (x) { return typeof x === 'string' && x.trim(); });
+    }
+  } catch (e) { PL_SOURCES = []; }
+  window.PL_SOURCES = PL_SOURCES || [];
+  return PL_SOURCES;
+}
+
 async function plCreateDeal(pid) {
   const name = (document.getElementById('dlName').value || '').trim();
   if (!name) { toast('Deal name is required', 'error'); return; }
@@ -7314,7 +7347,8 @@ async function plCreateDeal(pid) {
     owner_id: document.getElementById('dlOwner').value || null,
     probability: prob === '' ? null : parseInt(prob, 10),
     expected_close_date: document.getElementById('dlClose').value || null,
-    notes: (document.getElementById('dlNotes').value || '').trim() || null
+    notes: (document.getElementById('dlNotes').value || '').trim() || null,
+    source: ((document.getElementById('dlSource') || {}).value || '').trim() || null
   };
   try {
     await API.post('/deals', body);
