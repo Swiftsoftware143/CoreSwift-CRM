@@ -2137,6 +2137,96 @@ once.</p>
     the record.</p>
   </div>
 </section>
+<!-- guide-2026-11-21 -->
+
+<h2 id="bookings-taken">The bookings your customers made</h2>
+<p>Under <strong>Settings &rarr; Bookings taken</strong> (right beside <em>Booking</em>) is the list of real
+bookings, not the calendar setup: who booked, for which dates, on which calendar, in what state, and what they
+paid. <strong>Cancel</strong> on a row puts the slot back on the calendar.</p>
+<p>A booking is already <strong>confirmed the moment it is made</strong> — the public page takes the slot and
+holds it, so there is no separate "accept" step and no button for one. The state column reads
+<em>confirmed</em> or <em>cancelled</em>, and a cancelled booking frees its place for the next customer.</p>
+<p>If the list is empty, no one has booked yet: share the calendar link from
+<strong>Settings &rarr; Booking</strong> and the first booking appears here.</p>
+
+<h2 id="deal-fields">Deal fields — the details beyond amount and stage</h2>
+<p>Every business records something a generic deal form cannot know: a drop-off city, a reference number, a
+delivery date. <strong>Deals &rarr; Deal fields</strong> is where you add them.</p>
+<ul>
+<li>Press <strong>+ Add a field</strong>, name it, and choose a type: text, number, money, date, yes/no, or pick
+from a list.</li>
+<li>The <strong>key</strong> shown next to each field is what an AI agent or an import uses to address it, and it
+is made from the name so it stays predictable.</li>
+<li><strong>Remove</strong> stops a field appearing on new deals. Values already recorded on existing deals are
+left alone.</li>
+</ul>
+<p>Deal fields belong to your account, so two businesses in the same place can record completely different
+details.</p>
+
+<h2 id="alert-rules">Alert rules — what CoreSwift does while you are not looking</h2>
+<p>The notifications list shows what happened. <strong>Notifications &rarr; Alert rules</strong> is what decides it:
+each rule is "when this happens, do that".</p>
+<ul>
+<li><strong>When this happens</strong> is the event name the system publishes — for example
+<code>deal.stalled</code>, <code>contact.created</code>, <code>booking.confirmed</code>.</li>
+<li><strong>Do this</strong> is one of four things: put it in this feed, send an email, send a text message, or
+send a WhatsApp message.</li>
+<li><strong>Pause</strong> keeps a rule but stops it firing; <strong>Remove</strong> deletes it. Nothing already
+sent is affected either way.</li>
+<li><strong>Waiting to go out</strong> lists what the server has queued and not yet delivered — the honest answer
+to "why have I not had that email yet".</li>
+</ul>
+
+<h2 id="score-destinations">Score destinations — where a lead score goes</h2>
+<p>Lead scoring gives each contact a number. <strong>Lead Scoring &rarr; Score destinations</strong> is where that
+number is delivered when it changes — your own automation, an n8n workflow, a Slack hook.</p>
+<ul>
+<li>Each destination has a name, a web address, and the score range that should trigger it
+(<strong>at least</strong> this score, and optionally <strong>at most</strong> that one).</li>
+<li>Leave this empty and scores stay inside CoreSwift, visible only on the Lead Scoring screen.</li>
+<li>A signing secret is optional and stored encrypted; it travels with the call so the receiving end can prove
+the request came from you.</li>
+</ul>
+
+<h2 id="hand-a-lead">Hand a lead to the team</h2>
+<p>The <strong>Round Robin</strong> screen lists your teams and how leads rotate between their members. The button
+that actually does it is <strong>Hand a lead to the team</strong> at the top.</p>
+<p>Pick a team, optionally name the contact, and press <strong>Assign now</strong> — round robin gives the lead to
+the next person in turn, so the work spreads instead of landing on whoever answers first. With no contact named
+the lead is assigned without one; a team is required, because the rotation belongs to the team.</p>
+
+<h2 id="assign-a-ticket">Assign a ticket to a teammate</h2>
+<p>On <strong>Tickets</strong>, the <strong>Assigned to</strong> cell is a button for an owner or admin. Press it,
+pick a teammate, and the conversation belongs to them. Choose <strong>Leave it unassigned</strong> to put it back
+in the shared queue.</p>
+<p><strong>A teammate sees only their own work.</strong> Somebody invited as a member signs in to the tickets that
+are assigned to them — not the whole desk — and a ticket that is not theirs answers "not found" rather than
+showing a conversation that belongs to someone else. If a member sees an empty queue, nothing is broken: nothing
+has been assigned to them yet.</p>
+
+<h2 id="day-and-night">Day and night, on every page</h2>
+<p>Every CoreSwift page has a switch, and the choice follows you: pick night on the booking page and the guide,
+the sign-in screen and the inbox are night too, on whichever address you are on.</p>
+<ul>
+<li>In the console: the moon icon in the header, or <strong>Day / night</strong> in the sidebar.</li>
+<li>Every other page, including this guide: the small switch in the bottom-left corner.</li>
+<li>Nothing is stored on our side — the choice lives in your browser, and until you make one it follows your
+computer's own light or dark setting.</li>
+</ul>
+
+<h2 id="account-vs-workspace">An account and a workspace are not the same thing</h2>
+<p>An <strong>account</strong> is the business — it is what you signed up for, what your plan belongs to, and what
+your data is separated by. A <strong>workspace</strong> lives <em>inside</em> an account, for splitting one
+business's work (by branch, brand or team) without a second login.</p>
+<p>Two consequences worth knowing:</p>
+<ul>
+<li>Switching a workspace changes what you are looking at, never who you are — your plan, your people and your
+billing stay with the account.</li>
+<li>An account always keeps at least one workspace, and an account that is one of our portfolio businesses keeps
+its workspaces permanently. In that case the <strong>Delete</strong> button is shown disabled, with the reason on
+hover, instead of failing when you press it.</li>
+</ul>
+
 <script id="cs-theme-shared-js">/* the switch itself (shared): describes what pressing it will DO, not the current state */
 (function(){
   function label(){var t=document.documentElement.getAttribute('data-theme')==='dark';

@@ -395,6 +395,43 @@ platform token and mail flows, whereas a wrong key refuses everything. Removing 
 provider rewrites the envelope to <code>bounce+&lt;hash&gt;@&lt;its domain&gt;</code>, and reading that as the sender
 mislabels the message and stops a ticket from being opened for it.</p>
 
+<!-- guide-2026-11-21 -->
+
+<h2 id="operator-actions">Operator Actions — doing on a customer's behalf</h2>
+<p><strong>Operator Actions</strong> sits in the operator menu beside Portfolio and Users. It is the console door
+to the same action runner an AI agent uses, so nothing here is a second implementation of a rule.</p>
+<ul>
+<li><strong>The list of actions is read from the server</strong> (its intents endpoint), and so are each action's
+required fields. The screen cannot offer an action the API would refuse.</li>
+<li><strong>create_tenant_account</strong> creates a real customer account and mints its API key. It needs a name
+and an email. This is how an operator onboards a customer without them signing up themselves.</li>
+<li><strong>build_campaign</strong> and <strong>sync_funnelswift_tag</strong> are the other two the platform
+currently offers.</li>
+<li>The result panel shows the server's own answer. A refusal is shown as a refusal — an empty email comes back
+as <em>"email: is required"</em> and <strong>nothing is created</strong>.</li>
+</ul>
+<p><strong>Nothing on this screen can be undone from it.</strong> Treat creating an account as permanent: it is a
+real workspace with a real key. If an action refuses, read the sentence it returned rather than pressing again.</p>
+<p>Note where this screen lives: the operator console at <code>admin.</code> asks for a password on every visit
+and keeps its own session, so operator screens that must be reachable in a hurry (Portfolio, Users and this one)
+live in the main console. Signing in there as an operator shows them in the admin section of the menu.</p>
+
+<h2 id="bookings-and-deal-fields-admin">Bookings taken, deal fields, alert rules, score destinations</h2>
+<p>Four screens were added to the customer console and are worth knowing when a customer asks:</p>
+<ul>
+<li><strong>Bookings taken</strong> (Settings) lists every booking a customer made, with Cancel. A booking is
+confirmed at the moment it is made, so there is no acceptance step.</li>
+<li><strong>Deal fields</strong> (Deals) is where an account records its own details on a deal. The key beside
+each field is what an AI agent addresses it by.</li>
+<li><strong>Alert rules</strong> (Notifications) decide what the feed, email, SMS and WhatsApp receive; the
+<em>Waiting to go out</em> list is the server's outbound queue.</li>
+<li><strong>Score destinations</strong> (Lead Scoring) is where a score is delivered when it changes.</li>
+</ul>
+<p>The <strong>Get set up</strong> card on a customer's Dashboard is the fastest way to see what an account is
+still missing: nine checks, read from their real data, each with a button to the screen that closes it. Nine of
+nine means the account is working. It is also the first thing to look at when a customer says the product does
+nothing.</p>
+
 <script id="cs-theme-shared-js">/* the switch itself (shared): describes what pressing it will DO, not the current state */
 (function(){
   function label(){var t=document.documentElement.getAttribute('data-theme')==='dark';
