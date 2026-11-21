@@ -121,10 +121,35 @@ pub async fn evaluate_tag_triggers(
             if matches {
                 // A failing action used to be dropped here (`let _ =`), so an AddTag that tripped
                 // tag_assignments' unique constraint was a silent no-op with no operator signal.
-                if let Err(e) =
-                    actions::execute_action(db, &rule, tenant_id, entity_type, entity_id).await
-                {
-                    tracing::warn!(rule = %rule.id, action = %rule.action_type, error = %e, "Automation action failed");
+                // A RULE THAT RAN MUST SAY SO (measured 2026-11-21): the action executed and the
+                // contact got the tag it was told to apply, while `execution_count` stayed 0 - so the
+                // one number an owner uses to ask "is this automation working?" reported that it never
+                // ran. Both counters are now written here, on success and on failure, because a rule
+                // that fires and fails is not the same as a rule nobody triggered.
+                match actions::execute_action(db, &rule, tenant_id, entity_type, entity_id).await {
+                    Ok(()) => {
+                        let _ = sqlx::query(
+                            "UPDATE automation_rules \
+                                SET execution_count = COALESCE(execution_count, 0) + 1, \
+                                    last_executed_at = now() \
+                              WHERE id = $1",
+                        )
+                        .bind(rule.id)
+                        .execute(db)
+                        .await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(rule = %rule.id, action = %rule.action_type, error = %e, "Automation action failed");
+                        let _ = sqlx::query(
+                            "UPDATE automation_rules \
+                                SET execution_count = COALESCE(execution_count, 0) + 1, \
+                                    last_executed_at = now() \
+                              WHERE id = $1",
+                        )
+                        .bind(rule.id)
+                        .execute(db)
+                        .await;
+                    }
                 }
             }
         }
