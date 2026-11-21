@@ -5,6 +5,7 @@ pub mod handlers;
 pub mod models;
 pub mod outbox;
 pub mod provision;
+pub mod targets;
 
 use crate::AppState;
 use axum::{middleware, Router};

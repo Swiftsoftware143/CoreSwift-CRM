@@ -92,6 +92,24 @@ pub async fn drain(pool: &PgPool, sync_key: &str, limit: i64) -> DrainReport {
                     sync_key.to_string(),
                 )
                 .await;
+                // THE TARGETS THE OWNER CONFIGURED NOW ACTUALLY RECEIVE SOMETHING (David, 2026-11-21).
+                // Until now `integration_targets` was a form that stored a URL and an API key and was
+                // never read again, so an owner who wired their n8n or Zapier believed it was live.
+                let _ = super::targets::deliver_event(
+                    pool,
+                    company_id,
+                    super::targets::EVENT_SYNCED,
+                    &serde_json::json!({
+                        "action": action,
+                        "name": name,
+                        "slug": slug,
+                        "email": email,
+                        "description": description.clone().unwrap_or_default(),
+                        "account_tenant_id": done.tenant_id,
+                        "user_created": done.user_created,
+                    }),
+                )
+                .await;
                 let _ = sqlx::query(
                     "UPDATE portfolio_sync_outbox SET processed_at = now(), attempts = attempts + 1 WHERE id = $1",
                 )
