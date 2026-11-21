@@ -1136,7 +1136,7 @@ function getTabLabel(id) {
 async function checkPlan() {
   try {
     // SOURCE OF TRUTH for "this account's plan": GET /api/billing/subscription answers the tenant's
-    // OWN tenant_plans row and its plan_id IS the plan the workspace is on; a tenant with no row gets
+    // OWN tenant_plans row and its plan_id IS the plan the account is on; a tenant with no row gets
     // the route's own declared default (default_plan = the Free row). The display NAME is then read BY
     // ID from GET /api/billing/plans/:id — never by position, never hardcoded. This replaces
     // plans.find(p => p.is_current || p.is_default) || plans[0], which fell back to plans[0] because no
@@ -1158,7 +1158,7 @@ async function checkPlan() {
     // also runs on the 402 path (API.call), before/without this, and may not claim a plan it never read.
     const wrap = document.getElementById('currentPlanWrap');
     if (wrap) wrap.style.display = STATE.planName ? '' : 'none';
-    // the banner's whole job: upsell a workspace that really is on free/starter. Unknown -> silent.
+    // the banner's whole job: upsell an account that really is on free/starter. Unknown -> silent.
     const tier = STATE.planName.toLowerCase();
     if ((tier === 'free' || tier === 'starter') && !localStorage.getItem('crm_banner_dismissed')) {
       showUpgradeBanner();
@@ -1229,7 +1229,7 @@ async function requestPlanChange(idx, btn) {
             : '')
           + ' Self-serve '
           + 'checkout is not open on this install, so the switch has to be made by the CoreSwift team.'
-          + ' Workspace: ' + (user.company || user.account_name || '(unnamed)')
+          + ' Account: ' + (user.company || user.account_name || '(unnamed)')
           + ' [' + user.account_id + ']. Requester: ' + (user.email || '(no address)') + '.',
         name: user.name || user.email || '',
         // Required by this intake: the address the team replies to, and the one the queue shows.
@@ -1282,12 +1282,12 @@ async function recordPaymentHandoff(idx) {
         subject: 'Payment started: ' + name + ' plan',
         message: 'This account pressed Open payment page for the ' + name + ' plan ($' + price
           + '/month) from Plans & Billing, so payment is happening on CoreSwift’s own payment page.'
-          + ' The workspace is on ' + (STATE.planName || 'no plan') + ' today and must be switched onto '
+          + ' The account is on ' + (STATE.planName || 'no plan') + ' today and must be switched onto '
           + name + ' once the money lands — nothing about this is automatic.'
           + (String(STATE.planName || '').toLowerCase() === 'inbox'
-            ? ' IMPORTANT: the $1 Inbox subscription must be cancelled in the same step, so the workspace is never billed $1 on top of the new plan.'
+            ? ' IMPORTANT: the $1 Inbox subscription must be cancelled in the same step, so the account is never billed $1 on top of the new plan.'
             : '')
-          + ' Workspace: ' + (user.company || user.account_name || '(unnamed)')
+          + ' Account: ' + (user.company || user.account_name || '(unnamed)')
           + ' [' + (user.account_id || '') + ']. Payer: ' + (user.email || '') + '.',
         name: user.name || user.email || '',
         email: user.email || ''
@@ -1607,7 +1607,7 @@ const TAB_RENDERERS = {
         '<h3 style="font-weight:700;margin:14px 0 6px">Your token</h3>' +
         '<p style="color:var(--text-secondary);margin-bottom:14px">The API key above is what an MCP client uses to authenticate. Treat it like a password: anyone holding it can read this account.</p>' +
         '<h3 style="font-weight:700;margin:14px 0 6px">What it can read</h3>' +
-        '<p style="color:var(--text-secondary);margin-bottom:8px">These are the read-only tools this app exposes to a workspace credential — the real tool names, every one scoped to this account.</p>' +
+        '<p style="color:var(--text-secondary);margin-bottom:8px">These are the read-only tools this app exposes to an account credential — the real tool names, every one scoped to this account.</p>' +
         '<ul style="list-style:disc;padding-left:20px;color:var(--text-secondary);margin-bottom:8px">' +
           '<li><code>coreswift_search_contacts</code> — contacts by name, email or company</li>' +
           '<li><code>coreswift_contact_count</code> — how many active contacts this account holds</li>' +
@@ -1619,7 +1619,7 @@ const TAB_RENDERERS = {
             return '<li><code>' + s[0] + '_summary</code> / <code>' + s[0] + '_search</code> — ' + s[1] + '</li>';
           }).join('') +
         '</ul>' +
-        '<p style="color:var(--text-muted);font-size:12px">Each row above is two tools: <code>&lt;name&gt;_summary</code> answers counts and an overview, <code>&lt;name&gt;_search</code> returns the searchable rows newest first, capped at 200. Every tool is a SELECT and tenant-scoped: an account token can only ever return this account&#39;s rows. There is no write tool and no free-form SQL door, and the operator-wide tools are refused for a workspace credential.</p>' +
+        '<p style="color:var(--text-muted);font-size:12px">Each row above is two tools: <code>&lt;name&gt;_summary</code> answers counts and an overview, <code>&lt;name&gt;_search</code> returns the searchable rows newest first, capped at 200. Every tool is a SELECT and tenant-scoped: an account token can only ever return this account&#39;s rows. There is no write tool and no free-form SQL door, and the operator-wide tools are refused for an account credential.</p>' +
         '<h3 style="font-weight:700;margin:14px 0 6px">Connect</h3>' +
         '<p style="color:var(--text-secondary);margin-bottom:8px">Paste this into your MCP client config (Claude Desktop, Cursor, or any other MCP client). Replace <code>YOUR_API_KEY</code> with this account&#39;s key.</p>' +
         '<pre style="background:var(--bg-secondary);padding:12px;border-radius:var(--radius);font-size:12px;overflow-x:auto;margin:0">' + escapeHtml(MCP_CONFIG_TEXT) + '</pre>' +
@@ -1727,7 +1727,7 @@ const TAB_RENDERERS = {
   'tracked-links': () => {
     // The rows come from the loader below (TAB_LOADERS['tracked-links'] -> loadTrackedLinksTab).
     // This renderer used to return a HARD-CODED "No tracked links yet" empty state and issue NO
-    // request at all, so a workspace whose links really exist was told it had none - while the
+    // request at all, so an account whose links really exist was told it had none - while the
     // dashboard tile counted the very same route (kanban t_bd9470b6).
     return pageHeader('Tracked Links', 'Generate trackable URLs for campaigns',
       '<button class="btn btn-primary btn-sm" onclick="showAddLinkModal()">+ Generate Link</button>') +
@@ -2123,7 +2123,7 @@ const TAB_LOADERS = {
     // console carries the SAME tiles from the SAME keys: change the two shells together.
     // A source BLOCKED BY THE PLAN is not a failure: 402 carries the server's own sentence
     // ("Support tickets is not available on your current plan. Upgrade to access it."). Rendering a
-    // mute '—' for it made every Free workspace's Open Tickets tile look broken, with no way to tell
+    // mute '—' for it made every Free account's Open Tickets tile look broken, with no way to tell
     // a plan gate from an outage (measured in Chromium 2026-10-23, app.coreswiftcrm.com). A gated
     // source now renders the tile with the plan note under its label and the server's sentence as
     // its tooltip; a genuine failure still renders the bare '—'.
@@ -2170,7 +2170,7 @@ const TAB_LOADERS = {
     // 0 contacts / 0 companies / 0 opportunities / $0.00 won / 0 pipelines / 0 tracked links, and
     // the three things a CRM needs before any of that means anything were discoverable only by
     // reading the sidebar. This card names them and links each to the screen that does it.
-    // It paints ONLY for a workspace where EVERY read it depends on answered AND every count is
+    // It paints ONLY for an account where EVERY read it depends on answered AND every count is
     // zero, so a failed read can never make a busy workspace look new; and it removes itself the
     // moment any one of them is non-zero, so it never becomes permanent furniture.
     // `ticketsS.gated` is deliberately NOT part of the predicate: a 402 is the plan gate talking,
@@ -2730,11 +2730,11 @@ async function createPortfolioCompany() {
 
 function showPortfolioSyncModal() {
   showModal('Sync New Company — give a company its own account',
-    '<p style="color:var(--text-secondary);margin-bottom:12px">Creates a workspace, its owner login and the portfolio entry, then <strong>emails the login details and the password to the owner</strong>. ' +
+    '<p style="color:var(--text-secondary);margin-bottom:12px">Creates an account, its owner login and the portfolio entry, then <strong>emails the login details and the password to the owner</strong>. ' +
     'If this company is already a portfolio record with no account behind it, this gives that record the account instead of making a second one. ' +
     'Running it again on a company that already has an account only refreshes its details — no second login is created and no email is sent.</p>' +
     '<div class="form-group"><label for="psName">Company name *</label><input type="text" id="psName" data-ops="ps-name"></div>' +
-    '<div class="form-group"><label for="psEmail">Owner email *</label><input type="email" id="psEmail" data-ops="ps-email"><div class="form-hint">The login and its password are emailed here. An address that already signs in to a workspace cannot be used a second time.</div></div>' +
+    '<div class="form-group"><label for="psEmail">Owner email *</label><input type="email" id="psEmail" data-ops="ps-email"><div class="form-hint">The login and its password are emailed here. An address that already signs in to an account cannot be used a second time.</div></div>' +
     '<div class="form-group"><label for="psPlan">Plan</label><select id="psPlan" data-ops="ps-plan"><option value="">Loading plans…</option></select><div class="form-hint">The entry plan is the free plan every self-serve signup gets. Pick a tier to seat the account on it from the start.</div></div>' +
     '<div class="form-group"><label for="psDesc">Description</label><textarea id="psDesc" rows="3"></textarea></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
@@ -3713,7 +3713,7 @@ async function loadProfileTab() {
       '<span class="form-hint" style="margin-left:10px">/contact.html</span>', '') +
     '<br>' +
     // DOWNLOAD MY DATA (kanban t_e2ec5452) — the customer's OWN copy of the workspace. Until now
-    // the only export was two CSV tables (contacts, opportunities), so a workspace leaving could
+    // the only export was two CSV tables (contacts, opportunities), so an account leaving could
     // not take its pipelines, tickets, bookings, automations or mail with it. The document is built
     // FRESH on each press by GET /api/v1/account/export from the session's account — there is no id
     // to spoof — and this card is the fleet-standard door to it.
@@ -5603,7 +5603,7 @@ function teamPeopleHtml(d) {
   var now = Date.now();
   var body = members.map(function (m) {
     var added = m.joined_at ? fmtTeamDate(m.joined_at) : '—';
-    var via = m.invited_by ? ('invited by ' + m.invited_by) : 'owner of the workspace';
+    var via = m.invited_by ? ('invited by ' + m.invited_by) : 'owner of the account';
     var state = m.is_active === false
       ? '<span style="color:var(--text-muted)">Removed</span>'
       : '<span style="color:var(--success,#34d399)">Active</span>';
@@ -5671,9 +5671,9 @@ function showTeamMsg(text, ok) {
 
 async function removeTeammate(id, email) {
   if (!canManageTeam()) { toast('Only the owner or an admin can remove a teammate', 'error'); return; }
-  if (!window.confirm('Remove ' + (email || 'this person') + ' from the workspace?\n\n' +
+  if (!window.confirm('Remove ' + (email || 'this person') + ' from the account?\n\n' +
     'They will not be able to sign in any more. Their conversations and inboxes come back to the ' +
-    'workspace and nothing is deleted.')) return;
+    'account and nothing is deleted.')) return;
   try {
     var d = await API.del('/auth/team/members/' + id);
     var un = (d && d.unassigned) || {};
@@ -5988,7 +5988,7 @@ async function loadIndustriesPanel() {
     });
     const head = card('Industry tabs',
       '<p style="color:var(--text-secondary);margin-bottom:12px">' + escapeHtml(cap) +
-      ' — an active industry tab is what the workspace dashboard and its automations are shaped from.</p>');
+      ' — an active industry tab is what the account dashboard and its automations are shaped from.</p>');
     el.innerHTML = head + (all.length
       ? '<div class="card"><div class="table-wrap"><table><thead><tr><th>Industry</th><th>What it configures</th><th>Status</th><th></th></tr></thead><tbody>' + rows.join('') + '</tbody></table></div></div>'
       : '<div class="card"><div class="card-body"><div class="empty-state"><div class="empty-icon">🏭</div><h3>No industries</h3><p>The catalogue is empty.</p></div></div></div>');
@@ -6028,7 +6028,7 @@ async function loadUsage() {
     //
     // Contacts carry the plan's CEILING (kanban t_3e3965fc). The ceiling is a hard stop only where
     // the TENANT adds a contact (this console, CSV import) — a lead another app captured keeps
-    // landing either way — so a workspace over its ceiling is a normal state, and this readout is
+    // landing either way — so an account over its ceiling is a normal state, and this readout is
     // where its owner is told. `contacts_limit` is absent from a server that predates the field, so
     // fall back to the bare count rather than printing `undefined`.
     const contacts = (u.contacts || 0);
@@ -6041,7 +6041,7 @@ async function loadUsage() {
       ? (contacts + '/' + u.contacts_limit + ' ' + (Number(u.contacts_limit) === 1 ? 'contact' : 'contacts'))
       : cnt(contacts, 'contact', 'contacts');
     // The help desk's readout (kanban t_969f576a, decision (a)). The public intake is NOT plan-gated
-    // while the ticket queue IS, so a workspace without Support tickets can collect real customer
+    // while the ticket queue IS, so an account without Support tickets can collect real customer
     // requests its own queue refuses to open. `support_intake_unreadable` is that state, and it is
     // decided server-side by the SAME resolve the gate enforces. Zero tickets prints nothing.
     const tk = (u.tickets || 0);
@@ -6058,10 +6058,10 @@ async function loadUsage() {
 // Plan notices on the Dashboard — ONE composer, because both notices share the same slot.
 //
 // 1. The contact ceiling: it refuses a contact the TENANT adds, while a lead a sibling app already
-//    captured is still accepted (capture-over-ceiling, kanban t_3e3965fc), so a workspace can sit
+//    captured is still accepted (capture-over-ceiling, kanban t_3e3965fc), so an account can sit
 //    above its ceiling and has to be told.
 // 2. The help desk's PUBLIC INTAKE (kanban t_969f576a, decision (a)): the intake arms are NOT
-//    plan-gated while the ticket queue IS, so a workspace whose plan excludes Support tickets can
+//    plan-gated while the ticket queue IS, so an account whose plan excludes Support tickets can
 //    collect customer requests it cannot read. The decision was to keep accepting them — the caller
 //    is the workspace's OWN customer, and refusing would lose the request outright — and to end the
 //    silence instead, which is what this notice does.
@@ -6073,13 +6073,13 @@ function renderPlanNotices(u, over) {
   let html = '';
   if (over) {
     html += card('⚠ Over your plan\u2019s contact limit',
-      '<p style="color:var(--text-secondary);margin-bottom:10px">This workspace holds <strong>' + (u.contacts || 0) + ' of ' + u.contacts_limit + '</strong> contacts. Leads captured by your connected apps keep arriving, so the count can pass the limit — but a new contact you add here, or by CSV import, is refused until the workspace is under the limit or on a bigger plan.</p>',
+      '<p style="color:var(--text-secondary);margin-bottom:10px">This account holds <strong>' + (u.contacts || 0) + ' of ' + u.contacts_limit + '</strong> contacts. Leads captured by your connected apps keep arriving, so the count can pass the limit — but a new contact you add here, or by CSV import, is refused until the workspace is under the limit or on a bigger plan.</p>',
       '<button class="btn btn-primary btn-sm" onclick="switchTab(&#39;billing&#39;)">💳 See plans</button>');
   }
   if (u.support_intake_unreadable === true) {
     const n = (u.tickets || 0);
     html += card('⚠ Customer requests you cannot open',
-      '<p style="color:var(--text-secondary);margin-bottom:10px">This workspace is holding <strong>' + n + (n === 1 ? ' customer request' : ' customer requests') + '</strong> in a support queue this plan refuses to open. The intake is not plan-gated, so requests keep arriving through the 💬 <strong>My Support</strong> portal and the embed widget — nothing is lost. They appear in <strong>Support Tickets</strong> as soon as the plan includes it.</p>',
+      '<p style="color:var(--text-secondary);margin-bottom:10px">This account is holding <strong>' + n + (n === 1 ? ' customer request' : ' customer requests') + '</strong> in a support queue this plan refuses to open. The intake is not plan-gated, so requests keep arriving through the 💬 <strong>My Support</strong> portal and the embed widget — nothing is lost. They appear in <strong>Support Tickets</strong> as soon as the plan includes it.</p>',
       '<button class="btn btn-primary btn-sm" onclick="switchTab(&#39;billing&#39;)">💳 See plans</button>');
   }
   el.innerHTML = html;
@@ -6488,11 +6488,11 @@ function confirmThen(msg, fn) { if (window.confirm(msg)) fn(); }
 // The DEAL TAB (David, 2026-11-20 — kanban t_2df68850).
 //
 // The deal record is CoreSwift's `opportunities` table; this tab is the software-wide surface over
-// it. Nothing here is industry-specific: a workspace that needs courier fields (Xride) adds them
+// it. Nothing here is industry-specific: an account that needs courier fields (Xride) adds them
 // as CUSTOM FIELDS, which is the same mechanism any other industry uses.
 //
 // Money is shown per currency, never added across currencies. David's standing rule (2026-11-20):
-// the US DOLLAR is the default currency, so a workspace that has not chosen one prices its deals in
+// the US DOLLAR is the default currency, so an account that has not chosen one prices its deals in
 // USD and reports in USD — nobody is asked to choose one first, and a first deal is never refused.
 let PL_DATA = [];
 let PL_FILTER = { q: '', owner_id: '', stage_id: '', source: '', status: '', from: '', to: '', rotting: false };
@@ -6567,7 +6567,7 @@ function plCurrencies(deals) {
   return seen;
 }
 
-// Won value is per currency: a workspace selling in two currencies has two figures, never one
+// Won value is per currency: an account selling in two currencies has two figures, never one
 // number that adds dollars to euros (David, 2026-11-20). `total_revenue` is null in that case.
 function dashWonValue(stats) {
   if (!stats) return '—';
@@ -7147,7 +7147,7 @@ function plDealWriterHelp() {
       'The <strong>external reference</strong> is the identity of the deal: send the same reference twice and the ' +
       'second call updates the same deal instead of creating another one.</p>' +
     '<div class="form-group"><label>1. Create an API key</label><div class="config-desc">Integration Center → API keys. ' +
-      'The key resolves the workspace; a tenant id in the body is ignored.</div></div>' +
+      'The key resolves the account; a tenant id in the body is ignored.</div></div>' +
     '<div class="form-group"><label>2. Push the deal</label><pre style="white-space:pre-wrap;background:var(--bg-secondary);padding:10px;border-radius:6px;font-size:12px">' +
       escapeHtml(curl) + '</pre></div>' +
     '<div class="form-group"><label>3. Keep it in step</label><div class="config-desc">' +
@@ -7155,7 +7155,7 @@ function plDealWriterHelp() {
       'POST /api/external/deals/&lt;external_ref&gt;/status — mark it open, won or lost.<br>' +
       'The response says <code>created: true</code> or <code>false</code>, so a re-send is visible, not silent.</div></div>' +
     '<div class="form-group"><label>Workspace currency</label><div class="config-desc">' +
-      'A deal takes its currency from the workspace unless the push states one. Current: <strong id="plCurLabel">' +
+      'A deal takes its currency from the account unless the push states one. Current: <strong id="plCurLabel">' +
       (PL_CURRENCY || 'not set') + '</strong></div>' +
       '<div style="display:flex;gap:6px;margin-top:6px">' +
         '<input type="text" id="plCurrencyInput" maxlength="3" placeholder="USD" style="width:90px;padding:6px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
@@ -7164,7 +7164,7 @@ function plDealWriterHelp() {
 }
 
 // ── deals settings: the workspace's two currencies, and the rate table they read ───────────
-// David's amendment (2026-11-20): a workspace states a DEFAULT currency (what a new deal is priced
+// David's amendment (2026-11-20): an account states a DEFAULT currency (what a new deal is priced
 // in) and a REPORTING currency (what its reports are computed in). Both are picked from the real
 // ISO 4217 list, and the panel shows the rates the deals will store today.
 async function plDealSettings() {
@@ -7187,7 +7187,7 @@ async function plDealSettings() {
   showModal('Deals settings',
     '<div class="form-group"><label>Default currency — what a new deal is priced in</label>' +
       '<select id="dlDefaultCur">' + plCurrencyOptions(PL_CURRENCY) + '</select>' +
-      '<div class="config-desc">A deal that names no currency takes this one. <strong>USD is the standing default</strong> — a workspace that has not chosen here is a dollar workspace, and a first deal is never refused for the want of a default.</div></div>' +
+      '<div class="config-desc">A deal that names no currency takes this one. <strong>USD is the standing default</strong> — an account that has not chosen here is a dollar workspace, and a first deal is never refused for the want of a default.</div></div>' +
     '<div class="form-group"><label>Reporting currency — what totals and reports compute in</label>' +
       '<select id="dlReportingCur">' + plCurrencyOptions(PL_REPORTING || PL_CURRENCY) + '</select>' +
       '<div class="config-desc">Every deal stores the rate that converts it into this currency, on the day it was written. Changing this re-quotes open history from the rate that was true on each deal\'s own date — it never re-prices from today\'s market.</div></div>' +
@@ -8449,7 +8449,7 @@ function rrDeleteTeam(id) {
 }
 // The picker reads THIS workspace's roster from GET /api/auth/team/members — the same list the
 // Inbox assignment picker uses (any signed-in member may read it). This modal used to ask for a
-// RAW USER ID and claimed "the platform exposes no endpoint that lists a workspace’s users";
+// RAW USER ID and claimed "the platform exposes no endpoint that lists an account’s users";
 // that route exists and is tenant-scoped, so the id box was the only thing missing a source.
 async function rrAddMember(teamId) {
   let roster = [];
@@ -8461,7 +8461,7 @@ async function rrAddMember(teamId) {
   }
   const active = roster.filter(function (u) { return u && u.id && u.is_active !== false; });
   if (!active.length) {
-    toast('This workspace has no other members yet. Invite a teammate first, then add them to a team.', 'error');
+    toast('This account has no other members yet. Invite a teammate first, then add them to a team.', 'error');
     return;
   }
   const opts = active.map(function (u) {
@@ -9124,7 +9124,7 @@ async function saveBranding() {
 }
 
 // The logo endpoints write `logo_url` with jsonb_set, and jsonb_set cannot CREATE a missing
-// intermediate key: on a workspace whose settings have no `email_branding` object yet — i.e. anyone
+// intermediate key: on an account whose settings have no `email_branding` object yet — i.e. anyone
 // who uploads a logo before ever saving a name or colour — the pointer was silently dropped. The
 // tab then re-read "No logo uploaded" after a reload, and Branding::load (which reads only that
 // document) put NO header at all in the workspace's mail. Persist the pointer through the settings
@@ -9990,11 +9990,11 @@ function pePlanCard(st, domainCount) {
     : '<span class="badge badge-error">sending blocked</span>';
   var sendLine;
   if (st.can_send) {
-    sendLine = 'This workspace can send mail.';
+    sendLine = 'This account can send mail.';
   } else if (st.plan_sells_sending === false) {
     sendLine = 'Your plan does not sell sending, so mail is receive-only. Upgrade to send from your own domain.';
   } else {
-    sendLine = escapeHtml(st.send_blocked_reason || 'This workspace cannot send mail right now.');
+    sendLine = escapeHtml(st.send_blocked_reason || 'This account cannot send mail right now.');
   }
   var cap = st.send_cap_per_day;
   var sendUse = String(st.sent_last_24h == null ? 0 : st.sent_last_24h) +
@@ -10229,7 +10229,7 @@ function peCredentialCell(d) {
 // the gate. The success message is only shown when the returned row really carries the new value.
 function peCatchAllCell(d) {
   // The stored switch is NOT the entitlement (kanban t_6b54961b). Catch-all is sold by the plan,
-  // and the inbound router asks the plan at the moment a delivery needs it, so a workspace that
+  // and the inbound router asks the plan at the moment a delivery needs it, so an account that
   // enabled it and was then moved to a plan that does not sell it keeps this switch remembered
   // while every unmatched delivery is refused. The server reports exactly that state as
   // catch_all_off_plan, and painting "on" there would promise mail the router is dropping — the
@@ -10294,7 +10294,7 @@ async function peToggleCatchAll(domainId, next) {
 // presents no session and cannot carry an internal key, so this signature IS the receiver's only
 // credential — and since t_7f134e77 the receiver REFUSES every delivery it cannot authenticate,
 // including one for a domain with no key configured. Until this cell existed there was no surface
-// anywhere that could write the column, so a workspace that set up private email received nothing
+// anywhere that could write the column, so an account that set up private email received nothing
 // and had no way to arm its own receiver.
 // The server reports presence + LENGTH only (it opens the stored ciphertext to decide
 // `usable | unreadable | missing`); the value is sealed at rest and never echoed back here — the
@@ -11671,7 +11671,7 @@ async function csvExportContacts() {
 
 // ── Deals (opportunities) CSV — the export's own header names round-trip ────
 // The backend has carried GET /api/csv/export/opportunities and POST
-// /api/csv/import/opportunities since 2026-10-02, but this console called neither: a workspace could
+// /api/csv/import/opportunities since 2026-10-02, but this console called neither: an account could
 // export its CONTACTS and never its deals, and an export you cannot re-import is a backup you cannot
 // restore. Both go through the SAME ctCsvFetch helper as the contacts pair (raw fetch + the tenant's
 // bearer token), and the importer resolves the export's own column names — name, contact, company,
@@ -12167,7 +12167,7 @@ window.appGuidePages = {
   tickets:         { title: "Support Tickets", desc: "Support requests raised in your account and their status. Only mail a person wrote opens a ticket — server reports (DMARC, bounces), newsletters and marketing blasts stay in the Shared Inbox, and any message can be turned into a ticket by hand.", actions: ["Open a ticket", "Reply and change its status"] },
   branding:        { title: "Email Branding", desc: "One logo and one signature for every message this account sends. Upload the logo once — the app resizes it so it renders in Gmail, Outlook and Apple Mail on a phone or a desktop — then fill in the signature (name, title, company, phone and a short line) and press Save signature. Compose and every reply then open with both already in place; an individual address can use its own wording from the mail client's Signature button.", actions: ["Upload the company logo (PNG, JPEG, GIF or WebP — no size to choose)", "Fill in the signature and press Save signature", "Read the preview: it is the message the mailer really produces", "Send yourself a test email to see it in your own inbox"] },
   inbox:           { title: "Shared Inbox", desc: "Your mail in one place: every message that arrived at your account's addresses. CoreSwift does not host your mail \u2014 you bring your own domain, and sending and receiving are TWO separate choices: send through your own Mailgun account or any SMTP service (Amazon SES, SendGrid, Postmark, Google Workspace), and receive through Mailgun or SendGrid. The setup page is three steps: the domain plus the keys those choices need, the mail records (MX, SPF/DKIM) each with a Copy button and a live Active / Waiting / Needs attention badge, then the inbox itself. The API key is the sending key (Mailgun \u2192 Settings \u2192 API Keys \u2192 Private API key, it starts key-) and the webhook signing key is the receiving key (Mailgun \u2192 Send \u2192 Domains \u2192 your domain \u2192 Webhook signing key); without the second one the domain can only send. One extra CNAME makes inbox.yourbusiness.com open your mail, and it is the only record that must be Proxied (orange cloud) \u2014 the mail records stay grey. Nothing is charged and no mailbox exists until the records verify, and the 30-day clock starts at your first verified inbox. When it ends the address still receives and only sending pauses: Keep inbox \u2014 $1/mo or Upgrade CRM brings sending back on the spot, and nothing is ever deleted. The meter at the bottom of the left column is your storage, with a banner and one email at 50, 75 and 99 per cent.", actions: ["Pick an address to narrow the list", "Open a message, star it, or file it under a label", "Received files: press a file's chip to open it in place (a picture or PDF draws on screen, with Download beside it), or press the ↓ arrow to save a copy", "Follow the three setup steps and press Check again when the records show Active", "LOG IN on an inbox row opens your branded address once it is live", "Receive-only? Use Keep inbox \u2014 $1/mo or Upgrade CRM to restore sending", "Catch-all is switched on Email Domains & Sending, not here", "Change how a domain RECEIVES (Mailgun, SendGrid, or nowhere) under the domain on the setup page \u2014 sending is untouched by it"] },
-  "email-settings":{ title: "Email Domains & Sending", desc: "The sending half of your mail: the domains you send from with their Catch-all switch and their keys, the mailboxes on each domain, auto-replies and a form to send from a mailbox. The Catch-all column accepts mail for addresses that do not exist on the domain and files it under Everything else (MISC); it is sold by the plan \u2014 on this ladder from Professional ($79) upward \u2014 and the plan is checked when mail arrives, so a workspace moved down keeps the setting remembered while unmatched mail is refused: the cell then reads \u201coff \u2014 not on your plan\u201d with a Clear button. Mailboxes are counted per plan, and at the ceiling the answer names the plan that adds more and charges nothing.", actions: ["Enable or disable catch-all on a domain", "Add a domain, choose how it sends and how it receives, and paste only the keys those choices need; Check again after the records go Active", "DNS records shows the exact MX, SPF and DKIM values a domain needs, with a Copy button, for any domain \u2014 not just while the account has no inbox", "Remove this domain deletes a domain you no longer want (and the inboxes on it; mail already received stays) after you type its name to confirm", "Create a mailbox \u2014 the button stays disabled until receiving and sending both verify"] },
+  "email-settings":{ title: "Email Domains & Sending", desc: "The sending half of your mail: the domains you send from with their Catch-all switch and their keys, the mailboxes on each domain, auto-replies and a form to send from a mailbox. The Catch-all column accepts mail for addresses that do not exist on the domain and files it under Everything else (MISC); it is sold by the plan \u2014 on this ladder from Professional ($79) upward \u2014 and the plan is checked when mail arrives, so an account moved down keeps the setting remembered while unmatched mail is refused: the cell then reads \u201coff \u2014 not on your plan\u201d with a Clear button. Mailboxes are counted per plan, and at the ceiling the answer names the plan that adds more and charges nothing.", actions: ["Enable or disable catch-all on a domain", "Add a domain, choose how it sends and how it receives, and paste only the keys those choices need; Check again after the records go Active", "DNS records shows the exact MX, SPF and DKIM values a domain needs, with a Copy button, for any domain \u2014 not just while the account has no inbox", "Remove this domain deletes a domain you no longer want (and the inboxes on it; mail already received stays) after you type its name to confirm", "Create a mailbox \u2014 the button stays disabled until receiving and sending both verify"] },
   calendar:        { title: "Calendar", desc: "Your public calendar address, the booking calendars it shows, and the Google Calendar each one mirrors into. The card at the top is your address \u2014 <your-workspace>.coreswiftcrm.com \u2014 and it works the moment your account exists: anyone with it sees your open booking calendars and can reserve a place without an account. Change the name in front of the domain, or point a domain you own at the same calendar; the system address keeps answering either way, so a DNS mistake can never take your calendar away. Below it are your booking calendars with the Google Calendar each one pushes bookings into. Each calendar is also its own page under your address (for example acme.coreswiftcrm.com/consultations), and Give it its own address gives one calendar its own subdomain; a name already taken is refused with a plain sentence plus a suggested free one.", actions: ["Copy your calendar address, or open it to see what a visitor sees", "Change the calendar address name and press Save name", "To use your own domain: type it, press Save domain, point a CNAME at the address shown, then press Check now", "Open or create a booking calendar below, and connect Google Calendar to push its bookings into", "Give one calendar its own address (or remove it)"] },
   bookings:        { title: "Bookings", desc: "Appointment slots people can book with you, and the bookings they made.", actions: ["Set your availability", "Review upcoming bookings"] },
   "ai-assistant":  { title: "AI Assistant", desc: "Ask questions about your data, or have it draft content for you.", actions: ["Connect an AI provider in the Integration Center", "Ask it something"] },
@@ -12181,7 +12181,7 @@ window.appGuidePages = {
   team:            { title: "Team & Invites", desc: "The people who share this account and what each of them can do. A seat is one person who can sign in, the owner included: on this ladder Free includes 1, Starter 3, Professional 15, Enterprise 20 and Agency 100 (Pro and the $1 Inbox line are not on sale), and the $1 Inbox line includes nobody beyond the owner. You type the address and a role; the app makes the password, emails it, and never shows it to you. Removing somebody ends their access at their next click, puts their inboxes and conversations back to the workspace, and deletes nothing.", actions: ["Invite someone by email and choose Member or Admin", "When every seat is used, the answer names the plan that adds more and its price \u2014 nothing is charged by itself", "Create invite link for a teammate who would rather choose their own password (7 days, one use)", "The teammate signs in with the address and password the email carries and lands on the Dashboard; their mail is in the Shared Inbox tab", "Watch the Shared Inbox tab's Assigned to column to see who owns which address"] },
   webhooks:        { title: "Webhooks", desc: "Send your account's events out to another system in real time.", actions: ["Add an endpoint", "Pick which events it receives"] },
   portfolio:       { title: "Portfolio Companies", desc: "Platform operator view: the businesses managed on this platform. Sync New Company gives a company its own workspace and owner login, emails the owner the login details, and converts a record that has no account behind it \u2014 pressing it again only refreshes the details.", actions: ["Open a company", "Change its plan", "Press \ud83d\udd04 Sync New Company to give a record its own account \u2014 the owner is emailed the login"] },
-  users:           { title: "Users", desc: "Platform operator view: every user account across the platform with the workspace it belongs to. This list is read-only — no screen on it creates a person; people join a workspace through that workspace's own Team & Invites.", actions: ["Look up a person and the workspace they belong to", "Add somebody from the tenant console under Team & Invites"] },
+  users:           { title: "Users", desc: "Platform operator view: every user account across the platform with the workspace it belongs to. This list is read-only — no screen on it creates a person; people join an account through that account's own Team & Invites.", actions: ["Look up a person and the workspace they belong to", "Add somebody from the tenant console under Team & Invites"] },
   billing:         { title: "Billing & Plans", desc: "Your bill, the plan this account is on, and every plan it could move to. Nothing on this screen changes the plan by itself. Your bill states the one amount due, says there is one subscription, names any plan that ended when the workspace last moved, and states either the next charge date or — when the paid period has already ended and no renewal is on record — the date that period ended, with the fact that nothing has been charged since. Each tier that is not yours carries Request this plan, which tells our team which workspace is asking and charges nothing; a tier that already has a payment page also shows Open payment page, and pressing it files the same request first. When the team has written how to pay, a How to pay for a paid plan block sits at the bottom of the plan list with their own directions. Cancel subscription drops the workspace to the Free plan as soon as you confirm.", actions: ["Read Your bill — the amount, the single subscription and either the next charge date or the date the paid period ended", "Press Request this plan on a tier you want — our team makes the change and nothing is charged here", "Open payment page where a tier shows one, then your request is already filed", "Cancel subscription to drop back to Free at once — it asks you to confirm first"] },
   widgets:         { title: "Widgets", desc: "Platform operator view: embeddable pieces you can add to a customer's site.", actions: ["Create a widget"] },
   "native-apps":   { title: "Native Apps", desc: "Platform operator view: the mobile and desktop apps offered to customers.", actions: ["Review the apps"] },

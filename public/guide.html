@@ -193,7 +193,7 @@
   <div class="nav-inner">
     <a href="#getting-started">Getting Started</a>
     <a href="#dashboard">Dashboard</a>
-    <a href="#workspaces">Workspaces</a>
+    <a href="#workspaces">Accounts</a>
     <a href="#sales">Sales</a>
     <a href="#marketing">Marketing</a>
     <a href="#operations">Events, Portfolio &amp; Lists</a>
@@ -253,11 +253,11 @@
 <section id="mcp">
   <h2 class="sec-title"><span class="sec-num">1b</span> MCP — connect your AI tools</h2>
   <div class="card">
-    <p>Your workspace has an API key you can hand to an MCP client — Claude Code, Cursor, Hermes, or your own agent — so it can read your CoreSwift data.</p>
+    <p>Your account has an API key you can hand to an MCP client — Claude Code, Cursor, Hermes, or your own agent — so it can read your CoreSwift data.</p>
     <ul>
       <li><strong>Endpoint:</strong> <code>https://hooks.swiftsoftware.net/mcp</code></li>
       <li><strong>Token:</strong> your API key. Open <strong>MCP</strong> in the console, press <strong>View &amp; copy</strong>, and re-enter your password to see the full key.</li>
-      <li><strong>Read-only:</strong> every tool is scoped to your workspace and can only read. There is no write tool and no free-form SQL door.</li>
+      <li><strong>Read-only:</strong> every tool is scoped to your account and can only read. There is no write tool and no free-form SQL door.</li>
     </ul>
   </div>
 </section>
@@ -301,7 +301,7 @@
     <p><strong>Setting it up (Settings &rarr; Booking):</strong></p>
     <ol>
       <li><strong>Create the calendar</strong> and pick its kind on one of the three cards.</li>
-      <li><strong>Name your workspace once, at signup.</strong> Every account starts with one workspace and you name it yourself — that name becomes the address your team and customers use, so nothing is auto-named for you. More workspaces later, if your plan allows.</li>
+      <li><strong>Name your account once, at signup.</strong> Every account starts with one account and you name it yourself — that name becomes the address your team and customers use, so nothing is auto-named for you. More accounts later, if your plan allows.</li>
       <li><strong>Add what customers can book</strong> — a name, a price, how long it lasts, how many places, and how much padding you want after each one.</li>
       <li><strong>Set your open hours</strong> (appointments). Monday once, then <em>Copy Monday to Tue&ndash;Fri</em> or <em>Same hours every weekday</em> — a whole week is two clicks, not seven rows.</li>
       <li><strong>Or generate dated slots</strong> (the other two kinds) — pick the dates, the weekdays, the time and the price. Running it again never duplicates a position, and you can give Tuesdays a different price.</li>
@@ -311,7 +311,7 @@
     <p><strong>The public link, three ways — all the same calendar.</strong> The last part of every address is the name you chose, so it reads the way you want it to:</p>
     <ul>
       <li><code>booking.coreswiftcrm.com/book/<em>your-name</em></code> — the module's own address.</li>
-      <li><code><em>your-workspace</em>.coreswiftcrm.com/b/<em>your-name</em></code> — your workspace's own address, with <strong>b</strong> for booking. The same folder carries the other modules (an <strong>i</strong> for the private inbox), so one address serves everything.</li>
+      <li><code><em>your-account</em>.coreswiftcrm.com/b/<em>your-name</em></code> — your account's own address, with <strong>b</strong> for booking. The same folder carries the other modules (an <strong>i</strong> for the private inbox), so one address serves everything.</li>
       <li><code><em>your-own-domain</em>/b/<em>your-name</em></code> — once your domain is pointed at CoreSwift.</li>
     </ul>
     <p>Because a calendar's name is unique across your account&rsquo;s address, a link keeps working whichever of those an owner opens it on. A customer picks what they want, sees the total, and pays or reserves — and lands on a thank-you page with their reference and an <em>add to Google Calendar</em> link.</p>
@@ -434,21 +434,21 @@ Response:
   </div>
 </section>
 
-<!-- ======= 2b. WORKSPACES & SWITCHING ======= -->
+<!-- ======= 2b. ACCOUNTS & SWITCHING ======= -->
 <section id="workspaces">
-  <h2 class="sec-title"><span class="sec-num">🗂️</span> Workspaces &amp; switching</h2>
+  <h2 class="sec-title"><span class="sec-num">🗂️</span> Accounts &amp; switching</h2>
   <div class="card">
-    <h3>One account, several workspaces</h3>
-    <p>Your account is the business. A <strong>workspace</strong> lives inside it and holds the work — contacts, companies, mail, calendars, pipelines and automations. Settings, your plan, branding and team members are shared across every workspace in the account. Every account starts with one workspace called <em>My Workspace</em>, so you never land on a blank screen.</p>
-    <p>The <strong>🗂️ menu in the top bar</strong>, next to your plan, is where workspaces are managed:</p>
+    <h3>One account, several accounts</h3>
+    <p>Your account is the business. A <strong>account</strong> lives inside it and holds the work — contacts, companies, mail, calendars, pipelines and automations. Settings, your plan, branding and team members are shared across every account in the account. Every account starts with one account called <em>My Account</em>, so you never land on a blank screen.</p>
+    <p>The <strong>🗂️ menu in the top bar</strong>, next to your plan, is where accounts are managed:</p>
     <ul>
-      <li><strong>Switch</strong> — move between workspaces. The console reloads to show the chosen workspace's work, and your settings stay the same.</li>
-      <li><strong>Add workspace</strong> — create another. How many your plan allows decides the ceiling.</li>
-      <li><strong>Rename</strong> — change a workspace's name (owner or admin).</li>
-      <li><strong>Make default</strong> — mark which workspace a fresh sign-in opens. Exactly one is default at a time.</li>
-      <li><strong>Delete</strong> — remove a workspace you no longer need (owner or admin).</li>
+      <li><strong>Switch</strong> — move between accounts. The console reloads to show the chosen account's work, and your settings stay the same.</li>
+      <li><strong>Add account</strong> — create another. How many your plan allows decides the ceiling.</li>
+      <li><strong>Rename</strong> — change a account's name (owner or admin).</li>
+      <li><strong>Make default</strong> — mark which account a fresh sign-in opens. Exactly one is default at a time.</li>
+      <li><strong>Delete</strong> — remove a account you no longer need (owner or admin).</li>
     </ul>
-    <p>A few rules are always enforced: an account always keeps at least one workspace; you cannot delete the workspace you are currently signed into (switch to another first); and two workspaces in one account cannot share a name. Team members can switch and add workspaces; only an owner or admin can rename, delete or change the default.</p>
+    <p>A few rules are always enforced: an account always keeps at least one account; you cannot delete the account you are currently signed into (switch to another first); and two accounts in one account cannot share a name. Team members can switch and add accounts; only an owner or admin can rename, delete or change the default.</p>
   </div>
 </section>
 
@@ -534,7 +534,7 @@ Content-Type: application/json
   </div>
   <div class="card">
     <h3>Finding Duplicate Contacts</h3>
-    <p>Over time the same person can end up in your workspace more than once — imported from a
+    <p>Over time the same person can end up in your account more than once — imported from a
     spreadsheet on Monday, added by hand on Friday. The <strong>Duplicates</strong> screen (in the
     sidebar, directly under <strong>Contacts</strong>) shows you every set of records that look like
     the same person so you can decide what to keep.</p>
@@ -544,7 +544,7 @@ Content-Type: application/json
         <code>(561) 555-0143</code> and <code>5615550143</code> count as the same number.</li>
       <li><strong>The same first and last name</strong>, once case and extra spaces are ignored.</li>
     </ul>
-    <p>Email addresses are deliberately <em>not</em> compared: a workspace can never hold two active
+    <p>Email addresses are deliberately <em>not</em> compared: a account can never hold two active
     contacts with the same email address, so a report on email could only ever come back empty.</p>
     <p><strong>Nothing is merged automatically.</strong> Each row has an <strong>Edit</strong> button
     that opens that contact in the normal editor, so you decide which record survives and what it
@@ -800,7 +800,7 @@ GET /api/deals/report     (win rate, average days to close, deals rotting in a s
 GET /api/pipelines
 POST /api/pipelines
 GET /api/pipelines/:pipeline_id/opportunities</pre>
-    <p><strong>Money is an amount plus a currency code.</strong> A workspace states two currencies under Deals \u2192 Deals settings: a <strong>default currency</strong> (what a new deal is priced in when nobody says otherwise \u2014 <strong>the US dollar is the standing default</strong>, so a workspace that has not chosen one prices and reports in USD, and nobody is asked to pick a currency before their first deal) and a <strong>reporting currency</strong> (what totals and reports are computed in). Every deal keeps the <strong>exchange rate</strong> it was recorded at and <strong>the date that rate was true</strong>, so a past quarter never moves when the market does. Stage totals, the filter summary and the report show each currency separately <em>and</em> the reporting-currency equivalent built from those stored rates \u2014 never one number that adds dollars to euros. A money <strong>custom field</strong> follows the same rules: its own amount, its own currency code and its own stored rate. Rates come from a table you control: <em>Refresh rates</em> in Deals settings pulls today\u2019s figures whenever you want them, and every deal keeps the rate it was recorded at together with the date that rate was true, so nothing moves afterwards.
+    <p><strong>Money is an amount plus a currency code.</strong> A account states two currencies under Deals \u2192 Deals settings: a <strong>default currency</strong> (what a new deal is priced in when nobody says otherwise \u2014 <strong>the US dollar is the standing default</strong>, so a account that has not chosen one prices and reports in USD, and nobody is asked to pick a currency before their first deal) and a <strong>reporting currency</strong> (what totals and reports are computed in). Every deal keeps the <strong>exchange rate</strong> it was recorded at and <strong>the date that rate was true</strong>, so a past quarter never moves when the market does. Stage totals, the filter summary and the report show each currency separately <em>and</em> the reporting-currency equivalent built from those stored rates \u2014 never one number that adds dollars to euros. A money <strong>custom field</strong> follows the same rules: its own amount, its own currency code and its own stored rate. Rates come from a table you control: <em>Refresh rates</em> in Deals settings pulls today\u2019s figures whenever you want them, and every deal keeps the rate it was recorded at together with the date that rate was true, so nothing moves afterwards.
     <p><strong>Deal writer API.</strong> An outside system (for example a dispatch system turning an unbooked quote into a deal) writes deals with an issued API key:</p>
     <pre>POST /api/external/deals
   { "external_ref": "QUOTE-1042", "title": "Airport transfer", "value": 240,
@@ -883,7 +883,7 @@ GET /api/checklists/instances</pre>
     <p>View all portfolio companies across your user ecosystem. Searchable by name, slug, or domain. Shows status, plan assignment, and active/inactive state.</p>
     <pre>GET /api/portfolio</pre>
     <h3>Your company&rsquo;s login</h3>
-    <p>If the CoreSwift team set your company up, your workspace and your owner login were created together, and the login details were emailed to the address on the company record. Sign in with that password, then change it in <strong>Settings &rarr; Change password</strong>. If no email arrived, use <strong>Forgot password?</strong> on the sign-in page &mdash; that sends a fresh link to the same address.</p>
+    <p>If the CoreSwift team set your company up, your account and your owner login were created together, and the login details were emailed to the address on the company record. Sign in with that password, then change it in <strong>Settings &rarr; Change password</strong>. If no email arrived, use <strong>Forgot password?</strong> on the sign-in page &mdash; that sends a fresh link to the same address.</p>
   </div>
 
   <div class="card">
@@ -952,7 +952,7 @@ POST /api/lists/:id/members</pre>
     switch it on</strong>, and it only ever asks for things on a fixed list — leave an internal note, change
     the priority, tag the customer, add them to a list, hand the ticket to a teammate, or escalate it. An
     action that is not on that list cannot be proposed at all, so nothing can be invented behind your back.</p>
-    <p>Two numbers govern money. A <strong>per-action limit</strong> and a workspace <strong>ceiling</strong>,
+    <p>Two numbers govern money. A <strong>per-action limit</strong> and a account <strong>ceiling</strong>,
     and the smaller one decides: anything above either waits for you, with the reason recorded on the row. A
     per-action limit can never be set above the ceiling — that would be two numbers where the smaller one
     decides nothing.</p>
@@ -962,7 +962,7 @@ POST /api/lists/:id/members</pre>
     <em>why</em> rather than disappearing — a silent no-op would be worse than a refusal.</p>
 
     <h3>What the AI has cost you — and with whose key</h3>
-    <p>Every AI feature in this workspace now keeps a tally: which feature called a model, which provider
+    <p>Every AI feature in this account now keeps a tally: which feature called a model, which provider
     answered, how many tokens went in and out, and whether your own key or the platform's paid for it. The
     AI panel shows the last thirty days by provider, the most recent calls, and how many ran on the platform
     key rather than yours.</p>
@@ -976,7 +976,7 @@ POST /api/lists/:id/members</pre>
     your email, so the message they receive and the page they open from it look like one company.</p>
     <p>There are two ways in. <strong>Email me a sign-in link</strong> mails them a link that works once and expires in
     thirty minutes &mdash; nothing to remember. The other way is the email address they wrote in with plus the
-    reference from any of their requests, which stays as the fallback for a workspace whose mail is not set up yet.</p>
+    reference from any of their requests, which stays as the fallback for a account whose mail is not set up yet.</p>
     <p>The link carries its one-time token in a part of the address a web server never receives, so it cannot be
     picked out of a server log, and it is stored only as a scrambled fingerprint &mdash; a copy of the database yields
     no working links. Asking for a link always answers the same way, whether or not that address has ever written in,
@@ -1003,7 +1003,7 @@ POST /api/lists/:id/members</pre>
     <p>A median with nothing behind it shows a dash, never a zero: a desk nobody has asked anything yet should not look perfect.</p>
     <h3>Your help centre — one place a customer can look first</h3>
     <p>Published articles are not only searched from the widget: they make a <strong>help centre</strong> at
-    <code>/help/your-workspace</code>, a page a customer can browse without an account. It groups articles into <strong>sections</strong>
+    <code>/help/your-account</code>, a page a customer can browse without an account. It groups articles into <strong>sections</strong>
     &mdash; Billing, Getting started, whatever you name &mdash; shows the most-read answers, has its own search, and each article has a
     <strong>&ldquo;did this answer it?&rdquo;</strong> vote. Beneath it sits the same Support chat, so if the answer is not there they can talk to a
     person without leaving the page.</p>
@@ -1108,9 +1108,9 @@ POST /api/public/contact</pre>
 
   <div class="card callout tip">
     <h3>Pricing</h3>
-    <p><strong>Free tier:</strong> The help desk is not included — the ticket queue and the admin support panel refuse a Free workspace with <strong>402 Payment Required</strong> (<code>GET /api/tickets</code>: "Support tickets is not available on your current plan"), so <strong>Support Tickets → 💬 My Support</strong> is unavailable too.<br>
+    <p><strong>Free tier:</strong> The help desk is not included — the ticket queue and the admin support panel refuse a Free account with <strong>402 Payment Required</strong> (<code>GET /api/tickets</code>: "Support tickets is not available on your current plan"), so <strong>Support Tickets → 💬 My Support</strong> is unavailable too.<br>
     <strong>Paid tier:</strong> Support tickets (embed widget + admin support panel + customer portal) + custom domain (use your own <code>support.yourdomain.com</code>) + email-to-ticket parsing + priority support.</p>
-    <p>The public intake arms are <strong>not</strong> plan-gated, by decision: the embed widget script at <code>/s/&lt;tenant-id&gt;/widget.js</code> and the customer portal page are served on every plan, and a visitor's request is accepted and stored — a customer's request is never refused because of your plan, so nothing is lost either way. What a Free workspace gets instead of silence: the <strong>Dashboard</strong> shows a <strong>Customer requests you cannot open</strong> notice naming how many requests are waiting, the workspace dropdown flags them (<code>⚠ cannot open</code>), and <code>GET /api/auth/me/usage</code> carries the three fields the notice is built from (<code>tickets</code>, <code>tickets_readable</code>, <code>support_intake_unreadable</code>). Stored requests appear in <strong>Support Tickets</strong> the moment the plan includes it.</p>
+    <p>The public intake arms are <strong>not</strong> plan-gated, by decision: the embed widget script at <code>/s/&lt;tenant-id&gt;/widget.js</code> and the customer portal page are served on every plan, and a visitor's request is accepted and stored — a customer's request is never refused because of your plan, so nothing is lost either way. What a Free account gets instead of silence: the <strong>Dashboard</strong> shows a <strong>Customer requests you cannot open</strong> notice naming how many requests are waiting, the account dropdown flags them (<code>⚠ cannot open</code>), and <code>GET /api/auth/me/usage</code> carries the three fields the notice is built from (<code>tickets</code>, <code>tickets_readable</code>, <code>support_intake_unreadable</code>). Stored requests appear in <strong>Support Tickets</strong> the moment the plan includes it.</p>
     <p>Chatbot integrations are API-only on all tiers — you connect your own chatbot, we handle the ticket routing.</p>
   </div>
 </section>
@@ -1206,7 +1206,7 @@ POST /api/public/contact</pre>
 
   <div class="card">
     <h3>Health Monitor</h3>
-    <p>Account health is computed by the API: <code>POST /api/monitoring/account-health/check</code> runs an analysis and <code>GET /api/monitoring/health</code> reads it. In the console, the platform-admin <strong>Monitoring</strong> screen renders those endpoints; there is no "Run Health Check" button in the tenant workspace.</p>
+    <p>Account health is computed by the API: <code>POST /api/monitoring/account-health/check</code> runs an analysis and <code>GET /api/monitoring/health</code> reads it. In the console, the platform-admin <strong>Monitoring</strong> screen renders those endpoints; there is no "Run Health Check" button in the tenant account.</p>
     <pre>POST /api/monitoring/account-health/check
 GET /api/monitoring/health</pre>
   </div>
@@ -1235,7 +1235,7 @@ DELETE /api/comms/templates/:id</pre>
     <h3>Site Configuration (Platform Admin)</h3>
     <p>General details, SEO/meta (title, description, keywords, Open Graph) and branding colours are edited in the
        platform console under <strong>Admin Settings &gt; Configuration</strong> ("Site Configuration"), which reads and
-       writes <code>GET/PUT /api/admin/site</code> &mdash; server-side, not in the browser. The tenant workspace has no
+       writes <code>GET/PUT /api/admin/site</code> &mdash; server-side, not in the browser. The tenant account has no
        Settings page of its own.</p>
   </div>
 
@@ -1245,29 +1245,29 @@ DELETE /api/comms/templates/:id</pre>
        admin (<code>users.is_platform_admin</code>, carried in the session as <code>platform_admin</code>). A tenant
        <code>owner</code>/<code>admin</code> role is not platform authority. The entries are:</p>
     <ul>
-      <li><strong>Users</strong> &mdash; Every user on the platform with the workspace they belong to (read-only list).</li>
+      <li><strong>Users</strong> &mdash; Every user on the platform with the account they belong to (read-only list).</li>
       <li><strong>Revenue &gt; Billing &amp; Plans</strong> &mdash; Subscription plans, pricing and limits.</li>
       <li><strong>Platform &gt; Webhooks</strong> &mdash; a pointer to where outbound webhook endpoints are
-          configured: each workspace registers its own in the workspace console under
-          <strong>Settings &gt; Webhooks</strong> (Enterprise plans). The routes are workspace-scoped, so this
-          console has no editor for another workspace's endpoints. Also <strong>Widgets</strong>, <strong>Native Apps</strong>, <strong>Audit Log</strong>, <strong>Monitoring</strong>.</li>
+          configured: each account registers its own in the account console under
+          <strong>Settings &gt; Webhooks</strong> (Enterprise plans). The routes are account-scoped, so this
+          console has no editor for another account's endpoints. Also <strong>Widgets</strong>, <strong>Native Apps</strong>, <strong>Audit Log</strong>, <strong>Monitoring</strong>.</li>
       <li><strong>Communication Admin &gt; Telnyx Admin</strong> and <strong>Private Email Admin</strong>.</li>
-      <li><strong>Modules &amp; Plans</strong> &mdash; the module registry: switch modules and individual features on or off per plan, and override a single workspace.</li>
+      <li><strong>Modules &amp; Plans</strong> &mdash; the module registry: switch modules and individual features on or off per plan, and override a single account.</li>
       <li><strong>Admin Settings &gt; Configuration</strong> &mdash; site configuration (SEO, legal pages, homepage).</li>
     </ul>
     <p>There is no Impersonate button in the console: the API can start and stop impersonation, but no screen calls it.</p>
   </div>
 
   <div class="card">
-    <h3>Admin: Users &amp; Workspaces</h3>
-    <p>People live on the <strong>Users</strong> screen &#8212; every workspace's users in one list with name, email, role and joined date.</p>
+    <h3>Admin: Users &amp; Accounts</h3>
+    <p>People live on the <strong>Users</strong> screen &#8212; every account's users in one list with name, email, role and joined date.</p>
     <pre>GET /api/admin/users
 GET /api/admin/tenants</pre>
   </div>
 
   <div class="card">
     <h3>Admin: Plans &amp; Feature Overrides</h3>
-    <p><strong>Modules &amp; Plans</strong> is where each plan's modules and individual features are switched on, and where a single workspace can be granted or denied one feature without touching its plan. Enter a workspace id to load the features it effectively gets, then tick one to override it.</p>
+    <p><strong>Modules &amp; Plans</strong> is where each plan's modules and individual features are switched on, and where a single account can be granted or denied one feature without touching its plan. Enter a account id to load the features it effectively gets, then tick one to override it.</p>
     <pre>GET /api/admin/modules
 POST /api/admin/plans/:slug/modules
 POST /api/admin/plans/:slug/features
@@ -1295,7 +1295,7 @@ GET /api/billing/features</pre>
     <h3>Admin: Telnyx Admin panel (SMS, voice and the inbound signing key)</h3>
     <p>The console's <strong>Telnyx Admin</strong> entry (Communication Admin group) is a real screen:
        it reads <code>GET /api/telnyx/config</code>, writes <code>PUT /api/telnyx/config</code> (this
-       workspace's own key, encrypted before it is stored) and lists the numbers on the account with
+       account's own key, encrypted before it is stored) and lists the numbers on the account with
        <code>GET /api/telnyx/available</code>.</p>
     <p>Below those sits one more card, the <strong>inbound webhook signing key</strong>. Telnyx signs
        every inbound call and SMS delivery with the account's Ed25519 public key; while no key is
@@ -1325,7 +1325,7 @@ GET  /api/telnyx/available</pre>
 
   <div class="card">
     <h3>Free Access &amp; Upgrades</h3>
-    <p>CoreSwift CRM offers free access with a limited feature set. When your plan does not cover something, the console shows an upgrade banner whose <strong>Upgrade Now</strong> button opens the plan comparison. Each tier that is not your current one carries a <strong>Request this plan</strong> button: pressing it sends the request to our team (nothing is charged, and no plan changes by itself) and the request names your workspace and the address to answer. Putting the workspace on a plan is therefore still an operator action — self-service checkout is not open on this install — but asking is now one press inside the app instead of a support email you had to compose yourself. Feature availability is determined by your plan's feature flags. A tier that carries a payment page also shows <strong>Open payment page</strong>: it opens that page, and pressing it files the same request first, so our team knows which workspace is paying (nothing is charged by this app). If the team has written how to pay, a <strong>How to pay for a paid plan</strong> block appears at the bottom of that plan comparison &mdash; and on the public pricing page &mdash; with their bank or invoice details, so you can send the money without having to ask. When it is empty, nothing is shown. Picking a tier on the price list before you have an account works the same way: each paid card&rsquo;s <strong>Get started</strong> button carries that tier into the signup form, the form names it back to you, and creating the account files the same request &mdash; so the team already knows which plan you asked for when they switch you on. </p>
+    <p>CoreSwift CRM offers free access with a limited feature set. When your plan does not cover something, the console shows an upgrade banner whose <strong>Upgrade Now</strong> button opens the plan comparison. Each tier that is not your current one carries a <strong>Request this plan</strong> button: pressing it sends the request to our team (nothing is charged, and no plan changes by itself) and the request names your account and the address to answer. Putting the account on a plan is therefore still an operator action — self-service checkout is not open on this install — but asking is now one press inside the app instead of a support email you had to compose yourself. Feature availability is determined by your plan's feature flags. A tier that carries a payment page also shows <strong>Open payment page</strong>: it opens that page, and pressing it files the same request first, so our team knows which account is paying (nothing is charged by this app). If the team has written how to pay, a <strong>How to pay for a paid plan</strong> block appears at the bottom of that plan comparison &mdash; and on the public pricing page &mdash; with their bank or invoice details, so you can send the money without having to ask. When it is empty, nothing is shown. Picking a tier on the price list before you have an account works the same way: each paid card&rsquo;s <strong>Get started</strong> button carries that tier into the signup form, the form names it back to you, and creating the account files the same request &mdash; so the team already knows which plan you asked for when they switch you on. </p>
     <div class="callout tip"><strong>Tip:</strong> The free plan includes the full core CRM — contacts, pipelines, campaigns and SMS, calendar and bookings. Automations and AI scoring start on the Professional plan; paid plans also add private mailboxes, support tickets, and higher limits on contacts, users, pipelines and integrations.</div>
   </div>
 </section>
@@ -1448,13 +1448,13 @@ X-Satellite-Key: &lt;full-api-key&gt;</pre>
     <h3>Outgoing Webhook Endpoints (Sending Data)</h3>
     <p>You can register endpoints that CoreSwift will POST events to. CoreSwift delivers events to each
        endpoint that is <strong>active</strong> and subscribes to that event type.
-       A workspace configures its own endpoints, signing secret and event subscriptions in the console
+       A account configures its own endpoints, signing secret and event subscriptions in the console
        under <strong>Settings &rarr; Webhooks</strong>: that screen lists each endpoint's name, URL, events,
        active state, last successful delivery and failure count, and can add, edit, pause, activate and
-       delete them. Outbound webhooks are sold on Enterprise/Agency &mdash; a workspace whose plan lacks the
+       delete them. Outbound webhooks are sold on Enterprise/Agency &mdash; a account whose plan lacks the
        <code>webhooks</code> module has its requests to the whole surface refused with
        <strong>HTTP 402</strong> and the reason in the response body. The platform console
-       (admin.coreswiftcrm.com) has no editor: the endpoints are workspace-scoped, so it only points here.
+       (admin.coreswiftcrm.com) has no editor: the endpoints are account-scoped, so it only points here.
        These same calls remain available directly on the API:</p>
     <pre>POST /api/integrations/webhooks
 Authorization: Bearer ***
@@ -1559,14 +1559,14 @@ Authorization: Bearer &lt;token&gt;
   <div class="card">
     <h3>Export everything you have (Download my data)</h3>
     <p>On <strong>Settings &gt; Profile</strong>, the <strong>Download my data</strong> card writes one
-       JSON file holding the whole workspace: contacts, companies, deals, pipelines, tags and lists,
+       JSON file holding the whole account: contacts, companies, deals, pipelines, tags and lists,
        tickets and help-desk settings, calendars and bookings, automations and webhooks, messages,
        your own mail, plus your plan and team. The file is built fresh each time you press the button.</p>
     <ul>
       <li><strong>What is in it</strong> — every record above, with its dates and its ids, so the file can be
           read on its own or loaded into another system.</li>
       <li><strong>What is never in it</strong> — anything that could be used to sign in as you or act as your
-          workspace: passwords and password hashes, API-key secrets (each key's prefix and dates are
+          account: passwords and password hashes, API-key secrets (each key's prefix and dates are
           there instead), webhook signing secrets, connected-app credentials, invite links and the
           Google calendar connection token. The file states this in its own <code>excluded</code> field.</li>
       <li><strong>CSV stays</strong> — contacts and deals also export as CSV from their own screens, for
@@ -1626,7 +1626,7 @@ PATCH /api/account/:id — Update name</pre>
   <div class="card">
     <h3>One built-in look</h3>
     <p>There is no preset-theme picker and no <strong>Appearance</strong> screen in the console today &mdash; the
-       workspace ships a single built-in look. (A widget's own form carries an accent colour for that widget.)</p>
+       account ships a single built-in look. (A widget's own form carries an accent colour for that widget.)</p>
   </div>
 </section>
 
@@ -1681,11 +1681,11 @@ PATCH /api/account/:id — Update name</pre>
   <div class="card">
     <h3>Export to CSV</h3>
     <p>Two tables export to CSV: your <strong>contacts</strong> and your <strong>deals</strong>. For a copy of
-       the whole workspace in one file, use <strong>Settings &gt; Profile &rarr; Download my data</strong>
+       the whole account in one file, use <strong>Settings &gt; Profile &rarr; Download my data</strong>
        (see <em>Export everything you have</em> in the Profile section).</p>
     <ul>
       <li><strong>From Contacts</strong> — Click <strong>⬇ Export CSV</strong> on the Contacts screen to download all contacts as CSV</li>
-      <li><strong>From Pipelines &amp; Deals</strong> — Click <strong>⬇ Export deals</strong> to download every deal in the workspace as CSV, with its contact, company, pipeline and stage names</li>
+      <li><strong>From Pipelines &amp; Deals</strong> — Click <strong>⬇ Export deals</strong> to download every deal in the account as CSV, with its contact, company, pipeline and stage names</li>
     </ul>
   </div>
   <div class="card">
@@ -1744,7 +1744,7 @@ PATCH /api/account/:id — Update name</pre>
       <p>Commissionable products live in the affiliate portal (FunnelSwift &rarr; <strong>Affiliate
          Products</strong>) and that list is the source of truth — a paid plan of any service can only
          be promoted once an admin has added it there. Platform-wide entries are visible to every
-         affiliate; a workspace's own products are visible to its affiliates. Measured 2026-09-26, the
+         affiliate; a account's own products are visible to its affiliates. Measured 2026-09-26, the
          catalogue holds:</p>
       <table>
         <thead><tr><th>Scope</th><th>Product</th></tr></thead>
@@ -1754,7 +1754,7 @@ PATCH /api/account/:id — Update name</pre>
           <tr><td>IncentiveSwift Free</td></tr>
           <tr><td>MissedCall Respondr Free</td></tr>
           <tr><td>WorkflowSwift Free</td></tr>
-          <tr><td rowspan="6"><strong>FunnelSwift workspace</strong></td><td>Capture Free</td></tr>
+          <tr><td rowspan="6"><strong>FunnelSwift account</strong></td><td>Capture Free</td></tr>
           <tr><td>Capture Starter</td></tr>
           <tr><td>Kinetic Free</td></tr>
           <tr><td>Kinetic Pro</td></tr>
@@ -1771,7 +1771,7 @@ PATCH /api/account/:id — Update name</pre>
          no checkout session and no payment-provider webhook anywhere in the chain:</p>
       <ol class="step-list">
         <li><strong>The Referral Is Recorded</strong><p>When someone arrives through your affiliate link, FunnelSwift keeps them as a lead on your affiliate account. That lead is the attribution — it is permanent, with no cookie to expire or be lost.</p></li>
-        <li><strong>CoreSwift Reports the Plan Change</strong><p>When the referred business moves to a paid plan here (the CoreSwift platform admin assigns the plan to the workspace — <code>POST</code> / <code>PATCH /api/billing/subscription</code> are operator-only writes, with no customer self-service plan change), CoreSwift looks up the account owner's email address and posts it to FunnelSwift's internal affiliate endpoint, <code>POST /api/v1/internal/affiliate/upgrade-event</code>, together with the plan name and its price.</p></li>
+        <li><strong>CoreSwift Reports the Plan Change</strong><p>When the referred business moves to a paid plan here (the CoreSwift platform admin assigns the plan to the account — <code>POST</code> / <code>PATCH /api/billing/subscription</code> are operator-only writes, with no customer self-service plan change), CoreSwift looks up the account owner's email address and posts it to FunnelSwift's internal affiliate endpoint, <code>POST /api/v1/internal/affiliate/upgrade-event</code>, together with the plan name and its price.</p></li>
         <li><strong>Commission Recorded</strong><p>FunnelSwift matches that email back to the lead, applies the affiliate's rate to the plan price, and records the commission against the event. A repeat of the same upgrade event is ignored, so nothing is credited twice.</p></li>
       </ol>
       <p>This is fully automatic — nothing extra is needed as long as the customer reaches you through your affiliate link. Two details worth knowing: attribution is matched by the <strong>email address</strong> the referred business signed up with, and only a move onto a <strong>paid</strong> plan counts as an upgrade.</p>
@@ -1909,9 +1909,9 @@ PATCH /api/account/:id — Update name</pre>
 
 
 <h2>Email branding</h2>
-<p><strong>Settings &rarr; Email Branding</strong> puts this workspace's own logo, display name and
+<p><strong>Settings &rarr; Email Branding</strong> puts this account's own logo, display name and
 colour on every transactional email it sends — the welcome/credentials mail, password resets and
-purchase confirmations. The branding is this account's; nothing is shared with another workspace.</p>
+purchase confirmations. The branding is this account's; nothing is shared with another account.</p>
 <ul>
 <li><strong>Brand display name</strong> — up to 60 characters. Printed above the message, and used as
 the logo's <code>alt</code> text so a blocked image still says whose mail it is.</li>
@@ -1923,38 +1923,38 @@ and <em>Remove logo</em>. Uploads are checked against the same size limit the se
 <p>An account with neither a name nor a logo gets exactly the mail it got before this feature
 existed. Removing the logo keeps the name and the colour.</p>
 
-<h2>Workspaces</h2>
-<p><strong>Sidebar &rarr; Workspaces</strong> (in the Settings group) lists this account&rsquo;s workspaces. A workspace is a name &mdash; a label you give a part of the business, such as &ldquo;Miami office&rdquo; or &ldquo;Wholesale&rdquo; &mdash; and the one marked <em>Default</em> is the workspace a new session is meant to open.</p>
+<h2>Accounts</h2>
+<p><strong>Sidebar &rarr; Accounts</strong> (in the Settings group) lists this account&rsquo;s accounts. A account is a name &mdash; a label you give a part of the business, such as &ldquo;Miami office&rdquo; or &ldquo;Wholesale&rdquo; &mdash; and the one marked <em>Default</em> is the account a new session is meant to open.</p>
 <ul>
-<li><strong>Add</strong> &mdash; type a name and press <em>Add workspace</em>. The first workspace you add becomes the default automatically.</li>
-<li><strong>Rename</strong> &mdash; press <em>Rename</em>, edit the name, then <em>Save</em>. Two workspaces in one account cannot share a name, whatever the capitals.</li>
+<li><strong>Add</strong> &mdash; type a name and press <em>Add account</em>. The first account you add becomes the default automatically.</li>
+<li><strong>Rename</strong> &mdash; press <em>Rename</em>, edit the name, then <em>Save</em>. Two accounts in one account cannot share a name, whatever the capitals.</li>
 <li><strong>Make default</strong> &mdash; moves the Default badge. An account always has exactly one default.</li>
-<li><strong>Delete</strong> &mdash; removes a workspace you no longer want. An account always keeps at least one, and deleting the default promotes the oldest remaining workspace.</li>
+<li><strong>Delete</strong> &mdash; removes a account you no longer want. An account always keeps at least one, and deleting the default promotes the oldest remaining account.</li>
 </ul>
-<p>If your plan states a workspace limit, adding past it says so and points you at the plan screen; nothing is created and nothing is lost.</p>
+<p>If your plan states a account limit, adding past it says so and points you at the plan screen; nothing is created and nothing is lost.</p>
 <h2>Team &amp; Invites</h2>
 <p><strong>Sidebar &rarr; Team &amp; Invites</strong> is how a second person gets a real login INTO this
-workspace. Only the workspace owner and an admin can see it.</p>
+account. Only the account owner and an admin can see it.</p>
 <ol>
 <li><strong>Add a teammate.</strong> Type their email address (their name is optional) and choose what
-they can do: <em>Member</em> works inside the workspace; <em>Admin</em> can also invite people and
-manage the workspace. Press <strong>Send the invitation</strong>.</li>
+they can do: <em>Member</em> works inside the account; <em>Admin</em> can also invite people and
+manage the account. Press <strong>Send the invitation</strong>.</li>
 <li><strong>We set their password and email it to them.</strong> There is no password field anywhere
 on this screen, and you never choose or see their password. They sign in at the normal login page
 with the address and password that email carries, and they land on the Dashboard; their mail is
 one press away in the Shared Inbox tab.</li>
-<li><strong>They work in the same account.</strong> A member sees the workspace&rsquo;s contacts,
+<li><strong>They work in the same account.</strong> A member sees the account&rsquo;s contacts,
 pipeline and mail exactly as the owner does, except owner-only screens such as Team &amp; Invites.</li>
 </ol>
 <p><strong>Who is looking after what.</strong> The <strong>Shared Inbox</strong> tab lists every address with an
 <strong>Assigned to</strong> column: pick a teammate there to make an inbox theirs, or leave it empty
-to keep it with the whole workspace. Open any conversation and the same <strong>Assigned to</strong>
+to keep it with the whole account. Open any conversation and the same <strong>Assigned to</strong>
 choice sits on the message. That one answer is also what the Support Tickets queue shows, so a
 conversation never ends up with two owners in two different systems.</p>
 <p><strong>Removing somebody</strong> takes their access away at their next click &mdash; the session
 they already hold stops working &mdash; and puts their conversations and inboxes back in the
-workspace. Nothing is deleted: their mail, the tickets they worked and every message stay exactly
-where they are. The workspace owner cannot be removed this way.</p>
+account. Nothing is deleted: their mail, the tickets they worked and every message stay exactly
+where they are. The account owner cannot be removed this way.</p>
 <p><strong>Seats follow your plan.</strong> Each plan states how many people it includes. When every
 seat is in use, <strong>Send the invitation</strong> answers with the plan that adds more seats and
 what it costs &mdash; for example, &ldquo;Your plan includes 1 person, and 1 is already in use.
@@ -1967,7 +1967,7 @@ choose their own.</p>
 use <strong>Create invite link</strong> under the form: the link stays valid for 7 days and works
 once.</p>
 
-<h2>Your calendar address</h2><p>Your workspace has a public calendar address from the day it is created: <code>&lt;your-workspace&gt;.coreswiftcrm.com</code>. Anyone you give it to sees your open booking calendars, how many places are left and a form to reserve one — no account, no sign-in. It works immediately; there is nothing to switch on.</p><p>Open <strong>Booking</strong> in the console and look at the card <strong>Your public calendar address</strong>:</p><ul><li><strong>Copy</strong> puts the address on your clipboard so you can paste it into an email, a listing or a business card. <strong>Open</strong> shows you exactly what a visitor sees.</li><li><strong>Calendar address name</strong> changes the part before <code>.coreswiftcrm.com</code> — the name your customers will remember. Letters, numbers and hyphens. If somebody else already has it you are told so and can pick another; system names such as <code>app</code> or <code>admin</code> are kept for the platform.</li><li><strong>Use your own domain</strong> lets you serve the same calendar on a domain you own, for example <code>calendar.yourbusiness.com</code>. Type it, press <strong>Save domain</strong>, then create one CNAME record at your domain provider pointing at the address the panel shows you. Press <strong>Check now</strong> when the record is in place — the panel says <strong>domain verified</strong> when the domain really reaches your calendar, or tells you what is still missing.</li><li><strong>Remove</strong> drops the custom domain. Your <code>.coreswiftcrm.com</code> address keeps working throughout, so you can never lose your calendar by changing your mind.</li></ul><p>Each calendar you create is its own page under that address, so you can hand out a link to one calendar directly — for example <code>acme.coreswiftcrm.com/consultations</code>. You can also give one calendar its own address instead: on the <strong>Booking</strong> screen, find that calendar and press <strong>Give it its own address</strong>, and it then answers at <code>&lt;its-name&gt;.coreswiftcrm.com/&lt;your-account&gt;/&lt;calendar&gt;</code>. If the name you type is already taken, CoreSwift says so in plain words and suggests a free one.</p><p>The page is public: it shows only the calendars you have marked active and the places that are still open. A booking someone sends from it appears in <strong>Bookings</strong> like any other.</p><h2>Your inbox: bring your own domain</h2>
+<h2>Your calendar address</h2><p>Your account has a public calendar address from the day it is created: <code>&lt;your-account&gt;.coreswiftcrm.com</code>. Anyone you give it to sees your open booking calendars, how many places are left and a form to reserve one — no account, no sign-in. It works immediately; there is nothing to switch on.</p><p>Open <strong>Booking</strong> in the console and look at the card <strong>Your public calendar address</strong>:</p><ul><li><strong>Copy</strong> puts the address on your clipboard so you can paste it into an email, a listing or a business card. <strong>Open</strong> shows you exactly what a visitor sees.</li><li><strong>Calendar address name</strong> changes the part before <code>.coreswiftcrm.com</code> — the name your customers will remember. Letters, numbers and hyphens. If somebody else already has it you are told so and can pick another; system names such as <code>app</code> or <code>admin</code> are kept for the platform.</li><li><strong>Use your own domain</strong> lets you serve the same calendar on a domain you own, for example <code>calendar.yourbusiness.com</code>. Type it, press <strong>Save domain</strong>, then create one CNAME record at your domain provider pointing at the address the panel shows you. Press <strong>Check now</strong> when the record is in place — the panel says <strong>domain verified</strong> when the domain really reaches your calendar, or tells you what is still missing.</li><li><strong>Remove</strong> drops the custom domain. Your <code>.coreswiftcrm.com</code> address keeps working throughout, so you can never lose your calendar by changing your mind.</li></ul><p>Each calendar you create is its own page under that address, so you can hand out a link to one calendar directly — for example <code>acme.coreswiftcrm.com/consultations</code>. You can also give one calendar its own address instead: on the <strong>Booking</strong> screen, find that calendar and press <strong>Give it its own address</strong>, and it then answers at <code>&lt;its-name&gt;.coreswiftcrm.com/&lt;your-account&gt;/&lt;calendar&gt;</code>. If the name you type is already taken, CoreSwift says so in plain words and suggests a free one.</p><p>The page is public: it shows only the calendars you have marked active and the places that are still open. A booking someone sends from it appears in <strong>Bookings</strong> like any other.</p><h2>Your inbox: bring your own domain</h2>
 <p><strong>CoreSwift does not give out an address on our domain.</strong> You keep the domain you already own (for example <code>yourbusiness.com</code>) and your own Mailgun account, and your mail is delivered straight to you. Open the <strong>Shared Inbox</strong> tab in the console: the setup page is the onboarding, in three plain steps, with a copy button beside every value.</p>
 <ol>
 <li><strong>Add your domain and make two choices.</strong> Type the domain, choose <strong>how it sends</strong> and <strong>how it receives</strong>, and paste only the keys those choices need. Both keys are stored sealed and used only for your own mail.</li>
@@ -1980,13 +1980,13 @@ once.</p>
 <p><strong>Your 30 free days start at your first verified inbox</strong>, not at signup: the days you spend waiting on DNS cost you nothing. During the trial, sending has a fair-use ceiling of <strong>200 messages a day</strong> to protect the address&rsquo;s deliverability.</p>
 <p><strong>When the 30 days end</strong> the address keeps working and keeps receiving. Nothing is deleted. What stops is <em>sending</em> &mdash; the mailbox becomes receive-only and the screen offers two buttons: <strong>Keep inbox</strong> (the mailbox alone) and <strong>Upgrade CRM</strong> (the whole platform). <strong>Upgrade CRM</strong> restores sending immediately. The Inbox line is <strong>not on sale yet</strong>: pressing it opens its plan with a note that sales are not open and reaches our team, and nothing is charged. Every message you already have stays where it is.</p>
 <p><strong>What &ldquo;receive-only&rdquo; means in plain words:</strong> mail keeps arriving and you keep every message you already have. Only <strong>Compose</strong> and <strong>Reply</strong> stop, and both answer with the two buttons above rather than an error. Nothing is deleted at expiry, by pressing the wrong button, or by waiting &mdash; there is no deadline after which mail disappears.</p>
-<p><strong>One bill, never two.</strong> The Inbox line is a standalone door, not an add-on. It is <strong>not on sale yet</strong> &mdash; it is absent from Plans &amp; Billing, and pressing its card answers that sales are not open, without charging anything &mdash; so no workspace pays it today. If it does go on sale: moving up to a CRM plan ends the Inbox subscription in the same step, so you pay the new plan&rsquo;s price only &mdash; never the Inbox charge on top of it &mdash; and the new period starts the day you move, so nothing is prorated. <strong>Plans &amp; Billing</strong> opens with <strong>Your bill</strong>, which states the one amount you pay, that there is one subscription, and &mdash; if your plan changed &mdash; the line that ended and the day it ended.</p>
+<p><strong>One bill, never two.</strong> The Inbox line is a standalone door, not an add-on. It is <strong>not on sale yet</strong> &mdash; it is absent from Plans &amp; Billing, and pressing its card answers that sales are not open, without charging anything &mdash; so no account pays it today. If it does go on sale: moving up to a CRM plan ends the Inbox subscription in the same step, so you pay the new plan&rsquo;s price only &mdash; never the Inbox charge on top of it &mdash; and the new period starts the day you move, so nothing is prorated. <strong>Plans &amp; Billing</strong> opens with <strong>Your bill</strong>, which states the one amount you pay, that there is one subscription, and &mdash; if your plan changed &mdash; the line that ended and the day it ended.</p>
 <p><strong>When your plan already includes every inbox you have</strong>, <strong>Create new inbox</strong> answers with the plan that unlocks more and what it costs, never a dead button. The <strong>Inbox</strong> line, one mailbox on its own, is <strong>not on sale yet</strong> &mdash; its card reaches our team and charges nothing &mdash; so move up the CRM plans for more addresses.</p>
 
 <h2>Sending and receiving are two separate choices</h2>
 <p><strong>You do not have to move your mail to one company.</strong> The inbox setup page asks two questions that stand on their own: <strong>how should your mail leave</strong> (sending) and <strong>how should your mail arrive</strong> (receiving). Every option in those two lists really works &mdash; there is no placeholder in either one.</p>
 <ul>
-<li><strong>Sending</strong> can go through <strong>your own Mailgun account</strong>, or through <strong>any SMTP service</strong> &mdash; Amazon SES, SendGrid, Postmark, Google Workspace, or a mail server you run yourself. For those you type the server name, port, username and password that the service gave you; that is the whole setup.</li>
+<li><strong>Sending</strong> can go through <strong>your own Mailgun account</strong>, or through <strong>any SMTP service</strong> &mdash; Amazon SES, SendGrid, Postmark, Google Account, or a mail server you run yourself. For those you type the server name, port, username and password that the service gave you; that is the whole setup.</li>
 <li><strong>Receiving</strong> can come through <strong>Mailgun</strong> or <strong>SendGrid</strong>, or nowhere at all if the domain only sends.</li>
 </ul>
 <p><strong>Mixing them is normal.</strong> Sending through Amazon SES while receiving through Mailgun &mdash; or sending through Mailgun and receiving through SendGrid &mdash; is a supported setup, and it is the one that lets you keep whatever already sends your mail. Changing one never changes the other.</p>
@@ -2014,14 +2014,14 @@ once.</p>
 <p><strong>What it is.</strong> Normally mail is accepted only for an address you created, such as <code>info&#64;yourbusiness.com</code>; a message to <code>nobody&#64;yourbusiness.com</code> is refused at the door. <strong>Catch-all</strong> accepts every message sent to your domain, even when that address does not exist, and files it in your inbox under <strong>Everything else</strong> (labelled <strong>MISC</strong>).</p>
 <p><strong>When to use it.</strong> Turn it on when people write to addresses you never created on purpose &mdash; <code>sales@</code>, <code>billing@</code>, a mistyped <code>inof@</code>, the address printed on an old business card &mdash; and you would rather read that mail than have it bounce. Leave it off when you want silence: with catch-all off, mail to an unknown address is refused, which is also how a sender learns they have the wrong address.</p>
 <p><strong>How to switch it.</strong> <strong>Sidebar &rarr; Inbox &rarr; Email Domains &amp; Sending</strong>, find the domain and use its <strong>Catch-all</strong> column: <strong>Enable catch-all</strong> turns it on, <strong>Disable</strong> turns it off. It is set per domain, so two domains on one account can differ.</p>
-<p><strong>It follows the plan, not the domain.</strong> On this plan ladder catch-all is included from <strong>Professional</strong> upward &mdash; Professional, Enterprise and Agency &mdash; and is not sold on Free or Starter. Pressing the button on a plan that does not include it answers with the plan that unlocks it and what it costs, and nothing changes. If the workspace later moves back to a plan without it, your setting is remembered but mail to an unknown address is refused again; the column then reads <strong>off &mdash; not on your plan</strong>, with a <strong>Clear</strong> button that forgets the setting.</p>
+<p><strong>It follows the plan, not the domain.</strong> On this plan ladder catch-all is included from <strong>Professional</strong> upward &mdash; Professional, Enterprise and Agency &mdash; and is not sold on Free or Starter. Pressing the button on a plan that does not include it answers with the plan that unlocks it and what it costs, and nothing changes. If the account later moves back to a plan without it, your setting is remembered but mail to an unknown address is refused again; the column then reads <strong>off &mdash; not on your plan</strong>, with a <strong>Clear</strong> button that forgets the setting.</p>
 <p><strong>What catch-all is not.</strong> It does not create addresses. A catch-all message is not a mailbox, cannot be signed into, and does not start a trial &mdash; it is one bucket inside the inbox you already have.</p>
 
 <p><strong>Which mail opens a ticket.</strong> Mail from a <em>person</em> opens a ticket. Reports from mail servers (DMARC, bounces, delivery failures), newsletters and marketing blasts still arrive in your inbox, but they do not open a ticket &mdash; so the work queue holds only mail somebody wrote. If one of those really needs an answer, open it and press <strong>Turn into a ticket</strong>.</p>
 <h2>Your logo and signature on outgoing mail</h2>
-<p><strong>One logo and one workspace signature, both applied automatically.</strong> Open <strong>Email Branding</strong> in the workspace menu: upload the company logo, then fill in the signature &mdash; name, title, company, phone and one short line &mdash; and press <strong>Save signature</strong>. From then on every new message and every reply opens with the logo and the signature already in place under the text you type, so you type only the subject and the message.</p>
+<p><strong>One logo and one account signature, both applied automatically.</strong> Open <strong>Email Branding</strong> in the account menu: upload the company logo, then fill in the signature &mdash; name, title, company, phone and one short line &mdash; and press <strong>Save signature</strong>. From then on every new message and every reply opens with the logo and the signature already in place under the text you type, so you type only the subject and the message.</p>
 <p><strong>You never size the logo.</strong> Any PNG, JPEG, GIF or WebP up to 2 MB is accepted and the app resizes it for email, so it looks sharp and the right size in Gmail, Outlook and Apple Mail on a phone as well as on a desktop. The preview on the Email Branding screen shows what your customers will see.</p>
-<p><strong>Per address, if you want.</strong> In the mail client press <strong>Signature</strong> and choose, for one address: use the workspace signature, write its own wording (a blank field falls back to the workspace value for that field), or send without a signature &mdash; useful for a no-reply address. Every other address keeps following the workspace signature.</p>
+<p><strong>Per address, if you want.</strong> In the mail client press <strong>Signature</strong> and choose, for one address: use the account signature, write its own wording (a blank field falls back to the account value for that field), or send without a signature &mdash; useful for a no-reply address. Every other address keeps following the account signature.</p>
 <p><strong>Leave it off one message.</strong> The compose window shows the signature under the message with an <strong>Include the signature on this message</strong> box already ticked. Untick it and that one message &mdash; or that one reply &mdash; goes without the signature. Nothing is saved, so the next message starts signed again.</p>
 <p><strong>Changing or deleting the logo never breaks mail you already sent.</strong> The logo travels inside each message rather than being fetched from a link, so a message sent last month still shows the logo it was sent with even after the logo is replaced or removed. New messages use the new logo immediately.</p>
 <h2>Storage: the meter, the three warnings, and what a full mailbox does</h2>
@@ -2077,7 +2077,7 @@ once.</p>
   <div class="card">
     <h3>Adding people</h3>
     <p>Press <strong>+ Add member</strong> on a team and pick the person from the list &mdash; the
-    list is this workspace&rsquo;s own roster, by name and address, and only active people are
+    list is this account&rsquo;s own roster, by name and address, and only active people are
     offered. (It used to ask you to paste an internal user id; the roster was always available to
     read, so that box is gone.) Each member carries a <strong>weight</strong>, which is kept on the
     record but is not used by either strategy above, and a <strong>max concurrent bookings</strong>
