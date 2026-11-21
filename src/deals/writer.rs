@@ -919,6 +919,28 @@ async fn fire_stage_hooks(
         }
     }
 
+    // A rule that NAMES this stage is its own opt-in (2026-11-21). Until now `StageChanged` only
+    // fired when the stage carried a manual "workflow" hook, so an owner who simply wrote a rule —
+    // "Paid -> Customer tag" — got nothing, and the rule looked decorative. The truth is read from
+    // the rules table: if an active StageChanged rule targets this stage (or every stage), it runs.
+    // A stage with neither a hook nor a matching rule still runs nothing, so nobody's old rules fire
+    // by surprise.
+    if !wants_workflow {
+        wants_workflow = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM automation_rules \
+                WHERE tenant_id = $1 AND is_active \
+                  AND trigger_type = 'StageChanged' \
+                  AND (trigger_config->>'stage_id' = $2::text \
+                       OR trigger_config->>'stage_id' IS NULL \
+                       OR trigger_config->>'stage_id' = ''))",
+        )
+        .bind(tenant_id)
+        .bind(stage_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(false);
+    }
+
     if wants_workflow {
         let _ = touch(
             &state.db,
@@ -939,6 +961,11 @@ async fn fire_stage_hooks(
         )
         .await;
     }
+
+    // A deal's source, stage and dates decide membership of the Dispatch lists, so every write
+    // refreshes them — including one that came from an API caller rather than the board, which is
+    // exactly how the dispatch app posts its quotes and stage moves (2026-11-21).
+    crate::lists::evaluator::refresh_dynamic_lists(&state.db, tenant_id).await;
 }
 
 fn status_flags(status: Option<&str>) -> Result<Option<(bool, bool)>, AppError> {
@@ -1415,6 +1442,118 @@ pub async fn upsert(
     } else if stage_changed {
         fire_stage_hooks(state, tenant_id, deal.id, target_stage_id, actor).await;
     }
+
+    // ── CONSENT RECORDED IN THE DISPATCH APP (B218, 2026-11-21) ───────────────────────────────────
+    // The dispatch app stores `delivery_text_opt_in` on the order and posts it as a deal field. The
+    // contact is tagged ONLY when that stored value is truthy — consent is read from the flag, never
+    // assumed from the fact that an order exists. The tag then drives the list through its own rule,
+    // so the Delivery Text Opt-Ins list and the SMS Opt-In list stay separate on purpose: a regulator
+    // asking "where did this consent come from" gets a different answer for each.
+    if let Some(contact_id) = deal.contact_id {
+        let opted_in: Option<String> = sqlx::query_scalar(
+            "SELECT d.value FROM deal_field_values d \
+               JOIN deal_custom_fields f ON f.id = d.field_id \
+              WHERE d.opportunity_id = $1 AND f.tenant_id = $2 AND f.key = 'delivery_text_opt_in' \
+              LIMIT 1",
+        )
+        .bind(deal.id)
+        .bind(tenant_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+        let truthy = opted_in
+            .as_deref()
+            .map(|v| {
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "true" | "1" | "yes" | "on"
+                )
+            })
+            .unwrap_or(false);
+        if truthy {
+            let tag_id: Option<uuid::Uuid> = sqlx::query_scalar(
+                "SELECT id FROM tags WHERE tenant_id = $1 AND lower(name) = 'delivery text opt-in' LIMIT 1",
+            )
+            .bind(tenant_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+            if let Some(tag_id) = tag_id {
+                let inserted = sqlx::query(
+                    "INSERT INTO tag_assignments(id, tag_id, entity_type, entity_id, tenant_id) \
+                     VALUES($1,$2,'contact',$3,$4) ON CONFLICT DO NOTHING",
+                )
+                .bind(uuid::Uuid::new_v4())
+                .bind(tag_id)
+                .bind(contact_id)
+                .bind(tenant_id)
+                .execute(&state.db)
+                .await
+                .map(|r| r.rows_affected() > 0)
+                .unwrap_or(false);
+                if inserted {
+                    crate::automation::engine::fire_tag_trigger(
+                        &state.db, tenant_id, "contact", contact_id, tag_id, "TagAdded",
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+
+    // ── A DEAL FROM A CONNECTED APP IS STILL A QUOTE TO FOLLOW UP (2026-11-21) ────────────────────
+    // Deals posted by the dispatch app (source `Dispatch App` or its older token `xride-dispatch`)
+    // arrived with no tag, so the contact never reached Quotes to Follow Up and nobody chased it.
+    // The tag is applied here, on the write path, so the EXISTING `Quote Request -> Quotes to Follow
+    // Up` rule does the list work: one rule, every door, and a hand-added quote behaves identically.
+    if created {
+        if let Some(src) = deal.source.as_deref() {
+            let normalised = src.trim().to_ascii_lowercase();
+            if matches!(normalised.as_str(), "dispatch app" | "xride-dispatch") {
+                if let Some(contact_id) = deal.contact_id {
+                    // By NAME, tenant-scoped: a tag the owner renamed or has not created yet must not
+                    // silently drop the quote. The assignment is idempotent, and the tag's OWN
+                    // trigger is fired afterwards so the existing `Quote Request -> Quotes to Follow
+                    // Up` rule does the list work — one rule, every door.
+                    let tag_id: Option<uuid::Uuid> = sqlx::query_scalar(
+                        "SELECT id FROM tags WHERE tenant_id = $1 AND lower(name) = 'quote request' LIMIT 1",
+                    )
+                    .bind(tenant_id)
+                    .fetch_optional(&state.db)
+                    .await
+                    .ok()
+                    .flatten();
+                    if let Some(tag_id) = tag_id {
+                        let inserted = sqlx::query(
+                            "INSERT INTO tag_assignments(id, tag_id, entity_type, entity_id, tenant_id) \
+                             VALUES($1,$2,'contact',$3,$4) ON CONFLICT DO NOTHING",
+                        )
+                        .bind(uuid::Uuid::new_v4())
+                        .bind(tag_id)
+                        .bind(contact_id)
+                        .bind(tenant_id)
+                        .execute(&state.db)
+                        .await
+                        .map(|r| r.rows_affected() > 0)
+                        .unwrap_or(false);
+                        if inserted {
+                            crate::automation::engine::fire_tag_trigger(
+                                &state.db, tenant_id, "contact", contact_id, tag_id, "TagAdded",
+                            )
+                            .await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Every write refreshes the account's DYNAMIC lists, on the upsert path itself: a deal's source,
+    // stage and dates decide membership, and a list that only refreshes when somebody presses
+    // Evaluate is not self-maintaining (2026-11-21). Bounded: only lists with rules are evaluated.
+    crate::lists::evaluator::refresh_dynamic_lists(&state.db, tenant_id).await;
 
     Ok(UpsertOutcome {
         deal,

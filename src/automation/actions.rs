@@ -62,6 +62,9 @@ async fn exec_add_tag(
     // AddTag would chain. The tag triggers are fired by the surfaces a CALLER asked for — the full
     // rule (fire/no-fire) is documented on `crate::automation::engine::fire_tag_trigger`.
     sqlx::query("INSERT INTO tag_assignments(id,tag_id,entity_type,entity_id,tenant_id) VALUES($1,$2,$3,$4,$5)").bind(Uuid::new_v4()).bind(tag_id).bind(entity_type).bind(entity_id).bind(tenant_id).execute(db).await?;
+    // A tag can be the ONLY thing that decides list membership, so the dynamic lists are refreshed
+    // here — otherwise a "self-maintaining" list waits for somebody to press Evaluate (2026-11-21).
+    crate::lists::evaluator::refresh_dynamic_lists(db, tenant_id).await;
     Ok(())
 }
 

@@ -599,7 +599,13 @@ async fn console_update(
         .bind(existing.id)
         .bind(tenant)
         .bind(writer::blank_pub(&req.name))
-        .bind(wanted_stage)
+        // THE STAGE BELONGS TO move_stage, NOT TO THIS UPDATE (2026-11-21). Binding the wanted stage
+        // here wrote it silently: the row already held the new stage by the time move_stage was
+        // called, so move_stage saw "no change", returned early, and neither the stage history nor
+        // the STAGE HOOKS ran — measured live, a deal posted by the dispatch app reached Paid and the
+        // `Paid -> Customer tag` rule never fired, with no history row to show it had moved. The
+        // UPDATE therefore leaves the stage as it is and the transition happens in one place.
+        .bind(existing.stage_id)
         .bind(contact_id)
         .bind(company_id)
         .bind(req.value)
