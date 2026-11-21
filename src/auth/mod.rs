@@ -117,9 +117,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/register", axum::routing::post(handlers::register))
         .route("/login", axum::routing::post(handlers::login))
         .route("/refresh", axum::routing::post(handlers::refresh))
-        .route("/me", axum::routing::get(handlers::me))
         .route("/logout", axum::routing::post(handlers::logout))
-        .route("/invites", axum::routing::get(handlers::list_invites))
         // The credential-guessing surface: login/register/refresh. This is the limiter that stops
         // password guessing, and it is a SEPARATE bucket from password recovery on purpose — one reset
         // request must not eat a caller's login allowance.
@@ -127,6 +125,24 @@ pub fn router(state: AppState) -> Router<AppState> {
             state.rate_limiter.clone(),
             crate::rate_limiter::auth_rate_limit_middleware,
         ))
+        .layer(axum::middleware::from_fn_with_state(
+            body_deadline,
+            crate::body_deadline::body_read_deadline_middleware,
+        ));
+
+    // THE CONSOLE'S IDENTITY READ IS NOT A CREDENTIAL-GUESSING DOOR. `/me` is the call every console
+    // boot makes to learn who is signed in, and `/invites` is the Team screen's read. They used to sit
+    // in the group above, so they spent the 5-per-minute login budget: MEASURED live 2026-11-21, six
+    // authenticated `GET /api/auth/me` calls inside one minute answered `200 ×5` then `429 ×3`, i.e. a
+    // morning where a whole office signs in from one address left later arrivals with no identity
+    // answer at all (and the console hides sections it cannot attribute). Neither route can guess a
+    // password: each parses a bearer token the handler verifies, and without one the boundary refuses
+    // 401. They carry the body deadline and the general API limiter (600/min credentialed, 120/min
+    // anonymous, `rate_limiter::api_rate_limit_middleware`) — the same shape, and the same argument,
+    // as the email-confirm arm below.
+    let session_reads = Router::new()
+        .route("/me", axum::routing::get(handlers::me))
+        .route("/invites", axum::routing::get(handlers::list_invites))
         .layer(axum::middleware::from_fn_with_state(
             body_deadline,
             crate::body_deadline::body_read_deadline_middleware,
@@ -150,6 +166,7 @@ pub fn router(state: AppState) -> Router<AppState> {
 
     Router::new()
         .merge(public)
+        .merge(session_reads)
         .merge(password)
         .merge(protected)
         .merge(email_confirm)
