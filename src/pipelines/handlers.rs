@@ -334,6 +334,20 @@ pub async fn move_opportunity(
         "INSERT INTO opportunity_stage_history (id, opportunity_id, from_stage_id, to_stage_id, moved_by) VALUES ($1,$2,$3,$4,$5)"
     ).bind(Uuid::new_v4()).bind(opportunity_id).bind(prev_stage).bind(stage_id).bind(user_id).execute(&state.db).await?;
 
+    // ── THE STAGE AUTOMATIONS MUST RUN ON THE DOOR PEOPLE USE (measured 2026-11-21) ────────────────
+    // `fire_stage_trigger` was only called by the deals writer, so a deal moved on the pipeline board -
+    // the path the console actually takes - flipped the stage and told no rule. "Won deal -> Customer
+    // tag" therefore never fired for anyone using the board: measured live, a deal moved to Won with a
+    // contact attached left the contact with no tag at all. Same class as every other two-door bug.
+    crate::automation::engine::fire_stage_trigger(
+        &state.db,
+        tenant_id,
+        opportunity_id,
+        stage_id,
+        Some(user_id),
+    )
+    .await;
+
     Ok(Json(
         json!({"message": "Opportunity moved", "from_stage_id": prev_stage, "to_stage_id": stage_id, "status": status}),
     ))
