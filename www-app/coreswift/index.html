@@ -59,6 +59,18 @@ html[data-theme="light"] input,
 html[data-theme="light"] select,
 html[data-theme="light"] textarea,
 html[data-theme="light"] pre{color-scheme:light}
+/* ── SURFACE LEVELS + TYPE SCALE (design tokens) ───────────────────────────────────────────────
+   Level 0 page · level 1 task card · level 2 nested panel · level 3 modal. Reference material sits on a
+   SUNKEN surface (--bg-secondary, no shadow, muted text) so it reads as documentation rather than as
+   another thing to press. Every rule below uses tokens, so both themes get the same hierarchy. */
+.lvl-1{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);padding:18px;margin-bottom:16px}
+.lvl-2{background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:12px}
+.sunken{background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;margin-bottom:16px;box-shadow:none}
+.sunken h3,.sunken .card-title{font-size:13px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.06em}
+.sunken p,.sunken li{font-size:13px;color:var(--text-secondary)}
+.eyebrow{font-size:11px;letter-spacing:.09em;color:var(--text-muted);font-weight:700;margin-bottom:8px;text-transform:uppercase}
+.task-title{font-size:18px;font-weight:700;margin-bottom:4px}
+.task-sub{font-size:13px;color:var(--text-secondary);margin-bottom:14px;max-width:70ch}
 html{color-scheme:dark}
 html[data-theme="light"]{color-scheme:light}
 body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg-primary);color:var(--text-primary);display:flex;min-height:100vh;overflow:hidden;line-height:1.5}
@@ -1766,7 +1778,7 @@ const TAB_RENDERERS = {
           '<button class="btn btn-primary btn-sm" id="mcpTabChatgpt" onclick="mcpClient(\'chatgpt\')">ChatGPT</button>' +
           '<button class="btn btn-ghost btn-sm" id="mcpTabClaude" onclick="mcpClient(\'claude\')">Claude</button>' +
         '</div>' +
-        label('CONNECT WITH YOUR API KEY') +
+        '<div class="eyebrow">Connect with your API key</div>' +
         '<p style="color:var(--text-secondary);margin-bottom:14px;max-width:70ch" id="mcpClientIntro">' +
           'For ChatGPT and Claude on the web. There is no app to install: you give your AI client this account&#39;s ' +
           'API key so every answer is scoped to <strong>your</strong> data and nobody else&#39;s.</p>' +
@@ -1788,10 +1800,10 @@ const TAB_RENDERERS = {
         '</div>' +
         '<div id="mcpCheckOut" style="font-size:12px;color:var(--text-muted);margin-top:8px"></div>') +
 
-      card('How the connection works',
+      '<div class="sunken">' + card('How the connection works',
         '<p style="color:var(--text-secondary);font-size:13px;margin:0;max-width:70ch">We do not keep a list of the apps you have ' +
         'connected — your key is the connection. That means one action disconnects everything at once: regenerate ' +
-        'the key above and every client using the old one stops working immediately.</p>') +
+        'the key above and every client using the old one stops working immediately.</p>') + '</div>' +
 
       // ── what you can ask, in two columns like the reference
       card('',
@@ -1835,6 +1847,7 @@ const TAB_RENDERERS = {
         '<div style="font-size:12px;color:var(--text-muted);margin-top:6px">We will suggest the prompts that fit your goal.</div>' +
         '<div id="mcpIdeasOut" style="margin-top:10px"></div>') +
 
+      '<div class="sunken">' +
       card('',
         label('EVERYTHING AI CAN READ IN CORESWIFT') +
         '<p style="color:var(--text-secondary);font-size:13px;margin-bottom:8px">Open a section to see what is in it — ' +
@@ -1873,7 +1886,8 @@ const TAB_RENDERERS = {
       card('Need help getting connected?',
         '<p style="color:var(--text-secondary);font-size:13px;margin:0">Copy your setup with the button above and paste it to us, ' +
         'or read the step-by-step in the guide under <strong>MCP — read-only AI access</strong>. ' +
-        'If your client lists no tools at all, the key is the thing to replace first — that is almost always the cause.</p>');
+        'If your client lists no tools at all, the key is the thing to replace first — that is almost always the cause.</p>') +
+      '</div>';
   },
   'contacts': () => {
     return pageHeader('Contacts', 'Manage your contacts and leads',
@@ -2220,10 +2234,7 @@ function renderSiteConfigForm() {
   html += input('ga_id', 'Google Analytics ID', 'e.g. G-XXXXXXXXXX or UA-XXXXX-X', 'text', 'G-XXXXXXXXXX');
   html += input('gtm_id', 'Google Tag Manager ID', 'e.g. GTM-XXXXXXX', 'text', 'GTM-XXXXXXX');
   html += input('head_scripts', 'Head Scripts', 'Custom scripts in <head> (one per line)', 'textarea', '<scr' + 'ipt>...</scr' + 'ipt>');
-  html += input('body_scripts', 'Body Scripts', 'Custom scripts before <script>/* themeSyncOnLoad: after a reload the switch must describe what it will DO, so the icon
-   and label are refreshed from the stored choice (the boot script already set the attribute). */
-document.addEventListener('DOMContentLoaded',function(){try{themeApply(document.documentElement.getAttribute('data-theme')||'dark');}catch(e){}});</script>
-</body>', 'textarea', '<scr' + 'ipt>...</scr' + 'ipt>');
+  html += input('body_scripts', 'Body Scripts', 'Custom scripts before </body>', 'textarea', '<scr' + 'ipt>...</scr' + 'ipt>');
   html += '</div></div></div>';
 
   // Homepage
@@ -14801,5 +14812,8 @@ async function mcDownload(path, filename) {
 
 </script>
 <!--/B209-FEEDBACK-APP-->
+<script>/* themeSyncOnLoad: after a reload the switch must describe what it will DO, so the icon is
+   refreshed from the stored choice (the boot script already set the attribute). */
+document.addEventListener('DOMContentLoaded',function(){try{themeApply(document.documentElement.getAttribute('data-theme')||'dark');}catch(e){}});</script>
 </body>
 </html>
