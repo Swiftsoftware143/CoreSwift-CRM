@@ -1073,6 +1073,10 @@ const SETTINGS_MENU = [
 const ADMIN_MENU = [
   { id:'portfolio', icon:'🏢', label:'Portfolio Companies' },
   { id:'users', icon:'👥', label:'Users' },
+  // POST /api/admin/chat-action + GET .../intents: three operator actions, one of which CREATES A
+  // CUSTOMER ACCOUNT. Measured 2026-11-21: no console offered them and neither console could create
+  // an account at all, so an operator capability existed only for curl.
+  { id:'operator-actions', icon:'🛠', label:'Operator Actions' },
   { type:'group', icon:'💰', label:'Revenue', children:[
     { id:'billing', icon:'💳', label:'Billing & Plans' },
   ]},
@@ -9532,6 +9536,83 @@ document.addEventListener('click', async function (ev) {
     catch (e) { toast('Could not remove it: ' + (e.message || e), 'error'); }
   }
 });
+
+
+// ── OPERATOR ACTIONS (2026-11-21) ────────────────────────────────────────────────────────────────
+// The list of what an operator can do comes FROM the server (GET /api/admin/chat-action/intents), so
+// this screen can never offer an action the API would refuse, and the result it shows is the API's own
+// answer. Creating an account goes through the one engine that already knows how — not a second
+// implementation of tenant creation living in the browser.
+var OPS = { intents: [] };
+
+function opsShell() {
+  return pageHeader('Operator Actions', 'The handful of things an operator can do on a customer account',
+    '<button class="btn btn-secondary btn-sm" onclick="opsLoad()">↻ Reload</button>') +
+    '<div class="card"><div class="card-body">' +
+      '<p style="color:var(--text-secondary);margin:0 0 12px">Each action below is run by the server exactly as an agent would run it. The list is read from the API, never typed here.</p>' +
+      '<div id="opsIntents"><div class="loading-wrap"><div class="spinner"></div> Asking the server what it can do…</div></div>' +
+      '<div id="opsForm" style="margin-top:16px"></div>' +
+    '</div></div>' +
+    '<div id="opsResult"></div>';
+}
+
+async function opsLoad() {
+  const el = document.getElementById('opsIntents');
+  if (!el) return;
+  try {
+    const d = await API.get('/admin/chat-action/intents');
+    OPS.intents = (d && Array.isArray(d.intents)) ? d.intents : [];
+  } catch (e) {
+    el.innerHTML = '<p style="color:var(--text-secondary)">Could not read the action list: ' + escapeHtml(e.message || String(e)) + '</p>';
+    return;
+  }
+  el.innerHTML = OPS.intents.length
+    ? dataTable(['Action', 'What it does', 'Needs'], OPS.intents.map(function (i) {
+        return ['<strong>' + escapeHtml(i.name) + '</strong>', escapeHtml(i.description || ''),
+                '<code>' + escapeHtml((i.required_fields || []).join(', ') || '—') + '</code>'];
+      }), '')
+    : '<p style="color:var(--text-secondary)">The server offered no actions.</p>';
+  opsPick(OPS.intents.length ? OPS.intents[0].name : '');
+}
+
+function opsPick(name) {
+  const box = document.getElementById('opsForm');
+  if (!box || !name) return;
+  const it = OPS.intents.find(function (x) { return x.name === name; });
+  if (!it) { box.innerHTML = ''; return; }
+  const fields = (it.required_fields || []).map(function (f) {
+    return '<div class="form-group"><label>' + escapeHtml(f) + '</label><input type="text" data-ops-field="' + escapeHtmlAttr(f) + '" placeholder="' + escapeHtml(f) + '"></div>';
+  }).join('');
+  const optional = (it.optional_fields || []).length
+    ? '<p style="color:var(--text-secondary);font-size:12px;margin:0 0 8px">Optional: <code>' + escapeHtml((it.optional_fields || []).join(', ')) + '</code></p>' : '';
+  const opts = OPS.intents.map(function (x) {
+    return '<option value="' + escapeHtmlAttr(x.name) + '"' + (x.name === name ? ' selected' : '') + '>' + escapeHtml(x.name) + '</option>';
+  }).join('');
+  box.innerHTML = '<div class="form-group"><label>Action</label><select id="opsIntent" onchange="opsPick(this.value)">' + opts + '</select></div>' +
+    fields + optional + '<button type="button" class="btn btn-primary" id="opsRun">Run it</button>' +
+    '<p style="color:var(--text-secondary);font-size:12px;margin:10px 0 0">Creating an account makes a real customer account and mints its API key. Nothing here can be undone from this screen.</p>';
+  const run = document.getElementById('opsRun');
+  if (run) run.onclick = function () { opsRun(name); };
+}
+
+async function opsRun(name) {
+  const params = {};
+  document.querySelectorAll('[data-ops-field]').forEach(function (inp) { params[inp.getAttribute('data-ops-field')] = inp.value.trim(); });
+  const box = document.getElementById('opsResult');
+  if (box) box.innerHTML = '<div class="card"><div class="card-body"><div class="loading-wrap"><div class="spinner"></div> Running…</div></div></div>';
+  try {
+    const r = await API.post('/admin/chat-action', { intent: name, params: params });
+    if (box) box.innerHTML = '<div class="card"><div class="card-body"><h3 style="margin:0 0 6px">The server answered</h3>' +
+      '<pre style="white-space:pre-wrap;font-size:12px;margin:0">' + escapeHtml(JSON.stringify(r, null, 2)) + '</pre></div></div>';
+    toast('Done', 'success');
+  } catch (e) {
+    if (box) box.innerHTML = '<div class="card"><div class="card-body"><h3 style="margin:0 0 6px">It was refused</h3>' +
+      '<p style="color:var(--text-secondary);margin:0">' + escapeHtml(e.message || String(e)) + '</p></div></div>';
+    toast('Refused: ' + (e.message || e), 'error');
+  }
+}
+TAB_RENDERERS['operator-actions'] = opsShell;
+TAB_LOADERS['operator-actions'] = function () { opsLoad(); };
 
 TAB_RENDERERS['deals'] = pipelinesShell;
 TAB_RENDERERS['campaigns'] = campaignsShell;
