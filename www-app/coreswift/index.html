@@ -354,6 +354,17 @@ tr:hover td{background:var(--bg-hover)}
         <span class="nav-icon">📖</span>
         <span class="nav-text">User Guide</span>
       </a>
+      <!-- cron 2026-11-20 (kanban B209): the public Roadmap and What's new pages, beside the guide.
+           /roadmap and /updates are exact-match locations in sites/coreswift.conf; before that they
+           answered the 829 KB app shell for a visitor who typed them. -->
+      <a class="nav-item" id="roadmap-link" href="/roadmap.html" style="text-decoration:none">
+        <span class="nav-icon">🗺</span>
+        <span class="nav-text">Roadmap</span>
+      </a>
+      <a class="nav-item" id="updates-link" href="/updates.html" style="text-decoration:none">
+        <span class="nav-icon">✨</span>
+        <span class="nav-text">What's new</span>
+      </a>
       <button class="collapse-btn" onclick="toggleSidebar()">
         <span id="collapseIcon">◀</span>
         <span class="nav-text">Collapse</span>
