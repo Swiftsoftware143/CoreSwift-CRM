@@ -2399,9 +2399,10 @@ const TAB_RENDERERS = {
   // Every workspace, with the bulk retire control (kanban t_ac2fe688). The button is inert until a
   // row is picked; the loader below arms it with the count and wires the write.
   'tenants': () => {
-    return pageHeader('Users', 'Every workspace on the platform — select rows to retire them. Probe/test workspaces are a picker, not customers: hidden until you tick Show probe workspaces',
+    return pageHeader('Users', 'Customers on the platform — one row per workspace — select rows to retire them. Probe/test workspaces are hidden until you tick Show probe workspaces; your own portfolio companies live on Admin → Portfolio Companies, not here',
       '<label style="display:inline-flex;align-items:center;gap:6px;margin-right:12px;font-size:13px"><input type="checkbox" id="tnShowProbes"> Show probe workspaces</label> ' +
       '<span id="tnProbeHidden" class="badge badge-warning" style="display:none;margin-right:12px"></span> ' +
+      '<span id="tnPortfolioHidden" class="badge badge-muted" style="display:none;margin-right:12px"></span> ' +
       // CSV of what the operator is LOOKING AT (2026-11-19): name, slug, owner, status, plan and the
       // created date of every row currently drawn — probe rows only when Show probe workspaces is
       // ticked, and the plan mix filter respected. Built from the table's own cells, so the file can
@@ -3247,11 +3248,40 @@ async function loadTenantsTab() {
   const btn = document.getElementById('tnDel');
 
   let items = [];
+  let portfolioHidden = 0;
   try {
     const data = await API.get('/admin/tenants');
     items = Array.isArray(data) ? data : ((data && (data.tenants || data.items)) || []);
-    // Portfolio companies belong in Admin -> Portfolio Companies only (David, 2026-11-04).
-    items = items.filter(t => !/zaarhub|swiftimpact|giraudy|swiftsoftware/i.test(String((t && (t.name || t.company_name || t.tenant_name)) || '')));
+    // ── PORTFOLIO IS NOT A CUSTOMER LIST (David, 2026-11-20) ─────────────────────────────────
+    // This screen is the CUSTOMER list, so the owner's own companies must not sit in it. Until
+    // 2026-11-21 the filter below was a hardcoded NAME regex (zaarhub|swiftimpact|giraudy|
+    // swiftsoftware), so every portfolio company outside those four names was drawn as a customer:
+    // measured live, BV Premiere Products and Xride Drivers both carry `tenants.is_portfolio = true`
+    // and both appeared here. The authoritative link is GET /admin/portfolio-companies -> each row's
+    // `account_tenant_id` (the same read the Portfolio Companies screen makes), so the list and that
+    // screen can never disagree, and a company added tomorrow is hidden the day it is added.
+    const pfSet = new Set();
+    try {
+      const pf = await API.get('/admin/portfolio-companies');
+      ((pf && pf.portfolio_companies) || []).forEach(c => {
+        if (c && c.account_tenant_id) pfSet.add(String(c.account_tenant_id));
+      });
+    } catch (_) { /* best-effort filter: the tenant list still draws if this read fails */ }
+    // `^swiftsoftware$` is the operator's OWN platform workspace — also not a customer. When the
+    // portfolio read fails, fall back to the old name guard rather than drawing everything.
+    const legacyName = /zaarhub|swiftimpact|giraudy|swiftsoftware/i;
+    items = items.filter(t => {
+      const id = String((t && t.id) || '');
+      const nm = String((t && (t.name || t.company_name || t.tenant_name)) || '').trim();
+      if (pfSet.size) {
+        const hide = pfSet.has(id) || /^swiftsoftware$/i.test(nm);
+        if (hide && !/^swiftsoftware$/i.test(nm)) portfolioHidden++;
+        return !hide;
+      }
+      const hide = legacyName.test(nm);
+      if (hide) portfolioHidden++;
+      return !hide;
+    });
   } catch (e) {
     el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Tenants endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
     return;
@@ -3282,6 +3312,17 @@ async function loadTenantsTab() {
     const n = probeSet.size;
     hiddenEl.textContent = n ? (n + ' test workspace' + (n === 1 ? '' : 's') + ' hidden') : '';
     hiddenEl.style.display = n ? 'inline-block' : 'none';
+  }
+  // SAY WHAT THE PORTFOLIO FILTER HID (2026-11-21). Same rule as the probe badge above: a silent
+  // filter leaves the operator unable to tell a small customer list from a broken read, and leaves
+  // a portfolio company's account looking lost. The count is the rows this loader actually removed,
+  // so it can never drift from the table.
+  const pfBadge = document.getElementById('tnPortfolioHidden');
+  if (pfBadge) {
+    pfBadge.textContent = portfolioHidden
+      ? (portfolioHidden + ' portfolio ' + (portfolioHidden === 1 ? 'company' : 'companies') + ' hidden — open Portfolio Companies')
+      : '';
+    pfBadge.style.display = portfolioHidden ? 'inline-block' : 'none';
   }
   const rows = visible.map(t => [
     `<input type="checkbox" class="tn-chk" value="${escapeHtmlAttr(t.id || '')}">`,
