@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CoreSwift CRM — Roadmap</title>
+<meta name="description" content="What is planned, in progress and already live in CoreSwift CRM.">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate icon" href="/favicon.ico">
+<style>
+  :root{--indigo:#4f46e5;--indigo-light:#a5b4fc;--bg-dark:#0E0F12;--bg-card:#16181D;--bg-elevated:#1E2028;--border:#2A2D38;--text-primary:#F1F5F9;--text-secondary:#CBD5E1;--text-muted:#94A3B8;--success:#22C55E;--warning:#F59E0B;--info:#3B82F6}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:var(--bg-dark);color:var(--text-primary);line-height:1.6;min-height:100vh}
+  a{color:var(--indigo-light)}
+  .wrap{max-width:1080px;margin:0 auto;padding:56px 24px 72px}
+  .top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:28px}
+  .brand{display:flex;align-items:center;gap:12px;text-decoration:none;color:var(--text-primary)}
+  .brand .icon{width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,var(--indigo),#8B5CF6);display:flex;align-items:center;justify-content:center;font-size:20px}
+  .brand b{font-size:17px}
+  .top nav{display:flex;gap:18px;font-size:14px}
+  .top nav a{color:var(--text-secondary);text-decoration:none}
+  .top nav a:hover,.top nav a.on{color:var(--indigo-light)}
+  h1{font-size:2rem;font-weight:700;margin-bottom:6px}
+  .sub{color:var(--text-muted);font-size:15px;margin-bottom:30px;max-width:720px}
+  .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}
+  .col{background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:22px 22px 8px}
+  .col h2{font-size:15px;font-weight:700;margin-bottom:2px}
+  .col .tag{font-size:12.5px;color:var(--text-muted);margin-bottom:14px}
+  .col ul{list-style:none}
+  .col li{padding:12px 0;border-top:1px solid var(--border);font-size:14px;color:var(--text-secondary)}
+  .col li:first-child{border-top:none}
+  .col li strong{color:var(--text-primary);display:block;font-size:14px;margin-bottom:2px}
+  .col.planned h2{color:var(--warning)}
+  .col.progress h2{color:var(--info)}
+  .col.done h2{color:var(--success)}
+  .vote{margin-top:36px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:14px;padding:20px 22px;font-size:14px;color:var(--text-secondary)}
+  footer{margin-top:44px;padding-top:20px;border-top:1px solid var(--border);font-size:13px;color:var(--text-muted);display:flex;gap:18px;flex-wrap:wrap}
+  footer a{color:var(--text-muted);text-decoration:none}
+  footer a:hover{color:var(--indigo-light)}
+</style>
+<script id="cs-theme-boot">/* day/night, applied before first paint (shared: cs-theme-shared) */
+(function(){try{var t=localStorage.getItem('cs_theme');if(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)t='dark';if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})();
+</script>
+<style id="cs-theme-shared">
+  /* Shared day/night palette for the standalone CoreSwift pages. Additive: it only reacts to the
+     attribute, so nothing here changes a page that never opts in. Both hosts (app. and booking.) ship
+     this same block, which is what makes the product feel like one product across subdomains. */
+  html{color-scheme:light}
+  html[data-theme="dark"]{color-scheme:dark}
+  html[data-theme="light"]{color-scheme:light}
+  html[data-theme="light"] body{background:#f6f7fb !important;color:#16181d !important}
+  html[data-theme="light"] .card,html[data-theme="light"] .panel,html[data-theme="light"] .box,
+  html[data-theme="light"] .wrap,html[data-theme="light"] .container,html[data-theme="light"] .modal,
+  html[data-theme="light"] form,html[data-theme="light"] section{background:#ffffff !important;border-color:#dde1ea !important}
+  html[data-theme="light"] input,html[data-theme="light"] select,html[data-theme="light"] textarea{
+    background:#ffffff !important;color:#16181d !important;border-color:#c9cfdb !important}
+  html[data-theme="light"] h1,html[data-theme="light"] h2,html[data-theme="light"] h3,
+  html[data-theme="light"] h4,html[data-theme="light"] strong,html[data-theme="light"] label{color:#16181d !important}
+  html[data-theme="light"] p,html[data-theme="light"] li,html[data-theme="light"] span,
+  html[data-theme="light"] td,html[data-theme="light"] small{color:#4b5563 !important}
+  html[data-theme="light"] a{color:#4f46e5 !important}
+  html[data-theme="light"] table,html[data-theme="light"] td,html[data-theme="light"] th{border-color:#dde1ea !important}
+  html[data-theme="light"] pre,html[data-theme="light"] code{background:#eef0f6 !important;color:#16181d !important}
+  html[data-theme="dark"] body{background:#0f1117 !important;color:#e8eaed !important}
+  html[data-theme="dark"] .card,html[data-theme="dark"] .panel,html[data-theme="dark"] .box,
+  html[data-theme="dark"] .wrap,html[data-theme="dark"] .container,html[data-theme="dark"] .modal,
+  html[data-theme="dark"] form,html[data-theme="dark"] section{background:#1a1d27 !important;border-color:#2d3148 !important}
+  html[data-theme="dark"] input,html[data-theme="dark"] select,html[data-theme="dark"] textarea{
+    background:#11131b !important;color:#e8eaed !important;border-color:#2d3148 !important}
+  html[data-theme="dark"] h1,html[data-theme="dark"] h2,html[data-theme="dark"] h3,
+  html[data-theme="dark"] h4,html[data-theme="dark"] strong,html[data-theme="dark"] label{color:#f3f4f6 !important}
+  html[data-theme="dark"] p,html[data-theme="dark"] li,html[data-theme="dark"] span,
+  html[data-theme="dark"] td,html[data-theme="dark"] small{color:#c3c8d1 !important}
+  html[data-theme="dark"] a{color:#93c5fd !important}
+  html[data-theme="dark"] table,html[data-theme="dark"] td,html[data-theme="dark"] th{border-color:#2d3148 !important}
+  html[data-theme="dark"] pre,html[data-theme="dark"] code{background:#11131b !important;color:#e8eaed !important}
+  html[data-theme="dark"] hr{border-color:#2d3148 !important}
+  #csThemeBtn{position:fixed;left:12px;bottom:12px;z-index:2147483000;display:flex;align-items:center;gap:6px;
+    padding:7px 11px;border-radius:999px;border:1px solid rgba(120,130,150,.45);background:rgba(20,22,30,.86);
+    color:#e8eaed;font:600 12px system-ui,-apple-system,sans-serif;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.25)}
+  html[data-theme="dark"] #csThemeBtn{background:rgba(246,247,251,.92);color:#16181d;border-color:rgba(20,24,40,.25)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <a class="brand" href="/"><span class="icon">🏢</span><b>CoreSwift CRM</b></a>
+    <nav>
+      <a href="/">Console</a>
+      <a class="on" href="/roadmap.html">Roadmap</a>
+      <a href="/updates.html">What&rsquo;s new</a>
+      <a href="/guide.html">Guide</a>
+    </nav>
+  </div>
+
+  <h1>Roadmap</h1>
+  <p class="sub">What we are building next, what is being built right now, and what is already live in your workspace. Nothing here is a promise of a date.</p>
+
+  <div class="cols">
+    <div class="col planned">
+      <h2>Planned</h2>
+      <p class="tag">On the list, not started.</p>
+      <ul>
+        <li><strong>Self-serve checkout</strong>Buy a plan on the site instead of sending a request.</li>
+        <li><strong>Folders and drafts</strong>Organise the built-in inbox the way a mail client does.</li>
+        <li><strong>More sending providers</strong>Send through a provider other than Mailgun as well as through it.</li>
+        <li><strong>Team roles in depth</strong>Per-screen permissions, so a teammate sees only the tabs their job needs.</li>
+      </ul>
+    </div>
+
+    <div class="col progress">
+      <h2>In progress</h2>
+      <p class="tag">Being built right now.</p>
+      <ul>
+        <li><strong>Booking readiness, everywhere</strong>The calendar already answers whether a customer can book it; the same clear verdict is being carried to the rest of the booking surfaces.</li>
+        <li><strong>Mail setup in plain steps</strong>Adding a domain, a signing key and a mailbox from one screen, with the guide matching what the screen shows.</li>
+      </ul>
+    </div>
+
+    <div class="col done">
+      <h2>Live today</h2>
+      <p class="tag">In your console now.</p>
+      <ul>
+        <li><strong>Contacts and deals</strong>Contacts with CSV import and export, and a Deals pipeline with its own tab and multi-currency amounts.</li>
+        <li><strong>Tickets that answer</strong>A ticket queue with replies, a response promise shown on every ticket, and a due column that tracks it.</li>
+        <li><strong>Appointments</strong>Booking calendars with open hours and a public link, plus a readiness check that says what is missing when a customer could not book.</li>
+        <li><strong>Your own mail domain</strong>Sending and receiving are separate choices; a catch-all address, a 32-character signing key, and an inbox that names the customer from their own From header.</li>
+        <li><strong>Email branding</strong>Upload your logo and set a signature once; both ride every message your workspace sends.</li>
+        <li><strong>Workspaces and invitations</strong>Separate workspaces, each with its own people and data, and invitations by email.</li>
+        <li><strong>Affiliate programme</strong>Referral links and a partner list, with the payouts you set.</li>
+        <li><strong>Help centre</strong>A public help centre that never dead-ends, and a guide on your own app address.</li>
+        <li><strong>Submit feedback</strong>Send an idea, a bug or a complaint from inside the console.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="vote">
+    Want to move something up? Vote on the full roadmap at
+    <a href="https://swiftsoftware.net/coreswift-roadmap">swiftsoftware.net/coreswift-roadmap</a>,
+    or press <strong>Send feedback</strong> in the console and tell us which one matters to you.
+  </div>
+
+  <footer>
+    <a href="/">Home</a>
+    <a href="/guide.html">Guide</a>
+    <a href="/updates.html">What&rsquo;s new</a>
+    <a href="https://swiftsoftware.net/coreswift-roadmap">Vote on the roadmap</a>
+    <span>&copy; 2026 CoreSwift CRM</span>
+  </footer>
+</div>
+<script id="cs-theme-shared-js">/* the switch itself (shared): describes what pressing it will DO, not the current state */
+(function(){
+  function label(){var t=document.documentElement.getAttribute('data-theme')==='dark';
+    var b=document.getElementById('csThemeBtn');
+    if(b) b.innerHTML=(t?'\u2600\uFE0F <span>Day mode</span>':'\uD83C\uDF12 <span>Night mode</span>');}
+  function flip(){
+    var next=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';
+    document.documentElement.setAttribute('data-theme',next);
+    try{localStorage.setItem('cs_theme',next);}catch(e){}
+    label();
+  }
+  function mount(){
+    if(document.getElementById('csThemeBtn')){label();return;}
+    var b=document.createElement('button');
+    b.id='csThemeBtn'; b.type='button'; b.title='Switch day / night mode';
+    b.onclick=flip; document.body.appendChild(b); label();
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',mount); else mount();
+})();
+</script>
+</body>
+</html>
