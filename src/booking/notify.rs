@@ -306,10 +306,14 @@ async fn apply_tags(pool: &PgPool, ctx: &Context, stage: &str) {
         // the same person means one of them came before this one. Counted through the order's contact
         // AND the customer's address, because an order placed before the contact existed carries no
         // contact_id and would otherwise make a returning customer look new.
-        let prior: i64 = sqlx::query_scalar(
+        // `booking_bookings` HAS NO tenant_id (measured 2026-11-21): the column lives on the ORDER, and
+        // the first version of this query named b.tenant_id, failed with 42703 and was swallowed by
+        // unwrap_or(0) - so a returning customer was never tagged and nothing said why. The error is
+        // logged now, because a silent default is how this class of bug hides.
+        let prior: i64 = match sqlx::query_scalar(
             "SELECT count(*) FROM booking_bookings b \
                JOIN booking_orders o ON o.id = b.order_id \
-              WHERE b.tenant_id = $1 AND o.status = 'confirmed' \
+              WHERE o.tenant_id = $1 AND o.status = 'confirmed' \
                 AND (o.contact_id = $2 OR lower(o.customer_email) = lower($3))",
         )
         .bind(ctx.tenant_id)
@@ -317,7 +321,13 @@ async fn apply_tags(pool: &PgPool, ctx: &Context, stage: &str) {
         .bind(&ctx.customer_email)
         .fetch_one(pool)
         .await
-        .unwrap_or(0);
+        {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(tenant = %ctx.tenant_id, error = %e, "could not count prior bookings for the repeat-customer tag");
+                0
+            }
+        };
         if prior >= 2 {
             if let Some(repeat) = ensure_tag(pool, ctx.tenant_id, "Repeat Customer").await {
                 let _ = sqlx::query(
