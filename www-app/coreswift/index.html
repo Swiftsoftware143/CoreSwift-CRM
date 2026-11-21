@@ -1045,6 +1045,10 @@ const SETTINGS_MENU = [
   // Booking engine (one model, three calendar types). Sits under Settings because it is
   // workspace configuration, not something a member touches.
   { id:'booking', icon:'📅', label:'Booking' },
+  // TAB_RENDERERS['bookings'] and TAB_LOADERS['bookings'] have existed since the slot engine
+  // landed, but no MENU entry ever pointed at them, so the bookings a customer actually made
+  // (and the only Cancel control) were unreachable from the console (measured 2026-11-21).
+  { id:'bookings', icon:'🗂', label:'Bookings taken' },
   // Tenant-side team management. roles[] hides the nav entry from a 'member': the API
   // answers 403 for any non-owner/admin token, so offering it would only dead-end.
   { id:'team', icon:'👥', label:'Team & Invites', roles:['owner','admin'] },
@@ -12172,6 +12176,10 @@ async function loadBookingsTab() {
             ? '<span class="badge badge-muted">cancelled</span>'
             : '<span class="badge badge-success">' + escapeHtml(b.status || '') + '</span>',
           escapeHtml(String(b.price_paid == null ? '—' : b.price_paid)) + ' ' + escapeHtml(b.currency || ''),
+          // No Confirm button lives here on purpose: a booking is created ALREADY active by the public
+          // checkout (src/bookings/handlers.rs writes status 'active'), so there is no held state to
+          // confirm. The old POST /api/bookings/checkout route was retired for the same reason — a
+          // control that can never appear, or a route no writer can feed, is a lie either way.
           b.status === 'cancelled' ? '' :
             '<button class="btn btn-ghost btn-xs" onclick="bkCancelBooking(\'' + escapeHtmlAttr(b.id) + '\')">Cancel</button>'
         ];
@@ -13190,6 +13198,7 @@ TAB_RENDERERS['data-mapping'] = () => pageHeader(
   '<div id="dmWrap"><div class="loading-wrap"><div class="spinner"></div> Loading mappings…</div></div>';
 
 TAB_LOADERS['data-mapping'] = async () => { await dmInit(); dmShowHealth(); };
+
 
 /* ==========================================================================================
  * BOOKING ENGINE console page

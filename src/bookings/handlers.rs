@@ -958,60 +958,8 @@ async fn insert_booking(
 
 // ── Payment / Checkout ───────────────────────────────────────────────────
 
-pub async fn create_checkout(
-    State(s): State<AppState>,
-    Extension(c): Extension<Claims>,
-    Json(body): Json<serde_json::Value>,
-) -> ApiResult<impl IntoResponse> {
-    let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    let booking_id = body
-        .get("booking_id")
-        .and_then(|v| v.as_str())
-        .and_then(|v| Uuid::parse_str(v).ok())
-        .ok_or_else(|| AppError::Validation("booking_id required".into()))?;
-
-    let booking = sqlx::query_as::<_, SlotBooking>(
-        "UPDATE slot_bookings SET status = 'active' WHERE id = $1 AND tenant_id = $2 RETURNING *",
-    )
-    .bind(booking_id)
-    .bind(tid)
-    .fetch_optional(&s.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Booking not found".into()))?;
-
-    sqlx::query("UPDATE calendar_slots SET filled_slots = filled_slots + 1 WHERE id = $1")
-        .bind(booking.slot_id)
-        .execute(&s.db)
-        .await?;
-
-    // Fire scoring event: booking completed → +50 points
-    if let Some(cid) = booking.contact_id {
-        let _ = engine::calculate_score(&s.db, tid, cid, "booking_completed").await;
-    }
-
-    // Round-robin assignment: fire-and-forget so booking response is not delayed
-    if let Some(team_id) =
-        crate::round_robin::engine::find_team_for_calendar(&s.db, booking.calendar_id).await
-    {
-        let db = s.db.clone();
-        tokio::spawn(async move {
-            if let Err(e) = crate::round_robin::engine::assign_lead(
-                &db,
-                team_id,
-                Some(booking.id),
-                booking.contact_id,
-            )
-            .await
-            {
-                tracing::error!("round-robin assignment failed: {}", e);
-            }
-        });
-    }
-
-    Ok(Json(json!({"success": true, "status": "active"})))
-}
-
-// ── Booking Management (Admin) ──────────────────────────────────────────
+// (retired) create_checkout — see the note on the route in `bookings::mod`. Kept out of the tree
+// rather than left dead: an endpoint no writer can feed and no screen can offer is not a feature.
 
 pub async fn list_bookings(
     State(s): State<AppState>,

@@ -165,7 +165,7 @@
 //!        bookable resource or no opening hours is a public link that offers nothing, and from the owner's side
 //!        that is indistinguishable from a broken product, so the screen asks the server what a customer would
 //!        actually find. Behind the booking router's usual auth. The extractor resolves **531 mounted
-//!        `.route(..)` calls / 519 on /api** (533 = 519 /api + the 14 root-level mounts).
+//!        `.route(..)` calls / 518 on /api** (532 = 518 /api + the 14 root-level mounts).
 //!
 //!   +1 mount (2026-11-12, kanban t_f919924f), THE FILE A MESSAGE CARRIED: `GET
 //!        /api/private-email/messages/:id/attachments/:attachment_id`. It sits on the private-email
@@ -1457,12 +1457,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            533,
+            532,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 519,
+            api, 518,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.

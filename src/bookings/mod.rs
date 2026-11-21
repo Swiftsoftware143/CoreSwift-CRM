@@ -8,7 +8,7 @@
 //! - PATCH  /api/bookings/calendars/:slug/slots/:id — update slot config
 //! - GET    /api/bookings/calendars/:slug/questions — return Q&A form fields
 //! - GET    /api/bookings/calendars/:slug/available?start=&end= — time-slot availability
-//! - POST   /api/bookings/checkout               — create booking + return payment URL
+//! - (retired) POST /api/bookings/checkout        — nothing can leave a booking held to confirm
 //! - POST   /api/bookings/verify-payment          — called by Stripe webhook, activate booking
 //! - GET    /api/bookings/bookings               — list bookings (admin)
 //! - POST   /api/bookings/bookings/:id/cancel    — cancel booking
@@ -64,7 +64,11 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/calendars/:slug/available",
             axum::routing::get(handlers::get_available),
         )
-        .route("/checkout", axum::routing::post(handlers::create_checkout))
+        // POST /checkout was RETIRED (2026-11-21): it marked a booking 'active' that something else
+        // had left held, and NOTHING in this app ever creates a booking in any state but 'active' -
+        // the public checkout writes it active at creation. So the route could not be reached by any
+        // writer and no screen could honestly offer it. The bookings list, per-booking read and the
+        // cancel arm stay, and are now reachable from the "Bookings taken" screen.
         .route("/bookings", axum::routing::get(handlers::list_bookings))
         .route("/bookings/:id", axum::routing::get(handlers::get_booking))
         .route(
