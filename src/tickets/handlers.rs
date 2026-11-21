@@ -34,6 +34,16 @@ pub async fn list_tickets(
     // who "mine" means: the caller, from the session rather than from a query parameter, so a request
     // cannot ask for somebody else's view by naming them.
     let assignee = Uuid::parse_str(&c.sub).ok();
+    // A MEMBER DOES NOT GET THE WHOLE DESK (kanban B204, 2026-11-21). The invite flow promises a
+    // teammate their own work; without this, anyone invited to an account could read every customer
+    // conversation in it. The role decides, not the query string, so ?view=all cannot widen it, and an
+    // owner/admin keeps every view they had.
+    let is_admin = crate::auth::middleware::is_account_admin(&c.role);
+    let effective_view: Option<String> = if is_admin {
+        q.view.clone()
+    } else {
+        Some("mine".to_string())
+    };
 
     let tickets = sqlx::query_as::<_, Ticket>(
         r#"SELECT id, tenant_id, subject, description, status, priority, assigned_to, contact_id,
@@ -111,7 +121,7 @@ pub async fn list_tickets(
     .bind(limit)
     .bind(offset)
     .bind(is_platform)
-    .bind(&q.view)
+    .bind(&effective_view)
     .bind(assignee)
     .bind(&q.contact_email)
     .bind(q.q.as_deref().map(str::trim).filter(|v| !v.is_empty()))
@@ -220,6 +230,25 @@ pub async fn get_ticket(
             .fetch_optional(&s.db)
             .await?
             .ok_or_else(|| AppError::NotFound("Ticket not found".into()))?;
+    // The same rule as the list, enforced per row: a member reads the tickets that are theirs. A
+    // ticket they do not own answers NotFound, not Forbidden — telling them a conversation exists but
+    // is someone else's would leak the queue.
+    if !crate::auth::middleware::is_account_admin(&c.role) {
+        let mine: Option<Uuid> = Uuid::parse_str(&c.sub).ok();
+        let owns = mine.map(|u| ticket.assigned_to == Some(u)).unwrap_or(false);
+        if !owns {
+            let via_inbox: Option<i32> = sqlx::query_scalar(
+                "SELECT 1 FROM private_email_messages WHERE ticket_id = $1 AND assigned_user_id = $2 LIMIT 1",
+            )
+            .bind(ticket_id)
+            .bind(mine)
+            .fetch_optional(&s.db)
+            .await?;
+            if via_inbox.is_none() {
+                return Err(AppError::NotFound("Ticket not found".into()));
+            }
+        }
+    }
 
     let messages = sqlx::query_as::<_, TicketMessage>(
         "SELECT * FROM ticket_messages WHERE ticket_id = $1 ORDER BY created_at ASC",
