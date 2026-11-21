@@ -4646,15 +4646,31 @@ const TAB_LOADERS = {
     try {
       const data = await API.get('/admin/portfolio-companies');
       const companies = (data && data.portfolio_companies) || [];
-      const rows = companies.map(c => [
-        escapeHtml(c.name || '—'),
-        escapeHtml(c.slug || '—'),
-        escapeHtml(c.email || '—'),
-        c.is_active ? '<span class="badge badge-success">active</span>' : '<span class="badge badge-muted">inactive</span>',
-        escapeHtml(c.created_at ? new Date(c.created_at).toLocaleDateString() : '—'),
-        `<button class="btn btn-ghost btn-xs" data-ops="portfolio-targets-open" onclick="showTargetsModal('${c.id}','${escapeHtmlAttr(c.name || '')}')">Targets</button>`
-      ]);
-      el.innerHTML = dataTable(['Company','Slug','Email','Status','Created',''], rows,
+      // WHICH OF MY COMPANIES HAS AN ACCOUNT, AND OPEN IT (2026-11-21). This screen listed the
+      // company's name, slug and mail but never whether it has a login of its own — so a company
+      // whose account was never minted looked exactly like one that has been running for months,
+      // and the only way in was to hunt for it on the Users list. The read above already carries the
+      // link (`account_tenant_id` / `account_name`), so say it per row and offer the SAME
+      // impersonation the Users list uses (15-minute session, server refuses non-operators).
+      // `TENANT_NAMES` is the map that names the banner; fill it for the account being opened.
+      const rows = companies.map(c => {
+        const acctTenant = c && c.account_tenant_id ? String(c.account_tenant_id) : '';
+        if (acctTenant) TENANT_NAMES[acctTenant] = String(c.account_name || c.name || '');
+        const acctCell = acctTenant
+          ? '<span class="badge badge-success">' + escapeHtml(c.account_name || 'has an account') + '</span> ' +
+            '<button class="btn btn-ghost btn-xs" data-ops="portfolio-open-account" onclick="crmImpersonate(\'' + escapeHtmlAttr(acctTenant) + '\')">Open account</button>'
+          : '<span class="badge badge-muted" title="This company has no login of its own yet — press Sync New Company to mint one.">No account yet</span>';
+        return [
+          escapeHtml(c.name || '—'),
+          escapeHtml(c.slug || '—'),
+          escapeHtml(c.email || '—'),
+          acctCell,
+          c.is_active ? '<span class="badge badge-success">active</span>' : '<span class="badge badge-muted">inactive</span>',
+          escapeHtml(c.created_at ? new Date(c.created_at).toLocaleDateString() : '—'),
+          `<button class="btn btn-ghost btn-xs" data-ops="portfolio-targets-open" onclick="showTargetsModal('${c.id}','${escapeHtmlAttr(c.name || '')}')">Targets</button>`
+        ];
+      });
+      el.innerHTML = dataTable(['Company','Slug','Email','Account','Status','Created',''], rows,
         'No portfolio companies yet — add one, or run a cross-app sync.');
     } catch(e) {
       el.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Portfolio endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
