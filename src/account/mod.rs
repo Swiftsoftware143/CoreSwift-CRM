@@ -5,12 +5,17 @@ pub mod models;
 pub mod settings;
 
 use crate::AppState;
+pub mod setup;
+
 use axum::{middleware, Router};
 
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/", axum::routing::get(handlers::list))
         .route("/", axum::routing::post(handlers::create))
+        // Registered BEFORE `/:id`: axum matches in order, so "/setup" would otherwise be read as
+        // an account id and answer a parse error instead of the setup state.
+        .route("/setup", axum::routing::get(setup::account_setup))
         .route("/:id", axum::routing::get(handlers::get))
         .route("/:id", axum::routing::patch(handlers::update))
         .route("/:id", axum::routing::delete(handlers::delete))

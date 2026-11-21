@@ -1205,6 +1205,27 @@ function switchTab(tabId) {
   document.getElementById('userMenu').classList.remove('show');
 }
 
+
+// The setup card's three controls. Delegated, because the card is rebuilt on every Dashboard visit and
+// because an inline onclick carrying a server-supplied string is how this console has been broken.
+document.addEventListener('click', function (ev) {
+  const t = ev.target;
+  if (!t || !t.closest) return;
+  const go = t.closest('[data-setup-go]');
+  if (go) { ev.preventDefault(); switchTab(go.getAttribute('data-setup-go')); return; }
+  if (t.closest('[data-setup-hide]')) {
+    ev.preventDefault();
+    localStorage.setItem('crm_setup_hidden', '1');
+    switchTab('dashboard');
+    return;
+  }
+  if (t.closest('[data-setup-show]')) {
+    ev.preventDefault();
+    localStorage.removeItem('crm_setup_hidden');
+    switchTab('dashboard');
+  }
+});
+
 function getTabLabel(id) {
   const all = [...MENU, ...SETTINGS_MENU, ...ADMIN_MENU, ...BOTTOM_MENU];
   for (const it of all) {
@@ -2429,82 +2450,58 @@ const TAB_LOADERS = {
       }
       statsGridEl.innerHTML = html || '<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Dashboard stats unavailable — no source answered.</p></div></div>';
 
-    // cron 2026-10-27 — a brand-new workspace landed on a dashboard of seven zeros with no next
-    // step: measured on a fresh signup (real numbers from the app's own routes) the tiles read
-    // 0 contacts / 0 companies / 0 opportunities / $0.00 won / 0 pipelines / 0 tracked links, and
-    // the three things a CRM needs before any of that means anything were discoverable only by
-    // reading the sidebar. This card names them and links each to the screen that does it.
-    // It paints ONLY for an account where EVERY read it depends on answered AND every count is
-    // zero, so a failed read can never make a busy workspace look new; and it removes itself the
-    // moment any one of them is non-zero, so it never becomes permanent furniture.
-    // `ticketsS.gated` is deliberately NOT part of the predicate: a 402 is the plan gate talking,
-    // not a missing read (a Free workspace has no support tickets at all).
-    (async function paintFirstSteps(){
+    // ── GET SET UP: what is actually true in this account ──────────────────────────────────────
+    // This card used to be a special case: it painted ONLY when seven counters were all zero, and it
+    // listed three hard-coded steps. So an account half set up — a domain added but never verified, a
+    // calendar with nothing bookable, no automation rule, a revoked API key — saw NOTHING and was
+    // told nothing, which is the "empty tables look like a broken product" trap. It now asks the
+    // server what is true: GET /api/account/setup answers nine checks from real rows, each with the
+    // console screen that closes it, so this is a to-do list with doors rather than advice.
+    (async function paintSetupCard(){
       const box = document.getElementById('firstSteps');
       if (!box) return;
-      if (!stats || !pipes || !links) { box.innerHTML = ''; return; }
-      const num = (v) => (typeof v === 'number' && isFinite(v)) ? v : 0;
-      const pipesN = Array.isArray(pipes.pipelines) ? pipes.pipelines.length : null;
-      const linksN = Array.isArray(links.links) ? links.links.length : null;
-      if (pipesN === null || linksN === null) { box.innerHTML = ''; return; }
-      const existing = num(stats.total_contacts) + num(stats.total_companies)
-                     + num(stats.total_opportunities) + pipesN + linksN;
-      if (existing > 0) { box.innerHTML = ''; return; }
-      // The nav hides a roles[] entry from a 'member' (see the SETTINGS_MENU filter); the card
-      // follows the same rule, so it never offers a screen whose API answers 403.
-      const role = (STATE.user && STATE.user.role) || 'member';
-      const canInvite = role === 'owner' || role === 'admin';
-      // A SEAT THE PLAN DOES NOT INCLUDE IS NOT A STEP THE OWNER CAN TAKE (2026-11-20).
-      // Measured live on a fresh Free signup: this card opened with "Invite your team" while
-      // POST /api/auth/team/invite answered 402 "Your plan includes 1 person, and 1 is already in
-      // use." — i.e. the first thing a new customer was told to do was the one thing the plan
-      // forbids. The numbers below come from the SAME ledger the invite gate enforces:
-      // GET /api/auth/team/members returns `seats: {limit, used}` computed by the server (measured
-      // on the Free plan: {"limit":1,"used":1}), so this card and that refusal cannot disagree.
-      // A failed or silent read keeps the previous behaviour — a hidden control that would have
-      // worked is a worse defect than an offered one that refuses.
-      let seatsFull = false, seatNote = '';
-      if (canInvite) {
-        try {
-          const team = await API.get('/auth/team/members');
-          const seats = team && team.seats;
-          if (seats && typeof seats.limit === 'number' && typeof seats.used === 'number'
-              && seats.used >= seats.limit) {
-            seatsFull = true;
-            seatNote = 'Your plan includes ' + seats.limit + (seats.limit === 1 ? ' person' : ' people')
-                     + ' and ' + (seats.used === 1 ? 'that seat is' : 'all of them are') + ' already in use.';
-          }
-        } catch (_) {}
+      let s = null;
+      try { s = await API.get('/account/setup'); } catch (_) { box.innerHTML = ''; return; }
+      if (!s || typeof s.done !== 'number' || !Array.isArray(s.steps)) { box.innerHTML = ''; return; }
+
+      const HIDDEN_KEY = 'crm_setup_hidden';
+      if (s.all_done) {
+        box.innerHTML = '<div class="card" data-setup-card="done" style="margin-bottom:16px"><div class="card-body" style="display:flex;gap:10px;align-items:center">' +
+          '<span style="font-size:18px">&#9989;</span>' +
+          '<div style="flex:1"><div style="font-weight:600">Everything is set up</div>' +
+          '<div style="color:var(--text-secondary);font-size:12px">All ' + s.total + ' checks pass: sending domain, inbox, booking, tags, automation, pipeline, contacts, API key and team.</div></div></div></div>';
+        return;
       }
-      const steps = [
-        ['Add your first contact',
-         'The person you are going to sell to. A whole spreadsheet can come in at once with Import CSV, on the same screen.',
-         'contacts', 'Add your first contact'],
-        ['Set up a pipeline',
-         'The stages a deal moves through, so a won deal has somewhere to land and the Won Deal Value tile can count it.',
-         'pipelines', 'Set up a pipeline'],
-      ];
-      if (canInvite) {
-        if (seatsFull) {
-          // The upsell names the actual ceiling instead of offering a button that can only refuse.
-          steps.push(['Invite your team',
-            seatNote + ' A plan with more seats adds them — nothing changes for the people already here.',
-            'billing', 'See plans']);
-        } else {
-          steps.push(['Invite your team',
-            'Bring in the people who work the deals. Each person gets their own sign-in in this account.',
-            'team', 'Invite your team']);
+      if (localStorage.getItem(HIDDEN_KEY) === '1') {
+        // Hidden is a COLLAPSE, never a delete: one line, and the way back is on it.
+        box.innerHTML = '<div class="card" data-setup-card="bar" style="margin-bottom:16px"><div class="card-body" style="display:flex;gap:10px;align-items:center;font-size:13px">' +
+          '<span style="flex:1;color:var(--text-secondary)">' + s.done + ' of ' + s.total + ' setup steps done' +
+          (s.next ? ' &mdash; next: <strong>' + escapeHtml(s.next.title) + '</strong>' : '') + '</span>' +
+          '<button type="button" class="btn btn-ghost btn-xs" data-setup-show="1">Show setup</button></div></div>';
+        return;
+      }
+
+      let h = '<div class="card" data-setup-card="full" style="margin-bottom:16px"><div class="card-body">';
+      h += '<div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:6px">';
+      h += '<div style="flex:1"><h3 style="margin:0 0 4px">Get set up</h3>';
+      h += '<p style="color:var(--text-secondary);font-size:13px;margin:0">' + s.done + ' of ' + s.total +
+           ' done. Each line here is checked against your real data, not against whether anyone clicked it.' +
+           (s.next ? ' <strong>Next: ' + escapeHtml(s.next.title) + '.</strong>' : '') + '</p></div>';
+      h += '<button type="button" class="btn btn-ghost btn-xs" data-setup-hide="1" title="Hide this list — the count stays on the dashboard">Hide</button>';
+      h += '</div>';
+      s.steps.forEach(function (st, i) {
+        const dot = st.done
+          ? '<span style="flex:0 0 22px;height:22px;border-radius:50%;background:#dcfce7;color:#15803d;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center">&#10003;</span>'
+          : '<span style="flex:0 0 22px;height:22px;border-radius:50%;background:var(--surface-2,#eef2ff);color:var(--text-secondary);font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center">' + (i + 1) + '</span>';
+        h += '<div data-setup-step="' + escapeHtmlAttr(st.key) + '" style="display:flex;gap:12px;align-items:flex-start;padding:10px 0' + (i ? ';border-top:1px solid var(--border,#e2e8f0)' : '') + '">';
+        h += dot;
+        h += '<div style="flex:1"><div style="font-weight:600;font-size:14px' + (st.done ? ';opacity:.65' : '') + '">' + escapeHtml(st.title) + '</div>';
+        h += '<div style="color:var(--text-secondary);font-size:12px;margin:2px 0 4px;max-width:62ch">' + escapeHtml(st.why) + '</div>';
+        h += '<div style="font-size:12px;color:var(--text-secondary)"><strong>' + escapeHtml(st.detail || '') + '</strong></div></div>';
+        if (!st.done && st.tab) {
+          h += '<button type="button" class="btn btn-primary btn-sm" data-setup-go="' + escapeHtmlAttr(st.tab) + '">Open</button>';
         }
-      }
-      let h = '<div class="card" data-first-steps="1" style="margin-bottom:16px"><div class="card-body">';
-      h += '<h3 style="margin:0 0 4px">Get set up</h3>';
-      h += '<p style="color:var(--text-secondary);font-size:13px;margin:0 0 12px">' + (steps.length === 3 ? 'Three steps' : steps.length + ' steps') + ' and this account is ready to work. This card goes away once you have done any one of them.</p>';
-      steps.forEach((s, i) => {
-        h += '<div style="display:flex;gap:12px;align-items:flex-start;padding:10px 0' + (i ? ';border-top:1px solid #e2e8f0' : '') + '">';
-        h += '<div style="flex:0 0 24px;height:24px;border-radius:50%;background:#eef2ff;color:#4338ca;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center">' + (i + 1) + '</div>';
-        h += '<div style="flex:1"><div style="font-weight:600;font-size:14px">' + escapeHtml(s[0]) + '</div>';
-        h += '<div style="color:var(--text-secondary);font-size:12px;margin:2px 0 6px;max-width:60ch">' + escapeHtml(s[1]) + '</div>';
-        h += '<button type="button" class="btn btn-primary btn-sm" data-first-step="' + s[2] + '" onclick="switchTab(\'' + s[2] + '\')">' + escapeHtml(s[3] || s[0]) + '</button></div></div>';
+        h += '</div>';
       });
       h += '</div></div>';
       box.innerHTML = h;

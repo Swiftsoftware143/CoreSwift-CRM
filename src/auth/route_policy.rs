@@ -164,8 +164,8 @@
 //!   +1 mount (2026-11-20, booking readiness): `GET /api/booking/calendars/:id/readiness`. A calendar with no
 //!        bookable resource or no opening hours is a public link that offers nothing, and from the owner's side
 //!        that is indistinguishable from a broken product, so the screen asks the server what a customer would
-//!        actually find. Behind the booking router's usual auth. The extractor resolves **530 mounted
-//!        `.route(..)` calls / 516 on /api** (530 = 516 /api + the 14 root-level mounts).
+//!        actually find. Behind the booking router's usual auth. The extractor resolves **531 mounted
+//!        `.route(..)` calls / 519 on /api** (533 = 519 /api + the 14 root-level mounts).
 //!
 //!   +1 mount (2026-11-12, kanban t_f919924f), THE FILE A MESSAGE CARRIED: `GET
 //!        /api/private-email/messages/:id/attachments/:attachment_id`. It sits on the private-email
@@ -1457,12 +1457,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            530,
+            533,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 516,
+            api, 519,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.
