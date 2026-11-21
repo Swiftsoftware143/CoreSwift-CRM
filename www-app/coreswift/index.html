@@ -1589,7 +1589,7 @@ const TAB_RENDERERS = {
     // Fleet MCP panel — same slot above Settings (docs/fleet-mcp-nav-convention.md). Read-only by
     // construction: CoreSwift exposes SELECT-only tools, no write door, no free-form SQL door.
     // The API-key card is first, so a user never has to leave this page to grab their token.
-    return pageHeader('MCP', 'Connect your AI tools to read this workspace') +
+    return pageHeader('MCP', 'Connect your AI tools to read this account') +
       card('🔑 Your API key',
         '<div id="mcpKeyWrap"><div class="loading-wrap"><div class="spinner"></div> Loading your API key...</div></div>') +
       card('MCP — connect your AI tools',
@@ -1598,11 +1598,16 @@ const TAB_RENDERERS = {
         '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">' +
           '<code style="padding:6px 10px;background:var(--bg-secondary);border-radius:var(--radius)">https://hooks.swiftsoftware.net/mcp</code>' +
           '<button class="btn btn-secondary btn-sm" onclick="tlCopyUrl(\'https://hooks.swiftsoftware.net/mcp\', this)">Copy</button>' +
+          // A CLIENT TRAP, MEASURED (2026-11-21): the edge in front of the primary name refuses one
+          // user-agent signature with a 403 BEFORE authentication, which reads exactly like a rejected
+          // key. The same server answers on a name the edge does not filter, so say so here rather than
+          // letting a customer debug a key that is fine.
+          '<div style="font-size:12px;opacity:.8;margin-top:6px">If a client is refused by our edge before it ever authenticates — a 403 rather than a 401 — use <code>https://mcp.swiftsoftware.net/mcp</code>: the same server, on a name the edge does not filter.</div>' +
         '</div>' +
         '<h3 style="font-weight:700;margin:14px 0 6px">Your token</h3>' +
-        '<p style="color:var(--text-secondary);margin-bottom:14px">The API key above is what an MCP client uses to authenticate. Treat it like a password: anyone holding it can read this workspace.</p>' +
+        '<p style="color:var(--text-secondary);margin-bottom:14px">The API key above is what an MCP client uses to authenticate. Treat it like a password: anyone holding it can read this account.</p>' +
         '<h3 style="font-weight:700;margin:14px 0 6px">What it can read</h3>' +
-        '<p style="color:var(--text-secondary);margin-bottom:8px">These are the read-only tools this app exposes to a workspace credential — the real tool names, every one scoped to this workspace.</p>' +
+        '<p style="color:var(--text-secondary);margin-bottom:8px">These are the read-only tools this app exposes to a workspace credential — the real tool names, every one scoped to this account.</p>' +
         '<ul style="list-style:disc;padding-left:20px;color:var(--text-secondary);margin-bottom:8px">' +
           '<li><code>coreswift_search_contacts</code> — contacts by name, email or company</li>' +
           '<li><code>coreswift_contact_count</code> — how many active contacts this workspace holds</li>' +
@@ -12076,7 +12081,7 @@ async function wsSwitchBusiness(idx) {
    hash, so switchTab() tells the widget which screen is open via window.inlineGuidePage(tabId). */
 window.appGuidePages = {
   dashboard:       { title: "Dashboard", desc: "Your workspace at a glance — contacts, deals, activity and what needs attention today.", actions: ["Scan the counters and recent activity", "Jump to anything that needs a follow-up", "Use the workspace switcher (🗂️ top bar) to move between workspaces"] },
-  mcp:             { title: "MCP", desc: "Connect your AI tools to read this workspace. Point an MCP client (Claude Code, Cursor, Hermes, or your own agent) at https://hooks.swiftsoftware.net/mcp, using your API key as the token. Every tool is read-only and scoped to this workspace — there is no write tool and no free-form SQL door.", actions: ["Copy the endpoint", "View & copy your API key (re-enter your password)", "Paste both into your MCP client"] },
+  mcp:             { title: "MCP", desc: "Connect your AI tools to read this account. Point an MCP client (Claude Code, Cursor, Hermes, or your own agent) at https://hooks.swiftsoftware.net/mcp, using your API key as the token. Every tool is read-only and scoped to this account — there is no write tool and no free-form SQL door.", actions: ["Copy the endpoint", "View & copy your API key (re-enter your password)", "Paste both into your MCP client"] },
   "booking":       { title: "Booking", desc: "One booking engine, three kinds of calendar. Pick the type when you create it: appointment times (a Calendly replacement), dated slots you sell (newsletter placements, ad spots), or a date range (a featured listing or a rental). Set your open hours once and use the shortcuts to fill a whole week; generate a quarter of dated slots in one run with a different price per weekday; add a bulk price. Every calendar has its own public address, and the screen gives you two snippets to put it on your own site — inline in the page, or a popup button that opens over it.", actions: ["Create a calendar and pick its type", "Add what customers can book, with a price and a length", "Set open hours, or generate dated slots", "Add a bulk-pricing rule", "Copy the link or an embed snippet"] },
   "data-mapping":  { title: "Data mapping", desc: "Bring another SwiftSoftware app's leads into this CRM without code. Pick the source app, then drop its fields into your contact fields as data pills — the preview shows exactly what CoreSwift would receive before anything is saved. If the app has already sent you data, the field list is built from what actually arrived.", actions: ["Pick the source app and the kind of row", "Click a source field to drop it into a destination", "Test with a sample row, then Save", "Check Runs to see what was refused and why"] },
   contacts:        { title: "Contacts", desc: "The people and companies you do business with. Each contact carries its history, tags and deals.", actions: ["Add a contact", "Open one to see its full record", "Search by name or email"] },
