@@ -9,14 +9,14 @@
 <meta property="og:site_name" content="CoreSwift CRM">
 <meta property="og:url" content="https://app.coreswiftcrm.com/">
 <meta property="og:title" content="CoreSwift CRM — Free Single Source of Truth for Your Ecosystem">
-<meta property="og:description" content="One CRM behind every SwiftSoftware app: leads, clients and activity in one place. Sign in to your CoreSwift CRM workspace.">
+<meta property="og:description" content="One CRM behind every SwiftSoftware app: leads, clients and activity in one place. Sign in to your CoreSwift CRM account.">
 <meta property="og:image" content="https://coreswiftcrm.com/assets/og-coreswift.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:type" content="image/png">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="CoreSwift CRM — Free Single Source of Truth for Your Ecosystem">
-<meta name="twitter:description" content="One CRM behind every SwiftSoftware app: leads, clients and activity in one place. Sign in to your CoreSwift CRM workspace.">
+<meta name="twitter:description" content="One CRM behind every SwiftSoftware app: leads, clients and activity in one place. Sign in to your CoreSwift CRM account.">
 <meta name="twitter:image" content="https://coreswiftcrm.com/assets/og-coreswift.png">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -384,9 +384,9 @@ tr:hover td{background:var(--bg-hover)}
           <span id="notifBadge" style="display:none;margin-left:2px;background:var(--error,#e5484d);color:#fff;border-radius:9px;padding:1px 6px;font-size:.68rem;font-weight:600">0</span>
         </button>
         <div class="dropdown">
-          <button class="user-btn" onclick="toggleWsMenu()" title="Workspaces">
+          <button class="user-btn" onclick="toggleWsMenu()" title="Accounts">
             <span style="font-size:1rem">🗂️</span>
-            <span id="wsCurrentName">Workspace</span>
+            <span id="wsCurrentName">Account</span>
             <span style="font-size:.7rem">▾</span>
           </button>
           <div class="dropdown-menu" id="wsMenu"></div>
@@ -614,7 +614,7 @@ function fpPaymentSection(plans) {
     '<p style="color:var(--text-secondary);margin:0 0 14px;font-size:13px">' +
     'Paste the https address of the page that takes the money for a plan (a Stripe Payment Link, a ' +
     'PayPal button page, any hosted checkout). A buyer who presses that plan is sent there, and the ' +
-    'workspace is switched onto the plan once the payment lands. Leave it empty and buyers can still ' +
+    'account is switched onto the plan once the payment lands. Leave it empty and buyers can still ' +
     'press <strong>Request this plan</strong> — the ask reaches the team and nothing is lost.</p>' +
     '<div id="fpPayRows">';
   plans.forEach(function (p) {
@@ -1135,7 +1135,7 @@ function getTabLabel(id) {
 // ===== UPGRADE BANNER =====
 async function checkPlan() {
   try {
-    // SOURCE OF TRUTH for "this workspace's plan": GET /api/billing/subscription answers the tenant's
+    // SOURCE OF TRUTH for "this account's plan": GET /api/billing/subscription answers the tenant's
     // OWN tenant_plans row and its plan_id IS the plan the workspace is on; a tenant with no row gets
     // the route's own declared default (default_plan = the Free row). The display NAME is then read BY
     // ID from GET /api/billing/plans/:id — never by position, never hardcoded. This replaces
@@ -1183,7 +1183,7 @@ function dismissBanner() {
   localStorage.setItem('crm_banner_dismissed', '1');
 }
 
-// Ask CoreSwift to move this workspace onto a plan (fleet convention: ADASwift, FunnelSwift,
+// Ask CoreSwift to move this account onto a plan (fleet convention: ADASwift, FunnelSwift,
 // MissedCall, WorkflowSwift and IncentiveSwift all give a customer a one-press way to ASK while
 // self-serve checkout is closed. CoreSwift had only the sentence "plan changes are made by
 // CoreSwift", i.e. a plan screen with no action at all — a dead end for the customer who wants up).
@@ -1221,7 +1221,7 @@ async function requestPlanChange(idx, btn) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         subject: 'Upgrade request: ' + name + ' plan',
-        message: 'This workspace asked to move to the ' + name + ' plan ($' + price + '/month) from '
+        message: 'This account asked to move to the ' + name + ' plan ($' + price + '/month) from '
           + 'Plans & Billing. It is on ' + (STATE.planName || 'no plan') + ' today.'
           + (String(STATE.planName || '').toLowerCase() === 'inbox'
             ? ' IMPORTANT: this upgrade must cancel the $1 Inbox subscription in the same step — the '
@@ -1245,7 +1245,7 @@ async function requestPlanChange(idx, btn) {
     const note = document.querySelector('[data-plan-request-note]');
     if (note) {
       note.style.display = 'block';
-      note.textContent = 'Request sent — CoreSwift has been notified and will review this workspace'
+      note.textContent = 'Request sent — CoreSwift has been notified and will review this account'
         + ' for the ' + name + ' plan and email you. Nothing was charged.';
     }
   } catch (e) {
@@ -1280,7 +1280,7 @@ async function recordPaymentHandoff(idx) {
       keepalive: true,
       body: JSON.stringify({
         subject: 'Payment started: ' + name + ' plan',
-        message: 'This workspace pressed Open payment page for the ' + name + ' plan ($' + price
+        message: 'This account pressed Open payment page for the ' + name + ' plan ($' + price
           + '/month) from Plans & Billing, so payment is happening on CoreSwift’s own payment page.'
           + ' The workspace is on ' + (STATE.planName || 'no plan') + ' today and must be switched onto '
           + name + ' once the money lands — nothing about this is automatic.'
@@ -1295,14 +1295,14 @@ async function recordPaymentHandoff(idx) {
     });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     if (note) {
-      note.textContent = 'Noted — CoreSwift will switch this workspace onto ' + name
+      note.textContent = 'Noted — CoreSwift will switch this account onto ' + name
         + ' once your payment lands. Nothing is charged by this app.';
     }
   } catch (e) {
     // The payment page is already opening; a failed note is not a failed purchase.
     if (note) {
       note.textContent = 'Your payment page is opening. If you pay, reply to our email so we can switch '
-        + 'your workspace onto ' + name + '.';
+        + 'your account onto ' + name + '.';
     }
   }
 }
@@ -1411,8 +1411,8 @@ async function openUpgradeModal() {
       && String(p.id) !== String(STATE.planId));
     plansHtml += '<p style="color:var(--text-secondary);font-size:13px;margin-top:14px;text-align:center">'
       + (anyPayLink
-        ? 'A plan with a payment page can be paid for now: <strong>Open payment page</strong> takes you to our own secure checkout, and your workspace is switched onto the plan once the payment lands. Prefer a hand-off from our team? Press <strong>Request this plan</strong>.'
-        : 'Plan changes are made by CoreSwift for your workspace. Press <strong>Request this plan</strong> and it reaches our team.')
+        ? 'A plan with a payment page can be paid for now: <strong>Open payment page</strong> takes you to our own secure checkout, and your account is switched onto the plan once the payment lands. Prefer a hand-off from our team? Press <strong>Request this plan</strong>.'
+        : 'Plan changes are made by CoreSwift for your account. Press <strong>Request this plan</strong> and it reaches our team.')
       + '</p>';
     plansHtml += '<p id="planRequestNote" data-plan-request-note style="display:none;color:var(--success);font-size:13px;margin-top:8px;text-align:center"></p>';
     document.querySelector('#modalContainer .modal-body').innerHTML = plansHtml;
@@ -1523,7 +1523,7 @@ function dataTable(headers, rows, emptyMsg) {
 // Fleet MCP slot (docs/fleet-mcp-nav-convention.md). The entity list below is the REAL set the MCP
 // server exposes for a CoreSwift workspace credential: /opt/swift/mcp/src/main.rs gives every
 // AppSpec key a <key>_summary and a <key>_search (the third, <key>_list_tenants, is ADMIN ONLY and
-// is never offered to a workspace token), and four bespoke read tools sit beside them. Verified
+// is never offered to an account token), and four bespoke read tools sit beside them. Verified
 // against the spec table on 2026-11-13 — the panel used to name only the three original tools, so a
 // customer reading it could not tell that companies, tickets, pipelines, calendar and the rest were
 // reachable at all.
@@ -1574,7 +1574,7 @@ const TAB_RENDERERS = {
   // GET /api/industries/available (catalogue), GET /api/industries (what is ACTIVE for this user),
   // GET /api/industries/limit (the SAME current/max GET /api/auth/me/usage reports).
   'industries': () => {
-    return pageHeader('Industries', 'Activate the industry dashboard this workspace starts from') +
+    return pageHeader('Industries', 'Activate the industry dashboard this account starts from') +
     '<div id="industriesPanel"><div class="loading-wrap"><div class="spinner"></div> Loading industries...</div></div>';
   },
 
@@ -1593,7 +1593,7 @@ const TAB_RENDERERS = {
       card('🔑 Your API key',
         '<div id="mcpKeyWrap"><div class="loading-wrap"><div class="spinner"></div> Loading your API key...</div></div>') +
       card('MCP — connect your AI tools',
-        '<p style="color:var(--text-secondary);margin-bottom:14px">Point any MCP client (Claude Code, Cursor, Hermes, or your own agent) at the endpoint below and it can read this workspace&#39;s CoreSwift data. Read-only.</p>' +
+        '<p style="color:var(--text-secondary);margin-bottom:14px">Point any MCP client (Claude Code, Cursor, Hermes, or your own agent) at the endpoint below and it can read this account&#39;s CoreSwift data. Read-only.</p>' +
         '<h3 style="font-weight:700;margin:14px 0 6px">Endpoint</h3>' +
         '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">' +
           '<code style="padding:6px 10px;background:var(--bg-secondary);border-radius:var(--radius)">https://hooks.swiftsoftware.net/mcp</code>' +
@@ -1610,18 +1610,18 @@ const TAB_RENDERERS = {
         '<p style="color:var(--text-secondary);margin-bottom:8px">These are the read-only tools this app exposes to a workspace credential — the real tool names, every one scoped to this account.</p>' +
         '<ul style="list-style:disc;padding-left:20px;color:var(--text-secondary);margin-bottom:8px">' +
           '<li><code>coreswift_search_contacts</code> — contacts by name, email or company</li>' +
-          '<li><code>coreswift_contact_count</code> — how many active contacts this workspace holds</li>' +
+          '<li><code>coreswift_contact_count</code> — how many active contacts this account holds</li>' +
           '<li><code>coreswift_list_lists</code> — lists with their member counts</li>' +
-          '<li><code>coreswift_private_email_messages</code> — this workspace&#39;s private-email messages: sender, direction, subject and a body excerpt</li>' +
+          '<li><code>coreswift_private_email_messages</code> — this account&#39;s private-email messages: sender, direction, subject and a body excerpt</li>' +
         '</ul>' +
         '<ul style="list-style:disc;padding-left:20px;color:var(--text-secondary);margin-bottom:8px">' +
           MCP_ENTITY_SPECS.map(function (s) {
             return '<li><code>' + s[0] + '_summary</code> / <code>' + s[0] + '_search</code> — ' + s[1] + '</li>';
           }).join('') +
         '</ul>' +
-        '<p style="color:var(--text-muted);font-size:12px">Each row above is two tools: <code>&lt;name&gt;_summary</code> answers counts and an overview, <code>&lt;name&gt;_search</code> returns the searchable rows newest first, capped at 200. Every tool is a SELECT and tenant-scoped: a workspace token can only ever return this workspace&#39;s rows. There is no write tool and no free-form SQL door, and the operator-wide tools are refused for a workspace credential.</p>' +
+        '<p style="color:var(--text-muted);font-size:12px">Each row above is two tools: <code>&lt;name&gt;_summary</code> answers counts and an overview, <code>&lt;name&gt;_search</code> returns the searchable rows newest first, capped at 200. Every tool is a SELECT and tenant-scoped: an account token can only ever return this account&#39;s rows. There is no write tool and no free-form SQL door, and the operator-wide tools are refused for a workspace credential.</p>' +
         '<h3 style="font-weight:700;margin:14px 0 6px">Connect</h3>' +
-        '<p style="color:var(--text-secondary);margin-bottom:8px">Paste this into your MCP client config (Claude Desktop, Cursor, or any other MCP client). Replace <code>YOUR_API_KEY</code> with this workspace&#39;s key.</p>' +
+        '<p style="color:var(--text-secondary);margin-bottom:8px">Paste this into your MCP client config (Claude Desktop, Cursor, or any other MCP client). Replace <code>YOUR_API_KEY</code> with this account&#39;s key.</p>' +
         '<pre style="background:var(--bg-secondary);padding:12px;border-radius:var(--radius);font-size:12px;overflow-x:auto;margin:0">' + escapeHtml(MCP_CONFIG_TEXT) + '</pre>' +
         '<button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="tlCopyUrl(MCP_CONFIG_TEXT, this)">Copy config</button>');
   },
@@ -1805,7 +1805,7 @@ const TAB_RENDERERS = {
   // from the loader (TAB_LOADERS['webhooks'] -> loadWebhooksTab) because a renderer runs BEFORE its
   // own HTML is in the document, so an in-renderer load finds no #whTable and bails out silently.
   'webhooks': () => {
-    return pageHeader('Webhooks', 'Outbound endpoints this workspace posts its events to',
+    return pageHeader('Webhooks', 'Outbound endpoints this account posts its events to',
       '<button class="btn btn-primary btn-sm" data-ops="wh-new" onclick="whOpenForm()">+ Add Endpoint</button>') +
     '<div id="whTable"><div class="loading-wrap"><div class="spinner"></div> Loading webhooks...</div></div>';
   },
@@ -1820,7 +1820,7 @@ const TAB_RENDERERS = {
   // defect. The list below reads it, the export is built from the rows on screen (so a download can
   // never carry a row the screen did not read), and the caption no longer promises "all platform
   // activity": the route answers for the caller's own workspace.
-  'audit-log': () => pageHeader('Audit Log', 'Every change recorded for this workspace, newest first',
+  'audit-log': () => pageHeader('Audit Log', 'Every change recorded for this account, newest first',
       '<button class="btn btn-secondary btn-sm" data-ops="audit-export" onclick="auditExportCsv()">Export CSV</button>') +
     '<div id="auditContent"><div style="text-align:center;padding:40px;color:var(--text-muted)">Loading the audit trail...</div></div>',
   // The former 'monitoring' panel was a hand-written fake (99.9% uptime, 34% disk, 2.1GB RAM
@@ -1870,14 +1870,14 @@ const TAB_RENDERERS = {
   // Team & Invites — POST /api/auth/invite + GET /api/auth/invites (owner/admin only).
   'team': () => {
     if (!canManageTeam()) {
-      return pageHeader('Team & Invites', 'Bring your teammates into this workspace') +
+      return pageHeader('Team & Invites', 'Bring your teammates into this account') +
         card('Owner or admin required',
           '<p style="color:var(--text-secondary);margin:0">You are signed in as <strong>' +
           escapeHtml(roleLabel((STATE.user && STATE.user.role) || 'member')) +
-          '</strong>. Invite links and the invite list belong to the workspace owner or an admin. ' +
+          '</strong>. Invite links and the invite list belong to the account owner or an admin. ' +
           'The API enforces the same rule, so there is nothing to manage here.</p>');
     }
-    return pageHeader('Team & Invites', 'Bring your teammates into this workspace') +
+    return pageHeader('Team & Invites', 'Bring your teammates into this account') +
       // ── THE REAL SECOND LOGIN (kanban t_5f314e9a) ──────────────────────────────────────────
       // David 2026-11-11: the owner invites a teammate BY EMAIL, the system sets their password and
       // emails it, and they sign in to the shared inbox. There is deliberately NO password field
@@ -1891,20 +1891,20 @@ const TAB_RENDERERS = {
           '<div style="flex:0 0 230px"><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">What they can do</label>' +
             '<select id="teamRole" style="width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary)">' +
               '<option value="member">Member — the shared inbox and day-to-day work</option>' +
-              '<option value="admin">Admin — full workspace access</option>' +
+              '<option value="admin">Admin — full account access</option>' +
             '</select></div>' +
           '<button class="btn btn-primary" id="teamInviteBtn" onclick="inviteTeammate()">Send the invitation</button>' +
         '</div>' +
         '<p style="color:var(--text-secondary);font-size:.82rem;margin:10px 0 0">We set their password and email it to that address, so there is nothing for them to choose here. They sign in at the normal login page and land in the shared inbox.</p>' +
         '<div id="teamInviteMsg" style="display:none;margin-top:12px;font-size:.88rem"></div>',
-        'Only the owner or an admin of this workspace can add somebody.') +
+        'Only the owner or an admin of this account can add somebody.') +
       '<div id="teamPeopleWrap"><div class="loading-wrap"><div class="spinner"></div> Loading your team...</div></div>' +
       card('Invite a teammate with a link instead',
         '<div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">' +
           '<div style="flex:0 0 250px"><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Role for the new teammate</label>' +
             '<select id="inviteRole" style="width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary)">' +
               '<option value="member">Member — day-to-day CRM access</option>' +
-              '<option value="admin">Admin — full workspace access</option>' +
+              '<option value="admin">Admin — full account access</option>' +
             '</select></div>' +
           '<button class="btn btn-secondary" id="inviteBtn" onclick="createInvite()">➕ Create invite link</button>' +
         '</div>' +
@@ -1912,7 +1912,7 @@ const TAB_RENDERERS = {
           '<label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Invite link &mdash; send this to your teammate</label>' +
           '<div style="display:flex;gap:8px"><input id="inviteUrl" readonly style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:.85rem">' +
           '<button class="btn btn-secondary" id="inviteCopyBtn" onclick="copyInviteUrl()">📋 Copy</button></div>' +
-          '<p style="color:var(--text-secondary);font-size:.82rem;margin:8px 0 0">Single use, expires 7 days after creation. Opening it lets them create an account that joins this workspace and choose their own password.</p>' +
+          '<p style="color:var(--text-secondary);font-size:.82rem;margin:8px 0 0">Single use, expires 7 days after creation. Opening it lets them create an account that joins this account and choose their own password.</p>' +
         '</div>', 'A link is for a teammate who would rather pick their own password; the form above is the one that emails ours.') +
       '<div id="invitesWrap"><div class="loading-wrap"><div class="spinner"></div> Loading invites...</div></div>';
   }
@@ -2228,13 +2228,13 @@ const TAB_LOADERS = {
             'billing', 'See plans']);
         } else {
           steps.push(['Invite your team',
-            'Bring in the people who work the deals. Each person gets their own sign-in in this workspace.',
+            'Bring in the people who work the deals. Each person gets their own sign-in in this account.',
             'team', 'Invite your team']);
         }
       }
       let h = '<div class="card" data-first-steps="1" style="margin-bottom:16px"><div class="card-body">';
       h += '<h3 style="margin:0 0 4px">Get set up</h3>';
-      h += '<p style="color:var(--text-secondary);font-size:13px;margin:0 0 12px">' + (steps.length === 3 ? 'Three steps' : steps.length + ' steps') + ' and this workspace is ready to work. This card goes away once you have done any one of them.</p>';
+      h += '<p style="color:var(--text-secondary);font-size:13px;margin:0 0 12px">' + (steps.length === 3 ? 'Three steps' : steps.length + ' steps') + ' and this account is ready to work. This card goes away once you have done any one of them.</p>';
       steps.forEach((s, i) => {
         h += '<div style="display:flex;gap:12px;align-items:flex-start;padding:10px 0' + (i ? ';border-top:1px solid #e2e8f0' : '') + '">';
         h += '<div style="flex:0 0 24px;height:24px;border-radius:50%;background:#eef2ff;color:#4338ca;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center">' + (i + 1) + '</div>';
@@ -2616,6 +2616,28 @@ function showTargetsModal(companyId, companyName) {
   loadTargets(companyId);
 }
 
+async function testIntegrationTarget(companyId, targetId, btn) {
+  const label = btn ? btn.innerText : '';
+  if (btn) { btn.disabled = true; btn.innerText = 'Sending...'; }
+  try {
+    const d = await API.post('/portfolio/' + companyId + '/targets/' + targetId + '/test', {});
+    toast((d && d.detail) ? d.detail : (d && d.delivered ? 'The endpoint answered.' : 'The endpoint did not accept the test.'),
+          (d && d.delivered) ? 'success' : 'error');
+  } catch (e) {
+    toast((e && e.message) ? e.message : 'The test could not be sent', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerText = label || 'Send a test'; }
+  }
+}
+
+function removeIntegrationTarget(companyId, targetId) {
+  confirmThen('Remove this target? The automation behind it stops receiving events for this company.', function () {
+    API.del('/portfolio/' + companyId + '/targets/' + targetId)
+      .then(function () { toast('Target removed', 'success'); loadTargets(companyId); })
+      .catch(function (e) { toast('Could not remove that target: ' + e.message, 'error'); });
+  });
+}
+
 async function loadTargets(companyId) {
   const el = document.getElementById('targetsBody');
   if (!el) return;
@@ -2624,15 +2646,19 @@ async function loadTargets(companyId) {
     const targets = (data && data.integration_targets) || [];
     let html = '';
     if (targets.length) {
-      html += '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Provider</th><th>Webhook URL</th><th>Key</th><th>Events</th><th></th></tr></thead><tbody>';
+      html += '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Provider</th><th>Webhook URL</th><th>Key</th><th>Events</th><th>Active</th><th>Test</th></tr></thead><tbody>';
       targets.forEach(t => {
         html += '<tr>' +
           '<td>' + escapeHtml(t.name || '—') + '</td>' +
           '<td><span class="badge badge-muted">' + escapeHtml(t.provider || '—') + '</span></td>' +
           '<td style="word-break:break-all">' + escapeHtml(t.webhook_url || '—') + '</td>' +
           '<td>' + (t.has_api_key ? escapeHtml(t.api_key_masked || 'set') : '—') + '</td>' +
-          '<td>' + escapeHtml((t.events || []).join(', ') || '—') + '</td>' +
+          '<td>' + escapeHtml((t.events || []).join(', ') || 'everything') + '</td>' +
           '<td>' + (t.is_active ? '✅' : '⛔') + '</td>' +
+          '<td style="white-space:nowrap">' +
+            '<button class="btn btn-ghost btn-xs" data-ops="portfolio-target-test" onclick="testIntegrationTarget(\'' + companyId + '\',\'' + t.id + '\',this)">Send a test</button> ' +
+            '<button class="btn btn-ghost btn-xs" data-ops="portfolio-target-remove" onclick="removeIntegrationTarget(\'' + companyId + '\',\'' + t.id + '\')">Remove</button>' +
+          '</td>' +
         '</tr>';
       });
       html += '</tbody></table></div>';
@@ -2644,8 +2670,8 @@ async function loadTargets(companyId) {
       '<div class="form-group"><label>Provider</label><select id="tgProvider"><option value="webhook">Webhook</option><option value="n8n">n8n</option><option value="zapier">Zapier</option><option value="slack">Slack</option><option value="generic">Generic</option></select></div>' +
       '<div class="form-group"><label>Webhook URL *</label><input type="url" id="tgUrl" placeholder="https://..."></div>' +
       '<div class="form-group"><label>API Key (optional)</label><input type="password" id="tgKey"></div>' +
-      '<div class="form-group"><label>Events (comma separated)</label><input type="text" id="tgEvents" placeholder="contact.created, deal.won"></div>' +
-      '<p class="form-hint">Targets receive portfolio sync events for this company only.</p>' +
+      '<div class="form-group"><label>Events (comma separated)</label><input type="text" id="tgEvents" placeholder="portfolio.synced — or leave empty for everything"></div>' +
+      '<p class="form-hint"><strong>What arrives, and when:</strong> a <code>portfolio.synced</code> event is posted to this URL each time this company is created, or its name, web address, contact email, description or active state changes. The request carries the company, the action (create or update) and its account id, plus your API key as a Bearer token if you set one. Leave Events empty to receive everything. Press <strong>Send a test</strong> after adding it — a test answers from the endpoint itself, so you are never guessing.</p>' +
       '</div><div class="card-footer"><button class="btn btn-primary btn-sm" data-ops="portfolio-target-add" onclick="addIntegrationTarget(\'' + companyId + '\')">+ Add Target</button></div></div>';
     el.innerHTML = html;
   } catch(e) {
@@ -2769,7 +2795,7 @@ async function runPortfolioSync() {
     } else {
       head = '<p><strong>' + who + ' now has an account, but the email did not go out.</strong> The owner has no password yet — ' +
         'they can set one with &ldquo;Forgot password?&rdquo; on the sign-in page, or run this again once mail is working.</p>' +
-        '<p>Plan: <strong>' + escapeHtml(planLabel) + '</strong> — it is seated already, so the workspace is on that tier as soon as the owner signs in.</p>';
+        '<p>Plan: <strong>' + escapeHtml(planLabel) + '</strong> — it is seated already, so the account is on that tier as soon as the owner signs in.</p>';
     }
     toast(!synced ? 'Already has an account — details refreshed'
       : (emailed ? 'Account created — login emailed' : 'Account created — email did NOT go out'),
@@ -3451,7 +3477,7 @@ async function mcpLoadKey() {
     const keys = (d && d.keys) || [];
     const active = keys.filter(k => k.is_active);
     if (!active.length) {
-      el.innerHTML = '<p style="margin:0">No API key yet — an MCP client needs one to read this workspace. ' +
+      el.innerHTML = '<p style="margin:0">No API key yet — an MCP client needs one to read this account. ' +
         '<button class="btn btn-primary btn-sm" onclick="icCreateKey()">+ Create API key</button></p>';
       return;
     }
@@ -3682,7 +3708,7 @@ async function loadProfileTab() {
     // way to be followed from inside the product. Every sibling console offers this same
     // mailto to the fleet's support address; this one was the exception.
     card('Need a hand?',
-      '<p style="color:var(--text-secondary);margin:0 0 10px">Stuck on something, or need a change made to your workspace that this console does not offer yet? Our team reads every message sent here.</p>' +
+      '<p style="color:var(--text-secondary);margin:0 0 10px">Stuck on something, or need a change made to your account that this console does not offer yet? Our team reads every message sent here.</p>' +
       '<a class="btn btn-secondary" href="/contact.html">✉️ Contact us</a>' +
       '<span class="form-hint" style="margin-left:10px">/contact.html</span>', '') +
     '<br>' +
@@ -3692,7 +3718,7 @@ async function loadProfileTab() {
     // FRESH on each press by GET /api/v1/account/export from the session's account — there is no id
     // to spoof — and this card is the fleet-standard door to it.
     card('Download my data',
-      '<p style="color:var(--text-secondary);margin:0 0 10px">One file with everything this workspace holds: your contacts, companies, deals, pipelines, tags and lists, tickets and help-desk settings, calendars and bookings, automations and webhooks, messages, mail, plan and team. It is built fresh each time you press the button, and nothing that could be used to sign in as somebody &mdash; passwords, API-key secrets, webhook signing secrets &mdash; is ever in it.</p>' +
+      '<p style="color:var(--text-secondary);margin:0 0 10px">One file with everything this account holds: your contacts, companies, deals, pipelines, tags and lists, tickets and help-desk settings, calendars and bookings, automations and webhooks, messages, mail, plan and team. It is built fresh each time you press the button, and nothing that could be used to sign in as somebody &mdash; passwords, API-key secrets, webhook signing secrets &mdash; is ever in it.</p>' +
       '<button type="button" class="btn btn-secondary" id="dlDataBtn" data-ops="profile-download" onclick="downloadMyData()">Download my data</button>' +
       '<p id="dlDataMsg" role="status" style="margin:10px 0 0;font-size:13px;display:none"></p>', '') +
     '<br>' +
@@ -4393,7 +4419,7 @@ async function loadMessagesTab(){
 }
 // ── Received mail (2026-11-19) ───────────────────────────────────────────────────────────────────
 // MEASURED WHY: the console's mail tab renders domains, mailboxes, auto-replies, keys and the send
-// card, and never a single received message — while this workspace held 78 in
+// card, and never a single received message — while this account held 78 in
 // `private_email_messages` (GET /api/private-email/messages = 200; the counts read reports inbox: 78).
 // The page's only other message list reads `/api/messages`, the UNIFIED OUTBOUND table (total 0), so a
 // customer's letter had no screen at all. POST /private-email/messages/:id/summarize had no control
@@ -4459,7 +4485,7 @@ async function peShowInbox() {
   });
   showModal('Received mail (' + list.length + ')',
     '<p style="font-size:12px;color:var(--text-secondary)">The last ' + list.length +
-    ' message(s) this workspace received. Open one to read it.</p><div class="config-list">' + rows.join('') + '</div>',
+    ' message(s) this account received. Open one to read it.</p><div class="config-list">' + rows.join('') + '</div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Close</button>', true);
 }
 
@@ -4526,7 +4552,7 @@ function peInstallInboxButton(n) {
   b.id = 'peInboxBtn';
   b.className = 'btn btn-ghost btn-sm';
   b.type = 'button';
-  b.title = 'Read the mail this workspace has received';
+  b.title = 'Read the mail this account has received';
   b.textContent = '\uD83D\uDCEC Received mail';
   b.addEventListener('click', function () { peShowInbox(); });
   host.appendChild(b);
@@ -5298,7 +5324,7 @@ async function loadTrackedLinksTab() {
 async function showAddLinkModal() {
   showModal('Generate Tracked Link',
     '<div class="form-group"><label>Tag</label><select id="tlTag"><option value="">Loading tags...</option></select>' +
-      '<span class="form-hint">A tracked link belongs to one of this workspace\u2019s tags.</span></div>' +
+      '<span class="form-hint">A tracked link belongs to one of this account\u2019s tags.</span></div>' +
     '<div class="form-group"><label>Destination URL</label>' +
       '<input type="url" id="tlUrl" placeholder="https://example.com/offer"></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
@@ -5415,7 +5441,7 @@ async function loadWebhooksTab() {
     const msg = String((e && e.message) || e);
     if (e && e.locked) {
       // The sentence below is the server's, verbatim: the plan gate refused the read, so NOTHING is
-      // known about this workspace's endpoints and an empty list would be a lie. No route path and no
+      // known about this account's endpoints and an empty list would be a lie. No route path and no
       // status code in front of the customer — the server's sentence is already a plain one.
       el.innerHTML = card('Webhooks', '<div class="empty-state"><div class="empty-icon">🔒</div>' +
         '<h3>Outbound webhooks is not included in this plan</h3>' +
@@ -5556,7 +5582,7 @@ async function loadTeamMembers() {
     var d = await API.get('/auth/team/members');
     wrap.innerHTML = teamPeopleHtml(d);
   } catch (e) {
-    wrap.innerHTML = card('People in this workspace',
+    wrap.innerHTML = card('People in this account',
       '<p style="color:var(--danger,#f66);margin:0">Could not load your team: ' + escapeHtml(e.message) + '</p>');
   }
 }
@@ -5571,7 +5597,7 @@ function teamPeopleHtml(d) {
     ? used + ' active ' + (used === 1 ? 'person' : 'people') + ' — your plan does not cap the number of seats.'
     : used + ' of ' + limit + ' ' + (limit === 1 ? 'seat' : 'seats') + ' used';
   if (!members.length) {
-    return card('People in this workspace', '<div class="empty-state"><div class="empty-icon">👥</div>' +
+    return card('People in this account', '<div class="empty-state"><div class="empty-icon">👥</div>' +
       '<h3>Nobody here yet</h3><p>Add your first teammate with the form above.</p></div>');
   }
   var now = Date.now();
@@ -5600,7 +5626,7 @@ function teamPeopleHtml(d) {
       '<td>' + action + '</td>' +
     '</tr>';
   }).join('');
-  return card('People in this workspace — ' + seatLine,
+  return card('People in this account — ' + seatLine,
     '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Added</th><th>Status</th><th></th></tr></thead>' +
     '<tbody>' + body + '</tbody></table></div>' +
     '<p style="color:var(--text-secondary);font-size:.8rem;margin:10px 0 0">Removing somebody takes their access away and puts their conversations and inboxes back in the workspace. Nothing is deleted.</p>');
@@ -5726,7 +5752,7 @@ async function loadInvites() {
 function invitesTable(rows) {
   if (!rows.length) {
     return card('Invites', '<div class="empty-state"><div class="empty-icon">📨</div><h3>No invites yet</h3>' +
-      '<p>Create one above — the link is what lets a teammate join this workspace.</p></div>');
+      '<p>Create one above — the link is what lets a teammate join this account.</p></div>');
   }
   const now = Date.now();
   const body = rows.map(r => {
@@ -6196,7 +6222,7 @@ async function loadBillState() {
       el.innerHTML = card('Your bill',
         '<div class="stat-card accent" data-bill-amount="0"><div class="stat-value">$0.00</div>'
         + '<div class="stat-label">Free plan — nothing is billed</div></div>'
-        + '<p class="config-desc" style="margin-top:10px">No subscription is charged to this workspace. '
+        + '<p class="config-desc" style="margin-top:10px">No subscription is charged to this account. '
         + 'One plan at a time, always.</p>' + prevHtml);
       return;
     }
@@ -6559,7 +6585,7 @@ function dashWonValue(stats) {
 }
 
 function pipelinesShell() {
-  return pageHeader('Pipelines & Deals', 'Every deal your workspace is working — by stage, by owner, by currency',
+  return pageHeader('Pipelines & Deals', 'Every deal your account is working — by stage, by owner, by currency',
     '<button class="btn btn-primary btn-sm" onclick="plNewPipeline()">+ New Pipeline</button>' +
     '<button class="btn btn-secondary btn-sm" onclick="plCsvImportPick()">⬆ Import deals</button>' +
     '<button class="btn btn-secondary btn-sm" onclick="csvExportDeals()">⬇ Export deals</button>' +
@@ -8397,7 +8423,7 @@ function rrNewTeam() {
       '</select></div>' +
     '<div class="form-group"><label>Scope</label><select id="rrScope">' +
       '<option value="global">Whole workspace</option></select></div>' +
-    '<p class="form-hint">Round robin takes turns; least busy picks the teammate with the fewest open bookings. A team covers this workspace&rsquo;s bookings.</p>',
+    '<p class="form-hint">Round robin takes turns; least busy picks the teammate with the fewest open bookings. A team covers this account&rsquo;s bookings.</p>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
     '<button class="btn btn-primary" onclick="rrCreateTeam()">Create</button>');
 }
@@ -8445,7 +8471,7 @@ async function rrAddMember(teamId) {
   }).join('');
   showModal('Add Team Member',
     '<div class="form-group"><label>Workspace member</label><select id="rrUserId">' + opts + '</select></div>' +
-    '<p class="form-hint">Everyone listed is a person on this workspace. Only active members are offered.</p>' +
+    '<p class="form-hint">Everyone listed is a person on this account. Only active members are offered.</p>' +
     '<div class="form-group"><label>Weight (stored; the two strategies here do not use it)</label><input type="number" id="rrWeight" value="1" min="1"></div>' +
     '<div class="form-group"><label>Max concurrent bookings (least busy stops offering someone at this many)</label><input type="number" id="rrMax" value="10" min="1"></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
@@ -8793,7 +8819,7 @@ async function agentLoad() {
   const on = !!(limits && limits.enabled);
   let h = card('⚖️ What it may do on its own',
     '<p style="color:var(--text-secondary);margin:0 0 10px">The agent is <strong>' + (on ? 'ON' : 'OFF') +
-    '</strong> for this workspace. Anything above either limit waits for you — it is never done quietly.</p>' +
+    '</strong> for this account. Anything above either limit waits for you — it is never done quietly.</p>' +
     '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">' +
       '<label style="font-size:.78rem;color:var(--text-secondary)">Per action<br>' +
         '<input id="agentPerAction" type="number" min="0" step="1" value="' +
@@ -8870,7 +8896,7 @@ TAB_RENDERERS['analytics'] = analyticsShell;
 TAB_RENDERERS['tags'] = tagsShell;
 
 // ── Email branding (kanban t_feab8aff, ported from t_c06a32eb) ────────────────────────────────
-// Per-TENANT logo + display name on every transactional mail this workspace sends. The text half
+// Per-TENANT logo + display name on every transactional mail this account sends. The text half
 // is the workspace's OWN settings document (key `email_branding` inside `tenants.settings`, read
 // and written by /api/account/:id/settings); the logo BYTES live in `tenant_logos` and are served
 // by the PUBLIC GET /api/branding/logo/:id — a mail client fetches that <img> with no credential.
@@ -8884,7 +8910,7 @@ function currentAid() {
 }
 
 TAB_RENDERERS['branding'] = () => {
-  return pageHeader('Email Branding', 'Your logo and display name on every transactional email this workspace sends') +
+  return pageHeader('Email Branding', 'Your logo and display name on every transactional email this account sends') +
   card('Brand identity', '' +
     '<div class="form-group"><label>Brand display name</label>' +
       '<input type="text" id="brandName" maxlength="60" placeholder="e.g. Giraudy Capital">' +
@@ -8951,7 +8977,7 @@ async function loadBrandingTab() {
   }
 }
 
-// The email this workspace REALLY sends, fetched from the mail path — never redrawn here.
+// The email this account REALLY sends, fetched from the mail path — never redrawn here.
 //
 // GET /api/account/branding/preview-body renders the subject and body through the SAME renderer
 // every real send uses (template selection, merge fields, branded header, support footer) and
@@ -9080,7 +9106,7 @@ async function saveBranding() {
   const name = (document.getElementById('brandName') || {}).value || '';
   const color = (document.getElementById('brandColor') || {}).value || '';
   try {
-    // Full-document read-modify-write so no other setting of this workspace is lost. `logo_url` is
+    // Full-document read-modify-write so no other setting of this account is lost. `logo_url` is
     // ECHOED from the stored document — the logo endpoints are its only writer, and the server
     // inherits the stored value anyway when the key is omitted (one writer per field).
     const cur = await API.get('/account/' + currentAid() + '/settings');
@@ -9175,7 +9201,7 @@ const DUP_MAX_GROUPS = 25;
 const DUP_PAGE_BUDGET = 5; // x100 = at most 500 contacts resolved by name
 
 function duplicatesShell() {
-  return pageHeader('Duplicates', 'Contacts in this workspace that look like the same person',
+  return pageHeader('Duplicates', 'Contacts in this account that look like the same person',
     '<button class="btn btn-secondary btn-sm" onclick="loadDuplicatesTab()">Refresh</button>') +
   '<div id="duplicatesBody"><div class="loading-wrap"><div class="spinner"></div> Loading duplicates...</div></div>';
 }
@@ -9209,7 +9235,7 @@ async function loadDuplicatesTab() {
     el.innerHTML = card('No duplicates found',
       '<div class="empty-state"><div style="font-size:32px">✅</div>' +
       '<h3>Every contact looks distinct</h3>' +
-      '<p style="color:var(--text-secondary)">No two active contacts in this workspace share a phone number or a first and last name. This screen re-reads the report every time you open it — run it again after an import.</p></div>');
+      '<p style="color:var(--text-secondary)">No two active contacts in this account share a phone number or a first and last name. This screen re-reads the report every time you open it — run it again after an import.</p></div>');
     return;
   }
 
@@ -9326,7 +9352,7 @@ const GC = { configured: false, items: [], loaded: false };
 // ── The hosted calendar address ────────────────────────────────────────────────────────────────
 // GET /api/calendar-host returns the address and its custom-domain state. Nothing here is invented:
 // every sentence reads a field the server sent, so "verified" on screen means a request to that
-// domain really reached this workspace.
+// domain really reached this account.
 let CALHOST = null;
 
 async function loadCalendarHost() {
@@ -9347,7 +9373,7 @@ function calHostBadge(status) {
 }
 
 /// The address that WORKS RIGHT NOW. A custom domain is only the customer's address once a request
-/// to it has really reached this workspace ('verified'); until then the system address is the live
+/// to it has really reached this account ('verified'); until then the system address is the live
 /// one and the custom domain is a target they are still pointing DNS at. Showing an unpointed domain
 /// as "your calendar address … works right away" would hand the customer a broken address to print.
 function calHostShownUrl() {
@@ -9928,7 +9954,7 @@ function peTransportCard(t) {
   var dom = escapeHtml(t.domain || ''), from = escapeHtml(t.from || '');
   if (t.source === 'tenant') {
     return card('<span class="badge badge-success">your domain</span> Mail transport',
-      '<p style="margin:0">Mail from this workspace leaves on <code>' + dom + '</code>, sent as <code>' + from + '</code>' +
+      '<p style="margin:0">Mail from this account leaves on <code>' + dom + '</code>, sent as <code>' + from + '</code>' +
       (t.byok_source === 'private_email_domains'
         ? ' &mdash; the verified domain you added in this tab.'
         : ' &mdash; the provider domain saved in your provider settings.') +
@@ -9936,12 +9962,12 @@ function peTransportCard(t) {
   }
   if (t.source === 'platform') {
     return card('<span class="badge badge-warning">platform mail transport</span> Mail transport',
-      '<p style="margin:0">Mail from this workspace leaves on the <b>platform mail transport</b> as <code>' + from +
+      '<p style="margin:0">Mail from this account leaves on the <b>platform mail transport</b> as <code>' + from +
       '</code>, not on a domain you own, so it is the platform (not your brand) that receivers see. ' +
       'Add your own domain below &mdash; Mailgun has to report it as <b>verified</b> &mdash; and mail will leave on your domain instead.</p>');
   }
-  return icErr('No mail transport: email cannot be delivered from this workspace',
-    'Nothing is configured to carry this workspace\u2019s mail, so any message queued now fails permanently. Add a provider domain in this tab before sending.');
+  return icErr('No mail transport: email cannot be delivered from this account',
+    'Nothing is configured to carry this account\u2019s mail, so any message queued now fails permanently. Add a provider domain in this tab before sending.');
 }
 
 // ── Plan and limits card (the console's view of mailbox-status) ────────────────
@@ -10028,7 +10054,7 @@ async function loadInboxTab() {
   catch (e) { keysErr = e.message; }
   PE.domains = domains; PE.boxes = boxes; PE.autoReplies = auto; PE.support = support;
   PE.keys = keys; PE.keysError = keysErr;
-  // Which transport will carry this workspace's mail (t_d9d6120a). Read from the same endpoint the
+  // Which transport will carry this account's mail (t_d9d6120a). Read from the same endpoint the
   // delivery path's decision comes from, so this panel cannot promise a transport the send path
   // would not use.
   let transport = null, transportErr = null;
@@ -10239,7 +10265,7 @@ async function peToggleCatchAll(domainId, next) {
     if (got === next) {
       // Catch-all only DELIVERS if this domain's inbound receiver is armed: without the webhook
       // signing key, POST /api/v1/webhooks/mailgun/inbound refuses every delivery (t_fbd607a7) and
-      // the row beside this button says so. Promising "it now lands in your workspace" while the
+      // the row beside this button says so. Promising "it now lands in your account" while the
       // same row reads "no key — inbound refused" would be a false confirmation.
       const armed = !!(r && r.webhook_signing_key_status === 'usable');
       if (next && !armed) {
@@ -10247,7 +10273,7 @@ async function peToggleCatchAll(domainId, next) {
           'refused. Set the key in the Inbound mail column to start receiving.', 'error');
       } else {
         toast(next
-          ? 'Catch-all on — mail to an address that does not exist on ' + dom + ' now lands in this workspace'
+          ? 'Catch-all on — mail to an address that does not exist on ' + dom + ' now lands in this account'
           : 'Catch-all off — mail to an unknown address on ' + dom + ' is now refused', 'success');
       }
     } else {
@@ -10395,7 +10421,7 @@ async function peWebhookPatch(domainId, save, clear, body, okMsg, badMsg) {
 
 // ── Verification re-check (t_f02ade57) ────────────────────────────────────────────────────────
 // A domain added while Mailgun still reported it unverified stays `verified=false` until something
-// asks Mailgun again. Only a `verified` row carries this workspace's mail, so without a re-check the
+// asks Mailgun again. Only a `verified` row carries this account's mail, so without a re-check the
 // customer would have to re-paste an API key that was never wrong to get mail onto a domain Mailgun
 // had already activated. The server decides: Mailgun's own `state` is the verdict, never this page.
 function peVerifyCell(d) {
@@ -10534,7 +10560,7 @@ async function peRecheckDomain(domainId) {
     const r = await API.post('/private-email/domains/' + encodeURIComponent(domainId) + '/verify');
     const st = (r && r.mailgun_state) || 'unknown';
     if (r && r.verified && r.changed) {
-      toast('Mailgun reports "' + st + '" — mail from this workspace now leaves on ' + (d.domain || 'your domain'), 'success');
+      toast('Mailgun reports "' + st + '" — mail from this account now leaves on ' + (d.domain || 'your domain'), 'success');
     } else if (r && r.verified) {
       toast('Mailgun reports "' + st + '" — already verified, nothing changed', 'success');
     } else {
@@ -12120,12 +12146,12 @@ async function wsSwitchBusiness(idx) {
    console screen. This is a tabbed console that switches views in JS without moving the path or the
    hash, so switchTab() tells the widget which screen is open via window.inlineGuidePage(tabId). */
 window.appGuidePages = {
-  dashboard:       { title: "Dashboard", desc: "Your workspace at a glance — contacts, deals, activity and what needs attention today.", actions: ["Scan the counters and recent activity", "Jump to anything that needs a follow-up", "Use the workspace switcher (🗂️ top bar) to move between workspaces"] },
+  dashboard:       { title: "Dashboard", desc: "Your account at a glance — contacts, deals, activity and what needs attention today.", actions: ["Scan the counters and recent activity", "Jump to anything that needs a follow-up", "Use the account switcher (🗂️ top bar) to move between accounts"] },
   mcp:             { title: "MCP", desc: "Connect your AI tools to read this account. Point an MCP client (Claude Code, Cursor, Hermes, or your own agent) at https://hooks.swiftsoftware.net/mcp, using your API key as the token. Every tool is read-only and scoped to this account — there is no write tool and no free-form SQL door.", actions: ["Copy the endpoint", "View & copy your API key (re-enter your password)", "Paste both into your MCP client"] },
   "booking":       { title: "Booking", desc: "One booking engine, three kinds of calendar. Pick the type when you create it: appointment times (a Calendly replacement), dated slots you sell (newsletter placements, ad spots), or a date range (a featured listing or a rental). Set your open hours once and use the shortcuts to fill a whole week; generate a quarter of dated slots in one run with a different price per weekday; add a bulk price. Every calendar has its own public address, and the screen gives you two snippets to put it on your own site — inline in the page, or a popup button that opens over it.", actions: ["Create a calendar and pick its type", "Add what customers can book, with a price and a length", "Set open hours, or generate dated slots", "Add a bulk-pricing rule", "Copy the link or an embed snippet"] },
   "data-mapping":  { title: "Data mapping", desc: "Bring another SwiftSoftware app's leads into this CRM without code. Pick the source app, then drop its fields into your contact fields as data pills — the preview shows exactly what CoreSwift would receive before anything is saved. If the app has already sent you data, the field list is built from what actually arrived.", actions: ["Pick the source app and the kind of row", "Click a source field to drop it into a destination", "Test with a sample row, then Save", "Check Runs to see what was refused and why"] },
   contacts:        { title: "Contacts", desc: "The people and companies you do business with. Each contact carries its history, tags and deals.", actions: ["Add a contact", "Open one to see its full record", "Search by name or email"] },
-  duplicates:      { title: "Duplicates", desc: "Contacts in this workspace that look like the same person — the same phone number, or the same first and last name. Nothing is merged for you.", actions: ["Scan the groups for two records of one person", "Edit the record you keep, then remove the other on Contacts"] },
+  duplicates:      { title: "Duplicates", desc: "Contacts in this account that look like the same person — the same phone number, or the same first and last name. Nothing is merged for you.", actions: ["Scan the groups for two records of one person", "Edit the record you keep, then remove the other on Contacts"] },
   industries:      { title: "Industries", desc: "Group your contacts by the industry they belong to, so you can target and report on segments.", actions: ["Review the industries in use", "Assign a contact to one"] },
   pipelines:       { title: "Pipelines & Deals", desc: "Your sales stages and the deals moving through them, from first contact to closed.", actions: ["Create a pipeline", "Add a deal", "Move a deal to its next stage"] },
   campaigns:       { title: "Campaigns", desc: "Outbound email campaigns — who is being contacted, with what, and how it is performing.", actions: ["Start a campaign", "Pick the list it sends to", "Check its results"] },
@@ -12136,13 +12162,13 @@ window.appGuidePages = {
   "lead-scoring":  { title: "Lead Scoring", desc: "Points that rank your contacts by how likely they are to buy, so you know who to call first.", actions: ["Set the scoring rules", "Sort contacts by score"] },
   "email-templates": { title: "Email Templates", desc: "Reusable message bodies with placeholders that fill in per recipient, used by campaigns and automations.", actions: ["Create a template", "Preview it with sample data"] },
   messages:        { title: "Messages", desc: "Individual emails or texts you send to one contact from inside the CRM.", actions: ["Compose a message", "Pick a contact", "See the delivery result"] },
-  notifications:   { title: "Notifications", desc: "Alerts about activity in your workspace that needs your attention.", actions: ["Read an alert", "Clear one you have handled"] },
+  notifications:   { title: "Notifications", desc: "Alerts about activity in your account that needs your attention.", actions: ["Read an alert", "Clear one you have handled"] },
   telnyx:          { title: "Telnyx SMS/Voice", desc: "Send texts and place calls through your connected Telnyx number.", actions: ["Connect your Telnyx account", "Send a text", "Check the message log"] },
-  tickets:         { title: "Support Tickets", desc: "Support requests raised in your workspace and their status. Only mail a person wrote opens a ticket — server reports (DMARC, bounces), newsletters and marketing blasts stay in the Shared Inbox, and any message can be turned into a ticket by hand.", actions: ["Open a ticket", "Reply and change its status"] },
-  branding:        { title: "Email Branding", desc: "One logo and one signature for every message this workspace sends. Upload the logo once — the app resizes it so it renders in Gmail, Outlook and Apple Mail on a phone or a desktop — then fill in the signature (name, title, company, phone and a short line) and press Save signature. Compose and every reply then open with both already in place; an individual address can use its own wording from the mail client's Signature button.", actions: ["Upload the company logo (PNG, JPEG, GIF or WebP — no size to choose)", "Fill in the signature and press Save signature", "Read the preview: it is the message the mailer really produces", "Send yourself a test email to see it in your own inbox"] },
-  inbox:           { title: "Shared Inbox", desc: "Your mail in one place: every message that arrived at your workspace's addresses. CoreSwift does not host your mail \u2014 you bring your own domain, and sending and receiving are TWO separate choices: send through your own Mailgun account or any SMTP service (Amazon SES, SendGrid, Postmark, Google Workspace), and receive through Mailgun or SendGrid. The setup page is three steps: the domain plus the keys those choices need, the mail records (MX, SPF/DKIM) each with a Copy button and a live Active / Waiting / Needs attention badge, then the inbox itself. The API key is the sending key (Mailgun \u2192 Settings \u2192 API Keys \u2192 Private API key, it starts key-) and the webhook signing key is the receiving key (Mailgun \u2192 Send \u2192 Domains \u2192 your domain \u2192 Webhook signing key); without the second one the domain can only send. One extra CNAME makes inbox.yourbusiness.com open your mail, and it is the only record that must be Proxied (orange cloud) \u2014 the mail records stay grey. Nothing is charged and no mailbox exists until the records verify, and the 30-day clock starts at your first verified inbox. When it ends the address still receives and only sending pauses: Keep inbox \u2014 $1/mo or Upgrade CRM brings sending back on the spot, and nothing is ever deleted. The meter at the bottom of the left column is your storage, with a banner and one email at 50, 75 and 99 per cent.", actions: ["Pick an address to narrow the list", "Open a message, star it, or file it under a label", "Received files: press a file's chip to open it in place (a picture or PDF draws on screen, with Download beside it), or press the ↓ arrow to save a copy", "Follow the three setup steps and press Check again when the records show Active", "LOG IN on an inbox row opens your branded address once it is live", "Receive-only? Use Keep inbox \u2014 $1/mo or Upgrade CRM to restore sending", "Catch-all is switched on Email Domains & Sending, not here", "Change how a domain RECEIVES (Mailgun, SendGrid, or nowhere) under the domain on the setup page \u2014 sending is untouched by it"] },
+  tickets:         { title: "Support Tickets", desc: "Support requests raised in your account and their status. Only mail a person wrote opens a ticket — server reports (DMARC, bounces), newsletters and marketing blasts stay in the Shared Inbox, and any message can be turned into a ticket by hand.", actions: ["Open a ticket", "Reply and change its status"] },
+  branding:        { title: "Email Branding", desc: "One logo and one signature for every message this account sends. Upload the logo once — the app resizes it so it renders in Gmail, Outlook and Apple Mail on a phone or a desktop — then fill in the signature (name, title, company, phone and a short line) and press Save signature. Compose and every reply then open with both already in place; an individual address can use its own wording from the mail client's Signature button.", actions: ["Upload the company logo (PNG, JPEG, GIF or WebP — no size to choose)", "Fill in the signature and press Save signature", "Read the preview: it is the message the mailer really produces", "Send yourself a test email to see it in your own inbox"] },
+  inbox:           { title: "Shared Inbox", desc: "Your mail in one place: every message that arrived at your account's addresses. CoreSwift does not host your mail \u2014 you bring your own domain, and sending and receiving are TWO separate choices: send through your own Mailgun account or any SMTP service (Amazon SES, SendGrid, Postmark, Google Workspace), and receive through Mailgun or SendGrid. The setup page is three steps: the domain plus the keys those choices need, the mail records (MX, SPF/DKIM) each with a Copy button and a live Active / Waiting / Needs attention badge, then the inbox itself. The API key is the sending key (Mailgun \u2192 Settings \u2192 API Keys \u2192 Private API key, it starts key-) and the webhook signing key is the receiving key (Mailgun \u2192 Send \u2192 Domains \u2192 your domain \u2192 Webhook signing key); without the second one the domain can only send. One extra CNAME makes inbox.yourbusiness.com open your mail, and it is the only record that must be Proxied (orange cloud) \u2014 the mail records stay grey. Nothing is charged and no mailbox exists until the records verify, and the 30-day clock starts at your first verified inbox. When it ends the address still receives and only sending pauses: Keep inbox \u2014 $1/mo or Upgrade CRM brings sending back on the spot, and nothing is ever deleted. The meter at the bottom of the left column is your storage, with a banner and one email at 50, 75 and 99 per cent.", actions: ["Pick an address to narrow the list", "Open a message, star it, or file it under a label", "Received files: press a file's chip to open it in place (a picture or PDF draws on screen, with Download beside it), or press the ↓ arrow to save a copy", "Follow the three setup steps and press Check again when the records show Active", "LOG IN on an inbox row opens your branded address once it is live", "Receive-only? Use Keep inbox \u2014 $1/mo or Upgrade CRM to restore sending", "Catch-all is switched on Email Domains & Sending, not here", "Change how a domain RECEIVES (Mailgun, SendGrid, or nowhere) under the domain on the setup page \u2014 sending is untouched by it"] },
   "email-settings":{ title: "Email Domains & Sending", desc: "The sending half of your mail: the domains you send from with their Catch-all switch and their keys, the mailboxes on each domain, auto-replies and a form to send from a mailbox. The Catch-all column accepts mail for addresses that do not exist on the domain and files it under Everything else (MISC); it is sold by the plan \u2014 on this ladder from Professional ($79) upward \u2014 and the plan is checked when mail arrives, so a workspace moved down keeps the setting remembered while unmatched mail is refused: the cell then reads \u201coff \u2014 not on your plan\u201d with a Clear button. Mailboxes are counted per plan, and at the ceiling the answer names the plan that adds more and charges nothing.", actions: ["Enable or disable catch-all on a domain", "Add a domain, choose how it sends and how it receives, and paste only the keys those choices need; Check again after the records go Active", "DNS records shows the exact MX, SPF and DKIM values a domain needs, with a Copy button, for any domain \u2014 not just while the account has no inbox", "Remove this domain deletes a domain you no longer want (and the inboxes on it; mail already received stays) after you type its name to confirm", "Create a mailbox \u2014 the button stays disabled until receiving and sending both verify"] },
-  calendar:        { title: "Calendar", desc: "Your public calendar address, the booking calendars it shows, and the Google Calendar each one mirrors into. The card at the top is your address \u2014 <your-workspace>.coreswiftcrm.com \u2014 and it works the moment your workspace exists: anyone with it sees your open booking calendars and can reserve a place without an account. Change the name in front of the domain, or point a domain you own at the same calendar; the system address keeps answering either way, so a DNS mistake can never take your calendar away. Below it are your booking calendars with the Google Calendar each one pushes bookings into. Each calendar is also its own page under your address (for example acme.coreswiftcrm.com/consultations), and Give it its own address gives one calendar its own subdomain; a name already taken is refused with a plain sentence plus a suggested free one.", actions: ["Copy your calendar address, or open it to see what a visitor sees", "Change the calendar address name and press Save name", "To use your own domain: type it, press Save domain, point a CNAME at the address shown, then press Check now", "Open or create a booking calendar below, and connect Google Calendar to push its bookings into", "Give one calendar its own address (or remove it)"] },
+  calendar:        { title: "Calendar", desc: "Your public calendar address, the booking calendars it shows, and the Google Calendar each one mirrors into. The card at the top is your address \u2014 <your-workspace>.coreswiftcrm.com \u2014 and it works the moment your account exists: anyone with it sees your open booking calendars and can reserve a place without an account. Change the name in front of the domain, or point a domain you own at the same calendar; the system address keeps answering either way, so a DNS mistake can never take your calendar away. Below it are your booking calendars with the Google Calendar each one pushes bookings into. Each calendar is also its own page under your address (for example acme.coreswiftcrm.com/consultations), and Give it its own address gives one calendar its own subdomain; a name already taken is refused with a plain sentence plus a suggested free one.", actions: ["Copy your calendar address, or open it to see what a visitor sees", "Change the calendar address name and press Save name", "To use your own domain: type it, press Save domain, point a CNAME at the address shown, then press Check now", "Open or create a booking calendar below, and connect Google Calendar to push its bookings into", "Give one calendar its own address (or remove it)"] },
   bookings:        { title: "Bookings", desc: "Appointment slots people can book with you, and the bookings they made.", actions: ["Set your availability", "Review upcoming bookings"] },
   "ai-assistant":  { title: "AI Assistant", desc: "Ask questions about your data, or have it draft content for you.", actions: ["Connect an AI provider in the Integration Center", "Ask it something"] },
   "tracked-links": { title: "Tracked Links", desc: "Links you can send that report back when someone clicks them.", actions: ["Create a tracked link", "Copy it into a message", "Check its clicks"] },
@@ -12152,11 +12178,11 @@ window.appGuidePages = {
   // for any key it has an entry for, which would cover the Profile form's Save button on a first
   // visit. With no entry, updateGuide() closes the panel and hides its "?" toggle on that screen.
   integrations:    { title: "Integration Center", desc: "Connect the outside services the CRM uses — email, texting, AI and payment providers.", actions: ["Add a provider's credentials", "Test the connection"] },
-  team:            { title: "Team & Invites", desc: "The people who share this workspace and what each of them can do. A seat is one person who can sign in, the owner included: on this ladder Free includes 1, Starter 3, Professional 15, Enterprise 20 and Agency 100 (Pro and the $1 Inbox line are not on sale), and the $1 Inbox line includes nobody beyond the owner. You type the address and a role; the app makes the password, emails it, and never shows it to you. Removing somebody ends their access at their next click, puts their inboxes and conversations back to the workspace, and deletes nothing.", actions: ["Invite someone by email and choose Member or Admin", "When every seat is used, the answer names the plan that adds more and its price \u2014 nothing is charged by itself", "Create invite link for a teammate who would rather choose their own password (7 days, one use)", "The teammate signs in with the address and password the email carries and lands on the Dashboard; their mail is in the Shared Inbox tab", "Watch the Shared Inbox tab's Assigned to column to see who owns which address"] },
-  webhooks:        { title: "Webhooks", desc: "Send your workspace's events out to another system in real time.", actions: ["Add an endpoint", "Pick which events it receives"] },
+  team:            { title: "Team & Invites", desc: "The people who share this account and what each of them can do. A seat is one person who can sign in, the owner included: on this ladder Free includes 1, Starter 3, Professional 15, Enterprise 20 and Agency 100 (Pro and the $1 Inbox line are not on sale), and the $1 Inbox line includes nobody beyond the owner. You type the address and a role; the app makes the password, emails it, and never shows it to you. Removing somebody ends their access at their next click, puts their inboxes and conversations back to the workspace, and deletes nothing.", actions: ["Invite someone by email and choose Member or Admin", "When every seat is used, the answer names the plan that adds more and its price \u2014 nothing is charged by itself", "Create invite link for a teammate who would rather choose their own password (7 days, one use)", "The teammate signs in with the address and password the email carries and lands on the Dashboard; their mail is in the Shared Inbox tab", "Watch the Shared Inbox tab's Assigned to column to see who owns which address"] },
+  webhooks:        { title: "Webhooks", desc: "Send your account's events out to another system in real time.", actions: ["Add an endpoint", "Pick which events it receives"] },
   portfolio:       { title: "Portfolio Companies", desc: "Platform operator view: the businesses managed on this platform. Sync New Company gives a company its own workspace and owner login, emails the owner the login details, and converts a record that has no account behind it \u2014 pressing it again only refreshes the details.", actions: ["Open a company", "Change its plan", "Press \ud83d\udd04 Sync New Company to give a record its own account \u2014 the owner is emailed the login"] },
   users:           { title: "Users", desc: "Platform operator view: every user account across the platform with the workspace it belongs to. This list is read-only — no screen on it creates a person; people join a workspace through that workspace's own Team & Invites.", actions: ["Look up a person and the workspace they belong to", "Add somebody from the tenant console under Team & Invites"] },
-  billing:         { title: "Billing & Plans", desc: "Your bill, the plan this workspace is on, and every plan it could move to. Nothing on this screen changes the plan by itself. Your bill states the one amount due, says there is one subscription, names any plan that ended when the workspace last moved, and states either the next charge date or — when the paid period has already ended and no renewal is on record — the date that period ended, with the fact that nothing has been charged since. Each tier that is not yours carries Request this plan, which tells our team which workspace is asking and charges nothing; a tier that already has a payment page also shows Open payment page, and pressing it files the same request first. When the team has written how to pay, a How to pay for a paid plan block sits at the bottom of the plan list with their own directions. Cancel subscription drops the workspace to the Free plan as soon as you confirm.", actions: ["Read Your bill — the amount, the single subscription and either the next charge date or the date the paid period ended", "Press Request this plan on a tier you want — our team makes the change and nothing is charged here", "Open payment page where a tier shows one, then your request is already filed", "Cancel subscription to drop back to Free at once — it asks you to confirm first"] },
+  billing:         { title: "Billing & Plans", desc: "Your bill, the plan this account is on, and every plan it could move to. Nothing on this screen changes the plan by itself. Your bill states the one amount due, says there is one subscription, names any plan that ended when the workspace last moved, and states either the next charge date or — when the paid period has already ended and no renewal is on record — the date that period ended, with the fact that nothing has been charged since. Each tier that is not yours carries Request this plan, which tells our team which workspace is asking and charges nothing; a tier that already has a payment page also shows Open payment page, and pressing it files the same request first. When the team has written how to pay, a How to pay for a paid plan block sits at the bottom of the plan list with their own directions. Cancel subscription drops the workspace to the Free plan as soon as you confirm.", actions: ["Read Your bill — the amount, the single subscription and either the next charge date or the date the paid period ended", "Press Request this plan on a tier you want — our team makes the change and nothing is charged here", "Open payment page where a tier shows one, then your request is already filed", "Cancel subscription to drop back to Free at once — it asks you to confirm first"] },
   widgets:         { title: "Widgets", desc: "Platform operator view: embeddable pieces you can add to a customer's site.", actions: ["Create a widget"] },
   "native-apps":   { title: "Native Apps", desc: "Platform operator view: the mobile and desktop apps offered to customers.", actions: ["Review the apps"] },
   "audit-log":     { title: "Audit Log", desc: "Platform operator view: a record of who changed what, for accountability.", actions: ["Filter by user or action"] },
@@ -12200,7 +12226,7 @@ async function loadAuditTab() {
           fh(r.action), fh(r.entity_type), fh(auditRecord(r)),
           fh(r.user_id ? String(r.user_id).slice(0, 8) : 'the platform'),
           fh(r.ip_address)];
-      }), 'Nothing recorded for this workspace yet \u2014 entries appear as people change things.');
+      }), 'Nothing recorded for this account yet \u2014 entries appear as people change things.');
   } catch (e) {
     el.innerHTML = '<div class="card"><div class="card-body"><div class="empty-state">' +
       '<div class="empty-icon">\u26a0\ufe0f</div><h3>Could not read the audit trail</h3><p>' +
@@ -13136,7 +13162,7 @@ TAB_RENDERERS['booking'] = () => pageHeader(
   'One engine, three kinds of calendar — appointment times, dated slots for sale, or a date range',
   '<button class="btn btn-secondary btn-sm" onclick="bkInit()">↻ Reload</button>'
 ) + '<div id="bkWrap"><div class="loading-wrap"><div class="spinner"></div> Loading calendars…</div></div>'
-  // Retired from the old Calendar screen: the public address of this workspace and the Google
+  // Retired from the old Calendar screen: the public address of this account and the Google
   // Calendar each booking calendar mirrors into. Both belong here, where calendars are managed.
   + '<div id="calHost"><div class="loading-wrap"><div class="spinner"></div> Loading your booking address...</div></div>'
   + '<div id="gcContent"></div><div id="gcFlow"></div>';
@@ -13168,7 +13194,7 @@ async function dmInit() {
       DM.schema = null;
       DM.dirty = false;
       // A SOURCE IS ONLY A SOURCE IF THIS ACCOUNT CAN READ IT (measured 2026-11-18). The
-      // destinations list is the fleet's APP CATALOGUE, not this workspace's connections: a Free
+      // destinations list is the fleet's APP CATALOGUE, not this account's connections: a Free
       // workspace with nothing connected used to land here with `funnelswift` pre-selected, fire
       // /data-mapping/schema?app=funnelswift, and paint the backend's 400 as a red "Fields
       // unavailable" card — a dead end whose next step (connect the app) was never named. Ask each

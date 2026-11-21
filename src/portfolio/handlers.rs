@@ -371,3 +371,68 @@ pub async fn create_target(
     .await?;
     Ok((StatusCode::CREATED, Json(target_json(&target))))
 }
+
+/// DELETE /api/portfolio/:id/targets/:target_id — remove a target.
+///
+/// The panel had only list and create, so a target with a mistyped URL could never be taken away:
+/// the owner could add a wrong endpoint and live with it forever (David, 2026-11-21).
+pub async fn delete_target(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path((id, target_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    let removed = sqlx::query(
+        "DELETE FROM integration_targets WHERE id = $1 AND portfolio_company_id = $2 AND tenant_id = $3",
+    )
+    .bind(target_id)
+    .bind(id)
+    .bind(tenant_id)
+    .execute(&s.db)
+    .await?
+    .rows_affected();
+    if removed == 0 {
+        return Err(AppError::NotFound("No such target on this company".into()));
+    }
+    Ok(Json(json!({ "deleted": true })))
+}
+
+/// POST /api/portfolio/:id/targets/:target_id/test — deliver one event NOW.
+///
+/// Without this the owner wires an endpoint and waits for a real sync to find out whether it works,
+/// which is the same silence that made the whole panel look dead. The test says plainly whether the
+/// endpoint answered, and with what status.
+pub async fn test_target(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path((id, target_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    let exists: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM integration_targets WHERE id = $1 AND portfolio_company_id = $2 AND tenant_id = $3",
+    )
+    .bind(target_id)
+    .bind(id)
+    .bind(tenant_id)
+    .fetch_optional(&s.db)
+    .await?;
+    if exists.is_none() {
+        return Err(AppError::NotFound("No such target on this company".into()));
+    }
+
+    // Send through the same path a real event takes, so a passing test means the real thing works.
+    let report = crate::portfolio::targets::deliver_one(
+        &s.db,
+        target_id,
+        crate::portfolio::targets::EVENT_TEST,
+        &json!({ "test": true, "note": "This is a test from the Portfolio screen. A real sync sends portfolio.synced." }),
+    )
+    .await?;
+
+    Ok(Json(json!({
+        "delivered": report.delivered,
+        "failed": report.failed,
+        "detail": if report.delivered > 0 { "The endpoint answered. Your automation will receive real events here." }
+                  else { "The endpoint did not accept the test. Check the URL, and whether it needs the API key." },
+    })))
+}

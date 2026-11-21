@@ -27,6 +27,9 @@ use uuid::Uuid;
 /// The event name a provisioned-and-broadcast portfolio company emits.
 pub const EVENT_SYNCED: &str = "portfolio.synced";
 
+/// The event a manual test sends. Deliberately its own name so an automation can ignore it.
+pub const EVENT_TEST: &str = "portfolio.test";
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct DeliveryReport {
     pub attempted: usize,
@@ -43,6 +46,27 @@ fn wants(events: &[String], event: &str) -> bool {
             .any(|e| e.trim() == "*" || e.trim().eq_ignore_ascii_case(event))
 }
 
+/// Post one event to a single target, by id. Used by the test button; a missing row is an error the
+/// caller can act on rather than a silent no-op.
+pub async fn deliver_one(
+    pool: &PgPool,
+    target_id: Uuid,
+    event: &str,
+    payload: &Value,
+) -> Result<DeliveryReport, sqlx::Error> {
+    let row: Option<(Uuid, Uuid, Uuid, String, String, String, Vec<String>)> = sqlx::query_as(
+        "SELECT portfolio_company_id, id, tenant_id, name, webhook_url, COALESCE(api_key, ''), COALESCE(events, '{}')
+           FROM integration_targets WHERE id = $1",
+    )
+    .bind(target_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(row) = row else {
+        return Ok(DeliveryReport::default());
+    };
+    Ok(deliver_rows(pool, vec![row], event, payload).await)
+}
+
 /// Post one event to every active target belonging to `portfolio_company_id`.
 pub async fn deliver_event(
     pool: &PgPool,
@@ -50,10 +74,10 @@ pub async fn deliver_event(
     event: &str,
     payload: &Value,
 ) -> DeliveryReport {
-    let mut report = DeliveryReport::default();
+    let report = DeliveryReport::default();
 
-    let rows: Vec<(Uuid, Uuid, String, String, String, Vec<String>)> = match sqlx::query_as(
-        "SELECT id, tenant_id, name, webhook_url, COALESCE(api_key, ''), COALESCE(events, '{}')
+    let rows: Vec<(Uuid, Uuid, Uuid, String, String, String, Vec<String>)> = match sqlx::query_as(
+        "SELECT portfolio_company_id, id, tenant_id, name, webhook_url, COALESCE(api_key, ''), COALESCE(events, '{}')
            FROM integration_targets
           WHERE portfolio_company_id = $1 AND is_active",
     )
@@ -68,6 +92,18 @@ pub async fn deliver_event(
         }
     };
 
+    deliver_rows(pool, rows, event, payload).await
+}
+
+/// The one delivery loop. Both the event path and the test button go through it, so a passing test
+/// means the real path works.
+async fn deliver_rows(
+    _pool: &PgPool,
+    rows: Vec<(Uuid, Uuid, Uuid, String, String, String, Vec<String>)>,
+    event: &str,
+    payload: &Value,
+) -> DeliveryReport {
+    let mut report = DeliveryReport::default();
     if rows.is_empty() {
         return report;
     }
@@ -83,7 +119,7 @@ pub async fn deliver_event(
         }
     };
 
-    for (id, tenant_id, name, url, sealed_key, events) in rows {
+    for (company_id, id, tenant_id, name, url, sealed_key, events) in rows {
         if !wants(&events, event) {
             report.skipped += 1;
             continue;
@@ -99,7 +135,7 @@ pub async fn deliver_event(
 
         let body = json!({
             "event": event,
-            "portfolio_company_id": portfolio_company_id,
+            "portfolio_company_id": company_id,
             "data": payload,
         });
 

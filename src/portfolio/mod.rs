@@ -24,6 +24,14 @@ pub fn router(state: AppState) -> Router<AppState> {
             axum::routing::post(handlers::provision_company),
         )
         .route("/:id/targets", axum::routing::post(handlers::create_target))
+        .route(
+            "/:id/targets/:target_id",
+            axum::routing::delete(handlers::delete_target),
+        )
+        .route(
+            "/:id/targets/:target_id/test",
+            axum::routing::post(handlers::test_target),
+        )
         // Plan gating — the admin controls this module per plan
         // (the module & feature registry is the source of truth for the admin UI — see src/module_registry).
         .layer(axum::middleware::from_fn_with_state(
