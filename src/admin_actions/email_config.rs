@@ -51,8 +51,21 @@ async fn view(state: &AppState) -> Value {
     let masked = platform::masked_config(&opened);
     let effective = platform::resolved(&state.db).await;
 
+    // Where the provider reports its own verdict (kanban t_6146b9c9). The delivery-events receiver
+    // authenticates by a secret token in its URL, so the operator has to paste that URL into the
+    // provider ONCE per sending domain; without it a hard bounce or a complaint reaches nobody and
+    // the dead address stays mailable. Read from the same row the receiver reads, never composed in
+    // the page, so the panel cannot print an address the receiver does not answer on.
+    let events_webhook = platform::field(&opened, "webhook_token").map(|t| {
+        json!({
+            "url": format!("https://app.coreswiftcrm.com/api/webhooks/mailgun/events?t={t}"),
+            "events": ["permanent_fail", "complained", "unsubscribed"],
+        })
+    });
+
     json!({
         "config": masked,
+        "events_webhook": events_webhook,
         "stored": raw.is_some(),
         // At-rest posture of the stored credential (kanban t_d1fcda7e). `config.api_key_set` says a
         // credential the SEND path can use; this says whether it is encrypted in the database. The
