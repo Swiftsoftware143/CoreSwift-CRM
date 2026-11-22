@@ -10758,7 +10758,14 @@ async function txSend() {
   if (el) el.disabled = true;
   try {
     const r = await API.post('/telnyx/send-sms', { from: from, to: to, body: body });
-    toast('SMS sent — ' + ((r && r.status) || 'ok'), 'success');
+    // A WITHHELD NUMBER IS NOT A SENT TEXT (2026-11-22). The API answers `suppressed` when the
+    // number is in the range reserved for fiction: nothing was attempted and nothing was charged,
+    // so reporting "SMS sent" would be a lie the operator could only discover from the bill.
+    if (r && r.status === 'suppressed') {
+      toast('Not sent — ' + ((r && r.detail) || 'this number cannot receive a text'), 'error');
+    } else {
+      toast('SMS sent — ' + ((r && r.status) || 'ok'), 'success');
+    }
     document.getElementById('txBody').value = '';
   } catch (e) {
     toast('Send failed: ' + e.message, 'error');

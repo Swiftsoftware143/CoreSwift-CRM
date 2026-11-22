@@ -1366,6 +1366,9 @@ GET /api/billing/features</pre>
        it reads <code>GET /api/telnyx/config</code>, writes <code>PUT /api/telnyx/config</code> (this
        account's own key, encrypted before it is stored) and lists the numbers on the account with
        <code>GET /api/telnyx/available</code>.</p>
+    <p>Numbers in the range reserved for fiction (exchange 555 with a subscriber part of 0100&ndash;0199,
+       such as 813-555-0101) are never handed to Telnyx: no carrier can deliver to one, so the send is
+       recorded <code>suppressed</code> with <code>undeliverable_number</code> and nothing is charged.</p>
     <p>Below those sits one more card, the <strong>inbound webhook signing key</strong>. Telnyx signs
        every inbound call and SMS delivery with the account's Ed25519 public key; while no key is
        configured, both public receivers (<code>POST /api/telnyx/webhook</code> and

@@ -193,6 +193,10 @@ pub struct DeliveryOutcome {
     pub provider: Option<String>,
     /// The provider's own id for the accepted message (Mailgun: the `<id@domain>` it returns).
     pub provider_message_id: Option<String>,
+    /// Refused BEFORE any provider traffic because the destination can never receive the message —
+    /// a NANP fiction-block number (2026-11-22). Its own flag, because a `failed` row would blame a
+    /// carrier that was never contacted.
+    pub suppressed: bool,
 }
 
 impl DeliveryOutcome {
@@ -203,6 +207,7 @@ impl DeliveryOutcome {
             permanent: false,
             provider: Some(provider.to_string()),
             provider_message_id,
+            suppressed: false,
         }
     }
 
@@ -214,6 +219,7 @@ impl DeliveryOutcome {
             permanent: true,
             provider: None,
             provider_message_id: None,
+            suppressed: false,
         }
     }
 
@@ -225,6 +231,22 @@ impl DeliveryOutcome {
             permanent: false,
             provider: None,
             provider_message_id: None,
+            suppressed: false,
+        }
+    }
+
+    /// Withheld before any provider traffic: the destination cannot receive the message.
+    ///
+    /// Permanent by nature (no retry can make a fiction-block number deliverable), and flagged so
+    /// [`record_attempt`] stores `suppressed` rather than `failed`.
+    pub fn unreachable(reason: &str) -> Self {
+        Self {
+            ok: false,
+            error: Some(format!("undeliverable_number:{reason}")),
+            permanent: true,
+            provider: None,
+            provider_message_id: None,
+            suppressed: true,
         }
     }
 }
@@ -1072,6 +1094,18 @@ async fn deliver_whatsapp(cfg: &DeliveryConfig) -> DeliveryOutcome {
 
 /// Send SMS via Telnyx REST API
 async fn deliver_sms(cfg: &DeliveryConfig) -> DeliveryOutcome {
+    // A NUMBER THAT CAN NEVER RECEIVE A TEXT IS NOT HANDED TO THE PROVIDER (2026-11-22). NANP
+    // reserves exchange 555 with subscriber 0100–0199 for fiction, so the send can only fail — and a
+    // failed send is charged to the same account that carries real customers' texts. Asked FIRST,
+    // before the credential: this is the transport every `sms` channel delivery goes through.
+    if let Some(reason) = crate::security::probe_addr::undeliverable_number(&cfg.to) {
+        tracing::info!(
+            msg = %cfg.msg_id,
+            reason = %reason,
+            "text withheld: the number cannot receive one, so nothing was sent"
+        );
+        return DeliveryOutcome::unreachable(reason);
+    }
     let api_key = match &cfg.telnyx_api_key {
         Some(k) => k,
         None => return DeliveryOutcome::permanent("Telnyx API key not configured"),
@@ -1656,6 +1690,11 @@ pub enum AttemptRecord {
     Sent {
         message_id: Option<String>,
     },
+    /// Withheld before any provider traffic: the destination can never receive the message, so no
+    /// attempt was made and nothing will be retried (2026-11-22).
+    Suppressed {
+        attempts: i32,
+    },
     /// Permanent failure — terminal, no further attempt.
     Failed {
         attempts: i32,
@@ -1719,6 +1758,24 @@ pub async fn record_attempt(
         .error
         .clone()
         .unwrap_or_else(|| "delivery failed with no error text".to_string());
+
+    // WITHHELD, NOT FAILED (2026-11-22). The destination cannot receive the message, so no provider
+    // was asked and no retry can help — the row says what actually happened (`suppressed`) and keeps
+    // the reason, instead of blaming a carrier that was never contacted.
+    if outcome.suppressed {
+        sqlx::query(
+            "UPDATE outbound_messages
+                SET status = 'suppressed', error_message = $2, retry_count = $3, scheduled_at = NULL
+              WHERE id = $1",
+        )
+        .bind(msg_id)
+        .bind(&err)
+        .bind(attempts)
+        .execute(db)
+        .await?;
+        tracing::info!(msg = %msg_id, error = %err, "outbound message withheld: the destination cannot receive it");
+        return Ok(AttemptRecord::Suppressed { attempts });
+    }
 
     if outcome.permanent || attempts >= max_retries {
         let message = if outcome.permanent {

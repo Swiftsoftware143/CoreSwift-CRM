@@ -501,6 +501,38 @@ pub async fn send_sms(
         )));
     }
 
+    // A NUMBER THAT CAN NEVER RECEIVE A TEXT IS NEVER HANDED TO TELNYX (2026-11-22). NANP reserves
+    // exchange 555 with subscriber 0100–0199 for fiction: the send can only fail, and the failure is
+    // charged to the same account that carries real customers' texts. Asked BEFORE the credential is
+    // resolved, so the caller is told what actually happened instead of "Telnyx is not configured",
+    // and the log records `suppressed` rather than a silent 200 that reads as sent.
+    if let Some(reason) = crate::security::probe_addr::undeliverable_number(&req.to) {
+        let message_id = Uuid::new_v4();
+        let detail = format!("undeliverable_number:{reason}");
+        sqlx::query(
+            "INSERT INTO outbound_messages (id, tenant_id, channel, to_address, body, status, error_message)
+             VALUES ($1, $2, 'sms', $3, $4, 'suppressed', $5)",
+        )
+        .bind(message_id)
+        .bind(tenant_id)
+        .bind(&req.to)
+        .bind(&req.body)
+        .bind(&detail)
+        .execute(&state.db)
+        .await?;
+        tracing::info!(to = %req.to, reason = %reason, "text withheld: the number cannot receive one, so nothing was sent");
+        return Ok((
+            StatusCode::OK,
+            Json(json!({
+                "message_id": message_id,
+                "status": "suppressed",
+                "detail": detail,
+                "from": from,
+                "to": req.to,
+            })),
+        ));
+    }
+
     // Resolve API key and send. ONE resolution answers both questions — which credential signs this
     // send, and whether this workspace pays the platform for it — so the messaging profile and the
     // key can never come from different sides (kanban t_62712bc7).
