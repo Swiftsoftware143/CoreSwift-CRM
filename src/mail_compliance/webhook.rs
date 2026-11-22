@@ -281,17 +281,24 @@ pub async fn mailgun_events(
     // Both rows are written on purpose: the 'transactional' row stops even receipts and resets (the
     // provider has told us the mailbox does not exist, so continuing is pure reputation damage),
     // and the 'all' row stops the stoppable classes.
-    // A permanent `failed` is the same harm as a permanent bounce: the provider has told us this
+    // A permanent `failed` is the same harm as a permanent bounce: the provider has told this
     // address cannot receive (no MX, unknown user, refused). Continuing to send to it burns reputation
     // for nothing, so it is suppressed on the same evidence.
-    let suppress_reason = match (event.as_str(), severity.as_deref()) {
-        ("bounced", Some("permanent")) => Some("hard_bounce"),
-        ("failed", Some("permanent")) => Some("hard_bounce"),
-        ("complained", _) => Some("complaint"),
+    //
+    // `unsubscribed` is the provider's own opt-out (Mailgun's unsubscribe link or its list), so it
+    // stops the STOPPABLE class only, under the reason this app already stores for an opt-out
+    // ("unsubscribed", the same value the one-click page writes). It must never stop transactional
+    // mail: somebody who unsubscribed from notices still has to receive a password reset.
+    let suppress_plan: Option<(&str, &[&str])> = match (event.as_str(), severity.as_deref()) {
+        ("bounced", Some("permanent")) | ("failed", Some("permanent")) => {
+            Some(("hard_bounce", &["transactional", "all"]))
+        }
+        ("complained", _) => Some(("complaint", &["transactional", "all"])),
+        ("unsubscribed", _) => Some(("unsubscribed", &["notification"])),
         _ => None,
     };
-    if let (Some(reason), Some(address)) = (suppress_reason, address.as_deref()) {
-        for class in ["transactional", "all"] {
+    if let (Some((reason, classes)), Some(address)) = (suppress_plan, address.as_deref()) {
+        for class in classes {
             let _ = suppress(
                 &state.db,
                 tenant_id,
