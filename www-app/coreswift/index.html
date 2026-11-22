@@ -23,7 +23,7 @@
 :root{
   --bg-primary:#0f1117;--bg-secondary:#1a1d27;--bg-card:#222532;
   --bg-hover:#2a2d3a;--bg-active:#2d3152;
-  --text-primary:#e8eaed;--text-secondary:#9aa0a6;--text-muted:#6b7280;
+  --text-primary:#e8eaed;--text-secondary:#9aa0a6;--text-muted:#8e96a3;
   --accent:#6366f1;--accent-hover:#818cf8;--accent-subtle:rgba(99,102,241,.12);
   --success:#22c55e;--warning:#f59e0b;--error:#ef4444;
   --border:#2d3148;--border-light:#383c52;
@@ -40,7 +40,7 @@
 html[data-theme="light"]{
   --bg-primary:#f6f7fb;--bg-secondary:#eef0f6;--bg-card:#ffffff;
   --bg-hover:#e9ecf4;--bg-active:#dfe3f2;
-  --text-primary:#16181d;--text-secondary:#4b5563;--text-muted:#77808f;
+  --text-primary:#16181d;--text-secondary:#4b5563;--text-muted:#5d6673;
   --accent:#4f46e5;--accent-hover:#4338ca;--accent-subtle:rgba(79,70,229,.10);
   --success:#15803d;--warning:#b45309;--error:#b91c1c;
   --border:#dde1ea;--border-light:#c9cfdb;
@@ -345,6 +345,40 @@ tr:hover td{background:var(--bg-hover)}
     .bk-flash { margin-left:10px; font-size:13px; font-weight:600; }
     .bk-flash.good { color:#059669; }
     .bk-flash.bad { color:#dc2626; }
+
+    /* ── WCAG AA sweep (kanban t_ba8d1cbf, 2026-11-22) ────────────────────────────────────────
+       Every rule below exists because axe-core (wcag2a/2aa/21a/21aa) measured the rendered
+       console at desktop width. Two kinds of fix:
+         (a) the SOLID indigo is one step darker so white labels clear 4.5:1 (the dark palette's
+             --accent #6366f1 is 4.46:1 under white — text and hairlines keep the lighter indigo);
+         (b) widgets that hardcode a LIGHT surface keep that surface under the dark palette, so
+             their text is repainted in theme tokens instead of the light-mode greys they shipped.
+       Do not darken a grey that already sits on a dark surface: the muted greys were LIGHTENED for
+       dark and DARKENED for light in the token blocks above, and both clear 4.5:1 on their own
+       surfaces (dark #8e96a3 on #222532 = 5.11:1; light #5d6673 on #eef0f6 = 5.10:1). */
+    .btn-primary{background:#4f46e5}
+    .btn-primary:hover{background:#4338ca}
+    html[data-theme="dark"] .badge-primary{color:#a5b4fc}
+    .btn-danger{background:#b91c1c}
+    .btn-danger:hover{background:#991b1b;opacity:1}
+    html[data-theme="light"] .nav-item.active{color:var(--text-primary)}
+    html[data-theme="dark"] a{color:#a5b4fc}
+    html[data-theme="dark"] a:hover{color:#c7d2fe}
+    html[data-theme="dark"] .badge-error{color:#fca5a5}
+    html[data-theme="dark"] .plan-chip{color:#c7d2fe}
+    /* Inline #b91c1c is the light-palette error colour: 2.35:1 on the dark card. The class swaps it
+       per theme (light #b91c1c = 5.9:1 on white; dark #fca5a5 = 7.1:1 on #222532). */
+    .danger-text{color:#b91c1c}
+    html[data-theme="dark"] .danger-text{color:#fca5a5}
+    /* Booking-engine picker cards ship a white surface with light-palette grey text; under the dark
+       palette that is #e8eaed on #fff (1.2:1). Repaint the widget, keep the light theme as-is. */
+    html[data-theme="dark"] .bk-type{background:var(--bg-card);border-color:var(--border);color:var(--text-primary)}
+    html[data-theme="dark"] .bk-type:hover{box-shadow:0 6px 18px rgba(0,0,0,.4)}
+    html[data-theme="dark"] .bk-type.on{background:var(--bg-active);border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)}
+    html[data-theme="dark"] .bk-type-blurb{color:var(--text-secondary)}
+    html[data-theme="dark"] .bk-form label{color:var(--text-secondary)}
+    html[data-theme="dark"] .bk-form input,
+    html[data-theme="dark"] .bk-form select{background:var(--bg-secondary);border-color:var(--border);color:var(--text-primary)}
 </style>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/favicon.svg"><script id="theme-boot">/* Day/night, applied before first paint (see themeApply below). */
 /* THE CHOICE CROSSES SUBDOMAINS (CEO correction, 2026-11-21): localStorage is per-ORIGIN, so a
@@ -471,7 +505,7 @@ tr:hover td{background:var(--bg-hover)}
       </div>
     </header>
 
-    <div class="content" id="mainContent">
+    <div class="content" id="mainContent" tabindex="0">
       <div class="content-inner">
         <div id="upgradeBanner" class="upgrade-banner dismissed">
           <p><span id="currentPlanWrap" style="display:none">You're on the <span class="plan-name" id="currentPlanName"></span> plan. </span><span>Upgrade for more features.</span></p>
@@ -798,6 +832,21 @@ function escapeHtml(s) {
   return d.innerHTML;
 }
 
+// Tag chips carry a COLOUR THE USER PICKED, so a fixed white label cannot be guaranteed to clear
+// WCAG AA: white on indigo-500 is 4.46:1 (axe, kanban t_ba8d1cbf). Pick the ink that actually has
+// the higher contrast against the stored colour, so every chip a customer creates is readable in
+// both themes. Unknown/non-hex values fall back to the theme accent.
+function csBadgeInk(colour) {
+  var c = String(colour || '').trim();
+  if (!/^#[0-9a-fA-F]{6}$/.test(c)) return '#fff';
+  function ch(i) { return parseInt(c.substr(i, 2), 16) / 255; }
+  function lin(v) { return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }
+  var L = 0.2126 * lin(ch(1)) + 0.7152 * lin(ch(3)) + 0.0722 * lin(ch(5));
+  var whiteInk = 1.05 / (L + 0.05);        // contrast of #fff text on this colour
+  var blackInk = (L + 0.05) / 0.05;        // contrast of #111827 text on this colour
+  return blackInk >= whiteInk ? '#000000' : '#fff';
+}
+
 // Human-readable labels for the user_role enum. The admin Users panel used to print the raw DB
 // enum (`agency_admin`, `company_admin`, `team_member`, …) and, when a role was missing, fell
 // back to the bare word "user" — so an operator read database internals instead of a role.
@@ -827,8 +876,54 @@ function showModal(title, bodyHtml, footerHtml, large) {
         ${footerHtml ? `<div class="modal-footer">${footerHtml}</div>` : ''}
       </div>
     </div>`;
+  a11yBindLabels(c);
 }
 function closeModal() { document.getElementById('modalContainer').innerHTML = ''; }
+
+// ── ACCESSIBLE NAMES FOR EVERY RENDERED CONTROL (kanban t_ba8d1cbf) ─────────────────────────────
+// The console's forms are built as strings: `<div class="form-group"><label>First name *</label>
+// <input id="ctAddFirst"></div>`. The visible label is there, but without `for`/`id` axe reports
+// every one of them as an unlabelled control (the modal forms alone were ~110 nodes). Rather than
+// restamp ~110 template strings — and have the next form reintroduce the defect — ONE pass binds
+// each label to the control that follows it, and names any control that still has no label from its
+// id (a stable, human word: ctAddFirst → "Add First"). Called on every modal and every tab render.
+function a11yWords(id) {
+  var s = String(id || '').replace(/^[a-z]{1,4}(?=[A-Z])/, '').replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+}
+function a11yBindLabels(root) {
+  if (!root || !root.querySelectorAll) return;
+  root.querySelectorAll('label:not([for])').forEach(function (l) {
+    if (l.querySelector('input,select,textarea')) return;   // wrapped label already names its control
+    var n = l.nextElementSibling, hops = 0;
+    while (n && hops < 3 && !/^(INPUT|SELECT|TEXTAREA)$/.test(n.tagName)) { n = n.nextElementSibling; hops++; }
+    if (n && /^(INPUT|SELECT|TEXTAREA)$/.test(n.tagName) && n.id) l.setAttribute('for', n.id);
+  });
+  root.querySelectorAll('input,select,textarea').forEach(function (c) {
+    if (c.type === 'hidden') return;
+    if (c.getAttribute('aria-label') || c.getAttribute('aria-labelledby')) return;
+    if (c.closest('label')) return;
+    if (c.id && root.querySelector('label[for="' + c.id.replace(/"/g, '\\"') + '"]')) return;
+    if (c.id && document.querySelector('label[for="' + c.id.replace(/"/g, '\\"') + '"]')) return;
+    var word = a11yWords(c.id) || a11yWords(c.getAttribute('name')) || 'Field';
+    c.setAttribute('aria-label', word);
+  });
+}
+// Async panels (contact tags, integration targets, mail client) fill a loading placeholder AFTER
+// showModal returned, so the render-time pass above never sees them. One childList observer sweeps
+// whatever gets inserted; it watches childList only (never attributes), so the for/aria-label writes
+// it makes cannot re-trigger it.
+(function () {
+  if (window.__crmA11yObserver) return;
+  window.__crmA11yObserver = true;
+  var queued = false;
+  function sweep() { queued = false; try { a11yBindLabels(document); } catch (e) {} }
+  function schedule() { if (queued) return; queued = true; setTimeout(sweep, 120); }
+  try { new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true }); } catch (e) {}
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', schedule);
+  else schedule();
+})();
 
 // Auth
 // A sign-in must never post twice: Enter is now wired on both fields as well as the
@@ -1643,6 +1738,7 @@ function renderTab(tabId) {
   const fn = TAB_RENDERERS[tabId];
   if (fn) {
     container.innerHTML = fn();
+    a11yBindLabels(container);
     // If there's an async loader, call it
     if (TAB_LOADERS[tabId]) {
       TAB_LOADERS[tabId]();
@@ -1739,6 +1835,7 @@ const MCP_ENTITY_SPECS = [
   ['coreswift_private_email_domains', 'private email domains'],
   ['coreswift_score_rules', 'score rules'],
   ['coreswift_slot_bookings', 'slot bookings'],
+  ['coreswift_suppressions', 'suppressed addresses'],
   ['coreswift_tag_assignments', 'tag assignments'],
   ['coreswift_tag_categories', 'tag categories'],
   ['coreswift_tags', 'tags'],
@@ -2190,8 +2287,8 @@ const TAB_RENDERERS = {
       '<button class="btn btn-danger btn-sm" data-ops="pe-purge" onclick="showPurgeModal()">🧨 Run Purge</button>') +
     '<div id="peLimitsTable" data-ops="pe-limits"><div class="loading-wrap"><div class="spinner"></div> Loading tenant overrides...</div></div>' +
     '<br>' +
-    card('Tenant Retention', '<div class="form-group"><label>Tenant</label><select id="peRetTenant" data-ops="pe-retention"></select></div>' +
-      '<div class="form-group"><label>Retention (days, 30–3650)</label><input type="number" id="peRetDays" min="30" max="3650" value="365"></div>' +
+    card('Tenant Retention',      '<div class="form-group"><label for="peRetTenant">Tenant</label><select id="peRetTenant" data-ops="pe-retention"></select></div>' +
+      '<div class="form-group"><label for="peRetDays">Retention (days, 30–3650)</label><input type="number" id="peRetDays" min="30" max="3650" value="365"></div>' +
       '<p class="form-hint" id="peRetStatus">Pick a tenant, press “Load Current”, then save. Saving creates the override row if the tenant has none.</p>',
       '<button class="btn btn-secondary" data-ops="pe-retention-load" onclick="loadRetentionForTenant()">Load Current</button>' +
       '<button class="btn btn-primary" data-ops="pe-retention-save" onclick="saveRetentionForTenant()">Save Retention</button>') +
@@ -2301,7 +2398,7 @@ function renderSiteConfigForm() {
       '</div>';
   };
   const toggle = (key, label, desc) =>
-    '<div class="config-item"><div class="config-info"><div class="config-label">'+label+'</div><div class="config-desc">'+desc+'</div></div><label class="toggle"><input id="cfg_'+key+'" type="checkbox"'+ (s[key] ? ' checked' : '') +'><span class="toggle-slider"></span></label></div>';
+    '<div class="config-item"><div class="config-info"><div class="config-label">'+label+'</div><div class="config-desc">'+desc+'</div></div><label class="toggle"><input id="cfg_'+key+'" type="checkbox" aria-label="'+escapeHtmlAttr(label)+'"'+ (s[key] ? ' checked' : '') +'><span class="toggle-slider"></span></label></div>';
 
   let html = '';
 
@@ -4279,7 +4376,7 @@ async function loadProfileTab() {
     // the red button — and it is LAST on the screen on purpose.
     card('Close my account',
       '<p style="color:var(--text-secondary);margin:0 0 10px">This ends your sign-in and every API key, and you will not be able to sign in again. Your contacts, deals and history are kept for our records and are not deleted, so support can help you if you close it by mistake.</p>' +
-      '<div id="closeAcctArm"><button type="button" class="btn btn-secondary" data-ops="profile-close-arm" onclick="closeAccountArm()" style="color:#b91c1c;border-color:#fca5a5">Close my account</button></div>' +
+      '<div id="closeAcctArm"><button type="button" class="btn btn-secondary danger-text" data-ops="profile-close-arm" onclick="closeAccountArm()" style="border-color:#fca5a5">Close my account</button></div>' +
       '<div id="closeAcctForm" style="display:none">' +
         '<div class="form-group"><label for="closeAcctPw">Your password (proves it is you)</label><input type="password" id="closeAcctPw" autocomplete="current-password"></div>' +
         '<div class="form-group"><label for="closeAcctWord">Type CLOSE to confirm</label><input type="text" id="closeAcctWord" autocomplete="off" placeholder="CLOSE"></div>' +
@@ -5006,7 +5103,7 @@ async function peShowInbox() {
     list = (r && Array.isArray(r.messages)) ? r.messages : [];
   } catch (e) {
     showModal('Received mail',
-      '<div style="color:#b91c1c">Could not read the inbox: ' + peEsc((e && e.message) ? e.message : e) + '</div>',
+      '<div class="danger-text">Could not read the inbox: ' + peEsc((e && e.message) ? e.message : e) + '</div>',
       '<button class="btn btn-ghost" onclick="closeModal()">Close</button>');
     return;
   }
@@ -5084,7 +5181,7 @@ async function peSummariseMessage(id, btn) {
         : '<div style="color:#b45309">The summariser answered with nothing, so there is no summary to show.</div>';
     }
   } catch (e) {
-    if (out) out.innerHTML = '<div style="color:#b91c1c">' + peEsc((e && e.message) ? e.message : e) + '</div>';
+    if (out) out.innerHTML = '<div class="danger-text">' + peEsc((e && e.message) ? e.message : e) + '</div>';
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -7214,18 +7311,18 @@ function pipelinesShell() {
     '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">' +
       '<div style="flex:2 1 220px"><label style="font-size:12px;color:var(--text-secondary)">Search</label>' +
         '<input type="text" id="plFilterQ" placeholder="Deal, note, source or external reference" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"></div>' +
-      '<div style="flex:1 1 140px"><label style="font-size:12px;color:var(--text-secondary)">Owner</label>' +
+      '<div style="flex:1 1 140px"><label for="plFilterOwner" style="font-size:12px;color:var(--text-secondary)">Owner</label>' +
         '<select id="plFilterOwner" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"><option value="">Anyone</option></select></div>' +
-      '<div style="flex:1 1 140px"><label style="font-size:12px;color:var(--text-secondary)">Stage</label>' +
+      '<div style="flex:1 1 140px"><label for="plFilterStage" style="font-size:12px;color:var(--text-secondary)">Stage</label>' +
         '<select id="plFilterStage" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"><option value="">Any stage</option></select></div>' +
       '<div style="flex:1 1 130px"><label style="font-size:12px;color:var(--text-secondary)">Source</label>' +
         '<input type="text" id="plFilterSource" placeholder="Any" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"></div>' +
-      '<div style="flex:1 1 120px"><label style="font-size:12px;color:var(--text-secondary)">Status</label>' +
+      '<div style="flex:1 1 120px"><label for="plFilterStatus" style="font-size:12px;color:var(--text-secondary)">Status</label>' +
         '<select id="plFilterStatus" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
           '<option value="">All</option><option value="open">Open</option><option value="won">Won</option><option value="lost">Lost</option></select></div>' +
-      '<div style="flex:1 1 130px"><label style="font-size:12px;color:var(--text-secondary)">Created from</label>' +
+      '<div style="flex:1 1 130px"><label for="plFilterFrom" style="font-size:12px;color:var(--text-secondary)">Created from</label>' +
         '<input type="date" id="plFilterFrom" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"></div>' +
-      '<div style="flex:1 1 130px"><label style="font-size:12px;color:var(--text-secondary)">Created to</label>' +
+      '<div style="flex:1 1 130px"><label for="plFilterTo" style="font-size:12px;color:var(--text-secondary)">Created to</label>' +
         '<input type="date" id="plFilterTo" style="width:100%;padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)"></div>' +
       '<div style="flex:0 0 auto"><label style="font-size:12px;color:var(--text-secondary)">&nbsp;</label>' +
         '<button class="btn btn-primary btn-sm" onclick="plApplyFilters()">Filter</button> ' +
@@ -8605,7 +8702,7 @@ async function loadScoringTab() {
           '<p>Pick a contact below and recalculate to create real score rows.</p></div>', '');
     h += '<br>' + card('Contact score tools',
       '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">' +
-        '<div><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Contact</label>' +
+        '<div><label for="scContact" style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Contact</label>' +
         '<select id="scContact" style="padding:8px;min-width:280px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
           (SC_CONTACTS.length ? SC_CONTACTS.slice(0, 300).map(function (c) {
             const nm = c.name || ((c.first_name || '') + ' ' + (c.last_name || '')).trim() || c.email || c.id;
@@ -8616,7 +8713,7 @@ async function loadScoringTab() {
         '<button class="btn btn-secondary btn-sm" onclick="scLoadHistory()">History</button>' +
       '</div>' +
       '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-top:12px">' +
-        '<div><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Recalculate on event</label>' +
+        '<div><label for="scEvent" style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Recalculate on event</label>' +
         '<select id="scEvent" style="padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
           '<option value="email_opened">Email opened</option><option value="link_clicked">Link clicked</option>' +
           '<option value="form_submitted">Form submitted</option><option value="deal_closed">Deal closed</option></select></div>' +
@@ -8834,9 +8931,9 @@ async function loadTagsTab() {
       '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
         (tags.length ? tags.map(function (t) {
           const cat = cats.find(function (c) { return c.id === t.category_id; });
-          return '<span class="badge" style="background:' + (t.color || 'var(--accent-subtle)') + ';color:#fff;padding:6px 12px">' +
+          return '<span class="badge" style="background:' + (t.color || '#6366f1') + ';color:' + csBadgeInk(t.color) + ';padding:6px 12px">' +
             escapeHtml(t.name) + (cat ? ' · ' + escapeHtml(cat.name) : '') +
-            ' <a href="#" onclick="tgDeleteTag(\'' + t.id + '\');return false" title="Delete tag">✕</a></span>';
+            ' <a href="#" style="color:inherit" onclick="tgDeleteTag(\'' + t.id + '\');return false" title="Delete tag">✕</a></span>';
         }).join('') : '<span class="config-desc">No tags yet.</span>') + '</div>', '');
     el.innerHTML = h;
   } catch (e) { famErr(el, 'Tags', e); }
@@ -9161,7 +9258,7 @@ async function loadMonitoringTab() {
         '<button class="btn btn-secondary btn-sm" onclick="monCheckProfile()">Load status</button>' +
       '</div>' +
       '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-top:12px">' +
-        '<div><label style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Record milestone</label>' +
+        '<div><label for="monMilestone" style="display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px">Record milestone</label>' +
         '<select id="monMilestone" style="padding:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary)">' +
           '<option value="first_contact">First contact</option><option value="first_pipeline">First pipeline</option>' +
           '<option value="first_campaign">First campaign</option><option value="first_automation">First automation</option></select></div>' +
@@ -9609,7 +9706,7 @@ function opsPick(name) {
   const opts = OPS.intents.map(function (x) {
     return '<option value="' + escapeHtmlAttr(x.name) + '"' + (x.name === name ? ' selected' : '') + '>' + escapeHtml(x.name) + '</option>';
   }).join('');
-  box.innerHTML = '<div class="form-group"><label>Action</label><select id="opsIntent" onchange="opsPick(this.value)">' + opts + '</select></div>' +
+  box.innerHTML = '<div class="form-group"><label for="opsIntent">Action</label><select id="opsIntent" onchange="opsPick(this.value)">' + opts + '</select></div>' +
     fields + optional + '<button type="button" class="btn btn-primary" id="opsRun">Run it</button>' +
     '<p style="color:var(--text-secondary);font-size:12px;margin:10px 0 0">Creating an account makes a real customer account and mints its API key. Nothing here can be undone from this screen.</p>';
   const run = document.getElementById('opsRun');
@@ -9873,13 +9970,13 @@ TAB_RENDERERS['branding'] = () => {
     '<div class="form-group"><label>Brand display name</label>' +
       '<input type="text" id="brandName" maxlength="60" placeholder="e.g. Giraudy Capital">' +
       '<span class="form-hint">Up to 60 characters. Printed above the message, and used as the logo\u2019s alt text so a blocked image still says whose mail it is.</span></div>' +
-    '<div class="form-group"><label>Brand colour</label> ' +
+    '<div class="form-group"><label for="brandColor">Brand colour</label> ' +
       '<input type="color" id="brandColor" value="#4f46e5" style="width:64px;height:34px;padding:2px;vertical-align:middle">' +
       '<span class="form-hint">The rule painted under the logo. Default #4f46e5.</span></div>',
     '<button class="btn btn-primary" data-ops="branding-save" onclick="saveBranding()">Save branding</button>') +
   '<br>' +
   card('Logo', '' +
-    '<div class="form-group"><label>Logo image</label>' +
+    '<div class="form-group"><label for="brandLogoFile">Logo image</label>' +
       '<input type="file" id="brandLogoFile" accept="image/png,image/jpeg,image/gif,image/webp">' +
       '<span class="form-hint">PNG, JPEG, GIF or WebP, up to 2 MB. The app resizes it for email automatically \u2014 you do not choose a size, and it stays sharp on a phone and on a desktop.</span></div>' +
     '<div id="brandLogoPreviewWrap" style="margin-top:12px"></div>',
@@ -10741,7 +10838,7 @@ function txRenderSend() {
         : '');
   el.innerHTML = card('✉️ Send an SMS',
     (blocked ? '<p style="color:var(--text-secondary)">' + escapeHtml(blocked) + '</p>' : '') +
-    '<div class="form-group"><label>From</label><select id="txFrom">' + (options || '<option value="">no numbers</option>') + '</select></div>' +
+    '<div class="form-group"><label for="txFrom">From</label><select id="txFrom">' + (options || '<option value="">no numbers</option>') + '</select></div>' +
     '<div class="form-group"><label>To</label><input type="text" id="txTo" placeholder="+15551234567" autocomplete="off"></div>' +
     '<div class="form-group"><label>Message</label><input type="text" id="txBody" placeholder="Hello from CoreSwift" autocomplete="off"></div>',
     '<button class="btn btn-primary btn-sm" id="txSendBtn"' + (blocked ? ' disabled' : '') + '>Send SMS</button>');
@@ -10779,7 +10876,7 @@ function txRenderAvailable() {
   if (!el) return;
   let body = '<p style="color:var(--text-secondary)">Searches Telnyx for numbers you can buy. This call goes straight to api.telnyx.com with this account\'s key.</p>';
   if (TX.available === null) {
-    body += '<div class="form-group"><label>Starts with</label>' +
+    body += '<div class="form-group"><label for="txFilter">Starts with</label>' +
       '<input type="text" id="txFilter" value="305" autocomplete="off"><span class="form-hint">Area code or prefix.</span></div>';
   } else {
     const rows = (TX.available || []).map(n => [
@@ -11188,10 +11285,10 @@ async function loadInboxTab() {
   });
   peSendEl.innerHTML = card('✉️ Send from your domain',
     (activeBoxes ? '' : '<p style="color:var(--text-secondary)">No active mailbox on this account yet, and outbound mail must be sent FROM one.</p>') +
-    '<div class="form-group"><label>From</label><select id="peFrom">' + (activeBoxes || '<option value="">no mailboxes</option>') + '</select></div>' +
+    '<div class="form-group"><label for="peFrom">From</label><select id="peFrom">' + (activeBoxes || '<option value="">no mailboxes</option>') + '</select></div>' +
     '<div class="form-group"><label>To</label><input type="text" id="peTo" placeholder="lead@example.com" autocomplete="off"></div>' +
-    '<div class="form-group"><label>Subject</label><input type="text" id="peSubject" autocomplete="off"></div>' +
-    '<div class="form-group"><label>Body</label><input type="text" id="peBody" autocomplete="off"></div>',
+    '<div class="form-group"><label for="peSubject">Subject</label><input type="text" id="peSubject" autocomplete="off"></div>' +
+    '<div class="form-group"><label for="peBody">Body</label><input type="text" id="peBody" autocomplete="off"></div>',
     '<button class="btn btn-primary btn-sm" id="peSendBtn"' + (activeBoxes ? '' : ' disabled') + '>Send email</button>');
   const sb = document.getElementById('peSendBtn');
   if (sb) sb.addEventListener('click', peSend);
@@ -11311,7 +11408,7 @@ function peReceivingCell(d) {
       return '<option value="' + o[0] + '"' + (o[0] === cur ? ' selected' : '') + '>' + o[1] + '</option>';
     }).join('');
   return '<span class="badge ' + (cur === 'none' ? 'badge-muted' : 'badge-success') + '">' + label + '</span> '
-    + '<select onchange="peSetReceiving(\'' + d.id + '\', this.value)" style="max-width:150px;margin-left:6px">'
+    + '<select aria-label="Receiving provider for ' + escapeHtmlAttr(d.domain || 'this domain') + '" onchange="peSetReceiving(\'' + d.id + '\', this.value)" style="max-width:150px;margin-left:6px">'
     + opts + '</select>';
 }
 
@@ -11448,7 +11545,7 @@ async function peShowDomainRecords(domainId) {
   const name = d.domain || 'this domain';
   window.showModal('DNS records for ' + escapeHtml(name),
     '<div id="peRecBody"><div class="loading-wrap"><div class="spinner"></div> Reading from your mail provider...</div></div>',
-    '<button class="btn btn-ghost" onclick="peRemoveDomain(\'' + domainId + '\')" style="margin-right:auto;color:#b91c1c">Remove this domain</button>'
+    '<button class="btn btn-ghost danger-text" onclick="peRemoveDomain(\'' + domainId + '\')" style="margin-right:auto">Remove this domain</button>'
     + '<button class="btn btn-secondary" onclick="closeModal()">Close</button>');
   const body = document.getElementById('peRecBody');
   if (!body) return;
@@ -12921,9 +13018,9 @@ async function ctLoadTags(cid) {
   body.innerHTML =
     '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
       (mine.length ? mine.map(function (m) {
-        return '<span class="badge" style="background:' + escapeHtmlAttr(m.color || 'var(--accent-subtle)') +
-          ';color:#fff;padding:6px 12px">' + escapeHtml(m.name || m.tag_id) +
-          (m.assignment_id ? ' <a href="#" onclick="ctUnassignTag(\'' + escapeHtmlAttr(cid) + '\',\'' +
+        return '<span class="badge" style="background:' + escapeHtmlAttr(m.color || '#6366f1') +
+          ';color:' + csBadgeInk(m.color) + ';padding:6px 12px">' + escapeHtml(m.name || m.tag_id) +
+          (m.assignment_id ? ' <a href="#" style="color:inherit" onclick="ctUnassignTag(\'' + escapeHtmlAttr(cid) + '\',\'' +
             escapeHtmlAttr(m.assignment_id) + '\');return false" title="Remove tag">✕</a>' : '') +
           '</span>';
       }).join('') : '<span class="config-desc">No tags on this contact yet.</span>') +
@@ -14234,7 +14331,7 @@ TAB_RENDERERS['knowledge'] = () => pageHeader(
         '<input type="text" id="genIndustry" placeholder="local media"></div>' +
       '<div class="form-group" style="flex:1;min-width:150px"><label>Who are your customers?</label>' +
         '<input type="text" id="genAudience" placeholder="local business owners"></div>' +
-      '<div class="form-group" style="width:110px"><label>How many</label>' +
+      '<div class="form-group" style="width:110px"><label for="genCount">How many</label>' +
         '<input type="number" id="genCount" value="6" min="1" max="12"></div>' +
     '</div>' +
     '<div class="form-group"><label>What do people ask most? (optional)</label>' +
@@ -14473,14 +14570,14 @@ function dmRenderAll() {
       '<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">' +
         '<div class="form-group" style="flex:2;min-width:220px"><label>Mapping name</label>' +
           '<input id="dmName" type="text" placeholder="FunnelSwift leads → Contacts" value="' + dmEsc(m.name || '') + '" oninput="DM.dirty=true"></div>' +
-        '<div class="form-group"><label>Source app</label><select id="dmApp" onchange="dmChangeSource()">' + sourceOpts + '</select></div>' +
-        '<div class="form-group"><label>Source entity</label>' +
+        '<div class="form-group"><label for="dmApp">Source app</label><select id="dmApp" onchange="dmChangeSource()">' + sourceOpts + '</select></div>' +
+        '<div class="form-group"><label for="dmEntity">Source entity</label>' +
           ((DM.schema && DM.schema.source === 'observed')
             ? '<input id="dmEntity" type="text" value="' + dmEsc(DM.entity || 'contacts') + '" placeholder="what the app calls this row" oninput="DM.entity=this.value;DM.dirty=true" onchange="dmChangeEntity()">'
             : '<select id="dmEntity" onchange="dmChangeEntity()">' + (entityOpts || '<option value="">—</option>') + '</select>') +
         '</div>' +
-        '<div class="form-group"><label>On match</label><select id="dmOnMatch" onchange="DM.dirty=true">' + onMatch + '</select></div>' +
-        '<div class="form-group" style="flex:1;min-width:180px"><label>Add to list</label><select id="dmList" onchange="DM.dirty=true">' + listOpts + '</select></div>' +
+        '<div class="form-group"><label for="dmOnMatch">On match</label><select id="dmOnMatch" onchange="DM.dirty=true">' + onMatch + '</select></div>' +
+        '<div class="form-group" style="flex:1;min-width:180px"><label for="dmList">Add to list</label><select id="dmList" onchange="DM.dirty=true">' + listOpts + '</select></div>' +
         '<div class="form-group"><label>&nbsp;</label>' +
           '<button class="btn btn-primary" data-ops="dm-save" onclick="dmSave()">Save mapping</button></div>' +
         '<div class="form-group"><label>&nbsp;</label>' +
@@ -14492,7 +14589,7 @@ function dmRenderAll() {
       '<div>' + card('Source fields',
         '<input id="dmSearch" type="search" placeholder="Type to filter fields, Enter inserts the first match" ' +
           'oninput="dmRenderSource()" onkeydown="dmSearchKey(event)" style="width:100%;margin-bottom:8px">' +
-        '<div id="dmSource" style="max-height:60vh;overflow:auto"></div>', '') + '</div>' +
+        '<div id="dmSource" tabindex="0" style="max-height:60vh;overflow:auto"></div>', '') + '</div>' +
       '<div>' + card('Destination fields (type text + drop data pills)',
         '<div id="dmDest" style="max-height:62vh;overflow:auto"></div>', '') + '</div>' +
       '<div>' + card('What CoreSwift would receive', '<div id="dmPreview"></div>', '') + '</div>' +
@@ -14538,7 +14635,7 @@ function dmRenderSource() {
   });
   if (!shown.length) { box.innerHTML = note + '<p class="form-hint">Nothing matches “' + dmEsc(q) + '”.</p>'; return; }
   box.innerHTML = note + shown.map(function (f) {
-    const sample = f.sample === null || f.sample === undefined ? '<em style="opacity:.6">no sample</em>'
+    const sample = f.sample === null || f.sample === undefined ? '<em>no sample</em>'
       : '<code style="font-size:11px">' + dmEsc(typeof f.sample === 'object' ? JSON.stringify(f.sample) : f.sample) + '</code>';
     return '<div class="dm-src-row" onclick="dmInsertPill(\'' + dmEsc(f.path) + '\')" ' +
       'style="padding:6px 8px;border-bottom:1px solid var(--border,#eee);cursor:pointer">' +
@@ -14582,11 +14679,11 @@ function dmRenderDest() {
     f.idx = i;
   });
   const openHint = (DM.dest && DM.dest.entities || []).filter(function (e) { return !e.available; })
-    .map(function (e) { return '<p class="form-hint" style="opacity:.75">🚫 ' + dmEsc(e.label) + ' — ' + dmEsc(e.reason) + '</p>'; }).join('');
+    .map(function (e) { return '<p class="form-hint">🚫 ' + dmEsc(e.label) + ' — ' + dmEsc(e.reason) + '</p>'; }).join('');
   box.innerHTML = openHint + fields.map(function (f) {
     return '<div style="margin-bottom:10px">' +
       '<label style="font-size:12px;display:flex;justify-content:space-between">' +
-        '<span>' + dmEsc(f.label) + '</span><span style="opacity:.6">' + dmEsc(f.to) + '</span></label>' +
+        '<span>' + dmEsc(f.label) + '</span><span>' + dmEsc(f.to) + '</span></label>' +
       '<div class="dm-token" id="dmTok-' + f.idx + '" contenteditable="true" data-to="' + dmEsc(f.to) + '" ' +
         'oninput="dmSerialize(' + f.idx + ')" onkeyup="dmSerialize(' + f.idx + ')" ' +
         'style="min-height:34px;border:1px solid var(--border,#ccc);border-radius:6px;padding:6px 8px;font-size:13px"></div>' +
@@ -15136,7 +15233,7 @@ async function mcDownload(path, filename) {
 
 </script>
 <script src="/inline-guide-widget.js?v=20261119a"></script>
-<script src="/private-email-inbox.js?v=20261112j"></script>
+<script src="/private-email-inbox.js?v=20261122b"></script>
 
 <!--B209-FEEDBACK-APP-->
 <!-- feedback from inside the customer app: posts to /api/v1/feedback -->
@@ -15222,7 +15319,7 @@ async function mcDownload(path, filename) {
 
   var fab = el('button',
     'position:fixed;right:20px;bottom:80px;z-index:1000;display:none;align-items:center;gap:8px;' +
-    'background:#6366f1;color:#fff;border:none;border-radius:24px;padding:11px 16px;font-size:13px;' +
+    'background:#4f46e5;color:#fff;border:none;border-radius:24px;padding:11px 16px;font-size:13px;' +
     'font-weight:600;cursor:pointer;box-shadow:0 4px 16px rgba(99,102,241,.4);font-family:inherit');
   fab.id = 'fbFab';
   fab.type = 'button';
@@ -15271,13 +15368,14 @@ async function mcDownload(path, filename) {
     return b;
   });
 
-  var screenLine = el('div', 'font-size:12px;color:#9ca3af;margin-bottom:6px',
+  var screenLine = el('div', 'font-size:12px;color:#6b7280;margin-bottom:6px',
     'Screen: ' + screenName());
 
   var ta = el('textarea',
     'width:100%;box-sizing:border-box;min-height:110px;resize:vertical;padding:10px 12px;' +
     'border:1px solid #d1d5db;border-radius:8px;font-family:inherit;font-size:14px');
   ta.id = 'fbMessage';
+  ta.setAttribute('aria-label', 'Feedback message');
   ta.maxLength = 4000;
   ta.placeholder = 'What happened, or what should we build?';
 
@@ -15293,11 +15391,11 @@ async function mcDownload(path, filename) {
     'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 20px;' +
     'border-top:1px solid #e5e7eb;flex-wrap:wrap');
   var links = el('div', 'font-size:12px');
-  var up = el('a', 'color:#6366f1;text-decoration:none;margin-right:14px', "What's new");
+  var up = el('a', 'color:#4f46e5;text-decoration:none;margin-right:14px', "What's new");
   up.href = 'https://swiftsoftware.net/updates';
   up.target = '_blank';
   up.rel = 'noopener';
-  var rm = el('a', 'color:#6366f1;text-decoration:none', 'Roadmap');
+  var rm = el('a', 'color:#4f46e5;text-decoration:none', 'Roadmap');
   rm.href = 'https://swiftsoftware.net/roadmap';
   rm.target = '_blank';
   rm.rel = 'noopener';
@@ -15310,7 +15408,7 @@ async function mcDownload(path, filename) {
     'font-size:13px;font-weight:600;cursor:pointer;color:#374151;font-family:inherit', 'Cancel');
   cancel.type = 'button';
   var send = el('button',
-    'background:#6366f1;border:1px solid #6366f1;border-radius:8px;padding:9px 14px;' +
+    'background:#4f46e5;border:1px solid #4f46e5;border-radius:8px;padding:9px 14px;' +
     'font-size:13px;font-weight:600;cursor:pointer;color:#fff;font-family:inherit', 'Send feedback');
   send.type = 'button';
   send.id = 'fbSend';
@@ -15327,9 +15425,9 @@ async function mcDownload(path, filename) {
   function paint() {
     kindBtns.forEach(function (b) {
       var on = b.getAttribute('data-fb-kind') === kind;
-      b.style.background = on ? '#6366f1' : '#fff';
+      b.style.background = on ? '#4f46e5' : '#fff';
       b.style.color = on ? '#fff' : '#374151';
-      b.style.borderColor = on ? '#6366f1' : '#d1d5db';
+      b.style.borderColor = on ? '#4f46e5' : '#d1d5db';
     });
   }
 

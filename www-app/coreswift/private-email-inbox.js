@@ -105,17 +105,17 @@
         + '<td style="padding:8px"><strong>' + esc(b.email_address) + '</strong>'
         + (b.creates_ticket ? ' <span style="background:#e0f2fe;color:#075985;padding:1px 6px;border-radius:8px;font-size:11px">tickets</span>' : '')
         + '</td>'
-        + '<td style="padding:8px;opacity:.75">' + (ready ? 'Receiving' : 'Waiting for mail records')
-        + '<div style="font-size:11px;opacity:.8">'
+        + '<td style="padding:8px;color:var(--text-secondary)">' + (ready ? 'Receiving' : 'Waiting for mail records')
+        + '<div style="font-size:11px;color:var(--text-muted)">'
         + (branded ? 'opens at inbox.' + esc(dom.domain) : 'opens at inbox.coreswiftcrm.com until inbox.' + esc(dom.domain || 'your domain') + ' is live')
         + '</div></td>'
-        + '<td style="padding:8px;opacity:.75">' + count + '</td>'
+        + '<td style="padding:8px;color:var(--text-secondary)">' + count + '</td>'
         // WHO LOOKS AFTER THIS INBOX (kanban t_5f314e9a). The teammate is a real person in this
         // account; clearing it gives the address back to the whole workspace. The write goes to
         // PATCH /private-email/boxes/:id, the SAME `user_id` column this inbox was provisioned with.
         + '<td style="padding:8px">' + assignSelectHtml('box', b.id, b.user_id) + '</td>'
         + '<td style="padding:8px;text-align:right;white-space:nowrap">'
-        + '<label style="font-size:11px;opacity:.75;margin-right:10px;cursor:pointer"><input type="checkbox" '
+        + '<label style="font-size:11px;color:var(--text-secondary);margin-right:10px;cursor:pointer"><input type="checkbox" '
         + (b.creates_ticket ? 'checked ' : '') + 'onchange="peToggleTicket(\'' + esc(b.id) + '\',this.checked)"> also a ticket</label>'
         + (ready
           ? '<button class="btn btn-primary btn-sm" onclick="peLogin(\'' + esc(base) + '\',\'' + esc(b.email_address) + '\')">LOG IN</button>'
@@ -123,7 +123,7 @@
         + ' <button class="btn btn-ghost btn-xs" title="Delete this inbox" onclick="peDeleteBox(\'' + esc(b.id) + '\',\'' + esc(b.email_address) + '\')">Delete</button>'
         + '</td></tr>';
     }).join('');
-    return '<table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:left;opacity:.7">'
+    return '<table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:left;color:var(--text-secondary)">'
       + '<th style="padding:6px 8px">Inbox</th><th style="padding:6px 8px">Status</th><th style="padding:6px 8px">Messages</th><th style="padding:6px 8px">Assigned to</th><th></th>'
       + '</tr></thead><tbody>' + rows + '</tbody></table>';
   }
@@ -381,7 +381,7 @@
     if (S.miscTotal > 0) {
       opts.push('<option value="misc"' + (S.address === 'misc' ? ' selected' : '') + '>Everything else / MISC (' + S.miscTotal + ')</option>');
     }
-    return '<select onchange="peSetAddress(this.value)" style="margin-right:8px">' + opts.join('') + '</select>';
+    return '<select aria-label="Mailbox address filter" onchange="peSetAddress(this.value)" style="margin-right:8px">' + opts.join('') + '</select>';
   }
 
   // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -491,11 +491,11 @@
             + esc(memberLabel(memberById(x.assigned_user_id))) + '</span>'
           : '')
         + '</td>'
-        + '<td style="padding:8px;opacity:.7;font-size:12px">' + esc(x.address || '') + '</td>'
-        + '<td style="padding:8px;opacity:.7;white-space:nowrap">' + esc(fmt(x.received_at)) + '</td>'
+        + '<td style="padding:8px;color:var(--text-secondary);font-size:12px">' + esc(x.address || '') + '</td>'
+        + '<td style="padding:8px;color:var(--text-secondary);white-space:nowrap">' + esc(fmt(x.received_at)) + '</td>'
         + '</tr>';
     }).join('');
-    return '<table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:left;opacity:.7;font-size:12px">'
+    return '<table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:left;color:var(--text-secondary);font-size:12px">'
       + '<th></th><th style="padding:6px 8px">From</th><th style="padding:6px 8px">Subject</th><th style="padding:6px 8px">Arrived on</th><th style="padding:6px 8px">Received</th>'
       + '</tr></thead><tbody>' + rows + '</tbody></table>';
   }
