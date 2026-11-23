@@ -2839,14 +2839,19 @@ function renderSystemEmail(d) {
     ' · API key ' + (env.api_key_set ? '<span class="badge badge-muted">set</span>' : '<span class="badge badge-muted">unset</span>'),
     'EMAIL_API_URL / EMAIL_API_KEY / EMAIL_FROM in the container. Used for any field the saved credential does not carry.');
   if (cfg.updated_at) html += row('Last saved', escapeHtml(String(cfg.updated_at)) + (cfg.updated_by ? ' by ' + escapeHtml(String(cfg.updated_by)) : ''), '');
-  // Where the provider reports its own verdict (kanban t_6146b9c9). A hard bounce or a spam
-  // complaint arrives there and reaches the do-not-mail list with no human in the loop; the operator
-  // needs the address once, to paste into the provider's webhook settings.
+  // Bounces and complaints report themselves (2026-11-23). A hard bounce or a spam complaint arrives
+  // at the receiver on its own — the safety net is ours, the fleet registers the three event types per
+  // sending domain — and `last_event_at` says whether a verified report has actually arrived. Nobody
+  // pastes this address into anything; it stays on screen for support only.
   const hook = d.events_webhook || null;
   if (hook && hook.url) {
+    const hookedAt = hook.last_event_at ? String(hook.last_event_at).slice(0, 16).replace('T', ' ') : '';
     html += row('Delivery events', '<code data-provider-events-address="' + escapeHtmlAttr(hook.url) + '" style="word-break:break-all">' + escapeHtml(hook.url) + '</code> ' +
-      '<button class="btn btn-secondary btn-sm" aria-label="Copy the provider delivery-events address" onclick="copyProviderEventsAddress(this)">Copy</button>',
-      'The provider tells this install when a message hard-bounces, is marked as spam or unsubscribes; each of those addresses is then withheld. Paste this address into the provider\'s webhook settings for the sending domain (events: permanent failures, complaints, unsubscribes).');
+      '<button class="btn btn-secondary btn-sm" aria-label="Copy the delivery-events address" onclick="copyProviderEventsAddress(this)">Copy</button>',
+      (hookedAt
+        ? '<strong>Connected.</strong> The mail service sends its problem reports here — the most recent arrived ' + escapeHtml(hookedAt) + ' — so a hard-bounced or complained address is withheld by itself. '
+        : '<strong>Connected, waiting for its first report.</strong> When a message hard-bounces, is marked as spam or unsubscribes, the mail service tells this install and the address is withheld by itself. ') +
+      'The address beside this line is for support only — there is nothing to set up.');
   }
   html += '</div></div></div>';
 

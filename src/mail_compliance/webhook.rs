@@ -197,6 +197,7 @@ pub async fn mailgun_events(
     let data = body.get("event-data").cloned().unwrap_or(Value::Null);
     if data.is_null() {
         // A signed ping with no event (Mailgun sends these when a webhook is first set up).
+        record_receipt(&state.db, 0, 1).await;
         return (StatusCode::OK, Json(json!({ "status": "ack" }))).into_response();
     }
 
@@ -249,6 +250,7 @@ pub async fn mailgun_events(
 
     if message_id.is_empty() {
         tracing::warn!(event = %event, "Mailgun event carried no message-id — cannot attribute it");
+        record_receipt(&state.db, 0, 1).await;
         return (StatusCode::OK, Json(json!({ "status": "ack" }))).into_response();
     }
 
@@ -259,6 +261,7 @@ pub async fn mailgun_events(
             message_id = %message_id,
             "Mailgun event for a message this app did not log — nothing to attribute it to"
         );
+        record_receipt(&state.db, 0, 1).await;
         return (StatusCode::OK, Json(json!({ "status": "ignore" }))).into_response();
     };
     let address = recipient.or(logged_address);
@@ -321,9 +324,37 @@ pub async fn mailgun_events(
     // per-class ledger honest about which lane the reputation belongs to.
     let _ = CLASS_BULK;
 
+    // The path just proved itself: the provider reached us with a real payload about one of our own
+    // messages. Record WHEN, so the console can say the safety net is live instead of asking an
+    // operator to paste a URL into a provider they do not control (`email_config::view` reads this).
+    record_receipt(&state.db, 1, 0).await;
+
     (
         StatusCode::OK,
         Json(json!({ "status": "ok", "event": event })),
     )
         .into_response()
+}
+
+/// The last verified delivery report this installation received (`admin_settings.mail_events_last`).
+///
+/// Written for EVERY authorised POST, including one that suppresses nothing: the fact worth showing is
+/// that the provider's events reach this app at all. A write failure never fails the event.
+async fn record_receipt(db: &sqlx::PgPool, recorded: usize, ignored: usize) {
+    let payload = json!({
+        "at": chrono::Utc::now().to_rfc3339(),
+        "recorded": recorded,
+        "ignored": ignored,
+    });
+    if let Err(e) = sqlx::query(
+        "INSERT INTO admin_settings (key, value, description, updated_at)
+         VALUES ('mail_events_last', $1, 'The last delivery report the mail provider posted to this installation (written by the events receiver)', NOW())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+    )
+    .bind(payload)
+    .execute(db)
+    .await
+    {
+        tracing::warn!("could not record the last mail event: {e}");
+    }
 }

@@ -56,10 +56,22 @@ async fn view(state: &AppState) -> Value {
     // provider ONCE per sending domain; without it a hard bounce or a complaint reaches nobody and
     // the dead address stays mailable. Read from the same row the receiver reads, never composed in
     // the page, so the panel cannot print an address the receiver does not answer on.
+    // WHEN the provider last reported something. The console shows this instead of asking an operator
+    // to paste the address into a provider they do not control — the provider is ours and the fleet
+    // registers these three event types per sending domain. A read failure answers `null`, which the
+    // panel words as "waiting for the first report" rather than as an error.
+    let last_event_at = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT value ->> 'at' FROM admin_settings WHERE key = 'mail_events_last'",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
     let events_webhook = platform::field(&opened, "webhook_token").map(|t| {
         json!({
             "url": format!("https://app.coreswiftcrm.com/api/webhooks/mailgun/events?t={t}"),
             "events": ["permanent_fail", "complained", "unsubscribed"],
+            "last_event_at": last_event_at,
         })
     });
 
