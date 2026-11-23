@@ -13918,12 +13918,18 @@ function bkRenderNotify() {
   var card = document.getElementById('bkNotifyCard');
   if (!card) return;
   var n = BK.notify || { notify_emails: [], reminders: [], tag_rules: [], list_rules: [] };
-  function rowList(items, render, removeFn) {
+  // A SAVED RULE IS A ROW YOU CAN SEE, CORRECT AND REMOVE (ZaarHub, 2026-11-23). A rule that saved
+  // but could not be read back, changed or deleted is a rule nobody can trust: the counter said
+  // "1 rule" while the screen showed only a blank form, so the only way to check it was by looking in
+  // the database.
+  function rowList(items, render, removeFn, editFn) {
     return items.length
       ? '<div style="margin:6px 0 10px">' + items.map(function (it, i) {
           return '<div class="line" style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:6px">' +
             '<span style="font-size:13px">' + render(it) + '</span>' +
-            '<button class="btn btn-secondary btn-sm" onclick="' + removeFn + '(' + i + ')">Remove</button></div>';
+            '<span style="white-space:nowrap">' +
+            (editFn ? '<button class="btn btn-secondary btn-sm" onclick="' + editFn + '(' + i + ')">Edit</button> ' : '') +
+            '<button class="btn btn-secondary btn-sm" onclick="' + removeFn + '(' + i + ')">Remove</button></span></div>';
         }).join('') + '</div>'
       : '<p class="muted" style="margin:4px 0 10px;font-size:12.5px">None yet.</p>';
   }
@@ -13954,30 +13960,44 @@ function bkRenderNotify() {
     '<hr style="border:none;border-top:1px dashed #e2e8f0;margin:16px 0">' +
     '<strong style="font-size:13px">Tags on the contact</strong>' +
     rowList(n.tag_rules, function (t) {
-      return escapeHtml(t.tag_name) + ' <span class="muted">· on ' + escapeHtml(t.stage) + ' · ' + escapeHtml(t.mode) + '</span>';
-    }, 'bkRemoveTagRule') +
+      return 'Tag <b>' + escapeHtml(t.tag_name) + '</b> <span class="muted">· on ' + escapeHtml(t.stage) + ' · ' + escapeHtml(t.mode) + '</span>';
+    }, 'bkRemoveTagRule', 'bkEditTagRule') +
     '<div class="bk-form">' +
       '<label>Tag name<input id="bkNewTag" placeholder="Consultation Booked"></label>' +
       '<label>When<select id="bkNewStage"><option value="confirm">On confirm</option><option value="cancel">On cancel</option></select></label>' +
       '<label>Do<select id="bkNewMode"><option value="add">Add it</option><option value="remove">Remove it</option></select></label>' +
     '</div>' +
     '<button class="btn btn-secondary btn-sm" onclick="bkAddTagRule()">Add tag rule</button>' +
+    '<div class="muted" id="bkRuleNoteTag" style="font-size:12.5px;margin-top:6px"></div>' +
     '<p class="muted" style="font-size:12px;margin:10px 0 0">Tags are matched ignoring case, so “Webinar” and “webinar” stay one tag.</p>' +
     '<hr style="border:none;border-top:1px dashed #e2e8f0;margin:16px 0">' +
     '<strong style="font-size:13px">Lists on the contact</strong>' +
     '<p class="muted" style="font-size:12px;margin:2px 0 8px">A booking can put the person in a list as well as tag them — either one can be what an automation watches.</p>' +
     rowList(n.list_rules, function (l) {
-      return escapeHtml(l.list_name || l.list_id) + ' <span class="muted">· on ' + escapeHtml(l.stage) + ' · ' +
+      return 'List <b>' + escapeHtml(l.list_name || l.list_id) + '</b> <span class="muted">· on ' + escapeHtml(l.stage) + ' · ' +
         (l.mode === 'remove' ? 'take out' : 'add') + '</span>';
-    }, 'bkRemoveListRule') +
+    }, 'bkRemoveListRule', 'bkEditListRule') +
     '<div class="bk-form">' +
-    '<label>List<select id="bkNewList">' + (BK.lists || []).map(function (l) {
-      return '<option value="' + escapeHtml(l.id) + '">' + escapeHtml(l.name) + '</option>';
-    }).join('') + '</select></label>' +
+    // NO SILENT FIRST OPTION (the bug that made a Palm Bay calendar appear to save an Apopka list):
+    // the dropdown starts empty, so submitting without choosing cannot store whichever list happens to
+    // sort first. The workspace's own city is suggested first to make the right choice the easy one.
+    '<label>List<select id="bkNewList">' +
+      '<option value="">Choose a list…</option>' +
+      (BK.lists || []).slice().sort(function (a, b) {
+        var cal = ((BK.detail && BK.detail.calendar && BK.detail.calendar.name) || '').toLowerCase();
+        var hit = function (l) {
+          var first = (l.name || '').split(' - ')[0].toLowerCase();
+          return cal.indexOf(first) >= 0 ? 0 : 1;
+        };
+        return hit(a) - hit(b) || (a.name || '').localeCompare(b.name || '');
+      }).map(function (l) {
+        return '<option value="' + escapeHtml(l.id) + '">' + escapeHtml(l.name) + '</option>';
+      }).join('') + '</select></label>' +
     '<label>When<select id="bkNewListStage"><option value="confirm">On confirm</option><option value="cancel">On cancel</option></select></label>' +
     '<label>Do<select id="bkNewListMode"><option value="add">Add to list</option><option value="remove">Take out of list</option></select></label>' +
     '</div>' +
     '<button class="btn btn-secondary btn-sm" onclick="bkAddListRule()">Add list rule</button>' +
+    '<div class="muted" id="bkRuleNoteList" style="font-size:12.5px;margin-top:6px"></div>' +
     ((BK.lists && BK.lists.length) ? '' :
       '<p class="muted" style="font-size:12px;margin:10px 0 0">No lists yet — create one under Contacts → Lists and it appears here.</p>') +
     '</div>';
@@ -14008,24 +14028,77 @@ function bkRemoveReminder(i) { BK.notify.reminders.splice(i, 1); bkSaveNotify();
 function bkAddTagRule() {
   var name = (document.getElementById('bkNewTag').value || '').trim();
   if (!name) { bkFlash('Give the tag a name.', false); return; }
-  BK.notify.tag_rules.push({
+  var tagRule = {
     tag_name: name,
     stage: document.getElementById('bkNewStage').value,
     mode: document.getElementById('bkNewMode').value
-  });
+  };
+  BK.notify.tag_rules = BK.notify.tag_rules || [];
+  if (BK.editingTag != null && BK.notify.tag_rules[BK.editingTag]) {
+    BK.notify.tag_rules[BK.editingTag] = tagRule;
+    BK.editingTag = null;
+    var tnote = document.getElementById('bkRuleNoteTag');
+    if (tnote) tnote.innerHTML = '';
+  } else {
+    BK.notify.tag_rules.push(tagRule);
+  }
   bkSaveNotify();
 }
 function bkRemoveTagRule(i) { BK.notify.tag_rules.splice(i, 1); bkSaveNotify(); }
+/* EDITING A SAVED RULE: the form is filled with what is stored, and pressing the Add button saves the
+ * change to THAT rule instead of appending a second one. Without this, a rule pointing at the wrong
+ * list could only be removed and retyped — and nothing on screen showed which rule was wrong. */
+function bkEditTagRule(i) {
+  var t = (BK.notify.tag_rules || [])[i];
+  if (!t) return;
+  BK.editingTag = i;
+  document.getElementById('bkNewTag').value = t.tag_name || '';
+  document.getElementById('bkNewStage').value = t.stage || 'confirm';
+  document.getElementById('bkNewMode').value = t.mode || 'add';
+  var note = document.getElementById('bkRuleNoteTag');
+  if (note) note.innerHTML = 'Editing a saved tag rule — press <b>Add tag rule</b> to save the change. ' +
+    '<a href="#" onclick="event.preventDefault();bkCancelRuleEdit(\'tag\')">Cancel</a>';
+  bkFlash('Editing a saved tag rule.');
+}
+
+function bkEditListRule(i) {
+  var l = (BK.notify.list_rules || [])[i];
+  if (!l) return;
+  BK.editingList = i;
+  var sel = document.getElementById('bkNewList');
+  if (sel) sel.value = l.list_id || '';
+  document.getElementById('bkNewListStage').value = l.stage || 'confirm';
+  document.getElementById('bkNewListMode').value = l.mode || 'add';
+  var note = document.getElementById('bkRuleNoteList');
+  if (note) note.innerHTML = 'Editing a saved list rule — press <b>Add list rule</b> to save the change. ' +
+    '<a href="#" onclick="event.preventDefault();bkCancelRuleEdit(\'list\')">Cancel</a>';
+  bkFlash('Editing a saved list rule.');
+}
+
+function bkCancelRuleEdit(kind) {
+  if (kind === 'tag') { BK.editingTag = null; document.getElementById('bkRuleNoteTag').innerHTML = ''; document.getElementById('bkNewTag').value = ''; }
+  else { BK.editingList = null; document.getElementById('bkRuleNoteList').innerHTML = ''; }
+}
+
 function bkAddListRule() {
   var sel = document.getElementById('bkNewList');
   var listId = sel ? sel.value : '';
-  if (!listId) { bkFlash('Create a list first (Contacts \u2192 Lists).', false); return; }
+  if (!listId) { bkFlash('Choose the list this booking should go into — the dropdown does not pick one for you.', false); return; }
   BK.notify.list_rules = BK.notify.list_rules || [];
-  BK.notify.list_rules.push({
+  var rule = {
     list_id: listId,
     stage: document.getElementById('bkNewListStage').value,
     mode: document.getElementById('bkNewListMode').value
-  });
+  };
+  if (BK.editingList != null && BK.notify.list_rules[BK.editingList]) {
+    // REPLACE, never append: an edit that added a second rule would leave the wrong one still firing.
+    BK.notify.list_rules[BK.editingList] = rule;
+    BK.editingList = null;
+    var note = document.getElementById('bkRuleNoteList');
+    if (note) note.innerHTML = '';
+  } else {
+    BK.notify.list_rules.push(rule);
+  }
   bkSaveNotify();
 }
 function bkRemoveListRule(i) { BK.notify.list_rules.splice(i, 1); bkSaveNotify(); }
@@ -14297,12 +14370,15 @@ function bkResourcePanel(res, kind) {
       '<td>' + bkPriceCell(r) + '</td>' +
       '<td>' + (r.duration_min || 0) + ' min</td>' +
       '<td>' + (r.capacity || 1) + '</td>' +
-      '<td><button class="btn btn-secondary btn-sm" onclick="bkEditSlotPrices(\'' + r.id + '\')">Slots</button></td></tr>';
+      '<td style="white-space:nowrap">' +
+        '<button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();bkEditResource(\'' + r.id + '\')">Edit</button> ' +
+        '<button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();bkDeleteResource(\'' + r.id + '\', ' + JSON.stringify(r.name).replace(/"/g, '&quot;') + ')">Delete</button> ' +
+        '<button class="btn btn-secondary btn-sm" onclick="bkEditSlotPrices(\'' + r.id + '\')">Slots</button></td></tr>';
   }).join('');
   return '<div class="card" style="margin-bottom:18px"><h3 style="margin-top:0">What customers can book</h3>' +
     (res.length ? '<table class="table"><thead><tr><th>Name</th><th>' + priceLabel + '</th><th>Length</th><th>Places</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
                 : '<p class="muted">Nothing bookable yet. Add the first one below.</p>') +
-    '<div class="bk-form" style="margin-top:12px">' +
+    '<div class="bk-form" id="bkResAddForm" style="margin-top:12px">' +
       '<label>Name<input id="bkResName" placeholder="' + (kind === 'inventory' ? 'Top sponsor' : kind === 'date_range' ? 'Featured listing 30 days' : 'Discovery call') + '"></label>' +
       '<label>' + priceLabel + '<input id="bkResPrice" type="number" value="' + (kind === 'appointment' ? 0 : 20000) + '"></label>' +
       // THE "WAS" PRICE (2026-11-23): a founders rate needs the old figure beside it. Display only —
@@ -14326,6 +14402,107 @@ function bkPriceCell(r) {
     out = '<span style="text-decoration:line-through;opacity:.65">' + bkMoney(was) + '</span> ' + out;
   }
   return out;
+}
+
+/* A POSITION CAN BE CORRECTED OR REMOVED (ZaarHub, 2026-11-23). A mis-priced slot used to be
+ * un-fixable once created: every row's only control was "Slots", so the price could not be changed and
+ * the row could not be deleted without rebuilding the calendar. Edit loads the row into the form above
+ * and the button turns into "Save changes"; Delete asks first, and the server refuses while a live
+ * booking depends on it. */
+function bkResourceById(id) {
+  var list = (BK.detail && BK.detail.resources) || [];
+  return list.filter(function (r) { return String(r.id) === String(id); })[0] || null;
+}
+
+function bkEditResource(id) {
+  var r = bkResourceById(id);
+  if (!r) { bkFlash('That position is no longer on this calendar.', false); return; }
+  BK.editing = id;
+  var set = function (elId, v) { var el = document.getElementById(elId); if (el) el.value = (v == null ? '' : v); };
+  set('bkResName', r.name);
+  set('bkResPrice', r.price_cents);
+  set('bkResCompare', r.compare_at_price_cents);
+  set('bkResDur', r.duration_min);
+  set('bkResCap', r.capacity);
+  set('bkResBuf', r.buffer_min);
+  set('bkResInterval', r.slot_interval_min);
+  var btn = document.querySelector('#bkWrap button[onclick="bkAddResource()"]');
+  if (btn) {
+    btn.textContent = 'Save changes';
+    btn.setAttribute('onclick', 'bkSaveResource()');
+  }
+  var cancel = document.getElementById('bkResCancel');
+  if (!cancel) {
+    var holder = document.getElementById('bkResEditNote');
+    if (!holder) {
+      holder = document.createElement('div');
+      holder.id = 'bkResEditNote';
+      holder.className = 'muted';
+      holder.style.cssText = 'margin-top:8px;font-size:12.5px';
+      var form = document.getElementById('bkResAddForm');
+      if (form) form.parentNode.insertBefore(holder, form.nextSibling);
+    }
+    holder.innerHTML = 'Editing <b>' + escapeHtml(r.name) + '</b> — change what you need and press Save changes. ' +
+      '<a href="#" onclick="event.preventDefault();bkCancelResourceEdit()">Cancel</a>';
+  }
+  bkFlash('Editing “' + r.name + '”. Change the values and press Save changes.');
+}
+
+async function bkSaveResource() {
+  var id = BK.editing;
+  var name = ((document.getElementById('bkResName') || {}).value || '').trim();
+  if (!id) return;
+  if (!name) { bkFlash('Give it a name.', false); return; }
+  try {
+    await bkCall('PATCH', '/resources/' + encodeURIComponent(id), bkResourceBody(name));
+    BK.editing = null;
+    await bkInit();
+    if (BK.current) { await bkOpenDetail(BK.current, true); bkRender(); }
+    bkFlash('Saved — the booking page uses the new values.');
+  } catch (e) { bkFlash(e.message, false); }
+}
+
+function bkResourceBody(name) {
+  var num = function (id, dflt) {
+    var el = document.getElementById(id);
+    var raw = el ? String(el.value || '').trim() : '';
+    if (raw === '') return dflt;
+    var n = parseInt(raw, 10);
+    return isNaN(n) ? dflt : n;
+  };
+  var cmpEl = document.getElementById('bkResCompare');
+  var cmpRaw = cmpEl ? String(cmpEl.value || '').trim() : '';
+  return {
+    name: name,
+    price_cents: num('bkResPrice', 0),
+    compare_at_price_cents: cmpRaw === '' ? null : parseInt(cmpRaw, 10),
+    duration_min: num('bkResDur', 30),
+    capacity: num('bkResCap', 1),
+    buffer_min: num('bkResBuf', 0),
+    slot_interval_min: num('bkResInterval', 30)
+  };
+}
+
+/* Cancel leaves the form ready for a NEW position, not the one that was being edited. */
+function bkCancelResourceEdit() {
+  BK.editing = null;
+  ['bkResName', 'bkResCompare'].forEach(function (i) { var el = document.getElementById(i); if (el) el.value = ''; });
+  var btn = document.querySelector('#bkWrap button[onclick="bkSaveResource()"]');
+  if (btn) { btn.textContent = 'Add'; btn.setAttribute('onclick', 'bkAddResource()'); }
+  var note = document.getElementById('bkResEditNote');
+  if (note) note.innerHTML = '';
+  bkFlash('Edit cancelled.');
+}
+
+function bkDeleteResource(id, name) {
+  confirmThen('Remove “' + name + '” from what customers can book? Its open dates go with it. If any booking is still live against it, this is refused and tells you how many.', async function () {
+    try {
+      var r = await bkCall('DELETE', '/resources/' + encodeURIComponent(id));
+      await bkInit();
+      if (BK.current) { await bkOpenDetail(BK.current, true); bkRender(); }
+      bkFlash(r.message || 'Removed.', true);
+    } catch (e) { bkFlash(e.message, false); }
+  });
 }
 
 async function bkAddResource() {

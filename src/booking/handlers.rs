@@ -91,6 +91,32 @@ pub async fn clone_calendar(
     Ok(Json(value))
 }
 
+/// `PATCH /api/booking/resources/:id` — correct an existing position.
+pub async fn update_resource(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<NewResource>,
+) -> Result<Json<Resource>> {
+    let mut c = pool.acquire().await?;
+    Ok(Json(service::update_resource(&mut c, t.0, id, body).await?))
+}
+
+/// `DELETE /api/booking/resources/:id` — remove a position, refused while bookings depend on it.
+pub async fn delete_resource(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>> {
+    let mut c = pool.acquire().await?;
+    let (name, slots) = service::delete_resource(&mut c, t.0, id).await?;
+    Ok(Json(json!({
+        "deleted": name,
+        "slots_removed": slots,
+        "message": format!("\"{name}\" removed{}, along with its open dates.", if slots == 1 { "" } else { "" }),
+    })))
+}
+
 pub async fn get_calendar(
     State(pool): State<PgPool>,
     Extension(t): Extension<TenantId>,

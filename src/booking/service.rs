@@ -369,6 +369,134 @@ pub async fn create_resource(
     .await?)
 }
 
+/// Correct an existing bookable resource (ZaarHub, 2026-11-23).
+///
+/// A mis-priced position could be CREATED and never corrected: the console offered only "Slots", so the
+/// only way to change a price was to rebuild the calendar. Every field is editable here, including the
+/// compare-at price — and an empty compare-at means "remove the was-price", which is why it is written
+/// unconditionally rather than merged.
+pub async fn update_resource(
+    conn: &mut PgConnection,
+    tenant: Uuid,
+    resource_id: Uuid,
+    r: NewResource,
+) -> Result<Resource> {
+    // A DATED SLOT KEEPS ITS OWN PRICE, SO A CORRECTION HAS TO FOLLOW IT (measured 2026-11-23). The
+    // price a buyer is charged on a dated slot is the SLOT's, not the resource's: editing the resource
+    // from 25.00 to 40.00 left thirteen open dates still selling at 25.00 — the page showed the new
+    // "was" figure beside the old price. The old price is read first, and only slots that were still
+    // carrying it are moved, so a date deliberately priced on its own is left alone.
+    let previous_price: Option<i64> = sqlx::query_scalar(
+        "SELECT r.price_cents FROM booking_resources r JOIN booking_calendars c ON c.id = r.calendar_id \
+          WHERE r.id = $1 AND c.tenant_id = $2",
+    )
+    .bind(resource_id)
+    .bind(tenant)
+    .fetch_optional(&mut *conn)
+    .await?;
+
+    let updated = sqlx::query_as::<_, Resource>(
+        "UPDATE booking_resources r SET
+             name = $3, description = $4, capacity = $5, price_cents = $6,
+             compare_at_price_cents = $7, duration_min = $8, slot_interval_min = $9,
+             buffer_min = $10, min_notice_min = $11, sort_order = $12
+           FROM booking_calendars c
+          WHERE r.calendar_id = c.id AND r.id = $1 AND c.tenant_id = $2
+        RETURNING r.*",
+    )
+    .bind(resource_id)
+    .bind(tenant)
+    .bind(r.name.trim())
+    .bind(r.description.unwrap_or_default())
+    .bind(r.capacity.unwrap_or(1).max(1))
+    .bind(r.price_cents.unwrap_or(0).max(0))
+    .bind(r.compare_at_price_cents.map(|v| v.max(0)))
+    .bind(r.duration_min.unwrap_or(30).max(1))
+    .bind(r.slot_interval_min.or(r.duration_min).unwrap_or(30).max(1))
+    .bind(r.buffer_min.unwrap_or(0).max(0))
+    .bind(r.min_notice_min.unwrap_or(0).max(0))
+    .bind(r.sort_order.unwrap_or(0))
+    .fetch_optional(&mut *conn)
+    .await?
+    .ok_or_else(|| BookingError::NotFound("resource"))?;
+
+    if let Some(old_price) = previous_price {
+        let new_price = updated.price_cents;
+        if old_price != new_price {
+            let moved = sqlx::query(
+                "UPDATE booking_slots SET price_cents = $2 \
+                  WHERE resource_id = $1 AND price_cents = $3 AND status = 'open'",
+            )
+            .bind(resource_id)
+            .bind(new_price)
+            .bind(old_price)
+            .execute(&mut *conn)
+            .await?
+            .rows_affected();
+            if moved > 0 {
+                tracing::info!(resource = %resource_id, slots = moved,
+                    "resource price corrected: open slots moved with it");
+            }
+        }
+    }
+    Ok(updated)
+}
+
+/// Remove a bookable resource, and refuse while a live booking depends on it.
+///
+/// `booking_bookings.resource_id` has no cascade, so a delete would fail deep in the driver with a
+/// database error naming a constraint. The count is asked FIRST and answered as a sentence: the owner
+/// is told how many bookings stand in the way, which is the only fact that lets them decide (cancel
+/// those bookings, or retire the resource instead of deleting it). Slots and open hours cascade.
+pub async fn delete_resource(
+    conn: &mut PgConnection,
+    tenant: Uuid,
+    resource_id: Uuid,
+) -> Result<(String, i64)> {
+    let owned: Option<(String,)> = sqlx::query_as(
+        "SELECT r.name FROM booking_resources r JOIN booking_calendars c ON c.id = r.calendar_id \
+          WHERE r.id = $1 AND c.tenant_id = $2",
+    )
+    .bind(resource_id)
+    .bind(tenant)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some((name,)) = owned else {
+        return Err(BookingError::NotFound("resource"));
+    };
+
+    let live: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM booking_bookings b \
+           JOIN booking_slots s ON s.id = b.slot_id \
+          WHERE s.resource_id = $1 \
+            AND (b.status = 'confirmed' OR (b.status = 'held' AND b.hold_expires_at > now()))",
+    )
+    .bind(resource_id)
+    .fetch_one(&mut *conn)
+    .await?;
+
+    if live > 0 {
+        return Err(BookingError::conflict(format!(
+            "\"{name}\" has {live} live booking{}. Cancel {} first, or keep the resource and stop offering it by setting its places to zero — deleting it now would leave {} without the thing {} paid for.",
+            if live == 1 { "" } else { "s" },
+            if live == 1 { "that booking" } else { "those bookings" },
+            if live == 1 { "a buyer" } else { "buyers" },
+            if live == 1 { "they" } else { "they" }
+        )));
+    }
+
+    let slots = sqlx::query("DELETE FROM booking_slots WHERE resource_id = $1")
+        .bind(resource_id)
+        .execute(&mut *conn)
+        .await?
+        .rows_affected();
+    sqlx::query("DELETE FROM booking_resources WHERE id = $1")
+        .bind(resource_id)
+        .execute(&mut *conn)
+        .await?;
+    Ok((name, slots as i64))
+}
+
 /// Replace the weekly open hours of an appointment resource.
 pub async fn set_rules(
     pool: &PgPool,

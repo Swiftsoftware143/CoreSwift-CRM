@@ -59,6 +59,12 @@ pub fn admin_router(pool: PgPool) -> Router {
         .route("/calendars/:id/availability", get(h::admin_availability))
         .route("/calendars/:id/orders", get(h::list_orders))
         .route("/resources/:id/availability-rules", put(h::set_rules))
+        // AN EXISTING POSITION CAN BE CORRECTED OR REMOVED (ZaarHub, 2026-11-23): a mis-priced slot
+        // used to be un-fixable once created — the console offered only "Slots".
+        .route(
+            "/resources/:id",
+            patch(h::update_resource).delete(h::delete_resource),
+        )
         .route("/resources/:id/slots/generate", post(h::generate_slots))
         .route("/slots/:id", patch(h::update_slot))
         .route("/orders/:id", get(h::admin_get_order))
