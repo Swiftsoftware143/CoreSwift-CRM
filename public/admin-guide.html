@@ -368,6 +368,16 @@ message type, ask which of these it is before it ships: <em>can the recipient's 
 read <em>their</em> list — never copy a block from another account "to be safe", and never lift one that came from a hard bounce or a complaint: those are harm control, not
 preference.</p>
 
+<h3>Do not mail — the screen (operator console, Settings)</h3>
+<p>The operator console now carries <strong>Do not mail</strong> under <strong>Settings</strong>, beside Email Branding: the same account-scoped list the customer console's
+Mail compliance tab shows. It answers, in one screen, how many addresses are on the list, how many were added in the last 30 days, and the month's hard bounces and spam
+complaints — the two that add an address by themselves when the provider reports them. Four controls, each doing exactly one thing: <strong>Add to the list</strong> records an
+address that asked by phone or by hand (recorded as <strong>manual</strong>, so an operator's entry can never be mistaken for a bounce or a complaint),
+<strong>Allow again</strong> lifts a row so future mail reaches that address, and the two downloads
+give the do-not-mail list as a CSV, or every contact address in the workspace one per line for pasting into a checker. Lifting an address refuses a row that belongs to another account (it answers "no such
+suppression in this account") and never recalls anything already sent. Every row prints where it came from — <code>console</code> for a hand-added one — and the list is read
+and written under the signed-in account, so nothing here can see or lift another workspace's block.</p>
+
 <h3>The opt-out page and its wording</h3>
 <p>The page lists the campaigns that address is actually in, each with its own tick box, plus one stop-everything choice. A tick on one campaign stops only that campaign. The
 wording (title, explanation, stop-everything label, button, and the two confirmation lines) is per account and edited from the Mail compliance tab by an owner or an admin;

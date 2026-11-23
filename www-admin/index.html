@@ -1358,6 +1358,13 @@ const SETTINGS_MENU = [
   // `tenant_logos`. It is the workspace's OWN identity on the mail it sends, so it belongs with the
   // tenant Settings menu rather than the platform Admin menu.
   { id:'email-branding', icon:'🎨', label:'Email Branding' },
+  // Do not mail (2026-11-23). The backend has existed since the mail-compliance module shipped —
+  // GET|POST /api/mail-compliance/suppressions, DELETE /suppressions/:id, GET /suppressions.csv and
+  // /addresses.csv (src/mail_compliance/mod.rs) — and this console had NO screen for any of it, so
+  // an operator could not see who asked to stop, could not add an address that asked by phone, and
+  // could not lift one. A backend route with no UI is a defect by this fleet's rule, and it is the
+  // customer's OWN list, so it belongs in Settings beside Email Branding.
+  { id:'do-not-mail', icon:'🚫', label:'Do not mail' },
   { id:'integrations', icon:'🔌', label:'Integration Center' },
   // AI Tools (MCP) — 2026-11-19. The fleet MCP server answers six `coreswift_*` tools and
   // authenticates a customer with this workspace's own lead-delivery key (its key_auth reads
@@ -2415,6 +2422,17 @@ const TAB_RENDERERS = {
   'email-branding': () => {
     return pageHeader('Email Branding', 'Your logo and name on the transactional email sent for your account') +
     '<div id="brandPane" data-ops="email-branding-pane"><div class="loading-wrap"><div class="spinner"></div> Loading branding...</div></div>';
+  },
+
+  // ── DO NOT MAIL (2026-11-23) ───────────────────────────────────────────────────────────────
+  // The screen for the mail-compliance module that already ran with no UI: the list the sender
+  // consults before every send (email_suppressions), the hand-add arm for a request taken by
+  // phone, the lift arm, and the two CSV downloads. Registers a TAB_LOADER because the renderer
+  // runs before its HTML is in the document — the same rule every server-backed panel here obeys.
+  'do-not-mail': () => {
+    return pageHeader('Do not mail',
+      'Everyone this workspace must stop emailing — an unsubscribe, a hard bounce, a spam complaint, or a request you took by phone') +
+    '<div id="dnmWrap" data-ops="do-not-mail-pane"><div class="loading-wrap"><div class="spinner"></div> Loading the list...</div></div>';
   },
 
   // AI Tools (MCP) \u2014 2026-11-19. Read-only surface for the fleet MCP server at
@@ -4138,6 +4156,9 @@ const TAB_LOADERS = {
   // Email Branding panel: registers a loader for the same reason as the loaders above — the renderer
   // runs before its HTML is in the document, so an in-renderer load would see no #brandPane.
   'email-branding': async () => { await loadBrandingTab(); },
+  // Same rule as every loader above: the renderer runs before #dnmWrap is in the document, so the
+  // do-not-mail load registers here and runs against an element that already exists.
+  'do-not-mail': async () => { await loadDoNotMail(); },
   // Same reason as the loaders above: the renderer runs before its HTML is in the document, so the
   // tenants list registers here and runs against a #tenantsTable that already exists.
   'tenants': async () => { await loadTenantsTab(); },
@@ -7824,6 +7845,133 @@ async function saveProvisioning() {
   }
 }
 
+// ── DO NOT MAIL (2026-11-23) ───────────────────────────────────────────────────────────────────
+// The console screen for the mail-compliance module that had NO UI. Backend (src/mail_compliance/
+// mod.rs, mounted at /api/mail-compliance): GET /overview (rates + counts), GET|POST /suppressions,
+// DELETE /suppressions/:id, GET /suppressions.csv, GET /addresses.csv. Every call is scoped
+// server-side to the caller's own tenant, so nothing here can read another workspace's list.
+// Plain words only: what the list is, why a row is on it, and one control per action.
+let DNM_STATE = null;
+
+async function loadDoNotMail() {
+  const wrap = document.getElementById('dnmWrap');
+  if (!wrap) return;                       // the tab was switched away mid-load
+  let ov = null, items = [], failed = null;
+  try {
+    ov = await API.get('/mail-compliance/overview');
+    const r = await API.get('/mail-compliance/suppressions');
+    items = (r && r.suppressions) || [];
+  } catch (e) { failed = e.message; }
+  if (!document.getElementById('dnmWrap')) return;
+  if (failed) {
+    wrap.innerHTML = card('The list could not be loaded',
+      '<p style="color:var(--error)">' + escapeHtml(failed) + '</p>' +
+      '<p class="form-hint">Nothing was changed. Try again in a moment.</p>',
+      '<button class="btn btn-secondary btn-sm" onclick="loadDoNotMail()">Retry</button>');
+    return;
+  }
+  DNM_STATE = { ov: ov || {}, items: items };
+  renderDoNotMail();
+}
+
+function renderDoNotMail() {
+  const wrap = document.getElementById('dnmWrap');
+  if (!wrap || !DNM_STATE) return;
+  const ov = DNM_STATE.ov || {};
+  const items = DNM_STATE.items || [];
+  const rates = ov.rates || {};
+  const onList = (typeof ov.suppressed === 'number') ? ov.suppressed : items.length;
+  const last30 = (typeof ov.suppressed_last_30d === 'number') ? ov.suppressed_last_30d : 0;
+  const stat = (n, label, hint) =>
+    '<div class="stat-card"><div class="stat-value">' + escapeHtml(String(n)) + '</div>' +
+    '<div class="stat-label">' + label + '</div>' +
+    (hint ? '<div class="form-hint" style="margin-top:6px">' + hint + '</div>' : '') + '</div>';
+
+  let html = '<div class="stats-grid">' +
+    stat(onList, 'addresses on the list', 'None of them is ever emailed again') +
+    stat(last30, 'added in the last 30 days', '') +
+    stat(rates.bounced || 0, 'hard bounces this month', 'The provider reports these; they land here on their own') +
+    stat(rates.complained || 0, 'spam complaints this month', 'A complaint always adds the address') +
+    '</div>';
+
+  html += card('Add an address by hand',
+    '<div class="form-group"><label for="dnmAddr">Email address</label>' +
+    '<input id="dnmAddr" type="email" placeholder="person@example.com" autocomplete="off">' +
+    '<p class="form-hint">An address on this list is skipped by everything this workspace sends &mdash; campaign mail, notices and account mail. Lifting one lets future mail through again; it cannot recall anything already sent. A hand-added address is recorded as <strong>manual</strong>, so an operator&#39;s own entry can never be mistaken for the provider&#39;s bounce or a customer&#39;s complaint.</p></div>',
+    '<button class="btn btn-primary" onclick="dnmAdd()">Add to the list</button>');
+
+  const rows = items.map(function (it) {
+    const when = it.created_at ? new Date(it.created_at).toLocaleString() : '—';
+    const why = (it.reason || '') + (it.mail_class && it.mail_class !== 'all' ? ' · ' + it.mail_class : '');
+    return [
+      '<span style="word-break:break-all">' + escapeHtml(it.address || '') + '</span>',
+      escapeHtml(why || '—'),
+      escapeHtml(it.source || '—'),
+      escapeHtml(when),
+      '<button class="btn btn-secondary btn-sm" onclick="dnmRemove(\'' + escapeHtml(String(it.id)) + '\')">Allow again</button>'
+    ];
+  });
+  html += dataTable(['Address', 'Why', 'Added by', 'Added', ''], rows,
+    'Nobody has been added yet. An unsubscribe click, a hard bounce or a spam complaint lands an address here on its own.');
+
+  html += card('Take a copy',
+    '<p class="form-hint">The do-not-mail list itself as a file you can keep. The second download is a different thing: every contact address in this workspace, one per line, for pasting into an address checker.</p>',
+    '<button class="btn btn-secondary btn-sm" onclick="dnmDownload(\'suppressions\')">Download the do-not-mail list (CSV)</button> ' +
+    '<button class="btn btn-secondary btn-sm" onclick="dnmDownload(\'addresses\')">Download all contact addresses (CSV)</button>');
+
+  wrap.innerHTML = html;
+}
+
+async function dnmAdd() {
+  const addrEl = document.getElementById('dnmAddr');
+  const address = ((addrEl && addrEl.value) || '').trim();
+  if (!address || address.indexOf('@') < 0) { toast('Type an email address first.', 'warning'); return; }
+  try {
+    // `reason` must be one of the vocabulary the email_suppressions CHECK accepts
+    // (unsubscribed / hard_bounce / complaint / manual / provider): the server passes an arbitrary
+    // string straight through, so free text would be refused by the database and surface as a 500.
+    // A hand-added row is always `manual` — the operator's own entry, never a bounce or a complaint.
+    await API.post('/mail-compliance/suppressions', { address: address, reason: 'manual' });
+    toast('Added — ' + address + ' will not be emailed again.', 'success');
+    await loadDoNotMail();
+  } catch (e) {
+    toast('Could not add that address: ' + e.message, 'error');
+  }
+}
+
+async function dnmRemove(id) {
+  const items = (DNM_STATE && DNM_STATE.items) || [];
+  const row = items.filter(function (it) { return String(it.id) === String(id); })[0];
+  const address = (row && row.address) || 'that address';
+  if (!confirm('Allow ' + address + ' to receive email again?')) return;
+  try {
+    await API.del('/mail-compliance/suppressions/' + encodeURIComponent(id));
+    toast(address + ' can receive email again.', 'success');
+    await loadDoNotMail();
+  } catch (e) {
+    toast('Could not lift that address: ' + e.message, 'error');
+  }
+}
+
+async function dnmDownload(kind) {
+  const path = kind === 'addresses' ? '/mail-compliance/addresses.csv' : '/mail-compliance/suppressions.csv';
+  try {
+    const res = await fetch('/api' + path, {
+      headers: STATE.token ? { 'Authorization': 'Bearer ' + STATE.token } : {}
+    });
+    if (!res.ok) throw new Error(res.status === 401 ? 'Your session expired — sign in again.' : 'The download failed.');
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = kind === 'addresses' ? 'addresses.csv' : 'do-not-mail.csv';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  } catch (e) {
+    toast('Could not download the list: ' + e.message, 'error');
+  }
+}
+
 </script>
 
 <!-- Fleet inline guide (FS-10 pattern), the same widget the other operator consoles carry: a round
@@ -7859,6 +8007,7 @@ window.appGuidePages = {
   'round-robin': { title: 'Round Robin', desc: 'Distributes new leads evenly across your team.', actions: ['Choose the team and the rotation'] },
   profile: { title: 'Profile', desc: 'Your own name, company, password and picture.', actions: ['Update your name and company and save', 'Upload a picture (PNG/JPEG/GIF/WebP, up to 2 MB)', 'Change your password (your current one is required)'] },
   'email-branding': { title: 'Email Branding', desc: 'Your logo and display name on every transactional email this account sends. Leave it blank and mail keeps the CoreSwift look.', actions: ['Upload a logo (PNG/JPEG/GIF/WebP, up to 2 MB)', 'Set a brand name and colour, then save', 'Press “Email it to me” to have the exact message sent to your own inbox'] },
+  'do-not-mail': { title: 'Do not mail', desc: 'The addresses this workspace must never email again — from an unsubscribe click, a hard bounce or a spam complaint reported by the mail provider, or a request you took by phone. Every send on the account consults this list first, so an address here is skipped by campaign mail, notices and account mail alike. Lifting an address lets future mail through again; nothing already sent is recalled.', actions: ['Add an address that asked by phone, with an optional reason', 'Read why and when each address was added', 'Press Allow again to lift one', 'Download the whole list, or just the addresses, as a CSV'] },
   integrations: { title: 'Integration Center', desc: 'Connect the services this workspace uses, each with your own provider key (BYOK).', actions: ['Paste a provider key and save', 'Email integrations drive the mail you send'] },
   portfolio: { title: 'Portfolio Companies', desc: 'Advisory portfolios — one parent whose companies are managed together. Sync New Company gives a company its own workspace and owner login and emails the login details to the owner; a record with no account behind it is converted by the same press, and a second press only refreshes the details.', actions: ['Add a portfolio and its companies', 'Press 🔄 Sync New Company — the owner receives the login by email', 'Pick the plan the new account is seated on'] },
   tenants: { title: 'Users', desc: 'Every workspace on the platform, with a per-row checkbox, a Select probes picker and Delete selected to retire junk workspaces (the server refuses a protected row and shows why). This is the workspace list, not an invite screen: people join an account through that account\u2019s own Team & Invites. Each row also names the plan that account is actually on, read from the same entitlement check the plan card uses \u2014 "no plan row" means the workspace has no active plan and the every-module default applies, never that it is on a paid tier. The chips above the table count how many workspaces sit on each plan; pressing one shows only those workspaces, and All workspaces shows the full list again.', actions: ['Tick the workspaces to retire, or press Select probes to tick every probe/test workspace at once', 'Press a plan chip (All workspaces, Free, Agency, no plan row) to show only those workspaces', 'Read the Plan column to see each workspace\u2019s real tier \u2014 an account with no plan row is called out rather than guessed', 'Delete selected removes them with their data', 'To add a person, open the tenant console\u2019s Team & Invites for that account'] },
