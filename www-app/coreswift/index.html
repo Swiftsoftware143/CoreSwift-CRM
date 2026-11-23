@@ -14119,6 +14119,35 @@ async function bkSaveNotify() {
  * public address per newsletter, and each address lists only that workspace's calendars. Nothing is
  * provisioned outside the app for a new address: the wildcard already answers any
  * <label>.coreswiftcrm.com over https, so an address works the moment it is saved. */
+/* CHECK EVERY CALENDAR IN ONE READ (ZaarHub, 2026-11-23). Verifying ten calendars by clicking through
+ * ten forms is what made a correct rule look like a broken one. One call answers with every calendar's
+ * workspace, address, positions, tag rule and list rule — and names what looks wrong. */
+function bkSummaryPanel() {
+  var d = BK.summary;
+  if (!d) return '<div class="card" style="margin-bottom:18px"><h3 style="margin-top:0">Check every calendar</h3>' +
+    '<p class="muted" style="margin-top:-6px">One read of every calendar on this account: workspace, address, positions, tag rule and list rule — and anything that looks wrong.</p>' +
+    '<button class="btn btn-secondary" onclick="bkLoadSummary()">Check every calendar</button></div>';
+  var lines = (d.lines || []).map(function (l) { return '<li>' + escapeHtml(l) + '</li>'; }).join('');
+  var problems = (d.problems || []);
+  var phtml = problems.length
+    ? '<ul style="margin:8px 0 0;padding-left:18px">' + problems.map(function (x) {
+        return '<li style="color:#b45309;margin-bottom:4px">' + escapeHtml(x) + '</li>'; }).join('') + '</ul>'
+    : '<p style="color:#059669;margin:8px 0 0">No problems found across ' + (d.count || 0) + ' calendar' + ((d.count === 1) ? '' : 's') + '.</p>';
+  return '<div class="card" style="margin-bottom:18px">' +
+    '<h3 style="margin-top:0">Check every calendar</h3>' +
+    '<p class="muted" style="margin-top:-6px">' + (d.count || 0) + ' calendar' + ((d.count === 1) ? '' : 's') + ' on this account.</p>' +
+    '<ul style="margin:6px 0 0;padding-left:18px">' + lines + '</ul>' +
+    '<h4 style="margin:14px 0 0">Worth a look</h4>' + phtml +
+    '<button class="btn btn-secondary btn-sm" style="margin-top:10px" onclick="bkLoadSummary()">Check again</button>' +
+    '</div>';
+}
+
+async function bkLoadSummary() {
+  try { BK.summary = await API.get('/booking/calendars/summary'); }
+  catch (e) { bkFlash(e.message, false); return; }
+  bkRender();
+}
+
 function bkWorkspaceHostsPanel() {
   var d = BK.wsHosts;
   if (!d || !d.workspaces || !d.workspaces.length) return '';
@@ -14227,7 +14256,7 @@ async function bkSaveWsHost(id) {
 
 function bkHostPanel() {
   var h = BK.host || {};
-  return bkWorkspaceHostsPanel() +
+  return bkWorkspaceHostsPanel() + bkSummaryPanel() +
     '<div class="card" style="margin-bottom:18px">' +
     '<h3 style="margin-top:0">Your booking address</h3>' +
     '<p class="muted" style="margin-top:-6px">What happens when someone opens your booking address with no calendar chosen. Leave the redirect empty and visitors see the calendars below.</p>' +
@@ -14331,14 +14360,54 @@ function bkRulesPanel(cal) {
   var l = (cal.settings && cal.settings.limits) || {};
   return '<div class="card" style="margin-bottom:18px">' +
     '<h3 style="margin-top:0">What buyers are shown</h3>' +
-    '<p class="muted" style="margin-top:-6px">Keep the choice tight so people book sooner. Leave a box empty for no limit.</p>' +
+    // THE WINDOW, NOT A CURTAIN (ZaarHub, 2026-11-23). These three numbers decide what a buyer is
+    // shown; the sentence underneath is computed from live inventory by the same builder the public
+    // page uses, so the console can never describe a limit the page is not applying.
+    '<p class="muted" style="margin-top:-6px">These three numbers decide what a buyer is shown. Every open date beyond them still exists — it comes into view as the calendar advances, and as earlier dates are booked.</p>' +
     '<div class="bk-form">' +
       '<label>Options in total<input id="bkLimTotal" type="number" min="1" placeholder="e.g. 5" value="' + escapeHtml(l.max_options || '') + '"></label>' +
-      '<label>Options per day<input id="bkLimDay" type="number" min="1" placeholder="e.g. 3" value="' + escapeHtml(l.max_per_day || '') + '"></label>' +
+      // ONE PER POSITION, not one per calendar: four positions in the same issue are four products.
+      '<label>Options per day, per position<input id="bkLimDay" type="number" min="1" placeholder="e.g. 1" value="' + escapeHtml(l.max_per_day || '') + '"><span class="muted" style="font-weight:400">One of EACH thing you sell per date — four positions can still show four tiles on the same day.</span></label>' +
       '<label>How far ahead (days)<input id="bkLimAhead" type="number" min="1" placeholder="e.g. 60" value="' + escapeHtml(l.max_advance_days || '') + '"></label>' +
     '</div>' +
-    '<button class="btn btn-primary" onclick="bkSaveRules()">Save</button>' +
+    '<button class="btn btn-primary" onclick="bkSaveRules()">Save</button> ' +
+    '<button class="btn btn-secondary" onclick="bkLoadBuyerPreview()">Preview as buyer</button>' +
     '<p class="muted" style="font-size:12px;margin:10px 0 0">Applies to the booking page and its embeds. You still see everything when filling a position by hand.</p>' +
+    '<p id="bkLimSentence" style="font-size:13px;margin:8px 0 0"></p>' +
+    '<div id="bkBuyerPreview"></div>' +
+    '</div>';
+}
+
+/* WHAT THE BUYER SEES, RENDERED HERE (ZaarHub, 2026-11-23). The console used to describe the limits;
+ * nobody could see their result without opening the public URL, which is exactly how a page showing
+ * nothing went unnoticed. This renders the very tiles the public page gets — same builder, same caps.
+ */
+async function bkLoadBuyerPreview() {
+  var box = document.getElementById('bkBuyerPreview');
+  var sentence = document.getElementById('bkLimSentence');
+  if (!box) return;
+  box.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Asking the public page…</div>';
+  var d;
+  try { d = await API.get('/booking/calendars/' + encodeURIComponent(BK.current) + '/buyer-preview'); }
+  catch (e) { box.innerHTML = '<p class="muted">Could not read the buyer view — ' + escapeHtml(e.message) + '</p>'; return; }
+  if (sentence && d.view) sentence.textContent = d.view.sentence;
+  var tiles = (d.tiles || []).slice(0, 40);
+  box.innerHTML = '<div style="margin-top:12px;border-top:1px dashed #e2e8f0;padding-top:10px">' +
+    '<strong style="font-size:13px">Preview as buyer</strong>' +
+    '<p class="muted" style="font-size:12.5px;margin:4px 0 8px">' + escapeHtml((d.view || {}).sentence || '') + '</p>' +
+    (tiles.length
+      ? '<div style="display:flex;flex-wrap:wrap;gap:8px">' + tiles.map(function (t) {
+          var price = bkMoney(t.price_cents);
+          var was = (t.compare_at_price_cents && t.compare_at_price_cents > t.price_cents)
+            ? '<span style="text-decoration:line-through;opacity:.6;margin-right:4px">' + bkMoney(t.compare_at_price_cents) + '</span>' : '';
+          return '<div style="border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;min-width:150px">' +
+            '<div style="font-weight:600;font-size:13px">' + escapeHtml(t.resource_name || 'Position') + '</div>' +
+            '<div class="muted" style="font-size:12px">' + escapeHtml(new Date(t.starts_at).toLocaleDateString()) + '</div>' +
+            '<div style="font-weight:700">' + was + price + '</div>' +
+            '<div class="muted" style="font-size:11.5px">' + (t.remaining > 1 ? t.remaining + ' places' : 'One place') + '</div>' +
+            '</div>';
+        }).join('') + '</div>'
+      : '<p style="color:#b45309">The buyer sees NOTHING right now. That is the same answer the public page gives — so it is not a display fault, it is inventory or the limits.</p>') +
     '</div>';
 }
 

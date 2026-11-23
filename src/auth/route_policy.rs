@@ -475,6 +475,9 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/public/helpdesk/kb/vote",
     "/api/public/booking/c/:slug",
     "/api/public/booking/c/:slug/availability",
+    // WHAT THE PAGE IS SHOWING AND WHY (2026-11-23): the line that tells a visitor more dates open as
+    // the calendar advances. Public because the page it describes is public.
+    "/api/public/booking/c/:slug/limits",
     "/api/public/booking/c/:slug/quote",
     "/api/public/booking/c/:slug/orders",
     "/api/public/booking/orders/:id",

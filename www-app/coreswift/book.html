@@ -379,6 +379,32 @@
       if (!cal.resources && payload.resources) cal.resources = payload.resources;
       if (!cal.bundles && payload.bundles) cal.bundles = payload.bundles;
       STATE.cal = cal;
+      // MORE DATES OPEN AS THE CALENDAR ADVANCES (ZaarHub, 2026-11-23). When a horizon or a
+      // per-date cap is in force the visitor is told so: a short list that reads as a closed door
+      // loses the sale, the same list explained reads as demand. Everything here is derived from the
+      // page's own address and wrapped so that a failure can NEVER take the booking page down — the
+      // line is a courtesy, the tiles are the product.
+      try {
+        (function askLimits() {
+          var parts = window.location.pathname.split('/').filter(Boolean);
+          var last = parts.length ? decodeURIComponent(parts[parts.length - 1]) : '';
+          if (!last) return;
+          fetch('/api/public/booking/c/' + encodeURIComponent(last) + '/limits',
+                { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (d) {
+              if (!d || !d.more_later) return;
+              var host = document.getElementById('calBlurb');
+              if (!host || document.getElementById('bkMoreLater')) return;
+              var line = document.createElement('span');
+              line.id = 'bkMoreLater';
+              line.style.cssText = 'display:block;margin-top:6px;font-size:13px;opacity:.85';
+              line.textContent = 'More dates open as the calendar advances.';
+              host.appendChild(line);
+            })
+            .catch(function () {});
+        })();
+      } catch (e) { /* never break the page for a courtesy line */ }
       // THE WORKSPACE'S OWN LOOK (2026-11-23). A reader arriving from a newsletter should not land on
       // a generic indigo form: the brand colour, name and logo the owner already set are applied here.
       // Anything unset is left alone, so a workspace with no branding keeps the default page.

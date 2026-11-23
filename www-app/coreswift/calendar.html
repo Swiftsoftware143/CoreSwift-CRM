@@ -237,11 +237,18 @@
     wrap.innerHTML = site.calendars.map(function (cal, ci) {
       var slots = (cal.slots || []).map(function (sl, si) {
         var full = !sl.open;
+        // The price is the amount CHARGED; a compare-at figure is struck through beside it and is
+        // never part of the total (ZaarHub founders rate).
+        var was = (sl.compare_at_price && Number(sl.compare_at_price) > Number(sl.price))
+          ? '<span style="text-decoration:line-through;opacity:.6;font-size:14px;margin-right:4px">' +
+            esc(money(sl.compare_at_price)) + '</span>'
+          : '';
+        var dates = (sl.open_dates != null) ? (sl.open_dates + (sl.open_dates === 1 ? ' date open' : ' dates open')) : '';
         return '<div class="slot">' +
           '<div class="slot-row"><span class="slot-name">' + esc(sl.name) + '</span>' +
-          '<span class="price">' + esc(money(sl.price)) + '</span></div>' +
+          '<span class="price">' + was + esc(money(sl.price)) + '</span></div>' +
           '<div class="meta">' + (sl.duration_days ? sl.duration_days + ' day' + (sl.duration_days === 1 ? '' : 's') : '') +
-          (sl.total_slots < 0 ? ' · unlimited places' : ' · ' + Math.max(0, sl.total_slots - sl.filled_slots) + ' of ' + sl.total_slots + ' left') + '</div>' +
+          (dates ? ' · ' + dates : (sl.total_slots < 0 ? ' · unlimited places' : ' · ' + Math.max(0, sl.total_slots - sl.filled_slots) + ' of ' + sl.total_slots + ' left')) + '</div>' +
           '<div style="margin-top:8px;display:flex;align-items:center;gap:10px">' +
           '<span class="pill ' + (full ? 'full' : 'open') + '">' + (full ? 'full' : 'open') + '</span>' +
           (full ? '' : '<button class="btn" type="button" data-cal="' + ci + '" data-slot="' + si + '">Reserve</button>') +
@@ -249,7 +256,7 @@
       }).join('');
       return '<div class="card"><h2>' + esc(cal.name) + '</h2>' +
         (cal.description ? '<p class="desc">' + esc(cal.description) + '</p>' : '<p class="desc"></p>') +
-        (slots || '<div class="meta">No places configured for this calendar.</div>') + '</div>';
+        (slots || '<div class="meta">This calendar has nothing bookable yet — no positions are published.</div>') + '</div>';
     }).join('');
 
     Array.prototype.forEach.call(wrap.querySelectorAll('button[data-cal]'), function (b) {

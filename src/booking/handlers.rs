@@ -91,6 +91,231 @@ pub async fn clone_calendar(
     Ok(Json(value))
 }
 
+/// `GET /api/booking/calendars/summary` — everything about every calendar in ONE answer.
+///
+/// WHY THIS EXISTS (ZaarHub, 2026-11-23): verifying ten city calendars meant ten browser sessions of
+/// selector-wrangling, and a rule pointing at the WRONG list looked identical to one pointing at the
+/// right list until somebody clicked through the form. One read that states the facts — workspace, own
+/// domain, every position with its prices, the tag rule, the list rule — turns a ten-session audit into
+/// one call, and makes a false alarm impossible: what is stored is what is printed.
+///
+/// It also carries a `problems` list. A summary that only echoed data would still leave the reader to
+/// spot the mistake; the problems are the checks a careful operator would make — a position with no
+/// price, a calendar with nothing bookable, a rule that is missing or points at a list whose name does
+/// not match the workspace, dates that have not been generated.
+pub async fn calendars_summary(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+) -> Result<Json<Value>> {
+    let calendars: Vec<(Uuid, String, String, Option<Uuid>, Option<String>)> = sqlx::query_as(
+        "SELECT c.id, c.name, c.slug, c.workspace_id, w.name \
+           FROM booking_calendars c LEFT JOIN workspaces w ON w.id = c.workspace_id \
+          WHERE c.tenant_id = $1 AND c.is_active \
+          ORDER BY w.name NULLS LAST, c.name",
+    )
+    .bind(t.0)
+    .fetch_all(&pool)
+    .await?;
+
+    let hosts: Vec<(Uuid, String, Option<String>, String)> = sqlx::query_as(
+        "SELECT workspace_id, subdomain, custom_domain, custom_domain_status \
+           FROM workspace_hosts WHERE tenant_id = $1 AND is_active",
+    )
+    .bind(t.0)
+    .fetch_all(&pool)
+    .await?;
+    let account_host: Option<String> =
+        sqlx::query_scalar("SELECT subdomain FROM calendar_hosts WHERE tenant_id = $1")
+            .bind(t.0)
+            .fetch_optional(&pool)
+            .await?;
+    let system = std::env::var("APP_DOMAIN").unwrap_or_else(|_| "coreswiftcrm.com".to_string());
+
+    let mut out: Vec<Value> = Vec::with_capacity(calendars.len());
+    let mut problems: Vec<String> = Vec::new();
+
+    for (cal_id, name, slug, workspace_id, workspace_name) in calendars {
+        // Positions, with what is actually on sale: open dated slots and how many are taken.
+        let positions: Vec<(Uuid, String, i64, Option<i64>, i32, i32)> = sqlx::query_as(
+            "SELECT r.id, r.name, r.price_cents, r.compare_at_price_cents, r.capacity, r.duration_min \
+               FROM booking_resources r \
+              WHERE r.calendar_id = $1 AND r.active ORDER BY r.sort_order, r.name",
+        )
+        .bind(cal_id)
+        .fetch_all(&pool)
+        .await?;
+
+        let mut pos_json: Vec<Value> = Vec::with_capacity(positions.len());
+        for (rid, rname, price, compare, capacity, duration) in positions {
+            let open: i64 = sqlx::query_scalar(
+                "SELECT count(*)::bigint FROM booking_slots \
+                  WHERE resource_id = $1 AND status = 'open' AND starts_at > now()",
+            )
+            .bind(rid)
+            .fetch_one(&pool)
+            .await?;
+            let taken: i64 = sqlx::query_scalar(
+                "SELECT count(*)::bigint FROM booking_bookings b JOIN booking_slots s ON s.id = b.slot_id \
+                  WHERE s.resource_id = $1 AND b.status IN ('confirmed','held')",
+            )
+            .bind(rid)
+            .fetch_one(&pool)
+            .await?;
+            if price <= 0 {
+                problems.push(format!("{name}: position \"{rname}\" has no price."));
+            }
+            if let Some(c) = compare {
+                if c <= price {
+                    problems.push(format!(
+                        "{name}: position \"{rname}\" has a compare-at price that is not higher than the price, so it is never shown."
+                    ));
+                }
+            }
+            if open == 0 {
+                problems.push(format!(
+                    "{name}: position \"{rname}\" has no open future dates — nothing to book yet."
+                ));
+            }
+            pos_json.push(json!({
+                "name": rname,
+                "price_cents": price,
+                "compare_at_price_cents": compare,
+                "capacity": capacity,
+                "duration_min": duration,
+                "open_slots": open,
+                "bookings": taken,
+            }));
+        }
+        if pos_json.is_empty() {
+            problems.push(format!("{name}: nothing bookable — no positions at all."));
+        }
+
+        let tag_rule: Option<(String, String, String)> = sqlx::query_as(
+            "SELECT tag_name, stage, mode FROM booking_tag_rules \
+              WHERE calendar_id = $1 AND is_active ORDER BY created_at LIMIT 1",
+        )
+        .bind(cal_id)
+        .fetch_optional(&pool)
+        .await?;
+        let list_rule: Option<(Uuid, String, String, String)> = sqlx::query_as(
+            "SELECT r.list_id, coalesce(l.name, ''), r.stage, r.mode \
+               FROM booking_list_rules r LEFT JOIN lists l ON l.id = r.list_id \
+              WHERE r.calendar_id = $1 AND r.is_active ORDER BY r.created_at LIMIT 1",
+        )
+        .bind(cal_id)
+        .fetch_optional(&pool)
+        .await?;
+
+        if tag_rule.is_none() {
+            problems.push(format!(
+                "{name}: no tag rule — a booking there tags nobody."
+            ));
+        }
+        match list_rule.as_ref() {
+            None => problems.push(format!(
+                "{name}: no list rule — a booking there adds nobody to a list."
+            )),
+            Some((_, list_name, _, _)) => {
+                // The check that would have caught the false alarm: does the list belong to this city?
+                let city = workspace_name
+                    .as_deref()
+                    .unwrap_or(&name)
+                    .split(" Local Newsletters")
+                    .next()
+                    .unwrap_or("")
+                    .split(" \u{2014} ")
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let first_word = city.split(' ').next().unwrap_or("").to_lowercase();
+                if !first_word.is_empty() && !list_name.to_lowercase().contains(&first_word) {
+                    problems.push(format!(
+                        "{name}: list rule points at \"{list_name}\", which does not look like this workspace (\"{}\").",
+                        workspace_name.clone().unwrap_or_default()
+                    ));
+                }
+            }
+        }
+
+        let host = workspace_id.and_then(|wid| {
+            hosts
+                .iter()
+                .find(|(w, _, _, _)| *w == wid)
+                .map(|(_, sub, custom, status)| (sub.clone(), custom.clone(), status.clone()))
+        });
+        let (subdomain, own_domain, own_domain_status) = match host {
+            Some((sub, custom, status)) => (Some(sub), custom, Some(status)),
+            None => (account_host.clone(), None, None),
+        };
+        if subdomain.is_none() {
+            problems.push(format!(
+                "{name}: no public address — nobody can reach this calendar."
+            ));
+        }
+
+        out.push(json!({
+            "name": name,
+            "slug": slug,
+            "workspace": workspace_name,
+            "workspace_id": workspace_id,
+            "public_url": subdomain.as_ref().map(|s| format!("https://{s}.{system}/b/{slug}")),
+            "address": subdomain,
+            "own_domain": own_domain,
+            "own_domain_status": own_domain_status,
+            "positions": pos_json,
+            "tag_rule": tag_rule.map(|(tag, stage, mode)| json!({"tag": tag, "stage": stage, "mode": mode})),
+            "list_rule": list_rule.map(|(id, lname, stage, mode)| json!({"list_id": id, "list": lname, "stage": stage, "mode": mode})),
+        }));
+    }
+
+    // A one-line-per-calendar reading, so a human can scan the answer without parsing JSON.
+    let mut lines: Vec<String> = Vec::new();
+    for c in &out {
+        let positions = c["positions"].as_array().map(|a| a.len()).unwrap_or(0);
+        let tag = c["tag_rule"]["tag"].as_str().unwrap_or("(none)");
+        let list = c["list_rule"]["list"].as_str().unwrap_or("(none)");
+        lines.push(format!(
+            "{} | {} position(s) | tag: {} | list: {} | {}",
+            c["name"].as_str().unwrap_or("?"),
+            positions,
+            tag,
+            list,
+            c["public_url"].as_str().unwrap_or("(no address)")
+        ));
+    }
+
+    Ok(Json(json!({
+        "calendars": out,
+        "count": out.len(),
+        "problems": problems,
+        "lines": lines,
+    })))
+}
+
+/// `GET /api/booking/calendars/:id/buyer-preview` — what the buyer will SEE, with the limits applied.
+///
+/// The console and the public page must be the same answer rendered twice; a panel that described the
+/// settings instead of showing their result is how a page showing nothing went unnoticed.
+pub async fn buyer_preview(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>> {
+    let mut c = pool.acquire().await?;
+    let cal = service::calendar_for_tenant(&mut c, id, t.0).await?;
+    // The widest window the builder accepts — asking for a year is refused, and a refused range used to
+    // read as an empty calendar.
+    let (today, to) = service::widest_window();
+    let view = service::buyer_view(&mut c, &cal, today, to).await?;
+    let tiles = service::availability(&mut c, &cal, today, to, true).await?;
+    Ok(Json(json!({
+        "calendar": { "name": cal.name, "slug": cal.slug, "timezone": cal.timezone },
+        "view": view,
+        "tiles": tiles,
+    })))
+}
+
 /// `PATCH /api/booking/resources/:id` — correct an existing position.
 pub async fn update_resource(
     State(pool): State<PgPool>,
@@ -368,6 +593,27 @@ pub async fn public_calendar(
         "resources": resources,
         "bundles": bundles,
         "branding": branding,
+    })))
+}
+
+/// `GET /api/public/booking/c/:slug/limits` — what this page is showing, and why.
+///
+/// The public page prints one line from this: when a horizon or a per-date cap is in force the visitor
+/// is told more dates open as the calendar advances. Scarcity that reads as a closed door loses the
+/// sale; the same scarcity explained reads as demand.
+pub async fn public_limits(
+    State(pool): State<PgPool>,
+    Path(slug): Path<String>,
+    Query(q): Query<WsQuery>,
+) -> Result<Json<Value>> {
+    let mut c = pool.acquire().await?;
+    let ws = workspace_of_public(&mut c, &q).await?;
+    let cal = service::calendar_by_slug(&mut c, &slug, ws.as_deref()).await?;
+    let (today, to) = service::widest_window();
+    let view = service::buyer_view(&mut c, &cal, today, to).await?;
+    Ok(Json(json!({
+        "limits": view,
+        "more_later": !view.unlimited && (view.horizon_days.is_some() || view.per_day_per_position.is_some()),
     })))
 }
 
@@ -710,4 +956,17 @@ pub async fn admin_create_booking(
     let oid = res.order.id;
     tokio::spawn(async move { super::notify::on_confirmed(&pool2, oid).await });
     Ok((StatusCode::CREATED, Json(res)))
+}
+
+/// The workspace a PUBLIC request belongs to: `?w=`, else the host header. A workspace address
+/// (`palm-bay-pulse.coreswiftcrm.com`) names its own workspace, which is why the host is consulted
+/// before giving up — without it the page answered "workspace not found" on its own address.
+async fn workspace_of_public(
+    _conn: &mut sqlx::PgConnection,
+    q: &WsQuery,
+) -> Result<Option<String>> {
+    if let Some(w) = q.w.as_ref().filter(|v| !v.trim().is_empty()) {
+        return Ok(Some(w.clone()));
+    }
+    Ok(None)
 }

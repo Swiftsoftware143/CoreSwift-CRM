@@ -616,32 +616,87 @@ async fn calendar_listings(
         }
     };
 
+    // WHAT IS ACTUALLY ON SALE (measured 2026-11-23, ZaarHub: "console and public page disagree").
+    // This used to read `calendar_slots` — the FIRST-generation table. The booking engine the console
+    // writes to is `booking_resources` + `booking_slots`, so a calendar with four priced positions and
+    // twenty open dates answered "No places configured for this calendar" on its own public page,
+    // while the console listed all four. The page now reads what the console writes; the legacy table
+    // is still consulted when it is the only thing present, so a calendar from before the engine
+    // existed keeps working.
     let mut listings = Vec::with_capacity(calendars.len());
     for cal in calendars {
-        let slots = sqlx::query_as::<_, SlotListing>(
-            r#"SELECT id, slot_name, total_slots, filled_slots, default_duration_days,
-                      price_override::text AS price
-               FROM calendar_slots
-               WHERE calendar_id = $1 AND is_active = true
-               ORDER BY sort_order, slot_name"#,
+        let positions: Vec<(Uuid, String, i64, Option<i64>, i32, i64, i64)> = sqlx::query_as(
+            r#"SELECT r.id, r.name, r.price_cents, r.compare_at_price_cents, r.duration_min,
+                      (SELECT count(*) FROM booking_slots bs
+                        WHERE bs.resource_id = r.id AND bs.status = 'open' AND bs.starts_at > now()),
+                      (SELECT count(*) FROM booking_bookings bb JOIN booking_slots bs ON bs.id = bb.slot_id
+                        WHERE bs.resource_id = r.id AND bb.status IN ('confirmed','held'))
+                 FROM booking_resources r
+                WHERE r.calendar_id = $1 AND r.active
+                ORDER BY r.sort_order, r.name"#,
         )
         .bind(cal.id)
         .fetch_all(&s.db)
         .await?;
+
+        let slot_json: Vec<serde_json::Value> = if positions.is_empty() {
+            // Legacy fallback, unchanged in shape.
+            let legacy = sqlx::query_as::<_, SlotListing>(
+                r#"SELECT id, slot_name, total_slots, filled_slots, default_duration_days,
+                          price_override::text AS price
+                   FROM calendar_slots
+                   WHERE calendar_id = $1 AND is_active = true
+                   ORDER BY sort_order, slot_name"#,
+            )
+            .bind(cal.id)
+            .fetch_all(&s.db)
+            .await?;
+            legacy
+                .iter()
+                .map(|sl| {
+                    json!({
+                        "id": sl.id,
+                        "name": sl.slot_name,
+                        "total_slots": sl.total_slots,
+                        "filled_slots": sl.filled_slots,
+                        "open": if sl.total_slots < 0 { true } else { sl.filled_slots < sl.total_slots },
+                        "duration_days": sl.default_duration_days,
+                        "price": sl.price,
+                        "compare_at_price": serde_json::Value::Null,
+                        "open_dates": serde_json::Value::Null,
+                    })
+                })
+                .collect()
+        } else {
+            positions
+                .iter()
+                .map(|(id, name, price, compare, duration_min, open_dates, taken)| {
+                    // A position is bookable when it has future dates that are not all taken.
+                    let capacity = 1i64; // per-dated-slot capacity is one place per date on this engine
+                    json!({
+                        "id": id,
+                        "name": name,
+                        // The page speaks in "places" of a dated position: one per open date.
+                        "total_slots": open_dates + taken,
+                        "filled_slots": taken,
+                        "open": *open_dates > 0,
+                        "duration_days": if *duration_min >= 1440 { *duration_min / 1440 } else { 0 },
+                        "duration_min": duration_min,
+                        "price": format!("{:.2}", (*price as f64) / 100.0),
+                        "compare_at_price": compare.map(|c| format!("{:.2}", (c as f64) / 100.0)),
+                        "open_dates": open_dates,
+                        "places_per_date": capacity,
+                    })
+                })
+                .collect()
+        };
+
         listings.push(json!({
             "slug": cal.slug,
             "name": cal.name,
             "description": cal.description,
             "calendar_type": cal.calendar_type,
-            "slots": slots.iter().map(|sl| json!({
-                "id": sl.id,
-                "name": sl.slot_name,
-                "total_slots": sl.total_slots,
-                "filled_slots": sl.filled_slots,
-                "open": if sl.total_slots < 0 { true } else { sl.filled_slots < sl.total_slots },
-                "duration_days": sl.default_duration_days,
-                "price": sl.price,
-            })).collect::<Vec<_>>(),
+            "slots": slot_json,
         }));
     }
     Ok(listings)

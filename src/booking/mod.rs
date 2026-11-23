@@ -37,6 +37,10 @@ pub fn admin_router(pool: PgPool) -> Router {
         )
         // what this booking address does at its root
         .route("/host", get(h::get_host).put(h::set_host))
+        // ONE READ FOR A WHOLE ACCOUNT (ZaarHub, 2026-11-23): every calendar with its workspace, own
+        // domain, positions, tag rule and list rule — and the problems worth looking at. Mounted
+        // BEFORE /calendars/:id so the word "summary" is never read as a calendar id.
+        .route("/calendars/summary", get(h::calendars_summary))
         .route(
             "/calendars/:id",
             get(h::get_calendar).patch(h::update_calendar),
@@ -57,6 +61,9 @@ pub fn admin_router(pool: PgPool) -> Router {
         // Can a customer book this calendar right now, and if not why (David, 2026-11-20).
         .route("/calendars/:id/readiness", get(h::readiness))
         .route("/calendars/:id/availability", get(h::admin_availability))
+        // WHAT THE BUYER SEES, with the limits applied — the console renders this instead of
+        // describing the settings, so console and public page cannot disagree.
+        .route("/calendars/:id/buyer-preview", get(h::buyer_preview))
         .route("/calendars/:id/orders", get(h::list_orders))
         .route("/resources/:id/availability-rules", put(h::set_rules))
         // AN EXISTING POSITION CAN BE CORRECTED OR REMOVED (ZaarHub, 2026-11-23): a mis-priced slot
@@ -79,6 +86,8 @@ pub fn public_router(pool: PgPool) -> Router {
     Router::new()
         .route("/c/:slug", get(h::public_calendar))
         .route("/c/:slug/availability", get(h::public_availability))
+        // What the page is showing and why — the line that tells a visitor more dates open later.
+        .route("/c/:slug/limits", get(h::public_limits))
         .route("/c/:slug/quote", post(h::public_quote))
         .route("/c/:slug/orders", post(h::public_create_order))
         .route("/orders/:id", get(h::public_get_order))

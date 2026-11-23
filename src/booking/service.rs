@@ -678,26 +678,121 @@ fn apply_limits(
         let horizon = Utc::now() + Duration::days(days);
         out.retain(|o| o.starts_at <= horizon);
     }
-    let mut per_day: std::collections::HashMap<chrono::NaiveDate, u32> =
+    // PER POSITION PER DAY, not per calendar per day (ZaarHub, 2026-11-23). A newsletter sells four
+    // positions in the SAME issue: Email TOP, MIDDLE, FOOTER and a sponsored post, all on one date.
+    // Counting one tile per DATE hid three of the four — a "1 per day" cap silently made three
+    // products unsellable. The cap now counts each position separately, which is what an owner means
+    // by "one option a day": one of each thing they sell.
+    let mut per_position_day: std::collections::HashMap<(uuid::Uuid, chrono::NaiveDate), u32> =
         std::collections::HashMap::new();
     let mut kept = Vec::with_capacity(out.len());
+    // `out` arrives ordered by start time, so the nearest positions are the ones that survive a cap.
+    //
+    // ONLY BOOKABLE OPENINGS COUNT AGAINST THE CAP (measured 2026-11-23). A taken position stays on an
+    // ad grid on purpose — it reads as "Booked" and advertises the demand — but it must not consume a
+    // place in the owner's window: with a cap of 5, one sale left the buyer looking at four things they
+    // could buy, and the sixth date never appeared. Sold openings are still returned, they simply do
+    // not count, so every sale lets one more date into view.
+    let mut kept_open = 0u32;
     for o in out {
-        if let Some(cap) = limits.max_options {
-            if kept.len() as u32 >= cap {
-                break;
+        let bookable = o.remaining > 0;
+        if bookable {
+            if let Some(cap) = limits.max_options {
+                if kept_open >= cap {
+                    // The window is full of bookable openings: this one is beyond it. Taken ones are
+                    // still kept, so the page can show them as booked.
+                    continue;
+                }
             }
-        }
-        let day = o.starts_at.with_timezone(&tz).date_naive();
-        let used = per_day.entry(day).or_insert(0);
-        if let Some(cap) = limits.max_per_day {
-            if *used >= cap {
-                continue;
+            let day = o.starts_at.with_timezone(&tz).date_naive();
+            let used = per_position_day.entry((o.resource_id, day)).or_insert(0);
+            if let Some(cap) = limits.max_per_day {
+                if *used >= cap {
+                    continue;
+                }
             }
+            *used += 1;
+            kept_open += 1;
         }
-        *used += 1;
         kept.push(o);
     }
     kept
+}
+
+/// The widest window the availability builder accepts, as a date range from today. Callers that want
+/// "everything" must use this: asking for 365 days is refused, and a refused range answers an error
+/// object that reads like an empty calendar.
+pub fn widest_window() -> (NaiveDate, NaiveDate) {
+    let today = Utc::now().date_naive();
+    (today, today + Duration::days(MAX_RANGE_DAYS))
+}
+
+/// What the buyer will actually be shown, in plain words — computed from live inventory.
+///
+/// Three interlocking numbers with no explanation is how a scarcity setting becomes a mystery. This
+/// answers the question an owner actually asks: with these limits and this much open inventory, what
+/// does a visitor get? It is computed from the SAME availability builder the public page uses, so a
+/// stale sentence is impossible, and the console can print it instead of describing the settings.
+#[derive(Debug, serde::Serialize)]
+pub struct BuyerView {
+    pub open_total: usize,
+    pub shown: usize,
+    pub horizon_days: Option<i64>,
+    pub per_day_per_position: Option<u32>,
+    pub unlimited: bool,
+    pub sentence: String,
+}
+
+pub async fn buyer_view(
+    conn: &mut PgConnection,
+    cal: &Calendar,
+    from: NaiveDate,
+    to: NaiveDate,
+) -> Result<BuyerView> {
+    let limits = AvailabilityLimits::of(cal);
+    let all = availability(conn, cal, from, to, false).await?;
+    let shown = availability(conn, cal, from, to, true).await?;
+    let unlimited = limits.max_options.is_none()
+        && limits.max_per_day.is_none()
+        && limits.max_advance_days.is_none();
+    let shown_bookable = shown.iter().filter(|o| o.remaining > 0).count();
+    let mut parts: Vec<String> = Vec::new();
+    if limits.max_options.is_some()
+        || limits.max_per_day.is_some()
+        || limits.max_advance_days.is_some()
+    {
+        parts.push(format!(
+            "Buyer sees {} of {} open position{}",
+            shown_bookable,
+            all.len(),
+            if all.len() == 1 { "" } else { "s" }
+        ));
+        if let Some(d) = limits.max_advance_days {
+            parts.push(format!(
+                "within the next {d} day{}",
+                if d == 1 { "" } else { "s" }
+            ));
+        } else {
+            parts.push("with no date horizon".to_string());
+        }
+        if let Some(p) = limits.max_per_day {
+            parts.push(format!("at most {p} per date for each position"));
+        }
+    } else {
+        parts.push(format!(
+            "Buyer sees all {} open position{}. No limits are set, so nothing is being held back.",
+            all.len(),
+            if all.len() == 1 { "" } else { "s" }
+        ));
+    }
+    Ok(BuyerView {
+        open_total: all.len(),
+        shown: shown_bookable,
+        horizon_days: limits.max_advance_days,
+        per_day_per_position: limits.max_per_day,
+        unlimited,
+        sentence: format!("{}.", parts.join(" ")),
+    })
 }
 
 pub async fn availability(
@@ -708,9 +803,9 @@ pub async fn availability(
     enforce_limits: bool,
 ) -> Result<Vec<Opening>> {
     if to < from || (to - from).num_days() > MAX_RANGE_DAYS {
-        return Err(BookingError::invalid(
-            "range must be 0-{MAX_RANGE_DAYS} days",
-        ));
+        return Err(BookingError::invalid(format!(
+            "range must be 0-{MAX_RANGE_DAYS} days"
+        )));
     }
     let tz = tz_of(cal)?;
     let to_excl = to
