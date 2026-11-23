@@ -13514,6 +13514,8 @@ const BK_TYPES = [
     blurb: 'A span of days at a day rate — a featured listing, a rental, equipment on hire.' }
 ];
 
+if (typeof BK === 'object' && BK && !('wsHosts' in BK)) BK.wsHosts = null;
+
 function bkMoney(cents) {
   const n = (cents || 0) / 100;
   return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -14039,9 +14041,121 @@ async function bkSaveNotify() {
 /* What the booking ADDRESS does at its root. Per workspace, because the address belongs to the
  * business, not to one calendar: send visitors anywhere (including another calendar), or let
  * CoreSwift list what this business can book. */
+/* AN ADDRESS PER WORKSPACE (David, 2026-11-23): "each workspace might have multiple calendars so
+ * they need to be able to have their sub domain". An account selling one newsletter per town gets one
+ * public address per newsletter, and each address lists only that workspace's calendars. Nothing is
+ * provisioned outside the app for a new address: the wildcard already answers any
+ * <label>.coreswiftcrm.com over https, so an address works the moment it is saved. */
+function bkWorkspaceHostsPanel() {
+  var d = BK.wsHosts;
+  if (!d || !d.workspaces || !d.workspaces.length) return '';
+  var rows = d.workspaces.map(function (w) {
+    var inputId = 'bkws_' + w.id;
+    return '<tr>' +
+      '<td><strong>' + escapeHtml(w.name) + '</strong>' +
+        (w.is_default ? ' <span class="badge">default</span>' : '') +
+        '<div class="muted" style="font-size:12px">' + w.calendars + ' calendar' + (w.calendars === 1 ? '' : 's') + '</div></td>' +
+      '<td><div style="display:flex;gap:8px;align-items:center">' +
+        '<input id="' + inputId + '" value="' + escapeHtml(w.subdomain || '') + '" placeholder="palm-bay-pulse" style="min-width:180px">' +
+        '<span class="muted">.' + escapeHtml(d.system_domain) + '</span>' +
+        '<button class="btn btn-secondary btn-sm" onclick="bkSaveWsHost(\'' + w.id + '\')">Save</button>' +
+      '</div></td>' +
+      '<td>' + (w.url
+        ? '<a href="' + escapeHtml(w.url) + '" target="_blank" rel="noopener">' + escapeHtml(w.url.replace('https://', '')) + '</a>'
+        : '<span class="muted">no address yet</span>') + '</td>' +
+      '<td><div style="display:flex;gap:8px;align-items:center">' +
+        '<input id="bkdom_' + w.id + '" value="' + escapeHtml(w.custom_domain || '') + '" placeholder="yourbusiness.com" style="min-width:170px">' +
+        '<button class="btn btn-secondary btn-sm" onclick="bkSaveWsDomain(\'' + w.id + '\')">Save</button>' +
+        '<button class="btn btn-secondary btn-sm" onclick="bkShowDns(\'' + w.id + '\')">DNS</button>' +
+      '</div>' +
+      (w.custom_domain_status && w.custom_domain_status !== 'verified'
+        ? '<div class="muted" style="font-size:12px;margin-top:2px">' + escapeHtml(w.custom_domain_status) + '</div>' : '') +
+      '</td>' +
+    '</tr>';
+  }).join('');
+  return '<div class="card" style="margin-bottom:18px">' +
+    '<h3 style="margin-top:0">Address per workspace</h3>' +
+    '<p class="muted" style="margin-top:-6px">Each workspace can have its own public address, and it lists only that workspace&rsquo;s calendars. Letters, numbers and hyphens — it becomes <em>your-name.' + escapeHtml(d.system_domain) + '</em>.</p>' +
+    '<table class="table"><thead><tr><th>Workspace</th><th>Address on our domain</th><th>Live link</th><th>Your own domain</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+    '<div id="bkDnsPanel"></div>' +
+    '<span class="bk-flash" id="bkwsFlash"></span>' +
+    '</div>';
+}
+
+async function bkLoadWsHosts() {
+  // NOT bkCall: that helper prefixes `/booking`. These routes live at /api/calendar-host, next to the
+  // account-level address this screen already reads.
+  try { BK.wsHosts = await API.get('/calendar-host/workspaces'); } catch (e) { BK.wsHosts = null; }
+}
+
+function bkWsFlash(msg, ok) {
+  var el = document.getElementById('bkwsFlash');
+  if (!el) { bkFlash(msg, ok); return; }
+  el.textContent = msg;
+  el.className = 'bk-flash ' + (ok === false ? 'bad' : 'good');
+  setTimeout(function () { el.textContent = ''; }, 7000);
+}
+
+/* WHERE THE DNS RECORDS COME FROM (David, 2026-11-23): "have instructions where users can get the DNS
+ * information to put in Cloudflare". Pressing DNS on a workspace asks the server for the exact records
+ * and a live verdict on them, and prints both here — the table to copy and the sentence saying what is
+ * still missing. The records are computed from the workspace's platform address, so they cannot drift
+ * from what this app actually answers on. */
+async function bkShowDns(id) {
+  var box = document.getElementById('bkDnsPanel');
+  if (!box) return;
+  box.innerHTML = '<div class="loading-wrap"><div class="spinner"></div> Reading DNS…</div>';
+  var d;
+  try { d = await API.get('/calendar-host/workspaces/' + id + '/dns'); }
+  catch (e) { box.innerHTML = '<p class="muted" style="padding:8px 0">' + escapeHtml(e.message) + '</p>'; return; }
+  var recs = (d.records || []).map(function (r) {
+    return '<tr><td><code>' + escapeHtml(r.type) + '</code></td><td><code>' + escapeHtml(r.name) + '</code></td>' +
+      '<td><code>' + escapeHtml(r.value) + '</code></td><td>' + escapeHtml(r.ttl) + '</td>' +
+      '<td>' + (r.proxied ? 'Proxied (orange cloud)' : 'DNS only') + '</td>' +
+      '<td class="muted" style="font-size:12px">' + escapeHtml(r.why || '') + '</td></tr>';
+  }).join('');
+  var c = d.check || {};
+  var verdictColor = c.answered_by_app ? '#059669' : '#b45309';
+  box.innerHTML = '<div style="border-top:1px solid rgba(128,128,128,.25);padding-top:12px;margin-top:6px">' +
+    '<h4 style="margin:6px 0">DNS for ' + escapeHtml(d.workspace) + '</h4>' +
+    '<p class="muted" style="margin-top:0">Add the first record at your DNS provider — Cloudflare → your domain → DNS → Records → Add record. Leave <strong>Proxied</strong> on. ' +
+      'Then Cloudflare → SSL/TLS → Overview → <strong>Flexible</strong>.</p>' +
+    '<table class="table"><thead><tr><th>Type</th><th>Name</th><th>Target</th><th>TTL</th><th>Proxy</th><th>Why</th></tr></thead><tbody>' + recs + '</tbody></table>' +
+    '<p style="color:' + verdictColor + '"><strong>Check:</strong> ' + escapeHtml(c.verdict || '') + '</p>' +
+    '<p class="muted" style="font-size:12px">Platform address: <code>' + escapeHtml(d.platform_host) + '</code>' +
+      (d.custom_domain ? ' · your domain: <code>' + escapeHtml(d.custom_domain) + '</code> (' + escapeHtml(d.custom_domain_status || 'pending') + ')' : '') + '</p>' +
+    '</div>';
+}
+
+async function bkSaveWsDomain(id) {
+  var input = document.getElementById('bkdom_' + id);
+  var value = input ? (input.value || '').trim() : '';
+  if (!value) { bkWsFlash('Type the domain that should point here.', false); return; }
+  try {
+    var r = await API.patch('/calendar-host/workspaces/' + id, { custom_domain: value });
+    await bkLoadWsHosts();
+    bkRender();
+    bkWsFlash(r.custom_domain ? ('Saved — ' + r.custom_domain + ' is waiting for its DNS record.') : 'Saved.', true);
+    await bkShowDns(id);
+  } catch (e) { bkWsFlash(e.message, false); }
+}
+
+async function bkSaveWsHost(id) {
+  var input = document.getElementById('bkws_' + id);
+  var value = input ? (input.value || '').trim() : '';
+  if (!value) { bkWsFlash('Type the address this workspace should answer on.', false); return; }
+  try {
+    var r = await API.patch('/calendar-host/workspaces/' + id, { subdomain: value });
+    await bkLoadWsHosts();
+    bkRender();
+    bkWsFlash(r.message || 'Saved.', true);
+  } catch (e) { bkWsFlash(e.message, false); }
+}
+
 function bkHostPanel() {
   var h = BK.host || {};
-  return '<div class="card" style="margin-bottom:18px">' +
+  return bkWorkspaceHostsPanel() +
+    '<div class="card" style="margin-bottom:18px">' +
     '<h3 style="margin-top:0">Your booking address</h3>' +
     '<p class="muted" style="margin-top:-6px">What happens when someone opens your booking address with no calendar chosen. Leave the redirect empty and visitors see the calendars below.</p>' +
     '<div class="bk-form">' +
@@ -14059,6 +14173,7 @@ function bkHostPanel() {
 
 async function bkLoadHost() {
   try { BK.host = await bkCall('GET', '/host'); } catch (e) { BK.host = {}; }
+  await bkLoadWsHosts();
 }
 
 async function bkSaveHost() {

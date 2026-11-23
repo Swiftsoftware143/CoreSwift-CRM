@@ -24,7 +24,7 @@ use super::{
 /// Both `PATCH /api/calendar-host/subdomain` and the console's own save button are the ACCOUNT's
 /// decision about where its calendar answers, so they demand an owner/admin token — the same bar the
 /// rest of the account surface uses. A 'member' can read the address; only an owner changes it.
-fn require_account_admin(c: &Claims) -> Result<Uuid, AppError> {
+pub(crate) fn require_account_admin(c: &Claims) -> Result<Uuid, AppError> {
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     if c.role != "owner"
         && c.role != "account_owner"
@@ -446,7 +446,9 @@ async fn public_site_impl(
     // 1. A dedicated per-calendar subdomain answers for that ONE calendar (kanban t_d4ac5433). The
     //    calendar subdomain is more specific than a workspace subdomain, so it is tried first.
     if let Some(cal) = resolve_calendar_subdomain(&s.db, &raw_host, &system).await? {
-        let listings = calendar_listings(s, cal.tenant_id, Some(&cal.calendar_slug)).await?;
+        // A calendar's own address answers for that calendar and nothing else, so it passes None:
+        // the slug already narrows it to one row, whatever workspace it lives in.
+        let listings = calendar_listings(s, cal.tenant_id, Some(&cal.calendar_slug), None).await?;
         let open_slots = open_slot_count(&listings);
         return Ok(json!({
             "tenant": {
@@ -470,7 +472,50 @@ async fn public_site_impl(
         }));
     }
 
-    // 2. Workspace resolution (system subdomain or an owned custom domain).
+    // 2. WORKSPACE address first (2026-11-23): each newsletter's own address lists only its own
+    //    calendars. Falls back to the account-level address, which is unchanged.
+    let workspace_host = {
+        let raw = headers
+            .get("x-forwarded-host")
+            .or_else(|| headers.get(header::HOST))
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        super::resolve_workspace_host(&s.db, &raw, &system).await?
+    };
+    if let Some(host) = workspace_host {
+        let listings = calendar_listings(
+            s,
+            host.tenant_id,
+            requested_slug.as_deref(),
+            host.workspace_id,
+        )
+        .await?;
+        let open_slots = open_slot_count(&listings);
+        return Ok(json!({
+            "tenant": {
+                "id": host.tenant_id,
+                "name": host.tenant_name,
+                "slug": host.tenant_slug,
+                "branding_name": host.branding_name,
+                "logo_url": host.logo_url,
+                "primary_color": host.primary_color,
+                "accent_color": host.accent_color,
+            },
+            "host": {
+                "kind": "workspace",
+                "subdomain": host.subdomain,
+                "system_domain": system,
+                "system_url": public_url(&host.subdomain, None, &system),
+                "custom_domain": host.custom_domain,
+                "workspace_id": host.workspace_id,
+            },
+            "calendars": listings,
+            "open_slots": open_slots,
+        }));
+    }
+
+    // 3. Account-level resolution (the address every existing customer already has).
     let Some(host) = resolve_request_host(s, headers).await? else {
         return Err(AppError::NotFound("No calendar at this address".into()));
     };
@@ -498,7 +543,13 @@ async fn public_site_impl(
         }
     }
 
-    let listings = calendar_listings(s, host.tenant_id, requested_slug.as_deref()).await?;
+    let listings = calendar_listings(
+        s,
+        host.tenant_id,
+        requested_slug.as_deref(),
+        host.workspace_id,
+    )
+    .await?;
     let open_slots = open_slot_count(&listings);
 
     Ok(json!({
@@ -531,6 +582,9 @@ async fn calendar_listings(
     s: &AppState,
     tenant_id: Uuid,
     only_slug: Option<&str>,
+    // When the address belongs to a WORKSPACE, only that workspace's calendars are listed: one
+    // newsletter's address must never advertise another newsletter's slots.
+    workspace_id: Option<Uuid>,
 ) -> Result<Vec<serde_json::Value>, AppError> {
     let calendars: Vec<CalendarListing> = match only_slug {
         Some(slug) => {
@@ -538,10 +592,12 @@ async fn calendar_listings(
                 r#"SELECT id, slug, name, description, calendar_type
                FROM booking_calendars
                WHERE tenant_id = $1 AND is_active = true AND slug = $2
+                 AND ($3::uuid IS NULL OR workspace_id = $3)
                ORDER BY name"#,
             )
             .bind(tenant_id)
             .bind(slug)
+            .bind(workspace_id)
             .fetch_all(&s.db)
             .await?
         }
@@ -550,9 +606,11 @@ async fn calendar_listings(
                 r#"SELECT id, slug, name, description, calendar_type
                FROM booking_calendars
                WHERE tenant_id = $1 AND is_active = true
+                 AND ($2::uuid IS NULL OR workspace_id = $2)
                ORDER BY name"#,
             )
             .bind(tenant_id)
+            .bind(workspace_id)
             .fetch_all(&s.db)
             .await?
         }

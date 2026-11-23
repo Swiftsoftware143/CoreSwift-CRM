@@ -441,6 +441,24 @@
     <p>The copy window asks for the two things that make the result usable. <strong>Name</strong> comes pre&#8209;filled with the original&rsquo;s, so one word is enough to tell the two apart. <strong>Web address</strong> is built from that name as you type &mdash; every word joined by a hyphen &mdash; and you can edit it before saving, because that address is the public link. The list also shows <strong>which workspace</strong> each calendar belongs to, and the copy window asks for the workspace the copy should land in; the original stays exactly where it is.</p>
     <p>A copy is never called &ldquo;clone&rdquo;. It takes the name you type, and only the web address is adjusted &mdash; never the name &mdash; if that address is already in use.</p>
     <p><strong>What travels with the copy, and what does not.</strong> Hours, resources, prices, bundles, tag rules, list rules, notification addresses and reminders are copied. Bookings, orders and the Google Mirror are not: a copy starts empty of bookings, and two calendars must never mirror into the same Google calendar. A copy is also a new calendar, so it counts towards your plan&rsquo;s calendar allowance like any other.</p>
+
+    <h3>An address for each workspace</h3>
+    <p>An account can hold several workspaces &mdash; one per newsletter, one per town, one per brand &mdash; and each workspace can hold several calendars. Every workspace can therefore have <strong>its own public address</strong>, and that address lists <strong>only that workspace&rsquo;s calendars</strong>: one newsletter&rsquo;s link never advertises another newsletter&rsquo;s dates.</p>
+    <p>Open <strong>Booking</strong> and the <em>Address per workspace</em> card lists every workspace with the calendars it holds, the address it answers on today, and the live link. Type the label you want &mdash; letters, numbers and hyphens &mdash; and press <strong>Save</strong>. The address becomes <em>your-label</em> followed by the platform domain, over https, and it works the moment you save it: nothing has to be installed or approved first.</p>
+    <p>Two things are refused, with the reason: a label someone else already uses (a free one is suggested), and a label reserved for the platform. A workspace with no address shows &ldquo;no address yet&rdquo; rather than a link that would not open.</p>
+
+    <h3>Using your own domain &mdash; and where the DNS records come from</h3>
+    <p>An address on the platform&rsquo;s domain works with no setup at all. To use <em>your own</em> domain instead, type it in the <strong>Your own domain</strong> column of that same card and press <strong>Save</strong>. The domain is then waiting for one DNS record, and it becomes live once the name actually reaches this app.</p>
+    <p><strong>Where to get the records.</strong> Press <strong>DNS</strong> on the workspace row. The panel that opens lists the exact records to create &mdash; type, name, target, TTL and whether the proxy must be on &mdash; computed from the address this workspace really answers on, so they cannot drift from the product. The same panel prints a live check underneath: whether the name resolves, and whether it reached this app.</p>
+    <p><strong>Where to put them in Cloudflare.</strong></p>
+    <ol>
+      <li>Cloudflare dashboard &rarr; pick your domain &rarr; <strong>DNS</strong> &rarr; <strong>Records</strong> &rarr; <strong>Add record</strong>.</li>
+      <li>Choose the type the panel shows &mdash; a <code>CNAME</code> to the platform address is preferred, because it follows the platform if that ever changes. Use the <code>A</code> record alternative only when your provider will not allow a CNAME on that name, which is usual at the apex.</li>
+      <li>Paste the name and target exactly as shown, leave TTL on auto, and leave <strong>Proxied</strong> switched <strong>on</strong> (the orange cloud). This part is not optional: the certificate here covers the platform&rsquo;s own domain, not yours, so the visitor&rsquo;s connection must be handled at Cloudflare.</li>
+      <li>Then go to <strong>SSL/TLS</strong> &rarr; <strong>Overview</strong> and set the encryption mode to <strong>Flexible</strong>.</li>
+      <li>Save the record, wait a minute, then press <strong>DNS</strong> again. The check turns green and the domain is live &mdash; no further step in this app.</li>
+    </ol>
+    <p>If the check still says the name resolves but nothing here answered, the record is right and the address is not yet connected on this side: send support that panel and it is switched on from here. Nothing about your DNS has to change for that.</p>
   </div>
 </section>
 

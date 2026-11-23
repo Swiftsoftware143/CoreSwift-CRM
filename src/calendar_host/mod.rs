@@ -36,7 +36,9 @@
 //! workspace's calendar answers), so they demand owner/admin — the same roles the rest of the
 //! account surface demands, not merely a session.
 
+pub mod dns;
 pub mod handlers;
+pub mod workspace_hosts;
 
 use crate::{errors::AppError, AppState};
 use axum::{
@@ -139,6 +141,9 @@ pub struct CalendarHost {
 pub struct ResolvedHost {
     pub id: Uuid,
     pub tenant_id: Uuid,
+    /// The workspace this address belongs to. `None` is the account-level address, which stays exactly
+    /// as it was: every calendar in the account.
+    pub workspace_id: Option<Uuid>,
     pub subdomain: String,
     pub custom_domain: Option<String>,
     pub custom_domain_status: String,
@@ -379,7 +384,8 @@ pub async fn resolve_host(
         return Ok(None);
     }
     sqlx::query_as::<_, ResolvedHost>(
-        r#"SELECT ch.id, ch.tenant_id, ch.subdomain, ch.custom_domain, ch.custom_domain_status,
+        r#"SELECT ch.id, ch.tenant_id, NULL::uuid AS workspace_id, ch.subdomain, ch.custom_domain,
+                  ch.custom_domain_status,
                   t.name AS tenant_name, t.slug AS tenant_slug, t.logo_url,
                   t.primary_color, t.accent_color, t.branding_name
            FROM calendar_hosts ch
@@ -387,6 +393,36 @@ pub async fn resolve_host(
            WHERE ch.is_active AND t.is_active
              AND (lower(ch.custom_domain) = $1
                   OR lower(ch.subdomain) || '.' || $2 = $1)
+           LIMIT 1"#,
+    )
+    .bind(&host)
+    .bind(system)
+    .fetch_optional(db)
+    .await
+}
+
+/// Resolve a Host to a WORKSPACE address. Tried before the account-level address, because a workspace
+/// is the more specific claim: two newsletters in one account must not answer for each other.
+pub async fn resolve_workspace_host(
+    db: &PgPool,
+    raw_host: &str,
+    system: &str,
+) -> Result<Option<ResolvedHost>, sqlx::Error> {
+    let host = host_only(raw_host);
+    if host.is_empty() {
+        return Ok(None);
+    }
+    sqlx::query_as::<_, ResolvedHost>(
+        r#"SELECT wh.id, wh.tenant_id, wh.workspace_id, wh.subdomain, wh.custom_domain,
+                  wh.custom_domain_status,
+                  t.name AS tenant_name, t.slug AS tenant_slug, t.logo_url,
+                  t.primary_color, t.accent_color, t.branding_name
+           FROM workspace_hosts wh
+           JOIN tenants t ON t.id = wh.tenant_id
+           JOIN workspaces w ON w.id = wh.workspace_id
+           WHERE wh.is_active AND t.is_active AND w.tenant_id = wh.tenant_id
+             AND (lower(wh.custom_domain) = $1
+                  OR lower(wh.subdomain) || '.' || $2 = $1)
            LIMIT 1"#,
     )
     .bind(&host)
@@ -475,6 +511,15 @@ pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/", get(handlers::get_host))
         .route("/subdomain", patch(handlers::set_subdomain))
+        // ONE ADDRESS PER WORKSPACE (2026-11-23): an account with a calendar per newsletter needs an
+        // address per newsletter, and each of those addresses lists only its own calendars.
+        .route("/workspaces", get(workspace_hosts::list_workspace_hosts))
+        .route(
+            "/workspaces/:id",
+            patch(workspace_hosts::set_workspace_host),
+        )
+        // DNS TOOLING: the records to paste into Cloudflare, and a live verdict on them.
+        .route("/workspaces/:id/dns", get(dns::workspace_dns))
         .route(
             "/custom-domain",
             put(handlers::set_custom_domain).delete(handlers::clear_custom_domain),
