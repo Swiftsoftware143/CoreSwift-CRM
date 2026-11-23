@@ -13632,12 +13632,87 @@ function bkListPanel() {
     return '<tr onclick="bkOpen(\'' + c.id + '\')" style="cursor:pointer">' +
       '<td><strong>' + escapeHtml(c.name) + '</strong><div class="muted" style="font-size:12px">/' + escapeHtml(c.slug) + '</div></td>' +
       '<td><span class="badge">' + bkTypeWords(c.kind) + '</span></td>' +
+      // WHICH WORKSPACE (2026-11-23): calendars belong to one, and an account with a calendar per
+      // newsletter is unreadable without it.
+      '<td class="muted">' + escapeHtml(c.workspace_name || 'Default workspace') + '</td>' +
       '<td>' + escapeHtml(c.currency || 'usd').toUpperCase() + '</td>' +
       '<td class="muted">' + escapeHtml(c.timezone || '') + '</td>' +
-      '<td style="text-align:right"><button class="btn btn-secondary btn-sm">Open</button></td></tr>';
+      '<td style="text-align:right;white-space:nowrap">' +
+        '<button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();bkCloneOpen(\'' + c.id + '\')">Copy</button> ' +
+        '<button class="btn btn-secondary btn-sm">Open</button></td></tr>';
   }).join('');
   return bkHostPanel() +
-    '<div class="card"><table class="table"><thead><tr><th>Calendar</th><th>Type</th><th>Currency</th><th>Time zone</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    '<div class="card"><table class="table"><thead><tr><th>Calendar</th><th>Type</th><th>Workspace</th><th>Currency</th><th>Time zone</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+}
+
+/* COPY A CALENDAR — ASK THE TWO THINGS THAT MAKE THE COPY USEFUL (David, 2026-11-23).
+ *
+ * "if a user clicks on clone a calendar this should be another thing to say which workspace as well as
+ * a rename so it's just not a clone hyphen."
+ *
+ * So the dialog asks for a NAME (pre-filled with the source's, so one word makes it distinct), shows the
+ * WEB ADDRESS that name produces — every word joined by a hyphen, exactly as typed, because that address
+ * becomes the public link — and asks WHICH WORKSPACE the copy belongs to, defaulting to the source's own.
+ * The address field stays editable: the server takes what the owner saw and only derives one if it is
+ * left empty.
+ *
+ * What is copied is stated on the dialog rather than discovered afterwards: hours, resources, prices,
+ * bundles, tags, lists, notification emails and reminders yes; bookings, orders and the Google mirror no.
+ */
+function bkCloneOpen(id) {
+  const src = BK.list.filter(function (c) { return c.id === id; })[0];
+  if (!src) return;
+  const items = (WS && WS.items) ? WS.items : [];
+  const defWs = src.workspace_id || (WS && WS.current && WS.current.id) || (items[0] && items[0].id) || '';
+  const opts = items.length
+    ? items.map(function (w) {
+        return '<option value="' + w.id + '"' + (String(w.id) === String(defWs) ? ' selected' : '') + '>' +
+          escapeHtml(w.name) + (w.is_default ? ' (default)' : '') + '</option>';
+      }).join('')
+    : '<option value="">Default workspace</option>';
+  showModal('Copy &ldquo;' + escapeHtml(src.name) + '&rdquo;',
+    '<div class="form-group"><label for="bkCloneName">New name</label>' +
+      '<input id="bkCloneName" value="' + escapeHtml(src.name) + '" oninput="bkCloneSync()"></div>' +
+    '<div class="form-group"><label for="bkCloneSlug">Web address</label>' +
+      '<input id="bkCloneSlug" value="' + escapeHtml(bkSlug(src.name)) + '">' +
+      '<span class="muted">Each word joined by a hyphen — this is the public link, and you can edit it.</span></div>' +
+    '<div class="form-group"><label for="bkCloneWs">Workspace</label>' +
+      '<select id="bkCloneWs">' + opts + '</select>' +
+      '<span class="muted">The copy lands in this workspace; the original stays where it is.</span></div>' +
+    '<p class="muted" style="margin:10px 0 0">Copied: hours, resources, prices, bundles, tags, lists, ' +
+      'notification emails and reminders. Not copied: bookings, orders and the Google Mirror.</p>',
+    '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="bkCloneDo(\'' + id + '\')">Copy calendar</button>', true);
+}
+
+/* The address follows the name as it is typed: one hyphen between each word. */
+function bkCloneSync() {
+  const n = document.getElementById('bkCloneName');
+  const s = document.getElementById('bkCloneSlug');
+  if (n && s) s.value = bkSlug(n.value);
+}
+
+async function bkCloneDo(id) {
+  const name = ((document.getElementById('bkCloneName') || {}).value || '').trim();
+  const slug = ((document.getElementById('bkCloneSlug') || {}).value || '').trim();
+  const wsEl = document.getElementById('bkCloneWs');
+  const wid = wsEl ? wsEl.value : '';
+  if (!name) { bkFlash('Give the copy its own name — that is what stops it being "clone".', false); return; }
+  const btn = document.querySelector('#modalContainer .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = 'Copying…'; }
+  try {
+    const r = await bkCall('POST', '/calendars/' + encodeURIComponent(id) + '/clone', {
+      name: name, slug: slug, workspace_id: wid || undefined
+    });
+    closeModal();
+    await bkInit();
+    bkFlash('Copied into ' + (r.workspace_name || 'the workspace') + ' as “' + r.name + '”.', true);
+    // Land on the copy: the owner should see what arrived, not hunt for it in the list.
+    await bkOpen(r.id);
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Copy calendar'; }
+    bkFlash(e.message, false);
+  }
 }
 
 async function bkOpen(id) {

@@ -12,6 +12,9 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use super::error::BookingError;
+use crate::errors::AppError;
+
 // ---------- admin (requires Extension<TenantId>) ----------
 
 pub async fn create_calendar(
@@ -29,9 +32,63 @@ pub async fn create_calendar(
 pub async fn list_calendars(
     State(pool): State<PgPool>,
     Extension(t): Extension<TenantId>,
-) -> Result<Json<Vec<Calendar>>> {
+) -> Result<Json<Vec<Value>>> {
     let mut c = pool.acquire().await?;
-    Ok(Json(service::list_calendars(&mut c, t.0).await?))
+    let calendars = service::list_calendars(&mut c, t.0).await?;
+    // WHICH WORKSPACE EACH CALENDAR BELONGS TO (2026-11-23). The Copy dialog asks which workspace the
+    // copy should land in, and the list has to say where the calendars already are or an account with
+    // one calendar per newsletter is a flat pile of names.
+    let ws: Vec<(Uuid, Option<Uuid>, Option<String>)> = sqlx::query_as(
+        "SELECT c.id, c.workspace_id, w.name \
+           FROM booking_calendars c LEFT JOIN workspaces w ON w.id = c.workspace_id \
+          WHERE c.tenant_id = $1",
+    )
+    .bind(t.0)
+    .fetch_all(&pool)
+    .await?;
+    let map: std::collections::HashMap<Uuid, (Option<Uuid>, Option<String>)> = ws
+        .into_iter()
+        .map(|(id, wid, name)| (id, (wid, name)))
+        .collect();
+    let mut out: Vec<Value> = Vec::with_capacity(calendars.len());
+    for cal in calendars {
+        // A calendar that cannot be serialised is not a request to fail: it is appended as null and
+        // the console shows the rest of the list (a 500 here would hide every calendar behind one).
+        let mut v = serde_json::to_value(&cal).unwrap_or(Value::Null);
+        if let Some(obj) = v.as_object_mut() {
+            let (wid, name) = map.get(&cal.id).cloned().unwrap_or((None, None));
+            obj.insert("workspace_id".into(), json!(wid));
+            obj.insert("workspace_name".into(), json!(name));
+        }
+        out.push(v);
+    }
+    Ok(Json(out))
+}
+
+/// `POST /api/booking/calendars/:id/clone` — copy a calendar's configuration into a workspace.
+pub async fn clone_calendar(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<crate::bookings::clone::CloneCalendarRequest>,
+) -> Result<Json<Value>> {
+    // The clone's own errors are the app-wide ones; they are mapped onto this module's vocabulary
+    // rather than leaking a second error type through the live booking router.
+    let value = crate::bookings::clone::clone_calendar_for(&pool, t.0, id, body)
+        .await
+        .map_err(|e| match e {
+            AppError::Validation(msg) | AppError::BadRequest(msg) => BookingError::Invalid(msg),
+            // A calendar that is not on this account is a request about something the caller cannot
+            // see, not a server fault — and it must not leak whether the id exists elsewhere.
+            AppError::NotFound(_) => {
+                BookingError::Invalid("That calendar is not on this account.".into())
+            }
+            AppError::Unauthorized | AppError::ForbiddenReason(_) => {
+                BookingError::Invalid("This account cannot copy that calendar.".into())
+            }
+            other => BookingError::Invalid(other.to_string()),
+        })?;
+    Ok(Json(value))
 }
 
 pub async fn get_calendar(

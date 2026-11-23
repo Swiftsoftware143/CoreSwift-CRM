@@ -41,10 +41,27 @@ pub async fn list_calendars(
         .fetch_all(&s.db)
         .await?;
         let map: std::collections::HashMap<Uuid, String> = subs.into_iter().collect();
+        // Which WORKSPACE each calendar belongs to (2026-11-23). Without this the Clone dialog could
+        // only guess, and a list spanning several workspaces looked like one flat pile.
+        let rows: Vec<(Uuid, Option<Uuid>, Option<String>)> = sqlx::query_as(
+            "SELECT c.id, c.workspace_id, w.name \
+               FROM booking_calendars c LEFT JOIN workspaces w ON w.id = c.workspace_id \
+              WHERE c.tenant_id = $1",
+        )
+        .bind(tid)
+        .fetch_all(&s.db)
+        .await?;
+        let ws: std::collections::HashMap<Uuid, (Option<Uuid>, Option<String>)> = rows
+            .into_iter()
+            .map(|(id, wid, wname)| (id, (wid, wname)))
+            .collect();
         for cal in calendars {
             let mut v = serde_json::to_value(&cal).unwrap_or(serde_json::Value::Null);
             if let Some(obj) = v.as_object_mut() {
                 obj.insert("subdomain".into(), json!(map.get(&cal.id)));
+                let (wid, wname) = ws.get(&cal.id).cloned().unwrap_or((None, None));
+                obj.insert("workspace_id".into(), json!(wid));
+                obj.insert("workspace_name".into(), json!(wname));
             }
             out.push(v);
         }

@@ -41,6 +41,10 @@ pub fn admin_router(pool: PgPool) -> Router {
             "/calendars/:id",
             get(h::get_calendar).patch(h::update_calendar),
         )
+        // COPY A CALENDAR INTO ANOTHER WORKSPACE (David, 2026-11-23). The console talks to THIS
+        // module (/api/booking), so the door has to be here — the same implementation the legacy
+        // /api/bookings route calls, never a second copy of it.
+        .route("/calendars/:id/clone", post(h::clone_calendar))
         .route("/calendars/:id/resources", post(h::create_resource))
         // the operator filling a position by hand (phone, invoice, a sponsor who never opens the page)
         .route("/calendars/:id/bookings", post(h::admin_create_booking))

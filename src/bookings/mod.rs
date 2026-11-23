@@ -14,6 +14,7 @@
 //! - POST   /api/bookings/bookings/:id/cancel    — cancel booking
 //! - PATCH  /api/bookings/bookings/:id/adjust-slots — admin adjust slot count
 
+pub mod clone;
 pub mod handlers;
 pub mod models;
 
