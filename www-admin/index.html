@@ -185,6 +185,29 @@ tr:hover td{background:var(--bg-hover)}
 .empty-state h3{font-size:1.1rem;margin-bottom:6px;color:var(--text-secondary)}
 .empty-state p{font-size:.88rem;max-width:400px;margin:0 auto 16px}
 
+/* ===== WIDE TABLES INSIDE A CARD (kanban t_12a2381a) =====
+   Measured 2026-11-23 on admin.coreswiftcrm.com: the Private Email view builds two tables (inbox
+   1912px intrinsic, domains 832px) as DIRECT children of a .card, and .card{overflow:hidden} (above)
+   therefore cut the right-hand columns off with no way to pan — at 390x844 the nearest scroll ancestor
+   was a hidden one with a 296px client width (Received/State and the whole domains table gone), and at
+   1280 the same card was 1350px against a 1912px table, so To, Received and State were outside the
+   window there too (the phone audit could not see that; it also let the 1912px table stretch #appWrap
+   to 1660px inside a 1280px viewport).
+   Every other view already builds its tables inside .table-wrap (overflow-x:auto), which is why this
+   was the only clipped screen; these two tables are not wrapped, so the card they sit in becomes the
+   scroll box instead of hiding its content — at every width, because a card that holds a table
+   directly must never hide a column. !important is needed: .card's own overflow:hidden has equal
+   specificity. Same class as ADASwift 147fa23 / IncentiveSwift 247d8b56. */
+.card:has(>table){overflow-x:auto!important;overflow-y:hidden!important;-webkit-overflow-scrolling:touch}
+/* From 1200px up there is room for all five columns: let long values break (the bounce+…-realproof-…
+   sender addresses and the DMARC Report-ID strings are single unbreakable tokens) so the table fills
+   the pane instead of scrolling — measured 1280px: table 970 == card 970, no scroll, every column
+   readable. Narrower panes cannot hold five readable columns, so they keep the natural widths and pan. */
+@media(min-width:1200px){
+  .card:has(>table) td{overflow-wrap:anywhere}
+  .card:has(>table) td[style*="nowrap"]{white-space:normal!important}
+}
+
 /* ===== BADGES ===== */
 .badge{display:inline-flex;padding:3px 10px;border-radius:20px;font-size:.75rem;font-weight:500}
 .badge-primary{background:var(--accent-subtle);color:var(--accent-hover)}
