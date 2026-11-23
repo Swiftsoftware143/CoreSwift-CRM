@@ -916,6 +916,22 @@ async fn overview(State(state): State<AppState>, Extension(c): Extension<Claims>
     .into_response()
 }
 
+/// The vocabulary the database enforces (`email_suppressions_reason_check`, migration 181). The door
+/// answers 400 with this list for anything else, because the CHECK would otherwise turn a caller's
+/// typo into a 500 that names no cause. The list is deliberately NOT widened: these five are how a
+/// hard bounce or a complaint is told apart from a preference, and a bounce is never lifted as if it
+/// were an opt-out.
+const SUPPRESSION_REASONS: [&str; 5] = [
+    "unsubscribed",
+    "hard_bounce",
+    "complaint",
+    "manual",
+    "provider",
+];
+
+/// `email_suppressions_mail_class_check` — the same rule for the scope a suppression covers.
+const SUPPRESSION_MAIL_CLASSES: [&str; 4] = ["all", "bulk", "notification", "transactional"];
+
 #[derive(Deserialize)]
 struct ManualSuppression {
     address: String,
@@ -978,12 +994,36 @@ async fn add_suppression(
         )
             .into_response();
     };
-    let mail_class = body.mail_class.unwrap_or_else(|| "all".to_string());
-    let reason = body.reason.unwrap_or_else(|| "manual".to_string());
+    let mail_class = body
+        .mail_class
+        .unwrap_or_else(|| "all".to_string())
+        .trim()
+        .to_lowercase();
+    let reason = body
+        .reason
+        .unwrap_or_else(|| "manual".to_string())
+        .trim()
+        .to_lowercase();
     if !body.address.contains('@') {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "not an address" })),
+        )
+            .into_response();
+    }
+    // The database's own vocabulary, enforced here so a caller's typo is a named 400 instead of a
+    // 500 from the CHECK constraint. The CHECK stays as the backstop for every other writer.
+    if !SUPPRESSION_REASONS.contains(&reason.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "unknown reason", "allowed": SUPPRESSION_REASONS })),
+        )
+            .into_response();
+    }
+    if !SUPPRESSION_MAIL_CLASSES.contains(&mail_class.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "unknown mail class", "allowed": SUPPRESSION_MAIL_CLASSES })),
         )
             .into_response();
     }

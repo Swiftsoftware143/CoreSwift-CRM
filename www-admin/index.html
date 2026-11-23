@@ -7928,8 +7928,8 @@ async function dnmAdd() {
   if (!address || address.indexOf('@') < 0) { toast('Type an email address first.', 'warning'); return; }
   try {
     // `reason` must be one of the vocabulary the email_suppressions CHECK accepts
-    // (unsubscribed / hard_bounce / complaint / manual / provider): the server passes an arbitrary
-    // string straight through, so free text would be refused by the database and surface as a 500.
+    // (unsubscribed / hard_bounce / complaint / manual / provider): the server answers 400 with the
+    // allowed vocabulary for anything else, so free text can never reach the database.
     // A hand-added row is always `manual` — the operator's own entry, never a bounce or a complaint.
     await API.post('/mail-compliance/suppressions', { address: address, reason: 'manual' });
     toast('Added — ' + address + ' will not be emailed again.', 'success');

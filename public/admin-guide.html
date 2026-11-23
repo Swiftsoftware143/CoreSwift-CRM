@@ -376,7 +376,7 @@ address that asked by phone or by hand (recorded as <strong>manual</strong>, so 
 <strong>Allow again</strong> lifts a row so future mail reaches that address, and the two downloads
 give the do-not-mail list as a CSV, or every contact address in the workspace one per line for pasting into a checker. Lifting an address refuses a row that belongs to another account (it answers "no such
 suppression in this account") and never recalls anything already sent. Every row prints where it came from — <code>console</code> for a hand-added one — and the list is read
-and written under the signed-in account, so nothing here can see or lift another workspace's block.</p>
+and written under the signed-in account, so nothing here can see or lift another workspace's block. An API client that sends any other <code>reason</code> or <code>mail_class</code> is refused with a <strong>400</strong> naming the allowed values — the five reasons above, and <code>all</code> / <code>bulk</code> / <code>notification</code> / <code>transactional</code> for the scope — so a typo is never recorded as if it were a real preference.</p>
 
 <h3>The opt-out page and its wording</h3>
 <p>The page lists the campaigns that address is actually in, each with its own tick box, plus one stop-everything choice. A tick on one campaign stops only that campaign. The
