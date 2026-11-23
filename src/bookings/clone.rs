@@ -219,6 +219,7 @@ pub async fn clone_calendar_for(
         Option<String>,
         i32,
         i64,
+        Option<i64>,
         i32,
         i32,
         i32,
@@ -227,8 +228,8 @@ pub async fn clone_calendar_for(
         Option<serde_json::Value>,
         bool,
     )> = sqlx::query_as(
-        "SELECT id, name, description, capacity, price_cents, duration_min, slot_interval_min, \
-                buffer_min, min_notice_min, sort_order, metadata, active \
+        "SELECT id, name, description, capacity, price_cents, compare_at_price_cents, duration_min, \
+                slot_interval_min, buffer_min, min_notice_min, sort_order, metadata, active \
            FROM booking_resources WHERE calendar_id = $1 ORDER BY sort_order, created_at",
     )
     .bind(id)
@@ -237,20 +238,34 @@ pub async fn clone_calendar_for(
 
     let mut map: Vec<(Uuid, Uuid)> = Vec::with_capacity(resources.len());
     let mut copied_rules = 0u32;
-    for (rid, rname, rdesc, cap, price, dur, interval, buffer, notice, order, meta, active) in
-        resources
+    for (
+        rid,
+        rname,
+        rdesc,
+        cap,
+        price,
+        compare_at,
+        dur,
+        interval,
+        buffer,
+        notice,
+        order,
+        meta,
+        active,
+    ) in resources
     {
         let new_rid: Uuid = sqlx::query_scalar(
             "INSERT INTO booking_resources \
-                 (id, calendar_id, name, description, capacity, price_cents, duration_min, \
-                  slot_interval_min, buffer_min, min_notice_min, sort_order, metadata, active) \
-             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id",
+                 (id, calendar_id, name, description, capacity, price_cents, compare_at_price_cents, \
+                  duration_min, slot_interval_min, buffer_min, min_notice_min, sort_order, metadata, active) \
+             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id",
         )
         .bind(new_id)
         .bind(&rname)
         .bind(&rdesc)
         .bind(cap)
         .bind(price)
+        .bind(compare_at)
         .bind(dur)
         .bind(interval)
         .bind(buffer)

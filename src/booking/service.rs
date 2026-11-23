@@ -347,14 +347,18 @@ pub async fn create_resource(
 ) -> Result<Resource> {
     Ok(sqlx::query_as::<_, Resource>(
         "INSERT INTO booking_resources
-           (calendar_id, name, description, capacity, price_cents, duration_min, slot_interval_min, buffer_min, min_notice_min, sort_order, metadata)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *",
+           (calendar_id, name, description, capacity, price_cents, compare_at_price_cents, duration_min,
+            slot_interval_min, buffer_min, min_notice_min, sort_order, metadata)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *",
     )
     .bind(calendar_id)
     .bind(r.name.trim())
     .bind(r.description.unwrap_or_default())
     .bind(r.capacity.unwrap_or(1).max(1))
     .bind(r.price_cents.unwrap_or(0).max(0))
+    // Display only: stored as given (never below zero). Whether it is SHOWN is the page's rule, so a
+    // value at or under the price simply does not render a strike-through.
+    .bind(r.compare_at_price_cents.map(|v| v.max(0)))
     .bind(r.duration_min.unwrap_or(30).max(1))
     .bind(r.slot_interval_min.or(r.duration_min).unwrap_or(30).max(1))
     .bind(r.buffer_min.unwrap_or(0).max(0))
@@ -594,6 +598,7 @@ pub async fn availability(
     match cal.kind {
         CalendarKind::Inventory => {
             let sql = "SELECT s.id, s.resource_id, r.name, s.label, s.starts_at, s.ends_at, s.price_cents,
+                        r.compare_at_price_cents,
                         (s.capacity - COALESCE((SELECT SUM(b.quantity) FROM booking_bookings b
                                                 WHERE b.slot_id = s.id AND (b.status = 'confirmed' OR (b.status = 'held' AND b.hold_expires_at > now()))), 0))::BIGINT
                  FROM booking_slots s JOIN booking_resources r ON r.id = s.resource_id
@@ -608,6 +613,7 @@ pub async fn availability(
                 DateTime<Utc>,
                 DateTime<Utc>,
                 i64,
+                Option<i64>,
                 i64,
             );
             let rows: Vec<Row> = sqlx::query_as(&sql)
@@ -624,6 +630,7 @@ pub async fn availability(
                 starts_at,
                 ends_at,
                 price_cents,
+                compare_at,
                 remaining,
             ) in rows
             {
@@ -635,6 +642,9 @@ pub async fn availability(
                     starts_at,
                     ends_at,
                     price_cents,
+                    // The rule, in one place: a "was" price only exists when it is HIGHER. Equal or
+                    // lower is not a saving, and showing it would be a false claim.
+                    compare_at_price_cents: compare_at.filter(|c| *c > price_cents),
                     remaining: remaining.max(0),
                 });
             }
@@ -664,6 +674,9 @@ pub async fn availability(
                                 starts_at: s,
                                 ends_at: e,
                                 price_cents: res.price_cents,
+                                compare_at_price_cents: res
+                                    .compare_at_price_cents
+                                    .filter(|c| *c > res.price_cents),
                                 remaining,
                             });
                         }
@@ -697,6 +710,9 @@ pub async fn availability(
                         starts_at: d,
                         ends_at: end,
                         price_cents: res.price_cents,
+                        compare_at_price_cents: res
+                            .compare_at_price_cents
+                            .filter(|c| *c > res.price_cents),
                         remaining: (res.capacity as i64 - u).max(0),
                     });
                 }

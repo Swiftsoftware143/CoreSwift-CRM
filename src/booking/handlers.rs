@@ -319,11 +319,29 @@ pub async fn public_calendar(
     let cal = service::calendar_by_slug(&mut c, &slug, ws.as_deref()).await?;
     let resources = service::list_resources(&mut c, cal.id, true).await?;
     let bundles = service::list_bundles(&mut c, cal.id, true).await?;
+    // THE PAGE A READER LANDS ON SHOULD LOOK LIKE THE PUBLICATION (ZaarHub, 2026-11-23): the console's
+    // theme fields were stored but nothing on the customer-facing page read them, so every booking link
+    // opened a default indigo form. The workspace's own brand name, colour and logo travel with the
+    // calendar now, and the page paints them; a workspace with no branding set keeps the default look.
+    let branding: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT jsonb_build_object(\
+                 'name', coalesce(settings->'email_branding'->>'brand_name', name),\
+                 'color', coalesce(settings->'email_branding'->>'brand_color', primary_color, accent_color),\
+                 'logo_url', coalesce(logo_url, settings->'email_branding'->>'logo_url')\
+             )\
+           FROM tenants WHERE id = $1",
+    )
+    .bind(cal.tenant_id)
+    .fetch_optional(&pool)
+    .await
+    .ok()
+    .flatten();
     Ok(Json(json!({
         "calendar": { "name": cal.name, "slug": cal.slug, "kind": cal.kind, "timezone": cal.timezone,
                       "currency": cal.currency, "hold_minutes": cal.hold_minutes, "settings": cal.settings },
         "resources": resources,
         "bundles": bundles,
+        "branding": branding,
     })))
 }
 

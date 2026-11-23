@@ -72,6 +72,8 @@ pub struct Resource {
     pub description: String,
     pub capacity: i32,
     pub price_cents: i64,
+    /// The "was" price, shown struck through beside `price_cents` and NEVER charged.
+    pub compare_at_price_cents: Option<i64>,
     pub duration_min: i32,
     pub slot_interval_min: i32,
     pub buffer_min: i32,
@@ -170,6 +172,10 @@ pub struct Opening {
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
     pub price_cents: i64,
+    /// Carried so the booking page can strike a "was" price through without asking a second endpoint.
+    /// Only ever set when it is GREATER than `price_cents`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compare_at_price_cents: Option<i64>,
     pub remaining: i64,
 }
 
@@ -201,6 +207,10 @@ pub struct NewResource {
     pub description: Option<String>,
     pub capacity: Option<i32>,
     pub price_cents: Option<i64>,
+    /// Display-only "was" price. Optional at the door: an owner who does not sell on a founders rate
+    /// never sees or sends it.
+    #[serde(default)]
+    pub compare_at_price_cents: Option<i64>,
     pub duration_min: Option<i32>,
     pub slot_interval_min: Option<i32>,
     pub buffer_min: Option<i32>,

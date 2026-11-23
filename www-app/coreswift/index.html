@@ -14294,7 +14294,7 @@ function bkResourcePanel(res, kind) {
   const priceLabel = kind === 'date_range' ? 'Price per day (cents)' : 'Price (cents)';
   const rows = res.map(function (r) {
     return '<tr><td><strong>' + escapeHtml(r.name) + '</strong></td>' +
-      '<td>' + bkMoney(r.price_cents) + '</td>' +
+      '<td>' + bkPriceCell(r) + '</td>' +
       '<td>' + (r.duration_min || 0) + ' min</td>' +
       '<td>' + (r.capacity || 1) + '</td>' +
       '<td><button class="btn btn-secondary btn-sm" onclick="bkEditSlotPrices(\'' + r.id + '\')">Slots</button></td></tr>';
@@ -14305,12 +14305,27 @@ function bkResourcePanel(res, kind) {
     '<div class="bk-form" style="margin-top:12px">' +
       '<label>Name<input id="bkResName" placeholder="' + (kind === 'inventory' ? 'Top sponsor' : kind === 'date_range' ? 'Featured listing 30 days' : 'Discovery call') + '"></label>' +
       '<label>' + priceLabel + '<input id="bkResPrice" type="number" value="' + (kind === 'appointment' ? 0 : 20000) + '"></label>' +
+      // THE "WAS" PRICE (2026-11-23): a founders rate needs the old figure beside it. Display only —
+      // the amount charged is always the price above, and this never reaches pricing or checkout.
+      '<label>Compare-at price (cents)<input id="bkResCompare" type="number" min="0" placeholder="leave empty for none">' +
+        '<span class="muted" style="font-weight:400">Shown struck through beside the price, only when it is higher. Customers are charged the price above.</span></label>' +
       '<label>Length (min)<input id="bkResDur" type="number" value="' + (kind === 'appointment' ? 30 : 60) + '"></label>' +
       '<label>Places<input id="bkResCap" type="number" value="1" min="1"></label>' +
       '<label>Padding after (min)<input id="bkResBuf" type="number" value="0" min="0"></label>' +
       '<label>Spacing (min)<input id="bkResInterval" type="number" value="' + (kind === 'appointment' ? 30 : 60) + '"></label>' +
     '</div>' +
     '<button class="btn btn-primary" onclick="bkAddResource()">Add</button></div>';
+}
+
+/* The price column, and whether a "was" price is honest: only when it is strictly higher. */
+function bkPriceCell(r) {
+  const was = r.compare_at_price_cents;
+  const mine = (r.price_cents || 0);
+  let out = bkMoney(mine);
+  if (was != null && was > mine) {
+    out = '<span style="text-decoration:line-through;opacity:.65">' + bkMoney(was) + '</span> ' + out;
+  }
+  return out;
 }
 
 async function bkAddResource() {
@@ -14320,6 +14335,10 @@ async function bkAddResource() {
     await bkCall('POST', '/calendars/' + BK.current + '/resources', {
       name: name,
       price_cents: parseInt(document.getElementById('bkResPrice').value, 10) || 0,
+      compare_at_price_cents: (function () {
+        const v = (document.getElementById('bkResCompare').value || '').trim();
+        return v === '' ? null : parseInt(v, 10);
+      })(),
       duration_min: parseInt(document.getElementById('bkResDur').value, 10) || 30,
       capacity: parseInt(document.getElementById('bkResCap').value, 10) || 1,
       buffer_min: parseInt(document.getElementById('bkResBuf').value, 10) || 0,

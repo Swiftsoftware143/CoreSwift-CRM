@@ -56,6 +56,8 @@
   .tile .meta{font-size:12.5px;color:var(--muted)}
   .tile .price{margin-top:auto;font-size:19px;font-weight:800;letter-spacing:-.02em}
   .tile .price small{font-size:12px;font-weight:600;color:var(--muted);letter-spacing:0}
+  /* The struck-through "was" figure: lighter, smaller, never the number that gets charged. */
+  .tile .price .was{text-decoration:line-through;opacity:.6;font-weight:600;font-size:14px;margin-right:2px}
   .tick{position:absolute;top:10px;right:10px;width:22px;height:22px;border-radius:50%;background:var(--brand);color:#fff;
         display:none;place-items:center;font-size:13px;font-weight:700;box-shadow:0 2px 6px rgba(99,102,241,.45)}
   .tile.on .tick{display:grid}
@@ -233,6 +235,16 @@
   function money(c) {
     return '$' + ((c || 0) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
+  /* THE "WAS" PRICE (2026-11-23). The owner may set a compare-at figure (a founders rate) on a
+     resource; when it is HIGHER than the price the page strikes it through and shows the price beside
+     it. Equal or lower renders nothing: a "saving" that is not a saving is a false claim, and the
+     amount charged is always the price. */
+  function priceHtml(item) {
+    var now = money(item.price_cents);
+    var was = item.compare_at_price_cents;
+    if (was == null || was <= (item.price_cents || 0)) return now;
+    return '<span class="was">' + money(was) + '</span> ' + now;
+  }
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
@@ -367,6 +379,37 @@
       if (!cal.resources && payload.resources) cal.resources = payload.resources;
       if (!cal.bundles && payload.bundles) cal.bundles = payload.bundles;
       STATE.cal = cal;
+      // THE WORKSPACE'S OWN LOOK (2026-11-23). A reader arriving from a newsletter should not land on
+      // a generic indigo form: the brand colour, name and logo the owner already set are applied here.
+      // Anything unset is left alone, so a workspace with no branding keeps the default page.
+      (function applyBranding() {
+        // The owner's per-calendar theme wins (that is the screen they set), and the workspace branding
+        // is the fallback for a calendar that never had one.
+        var theme = (cal.settings && cal.settings.theme) || {};
+        var b = cal.branding || {};
+        var brand = theme.brand || b.color || '';
+        var roots = document.documentElement.style;
+        if (brand && /^#[0-9a-fA-F]{3,8}$/.test(brand)) roots.setProperty('--brand', brand);
+        if (theme.ink && /^#[0-9a-fA-F]{3,8}$/.test(theme.ink)) roots.setProperty('--ink', theme.ink);
+        if (theme.bg && /^#[0-9a-fA-F]{3,8}$/.test(theme.bg)) roots.setProperty('--bg', theme.bg);
+        if (!brand && !theme.ink && !theme.bg && !b.name && !(theme.logo_url || b.logo_url)) return;
+        var logoUrl = theme.logo_url || b.logo_url;
+        if (b.name) {
+          var h1 = document.getElementById('calName');
+          if (h1) h1.setAttribute('data-brand', b.name);
+        }
+        if (logoUrl) {
+          var hero = document.querySelector('header.hero');
+          if (hero && !hero.querySelector('img.brandlogo')) {
+            var img = document.createElement('img');
+            img.className = 'brandlogo';
+            img.src = logoUrl;
+            img.alt = (b.name || 'Logo');
+            img.style.cssText = 'max-height:44px;max-width:220px;display:block;margin-bottom:10px';
+            hero.insertBefore(img, hero.firstChild);
+          }
+        }
+      })();
       applyTheme(cal);
       el('calName').textContent = cal.name || 'Book';
       el('calBlurb').textContent = cal.description ||
@@ -439,7 +482,7 @@
         '<span class="when">' + esc(dayLabel(a.starts_at)) + '</span>' +
         (sub ? '<span class="meta" style="font-size:12px">' + esc(sub) + '</span>' : '') +
         '<span class="meta">' + (a.remaining > 1 ? a.remaining + ' places left' : 'One place') + '</span>' +
-        '<span class="price">' + money(a.price_cents) + '</span>' +
+        '<span class="price">' + priceHtml(a) + '</span>' +
         '</button>';
     }).join('') : '<div class="empty">Nothing is open in these dates. Try a wider range.</div>';
 
