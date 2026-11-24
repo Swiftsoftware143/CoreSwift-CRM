@@ -1724,14 +1724,20 @@ Authorization: Bearer &lt;token&gt;
   </div>
 
   <div class="card">
-    <h3>Close your account</h3>
-    <p>The exit door is the last card on <strong>Settings &gt; Profile</strong>: <strong>Close my account</strong>. Press it once to open the form, then enter your password and type <code>CLOSE</code> &mdash; nothing is sent before that, so an account cannot be closed by one careless click.</p>
-    <p>Closing ends your sign-in and every API key on the account, and the sign-in address will be refused from then on. It is <strong>not</strong> a delete: your contacts, deals and history stay on file for the operator, so support can reopen the account if you closed it by mistake.</p>
+    <h3>Cancel your plan, or delete the account and its data</h3>
+    <p>Both live in the <strong>Danger zone</strong> &mdash; the last block on <strong>Settings &gt; Profile</strong>, below a divider, outlined in red. They are two separate actions on purpose, because they do two different things.</p>
+    <p><strong>Cancel plan</strong> (neutral button) ends your sign-in, every API key on the account and billing. It is <strong>not</strong> a delete: your contacts, deals and history stay on file, and support can restore the account if you cancelled by mistake. Nothing is sent until you enter your password and type <code>CLOSE</code> in the confirmation dialog.</p>
     <pre>POST /api/auth/close-account
-Authorization: Bearer &lt;token&gt;
+Authorization: Bearer ***
 
 { "password": "&lt;your-password&gt;", "confirm": "CLOSE" }</pre>
-    <div class="callout info"><strong>What stays behind.</strong> A closed account keeps a <code>closed_at</code> timestamp instead of being deleted. Sign-in, the refresh route and password reset all refuse it by name, so nothing quietly reopens it.</div>
+    <p><strong>Delete account and data</strong> (the red button, the only red button on the page) is the irreversible one. The confirmation dialog lists exactly what will be deleted &mdash; contacts, companies, deals, pipelines, tags and lists; tickets and help-desk conversations; calendars, bookings and booking forms; automations, webhooks and connected apps; email campaigns, templates, mailboxes and messages; every person who signs in to the workspace, their sessions and every API key &mdash; and what is kept: <strong>only the billing documents we must keep for tax</strong> (the plan you were on and its price history), detached from your workspace name. The button stays disabled until both your password and the word <code>DELETE</code> are entered, and the server re-checks both.</p>
+    <pre>POST /api/auth/erase-data
+Authorization: Bearer ***
+
+{ "password": "&lt;your-password&gt;", "confirm": "DELETE" }</pre>
+    <div class="callout info"><strong>Why a password as well as a sign-in.</strong> A signed-in tab proves someone is holding the session; your password proves it is you. Neither action can be done with an API key or by an AI/MCP client, and the platform operator's own account cannot use either from this screen.</div>
+    <div class="callout info"><strong>What stays behind after a close.</strong> A closed account keeps a <code>closed_at</code> timestamp instead of being deleted. Sign-in, the refresh route and password reset all refuse it by name, so nothing quietly reopens it. An erase leaves one audit row naming who asked and when &mdash; never your password or token.</div>
   </div>
 
   <div class="card">

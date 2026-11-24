@@ -185,16 +185,33 @@ fn check_confirmation(
     }
 }
 
-/// Destroy one workspace and everything its foreign keys cascade to.
+/// What was destroyed and what was kept, reported to the caller so an erasure is auditable.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EraseReport {
+    pub status: &'static str,
+    pub mode: &'static str,
+    pub tenant_id: Uuid,
+    pub users_removed: i64,
+    pub contacts_removed: i64,
+    pub lists_removed: i64,
+    /// Billing rows copied to `erasure_billing_retention` before the cascade (tax retention).
+    pub billing_documents_retained: i64,
+    pub audit_id: Uuid,
+    pub erased_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl EraseReport {
+    pub fn to_json(&self) -> Value {
+        json!(self)
+    }
+}
+
+/// The guards EVERY destroy door applies, in one place: a portfolio/owner company is never
+/// removed. Returns the workspace's `(name, slug)` once it passed.
 ///
-/// `confirmed_slug` is the caller's echo of the workspace slug (the fleet door requires it; the
-/// console door passes `None` — the operator picked the row in the UI).
-pub async fn delete_tenant(
-    db: &PgPool,
-    id: Uuid,
-    door: Door,
-    confirmed_slug: Option<&str>,
-) -> Result<PurgeReport, AppError> {
+/// Extracted so the self-service `erase_tenant` and the operator/fleet `delete_tenant` cannot
+/// drift apart — `guarded-destructive-actions`: a guard on one door is not a guard.
+async fn guarded_workspace(db: &PgPool, id: Uuid) -> Result<(String, String), AppError> {
     let (name, slug, is_portfolio) = sqlx::query_as::<_, (String, String, Option<bool>)>(
         "SELECT name, slug, is_portfolio FROM tenants WHERE id = $1",
     )
@@ -223,6 +240,123 @@ pub async fn delete_tenant(
             "refusing to delete the workspace '{name}' ({slug}): it is flagged is_portfolio and is never removed"
         )));
     }
+    Ok((name, slug))
+}
+
+/// The customer's own irreversible erasure (`POST /api/auth/erase-data`).
+///
+/// The caller has already proved three things (session, password, the typed word) in the handler;
+/// this function owns the DESTRUCTION and nothing else, through the same one-writer path as every
+/// other door. It differs from [`delete_tenant`] in exactly two ways, both required by the fleet
+/// standard §4:
+///
+///   * the billing documents (the plan the customer was on and its price history) are copied into
+///     `erasure_billing_retention` INSIDE the same transaction, because the cascade would otherwise
+///     destroy the records tax law requires us to keep;
+///   * one `account_erasures` row is written in that same transaction, so a successful erase always
+///     leaves exactly one audit row — and a failed one leaves none.
+///
+/// The workspace row itself is deleted by the same `DELETE FROM tenants` the other doors use, so
+/// the 100-odd `ON DELETE CASCADE` foreign keys take users, sessions, API keys, contacts, deals,
+/// tickets and the workspace's own audit trail with it in one statement.
+pub async fn erase_tenant(
+    db: &PgPool,
+    id: Uuid,
+    actor_user_id: Uuid,
+    actor_email: &str,
+) -> Result<EraseReport, AppError> {
+    // Portfolio/owner accounts are never erased, whatever door asks (same guards as delete_tenant).
+    guarded_workspace(db, id).await?;
+
+    let mut tx = db.begin().await?;
+    let users_removed: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE tenant_id = $1")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    let contacts_removed: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM contacts WHERE tenant_id = $1")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let lists_removed: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM lists WHERE tenant_id = $1")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    let plans_retained: i64 = sqlx::query(
+        "INSERT INTO erasure_billing_retention (erased_tenant_id, source, document) \
+         SELECT $1, 'tenant_plans', to_jsonb(t) FROM tenant_plans t WHERE t.tenant_id = $1 \
+         RETURNING id",
+    )
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?
+    .len() as i64;
+    let lines_retained: i64 = sqlx::query(
+        "INSERT INTO erasure_billing_retention (erased_tenant_id, source, document) \
+         SELECT $1, 'plan_lines', to_jsonb(t) FROM plan_lines t WHERE t.tenant_id = $1 \
+         RETURNING id",
+    )
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?
+    .len() as i64;
+    let billing_documents_retained = plans_retained + lines_retained;
+
+    let (audit_id, erased_at): (Uuid, chrono::DateTime<chrono::Utc>) = sqlx::query_as(
+        "INSERT INTO account_erasures \
+             (erased_tenant_id, actor_user_id, actor_email, action, records) \
+         VALUES ($1, $2, $3, 'erase_data', $4) \
+         RETURNING id, erased_at",
+    )
+    .bind(id)
+    .bind(actor_user_id)
+    .bind(actor_email)
+    .bind(json!({
+        "users": users_removed,
+        "contacts": contacts_removed,
+        "lists": lists_removed,
+        "billing_documents_retained": billing_documents_retained,
+    }))
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let done = sqlx::query("DELETE FROM tenants WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    if done.rows_affected() != 1 {
+        return Err(AppError::NotFound(format!("Workspace {id} not found")));
+    }
+    tx.commit().await?;
+
+    tracing::info!(
+        "[purge] workspace ERASED door=OwnerErase tenant={id} actor={actor_user_id} users={users_removed} contacts={contacts_removed} lists={lists_removed} billing_docs_kept={billing_documents_retained} audit={audit_id}"
+    );
+
+    Ok(EraseReport {
+        status: "erased",
+        mode: "hard",
+        tenant_id: id,
+        users_removed,
+        contacts_removed,
+        lists_removed,
+        billing_documents_retained,
+        audit_id,
+        erased_at,
+    })
+}
+
+/// Destroy one workspace and everything its foreign keys cascade to.
+///
+/// `confirmed_slug` is the caller's echo of the workspace slug (the fleet door requires it; the
+/// console door passes `None` — the operator picked the row in the UI).
+pub async fn delete_tenant(
+    db: &PgPool,
+    id: Uuid,
+    door: Door,
+    confirmed_slug: Option<&str>,
+) -> Result<PurgeReport, AppError> {
+    let (name, slug) = guarded_workspace(db, id).await?;
 
     // ── 2. the caller must name the workspace it means ─────────────────────────────────────────
     check_confirmation(door, confirmed_slug, &slug, id).map_err(AppError::Conflict)?;

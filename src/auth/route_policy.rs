@@ -239,9 +239,17 @@
 //!        and the custom-object REST + MCP surface — the one class that also accepts a console JWT,
 //!        decided in `custom_objects::authenticate`)
 //!    11 served surfaces outside the boundary: the SPA mount, /track/:slug, the eight
-//!        /s/:tenant_id/** support-portal mounts and the two /s/:tenant_slug/widgets/**
-//!        embed-widget mounts
+//!        /s/:tenant_id/** support-portal mounts and the two /s/:tenant_slug/widgets/** embed-widget
+//!        mounts
 //! ```
+//!
+//! **Two routes are deliberately in NONE of those lists**: `POST /api/auth/close-account` and
+//! `POST /api/auth/erase-data` — a customer's own exit doors. They are session-only by design
+//! (fleet standard docs/account-closure-erasure-standard-2026-11-24.md §3): a password is
+//! re-verified in the handler and the typed word `CLOSE` / `DELETE` is judged there, so no issued
+//! API key and no MCP tool can end or wipe an account. Pinned by
+//! `closure_and_erasure_are_session_only_and_never_reachable_by_an_agent` below.
+//!
 //!
 //! **No route was found answering an anonymous caller by accident.** Every anonymous path is a
 //! deliberate surface (a signup entry point, a public catalogue, a path-keyed receiver, a support
@@ -1484,21 +1492,94 @@ mod tests {
     /// (`POST /deals`, `PATCH /deals/:external_ref/stage`, `POST /deals/:external_ref/status` —
     /// the issued-key writer an outside system calls). Every new path is on `/api**`, so the
     /// root-level count is unchanged at 14. 517 mounted / 503 on /api**.
+    /// +1 mount / +1 path (2026-11-24): the customer's own DATA ERASURE door
+    /// (`POST /api/auth/erase-data`, kanban t_48b65042) — on `/api**`, so the root-level count is
+    /// unchanged. 559 mounted / 545 on /api**.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
         let mounted = mounted_routes();
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            558,
+            559,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 544,
+            api, 545,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.
         assert_eq!(mounted.len() - api, 14);
+    }
+
+    /// FLEET STANDARD §6 (docs/account-closure-erasure-standard-2026-11-24.md) — the exit doors are
+    /// a signed-in HUMAN's alone, and that is structural, not promised.
+    ///
+    /// A machine credential must never be able to end or wipe a customer's account even when its
+    /// agent is asked to: the two routes take a session only, and no allowlist entry may swallow
+    /// them by template. The Custom Objects MCP surface (the fleet's one agent-facing tool list on
+    /// this app) must expose no closure/erasure tool — its nine tools are objects, fields and
+    /// records only. If anyone ever adds `erase_account` there, this test goes red before a
+    /// customer's agent can call it.
+    #[test]
+    fn closure_and_erasure_are_session_only_and_never_reachable_by_an_agent() {
+        const EXIT_DOORS: [&str; 2] = ["/api/auth/close-account", "/api/auth/erase-data"];
+        for path in EXIT_DOORS {
+            assert!(
+                !is_api_key_route(path),
+                "{path} must not be an issued-API-key route"
+            );
+            assert!(
+                !is_internal_route(path),
+                "{path} must not be a shared-key internal route"
+            );
+            assert!(!is_public_route(path), "{path} must not be anonymous");
+            assert!(is_guarded_path(path), "{path} must sit inside the boundary");
+            // No allowlist ENTRY (as a template) may match the door either: a `/api/auth/:x`
+            // style entry would swallow it without the literal path ever appearing in the list.
+            for entry in API_KEY_ROUTES.iter().chain(INTERNAL_ROUTES.iter()) {
+                assert!(
+                    !matches_template(entry, path),
+                    "allowlist entry '{entry}' swallows the exit door {path}"
+                );
+            }
+        }
+
+        // The agent-facing tool list on this app names objects, fields and records — never the
+        // account itself.
+        const FORBIDDEN_FRAGMENTS: [&str; 6] = [
+            "close",
+            "erase",
+            "purge",
+            "delete_account",
+            "close_account",
+            "erase_data",
+        ];
+        const EXPECTED_TOOLS: [&str; 9] = [
+            "list_objects",
+            "create_object",
+            "describe_object",
+            "add_field",
+            "archive_field",
+            "insert_record",
+            "query_records",
+            "update_record",
+            "delete_record",
+        ];
+        assert_eq!(
+            crate::custom_objects::mcp::TOOL_NAMES,
+            EXPECTED_TOOLS,
+            "the Custom Objects tool list changed — it must stay objects/fields/records only"
+        );
+        for name in crate::custom_objects::mcp::TOOL_NAMES {
+            let lower = name.to_ascii_lowercase();
+            for bad in FORBIDDEN_FRAGMENTS {
+                assert!(
+                    !lower.contains(bad),
+                    "Custom Objects exposes '{name}', which names a closure/erasure action ('{bad}')"
+                );
+            }
+        }
     }
 }

@@ -4368,21 +4368,24 @@ async function loadProfileTab() {
       '<button type="button" class="btn btn-secondary" id="dlDataBtn" data-ops="profile-download" onclick="downloadMyData()">Download my data</button>' +
       '<p id="dlDataMsg" role="status" style="margin:10px 0 0;font-size:13px;display:none"></p>', '') +
     '<br>' +
-    // CLOSE MY ACCOUNT (kanban t_ae02611a) — the exit door. CoreSwift was the last app of the six
-    // without one: until now the only way out was asking support to DELETE the user row, and the FK
-    // chain CASCADEs, so a privacy request took the contacts, deals and history with it. The server
-    // records a closure as a STATE (POST /api/auth/close-account) and re-checks the password and the
-    // word CLOSE itself. Two deliberate steps here: the first only REVEALS the form, the second is
-    // the red button — and it is LAST on the screen on purpose.
-    card('Close my account',
-      '<p style="color:var(--text-secondary);margin:0 0 10px">This ends your sign-in and every API key, and you will not be able to sign in again. Your contacts, deals and history are kept for our records and are not deleted, so support can help you if you close it by mistake.</p>' +
-      '<div id="closeAcctArm"><button type="button" class="btn btn-secondary danger-text" data-ops="profile-close-arm" onclick="closeAccountArm()" style="border-color:#fca5a5">Close my account</button></div>' +
-      '<div id="closeAcctForm" style="display:none">' +
-        '<div class="form-group"><label for="closeAcctPw">Your password (proves it is you)</label><input type="password" id="closeAcctPw" autocomplete="current-password"></div>' +
-        '<div class="form-group"><label for="closeAcctWord">Type CLOSE to confirm</label><input type="text" id="closeAcctWord" autocomplete="off" placeholder="CLOSE"></div>' +
-        '<button type="button" class="btn btn-primary" data-ops="profile-close-do" onclick="closeAccountDo()" style="background:#b91c1c;border-color:#b91c1c">Close my account permanently</button>' +
-        '<p id="closeAcctMsg" role="status" style="margin:10px 0 0;font-size:13px"></p>' +
-      '</div>', '');
+    // DANGER ZONE (fleet standard §7, kanban t_48b65042) — the account's own exit doors, below a
+    // full-width divider and LAST on the page. TWO separate actions with two consequence sentences:
+    // `Cancel plan` closes (access ends, data kept 30 days, support can restore) and `Delete account
+    // and data` erases (irreversible; only the billing documents tax law requires are kept). The
+    // danger is stated in WORDS and carried by an icon, never by colour alone; both arms open a
+    // confirmation dialog that re-checks the password and the typed word — and the SERVER re-checks
+    // both, so a bare API call cannot skip either.
+    '<div style="margin-top:28px;border-top:1px solid var(--border);padding-top:20px">' +
+      '<div style="border:1.5px solid #dc2626;border-radius:10px;padding:18px;background:rgba(220,38,38,.06)">' +
+        '<h3 style="color:#dc2626;margin:0 0 8px;font-size:16px;display:flex;align-items:center;gap:8px"><span aria-hidden="true">&#9888;</span> Danger zone</h3>' +
+        '<p style="color:var(--text-secondary);margin:0 0 14px">These actions affect this whole account and everyone who signs in to it. Read each one before you press it.</p>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">' +
+          '<button type="button" class="btn btn-secondary" data-ops="danger-cancel-plan" onclick="dangerDialog(\'close\')">Cancel plan</button>' +
+          '<button type="button" class="btn btn-primary" data-ops="danger-erase" onclick="dangerDialog(\'erase\')" style="background:#dc2626;border-color:#dc2626">Delete account and data</button>' +
+        '</div>' +
+        '<p style="color:var(--text-secondary);margin:12px 0 0;font-size:13px"><strong>Cancel plan</strong> ends your sign-in, every API key and billing, and keeps your data for 30 days. <strong>Delete account and data</strong> destroys the data and cannot be undone.</p>' +
+      '</div>' +
+    '</div>';
 }
 
 // Paint the header chip's picture (or the initial letter) from STATE.user.avatar_url, and keep the
@@ -4609,40 +4612,105 @@ function downloadMyData() {
     .then(() => { if (btn) { btn.disabled = false; btn.textContent = 'Download my data'; } });
 }
 
-// ── CLOSE MY ACCOUNT (kanban t_ae02611a) ────────────────────────────────────────────────────────
-// closeAccountArm only REVEALS the form — nothing is sent until closeAccountDo, which posts the
-// bearer token, the password and the word CLOSE. The SERVER owns every rule (the word, the
-// password, that a platform operator account cannot close itself); each refusal is printed in the
-// card's own message and never softened. Posted directly, not through API.call, for the same reason
-// changePassword is: API.call's 401 arm calls logout(), so a wrong password would look like an
-// expired session instead of the sentence the customer needs to read.
-function closeAccountArm() {
-  const arm = document.getElementById('closeAcctArm');
-  const form = document.getElementById('closeAcctForm');
-  if (arm) arm.style.display = 'none';
-  if (form) form.style.display = 'block';
-  const pw = document.getElementById('closeAcctPw');
+// ── DANGER ZONE: cancel plan (close) and delete account and data (erase) ─────────────────────────
+// Fleet standard §3-§7 (docs/account-closure-erasure-standard-2026-11-24.md). TWO operations, never
+// one button: `close` ends access and keeps the data (reversible for 30 days), `erase` destroys the
+// workspace (irreversible, only the billing documents tax law requires are kept). One dialog shape
+// serves both; the SERVER owns every rule — the typed word, the password, the platform-admin
+// refusal, the portfolio refusal — so each refusal sentence is printed here exactly as received.
+// Posted directly, not through API.call, for the same reason changePassword is: API.call's 401 arm
+// calls logout(), so a wrong password would look like an expired session instead of the sentence the
+// customer needs to read.
+const DANGER_ACTIONS = {
+  close: {
+    title: 'Cancel plan?',
+    word: 'CLOSE',
+    endpoint: '/api/auth/close-account',
+    intro: 'This ends your sign-in, every API key on the account and billing. <strong>Your data is kept for 30 days</strong> &mdash; contact support inside that window and they can restore the account.',
+    deleted: ['Nothing. Closing keeps every contact, deal, booking and message.'],
+    kept: 'nothing is deleted &mdash; support can restore the account within 30 days.',
+    confirmLabel: 'Cancel plan',
+    busyLabel: 'Cancelling',
+    done: 'Your account is closed. You can restore it within 30 days by contacting support.'
+  },
+  erase: {
+    title: 'Delete account and data?',
+    word: 'DELETE',
+    endpoint: '/api/auth/erase-data',
+    intro: 'This permanently deletes this workspace and everything in it. <strong>It cannot be undone</strong> and there is no restore.',
+    deleted: [
+      'contacts, companies, deals, pipelines, tags and lists',
+      'tickets, help-desk articles and conversations',
+      'calendars, bookings and booking forms',
+      'automations, webhooks and connected apps',
+      'email campaigns, templates, mailboxes and messages',
+      'every person who signs in to this workspace, their sessions and every API key'
+    ],
+    kept: 'only the billing documents we must keep for tax (the plan you were on, its price history and payment records). They are detached from your workspace name; nothing else survives.',
+    confirmLabel: 'Delete permanently',
+    busyLabel: 'Deleting',
+    done: 'Your account and its data have been deleted. Billing documents kept for tax were retained. You cannot sign in with this address again.'
+  }
+};
+
+var DANGER_KIND = 'close';
+
+function dangerDialog(kind) {
+  const a = DANGER_ACTIONS[kind];
+  if (!a) return;
+  DANGER_KIND = kind;
+  showModal(a.title,
+    '<p style="margin:0 0 10px">' + a.intro + '</p>' +
+    '<p style="margin:0 0 4px"><strong>What is deleted</strong></p>' +
+    '<ul style="margin:0 0 12px 18px;color:var(--text-secondary)">' +
+      a.deleted.map(function (x) { return '<li>' + x + '</li>'; }).join('') +
+    '</ul>' +
+    '<p style="margin:0 0 14px"><strong>What is kept:</strong> ' + a.kept + '</p>' +
+    '<div class="form-group"><label for="dangerPw">Your password (proves it is you)</label>' +
+      '<input type="password" id="dangerPw" autocomplete="current-password" data-ops="danger-password" oninput="dangerArmCheck()"></div>' +
+    '<div class="form-group"><label for="dangerWord">Type ' + a.word + ' to confirm</label>' +
+      '<input type="text" id="dangerWord" autocomplete="off" placeholder="' + a.word + '" data-ops="danger-word" oninput="dangerArmCheck()"></div>' +
+    '<p id="dangerMsg" role="status" style="margin:0;font-size:13px"></p>',
+    '<button type="button" class="btn btn-ghost" data-ops="danger-cancel" onclick="closeModal()">Cancel</button>' +
+    '<button type="button" class="btn btn-primary" id="dangerConfirm" data-ops="danger-confirm" disabled onclick="dangerSubmit()" ' +
+      'style="background:#dc2626;border-color:#dc2626;opacity:.6">' + a.confirmLabel + '</button>');
+  const pw = document.getElementById('dangerPw');
   if (pw) pw.focus();
 }
 
-function closeAcctMsg(text, colour) {
-  const el = document.getElementById('closeAcctMsg');
-  if (!el) return;
-  el.textContent = text || '';
-  el.style.color = colour || 'var(--text-secondary)';
+// The red confirm stays DISABLED until a password AND the exact word are present — a stray click on
+// a destructive control must do nothing. The server re-checks both, so this is only the mirror.
+function dangerArmCheck() {
+  const a = DANGER_ACTIONS[DANGER_KIND];
+  const pw = document.getElementById('dangerPw');
+  const w = document.getElementById('dangerWord');
+  const b = document.getElementById('dangerConfirm');
+  if (!a || !pw || !w || !b) return;
+  const ok = pw.value.length > 0 && w.value.trim() === a.word;
+  b.disabled = !ok;
+  b.style.opacity = ok ? '1' : '.6';
 }
 
-async function closeAccountDo() {
-  const pwEl = document.getElementById('closeAcctPw');
-  const wordEl = document.getElementById('closeAcctWord');
+async function dangerSubmit() {
+  const a = DANGER_ACTIONS[DANGER_KIND];
+  const pwEl = document.getElementById('dangerPw');
+  const wordEl = document.getElementById('dangerWord');
+  const btn = document.getElementById('dangerConfirm');
+  const msgEl = document.getElementById('dangerMsg');
+  function say(text, colour) {
+    if (!msgEl) return;
+    msgEl.textContent = text || '';
+    msgEl.style.color = colour || 'var(--text-secondary)';
+  }
+  if (!a) return;
   const pw = pwEl ? pwEl.value : '';
   const word = wordEl ? wordEl.value.trim() : '';
-  if (!pw) { closeAcctMsg('Enter your password', '#dc2626'); return; }
-  if (word.toUpperCase() !== 'CLOSE') { closeAcctMsg('Type CLOSE in the box to confirm', '#dc2626'); return; }
-  if (!window.confirm('Close this account? You will be signed out and will not be able to sign in again.')) return;
-  closeAcctMsg('Closing your account…', 'var(--text-secondary)');
+  if (!pw) { say('Enter your password', '#dc2626'); return; }
+  if (word !== a.word) { say('Type ' + a.word + ' in the box to confirm', '#dc2626'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = a.busyLabel + '…'; }
+  say(a.busyLabel + '…');
   try {
-    const res = await fetch('/api/auth/close-account', {
+    const res = await fetch(a.endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + STATE.token },
       body: JSON.stringify({ password: pw, confirm: word })
@@ -4654,16 +4722,20 @@ async function closeAccountDo() {
       const pick = d && [d.message, d.error].find(function (v) { return typeof v === 'string' && v.trim(); });
       throw new Error(pick || ('HTTP ' + res.status));
     }
-    // The server has already moved the session line, so this tab's bearer is dead. logout(true)
-    // drops the token, stops the notification poll and returns to the sign-in screen instead of
-    // letting the next API call bounce the customer with an "expired" message.
-    const done = (d && d.message) || 'Your account is closed.';
+    let done = a.done;
+    if (DANGER_KIND === 'erase') done = 'Your account and its data were deleted on ' + new Date().toLocaleString() + '. Billing documents kept for tax were retained. You cannot sign in with this address again.';
+    closeModal();
+    // The session is over either way (erase destroys the user row; close moves its session line), so
+    // drop the local token WITHOUT waiting for a round trip, then state what happened on the plain
+    // sign-in screen — the customer must never be left guessing.
     logout(true);
     const errEl = document.getElementById('loginError');
-    if (errEl) { errEl.textContent = done + ' You can no longer sign in with this address.'; errEl.style.display = 'block'; }
-    toast(done, 'success');
+    if (errEl) { errEl.textContent = done; errEl.style.display = 'block'; }
+    toast(DANGER_KIND === 'erase' ? 'Account and data deleted' : 'Plan cancelled', 'success');
   } catch (e) {
-    closeAcctMsg((e && e.message) || 'Could not close the account', '#dc2626');
+    say((e && e.message) || 'Could not complete this action', '#dc2626');
+    if (btn) { btn.textContent = a.confirmLabel; }
+    dangerArmCheck();
   }
 }
 

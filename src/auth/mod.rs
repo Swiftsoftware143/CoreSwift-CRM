@@ -77,6 +77,12 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/close-account",
             axum::routing::post(handlers::close_account),
         )
+        // ERASE MY DATA (kanban t_48b65042, fleet standard §3-§6): irreversible destruction of the
+        // workspace and its data. On THIS guarded group on purpose — the session is the only
+        // credential — and deliberately absent from `API_KEY_ROUTES` / `INTERNAL_ROUTES`, so no
+        // issued key and no MCP tool can reach it. The handler re-verifies the password and the
+        // typed word DELETE itself; `tenant_purge::erase_tenant` owns the destruction.
+        .route("/erase-data", axum::routing::post(handlers::erase_data))
         // INNERMOST, deliberately: `auth_middleware` is applied below (a later `.layer()` is
         // OUTERMOST in axum) so it stays outside the deadline. An unauthenticated request with a
         // declared body is answered 401 at once without its body ever being read, and a declared

@@ -1360,3 +1360,95 @@ pub async fn close_account(
         "message": "Your account is closed. Every session and API key on it has been ended.",
     })))
 }
+
+// ── ERASE MY DATA (kanban t_48b65042) ────────────────────────────────────────────────────────────
+//
+// `close_account` above records a STATE: the rows stay and support can reopen. Erasure is the other
+// half of the fleet standard (§3-§6, docs/account-closure-erasure-standard-2026-11-24.md) and is
+// IRREVERSIBLE. Three proofs of personhood are demanded, in this order:
+//
+//   * the SESSION (`auth_middleware`) proves who is asking;
+//   * the PASSWORD, re-verified here, proves the person holding the session is the owner — a stolen
+//     tab must not be able to wipe a workspace;
+//   * the typed word `DELETE`, judged HERE as well as in the browser, so a bare API call cannot
+//     skip it.
+//
+// The route is on the session-authenticated group and appears in NEITHER `API_KEY_ROUTES` nor
+// `INTERNAL_ROUTES` (pinned by `route_policy`'s tests), so no issued API key and no MCP tool can
+// reach it — an agent holding a customer's key must not be able to end or wipe the account even if
+// it is asked to. The destruction itself is delegated to the ONE writer, `tenant_purge
+// ::erase_tenant`, which also copies the billing documents into `erasure_billing_retention` and
+// writes the single `account_erasures` audit row.
+
+/// `POST /api/auth/erase-data` body — the owner's own irreversible decision.
+#[derive(Debug, serde::Deserialize)]
+pub struct EraseDataRequest {
+    pub password: String,
+    /// The word the console asks them to type. Judged HERE as well as in the browser, so a bare API
+    /// call cannot erase an account with one careless request.
+    pub confirm: String,
+}
+
+/// `POST /api/auth/erase-data` — the signed-in owner destroys their workspace and its data.
+pub async fn erase_data(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<EraseDataRequest>,
+) -> ApiResult<impl IntoResponse> {
+    if !req.confirm.trim().eq_ignore_ascii_case("DELETE") {
+        return Err(AppError::BadRequest(
+            "Type DELETE to confirm erasing the account and its data".into(),
+        ));
+    }
+
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+
+    let row: Option<(String, bool, Uuid, String)> = sqlx::query_as(
+        "SELECT password_hash, is_platform_admin, tenant_id, email FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (password_hash, is_platform_admin, tenant_id, email) =
+        row.ok_or_else(|| AppError::Unauthorized)?;
+
+    // The session's `aid` and the user's own workspace must agree: a token minted for another
+    // workspace (impersonation-class credentials) must never be able to erase this person's data.
+    let session_tenant = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    if session_tenant != tenant_id {
+        return Err(AppError::ForbiddenReason(
+            "This session is not signed in to the workspace this account belongs to.".into(),
+        ));
+    }
+
+    // A platform operator account closes WORKSPACES; it is not a customer, and erasing the install's
+    // own workspace from a dashboard button would take the console away from whoever runs it.
+    if is_platform_admin {
+        return Err(AppError::ForbiddenReason(
+            "A platform operator account cannot be erased from this screen.".into(),
+        ));
+    }
+
+    // A stored hash that is not a usable PHC string can verify no password at all: that is the
+    // ordinary refusal, never a 500 naming the internal reason (same rule `verify_password` states).
+    if !verify_password(&req.password, &password_hash)? {
+        return Err(AppError::UnauthorizedReason(
+            "Your password is incorrect".into(),
+        ));
+    }
+
+    // Irreversible from here. The ONE writer copies the billing documents, writes the audit row and
+    // deletes the workspace row in ONE transaction; every FK to `tenants` CASCADEs, which is what
+    // ends this session, every other session, and every API key on the account.
+    let report = crate::tenant_purge::erase_tenant(&state.db, tenant_id, user_id, &email).await?;
+
+    tracing::info!(
+        user = %user_id,
+        tenant = %tenant_id,
+        audit = %report.audit_id,
+        billing_docs_kept = report.billing_documents_retained,
+        "account erased: workspace and its data destroyed, billing documents retained"
+    );
+
+    Ok(Json(report.to_json()))
+}
