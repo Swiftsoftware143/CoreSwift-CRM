@@ -471,6 +471,12 @@
     <p><strong>A required answer is enforced by the server, not just the page.</strong> An order that arrives without it is refused with the question&rsquo;s own words &mdash; &ldquo;Company name is required for this booking&rdquo; &mdash; so a browser that was lenient cannot slip an incomplete booking through. The answers are stored on the booking itself and read back with it.</p>
     <p>Removing a question stops it being asked; answers already given stay on the bookings that gave them, because a record of what a customer told you does not disappear when you stop asking.</p>
 
+    <h3>The confirmation email, and asking for artwork</h3>
+    <p>When a booking is confirmed the customer is emailed automatically. The wording lives on the calendar itself: open the calendar and find <strong>The confirmation email your customer gets</strong>, which shows the exact message the mailer produces &mdash; not a description of it. <strong>Show what it sends right now</strong> renders the real message for a real booking.</p>
+    <p>The built-in message already asks for artwork and tells a repeat sponsor they can ignore it. It states the <strong>position</strong>, the <strong>artwork size</strong> and the <strong>date</strong>, all taken from the booking itself, so the specs cannot drift from what you actually sell. Set the size on each position in <em>What customers can book</em> (for example <code>600x150</code>); a position with no size set says so plainly rather than inventing a figure.</p>
+    <p>To use your own words, edit the subject and body and press <strong>Save my wording</strong>. The available values are listed under the box &mdash; <code>{{customer_name}}</code>, <code>{{positions}}</code>, <code>{{sizes}}</code>, <code>{{dates}}</code>, <code>{{artwork_block}}</code>, <code>{{total}}</code>, <code>{{manage_url}}</code> and others. Leave the body empty and save to go back to the built-in wording; nothing is lost by trying.</p>
+    <p>Whether the customer is emailed at all is the calendar&rsquo;s own switch, and an appointment calendar is never asked for artwork because it has no position to print.</p>
+
     <h3>Selling a full takeover without selling the same issue twice</h3>
     <p>A takeover sells every position in one issue. Tick <strong>Exclusive</strong> when you add or edit that position, and the rule works in both directions by itself:</p>
     <ul>

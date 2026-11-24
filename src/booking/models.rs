@@ -78,6 +78,8 @@ pub struct Resource {
     /// When true, a booking here closes every other position on that date — and any other position
     /// booked on a date closes this one for that date.
     pub exclusive: bool,
+    /// Artwork spec for this position, e.g. "600x150". None means the mail states no size.
+    pub size: Option<String>,
     pub slot_interval_min: i32,
     pub buffer_min: i32,
     pub min_notice_min: i32,
@@ -219,6 +221,9 @@ pub struct NewResource {
     /// Blocks every other position on a date this one is booked, in both directions.
     #[serde(default)]
     pub exclusive: Option<bool>,
+    /// The artwork spec, e.g. "600x150". Stated in the confirmation email.
+    #[serde(default)]
+    pub size: Option<String>,
     pub duration_min: Option<i32>,
     pub slot_interval_min: Option<i32>,
     pub buffer_min: Option<i32>,

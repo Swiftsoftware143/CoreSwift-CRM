@@ -389,8 +389,8 @@ pub async fn create_resource(
     Ok(sqlx::query_as::<_, Resource>(
         "INSERT INTO booking_resources
            (calendar_id, name, description, capacity, price_cents, compare_at_price_cents, duration_min,
-            exclusive, slot_interval_min, buffer_min, min_notice_min, sort_order, metadata)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *",
+            exclusive, slot_interval_min, buffer_min, min_notice_min, sort_order, metadata, size)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *",
     )
     .bind(calendar_id)
     .bind(r.name.trim())
@@ -407,6 +407,7 @@ pub async fn create_resource(
     .bind(r.min_notice_min.unwrap_or(0).max(0))
     .bind(r.sort_order.unwrap_or(0))
     .bind(r.metadata.unwrap_or_else(|| json!({})))
+    .bind(r.size.as_deref().map(str::trim).filter(|v| !v.is_empty()))
     .fetch_one(conn)
     .await?)
 }
@@ -442,7 +443,7 @@ pub async fn update_resource(
              name = $3, description = $4, capacity = $5, price_cents = $6,
              compare_at_price_cents = $7, duration_min = $8,
              exclusive = $9, slot_interval_min = $10, buffer_min = $11,
-             min_notice_min = $12, sort_order = $13
+             min_notice_min = $12, sort_order = $13, size = $14
            FROM booking_calendars c
           WHERE r.calendar_id = c.id AND r.id = $1 AND c.tenant_id = $2
         RETURNING r.*",
@@ -460,6 +461,7 @@ pub async fn update_resource(
     .bind(r.buffer_min.unwrap_or(0).max(0))
     .bind(r.min_notice_min.unwrap_or(0).max(0))
     .bind(r.sort_order.unwrap_or(0))
+    .bind(r.size.as_deref().map(str::trim).filter(|v| !v.is_empty()))
     .fetch_optional(&mut *conn)
     .await?
     .ok_or_else(|| BookingError::NotFound("resource"))?;

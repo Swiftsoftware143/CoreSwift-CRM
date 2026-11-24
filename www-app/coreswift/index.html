@@ -13725,6 +13725,7 @@ async function bkOpen(id) {
   // Paint the "can a customer book this" verdict with the screen, not after it: the list is the first
   // thing an owner needs and it must not wait behind the slot and order reads below.
   await bkPaintReadiness(id);
+  await bkLoadConfirmation();
   await bkLoadNotify();
   await bkLoadOpenSlots();
   await bkLoadOrders();
@@ -13760,6 +13761,84 @@ async function bkPaintReadiness(calId) {
     '<div style="font-size:12.5px;opacity:.8;margin-top:2px">' +
     (r.bookable_now ? 'The public link below offers real appointments or positions.' : 'The public link below opens and offers nothing, which looks like a broken site to a customer.') +
     '</div>' + ticks + '</div>';
+}
+
+/* WHAT THE CUSTOMER'S CONFIRMATION SAYS (ZaarHub, 2026-11-24).
+ *
+ * "Is a confirmation email sent to the customer when they book today? If yes, what sends it and where is
+ * its wording configured?" It was invisible: the message came from the built-in default, so the account
+ * had no template to point at and no way to see or change the words. This shows the message the mailer
+ * really produces — rendered by the server through the same path a send uses — and lets the account keep
+ * its own wording. */
+function bkConfirmationPanel() {
+  return '<div class="card" style="margin-bottom:18px"><h3 style="margin-top:0">The confirmation email your customer gets</h3>' +
+    '<div id="bkConfBody"><p class="muted">Loading&hellip;</p></div></div>';
+}
+
+async function bkLoadConfirmation() {
+  const box = document.getElementById('bkConfBody');
+  if (!box) return;
+  try {
+    const r = await API.get('/booking/calendars/' + encodeURIComponent(BK.current) + '/confirmation-email');
+    const own = r.override || {};
+    box.innerHTML =
+      '<p class="muted" style="margin-top:-6px">' +
+        (r.sends_to_customer
+          ? 'Sent automatically when a booking is confirmed. This is the message a customer actually receives.'
+          : 'This calendar is set NOT to email the customer. The wording below is what it would send if you switch it on.') +
+        (r.has_own_wording ? ' <strong>Your own wording is in use.</strong>' : ' <strong>The built-in wording is in use.</strong>') +
+      '</p>' +
+      '<h4 style="margin:14px 0 6px">Subject</h4>' +
+      '<input id="bkConfSubject" value="' + escapeHtml(own.subject != null ? own.subject : r.effective.subject) + '">' +
+      '<h4 style="margin:14px 0 6px">Body</h4>' +
+      '<textarea id="bkConfBodyText" rows="16" style="width:100%;font-family:ui-monospace,monospace;font-size:12.5px">' +
+        escapeHtml(own.body != null ? own.body : r.effective.body) + '</textarea>' +
+      '<p class="muted" style="font-size:12px">Leave the body empty and save to go back to the built-in wording. ' +
+        'You can use: ' + (r.merge_fields || []).map(function (m) { return '<code>' + escapeHtml(m) + '</code>'; }).join(' ') + '</p>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">' +
+        '<button class="btn btn-primary btn-sm" onclick="bkSaveConfirmation()">Save my wording</button>' +
+        '<button class="btn btn-secondary btn-sm" onclick="bkShowConfirmationNow()">Show what it sends right now</button>' +
+        (r.has_own_wording ? '<button class="btn btn-secondary btn-sm" onclick="bkResetConfirmation()">Back to the built-in wording</button>' : '') +
+      '</div>' +
+      '<div id="bkConfFlash" class="bk-flash"></div>' +
+      '<div id="bkConfPreview" style="margin-top:12px"></div>';
+  } catch (e) {
+    box.innerHTML = '<p class="muted">Could not read the confirmation email: ' + escapeHtml(e.message) + '</p>';
+  }
+}
+
+async function bkSaveConfirmation() {
+  const flash = document.getElementById('bkConfFlash');
+  const say = function (m, ok) { if (flash) { flash.textContent = m; flash.className = 'bk-flash ' + (ok === false ? 'bad' : 'good'); } };
+  try {
+    const subject = (document.getElementById('bkConfSubject') || {}).value || '';
+    const body = (document.getElementById('bkConfBodyText') || {}).value || '';
+    const r = await API.put('/booking/calendars/' + encodeURIComponent(BK.current) + '/confirmation-email',
+      { subject: subject, body: body });
+    await bkLoadConfirmation();
+    say(r.restored_default ? 'Back to the built-in wording.' : 'Saved — new bookings use this wording.', true);
+  } catch (e) { say(e.message, false); }
+}
+
+async function bkResetConfirmation() {
+  try {
+    await API.put('/booking/calendars/' + encodeURIComponent(BK.current) + '/confirmation-email',
+      { subject: '', body: '' });
+    await bkLoadConfirmation();
+  } catch (e) { bkFlash(e.message, false); }
+}
+
+async function bkShowConfirmationNow() {
+  const box = document.getElementById('bkConfPreview');
+  if (!box) return;
+  box.innerHTML = '<p class="muted">Rendering&hellip;</p>';
+  try {
+    const r = await API.get('/booking/calendars/' + encodeURIComponent(BK.current) + '/confirmation-email');
+    box.innerHTML = '<h4>As the mailer produces it</h4>' +
+      '<p><strong>Subject:</strong> ' + escapeHtml(r.effective.subject) + '</p>' +
+      '<pre style="white-space:pre-wrap;font-size:12.5px;background:rgba(128,128,128,.08);padding:12px;border-radius:8px">' +
+      escapeHtml(r.effective.body) + '</pre>';
+  } catch (e) { box.innerHTML = '<p class="muted">' + escapeHtml(e.message) + '</p>'; }
 }
 
 function bkDetailPanel() {
@@ -13803,6 +13882,8 @@ function bkDetailPanel() {
   if (cal.kind !== 'appointment') html += bkSlotsPanel(res);
   html += bkBundlePanel(bundles);
   html += bkNotifyPanel();
+  // The message a customer receives, beside the settings that decide who hears about a booking.
+  html += bkConfirmationPanel();
   html += bkOrdersPanel();
   return html;
 }
@@ -14567,6 +14648,10 @@ function bkResourcePanel(res, kind) {
       '<label>Compare-at price (cents)<input id="bkResCompare" type="number" min="0" placeholder="leave empty for none">' +
         '<span class="muted" style="font-weight:400">Shown struck through beside the price, only when it is higher. Customers are charged the price above.</span></label>' +
       '<label>Length (min)<input id="bkResDur" type="number" value="' + (kind === 'appointment' ? 30 : 60) + '"></label>' +
+      // THE ARTWORK SPEC (ZaarHub, 2026-11-24): the confirmation email states it, so it belongs to the
+      // position rather than being hardcoded per product name in a mail template.
+      '<label>Artwork size<input id="bkResSize" placeholder="600x150">' +
+        '<span class="muted" style="font-weight:400">Stated in the confirmation email. Leave empty if a sponsor can send any size.</span></label>' +
       '<label>Places<input id="bkResCap" type="number" value="1" min="1"></label>' +
       '<label>Padding after (min)<input id="bkResBuf" type="number" value="0" min="0"></label>' +
       '<label>Spacing (min)<input id="bkResInterval" type="number" value="' + (kind === 'appointment' ? 30 : 60) + '"></label>' +
@@ -14617,6 +14702,7 @@ function bkEditResource(id) {
   set('bkResBuf', r.buffer_min);
   set('bkResInterval', r.slot_interval_min);
   var ex = document.getElementById('bkResExclusive'); if (ex) ex.checked = !!r.exclusive;
+  set('bkResSize', r.size);
   var btn = document.querySelector('#bkWrap button[onclick="bkAddResource()"]');
   if (btn) {
     btn.textContent = 'Save changes';
@@ -14672,14 +14758,15 @@ function bkResourceBody(name) {
     buffer_min: num('bkResBuf', 0),
     slot_interval_min: num('bkResInterval', 30),
     // Sent on every save, so unticking it in the form actually clears it.
-    exclusive: !!(document.getElementById('bkResExclusive') || {}).checked
+    exclusive: !!(document.getElementById('bkResExclusive') || {}).checked,
+    size: ((document.getElementById('bkResSize') || {}).value || '').trim() || null
   };
 }
 
 /* Cancel leaves the form ready for a NEW position, not the one that was being edited. */
 function bkCancelResourceEdit() {
   BK.editing = null;
-  ['bkResName', 'bkResCompare'].forEach(function (i) { var el = document.getElementById(i); if (el) el.value = ''; });
+  ['bkResName', 'bkResCompare', 'bkResSize'].forEach(function (i) { var el = document.getElementById(i); if (el) el.value = ''; });
   var ex = document.getElementById('bkResExclusive'); if (ex) ex.checked = false;
   var btn = document.querySelector('#bkWrap button[onclick="bkSaveResource()"]');
   if (btn) { btn.textContent = 'Add'; btn.setAttribute('onclick', 'bkAddResource()'); }
@@ -14714,7 +14801,8 @@ async function bkAddResource() {
       capacity: parseInt(document.getElementById('bkResCap').value, 10) || 1,
       buffer_min: parseInt(document.getElementById('bkResBuf').value, 10) || 0,
       slot_interval_min: parseInt(document.getElementById('bkResInterval').value, 10) || 30,
-      exclusive: !!(document.getElementById('bkResExclusive') || {}).checked
+      exclusive: !!(document.getElementById('bkResExclusive') || {}).checked,
+      size: ((document.getElementById('bkResSize') || {}).value || '').trim() || null
     });
     await bkOpenDetail(BK.current, true); bkRender(); bkFlash('Added.');
   } catch (e) { bkFlash(e.message, false); }

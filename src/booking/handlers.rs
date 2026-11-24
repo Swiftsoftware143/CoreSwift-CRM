@@ -1203,3 +1203,132 @@ async fn workspace_of_public(
     }
     Ok(None)
 }
+
+// ---------- the confirmation email a customer receives ----------
+
+/// What the customer's confirmation says RIGHT NOW, whether this account overrides it, and the values
+/// available to it.
+///
+/// The question this answers was asked with the account in front of it: "is a confirmation sent at
+/// all, and where is its wording?" The answer was invisible, because the message came from the
+/// built-in default and no template existed to point at.
+pub async fn get_confirmation_email(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(calendar_id): Path<Uuid>,
+) -> Result<Json<Value>> {
+    let mut c = pool.acquire().await?;
+    let cal = service::calendar_for_tenant(&mut c, calendar_id, t.0).await?;
+    drop(c);
+
+    let vars = match crate::booking::notify::newest_order(&pool, calendar_id).await {
+        Some(order_id) => crate::booking::notify::preview_vars(&pool, order_id)
+            .await
+            .unwrap_or_else(|| serde_json::Value::Null),
+        None => serde_json::Value::Null,
+    }
+    .as_object()
+    .cloned()
+    .map(serde_json::Value::Object);
+    let vars = match vars {
+        Some(v) => v,
+        None => crate::booking::notify::sample_vars(&pool, calendar_id, t.0).await,
+    };
+
+    let rendered = crate::email::render_email(&pool, t.0, "booking_confirmed", &vars)
+        .await
+        .unwrap_or_else(|e| crate::email::RenderedEmail {
+            subject: "(could not render)".to_string(),
+            text: e,
+            html: String::new(),
+            is_html: false,
+            branded: false,
+            own_logo: false,
+        });
+
+    let override_row: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT subject, body FROM email_templates
+          WHERE template_type = 'booking_confirmed' AND aid = $1
+          ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(t.0)
+    .fetch_optional(&pool)
+    .await?;
+
+    Ok(Json(json!({
+        "sends_to_customer": cal.send_confirmation,
+        "has_own_wording": override_row.is_some(),
+        "override": override_row.map(|(s, b)| json!({"subject": s, "body": b.unwrap_or_default()})),
+        "effective": {"subject": rendered.subject, "body": rendered.text},
+        "merge_fields": [
+            "{{customer_name}}", "{{customer_email}}", "{{calendar_name}}",
+            "{{items}}", "{{positions}}", "{{sizes}}", "{{dates}}", "{{artwork_block}}",
+            "{{first_position}}", "{{first_size}}", "{{first_date}}", "{{total}}", "{{manage_url}}"
+        ],
+        "reply_to": cal.reply_to_email,
+    })))
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ConfirmationEmailIn {
+    pub subject: String,
+    pub body: String,
+}
+
+/// Save this account's own confirmation wording. An empty body deletes the override and restores the
+/// built-in message, which is the only way back that does not require editing a database row.
+pub async fn put_confirmation_email(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(calendar_id): Path<Uuid>,
+    Json(body): Json<ConfirmationEmailIn>,
+) -> Result<Json<Value>> {
+    let mut c = pool.acquire().await?;
+    service::calendar_for_tenant(&mut c, calendar_id, t.0).await?;
+    drop(c);
+    let subject = body.subject.trim().to_string();
+    let text = body.body.trim().to_string();
+    if text.is_empty() {
+        sqlx::query(
+            "DELETE FROM email_templates WHERE template_type = 'booking_confirmed' AND aid = $1",
+        )
+        .bind(t.0)
+        .execute(&pool)
+        .await?;
+        return Ok(Json(json!({"saved": false, "restored_default": true})));
+    }
+    if subject.is_empty() {
+        return Err(BookingError::invalid("the subject line cannot be empty"));
+    }
+    // One row per account for this kind of mail: the renderer takes the newest, so an update keeps the
+    // registry clean instead of stacking copies the owner cannot tell apart.
+    let existing: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM email_templates WHERE template_type = 'booking_confirmed' AND aid = $1
+          ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(t.0)
+    .fetch_optional(&pool)
+    .await?;
+    match existing {
+        Some(id) => {
+            sqlx::query("UPDATE email_templates SET subject = $2, body = $3, updated_at = now() WHERE id = $1")
+                .bind(id)
+                .bind(&subject)
+                .bind(&text)
+                .execute(&pool)
+                .await?;
+        }
+        None => {
+            sqlx::query(
+                "INSERT INTO email_templates (template_type, name, subject, body, is_default, aid, tenant_id)
+                 VALUES ('booking_confirmed', 'Booking confirmation', $1, $2, false, $3, $3)",
+            )
+            .bind(&subject)
+            .bind(&text)
+            .bind(t.0)
+            .execute(&pool)
+            .await?;
+        }
+    }
+    Ok(Json(json!({"saved": true})))
+}

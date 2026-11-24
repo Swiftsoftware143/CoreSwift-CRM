@@ -17,6 +17,8 @@ struct Line {
     resource_name: String,
     starts_at: DateTime<Utc>,
     price_cents: i64,
+    /// The artwork spec on the position, e.g. "600x150". None means no spec is stated.
+    size: Option<String>,
 }
 
 struct Context {
@@ -62,8 +64,8 @@ async fn load(pool: &PgPool, order_id: Uuid) -> Option<Context> {
     .await
     .ok()??;
 
-    let lines: Vec<Line> = sqlx::query_as::<_, (String, DateTime<Utc>, i64)>(
-        "SELECT r.name, b.starts_at, b.price_cents
+    let lines: Vec<Line> = sqlx::query_as::<_, (String, DateTime<Utc>, i64, Option<String>)>(
+        "SELECT r.name, b.starts_at, b.price_cents, r.size
            FROM booking_bookings b
            JOIN booking_resources r ON r.id = b.resource_id
           WHERE b.order_id = $1 AND b.status <> 'cancelled'
@@ -74,10 +76,11 @@ async fn load(pool: &PgPool, order_id: Uuid) -> Option<Context> {
     .await
     .ok()?
     .into_iter()
-    .map(|(resource_name, starts_at, price_cents)| Line {
+    .map(|(resource_name, starts_at, price_cents, size)| Line {
         resource_name,
         starts_at,
         price_cents,
+        size,
     })
     .collect();
 
@@ -140,16 +143,79 @@ fn manage_url(ctx: &Context) -> String {
     )
 }
 
+/// The values a confirmation email can use.
+///
+/// `positions`, `sizes`, `dates` and `artwork_block` exist because the request this email has to make
+/// is per-position: a sponsor needs the spec of the thing they bought, and the date it runs. Putting
+/// those in one block means an owner edits the wording, not the data.
 fn vars(ctx: &Context) -> serde_json::Value {
+    let positions = ctx
+        .lines
+        .iter()
+        .map(|l| l.resource_name.clone())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sizes = ctx
+        .lines
+        .iter()
+        .map(|l| l.size.clone().unwrap_or_else(|| "—".to_string()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let dates = ctx
+        .lines
+        .iter()
+        .map(|l| date_text(ctx, l))
+        .collect::<Vec<_>>()
+        .join(", ");
     serde_json::json!({
         "customer_name": ctx.customer_name,
         "customer_email": ctx.customer_email,
         "calendar_name": ctx.calendar_name,
         "items": items_text(ctx),
         "first_item": first_item(ctx),
+        "first_position": ctx.lines.first().map(|l| l.resource_name.clone()).unwrap_or_default(),
+        "first_size": ctx.lines.first().and_then(|l| l.size.clone()).unwrap_or_default(),
+        "first_date": ctx.lines.first().map(|l| date_text(ctx, l)).unwrap_or_default(),
+        "positions": positions,
+        "sizes": sizes,
+        "dates": dates,
+        // One line per position with its spec and date — what the artwork request lists.
+        "artwork_block": artwork_block(ctx),
         "total": money(ctx.total_cents),
         "manage_url": manage_url(ctx),
     })
+}
+
+fn date_text(ctx: &Context, l: &Line) -> String {
+    match ctx.timezone.parse::<chrono_tz::Tz>() {
+        Ok(tz) => l
+            .starts_at
+            .with_timezone(&tz)
+            .format("%a %d %b %Y")
+            .to_string(),
+        Err(_) => l.starts_at.format("%a %d %b %Y").to_string(),
+    }
+}
+
+/// The per-position list the artwork request prints: position, spec, date.
+fn artwork_block(ctx: &Context) -> String {
+    if ctx.lines.is_empty() {
+        return String::new();
+    }
+    ctx.lines
+        .iter()
+        .map(|l| {
+            format!(
+                "  Position:  {}\n  Size:      {}\n  Runs:      {}",
+                l.resource_name,
+                l.size
+                    .clone()
+                    .unwrap_or_else(|| "tell us what you have".to_string()),
+                date_text(ctx, l)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// A booking was confirmed (or made for free): tell the customer, and tell the team.
@@ -617,4 +683,79 @@ pub async fn run_reminders(pool: &PgPool) -> usize {
         tracing::info!(count = sent, "booking reminders sent");
     }
     sent
+}
+
+/// The merge values the confirmation email would use for one order — exposed so the console can render
+/// the message a customer will actually receive instead of describing it.
+pub async fn preview_vars(pool: &PgPool, order_id: Uuid) -> Option<serde_json::Value> {
+    load(pool, order_id).await.map(|ctx| vars(&ctx))
+}
+
+/// The newest order on a calendar, so a preview needs no hand-picked id. `None` when nothing is booked.
+pub async fn newest_order(pool: &PgPool, calendar_id: Uuid) -> Option<Uuid> {
+    sqlx::query_scalar(
+        "SELECT id FROM booking_orders WHERE calendar_id = $1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(calendar_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Sample values for a calendar with nothing booked yet: the real positions and their specs, so the
+/// preview still shows the artwork request with the right sizes and the owner can edit it before the
+/// first sale rather than after.
+pub async fn sample_vars(pool: &PgPool, calendar_id: Uuid, tenant: Uuid) -> serde_json::Value {
+    let rows: Vec<(String, Option<String>, i64)> = sqlx::query_as(
+        "SELECT name, size, price_cents FROM booking_resources
+          WHERE calendar_id = $1 AND active ORDER BY sort_order, name",
+    )
+    .bind(calendar_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    let name: String = sqlx::query_scalar("SELECT name FROM booking_calendars WHERE id = $1")
+        .bind(calendar_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "your calendar".to_string());
+    let items = if rows.is_empty() {
+        "- (no positions yet)".to_string()
+    } else {
+        rows.iter()
+            .map(|(n, _, p)| format!("- {} — {}", n, money(*p)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let block = rows
+        .iter()
+        .map(|(n, size, _)| {
+            format!(
+                "  Position:  {}\n  Size:      {}\n  Runs:      the date you booked",
+                n,
+                size.clone()
+                    .unwrap_or_else(|| "tell us what you have".to_string())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    serde_json::json!({
+        "customer_name": "Sample Sponsor",
+        "customer_email": "sample@example.invalid",
+        "calendar_name": name,
+        "items": items,
+        "first_item": rows.first().map(|(n, _, _)| n.clone()).unwrap_or_default(),
+        "first_position": rows.first().map(|(n, _, _)| n.clone()).unwrap_or_default(),
+        "first_size": rows.first().and_then(|(_, s, _)| s.clone()).unwrap_or_default(),
+        "first_date": "the date you booked",
+        "positions": rows.iter().map(|(n, _, _)| n.clone()).collect::<Vec<_>>().join(", "),
+        "sizes": rows.iter().map(|(_, s, _)| s.clone().unwrap_or_else(|| "—".into())).collect::<Vec<_>>().join(", "),
+        "dates": "the date you booked",
+        "artwork_block": block,
+        "total": money(rows.iter().map(|(_, _, p)| *p).sum()),
+        "manage_url": format!("https://booking.coreswiftcrm.com/book/manage/{}", tenant),
+    })
 }

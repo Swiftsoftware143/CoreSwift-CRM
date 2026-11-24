@@ -401,6 +401,8 @@ async fn queue_rendered(
 fn get_default_subject(template_type: &str, app_name: &str) -> String {
     match template_type {
         "welcome" => format!("Welcome to {}!", app_name),
+        "booking_confirmed" => "You're booked — here is what happens next".to_string(),
+        "booking_team_heads_up" => "New booking on your calendar".to_string(),
         "purchase_confirmed" => "Payment Received — Thank You!".to_string(),
         "password_reset" => "Password Reset Request".to_string(),
         "email_change" => "Confirm your new sign-in email".to_string(),
@@ -435,6 +437,69 @@ fn inline_bodies(
             let body = format!(
                 "Welcome to {}, {}!\n\nYour account has been created.\n\nEmail: {}\nPassword: {}\n\nLogin at: {}/login\n\nNext steps:\n- Connect your apps\n- Import your contacts\n- Set up your pipelines\n- Invite your team\n\n{} Team",
                 app_name, name, email, password, app_url, app_name
+            );
+            (subject, body, String::new(), false)
+        }
+        // THE BOOKING CONFIRMATION (ZaarHub, 2026-11-24). Before this arm existed the confirmation fell
+        // into the generic default, which mails "CoreSwift CRM Notification" and dumps the raw variable
+        // map — an unreadable message at the one moment a customer is paying attention. The artwork
+        // request lives here because that is when a sponsor can act on it, and the "already sent
+        // artwork" line is deliberate: without it every repeat sponsor replies "I already sent that",
+        // which buries the ones who genuinely have to do something.
+        "booking_confirmed" => {
+            let who = vars
+                .get("customer_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("there");
+            let what = vars
+                .get("calendar_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("booking");
+            let items = vars.get("items").and_then(|v| v.as_str()).unwrap_or("");
+            let total = vars.get("total").and_then(|v| v.as_str()).unwrap_or("");
+            let block = vars
+                .get("artwork_block")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let manage = vars
+                .get("manage_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let subject = format!("You're booked — {}", what);
+            let mut body = format!(
+                "Hi {who},\n\n                 Thank you — your booking with {what} is confirmed. Nothing else is needed to hold it.\n\n                 WHAT YOU BOOKED\n{items}\n\nTotal: {total}\n\n"
+            );
+            // Only ask for artwork when the booking actually carries a position: an appointment calendar
+            // has nothing to send us, and asking would be noise.
+            if !block.is_empty() {
+                body.push_str(&format!(
+                    "YOUR AD — ACTION NEEDED\n\n                     To get your ad into the newsletter, reply to this email with your artwork attached.\n\n                     {block}\n\
+                       Format:    JPG or PNG\n\n                     Already sent us artwork on a previous booking and don't want to change it? Just ignore \
+                     this — your existing creative stays in place.\n\n                     Reply here with any questions.\n\n"
+                ));
+            }
+            body.push_str(&format!(
+                "Change or cancel this booking yourself:\n    {manage}\n\n- {} Team",
+                app_name
+            ));
+            (subject, body, String::new(), false)
+        }
+        "booking_team_heads_up" => {
+            let who = vars
+                .get("customer_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("A customer");
+            let what = vars
+                .get("calendar_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("a calendar");
+            let items = vars.get("items").and_then(|v| v.as_str()).unwrap_or("");
+            let total = vars.get("total").and_then(|v| v.as_str()).unwrap_or("");
+            let subject = format!("New booking — {} — {}", who, what);
+            let body = format!(
+                "{who} just booked {what}.\n\n{items}\n\nTotal: {total}\n\n\
+                 You are receiving this because this address is on the calendar's notification list.\n\n\
+                 - {app_name}"
             );
             (subject, body, String::new(), false)
         }

@@ -60,6 +60,11 @@ pub fn admin_router(pool: PgPool) -> Router {
         )
         // Can a customer book this calendar right now, and if not why (David, 2026-11-20).
         .route("/calendars/:id/readiness", get(h::readiness))
+        // What the customer's confirmation says, and the account's own wording for it (2026-11-24).
+        .route(
+            "/calendars/:id/confirmation-email",
+            get(h::get_confirmation_email).put(h::put_confirmation_email),
+        )
         .route("/calendars/:id/availability", get(h::admin_availability))
         // WHAT THE BUYER SEES, with the limits applied — the console renders this instead of
         // describing the settings, so console and public page cannot disagree.
