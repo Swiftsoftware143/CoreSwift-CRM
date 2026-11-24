@@ -252,7 +252,127 @@ def main():
               and db_schema_changes == "6",  # 1 object_created + 4 field_added + 1 field_archived
               f"status={st} actions={actions} db={db_schema_changes}")
 
-        # ── the doors refuse what they should ───────────────────────────────────────────────────
+        # ── 9. §6a/§6b (kanban t_933dd588): you can undo what you created ────────────────────────
+        # 9a. A second workspace cannot archive the first workspace's object — 404, and the object
+        #     is still live afterwards (a refusal that silently archived would be worse than a 500).
+        st, body = http("DELETE", f"{base}/api/objects/orders", None, key_b)
+        still_live = db.q(f"SELECT count(*) FROM custom_objects WHERE tenant_id='{a}' AND slug='orders' AND archived_at IS NULL")
+        check("9a a second workspace's key cannot archive the object (404, object untouched)",
+              st == 404 and still_live == "1", f"status={st} live={still_live} body={json.dumps(body)[:160]}")
+
+        # 9b. hard=true is an ACTUAL delete: the row count drops by exactly 1 and the siblings stay.
+        r2 = http("POST", f"{base}/api/objects/orders/records",
+                  {"email": "purge-me@example.test", "amount": 20, "status": "open"}, key_a)[1].get("id")
+        r3 = http("POST", f"{base}/api/objects/orders/records",
+                  {"email": "soft-me@example.test", "amount": 30, "status": "open"}, key_a)[1].get("id")
+        rows_before = int(db.q(f"SELECT count(*) FROM custom_records WHERE tenant_id='{a}'"))
+        st, body = http("DELETE", f"{base}/api/objects/orders/records/{r2}?hard=true", None, key_a)
+        rows_after = int(db.q(f"SELECT count(*) FROM custom_records WHERE tenant_id='{a}'"))
+        gone = db.q(f"SELECT count(*) FROM custom_records WHERE id='{r2}'")
+        siblings = db.q(f"SELECT count(*) FROM custom_records WHERE tenant_id='{a}' AND id IN ('{rid}','{r3}')")
+        purged_audit = db.q(
+            f"SELECT count(*) FROM custom_object_audit WHERE tenant_id='{a}' AND action='record_purged' "
+            f"AND detail->>'id'='{r2}'"
+        )
+        purged_detail = db.q(
+            f"SELECT detail::text FROM custom_object_audit "
+            f"WHERE tenant_id='{a}' AND action='record_purged' ORDER BY id DESC LIMIT 1"
+        )
+        purged_keys = ",".join(sorted(json.loads(purged_detail).keys())) if purged_detail else ""
+        check("9b hard=true really deletes one row (siblings stay, audit keeps the id only)",
+              st == 200 and body.get("hard") is True and rows_before - rows_after == 1
+              and gone == "0" and siblings == "2" and purged_audit == "1" and purged_keys == "id",
+              f"status={st} rows={rows_before}->{rows_after} gone={gone} sibs={siblings} "
+              f"audit={purged_audit} keys={purged_keys} body={json.dumps(body)[:160]}")
+
+        # 9c. The default is STILL a soft delete: the row survives with deleted_at set.
+        st, body = http("DELETE", f"{base}/api/objects/orders/records/{r3}", None, key_a)
+        soft_row = db.q(f"SELECT (deleted_at IS NOT NULL)::text FROM custom_records WHERE id='{r3}'")
+        live_now = db.q(f"SELECT count(*) FROM custom_records WHERE tenant_id='{a}' AND deleted_at IS NULL")
+        check("9c the default delete is still soft (row survives with deleted_at)",
+              st == 200 and body.get("hard") is False and soft_row == "true" and live_now == "1",
+              f"status={st} soft={soft_row} live={live_now} body={json.dumps(body)[:160]}")
+
+        # 9d. Archiving the OBJECT: gone from list/describe/every door; fields archived with it; the
+        #     records are retained (rows + data still in custom_records).
+        recs_before = db.q(f"SELECT count(*) FROM custom_records WHERE tenant_id='{a}'")
+        st, body = http("DELETE", f"{base}/api/objects/orders", None, key_a)
+        listed = [o["slug"] for o in http("GET", f"{base}/api/objects", None, key_a)[1].get("objects", [])]
+        st_schema, _ = http("GET", f"{base}/api/objects/orders/schema", None, key_a)
+        st_records, _ = http("GET", f"{base}/api/objects/orders/records", None, key_a)
+        st_mcp, mcp_body = mcp(base, key_a, "describe_object", {"object": "orders"})
+        obj_archived = db.q(f"SELECT (archived_at IS NOT NULL)::text FROM custom_objects WHERE tenant_id='{a}' AND slug='orders'")
+        fields_live = db.q(
+            "SELECT count(*) FROM custom_fields f JOIN custom_objects o ON o.id=f.object_id "
+            f"WHERE o.tenant_id='{a}' AND o.slug='orders' AND f.archived_at IS NULL"
+        )
+        recs_after = db.q(f"SELECT count(*) FROM custom_records WHERE tenant_id='{a}'")
+        check("9d archiving an object hides it everywhere and keeps every record row",
+              st == 200 and body.get("archived") is True and body.get("already_archived") is False
+              and "orders" not in listed and st_schema == 404 and st_records == 404
+              and mcp_body.get("result", {}).get("isError") is True
+              and mcp_body.get("result", {}).get("status") == 404
+              and obj_archived == "true" and fields_live == "0" and recs_before == recs_after == "2",
+              f"status={st} listed={listed} schema={st_schema} records={st_records} "
+              f"mcp={mcp_body.get('result', {}).get('status')} archived={obj_archived} "
+              f"fields_live={fields_live} recs={recs_before}->{recs_after} body={json.dumps(body)[:160]}")
+
+        # 9e. Idempotent: a retry answers the same shape and changes nothing (no second archive).
+        st, body = http("DELETE", f"{base}/api/objects/orders", None, key_a)
+        archived_audit = db.q(
+            f"SELECT count(*) FROM custom_object_audit WHERE tenant_id='{a}' AND action='object_archived'"
+        )
+        check("9e archiving twice is idempotent and each call leaves one audit row",
+              st == 200 and body.get("archived") is True and body.get("already_archived") is True
+              and body.get("fields_archived") == 0 and archived_audit == "2",
+              f"status={st} audit={archived_audit} body={json.dumps(body)[:160]}")
+
+        # 9f. The MCP door does both too: hard delete_record and archive_object.
+        st, body = mcp(base, key_a, "create_object", {"slug": "cards", "name": "Cards " + stamp})
+        mcp(base, key_a, "add_field", {"object": "cards", "key": "email", "kind": "text"})
+        c1 = tool_out(mcp(base, key_a, "insert_record", {"object": "cards", "data": {"email": "c1@example.test"}})[1]).get("id")
+        c2 = tool_out(mcp(base, key_a, "insert_record", {"object": "cards", "data": {"email": "c2@example.test"}})[1]).get("id")
+        st_del, body_del = mcp(base, key_a, "delete_record", {"object": "cards", "id": c1, "hard": True})
+        c_gone = db.q(f"SELECT count(*) FROM custom_records WHERE id='{c1}'")
+        st_arch, body_arch = mcp(base, key_a, "archive_object", {"object": "cards"})
+        cards_listed = [o["slug"] for o in tool_out(mcp(base, key_a, "list_objects", {})[1]).get("objects", [])]
+        c_kept = db.q(
+            "SELECT count(*) FROM custom_records r JOIN custom_objects o ON o.id=r.object_id "
+            f"WHERE o.tenant_id='{a}' AND o.slug='cards'"
+        )
+        mcp_purge_audit = db.q(
+            f"SELECT count(*) FROM custom_object_audit WHERE tenant_id='{a}' AND action='record_purged' "
+            f"AND detail->>'id'='{c1}'"
+        )
+        check("9f MCP delete_record {hard:true} deletes and archive_object archives (records kept)",
+              st_del == 200 and tool_out(body_del).get("hard") is True and c_gone == "0"
+              and st_arch == 200 and tool_out(body_arch).get("archived") is True
+              and "cards" not in cards_listed and c_kept == "1" and mcp_purge_audit == "1"
+              and c1 and c2,
+              f"del={st_del} gone={c_gone} arch={st_arch} listed={cards_listed} kept={c_kept}")
+
+        # 9g. The slug is free again after archiving (a prototype shape is not permanent clutter).
+        st, body = http("POST", f"{base}/api/objects", {"slug": "orders", "name": "Orders again"}, key_a)
+        old_id = db.q(f"SELECT id FROM custom_objects WHERE tenant_id='{a}' AND slug='orders' AND archived_at IS NOT NULL")
+        new_id = (body.get("object") or {}).get("id")
+        check("9g the archived slug can be created again (unique among live objects)",
+              st == 200 and new_id and old_id and new_id != old_id,
+              f"status={st} old={old_id} new={new_id} body={json.dumps(body)[:160]}")
+
+        # 9h. NO machine path reaches account-level erase. Tools are objects/fields/records only, an
+        #     erase tool name is unknown, and the human exit door refuses an API key.
+        st, body = http("POST", f"{base}/api/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, key_a)
+        names = [t["name"] for t in body.get("result", {}).get("tools", [])]
+        bad = [n for n in names if any(f in n.lower() for f in ("erase", "purge", "close", "delete_account"))]
+        st_unknown, body_unknown = mcp(base, key_a, "erase_data", {})
+        unknown_code = body_unknown.get("error", {}).get("code")
+        st_exit, _ = http("POST", f"{base}/api/auth/erase-data", {"password": "x", "confirm": "DELETE"}, key_a)
+        check("9h no API-key/MCP path can reach account-level erase",
+              len(names) == 10 and "archive_object" in names and not bad
+              and st_unknown == 200 and unknown_code == -32601 and st_exit == 401,
+              f"names={names} bad={bad} unknown={unknown_code} exitdoor={st_exit}")
+
+
         st, _ = http("GET", f"{base}/api/objects", None, None)
         check("boundary: no credential -> 401", st == 401, f"status={st}")
         st, _ = http("GET", f"{base}/api/objects", None, "csk_" + "0" * 64)

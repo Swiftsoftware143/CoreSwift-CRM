@@ -23,11 +23,14 @@ use super::ObjCtx;
 use crate::errors::AppError;
 use crate::AppState;
 
-/// The Phase 1 tool set, in the order the spec lists it.
-pub const TOOL_NAMES: [&str; 9] = [
+/// The tool set, in the order the spec lists it. 10 tools: objects, fields and records only — no
+/// tool names the ACCOUNT, so no API key can reach account-level erasure (pinned by a route_policy
+/// test; `archive_object` archives a shape, it never deletes a tenant).
+pub const TOOL_NAMES: [&str; 10] = [
     "list_objects",
     "create_object",
     "describe_object",
+    "archive_object",
     "add_field",
     "archive_field",
     "insert_record",
@@ -59,6 +62,15 @@ fn tools() -> Value {
         {
             "name": "describe_object",
             "description": "One object's fields (live and archived), its record count, and the REST base address for it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "object": s("string") },
+                "required": ["object"]
+            }
+        },
+        {
+            "name": "archive_object",
+            "description": "Archive an object (the only way to remove one). Its fields are archived with it, it stops appearing in list_objects/describe_object, and everything under it answers 404. The records are NOT deleted — they stay in the database, readable by id. Idempotent: calling it twice is safe.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "object": s("string") },
@@ -120,10 +132,13 @@ fn tools() -> Value {
         },
         {
             "name": "delete_record",
-            "description": "Soft-delete one record by id. The row stays in the database with deleted_at set and is not returned by query_records.",
+            "description": "Delete one record by id. By default this is a SOFT delete: the row stays with deleted_at set. Pass hard:true to actually delete the row and its data (the audit trail keeps the id, never the data).",
             "inputSchema": {
                 "type": "object",
-                "properties": { "object": s("string"), "id": s("string") },
+                "properties": {
+                    "object": s("string"), "id": s("string"),
+                    "hard": { "type": "boolean" }
+                },
                 "required": ["object", "id"]
             }
         },
@@ -361,6 +376,11 @@ async fn call_tool(
                 "rest_base": format!("/api/objects/{}", obj.slug),
             }))
         }
+        "archive_object" => {
+            only_args(&a, &["object"])?;
+            let slug = arg_str(&a, "object")?;
+            store::archive_object(&st.db, ctx.tenant_id, &ctx.actor, &slug).await
+        }
         "add_field" => {
             only_args(
                 &a,
@@ -473,13 +493,14 @@ async fn call_tool(
             store::update_record(&st.db, ctx.tenant_id, &ctx.actor, &obj, id, patch).await
         }
         "delete_record" => {
-            only_args(&a, &["object", "id"])?;
+            only_args(&a, &["object", "id", "hard"])?;
             let slug = arg_str(&a, "object")?;
             let raw_id = arg_str(&a, "id")?;
             let id = Uuid::parse_str(&raw_id)
                 .map_err(|_| AppError::BadRequest(format!("'{raw_id}' is not a record id")))?;
+            let hard = arg_opt_bool(&a, "hard")?.unwrap_or(false);
             let obj = store::object_by_slug(&st.db, ctx.tenant_id, &slug).await?;
-            store::delete_record(&st.db, ctx.tenant_id, &ctx.actor, &obj, id).await
+            store::delete_record(&st.db, ctx.tenant_id, &ctx.actor, &obj, id, hard).await
         }
         other => Err(AppError::BadRequest(format!("unknown tool: {other}"))),
     }

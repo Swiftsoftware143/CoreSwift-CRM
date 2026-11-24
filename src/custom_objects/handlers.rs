@@ -223,6 +223,20 @@ pub async fn archive_field(
     Ok(Json(out))
 }
 
+/// `DELETE /api/objects/:slug` — archive the object itself (kanban t_933dd588 §6a).
+///
+/// Not a hard delete and deliberately not a record purger: the fields are archived with the object,
+/// the records stay, and the object disappears from every door. Idempotent, so a client that retries
+/// after a timeout gets the same answer instead of a 404 that looks like "gone already".
+pub async fn archive_object(
+    State(st): State<AppState>,
+    Extension(ctx): Extension<ObjCtx>,
+    Path(slug): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let out = store::archive_object(&st.db, ctx.tenant_id, &ctx.actor, &slug).await?;
+    Ok(Json(out))
+}
+
 pub async fn list_audit(
     State(st): State<AppState>,
     Extension(ctx): Extension<ObjCtx>,
@@ -331,10 +345,29 @@ pub async fn delete_record(
     State(st): State<AppState>,
     Extension(ctx): Extension<ObjCtx>,
     Path((slug, id)): Path<(String, String)>,
+    Query(q): Query<HashMap<String, String>>,
 ) -> ApiResult<Json<Value>> {
+    let hard = match q.get("hard").map(|s| s.as_str()) {
+        None => false,
+        Some("true") => true,
+        Some("false") => false,
+        Some(other) => {
+            return Err(AppError::BadRequest(format!(
+                "hard must be true or false, not '{other}'"
+            )))
+        }
+    };
+    for k in q.keys() {
+        if k != "hard" {
+            return Err(AppError::BadRequest(format!(
+                "unknown query parameter '{k}' — this call accepts: hard"
+            )));
+        }
+    }
     let obj = store::object_by_slug(&st.db, ctx.tenant_id, &slug).await?;
     let record_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest(format!("'{id}' is not a record id")))?;
-    let out = store::delete_record(&st.db, ctx.tenant_id, &ctx.actor, &obj, record_id).await?;
+    let out =
+        store::delete_record(&st.db, ctx.tenant_id, &ctx.actor, &obj, record_id, hard).await?;
     Ok(Json(out))
 }

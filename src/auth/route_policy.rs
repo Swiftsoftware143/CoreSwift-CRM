@@ -590,6 +590,7 @@ pub const API_KEY_ROUTES: &[&str] = &[
     // the module reads the tenant from that resolution, never from the request.
     "/api/mcp",
     "/api/objects",
+    "/api/objects/:slug",
     "/api/objects/:slug/schema",
     "/api/objects/:slug/fields",
     "/api/objects/:slug/fields/:id",
@@ -1495,18 +1496,21 @@ mod tests {
     /// +1 mount / +1 path (2026-11-24): the customer's own DATA ERASURE door
     /// (`POST /api/auth/erase-data`, kanban t_48b65042) — on `/api**`, so the root-level count is
     /// unchanged. 559 mounted / 545 on /api**.
+    /// +1 mount / +1 path (2026-11-24): `DELETE /api/objects/:slug` — archiving a Custom Object
+    /// (kanban t_933dd588 §6a) — on `/api**`, so the root-level count is unchanged.
+    /// 560 mounted / 546 on /api**.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
         let mounted = mounted_routes();
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            559,
+            560,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 545,
+            api, 546,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.
@@ -1556,10 +1560,11 @@ mod tests {
             "close_account",
             "erase_data",
         ];
-        const EXPECTED_TOOLS: [&str; 9] = [
+        const EXPECTED_TOOLS: [&str; 10] = [
             "list_objects",
             "create_object",
             "describe_object",
+            "archive_object",
             "add_field",
             "archive_field",
             "insert_record",

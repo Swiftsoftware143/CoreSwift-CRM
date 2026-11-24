@@ -122,9 +122,12 @@ fn field_from(row: &sqlx::postgres::PgRow) -> Field {
 // ── objects ─────────────────────────────────────────────────────────────────────────────────────
 
 pub async fn object_by_slug(db: &PgPool, tenant: Uuid, slug: &str) -> Result<Obj, AppError> {
+    // LIVE objects only: an archived object is gone from every door (describe, records, fields,
+    // audit). Its rows stay in the database, readable by id from support/SQL, which is what makes
+    // archive a reversible-in-principle removal rather than a delete.
     let row = sqlx::query(
         "SELECT id, slug, name, created_at, updated_at FROM custom_objects
-         WHERE tenant_id = $1 AND slug = $2",
+         WHERE tenant_id = $1 AND slug = $2 AND archived_at IS NULL",
     )
     .bind(tenant)
     .bind(slug)
@@ -152,7 +155,7 @@ pub async fn list_objects(db: &PgPool, tenant: Uuid) -> Result<Vec<Value>, AppEr
                 (SELECT COUNT(*) FROM custom_records r
                   WHERE r.object_id = o.id AND r.deleted_at IS NULL)           AS record_count
            FROM custom_objects o
-          WHERE o.tenant_id = $1
+          WHERE o.tenant_id = $1 AND o.archived_at IS NULL
           ORDER BY o.slug",
     )
     .bind(tenant)
@@ -234,6 +237,87 @@ pub async fn create_object(
     .await?;
 
     Ok(obj.json())
+}
+
+/// Archive an object — the ONE removal this module offers for an object (kanban t_933dd588 §6a).
+///
+/// The object and its live fields get `archived_at`. Every door then answers 404 for the slug,
+/// because [`object_by_slug`] and [`list_objects`] read live rows only. The RECORDS are untouched:
+/// the customer's data stays in `custom_records`, readable by record id from support/SQL. That is
+/// deliberate — archiving a shape must never be an accidental mass-erasure, and there is no object
+/// DELETE anywhere in this module (account-level erasure stays a signed-in human's route).
+///
+/// Idempotent: a second call changes nothing, answers the same shape with `already_archived: true`,
+/// and still leaves one audit row so the attempt itself is visible.
+pub async fn archive_object(
+    db: &PgPool,
+    tenant: Uuid,
+    actor: &str,
+    slug: &str,
+) -> Result<Value, AppError> {
+    let mut tx = db.begin().await.map_err(AppError::Database)?;
+
+    // 404 for another account's slug, exactly like every other lookup: a refusal must not confirm
+    // that someone else's object exists.
+    let row = sqlx::query(
+        "SELECT id, archived_at FROM custom_objects
+          WHERE tenant_id = $1 AND slug = $2 FOR UPDATE",
+    )
+    .bind(tenant)
+    .bind(slug)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(AppError::Database)?
+    .ok_or_else(|| AppError::NotFound(format!("no object '{slug}' in this workspace")))?;
+
+    let id: Uuid = row.get("id");
+    let already: Option<DateTime<Utc>> = row.get("archived_at");
+    let mut fields_archived: i64 = 0;
+
+    if already.is_none() {
+        sqlx::query(
+            "UPDATE custom_objects SET archived_at = NOW(), updated_at = NOW() WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(AppError::Database)?;
+
+        fields_archived = sqlx::query(
+            "UPDATE custom_fields SET archived_at = NOW(), updated_at = NOW()
+              WHERE object_id = $1 AND archived_at IS NULL",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(AppError::Database)?
+        .rows_affected() as i64;
+    }
+
+    tx.commit().await.map_err(AppError::Database)?;
+
+    audit(
+        db,
+        tenant,
+        actor,
+        "object_archived",
+        Some(slug),
+        json!({
+            "id": id,
+            "already_archived": already.is_some(),
+            "fields_archived": fields_archived,
+        }),
+    )
+    .await?;
+
+    Ok(json!({
+        "archived": true,
+        "already_archived": already.is_some(),
+        "id": id,
+        "slug": slug,
+        "fields_archived": fields_archived,
+        "records_kept": true,
+    }))
 }
 
 pub async fn fields_for(
@@ -983,7 +1067,40 @@ pub async fn delete_record(
     actor: &str,
     object: &Obj,
     id: Uuid,
+    hard: bool,
 ) -> Result<Value, AppError> {
+    if hard {
+        // The actual DELETE (kanban t_933dd588 §6b). It matches a live OR an already
+        // soft-deleted row on purpose: a customer who soft-deleted and then asked for the data to
+        // be gone must still be able to get it removed. The audit row carries the record's ID and
+        // NOTHING ELSE — the data is gone, so copying it into the trail would defeat the purge.
+        let row = sqlx::query(
+            "DELETE FROM custom_records
+              WHERE id = $1 AND tenant_id = $2 AND object_id = $3
+              RETURNING id",
+        )
+        .bind(id)
+        .bind(tenant)
+        .bind(object.id)
+        .fetch_optional(db)
+        .await
+        .map_err(AppError::Database)?
+        .ok_or_else(|| {
+            AppError::NotFound(format!("no record '{id}' on object '{}'", object.slug))
+        })?;
+
+        audit(
+            db,
+            tenant,
+            actor,
+            "record_purged",
+            Some(&object.slug),
+            json!({ "id": row.get::<Uuid, _>("id") }),
+        )
+        .await?;
+        return Ok(json!({ "deleted": true, "hard": true, "id": id }));
+    }
+
     let row = sqlx::query(
         "UPDATE custom_records SET deleted_at = NOW(), updated_at = NOW()
           WHERE id = $1 AND tenant_id = $2 AND object_id = $3 AND deleted_at IS NULL
