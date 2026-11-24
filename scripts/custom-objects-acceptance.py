@@ -139,11 +139,21 @@ def main():
         )
         return key
 
+    def new_user(tid, tag):
+        # A REAL users row: the canonical boundary refuses a token whose `sub` names no live,
+        # enabled user, so a probe session has to be a session of an actual account.
+        return db.q(
+            "INSERT INTO users (tenant_id, email, password_hash, name) "
+            f"VALUES ('{tid}', 'probe-co-{tag}-{stamp}@example.test', 'x', 'Probe {tag}') "
+            "RETURNING id"
+        ).splitlines()[0]
+
     try:
         a = new_tenant("a")
         b = new_tenant("b")
         key_a, key_b = new_key(a, "a"), new_key(b, "b")
-        session_a = jwt(db.secret, "00000000-0000-4000-8000-000000000001", a)
+        user_a = new_user(a, "a")
+        session_a = jwt(db.secret, user_a, a)
 
         # ── 1. MCP creates the object and its fields ────────────────────────────────────────────
         st, body = mcp(base, key_a, "create_object", {"slug": "orders", "name": "Orders " + stamp})

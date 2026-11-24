@@ -109,13 +109,61 @@ pub async fn authenticate(
             .into_response(),
         }
     } else {
-        match crate::auth::middleware::verify_token(&token, &state.config.jwt_secret) {
-            Ok(claims) => match Uuid::parse_str(claims.aid.trim()) {
-                Ok(tenant_id) => ObjCtx {
-                    tenant_id,
-                    actor: format!("user:{}", claims.sub),
-                },
-                Err(_) => return AppError::Unauthorized.into_response(),
+        let claims = match crate::auth::middleware::verify_token(&token, &state.config.jwt_secret) {
+            Ok(claims) => claims,
+            Err(_) => return AppError::Unauthorized.into_response(),
+        };
+
+        // A signature-valid token is NOT a credential by itself. Reproduce the canonical boundary
+        // checks from `auth::middleware::auth_middleware` HERE as well, so this door is never weaker
+        // than the rest of the app: a logged-out token (Redis blacklist), a token naming a retired
+        // workspace, a deleted/disabled user, and a session minted before the account's last password
+        // change all answer 401 — exactly as they do on every other route.
+        {
+            let mut conn = state.redis.clone();
+            let check = tokio::time::timeout(
+                std::time::Duration::from_millis(250),
+                redis::cmd("GET")
+                    .arg(format!("blacklist:{token}"))
+                    .query_async::<Option<String>>(&mut conn),
+            )
+            .await;
+            if let Ok(Ok(Some(_))) = check {
+                tracing::warn!("custom_objects: rejected a blacklisted (logged-out) token");
+                return AppError::Unauthorized.into_response();
+            }
+        }
+
+        // Fail CLOSED on a database error rather than leaking that the database is down; the caller
+        // still gets no access, which is the property that matters at a credential boundary.
+        match crate::auth::middleware::workspace_exists(&state.db, &claims.aid).await {
+            Ok(true) => {}
+            _ => {
+                tracing::warn!(workspace = %claims.aid, "custom_objects: rejected a token whose workspace is gone");
+                return AppError::Unauthorized.into_response();
+            }
+        }
+
+        match crate::auth::middleware::user_session_state(&state.db, &claims.sub).await {
+            Ok(Some((true, changed_at))) => {
+                if crate::auth::middleware::session_predates_password_change(
+                    Some(claims.iat as i64),
+                    changed_at,
+                ) {
+                    tracing::warn!(user = %claims.sub, "custom_objects: rejected a session that predates the password change");
+                    return AppError::Unauthorized.into_response();
+                }
+            }
+            _ => {
+                tracing::warn!(user = %claims.sub, "custom_objects: rejected a token whose user is gone or disabled");
+                return AppError::Unauthorized.into_response();
+            }
+        }
+
+        match Uuid::parse_str(claims.aid.trim()) {
+            Ok(tenant_id) => ObjCtx {
+                tenant_id,
+                actor: format!("user:{}", claims.sub),
             },
             Err(_) => return AppError::Unauthorized.into_response(),
         }
