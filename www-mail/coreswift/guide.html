@@ -435,6 +435,57 @@
         data-min-height="420"
         data-target="my-bookings"&gt;&lt;/script&gt;</code></pre>
     <p>Without <code>data-fill</code> the calendar reports its own height (clamped so a long list of dates cannot make your page enormous). With it, the container is in charge &mdash; which is what you want inside a pop&#8209;up.</p>
+
+    <h3>Copying a calendar into another workspace</h3>
+    <p>A calendar is more than a name. It carries its hours, its resources, its prices, its bundles, and the tags, lists, notification addresses and reminders a booking feeds. Rebuilding that shape for every newsletter is avoidable work, so every calendar in the list has a <strong>Copy</strong> button.</p>
+    <p>The copy window asks for the two things that make the result usable. <strong>Name</strong> comes pre&#8209;filled with the original&rsquo;s, so one word is enough to tell the two apart. <strong>Web address</strong> is built from that name as you type &mdash; every word joined by a hyphen &mdash; and you can edit it before saving, because that address is the public link. The list also shows <strong>which workspace</strong> each calendar belongs to, and the copy window asks for the workspace the copy should land in; the original stays exactly where it is.</p>
+    <p>A copy is never called &ldquo;clone&rdquo;. It takes the name you type, and only the web address is adjusted &mdash; never the name &mdash; if that address is already in use.</p>
+    <p><strong>What travels with the copy, and what does not.</strong> Hours, resources, prices, bundles, tag rules, list rules, notification addresses and reminders are copied. Bookings, orders and the Google Mirror are not: a copy starts empty of bookings, and two calendars must never mirror into the same Google calendar. A copy is also a new calendar, so it counts towards your plan&rsquo;s calendar allowance like any other.</p>
+
+    <h3>An address for each workspace</h3>
+    <p>An account can hold several workspaces &mdash; one per newsletter, one per town, one per brand &mdash; and each workspace can hold several calendars. Every workspace can therefore have <strong>its own public address</strong>, and that address lists <strong>only that workspace&rsquo;s calendars</strong>: one newsletter&rsquo;s link never advertises another newsletter&rsquo;s dates.</p>
+    <p>Open <strong>Booking</strong> and the <em>Address per workspace</em> card lists every workspace with the calendars it holds, the address it answers on today, and the live link. Type the label you want &mdash; letters, numbers and hyphens &mdash; and press <strong>Save</strong>. The address becomes <em>your-label</em> followed by the platform domain, over https, and it works the moment you save it: nothing has to be installed or approved first.</p>
+    <p>Two things are refused, with the reason: a label someone else already uses (a free one is suggested), and a label reserved for the platform. A workspace with no address shows &ldquo;no address yet&rdquo; rather than a link that would not open.</p>
+
+    <h3>Using your own domain &mdash; and where the DNS records come from</h3>
+    <p>An address on the platform&rsquo;s domain works with no setup at all. To use <em>your own</em> domain instead, type it in the <strong>Your own domain</strong> column of that same card and press <strong>Save</strong>. The domain is then waiting for one DNS record, and it becomes live once the name actually reaches this app.</p>
+    <p><strong>Where to get the records.</strong> Press <strong>DNS</strong> on the workspace row. The panel that opens lists the exact records to create &mdash; type, name, target, TTL and whether the proxy must be on &mdash; computed from the address this workspace really answers on, so they cannot drift from the product. The same panel prints a live check underneath: whether the name resolves, and whether it reached this app.</p>
+    <p><strong>Where to put them in Cloudflare.</strong></p>
+    <ol>
+      <li>Cloudflare dashboard &rarr; pick your domain &rarr; <strong>DNS</strong> &rarr; <strong>Records</strong> &rarr; <strong>Add record</strong>.</li>
+      <li>Choose the type the panel shows &mdash; a <code>CNAME</code> to the platform address is preferred, because it follows the platform if that ever changes. Use the <code>A</code> record alternative only when your provider will not allow a CNAME on that name, which is usual at the apex.</li>
+      <li>Paste the name and target exactly as shown, leave TTL on auto, and leave <strong>Proxied</strong> switched <strong>on</strong> (the orange cloud). This part is not optional: the certificate here covers the platform&rsquo;s own domain, not yours, so the visitor&rsquo;s connection must be handled at Cloudflare.</li>
+      <li>Then go to <strong>SSL/TLS</strong> &rarr; <strong>Overview</strong> and set the encryption mode to <strong>Flexible</strong>.</li>
+      <li>Save the record, wait a minute, then press <strong>DNS</strong> again. The check turns green and the domain is live &mdash; no further step in this app.</li>
+    </ol>
+    <p>If the check still says the name resolves but nothing here answered, the record is right and the address is not yet connected on this side: send support that panel and it is switched on from here. Nothing about your DNS has to change for that.</p>
+
+    <h3>A &ldquo;was&rdquo; price beside the real one</h3>
+    <p>A founders rate needs the old figure next to it, and a booking could only hold one number. Each bookable item now has an optional <strong>Compare-at price</strong>, set in the same place as its price when you add or edit what customers can book.</p>
+    <p>When it is set and <strong>higher</strong> than the price, the booking page shows the price with the compare-at figure struck through beside it &mdash; <em>&lsquo;$25&rsquo;</em> with <em>&lsquo;$150&rsquo;</em> crossed out. When it is empty, equal to the price, or lower, the page shows the price alone: a saving that is not a saving is never displayed.</p>
+    <p><strong>The amount charged is always the price</strong>, never the compare-at figure. It is a display figure only &mdash; it does not touch the quote, the total or anything the customer pays. Copying a calendar carries it, so a founders rate set once on a template travels to every copy.</p>
+
+    <h3>What the booking form asks, and which answers are mandatory</h3>
+    <p>A booking always captures the person&rsquo;s <strong>name, email and phone</strong> &mdash; those are how the confirmation reaches them and how they are found again, so they are built in and cannot be removed.</p>
+    <p>Anything else you need is a question you add on the calendar&rsquo;s <strong>What the form asks the booker</strong> panel: a company name, a billing address, a sponsor tier. Each one is either <strong>required</strong> or <strong>optional</strong>, and you can flip that at any time with one button.</p>
+    <p><strong>A required answer is enforced by the server, not just the page.</strong> An order that arrives without it is refused with the question&rsquo;s own words &mdash; &ldquo;Company name is required for this booking&rdquo; &mdash; so a browser that was lenient cannot slip an incomplete booking through. The answers are stored on the booking itself and read back with it.</p>
+    <p>Removing a question stops it being asked; answers already given stay on the bookings that gave them, because a record of what a customer told you does not disappear when you stop asking.</p>
+
+    <h3>The footer on every email, edited once</h3>
+    <p>The unsubscribe link is generated per recipient and per kind of mail, so it is never something you edit or paste. The <strong>words around it</strong> are one setting on this account: open <strong>Email compliance</strong>, and under <em>The footer on every email you send</em> set the <strong>link wording</strong> (the default is &ldquo;Stop these emails&rdquo;) and, if you want one, a <strong>line above the link</strong> saying why the person is receiving it.</p>
+    <p>Save once and every campaign, sequence and notification on the account carries it &mdash; there is nothing to re-edit per template, and no template needs to contain a footer of its own. Your postal address and account name sit in the same footer, taken from your account settings.</p>
+    <p>Emptying a box restores the platform&rsquo;s wording for that line rather than leaving a blank footer, and the opt-out page a person lands on is edited on the same screen.</p>
+
+    <h3>Correcting or removing what customers can book</h3>
+    <p>Every row in <strong>What customers can book</strong> has <strong>Edit</strong> and <strong>Delete</strong> beside <strong>Slots</strong>. A price typed wrongly is a correction, not a rebuild: press Edit, the row loads into the form above, change any of the values &mdash; name, price, compare-at price, length, places, padding, spacing &mdash; and press <strong>Save changes</strong>. The booking page uses the new values immediately. Press Cancel to leave the form ready for a new position instead.</p>
+    <h3>How much a buyer is shown, and why it never hides stock</h3>
+    <p>Three optional numbers on a calendar decide the window a buyer looks through: <strong>options in total</strong>, <strong>options per day, per position</strong>, and <strong>how far ahead</strong>. Leave a box empty and that limit is not applied.</p>
+    <p><strong>The list is the nearest open positions, and it refills.</strong> These numbers shorten the list a visitor sees; they never delete anything. A position that is booked leaves the window and the next open one takes its place, and dates beyond the horizon come into view as the calendar advances. Nothing behind the window becomes unsellable &mdash; which is the difference between a scarcity display and a curtain you cannot sell through.</p>
+    <p><strong>One per position, not one per calendar.</strong> If you sell four places in the same issue &mdash; an email top, middle and footer, plus a sponsored post &mdash; then &ldquo;1 per day, per position&rdquo; still shows four tiles on that date, one of each thing you sell.</p>
+    <p><strong>Press Preview as buyer</strong> under the three boxes. It asks the same engine the public page uses and renders the exact tiles a visitor gets, above a sentence computed from live inventory: <em>&ldquo;Buyer sees 5 of 19 open positions within the next 60 days at most 1 per date for each position.&rdquo;</em> If that panel shows nothing, the public page is showing nothing &mdash; the two cannot disagree, because they are the same answer rendered twice.</p>
+    <p>On the public page itself, a window in force adds one line: <em>&ldquo;More dates open as the calendar advances.&rdquo;</em> A visitor should never mistake a short list for a closed door.</p>
+
+    <p><strong>Delete asks first, and refuses when it should.</strong> Removing a position also removes its open dates. If a booking is still live against it &mdash; confirmed, or held and not yet expired &mdash; the removal is refused and says how many bookings stand in the way: cancel those first, or keep the position and stop offering it by setting its places to zero. A booking that has been paid for must never lose the thing it paid for.</p>
   </div>
 </section>
 
