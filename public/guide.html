@@ -988,15 +988,39 @@ GET /api/campaigns/:id/enrollments   (view enrolled contacts)</pre>
 
   <div class="card">
     <h3>Automation Rules</h3>
-    <p>Create trigger-based automation rules. Configure triggers (tag added, score changes, list membership changes) and actions (add/remove tag, move stage, add/remove from list). Each rule has a trigger config and action config stored as JSON.</p>
-    <p><strong>Available triggers:</strong> <code>tag_added</code>, <code>score_change</code>, <code>list_added</code>, <code>deal_stage</code></p>
-    <p><strong>Available actions:</strong> <code>add_tag</code>, <code>remove_tag</code>, <code>move_stage</code>, <code>add_to_list</code>, <code>remove_from_list</code></p>
+    <p>Create trigger-based automation rules. A rule is four things: <strong>when</strong> it fires, an optional
+       <strong>wait</strong>, an optional <strong>condition</strong> checked when the wait ends, and <strong>what it does</strong>.
+       The <strong>Rules</strong> screen (Automation ⚡ &rarr; Rules &rarr; <em>+ New Rule</em>) builds all four with pickers
+       over your own tags, lists and email templates &mdash; no JSON to type.</p>
+    <p><strong>Triggers</strong> (the value the API stores in <code>trigger_type</code>):
+      <code>TagAdded</code> / <code>TagRemoved</code> with <code>{"tag_id":"…"}</code> or <code>{"tag_ids":[…]}</code>;
+      <code>ListAdded</code> / <code>ListRemoved</code> with <code>{"list_id":"…"}</code>;
+      <code>StageChanged</code> (optionally <code>{"stage_id":"…"}</code>);
+      <code>ScoreChanged</code> with <code>{"category":"…"}</code> or <code>{"min_score":70}</code>;
+      <code>contact.created</code> (a contact is created in the console/API, by hub lead intake, or by satellite capture);
+      <code>date.renewal</code> with <code>{"field":"renewal_date","days_before":30}</code>;
+      <code>contact.inactive</code> with <code>{"days":30}</code>.</p>
+    <p><strong>Actions:</strong> <code>send_email</code> / <code>send_sms</code> (with <code>{"template_id":"…"}</code> &mdash;
+      the template's subject and body are used), <code>AddTag</code> / <code>RemoveTag</code>, <code>AddToList</code> /
+      <code>RemoveFromList</code>, <code>NotifyUser</code>, <code>Webhook</code>.</p>
+    <p><strong>Wait:</strong> <code>trigger_config.delay_minutes</code> (or <code>{"delay":{"value":3,"unit":"days"}}</code>).
+      The step is queued and runs at the end of the wait, never early.</p>
+    <p><strong>Condition:</strong> <code>trigger_config.condition = {"type":"no_reply"}</code> means the step runs only if
+      <em>that contact</em> has not replied since the rule fired. A reply counts when inbound mail from the contact's own
+      address is filed, or when a reply event for that contact is ingested; our own outgoing mail never counts.</p>
+    <p><strong>Drafts:</strong> <code>is_active: false</code> saves a rule that exists, lists and can be edited but never
+      fires. Omitting <code>is_active</code> keeps the old behaviour (active). The Rules list shows <em>Active</em> or
+      <em>Draft</em> with a Pause / Resume button.</p>
     <pre>GET /api/automation/rules
 POST /api/automation/rules
-PATCH /api/automation/rules/:id
-DELETE /api/automation/rules/:id</pre>
-    <div class="callout info"><strong>Trigger Config Example:</strong> <code>{"tag_id": "uuid"}</code> for tag-based triggers, <code>{"category": "overall", "min_score": 70}</code> for score-based.</div>
+PATCH /api/automation/rules/:id      ({"is_active":false} pauses, true resumes)
+DELETE /api/automation/rules/:id
+GET /api/events/delayed              (queued waits and why each did or did not run)</pre>
+    <div class="callout info"><strong>Full body example:</strong>
+      <code>{"name":"No reply in 3 days","trigger_type":"TagAdded","trigger_config":{"tag_id":"&lt;uuid&gt;","delay_minutes":4320,"condition":{"type":"no_reply"}},"action_type":"send_email","action_config":{"template_id":"&lt;uuid&gt;"},"is_active":false}</code>
+      &mdash; saves a draft that waits three days after the tag is added and emails the template only if the contact has not replied.</div>
   </div>
+
 
   <div class="card">
     <h3>Checklists</h3>
@@ -1337,6 +1361,45 @@ POST /api/public/contact</pre>
     <h3>Automation Group Overview</h3>
     <p>The <strong>Automation</strong> group (sidebar icon ⚡) contains <strong>Rules</strong>, <strong>Tags</strong> and <strong>Lead Scoring</strong>. The strategy-engine screens this section used to name are not in the console; each card below says what is API-only instead.</p>
   </div>
+
+  <div class="card">
+    <h3>The rule builder: when &rarr; wait &rarr; only if &rarr; then</h3>
+    <p><strong>+ New Rule</strong> asks four questions and nothing else. Pick <em>when</em> (a tag, a list, a stage, a score,
+      a new contact, a date, or quiet for N days). Optionally set a <em>wait</em> in minutes, hours or days. Optionally tick
+      <em>only if they have NOT replied</em>. Pick <em>then</em> (send a template, add/remove a tag, add/remove from a list,
+      notify a user, call a webhook). Every picker lists your own tags, lists and templates; there is no JSON to type and no
+      free-text id.</p>
+    <p><strong>Save as draft</strong> stores the rule with <code>is_active: false</code>. A draft appears in the list marked
+      <em>Draft</em>, can be paused, resumed or deleted, and is never evaluated by the engine &mdash; every rule lookup filters
+      on <code>is_active IS NOT FALSE</code>, so a draft cannot fire, enrol a contact or send a message. <strong>Save &amp;
+      activate</strong> stores the same rule as active; that is the only control on the screen that arms anything.</p>
+    <p><strong>What a wait really does.</strong> When a delay is set, the match is written to the delayed-action queue with a
+      due time and the engine does <em>not</em> run the action. A background pass picks it up once the time has passed, which
+      is why a "wait three days" step can never send in the same minute the tag was added. The queued row keeps the action as
+      it was when the rule fired, so editing the rule afterwards cannot change what the customer was about to receive.</p>
+
+    <h4>Case study &mdash; the new-lead first follow-up</h4>
+    <p><strong>Situation.</strong> A local service business adds every enquiry to the CRM by hand and also receives leads from
+      its directory listing. New enquiries often sit untouched for days, and the owner wanted one follow-up email going out
+      only if nobody had answered within a few hours.</p>
+    <p><strong>What it was set to.</strong> Trigger <em>Contact created (new lead)</em>; wait 4 hours; tick <em>only if they
+      have NOT replied</em>; action <em>Send an email template</em> &mdash; the workspace's "Thanks for reaching out" template.
+      Saved as a draft first, reviewed, then activated.</p>
+    <p><strong>What the visitor experienced.</strong> Every person who filled in the enquiry form or was added by the directory
+      intake received one email about four hours later &mdash; but only when they had not written back in the meantime. A
+      visitor who replied within the hour received nothing further from the rule.</p>
+    <p><strong>What it produced.</strong> One queued delayed-action row per new lead, one outbound message per lead who stayed
+      silent, and a visible count on the rule ("executed N") that the owner could read without opening a log. Contacts who
+      replied left a queued row that recorded <em>why</em> it was skipped, so "did this rule work?" has an answer per contact.</p>
+    <div class="callout info"><strong>Honest limits.</strong> The waiting and the no-reply check are exact; a "reply" is a
+      reply the app can see &mdash; inbound mail filed against that contact's address, or a reply event ingested for that
+      contact. A reply typed into some other tool is invisible and the follow-up would still go out. The clock triggers
+      (<em>a date coming up</em>, <em>no activity for N days</em>) are checked every 15 minutes, so they fire within a quarter
+      of an hour of becoming true, never to the second; the renewal date is read from a date field stored on the contact
+      (for example <code>renewal_date</code>). One rule carries one wait and one action: a longer sequence is several rules
+      chained by their own triggers, and each rule's own history is what tells you which step ran.</div>
+  </div>
+
 
   <div class="card">
     <h3>Agency Sequences</h3>
