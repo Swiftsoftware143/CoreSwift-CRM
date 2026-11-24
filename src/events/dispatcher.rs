@@ -326,6 +326,14 @@ fn is_reply_event(name: &str) -> bool {
 /// executor every other trigger path uses, so a template, a contact-addressed email and every other
 /// action behaviour are identical whether the wait was zero or three days. Legacy rows (monitoring,
 /// checklists, the public API) keep their old executor.
+///
+/// PAUSE IS RE-CHECKED HERE (kanban t_b54589a3). Pausing a rule cancels what it has waiting
+/// (`automation::handlers::update_rule`), and this is the second belt: the rule is loaded again
+/// when the row comes due, and an inactive rule sends nothing even if a row somehow survived the
+/// sweep (queued in the microseconds around the pause, or still pending from before the fix). The
+/// row is kept, marked executed with `result.executed = false` and
+/// `result.reason = "rule paused - not sent"`, so the queue stays a ledger. Resuming affects
+/// FUTURE triggers only: this row is already past its due time and must not resurrect.
 pub async fn evaluate_delayed_action(db: &PgPool, action_id: Uuid) {
     let action = match sqlx::query_as::<_, crate::events::models::DelayedAction>(
         "SELECT * FROM delayed_actions WHERE id = $1 AND executed = false AND cancelled = false",
@@ -374,7 +382,7 @@ pub async fn evaluate_delayed_action(db: &PgPool, action_id: Uuid) {
     // action without one (migration 073 made the column nullable for that writer), so a NULL is
     // real data — "no condition recorded" — and never fires. Before this it was a decode error,
     // which returned early and left the row pending forever (re-fetched every tick).
-    let (should_execute, reason) = match action.condition_type.as_deref() {
+    let (should_execute, mut reason) = match action.condition_type.as_deref() {
         Some("timeout") => (true, "timeout elapsed".to_string()),
         Some("no_reply") => match contact_id {
             Some(cid) => match contact_replied_since(db, action.tenant_id, cid, since).await {
@@ -476,6 +484,16 @@ pub async fn evaluate_delayed_action(db: &PgPool, action_id: Uuid) {
                 .fetch_optional(db)
                 .await
                 {
+                    // PAUSED while this row waited: the rule is re-read here, AFTER the queue row
+                    // was fetched, so a pause that committed in between wins. Nothing is sent; the
+                    // tail UPDATE marks the row executed with `executed: false` and this reason.
+                    Ok(Some(rule)) if !rule.is_active => {
+                        reason = "rule paused - not sent".to_string();
+                        tracing::info!(
+                            rule = %rule_id, action = %action_id,
+                            "Delayed action's rule is paused — not sent"
+                        );
+                    }
                     Ok(Some(mut rule)) => {
                         // The QUEUED copy wins: a rule edited between queueing and firing must not
                         // silently change what the customer was promised at trigger time.

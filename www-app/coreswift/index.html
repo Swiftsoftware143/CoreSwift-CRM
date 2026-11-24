@@ -5162,10 +5162,19 @@ async function createAutomationRule(saveAsDraft){
 }
 
 // Pause / resume from the rules list (PATCH /api/automation/rules/:id {is_active}).
+// Pausing cancels a step that is still WAITING in the queue (the server answers
+// cancelled_pending), so the sentence names the number instead of promising a blanket "it will
+// not fire" the queue disagreed with.
 async function toggleAutomationRule(id, currentlyActive){
   try {
-    await API.patch('/automation/rules/' + id, { is_active: !currentlyActive });
-    toast(currentlyActive ? 'Rule paused — it will not fire' : 'Rule resumed','success');
+    const res = await API.patch('/automation/rules/' + id, { is_active: !currentlyActive });
+    const cancelled = (res && typeof res.cancelled_pending === 'number') ? res.cancelled_pending : 0;
+    toast(currentlyActive
+      ? ('Rule paused — it will not fire again' + (cancelled
+          ? ', and ' + cancelled + ' waiting step' + (cancelled === 1 ? ' was' : 's were') + ' cancelled'
+          : '') + '. Anything already sent is untouched.')
+      : 'Rule resumed — it fires on new triggers only; a step cancelled while paused stays cancelled',
+      'success');
     if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['rules']) TAB_LOADERS['rules']();
   } catch (e) { toast('Could not change the rule: ' + ((e && e.message) || e), 'error'); }
 }

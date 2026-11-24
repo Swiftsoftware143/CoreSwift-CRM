@@ -11,6 +11,8 @@ customer row is read or written. Six checks, one per acceptance item on the card
   D. the no-reply condition both ways: a contact with no reply executes, a contact who replied does
      not — with a NON-SENDING action (AddTag), and the queue row records why
   E. no regression: tag, list, score and stage triggers still match and still run their action
+  P. PAUSE (kanban t_b54589a3): pause cancels a step that is still waiting, the executor refuses a
+     paused rule even for a row that escaped the sweep, and resuming affects future triggers only
   (F is the guide, checked by eye; G is the deploy.)
 
 The script deletes its tenants at the end (a cascade takes rules, contacts, tags, lists, templates,
@@ -264,8 +266,11 @@ def main():
             f"(gen_random_uuid(), '{a}', 'probe-inbox@example.test', 'inbound', "
             f"'{email_replied}', 'probe-inbox@example.test', 'Re: probe', 'Yes please', now())"
         )
-        # Two queue rows on the SAME draft rule, each with its own action tag, so "executed" and
-        # "suppressed" are distinguishable by which tag landed on which contact.
+        # Two queue rows on the SAME rule, each with its own action tag, so "executed" and
+        # "suppressed" are distinguishable by which tag landed on which contact. The rule must be
+        # LIVE here: since kanban t_b54589a3 the executor re-reads `is_active` and a draft can never
+        # deliver a wait (that IS the fix), so this arm activates it and restores the draft after.
+        http("PATCH", f"{base}/api/automation/rules/{rid}", {"is_active": True}, session_a)
         tag_one, tag_two = seed_a["Probe Action One"], seed_a["Probe Action Two"]
         rows = {}
         for label, cid, tag in (("no_reply", c_noreply, tag_one), ("replied", c_replied, tag_two)):
@@ -307,6 +312,8 @@ def main():
         replied_ok = ("\"executed\": false" in rows["replied"][3] and rows["replied"][4] == "0")
         check("D contact with no reply -> the queued action ran", no_reply_ok)
         check("D2 contact who replied -> the queued action did NOT run", replied_ok)
+        # Back to a draft: the rest of the card's claims are about a rule that is not armed.
+        http("PATCH", f"{base}/api/automation/rules/{rid}", {"is_active": False}, session_a)
 
         # ── E. no regression on the four existing trigger kinds ───────────────────────────────
         reg_tags = {}
@@ -381,6 +388,91 @@ def main():
                       f"AND entity_id='{seed_a['contacts'][0]}'")
             print(f"--- E4 stage trigger: move_status={st} deal={deal_id} assigned={e4} ---")
             check("E4 StageChanged still matches and runs its action", e4 == "1", f"assigned={e4}")
+
+        # ── P. Pause cancels a step already in the queue, and the executor refuses a paused rule ──
+        # (kanban t_b54589a3). Two belts, both proved separately:
+        #   P1-P3 the PATCH cancels the waiting row (half 1)
+        #   P4-P6 a row that escaped the sweep (not cancelled) still does not fire, because the
+        #         executor re-reads the rule's is_active (half 2)
+        #   P7-P8 resuming affects FUTURE triggers only: a new trigger queues, the cancelled row
+        #         does not resurrect
+        pause_trigger = http("POST", f"{base}/api/tags", {"name": f"Probe Pause Trigger {stamp}"}, session_a)[1].get("id")
+        pause_action = http("POST", f"{base}/api/tags", {"name": f"Probe Pause Action {stamp}"}, session_a)[1].get("id")
+        st, pause_rule = create_rule(session_a, {
+            "name": f"Probe pause cancels wait {stamp}", "trigger_type": "TagAdded",
+            "trigger_config": {"tag_id": pause_trigger, "delay_minutes": 30},
+            "action_type": "AddTag", "action_config": {"tag_id": pause_action}, "is_active": True})
+        pause_rid = (pause_rule or {}).get("id")
+        c_pause, c_resume = seed_a["contacts"][0], seed_a["contacts"][3]
+
+        # P1: a real trigger queues the waiting step.
+        st, _ = http("POST", f"{base}/api/tags/assign",
+                     {"tag_id": pause_trigger, "entity_type": "contact", "entity_id": c_pause}, session_a)
+        pending = db.q(
+            "SELECT id FROM delayed_actions WHERE source_rule_id='" + str(pause_rid) + "' "
+            "AND executed = false AND cancelled = false")
+        da_pause = pending.splitlines()[0] if pending else ""
+        print(f"\n--- P1 trigger (assign status {st}) queued pending row: {da_pause or 'NONE'} ---")
+        check("P1 a real trigger queues a pending delayed-action row for the rule", bool(da_pause), pending)
+
+        # P2: Pause cancels it, in the same request, and says how many.
+        st, paused = http("PATCH", f"{base}/api/automation/rules/{pause_rid}", {"is_active": False}, session_a)
+        returned = (paused or {}).get("cancelled_pending")
+        print(f"--- P2 PATCH is_active=false -> status={st} cancelled_pending={returned} ---")
+        check("P2 pause reports the cancelled step (cancelled_pending == 1)", returned == 1,
+              f"status={st} body={json.dumps(paused)[:300]}")
+
+        # P3: the row is cancelled in the DB, with the reason on it, and the rule is inactive.
+        state = db.q(
+            "SELECT jsonb_build_object('cancelled',cancelled,'status',status,'reason',result->>'reason',"
+            "'executed',executed) FROM delayed_actions WHERE id='" + da_pause + "'")
+        rule_state = db.q("SELECT is_active FROM automation_rules WHERE id='" + str(pause_rid) + "'")
+        print(f"--- P3 queue row: {state} rule is_active={rule_state} ---")
+        check("P3 the waiting row is cancelled and records 'rule paused - not sent'",
+              '"cancelled": true' in state and '"rule paused - not sent"' in state and rule_state == "f",
+              state)
+
+        # P4: the executor belt. Force the row due and un-cancel it by hand (simulating a row that
+        # escaped the sweep, or one queued before this fix), so the ONLY thing stopping it is the
+        # rule's is_active re-read inside evaluate_delayed_action.
+        db.q("UPDATE delayed_actions SET cancelled = false, status = NULL, result = NULL, "
+             "execute_at = now() - interval '1 minute' WHERE id='" + da_pause + "'")
+        deadline = time.time() + 190
+        while time.time() < deadline:
+            if db.q("SELECT executed FROM delayed_actions WHERE id='" + da_pause + "'") == "t":
+                break
+            time.sleep(5)
+        p4 = db.q(
+            "SELECT jsonb_build_object('executed',executed,'cancelled',cancelled,"
+            "'result',result) FROM delayed_actions WHERE id='" + da_pause + "'")
+        assigned = db.q(
+            f"SELECT count(*) FROM tag_assignments WHERE tag_id='{pause_action}' AND entity_id='{c_pause}'")
+        print(f"--- P4 after the worker pass on a due, un-cancelled row: {p4}; action tag rows={assigned} ---")
+        check("P4 the worker evaluated the row but the paused rule did not fire",
+              '"executed": true' in p4 and '"executed": false' in p4
+              and '"rule paused - not sent"' in p4 and assigned == "0", p4)
+        check("P5 no tag assignment was applied by the paused rule", assigned == "0", assigned)
+
+        # P6: resume — the cancelled row must not resurrect, and a NEW trigger must queue again.
+        st, resumed = http("PATCH", f"{base}/api/automation/rules/{pause_rid}", {"is_active": True}, session_a)
+        st2, _ = http("POST", f"{base}/api/tags/assign",
+                      {"tag_id": pause_trigger, "entity_type": "contact", "entity_id": c_resume}, session_a)
+        new_pending = db.q(
+            "SELECT count(*) FROM delayed_actions WHERE source_rule_id='" + str(pause_rid) + "' "
+            "AND entity_id='" + c_resume + "' AND executed = false AND cancelled = false")
+        old_row = db.q("SELECT jsonb_build_object('cancelled',cancelled,'executed',executed) "
+                       "FROM delayed_actions WHERE id='" + da_pause + "'")
+        assigned_old = db.q(
+            f"SELECT count(*) FROM tag_assignments WHERE tag_id='{pause_action}' AND entity_id='{c_pause}'")
+        print(f"--- P6 resume status={st} new trigger status={st2} new pending={new_pending} "
+              f"old row={old_row} old action rows={assigned_old} ---")
+        check("P6 resumed rule queues a NEW trigger", new_pending == "1", new_pending)
+        check("P7 the row cancelled while paused did not resurrect or run",
+              '"executed": true' in old_row and assigned_old == "0", old_row)
+
+        # Leave the probe rule inactive so the final baseline count is honest even before the
+        # tenant cascade runs.
+        http("PATCH", f"{base}/api/automation/rules/{pause_rid}", {"is_active": False}, session_a)
 
         # Deactivate everything this script armed before the final count.
         for rule in (tag_rule, list_rule, score_rule):

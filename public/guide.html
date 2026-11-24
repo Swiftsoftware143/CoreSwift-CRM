@@ -1010,7 +1010,10 @@ GET /api/campaigns/:id/enrollments   (view enrolled contacts)</pre>
       address is filed, or when a reply event for that contact is ingested; our own outgoing mail never counts.</p>
     <p><strong>Drafts:</strong> <code>is_active: false</code> saves a rule that exists, lists and can be edited but never
       fires. Omitting <code>is_active</code> keeps the old behaviour (active). The Rules list shows <em>Active</em> or
-      <em>Draft</em> with a Pause / Resume button.</p>
+      <em>Draft</em> with a Pause / Resume button. Pausing a rule that has a step still waiting in the delayed-action queue
+      cancels those rows in the same request &mdash; the response carries <code>cancelled_pending</code> with the count, and
+      each row is kept with <code>cancelled: true</code> and <code>result.reason: "rule paused - not sent"</code>. Resuming
+      affects future triggers only; a row cancelled while paused never fires.</p>
     <pre>GET /api/automation/rules
 POST /api/automation/rules
 PATCH /api/automation/rules/:id      ({"is_active":false} pauses, true resumes)
@@ -1377,6 +1380,11 @@ POST /api/public/contact</pre>
       due time and the engine does <em>not</em> run the action. A background pass picks it up once the time has passed, which
       is why a "wait three days" step can never send in the same minute the tag was added. The queued row keeps the action as
       it was when the rule fired, so editing the rule afterwards cannot change what the customer was about to receive.</p>
+    <p><strong>Pausing a rule stops the wait as well.</strong> <em>Pause</em> does two things: it stops the rule matching
+      anything new, and it cancels a step that is still waiting in the queue. The waiting row is kept and records
+      <em>rule paused - not sent</em>, so the queue shows what did not go out and why. Nothing already sent is recalled, and
+      <em>Resume</em> applies to future triggers only &mdash; a step that was cancelled while the rule was paused never comes
+      back. <em>Remove</em> also cancels whatever that rule still had waiting.</p>
 
     <h4>Case study &mdash; the new-lead first follow-up</h4>
     <p><strong>Situation.</strong> A local service business adds every enquiry to the CRM by hand and also receives leads from

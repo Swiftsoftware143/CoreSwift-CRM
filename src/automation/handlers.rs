@@ -10,6 +10,55 @@ use axum::{
 use serde_json::json;
 use uuid::Uuid;
 
+/// Cancel every queue row this rule still has waiting — the LEDGER is kept, the SEND is not.
+///
+/// Kanban t_b54589a3: pausing a rule used to flip `is_active` and nothing else, so a step that was
+/// already sitting in `delayed_actions` fired anyway when its wait elapsed. `cancelled = true` is
+/// what the 60-second worker pass filters on (`executed = false AND cancelled = false`), so a
+/// cancelled row can never run; `result.reason` is what the queue screen shows the operator
+/// instead of silence. Called for a rule that is now (or was created) inactive, and before a rule
+/// is deleted — a deleted rule's rows would otherwise have `source_rule_id` set to NULL by the FK
+/// and be picked up by the legacy executor, i.e. fire with nobody able to see why.
+async fn cancel_pending_for_rule<'e, E>(
+    executor: E,
+    tenant_id: Uuid,
+    rule_id: Uuid,
+) -> Result<u64, sqlx::Error>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let res = sqlx::query(
+        "UPDATE delayed_actions \
+            SET cancelled = true, \
+                status = 'cancelled', \
+                result = jsonb_build_object( \
+                    'condition', condition_type, \
+                    'reason', 'rule paused - not sent', \
+                    'executed', false), \
+                updated_at = NOW() \
+          WHERE source_rule_id = $1 AND tenant_id = $2 \
+            AND executed = false AND cancelled = false",
+    )
+    .bind(rule_id)
+    .bind(tenant_id)
+    .execute(executor)
+    .await?;
+    Ok(res.rows_affected())
+}
+
+/// The rule as JSON with the number of steps this request cancelled beside it. Every existing
+/// field is unchanged, so callers that read the rule body keep working.
+fn rule_with_cancelled(
+    rule: &AutomationRule,
+    cancelled: u64,
+) -> Result<serde_json::Value, AppError> {
+    let mut body = serde_json::to_value(rule).map_err(|e| AppError::Internal(e.to_string()))?;
+    if let Some(obj) = body.as_object_mut() {
+        obj.insert("cancelled_pending".to_string(), json!(cancelled));
+    }
+    Ok(body)
+}
+
 pub async fn list_rules(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
@@ -77,8 +126,20 @@ pub async fn create_rule(
     // ACTIVE rule, exactly as before this change, because the column's own default is true. The
     // console's "Save as draft" sends false explicitly; nothing in this endpoint can activate a
     // rule that was created as a draft, and nothing here queues an action.
-    Ok((StatusCode::CREATED, Json(json!(sqlx::query_as::<_,AutomationRule>(concat!("INSERT INTO automation_rules(id,tenant_id,name,description,trigger_type,trigger_config,action_type,action_config,is_active) VALUES($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9,true)) RETURNING ", rule_columns!()))
-        .bind(Uuid::new_v4()).bind(t).bind(&r.name).bind(&r.description).bind(&r.trigger_type).bind(&r.trigger_config).bind(&r.action_type).bind(&r.action_config).bind(r.is_active).fetch_one(&s.db).await?))))
+    let rule = sqlx::query_as::<_,AutomationRule>(concat!("INSERT INTO automation_rules(id,tenant_id,name,description,trigger_type,trigger_config,action_type,action_config,is_active) VALUES($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9,true)) RETURNING ", rule_columns!()))
+        .bind(Uuid::new_v4()).bind(t).bind(&r.name).bind(&r.description).bind(&r.trigger_type).bind(&r.trigger_config).bind(&r.action_type).bind(&r.action_config).bind(r.is_active).fetch_one(&s.db).await?;
+    // Belt and braces (kanban t_b54589a3): a brand-new rule has no queue rows, so this is a no-op
+    // today — but the invariant "an inactive rule has nothing waiting" is enforced at every door
+    // that can produce an inactive rule, not just at Pause.
+    let cancelled = if rule.is_active {
+        0
+    } else {
+        cancel_pending_for_rule(&s.db, t, rule.id).await?
+    };
+    Ok((
+        StatusCode::CREATED,
+        Json(rule_with_cancelled(&rule, cancelled)?),
+    ))
 }
 
 pub async fn get_rule(
@@ -108,8 +169,20 @@ pub async fn update_rule(
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     // `is_active` is the real column (nullable). COALESCE keeps the card's semantics:
     // a NULL request value means "leave as is"; the read path reports NULL as enabled.
-    Ok(Json(json!(sqlx::query_as::<_,AutomationRule>(concat!("UPDATE automation_rules SET name=COALESCE($1,name), description=COALESCE($2,description), trigger_type=COALESCE($3,trigger_type), trigger_config=COALESCE($4,trigger_config), action_type=COALESCE($5,action_type), action_config=COALESCE($6,action_config), is_active=COALESCE($7,is_active), updated_at=NOW() WHERE id=$8 AND tenant_id=$9 RETURNING ", rule_columns!()))
-        .bind(&r.name).bind(&r.description).bind(&r.trigger_type).bind(&r.trigger_config).bind(&r.action_type).bind(&r.action_config).bind(r.is_active).bind(id).bind(t).fetch_optional(&s.db).await?.ok_or(AppError::NotFound(format!("Rule {id} not found")))?)))
+    //
+    // PAUSE (kanban t_b54589a3): when the rule ends up inactive, every step it still has waiting is
+    // cancelled in the SAME transaction as the flip — the console's "it will not fire" sentence is
+    // only true if the queue agrees. Rows are kept as the ledger (`result.reason` says why).
+    let mut tx = s.db.begin().await?;
+    let rule = sqlx::query_as::<_,AutomationRule>(concat!("UPDATE automation_rules SET name=COALESCE($1,name), description=COALESCE($2,description), trigger_type=COALESCE($3,trigger_type), trigger_config=COALESCE($4,trigger_config), action_type=COALESCE($5,action_type), action_config=COALESCE($6,action_config), is_active=COALESCE($7,is_active), updated_at=NOW() WHERE id=$8 AND tenant_id=$9 RETURNING ", rule_columns!()))
+        .bind(&r.name).bind(&r.description).bind(&r.trigger_type).bind(&r.trigger_config).bind(&r.action_type).bind(&r.action_config).bind(r.is_active).bind(id).bind(t).fetch_optional(&mut *tx).await?.ok_or(AppError::NotFound(format!("Rule {id} not found")))?;
+    let cancelled = if rule.is_active {
+        0
+    } else {
+        cancel_pending_for_rule(&mut *tx, t, id).await?
+    };
+    tx.commit().await?;
+    Ok(Json(rule_with_cancelled(&rule, cancelled)?))
 }
 
 pub async fn delete_rule(
@@ -118,13 +191,27 @@ pub async fn delete_rule(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    let r = sqlx::query("DELETE FROM automation_rules WHERE id=$1 AND tenant_id=$2")
-        .bind(id)
-        .bind(t)
-        .execute(&s.db)
-        .await?;
-    if r.rows_affected() == 0 {
+    // Cancel before the DELETE: `delayed_actions.source_rule_id` is `ON DELETE SET NULL`, so a row
+    // left waiting when its rule is removed would come back as a LEGACY row and fire its stored
+    // action with no rule behind it (kanban t_b54589a3). Removing a rule must stop its waits too.
+    let mut tx = s.db.begin().await?;
+    let found: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM automation_rules WHERE id=$1 AND tenant_id=$2")
+            .bind(id)
+            .bind(t)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if found.is_none() {
         return Err(AppError::NotFound(format!("Rule {id} not found")));
     }
-    Ok(Json(json!({"message":"Deleted"})))
+    let cancelled = cancel_pending_for_rule(&mut *tx, t, id).await?;
+    sqlx::query("DELETE FROM automation_rules WHERE id=$1 AND tenant_id=$2")
+        .bind(id)
+        .bind(t)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(Json(
+        json!({"message":"Deleted","cancelled_pending":cancelled}),
+    ))
 }
