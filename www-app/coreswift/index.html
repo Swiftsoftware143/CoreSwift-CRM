@@ -15741,6 +15741,8 @@ function mcRender(ov, list, wrap) {
         '</div>' : '') +
       '</div></div></div>';
     var eff = (MC.copy && MC.copy.effective) || {};
+  // cp is mcLoad's LOCAL; mcRender reads the stored copy on the module-global MC.
+  var cpy = MC.copy || {};
   var canEdit = !!(MC.copy && MC.copy.can_edit);
   var nCamp = (MC.copy && MC.copy.campaigns) || 0;
   var copyCard = '<div class="card"><div class="card-header">The opt-out page: your words</div><div class="card-body">' +
@@ -15751,10 +15753,10 @@ function mcRender(ov, list, wrap) {
     '<h4 style="margin:18px 0 6px">The footer on every email you send</h4>' +
     '<p class="form-hint" style="margin-top:0">Applies to every campaign, sequence and notification on this account. The opt-out link itself is generated per recipient and is never edited.</p>' +
     '<div class="form-group"><label>Link wording</label>' +
-      '<input id="cpFooterLabel" placeholder="Stop these emails" value="' + escapeHtml((cp.footer && cp.footer.link_label) || '') + '">' +
+      '<input id="cpFooterLabel" placeholder="Stop these emails"' + (canEdit ? '' : ' readonly title="Read only — ask the account owner to change this"') + ' value="' + escapeHtml((cpy.footer && cpy.footer.link_label) || '') + '">' +
       '<span class="form-hint">The words on the unsubscribe link. Empty uses \u201cStop these emails\u201d.</span></div>' +
     '<div class="form-group"><label>One line above the link (optional)</label>' +
-      '<input id="cpFooterReason" placeholder="You are receiving this because you signed up at our site." value="' + escapeHtml((cp.footer && cp.footer.reason_line) || '') + '">' +
+      '<input id="cpFooterReason" placeholder="You are receiving this because you signed up at our site."' + (canEdit ? '' : ' readonly title="Read only — ask the account owner to change this"') + ' value="' + escapeHtml((cpy.footer && cpy.footer.reason_line) || '') + '">' +
       '<span class="form-hint">Why they are receiving it. Leave empty for no line.</span></div>' +
     (canEdit ? (
       '<div style="display:grid;gap:10px">' +
