@@ -24,8 +24,9 @@ Both credential classes resolve to exactly **one account** in `custom_objects::a
 doors call the same functions in `src/custom_objects/store.rs`. Validation, uniqueness and audit
 therefore cannot drift between what an agent writes and what an application writes.
 
-`GET /api/mcp` answers a small JSON description (service name, tool list, the account the token acts
-as) — handy for a human with `curl`, useless to anyone without a credential.
+`GET /api/mcp` answers a small JSON index (service name and both tool lists — the Custom Objects
+tools and the CRM's domain reads) for a human with `curl`. It carries no account and no data: the
+POST is the authenticated door.
 
 ### REST surface
 
@@ -55,6 +56,45 @@ sentence that says so.)
 `list_objects`, `create_object`, `describe_object`, `archive_object`, `add_field`, `archive_field`,
 `insert_record` (optional `upsert_on`), `set_unique_together`, `query_records`, `update_record`,
 `delete_record`.
+
+### Domain reads (12) — the CRM's own data on the same door
+
+Card `t_e9ab0027` put the CRM behind the same `POST /api/mcp`: the transport, the credential contract,
+the role gate and the audit line now come from the fleet's shared `mcp-door` crate, and beside the
+eleven Custom Objects tools the door offers twelve read-only tools over the app's own tables.
+
+| Tool | Answers |
+|---|---|
+| `coreswift_list_contacts` / `coreswift_get_contact` | contacts (+ deal/booking/ticket counts on one) |
+| `coreswift_list_companies` / `coreswift_get_company` | companies (+ contact/deal counts on one) |
+| `coreswift_list_deals` / `coreswift_get_deal` | opportunities — **value WITH its currency**, stage, pipeline, win/loss, recent activity excerpts |
+| `coreswift_list_pipelines` | pipelines with their stages in order |
+| `coreswift_list_bookings` | bookings, upcoming first, with calendar, resource and the order's customer |
+| `coreswift_list_availability` | bookable slots for a date window (`from` required) + the weekly rules |
+| `coreswift_list_tickets` | tickets with a 500-char description excerpt (**untrusted customer text**) |
+| `coreswift_list_billing` | `tenant_plans` + `plan_lines` — CoreSwift bills through plan lines, there is no invoices table |
+| `coreswift_list_messages` | `private_email_messages`, body excerpt capped at 2,000 chars (**untrusted**) |
+
+The names carry the app slug (the door standard) so one agent conversation can hold several products'
+doors without ambiguity; the eleven Custom Objects names are frozen because clients already call them.
+
+Every read filters `tenant_id = any(<the token's workspaces>)` **inside the statement**, takes no
+workspace argument, and answers `not_found` for another workspace's id. Never projected: the key
+tables, the sealed copies, provider keys, `account_erasures`, `audit_logs`.
+
+**A key can be read-only.** `POST /api/personal-api-keys {"name":"…","role":"read_only"}` mints a key
+the door refuses on every write tool (Custom Objects included) before the handler runs;
+`GET /api/personal-api-keys` shows each key's `role`. Operator authority is not a key role — a
+platform admin's key resolves to the operator role from `users.is_platform_admin`.
+
+**Audit.** One JSON line per call at `/app/data/mcp-audit.log` (host: `/opt/swift/coreswiftcrm-data`,
+mode 0600), written before the response, arguments redacted and truncated, subject = the key's id or
+the user's id — never the token. A refused call writes a line too (`unauthorized: <reason>`).
+
+**Proof.** `python3 scripts/mcp-door-acceptance.py` (25 checks: two probe workspaces, foreign id →
+`not_found` while its owner reads it, differing counts, read-only refused on writes, revoked key 401,
+`door-contract.py` 14/14, audit mode/delta/token-scan) and `python3 scripts/custom-objects-acceptance.py`
+(33 checks — the eleven tools unchanged through the new transport).
 
 No tool takes a workspace or tenant argument. An id belonging to another account answers 404 (never
 403 — a refusal must not confirm the row exists). Unknown arguments are refused by name, so a typo

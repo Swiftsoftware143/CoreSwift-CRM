@@ -43,6 +43,13 @@ pub struct MintedKey {
     pub prefix: String,
 }
 
+/// The role an issued key carries. `workspace` is the customer's own key (read and write inside
+/// their own workspace); `read_only` may call read tools only — the MCP door refuses it on every
+/// write before the handler runs. Operator authority is NOT a key role: it comes from
+/// `users.is_platform_admin` (see `src/mcp_door/mod.rs::Resolver`).
+pub const ROLE_WORKSPACE: &str = "workspace";
+pub const ROLE_READ_ONLY: &str = "read_only";
+
 /// Mint one key for a tenant and INSERT it on the caller's connection.
 ///
 /// One writer for every mint in this app: `create_key`, `rotate_key`, the signup transaction
@@ -58,6 +65,24 @@ pub async fn mint_on(
     user_id: Option<Uuid>,
     name: &str,
 ) -> Result<MintedKey, AppError> {
+    mint_with_role(conn, tenant_id, user_id, name, ROLE_WORKSPACE).await
+}
+
+/// The role-aware mint. ONE writer for every key in this app: `create_key`, `rotate_key`, the
+/// signup transaction and `crm-swift mint-key` all end here, so the hash / prefix / sealed-copy
+/// triple and the role can never drift between them.
+pub async fn mint_with_role(
+    conn: &mut PgConnection,
+    tenant_id: Uuid,
+    user_id: Option<Uuid>,
+    name: &str,
+    api_role: &str,
+) -> Result<MintedKey, AppError> {
+    if api_role != ROLE_WORKSPACE && api_role != ROLE_READ_ONLY {
+        return Err(AppError::BadRequest(format!(
+            "'{api_role}' is not a key role — use '{ROLE_WORKSPACE}' or '{ROLE_READ_ONLY}'"
+        )));
+    }
     let full_key = generate_key();
     let hash = key_hash(&full_key);
     let prefix = key_prefix(&full_key);
@@ -67,8 +92,9 @@ pub async fn mint_on(
     let id = Uuid::new_v4();
 
     sqlx::query(
-        "INSERT INTO personal_api_keys (id, tenant_id, user_id, name, key_hash, key_prefix, key_sealed)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO personal_api_keys
+             (id, tenant_id, user_id, name, key_hash, key_prefix, key_sealed, api_role)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(id)
     .bind(tenant_id)
@@ -77,6 +103,7 @@ pub async fn mint_on(
     .bind(&hash)
     .bind(&prefix)
     .bind(&sealed)
+    .bind(api_role)
     .execute(&mut *conn)
     .await
     .map_err(AppError::Database)?;
@@ -92,6 +119,8 @@ pub async fn mint_on(
 #[derive(Deserialize)]
 pub struct CreateKeyRequest {
     pub name: Option<String>,
+    /// `workspace` (default) or `read_only`. Anything else is refused, not defaulted.
+    pub role: Option<String>,
 }
 
 /// POST /api/personal-api-keys — generate a new key
@@ -103,6 +132,16 @@ pub async fn create_key(
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let user_id = Uuid::parse_str(&c.sub).ok();
     let name = req.name.unwrap_or_else(|| "default".to_string());
+    let role = req
+        .role
+        .unwrap_or_else(|| ROLE_WORKSPACE.to_string())
+        .trim()
+        .to_string();
+    if role != ROLE_WORKSPACE && role != ROLE_READ_ONLY {
+        return Err(AppError::BadRequest(format!(
+            "'{role}' is not a key role — use '{ROLE_WORKSPACE}' or '{ROLE_READ_ONLY}'"
+        )));
+    }
 
     // A workspace may hold SEVERAL active keys, each with its own name (migrations/207 dropped the
     // one-active partial unique index that 152 added), because a second key exists for a second
@@ -124,12 +163,13 @@ pub async fn create_key(
     }
 
     let mut tx = s.db.begin().await.map_err(AppError::Database)?;
-    let minted = mint_on(&mut tx, tenant_id, user_id, &name).await?;
+    let minted = mint_with_role(&mut tx, tenant_id, user_id, &name, &role).await?;
     tx.commit().await.map_err(AppError::Database)?;
 
     Ok(Json(json!({
         "id": minted.id.to_string(),
         "name": minted.name,
+        "role": role,
         "key": minted.key,
         "prefix": minted.prefix,
         "note": "This key can be viewed again in Settings > Integration Center after re-entering your password."
@@ -143,7 +183,7 @@ pub async fn list_keys(
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let rows = sqlx::query(
-        "SELECT id, name, key_prefix, is_active, last_used_at, created_at,
+        "SELECT id, name, key_prefix, api_role, is_active, last_used_at, created_at,
                 (key_sealed IS NOT NULL) AS recoverable
          FROM personal_api_keys WHERE tenant_id = $1 ORDER BY created_at DESC",
     )
@@ -159,6 +199,7 @@ pub async fn list_keys(
                 "id": r.get::<Uuid, _>("id").to_string(),
                 "name": r.get::<String, _>("name"),
                 "prefix": r.get::<String, _>("key_prefix"),
+                "role": r.get::<String, _>("api_role"),
                 "is_active": r.get::<bool, _>("is_active"),
                 "last_used_at": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_used_at"),
                 "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),

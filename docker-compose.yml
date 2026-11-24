@@ -17,6 +17,12 @@ services:
     container_name: coreswiftcrm
     restart: always
     network_mode: host
+    # The MCP door's audit line (`/app/data/mcp-audit.log`, created 0600 by the door itself). This is
+    # the ONLY writable path the app gets: the binary, migrations and static are baked into the image,
+    # and a container RECREATE would otherwise throw the audit away on every deploy. The host dir is
+    # owned by uid 999 (the app user) and mode 700.
+    volumes:
+      - /opt/swift/coreswiftcrm-data:/app/data
     env_file:
       - /etc/swift/env/coreswift.env
     # 200-ONLY (kanban t_af4d9006, 2026-10-22). The previous test had a fallback arm that accepted

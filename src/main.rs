@@ -53,6 +53,7 @@ pub mod integrations;
 pub mod lists;
 pub mod lists_internal;
 pub mod mail_compliance;
+pub mod mcp_door;
 pub mod messages;
 pub mod module_registry;
 pub mod monitoring;
@@ -407,6 +408,13 @@ async fn main() -> anyhow::Result<()> {
         rate_limiter: crate::rate_limiter::RateLimiterState::from_config(&config),
         config: config.clone(),
     };
+
+    // The MCP door validates its tool registry the first time it is built (a duplicate name, an
+    // unannotated tool or a non-object schema is a defect a customer would meet as a 500). Build it
+    // HERE, before the listener: a malformed door must stop the boot, not the first call.
+    if let Err(e) = crate::mcp_door::door(&state) {
+        anyhow::bail!("{e}");
+    }
 
     // Request ID middleware — adds X-Request-Id to every response
     let request_id_middleware = axum::middleware::from_fn(request_id_middleware_fn);

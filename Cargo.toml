@@ -72,6 +72,10 @@ reqwest = { version = "0.12", features = ["json"] }
 http = "1"
 # Email provider abstraction (mig 056)
 async-trait = "0.1"
+# The fleet's one MCP door — JSON-RPC 2.0 transport, the credential-resolver contract, tenancy,
+# 404-not-403, the redacted audit line and a startup-validated tool registry. PINNED BY REV: the
+# crate is shared by every product and must not move under this app's build.
+mcp-door = { git = "https://github.com/Swiftsoftware143/mcp-door", rev = "15aef65e324c804dc1f3cc6ebe112c0e537aaede" }
 hmac = "0.12"
 hex = "0.4"
 lettre = { version = "0.11", default-features = false, features = ["tokio1-native-tls", "builder", "smtp-transport"] }

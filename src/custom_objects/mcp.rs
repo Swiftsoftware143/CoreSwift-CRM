@@ -10,7 +10,7 @@
 //! validation, uniqueness and audit cannot drift between the two doors.
 
 use axum::{
-    extract::{Extension, State},
+    extract::State,
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -48,7 +48,7 @@ fn s(t: &str) -> Value {
     json!({ "type": t })
 }
 
-fn tools() -> Value {
+pub(crate) fn tool_descriptors() -> Value {
     json!([
         {
             "name": "list_objects",
@@ -166,126 +166,41 @@ fn tools() -> Value {
     ])
 }
 
-fn rpc_ok(id: Value, result: Value) -> Response {
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "application/json"),
-            (header::CACHE_CONTROL, "no-store"),
-        ],
-        Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })),
-    )
-        .into_response()
-}
-
-fn rpc_err(id: Value, code: i64, message: &str) -> Response {
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "application/json"),
-            (header::CACHE_CONTROL, "no-store"),
-        ],
-        Json(json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })),
-    )
-        .into_response()
-}
-
-/// A served GET on the same path: what this endpoint is, for a human who curls it. No credential
-/// reaches this body — the auth layer has already decided the caller, and only the account is echoed.
-pub async fn info(Extension(ctx): Extension<ObjCtx>) -> Response {
+/// A served GET on the same path: what this endpoint is, for a human who curls it. The POST is the
+/// authenticated door; this index carries no account and no credential.
+pub async fn info() -> Response {
     (
         StatusCode::OK,
         [(header::CACHE_CONTROL, "no-store")],
         Json(json!({
-            "service": "coreswift-custom-objects",
+            "service": "coreswift-crm",
             "protocol": "json-rpc-2.0",
-            "transport": "HTTP POST",
-            "account": ctx.tenant_id,
-            "tools": TOOL_NAMES,
+            "transport": "HTTP POST (Authorization: Bearer <workspace key or console session>)",
+            "custom_object_tools": TOOL_NAMES,
+            "domain_read_tools": crate::mcp_door::DOMAIN_TOOL_NAMES,
         })),
     )
         .into_response()
 }
 
+/// The authenticated door. Credential resolution (key or console session, with the app's canonical
+/// checks), protocol negotiation, the role gate and the audit line all live in the shared
+/// `mcp-door` crate; this module owns only what the tools DO.
 pub async fn handle(
     State(st): State<AppState>,
-    Extension(ctx): Extension<ObjCtx>,
+    headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    let req: Value = match serde_json::from_slice(&body) {
-        Ok(v) => v,
-        Err(_) => return rpc_err(Value::Null, -32700, "parse error"),
-    };
-    let id = req.get("id").cloned().unwrap_or(Value::Null);
-    let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
-
-    match method {
-        "initialize" => rpc_ok(
-            id,
-            json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": { "tools": { "listChanged": false } },
-                "serverInfo": {
-                    "name": "coreswift-custom-objects",
-                    "version": env!("CARGO_PKG_VERSION")
-                }
-            }),
-        ),
-        "notifications/initialized" => (StatusCode::ACCEPTED, ()).into_response(),
-        "ping" => rpc_ok(id, json!({})),
-        "tools/list" => rpc_ok(id, json!({ "tools": tools() })),
-        "tools/call" => {
-            let name = req
-                .get("params")
-                .and_then(|p| p.get("name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let args = req
-                .get("params")
-                .and_then(|p| p.get("arguments"))
-                .cloned()
-                .unwrap_or_else(|| json!({}));
-            if !TOOL_NAMES.contains(&name.as_str()) {
-                return rpc_err(id, -32601, &format!("unknown tool: {name}"));
-            }
-            match call_tool(&st, &ctx, &name, &args).await {
-                Ok(result) => rpc_ok(
-                    id,
-                    json!({
-                        "content": [{ "type": "text", "text": result.to_string() }],
-                        "isError": false
-                    }),
-                ),
-                Err(e) => rpc_ok(
-                    id,
-                    json!({
-                        "content": [{ "type": "text", "text": format!("{e}") }],
-                        "isError": true,
-                        "status": status_of(&e),
-                    }),
-                ),
-            }
+    match crate::mcp_door::door(&st) {
+        Ok(door) => door.dispatch(&headers, &body).await,
+        Err(e) => {
+            tracing::error!(error = %e, "mcp door unavailable");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "MCP door unavailable" })),
+            )
+                .into_response()
         }
-        other => rpc_err(id, -32601, &format!("method not found: {other}")),
-    }
-}
-
-/// The HTTP status the same refusal would carry on the REST surface, so an agent can tell "you sent
-/// the wrong thing" from "that row is not yours" without parsing prose.
-fn status_of(e: &AppError) -> u16 {
-    match e {
-        AppError::Unauthorized | AppError::InvalidCredentials | AppError::UnauthorizedReason(_) => {
-            401
-        }
-        AppError::Forbidden | AppError::ForbiddenReason(_) => 403,
-        AppError::NotFound(_) => 404,
-        AppError::Duplicate(_) | AppError::Conflict(_) => 409,
-        AppError::Validation(_) => 422,
-        AppError::BadRequest(_) => 400,
-        AppError::RateLimited(_) => 429,
-        AppError::UpgradeRequired(_) => 402,
-        _ => 500,
     }
 }
 
@@ -363,7 +278,7 @@ fn arg_window(a: &Map<String, Value>) -> Result<(i64, i64), AppError> {
     Ok((limit.min(200), offset))
 }
 
-async fn call_tool(
+pub(crate) async fn call_tool(
     st: &AppState,
     ctx: &ObjCtx,
     name: &str,
@@ -584,9 +499,5 @@ pub fn router(state: AppState) -> axum::Router<AppState> {
         .layer(middleware::from_fn_with_state(
             crate::body_deadline::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs),
             crate::body_deadline::body_read_deadline_middleware,
-        ))
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            super::authenticate,
         ))
 }

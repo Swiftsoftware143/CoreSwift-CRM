@@ -107,6 +107,14 @@ pub async fn require_credential(
 
     // Served surfaces (the SPA, the tracked-link redirect, the support portal) carry no credential
     // and return no tenant data of their own — see `route_policy::is_guarded_path`.
+    // A door that resolves the credential ITSELF answers its own refusal in the protocol's shape
+    // (`/api/mcp`: JSON-RPC -32001). Refusing it here first would hand an MCP client this
+    // middleware's generic body, which it cannot parse — and the door is not weaker for it: every
+    // call still runs the full resolution, and no call is served without a resolved caller.
+    if route_policy::is_self_authenticating(&path) {
+        return next.run(req).await;
+    }
+
     if !route_policy::is_guarded_path(&path) || route_policy::is_public_route(&path) {
         return next.run(req).await;
     }

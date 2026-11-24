@@ -125,6 +125,12 @@
 //!        it cannot see four mounts the tokenizer does; both numbers are stated so the next reader
 //!        does not "fix" one into the other).
 //!
+//!   +1 mount (2026-11-24, kanban t_990c386e — re-pinned by t_e9ab0027 because the gate does not run
+//!        `cargo test`, so the merge that added the automation rule-engine routes shipped without
+//!        moving this pin): one more `/api` mount on the automation surface. The extractor now
+//!        resolves 561 mounted `.route(..)` calls / 547 on /api** (strategy unchanged: re-measured
+//!        from the tree, never incremented).
+//!
 //!   +1 mount (2026-11-11, kanban t_5d1d6d31, pinned here because the pin had gone stale): the
 //!        billing screen's one-read bill, `GET /api/billing/summary` (the single amount due, the
 //!        one open plan line, and the line that ended on the last change). It sits on the billing
@@ -614,6 +620,24 @@ pub fn is_api_key_route(path: &str) -> bool {
     API_KEY_ROUTES.iter().any(|t| matches_template(t, path))
 }
 
+/// Routes whose HANDLER is the credential boundary, so the global middleware must not answer first.
+///
+/// The MCP door (`POST /api/mcp`, `src/mcp_door`) resolves the credential itself on EVERY request —
+/// hash + live `personal_api_keys` row + live workspace + the app's canonical session checks — and
+/// answers a 401 as a JSON-RPC error (`-32001`), which is the only shape an MCP client can parse.
+/// The global boundary runs BEFORE routing, so without this exemption its generic JSON body
+/// (`{"error": "Authentication required"}`) replaces the protocol answer and the door can never pass
+/// its own conformance probe. Nothing is widened: the door cannot serve a call without a resolved
+/// caller, and it is still listed in [`API_KEY_ROUTES`], so the census keeps treating it as private.
+pub const SELF_AUTHENTICATING_ROUTES: &[&str] = &["/api/mcp"];
+
+/// Is this path served by a handler that resolves its own credential?
+pub fn is_self_authenticating(path: &str) -> bool {
+    SELF_AUTHENTICATING_ROUTES
+        .iter()
+        .any(|t| matches_template(t, path))
+}
+
 /// Does this request path belong to the surface the credential boundary covers?
 ///
 /// `/api/**` is the API surface; `/inbound/**` is the machine-receiver surface (previously ungated
@@ -654,8 +678,9 @@ fn matches_template(template: &str, path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_api_key_route, is_guarded_path, is_internal_route, is_public_route, matches_template,
-        API_KEY_ROUTES, INTERNAL_ROUTES, PUBLIC_ROUTES,
+        is_api_key_route, is_guarded_path, is_internal_route, is_public_route,
+        is_self_authenticating, matches_template, API_KEY_ROUTES, INTERNAL_ROUTES, PUBLIC_ROUTES,
+        SELF_AUTHENTICATING_ROUTES,
     };
 
     /// One `nest(prefix, module::func(..))` in main.rs, with that module's source embedded at
@@ -1157,6 +1182,26 @@ mod tests {
         }
     }
 
+    /// The self-authenticating exemption must stay ONE path, must never be listed as anonymous, and
+    /// must stay on the key list — otherwise a door that resolves its own credential would either be
+    /// skipped by the boundary while claiming to be public (`/api/mcp` would then read as "open" in
+    /// the census), or lose its own 401 to the middleware's generic body.
+    #[test]
+    fn the_self_authenticating_set_is_one_door_and_is_not_public() {
+        assert_eq!(SELF_AUTHENTICATING_ROUTES, &["/api/mcp"]);
+        assert!(is_self_authenticating("/api/mcp"));
+        assert!(!is_self_authenticating("/api/mcp/x"));
+        assert!(!is_self_authenticating("/api/objects"));
+        assert!(
+            !PUBLIC_ROUTES.contains(&"/api/mcp"),
+            "/api/mcp authenticates every call; it must never be filed as an anonymous surface"
+        );
+        assert!(
+            API_KEY_ROUTES.contains(&"/api/mcp"),
+            "/api/mcp is a keyed surface and the census must keep saying so"
+        );
+    }
+
     /// The two arms a stranger or a provider must reach with NO credential: the one-click opt-out
     /// (RFC 8058) and the provider's event receiver. Their credential is the signed token / the HMAC
     /// signature, never a bearer.
@@ -1505,12 +1550,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            560,
+            561,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 546,
+            api, 547,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.

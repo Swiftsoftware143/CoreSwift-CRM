@@ -112,6 +112,17 @@ def tool_out(body):
         return {}
 
 
+def mcp_error(body):
+    """The door's error CODE from a tool result: `not_found`, `forbidden`, `invalid` … or None.
+
+    Since the MCP port (card t_e9ab0027) the door is the shared `mcp-door` crate: a tool failure is a
+    RESULT with `isError: true` and a `{"error": "<code>", "message": …}` payload, so a refusal is
+    read from the code, not from an HTTP status inside the envelope."""
+    if body.get("result", {}).get("isError") is not True:
+        return None
+    return tool_out(body).get("error")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://127.0.0.1:8084")
@@ -315,11 +326,10 @@ def main():
         check("9d archiving an object hides it everywhere and keeps every record row",
               st == 200 and body.get("archived") is True and body.get("already_archived") is False
               and "orders" not in listed and st_schema == 404 and st_records == 404
-              and mcp_body.get("result", {}).get("isError") is True
-              and mcp_body.get("result", {}).get("status") == 404
+              and mcp_error(mcp_body) == "not_found"
               and obj_archived == "true" and fields_live == "0" and recs_before == recs_after == "2",
               f"status={st} listed={listed} schema={st_schema} records={st_records} "
-              f"mcp={mcp_body.get('result', {}).get('status')} archived={obj_archived} "
+              f"mcp={mcp_error(mcp_body)} archived={obj_archived} "
               f"fields_live={fields_live} recs={recs_before}->{recs_after} body={json.dumps(body)[:160]}")
 
         # 9e. Idempotent: a retry answers the same shape and changes nothing (no second archive).
@@ -372,11 +382,15 @@ def main():
         st_unknown, body_unknown = mcp(base, key_a, "erase_data", {})
         unknown_code = body_unknown.get("error", {}).get("code")
         st_exit, _ = http("POST", f"{base}/api/auth/erase-data", {"password": "x", "confirm": "DELETE"}, key_a)
+        frozen = [
+            "list_objects", "create_object", "describe_object", "archive_object", "add_field",
+            "archive_field", "insert_record", "set_unique_together", "query_records",
+            "update_record", "delete_record",
+        ]
         check("9h no API-key/MCP path can reach account-level erase",
-              len(names) == 11 and "archive_object" in names and "set_unique_together" in names
-              and not bad
-              and st_unknown == 200 and unknown_code == -32601 and st_exit == 401,
-              f"names={names} bad={bad} unknown={unknown_code} exitdoor={st_exit}")
+              all(n in names for n in frozen) and len(names) == 23 and not bad
+              and st_unknown == 200 and unknown_code == -32602 and st_exit == 401,
+              f"names={len(names)} bad={bad} unknown={unknown_code} exitdoor={st_exit}")
 
         # ── 10. Composite unique + a replay-safe upsert (kanban t_5b6ec9d2, migration 208) ────────
         # The ZaarHub ad writer's shape: one fulfilment row per (booking_ref, position). Before this,
