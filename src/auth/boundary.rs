@@ -6,8 +6,11 @@
 //! request to a path [`crate::auth::route_policy::is_guarded_path`] covers is decided here first.
 //!
 //! It answers exactly one question — *does this caller present a credential?* — and it can only
-//! refuse an anonymous caller. Authorization (which tenant, which role, which row) stays where it
-//! already was: the module's own `auth_middleware` and the handler.
+//! refuse an anonymous caller, plus ONE property of the credential itself: a `read_only` issued key
+//! (kanban t_ce51cf34) is refused on every method/path that is not one of the read arms in
+//! [`route_policy::READ_ONLY_KEY_ROUTES`], so the REST surface can never be wider than the MCP door
+//! that role was minted for. Authorization (which tenant, which row) stays where it already was: the
+//! module's own `auth_middleware` and the handler.
 //!
 //! The refusal is deliberately distinguishable from every handler's own: the body is
 //! `{"error":"Authentication required"}` with no `code` field, which is what makes the boundary
@@ -29,6 +32,11 @@ use crate::AppState;
 /// `{"code":401,"error":true,"message":"Authentication required"}` so a live curl can tell which
 /// gate refused it.
 pub const BOUNDARY_REFUSAL: &str = "Authentication required";
+
+/// The one user-visible sentence for "this credential may not write" (kanban t_ce51cf34). 403, not
+/// 401: the key is real and valid — it is the ROLE that refuses, and the caller is told which key to
+/// use instead.
+pub const READ_ONLY_REFUSAL: &str = "this key is read-only — use a workspace key to write";
 
 /// Length-independent constant-time compare, same shape as the handler-local helpers in
 /// `contacts_internal` / `tags::internal_handler` / `bookings::handlers`; this copy is the one the
@@ -135,11 +143,27 @@ pub async fn require_credential(
 
     // ── the issued-API-key surface ──────────────────────────────────────────────────────────────
     if route_policy::is_api_key_route(&path) {
-        return if presents_opaque_bearer(&req) {
-            next.run(req).await
-        } else {
-            reject(StatusCode::UNAUTHORIZED, BOUNDARY_REFUSAL)
-        };
+        if !presents_opaque_bearer(&req) {
+            return reject(StatusCode::UNAUTHORIZED, BOUNDARY_REFUSAL);
+        }
+        // A `read_only` key is read-only on BOTH doors (kanban t_ce51cf34). The MCP door gates its
+        // own tools; this is the REST half, decided ONCE here, before any handler runs, from the
+        // committed allowlist. A console JWT (or any non-`csk_` bearer) has no role here and is
+        // untouched. The bearer is copied out first: `Request`'s body is not `Sync`, so holding
+        // `&Request` across the lookup's await would make this middleware's future non-`Send`.
+        let issued = bearer(&req)
+            .filter(|t| t.starts_with("csk_"))
+            .map(str::to_owned);
+        if let Some(token) = issued {
+            if let Some(role) = crate::external_api::issued_key_role(&state, &token).await {
+                if role == crate::personal_api_keys::ROLE_READ_ONLY
+                    && !route_policy::is_read_only_allowed(req.method().as_str(), &path)
+                {
+                    return reject(StatusCode::FORBIDDEN, READ_ONLY_REFUSAL);
+                }
+            }
+        }
+        return next.run(req).await;
     }
 
     // ── everything else: a valid app JWT ────────────────────────────────────────────────────────

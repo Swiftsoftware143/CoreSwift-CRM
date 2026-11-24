@@ -323,13 +323,18 @@
 //!   the only credential the boundary *verifies*.
 //! * **`X-Internal-Key`** — the app's own `INTERNAL_SYNC_KEY`, for [`INTERNAL_ROUTES`] only,
 //!   compared constant-time, and never accepted when the app has no key configured.
-//! * **Issued personal API key** — `Authorization: Bearer <key>`, for [`API_KEY_ROUTES`] only. The
+//! * **Issued personal API key** — `Authorization: Bearer *** for [`API_KEY_ROUTES`] only. The
 //!   key is opaque and its validation is a database read the handler already performs
 //!   (`external_api::resolve_key` against `personal_api_keys`), so the boundary requires only that
-//!   a non-empty bearer be present and leaves the decision where the credential lives.
+//!   a non-empty bearer be present — plus ONE property of the key itself: a `read_only` key
+//!   (migration 210) is refused with **403** on every method/path not in
+//!   [`READ_ONLY_KEY_ROUTES`]. That is the REST half of a role the MCP door already enforced, and
+//!   it is an explicit allowlist: a route added later is refused until it is listed (kanban
+//!   t_ce51cf34).
 //!
-//! The boundary never *widens* a caller's reach: it decides nothing about tenancy, roles, or which
-//! tenant a request may touch. It can only refuse a caller that presents no credential at all.
+//! Otherwise the boundary never *widens* a caller's reach: it decides nothing about tenancy or
+//! which tenant a request may touch. It can refuse a caller that presents no credential at all, and
+//! it can refuse a credential whose own `api_role` says "read only" on a write.
 //!
 //! # Adding a route
 //!
@@ -605,6 +610,42 @@ pub const API_KEY_ROUTES: &[&str] = &[
     "/api/objects/:slug/audit",
 ];
 
+/// The ONLY (method, path) pairs a `read_only` issued key may reach (kanban t_ce51cf34).
+///
+/// A `read_only` key is a workspace key minus the pen: the role used to be enforced by the MCP door
+/// alone, so the same key still created, updated and deleted through `/api/objects/**` and the write
+/// arms of `/api/external/**`. The two doors must agree on what "read" means, so the REST half is
+/// decided here — where the routes are already enumerated — rather than by a blanket
+/// `method == GET`, because this app's issued-key surface also carries POSTs that ARE writes
+/// (`/api/external/contacts`, `/api/data-mapping/events`). A route added later is refused by
+/// DEFAULT (the safe direction) until somebody lists it here.
+pub const READ_ONLY_KEY_ROUTES: &[(&str, &str)] = &[
+    // The one read on the lead-capture surface an agent may make: what lists exist.
+    ("GET", "/api/external/lists"),
+    // Custom Objects — the four GET handlers on the REST door (`src/custom_objects/mod.rs`).
+    ("GET", "/api/objects"),
+    ("GET", "/api/objects/:slug/schema"),
+    ("GET", "/api/objects/:slug/records"),
+    ("GET", "/api/objects/:slug/audit"),
+];
+
+/// May a `read_only` issued key use this (method, path)?
+///
+/// Only the pairs in [`READ_ONLY_KEY_ROUTES`]; `HEAD` rides with `GET` (axum answers it from the
+/// same handler). A trailing slash is normalised because `nest("/api/objects", …)` answers both
+/// `/api/objects` and `/api/objects/`.
+pub fn is_read_only_allowed(method: &str, path: &str) -> bool {
+    let read = method.eq_ignore_ascii_case("GET") || method.eq_ignore_ascii_case("HEAD");
+    if !read {
+        return false;
+    }
+    let trimmed = path.trim_end_matches('/');
+    let path = if trimmed.is_empty() { "/" } else { trimmed };
+    READ_ONLY_KEY_ROUTES
+        .iter()
+        .any(|(m, t)| *m == "GET" && matches_template(t, path))
+}
+
 /// Is `path` (a concrete request path) one of the committed public templates?
 pub fn is_public_route(path: &str) -> bool {
     PUBLIC_ROUTES.iter().any(|t| matches_template(t, path))
@@ -679,9 +720,64 @@ fn matches_template(template: &str, path: &str) -> bool {
 mod tests {
     use super::{
         is_api_key_route, is_guarded_path, is_internal_route, is_public_route,
-        is_self_authenticating, matches_template, API_KEY_ROUTES, INTERNAL_ROUTES, PUBLIC_ROUTES,
-        SELF_AUTHENTICATING_ROUTES,
+        is_read_only_allowed, is_self_authenticating, matches_template, API_KEY_ROUTES,
+        INTERNAL_ROUTES, PUBLIC_ROUTES, READ_ONLY_KEY_ROUTES, SELF_AUTHENTICATING_ROUTES,
     };
+
+    /// A `read_only` key is read-only on BOTH doors (kanban t_ce51cf34). Pin the REST half: the
+    /// read arms answer, every write arm of `/api/objects/**` and `/api/external/**` refuses, and a
+    /// GET on an unlisted path refuses too (the allowlist, not the method, is the authority).
+    #[test]
+    fn a_read_only_key_may_only_reach_the_read_arms() {
+        // ── allowed ───────────────────────────────────────────────────────────────────────────
+        assert!(is_read_only_allowed("GET", "/api/external/lists"));
+        assert!(is_read_only_allowed("GET", "/api/objects"));
+        assert!(is_read_only_allowed("GET", "/api/objects/"));
+        assert!(is_read_only_allowed("HEAD", "/api/objects"));
+        assert!(is_read_only_allowed("GET", "/api/objects/orders/schema"));
+        assert!(is_read_only_allowed("GET", "/api/objects/orders/records"));
+        assert!(is_read_only_allowed("GET", "/api/objects/orders/audit"));
+
+        // ── Custom Objects, every write arm ───────────────────────────────────────────────────
+        assert!(!is_read_only_allowed("POST", "/api/objects"));
+        assert!(!is_read_only_allowed("PATCH", "/api/objects/orders"));
+        assert!(!is_read_only_allowed("DELETE", "/api/objects/orders"));
+        assert!(!is_read_only_allowed("POST", "/api/objects/orders/fields"));
+        assert!(!is_read_only_allowed(
+            "PATCH",
+            "/api/objects/orders/fields/3f2a6c1e"
+        ));
+        assert!(!is_read_only_allowed(
+            "DELETE",
+            "/api/objects/orders/fields/3f2a6c1e"
+        ));
+        assert!(!is_read_only_allowed("POST", "/api/objects/orders/records"));
+        assert!(!is_read_only_allowed(
+            "PATCH",
+            "/api/objects/orders/records/9b1c7d2e"
+        ));
+        assert!(!is_read_only_allowed(
+            "DELETE",
+            "/api/objects/orders/records/9b1c7d2e"
+        ));
+
+        // ── the /api/external write arms, plus the data-mapping intake ────────────────────────
+        assert!(!is_read_only_allowed("POST", "/api/external/contacts"));
+        assert!(!is_read_only_allowed("POST", "/api/external/deals"));
+        assert!(!is_read_only_allowed(
+            "PATCH",
+            "/api/external/deals/quote-42/stage"
+        ));
+        assert!(!is_read_only_allowed(
+            "POST",
+            "/api/external/deals/quote-42/status"
+        ));
+        assert!(!is_read_only_allowed("POST", "/api/data-mapping/events"));
+
+        // ── default deny: an unlisted GET is not a read just because it is a GET ─────────────
+        assert!(!is_read_only_allowed("GET", "/api/external/anything"));
+        assert!(!is_read_only_allowed("GET", "/api/data-mapping/events"));
+    }
 
     /// One `nest(prefix, module::func(..))` in main.rs, with that module's source embedded at
     /// compile time and the router function to scan. Every mount in this app happens either
@@ -1229,6 +1325,20 @@ mod tests {
             assert!(
                 mounted.iter().any(|m| m == entry),
                 "{entry:?} is not a mounted route (the router's own spelling must match exactly)"
+            );
+        }
+        // The read-only allowlist is a SUBSET of the issued-key surface: an entry that is not on
+        // API_KEY_ROUTES would be a rule nothing can ever reach (the boundary only applies it
+        // there), and an entry that is not mounted would never match a real request.
+        for (method, entry) in READ_ONLY_KEY_ROUTES {
+            assert_eq!(*method, "GET", "{entry} rides a non-GET method");
+            assert!(
+                API_KEY_ROUTES.iter().any(|r| r == entry),
+                "{entry:?} is read-only-allowed but is not on the issued-key surface"
+            );
+            assert!(
+                mounted.iter().any(|m| m == entry),
+                "{entry:?} is read-only-allowed but is not a mounted route"
             );
         }
     }

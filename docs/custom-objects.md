@@ -82,10 +82,21 @@ Every read filters `tenant_id = any(<the token's workspaces>)` **inside the stat
 workspace argument, and answers `not_found` for another workspace's id. Never projected: the key
 tables, the sealed copies, provider keys, `account_erasures`, `audit_logs`.
 
-**A key can be read-only.** `POST /api/personal-api-keys {"name":"…","role":"read_only"}` mints a key
-the door refuses on every write tool (Custom Objects included) before the handler runs;
-`GET /api/personal-api-keys` shows each key's `role`. Operator authority is not a key role — a
-platform admin's key resolves to the operator role from `users.is_platform_admin`.
+**A key can be read-only — on BOTH doors.** `POST /api/personal-api-keys
+{"name":"…","role":"read_only"}` mints a key that may only read: the MCP door refuses it on every
+write tool (Custom Objects included) before the handler runs, and the REST surface refuses it on
+every write method with **403**
+`{"error":"this key is read-only — use a workspace key to write","status":403}`. The REST read arms it
+may use are exactly `GET /api/objects`, `GET /api/objects/:slug/schema`, `GET /api/objects/:slug/records`,
+`GET /api/objects/:slug/audit` and `GET /api/external/lists`; everything else on the issued-key
+surface — create/patch/archive object, field add/patch/archive, record insert/update/delete,
+`/api/external/contacts`, `/api/external/deals` and its stage/status arms, and the data-mapping
+intake — answers that 403 and writes nothing. The role is enforced once in the app-wide credential
+boundary (`src/auth/boundary.rs`) from the committed allowlist
+(`auth::route_policy::READ_ONLY_KEY_ROUTES`), so a route added later is refused until it is listed.
+A `workspace` key is unaffected. `GET /api/personal-api-keys` shows each key's `role`. Operator
+authority is not a key role — a platform admin's key resolves to the operator role from
+`users.is_platform_admin`.
 
 **Audit.** One JSON line per call at `/app/data/mcp-audit.log` (host: `/opt/swift/coreswiftcrm-data`,
 mode 0600), written before the response, arguments redacted and truncated, subject = the key's id or
@@ -93,8 +104,11 @@ the user's id — never the token. A refused call writes a line too (`unauthoriz
 
 **Proof.** `python3 scripts/mcp-door-acceptance.py` (25 checks: two probe workspaces, foreign id →
 `not_found` while its owner reads it, differing counts, read-only refused on writes, revoked key 401,
-`door-contract.py` 14/14, audit mode/delta/token-scan) and `python3 scripts/custom-objects-acceptance.py`
-(33 checks — the eleven tools unchanged through the new transport).
+`door-contract.py` 14/14, audit mode/delta/token-scan), `python3
+scripts/custom-objects-acceptance.py` (33 checks — the eleven tools unchanged through the new
+transport) and `python3 scripts/api-key-role-acceptance.py` (the REST half of `read_only`: the read
+arms answer 200, every write arm on both surfaces answers 403 with the sentence, the MCP door is
+unchanged, a workspace key still writes, and the probe workspace leaves no residue).
 
 No tool takes a workspace or tenant argument. An id belonging to another account answers 404 (never
 403 — a refusal must not confirm the row exists). Unknown arguments are refused by name, so a typo

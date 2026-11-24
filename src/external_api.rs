@@ -162,6 +162,29 @@ pub(crate) async fn resolve_key(
     Ok((tenant_id, key_id))
 }
 
+/// The `api_role` an issued key carries — read WITHOUT metering and WITHOUT stamping `last_used_at`.
+///
+/// The global boundary ([`crate::auth::boundary::require_credential`]) calls this to refuse a
+/// `read_only` key on a write method before any handler runs (kanban t_ce51cf34). It must not call
+/// [`resolve_key`]: that function meters the call and stamps `last_used_at`, and the handler still
+/// calls it for the tenant — two meters for one request would halve every tenant's daily ceiling.
+///
+/// `None` means "not an active issued key" (unknown hash, revoked row, or a bearer that is not a
+/// key at all). A database error also answers `None` and cannot widen anything: the handler's own
+/// [`resolve_key`] is the authority for turning a key into a tenant and fails closed on the same
+/// outage.
+pub(crate) async fn issued_key_role(s: &AppState, key: &str) -> Option<String> {
+    let hash = key_hash(key);
+    sqlx::query_scalar::<_, String>(
+        "SELECT api_role FROM personal_api_keys WHERE key_hash = $1 AND is_active = true",
+    )
+    .bind(&hash)
+    .fetch_optional(&s.db)
+    .await
+    .ok()
+    .flatten()
+}
+
 /// Known built-in contact columns we can map directly (lowercase key -> column).
 const BUILTIN_FIELDS: &[&str] = &[
     "email",

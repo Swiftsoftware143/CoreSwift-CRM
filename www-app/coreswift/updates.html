@@ -105,6 +105,7 @@
     <h2>24 November 2026</h2>
     <ul>
       <li><b>Pausing an automation really stops it.</b> Pause now cancels a follow-up that is still waiting in the queue, not just new matches, and the waiting row records &ldquo;rule paused &ndash; not sent&rdquo;. Resuming starts the rule again for new triggers; it does not send the step that was cancelled, and nothing already sent is affected.</li>
+      <li><b>A read-only key is read-only everywhere.</b> A key issued in the read-only role was refused only by the AI connection; the API it also opens could still create and change records with it. Every make-or-change call now answers <code>403</code> with the sentence &ldquo;this key is read-only &mdash; use a workspace key to write&rdquo;, and a refused call writes nothing. Workspace keys are unaffected.</li>
     </ul>
   </div>
 
