@@ -1390,7 +1390,7 @@ const SETTINGS_MENU = [
   { id:'do-not-mail', icon:'🚫', label:'Do not mail' },
   { id:'integrations', icon:'🔌', label:'Integration Center' },
   // AI Tools (MCP) — 2026-11-19. The fleet MCP server answers six `coreswift_*` tools and
-  // authenticates a customer with this workspace's own lead-delivery key (its key_auth reads
+  // authenticates a customer with this workspace's own API key (its key_auth reads
   // personal_api_keys.key_hash), but this console — the ONLY place a CoreSwift customer can see
   // that key — had no MCP screen. Measured live: 127.0.0.1:8099/mcp tools/list.
   { id:'mcp', icon:'🤖', label:'AI Tools (MCP)' }
@@ -2479,11 +2479,11 @@ const TAB_RENDERERS = {
     return pageHeader('AI Tools (MCP)', 'Connect an AI client to this workspace\u2019s CoreSwift data \u2014 read-only, and scoped to this account') +
       card('\U0001f916 What this is',
         '<p style="color:var(--text-secondary);margin:0">Any MCP client &mdash; Claude Code, Cursor, Hermes, or your own agent &mdash; can read this workspace&rsquo;s contacts, lists and private-email index over one endpoint. ' +
-        'The client signs in with a <strong>lead-delivery key</strong>, so it sees this account and nothing else. Read-only: no tool here can create, change or delete anything.</p>') +
+        'The client signs in with an <strong>API key</strong>, so it sees this account and nothing else. A workspace key can read and change this account; a read-only key is refused every make-or-change call.</p>') +
       card('\U0001f310 Endpoint',
         '<div style="display:flex;gap:8px;align-items:center"><code id="mcpEp" style="flex:1;font-size:12px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;padding:8px;word-break:break-all">' + escapeHtml(ep) + '</code>' +
         '<button class="btn btn-secondary btn-sm" onclick="mcpCopy(\'#mcpEp\', this)">Copy</button></div>' +
-        '<p style="color:var(--text-secondary);margin:10px 0 0;font-size:13px">The credential is a key from <strong>Integration Center &rarr; Lead-delivery keys</strong>. Create one there, then copy it at creation or press <strong>View</strong> (your password is asked for and the view is recorded). One key per capture app and one per AI client \u2014 revoking a key stops that client only.</p>') +
+        '<p style="color:var(--text-secondary);margin:10px 0 0;font-size:13px">The credential is a key from <strong>Integration Center &rarr; API keys</strong>. Create one there (choose <strong>read-only</strong> for a client that should only read), then copy it at creation or press <strong>View</strong> (your password is asked for and the view is recorded). One key per capture app and one per AI client — revoking a key stops that client only.</p>') +
       card('\u2699\ufe0f Client config',
         '<p style="color:var(--text-secondary);margin:0 0 8px;font-size:13px">Paste this into your client&rsquo;s MCP config and replace <code>YOUR_API_KEY</code> with the key.</p>' +
         '<pre id="mcpCfg" style="background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;font-size:11px;overflow-x:auto;margin:0">' + escapeHtml(cfg) + '</pre>' +
@@ -5655,7 +5655,7 @@ async function icDeleteProvider(pkey) {
   }
 }
 
-// ── Lead sources + lead-delivery keys (live from /api/integration-center/overview) ──
+// ── Lead sources + API keys (live from /api/integration-center/overview) ──
 // Lead-source status is computed from the contacts table, not from "is the app
 // connected": an app that has never delivered a lead reads as "never received" and an
 // unrecognized source_app shows up as its own row instead of being silently dropped.
@@ -5708,16 +5708,32 @@ function icRenderLeadSources() {
   el.innerHTML = html;
 }
 
+// ONE vocabulary for a key's role, shared by the Integration Center list, the once-shown card and
+// the MCP page. The API answers `workspace` | `read_only` (src/personal_api_keys.rs::ROLE_*); the
+// customer-facing words are the same ones the create control offers.
+function icKeyRoleIsReadOnly(role) { return role === 'read_only'; }
+function icKeyRoleBadge(role) {
+  return icKeyRoleIsReadOnly(role)
+    ? '<span class="badge badge-warning" style="white-space:nowrap" title="Reads only — cannot create or change anything">read-only</span>'
+    : '<span class="badge badge-muted" style="white-space:nowrap" title="Reads and writes inside this account">read + write</span>';
+}
+function icKeyRoleDetail(role) {
+  return icKeyRoleIsReadOnly(role)
+    ? 'it can read this account and cannot create or change anything; every make-or-change call is refused and writes nothing.'
+    : 'it can read and change this account.';
+}
+
 function icRenderKeys() {
   const el = document.getElementById('icKeysWrap');
   if (!el) return;
   const o = IC.overview || {};
-  if (o.error) { el.innerHTML = icErr('Could not load lead-delivery keys', o.error); return; }
+  if (o.error) { el.innerHTML = icErr('Could not load API keys', o.error); return; }
   const items = (o.personal_keys && o.personal_keys.items) || [];
   const active = items.filter(k => k.is_active).length;
   const rows = items.map(k => [
     '<strong>' + escapeHtml(k.name || 'default') + '</strong>',
     '<code>' + escapeHtml(k.prefix || '') + '…</code>',
+    icKeyRoleBadge(k.role),
     k.is_active ? '<span class="badge badge-success">active</span>' : '<span class="badge badge-muted">revoked</span>',
     escapeHtml(icFmtDate(k.last_used_at)),
     escapeHtml(icFmtDate(k.created_at)),
@@ -5727,17 +5743,36 @@ function icRenderKeys() {
     '<button class="btn btn-ghost btn-xs" onclick="icRotateKey(\'' + escapeHtmlAttr(k.id) + '\')">Rotate</button> ' +
     '<button class="btn btn-ghost btn-xs" onclick="icRevokeKey(\'' + escapeHtmlAttr(k.id) + '\')">Revoke</button>'
   ]);
-  const body = '<p style="color:var(--text-secondary);margin:0 0 10px">Each key lets a capture app deliver leads into <strong>this account</strong>. ' +
+  const body = '<p style="color:var(--text-secondary);margin:0 0 10px">Each key is this account&#39;s identity: a capture app uses one to deliver leads in, and an AI/MCP client uses one to read this account. ' +
+    'A <strong>read + write</strong> key can read and change this account; a <strong>read-only</strong> key can only read — every make-or-change call through it is refused with a sentence and writes nothing. ' +
     'The page shows only the prefix; <strong>View</strong> asks for your password and then shows the full key so you can copy it again — every view is recorded, and nothing is consumed by looking. A row marked <strong>cannot be shown</strong> predates recoverable storage: Rotate it to get a key you can display. <strong>' + active + '</strong> active of ' + items.length + ' total.</p>' +
-    dataTable(['Name', 'Prefix', 'Status', 'Last used', 'Created', ''], rows,
-      'No keys yet — create one and paste it into a capture app\'s CoreSwift integration.');
-  const footer = '<button class="btn btn-primary btn-sm" onclick="icCreateKey()">+ Create lead-delivery key</button>';
-  el.innerHTML = card('🔑 Lead-delivery keys (csk_…)', body, footer);
+    dataTable(['Name', 'Prefix', 'Role', 'Status', 'Last used', 'Created', ''], rows,
+      'No keys yet — create one and paste it into a capture app\'s CoreSwift integration, or into an AI client.');
+  const footer = '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">' +
+    '<div class="form-group" style="margin:0"><label for="icNewKeyName">Name (optional)</label>' +
+      '<input id="icNewKeyName" placeholder="e.g. Claude desktop" style="width:170px"></div>' +
+    '<div class="form-group" style="margin:0"><label for="icNewKeyRole">Role</label>' +
+      '<select id="icNewKeyRole" style="width:270px;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary)">' +
+        '<option value="workspace">Read and write (workspace)</option>' +
+        '<option value="read_only">Read-only — cannot create or change anything</option>' +
+      '</select></div>' +
+    '<button class="btn btn-primary btn-sm" onclick="icCreateKey()">+ Create API key</button>' +
+    '</div>';
+  el.innerHTML = card('🔑 API keys (csk_…)', body, footer);
 }
 
 async function icCreateKey() {
+  // The role picker lives in the Integration Center card. An operator issuing a credential for a
+  // capture app or an AI client must be able to choose a read-only key right here — the tenant
+  // console has offered this since t_5c021107 and this fork is the same SPA.
+  const roleEl = document.getElementById('icNewKeyRole');
+  const nameEl = document.getElementById('icNewKeyName');
+  const role = (roleEl && roleEl.value) || 'workspace';
+  if (role !== 'workspace' && role !== 'read_only') { toast('Choose a key role', 'error'); return; }
+  const fallback = icKeyRoleIsReadOnly(role) ? 'Read-only key' : 'Workspace key';
+  const name = ((nameEl && nameEl.value) || '').trim() || fallback;
   try {
-    const d = await API.post('/personal-api-keys', { name: 'lead-capture' });
+    const d = await API.post('/personal-api-keys', { name: name, role: role });
     await icShowKeyOnce(d, 'Key created');
   } catch (e) {
     toast('Could not create key: ' + e.message, 'error');
@@ -5745,7 +5780,9 @@ async function icCreateKey() {
 }
 
 async function icRotateKey(id) {
-  if (!confirm('Rotate this key? The current secret stops working immediately.')) return;
+  // rotate_key mints with the role the row already carries (src/personal_api_keys.rs), so a
+  // read-only key cannot silently come back as a read-write credential — say so in the confirm.
+  if (!confirm('Rotate this key? It keeps its role, and the current secret stops working immediately.')) return;
   try {
     const d = await API.post('/personal-api-keys/' + encodeURIComponent(id) + '/rotate', {});
     await icShowKeyOnce(d, 'Key rotated');
@@ -5800,6 +5837,8 @@ async function icDoViewKey(id) {
   if (res.ok && d && d.key) {
     showModal('Your API key',
       '<p style="margin:0 0 8px">This is the same key as before — nothing was replaced, and this view is recorded.</p>' +
+      '<p style="margin:0 0 8px" id="icNewKeyRoleLine">Role: <strong>' + (icKeyRoleIsReadOnly(d.role) ? 'Read-only' : 'Read and write (workspace)') + '</strong> — ' +
+        escapeHtml(icKeyRoleDetail(d.role)) + '</p>' +
       '<div class="form-group"><label>Key</label><input id="icRevealedKey" readonly value="' + escapeHtmlAttr(d.key) + '"></div>' +
       '<div style="font-size:.75rem;color:var(--text-muted)">Prefix ' + escapeHtml(d.prefix || '') + '</div>',
       '<button class="btn btn-secondary" onclick="closeModal()">Done</button>');
@@ -5817,8 +5856,14 @@ async function icDoViewKey(id) {
 }
 
 async function icShowKeyOnce(d, title) {
+  const role = d && d.role;
   showModal(escapeHtml(title),
-    '<p style="margin:0 0 8px">Paste this into the capture app now. You can see it again later with <strong>View</strong> on its row — that asks for your password and records the view.</p>' +
+    '<p style="margin:0 0 8px">' + (icKeyRoleIsReadOnly(role)
+      ? 'Paste this into the app or AI client that should only READ this account — this is a read-only key. '
+      : 'Paste this into the capture app or AI client — this key can read and change this account. ') +
+    'You can see it again later with <strong>View</strong> on its row — that asks for your password and records the view.</p>' +
+    '<p style="margin:0 0 8px" id="icNewKeyRoleLine">Role: <strong>' + (icKeyRoleIsReadOnly(role) ? 'Read-only' : 'Read and write (workspace)') + '</strong> — ' +
+      escapeHtml(icKeyRoleDetail(role)) + '</p>' +
     '<div class="form-group"><label>Key</label><input id="icNewKey" readonly value="' + escapeHtmlAttr(d && d.key || '') + '"></div>' +
     '<div style="font-size:.75rem;color:var(--text-muted)">Prefix ' + escapeHtml(d && d.prefix || '') + '</div>',
     '<button class="btn btn-secondary" onclick="closeModal()">Done</button>');
