@@ -7,6 +7,8 @@ Checks (each printed PASS/FAIL with the number that decided it):
   2  A's contact id asked for with B's key  -> not_found (never forbidden)
   3  the same id with A's key               -> the row, with A's data
   4  a read-only key reads (contacts) and is REFUSED on a Custom Objects write (create_object)
+  4b the crate's ROLE FILTER: a read-only key's `tools/list` is exactly the 15 read-only tools and
+     its raw bytes carry NO write tool name (mcp-door 0.1.2), while a workspace key still sees 23
   5  a revoked key                          -> 401
   6  a platform admin's key                 -> authenticated, protocol-era discovery answers
   7  the shared protocol probe               -> 14/14 (python3 <crate>/scripts/door-contract.py)
@@ -102,6 +104,38 @@ def rpc(base: str, token: str | None, method: str, params=None, ident: int = 1) 
     return http("POST", f"{base}/api/mcp", payload, token)
 
 
+def rpc_raw(base: str, token: str | None, method: str, params=None, ident: int = 1) -> tuple[int, str]:
+    """One JSON-RPC call, returning the RAW response text.
+
+    The role-filter proof is a claim about BYTES, not about what this script can parse: a write
+    tool's name anywhere in a read-only key's `tools/list` response means the list lies to the
+    caller, whether or not it is inside a `tools` entry.
+    """
+    payload = {"jsonrpc": "2.0", "id": ident, "method": method}
+    if params is not None:
+        payload["params"] = params
+    data = json.dumps(payload).encode()
+    req = urllib.request.Request(f"{base}/api/mcp", data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", "coreswift-mcp-door-acceptance/1")
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, r.read().decode()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode()
+
+
+def tool_names(raw: str) -> list[str]:
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        return []
+    return [t.get("name", "") for t in (((body.get("result") or {}).get("tools")) or [])]
+
+
+
 def tool(base: str, token: str, name: str, args: dict) -> tuple[bool, dict]:
     """One tools/call. Returns (is_error, payload)."""
     st, body = rpc(base, token, "tools/call", {"name": name, "arguments": args})
@@ -177,20 +211,32 @@ def main() -> int:
         "INSERT INTO tenants (name, slug, is_active, probe_harness) "
         f"VALUES ('probe-mcp-b-{stamp}', 'probe-mcp-b-{stamp}', true, 'true') RETURNING id"
     )
-    if not a or not b:
+    # Every probe key needs a LIVE creator: since kanban t_fbd8fc03 the door refuses a key whose
+    # creator row is missing, disabled or closed (`creator_live` in src/mcp_door/mod.rs), so a key
+    # minted with user_id NULL authenticates as 401 and would make this whole harness lie.
+    ua = db.one(
+        "INSERT INTO users (tenant_id, email, password_hash, name) "
+        f"VALUES ('{a}', 'probe-a-{stamp}@probe.test', 'probe-harness', 'Probe A') RETURNING id"
+    ) if a else ""
+    ub = db.one(
+        "INSERT INTO users (tenant_id, email, password_hash, name) "
+        f"VALUES ('{b}', 'probe-b-{stamp}@probe.test', 'probe-harness', 'Probe B') RETURNING id"
+    ) if b else ""
+    if not (a and b and ua and ub):
         print("FAIL  could not create the probe workspaces")
         return 1
     admin_key_id = ""
+    kro = ""
 
     try:
-        ka, _ = mint_key(db, a, "workspace", None, "probe-workspace-a")
-        kb, _ = mint_key(db, b, "workspace", None, "probe-workspace-b")
-        kro, _ = mint_key(db, a, "read_only", None, "probe-read-only")
-        kdead, _ = mint_key(db, a, "workspace", None, "probe-revoked", active=False)
+        ka, _ = mint_key(db, a, "workspace", ua, f"probe-workspace-a-{stamp}")
+        kb, _ = mint_key(db, b, "workspace", ub, f"probe-workspace-b-{stamp}")
+        kro, _ = mint_key(db, a, "read_only", ua, f"probe-read-only-{stamp}")
+        kdead, _ = mint_key(db, a, "workspace", ua, f"probe-revoked-{stamp}", active=False)
         admin_user = db.one("SELECT id||'|'||tenant_id FROM users WHERE is_platform_admin LIMIT 1")
         admin_id, admin_tenant = admin_user.split("|")
         # The admin key lives on the REAL operator workspace, so its cleanup is explicit below.
-        kadmin, admin_key_id = mint_key(db, admin_tenant, "workspace", admin_id, "probe-admin")
+        kadmin, admin_key_id = mint_key(db, admin_tenant, "workspace", admin_id, f"probe-admin-{stamp}")
 
         # ── fixtures: A has 2 contacts + a deal/ticket/line/message, B has 1 contact
         c1 = db.one(
@@ -286,6 +332,39 @@ def main() -> int:
         err_w2, w2 = tool(base, kro, "insert_record", {"object": "probe_ro", "data": {}})
         check("and on a record insert", err_w2, f"{w2.get('error')}")
 
+        # 4b ── the crate's ROLE FILTER (mcp-door 0.1.2, kanban t_46a81465).
+        # On the 0.1.0 pin a read-only key was handed all 23 tools and only refused when it called
+        # a write: the tool list LIED. The filter is a claim about response BYTES, so measure them.
+        ro_floor = sorted({
+            # the three Custom Objects tools the registry gates at Role::ReadOnly
+            "list_objects", "describe_object", "query_records",
+            # the twelve domain reads, each .min_role(Role::ReadOnly)
+            "coreswift_list_contacts", "coreswift_get_contact", "coreswift_list_companies",
+            "coreswift_get_company", "coreswift_list_deals", "coreswift_get_deal",
+            "coreswift_list_pipelines", "coreswift_list_bookings", "coreswift_list_availability",
+            "coreswift_list_tickets", "coreswift_list_billing", "coreswift_list_messages",
+        })
+        write_tools = ["create_object", "archive_object", "add_field", "archive_field",
+                       "insert_record", "set_unique_together", "update_record", "delete_record"]
+        st_ro, raw_ro = rpc_raw(base, kro, "tools/list")
+        ro_names = sorted(tool_names(raw_ro))
+        check("a read-only key's tools/list is exactly the read-only floor (15)",
+              st_ro == 200 and ro_names == ro_floor,
+              f"status={st_ro} n={len(ro_names)} "
+              f"extra={sorted(set(ro_names) - set(ro_floor))} "
+              f"missing={sorted(set(ro_floor) - set(ro_names))}")
+        leaked = [n for n in write_tools if n in raw_ro]
+        check("a read-only key's tools/list BYTES carry no write tool name", not leaked,
+              "leaked=" + ",".join(leaked))
+        st_ws, raw_ws = rpc_raw(base, ka, "tools/list")
+        ws_names = set(tool_names(raw_ws))
+        check("a workspace key still sees all 23 tools", st_ws == 200 and len(ws_names) == 23,
+              f"status={st_ws} n={len(ws_names)}")
+        check("a workspace key still sees every write tool", set(write_tools) <= ws_names,
+              "missing=" + ",".join(sorted(set(write_tools) - ws_names)))
+        err_lo, lo = tool(base, ka, "list_objects", {})
+        check("a workspace key's list_objects still answers", not err_lo, str(lo)[:80])
+
         # 5 ── revoked key
         st_dead, _ = rpc(base, kdead, "ping")
         check("a revoked key answers 401", st_dead == 401, f"status={st_dead}")
@@ -299,7 +378,8 @@ def main() -> int:
         names = [t.get("name") for t in ((tools_list.get("result") or {}).get("tools") or [])]
         check("the door offers 23 tools (11 custom objects + 12 reads)", len(names) == 23, f"n={len(names)}")
 
-        # 7 ── the shared protocol probe, 14/14
+        # 7 ── the shared protocol probe. The crate grows checks (14 -> 16 when tools/list became
+        # role-filtered), so assert "none failed and most of them ran" instead of a frozen count.
         probe = os.path.join(args.crate, "scripts", "door-contract.py")
         if os.path.exists(probe):
             cmd = [sys.executable, probe, f"{base}/api/mcp",
@@ -308,7 +388,8 @@ def main() -> int:
             out = subprocess.run(cmd, capture_output=True, text=True)
             passes = len(re.findall(r"^PASS ", out.stdout, re.M))
             fails = len(re.findall(r"^FAIL ", out.stdout, re.M))
-            check(f"door-contract.py 14/14", passes == 14 and fails == 0, f"{passes} pass / {fails} fail")
+            check(f"door-contract.py: every shared check passes ({passes})", fails == 0 and passes >= 14,
+                  f"{passes} pass / {fails} fail")
             if fails:
                 print(out.stdout[-2000:])
         else:
@@ -345,6 +426,11 @@ def main() -> int:
             db.q("DELETE FROM tenants WHERE probe_harness = 'true' AND slug LIKE 'probe-mcp-%'")
             leftover = db.q(f"SELECT count(*) FROM tenants WHERE slug LIKE 'probe-mcp-{stamp}-%'")
             print(f"cleanup: probe workspaces remaining = {leftover[0][0] if leftover else '?'}")
+            # Teardown is only proven by the CREDENTIAL dying, not by a row disappearing from a
+            # list: the read-only probe key must answer 401 on the very next call.
+            if kro:
+                st_gone, _ = rpc(base, kro, "tools/list")
+                check("a torn-down probe key answers 401", st_gone == 401, f"status={st_gone}")
         # The admin key is NOT a probe-tenant row: cascade does not reach it, so delete it here —
         # an un-cleaned one is an active credential on the operator's own workspace and one of
         # the ten slots migration 207 caps.
@@ -352,6 +438,13 @@ def main() -> int:
             db.q(f"DELETE FROM personal_api_keys WHERE id = '{admin_key_id}'")
             still = db.one(f"SELECT count(*) FROM personal_api_keys WHERE id = '{admin_key_id}'")
             print(f"cleanup: admin probe key removed = {'yes' if str(still) == '0' else 'NO'}")
+        if not args.keep:
+            keys_left = db.one(
+                "SELECT count(*) FROM personal_api_keys "
+                f"WHERE name LIKE 'probe-%-{stamp}'"
+            )
+
+            check("no probe key residue", str(keys_left) == "0", f"{keys_left} left")
 
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
     for name in FAIL:

@@ -83,9 +83,10 @@ workspace argument, and answers `not_found` for another workspace's id. Never pr
 tables, the sealed copies, provider keys, `account_erasures`, `audit_logs`.
 
 **A key can be read-only — on BOTH doors.** `POST /api/personal-api-keys
-{"name":"…","role":"read_only"}` mints a key that may only read: the MCP door refuses it on every
-write tool (Custom Objects included) before the handler runs, and the REST surface refuses it on
-every write method with **403**
+{"name":"…","role":"read_only"}` mints a key that may only read: the MCP door never *lists* a write
+tool to it (the crate's `tools/list` is filtered by the caller's role, mcp-door 0.1.2) and refuses
+it on every write tool (Custom Objects included) before the handler runs, so a client is not offered
+a capability the transport would then reject. On the REST surface it is refused on every write method with **403**
 `{"error":"this key is read-only — use a workspace key to write","status":403}`. The REST read arms it
 may use are exactly `GET /api/objects`, `GET /api/objects/:slug/schema`, `GET /api/objects/:slug/records`,
 `GET /api/objects/:slug/audit` and `GET /api/external/lists`; everything else on the issued-key
@@ -105,9 +106,11 @@ authority is not a key role — a platform admin's key resolves to the operator 
 mode 0600), written before the response, arguments redacted and truncated, subject = the key's id or
 the user's id — never the token. A refused call writes a line too (`unauthorized: <reason>`).
 
-**Proof.** `python3 scripts/mcp-door-acceptance.py` (25 checks: two probe workspaces, foreign id →
-`not_found` while its owner reads it, differing counts, read-only refused on writes, revoked key 401,
-`door-contract.py` 14/14, audit mode/delta/token-scan), `python3
+**Proof.** `python3 scripts/mcp-door-acceptance.py` (32 checks: two probe workspaces, foreign id →
+`not_found` while its owner reads it, differing counts, read-only refused on writes, a read-only key's
+`tools/list` is exactly the 15 read-only tools and its response bytes carry no write tool name while a
+workspace key still sees all 23, revoked key 401, `door-contract.py` 16/16, audit
+mode/delta/token-scan, and a torn-down probe key answering 401), `python3
 scripts/custom-objects-acceptance.py` (33 checks — the eleven tools unchanged through the new
 transport) and `python3 scripts/api-key-role-acceptance.py` (the REST half of `read_only`: the read
 arms answer 200, every write arm on both surfaces answers 403 with the sentence, the MCP door is

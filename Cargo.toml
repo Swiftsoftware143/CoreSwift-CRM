@@ -75,7 +75,13 @@ async-trait = "0.1"
 # The fleet's one MCP door — JSON-RPC 2.0 transport, the credential-resolver contract, tenancy,
 # 404-not-403, the redacted audit line and a startup-validated tool registry. PINNED BY REV: the
 # crate is shared by every product and must not move under this app's build.
-mcp-door = { git = "https://github.com/Swiftsoftware143/mcp-door", rev = "15aef65e324c804dc1f3cc6ebe112c0e537aaede" }
+#
+# 0.1.2 (axum-0.7 line, tag v0.1.2-axum07) filters `tools/list` by the resolved credential's role.
+# CoreSwift is the only door in the fleet that already ships a read_only credential role
+# (`personal_api_keys.api_role`), so on 0.1.0 a read_only key was OFFERED every write tool and only
+# refused when it called one — the tool list lied. The 0.4.0 line carries the same filter but needs
+# axum 0.8; this app is axum 0.7 (kanban t_46a81465).
+mcp-door = { git = "https://github.com/Swiftsoftware143/mcp-door", rev = "795033790d27c98d74f0e9bdf2ca7ef3b12e5d61" }
 hmac = "0.12"
 hex = "0.4"
 lettre = { version = "0.11", default-features = false, features = ["tokio1-native-tls", "builder", "smtp-transport"] }
