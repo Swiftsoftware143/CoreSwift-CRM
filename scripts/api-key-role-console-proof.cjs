@@ -122,6 +122,7 @@ async function main() {
 
   try {
     const page = await browser.newPage();
+    await page.setViewport({ width: 1440, height: 1000 });
     await page.setCacheEnabled(false);
     page.on('pageerror', e => pageErrors.push(String(e)));
     page.on('dialog', async d => { dialogs.push(d.message()); await d.accept(); });
@@ -295,12 +296,8 @@ async function main() {
       JSON.stringify(rwRow));
     const shotA = process.env.PROOF_SHOT;
     if (shotA) {
-      await page.evaluate(() => {
-        const el = document.getElementById('icKeysWrap');
-        if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center' });
-      });
-      await sleep(400);
-      await page.screenshot({ path: shotA, fullPage: false });
+      const cardEl = await page.$('#icKeysWrap');
+      if (cardEl) await cardEl.screenshot({ path: shotA });
     }
 
     // ── U6d the MCP page's own key table shows the role too ────────────────────────────
@@ -316,6 +313,11 @@ async function main() {
     check('U6d the MCP page lists each key with its role',
       !!mcpRo && /read-only/i.test(mcpRo[2]) && !!mcpRw && /read \+ write/i.test(mcpRw[2]),
       JSON.stringify(mcpRows));
+    const shotB = process.env.PROOF_SHOT2;
+    if (shotB) {
+      const wrapEl = await page.$('#mcpKeyWrap');
+      if (wrapEl) await wrapEl.screenshot({ path: shotB });
+    }
     await page.evaluate(() => { try { switchTab('integrations'); } catch (e) {} });
     await page.waitForFunction(() => !!document.getElementById('icNewKeyRole'), { timeout: 25000 });
 

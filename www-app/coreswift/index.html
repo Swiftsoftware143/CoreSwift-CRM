@@ -4156,8 +4156,8 @@ async function mcpLoadKey() {
 function icKeyRoleIsReadOnly(role) { return role === 'read_only'; }
 function icKeyRoleBadge(role) {
   return icKeyRoleIsReadOnly(role)
-    ? '<span class="badge badge-warning" title="Reads only — cannot create or change anything">read-only</span>'
-    : '<span class="badge badge-muted" title="Reads and writes inside this account">read + write</span>';
+    ? '<span class="badge badge-warning" style="white-space:nowrap" title="Reads only — cannot create or change anything">read-only</span>'
+    : '<span class="badge badge-muted" style="white-space:nowrap" title="Reads and writes inside this account">read + write</span>';
 }
 function icKeyRoleDetail(role) {
   return icKeyRoleIsReadOnly(role)
