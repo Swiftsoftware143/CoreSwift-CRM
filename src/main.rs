@@ -152,6 +152,20 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // ── Operator utility: mint ONE workspace API key ──────────────────────────────────────────
+    //   crm-swift mint-key <tenant_uuid> <name>
+    //
+    // The console's mint path (POST /api/personal-api-keys) needs the workspace user's password,
+    // and an operator provisioning a sibling app's integration has no customer secret to type.
+    // This calls the SAME writer every other mint uses (`personal_api_keys::mint_on`), so the
+    // hash/prefix/sealed-copy triple cannot drift, and prints the plaintext ONCE on stdout and
+    // nothing else — a caller redirects it straight into a 0600 file and the value never lands in
+    // a log. Checked before config/Redis/listener, exactly like the utility above.
+    if std::env::args().nth(1).as_deref() == Some("mint-key") {
+        mint_key_mode().await;
+        return Ok(());
+    }
+
     // Load environment variables
     let config = config::AppConfig::from_env()?;
 
@@ -1108,6 +1122,78 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     Ok(())
+}
+
+async fn mint_key_mode() {
+    let args: Vec<String> = std::env::args().collect();
+    let (Some(tenant_arg), Some(name)) = (args.get(2), args.get(3)) else {
+        eprintln!("usage: crm-swift mint-key <tenant_uuid> \"<key name>\"");
+        std::process::exit(2);
+    };
+    let Ok(tenant_id) = uuid::Uuid::parse_str(tenant_arg) else {
+        eprintln!("mint-key: '{tenant_arg}' is not a uuid");
+        std::process::exit(2);
+    };
+
+    let url = match std::env::var("DATABASE_URL") {
+        Ok(u) => u,
+        Err(_) => {
+            eprintln!("mint-key: DATABASE_URL is not set");
+            std::process::exit(2);
+        }
+    };
+    let db = match db::connect(&url, 1, 2).await {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("mint-key: cannot connect to the database: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Refuse a tenant that does not exist: a key minted for a uuid nothing owns would be an
+    // unresolvable credential, and the FK would fail anyway with a message that reads like a bug.
+    let tenant_name: Option<String> =
+        match sqlx::query_scalar("SELECT name FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .fetch_optional(&db)
+            .await
+        {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("mint-key: cannot read the tenant: {e}");
+                std::process::exit(1);
+            }
+        };
+    let Some(tenant_name) = tenant_name else {
+        eprintln!("mint-key: no tenant with id {tenant_id}");
+        std::process::exit(1);
+    };
+
+    let mut tx = match db.begin().await {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("mint-key: cannot open a transaction: {e}");
+            std::process::exit(1);
+        }
+    };
+    let minted = match crate::personal_api_keys::mint_on(&mut tx, tenant_id, None, name).await {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("mint-key: mint failed: {e:?}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = tx.commit().await {
+        eprintln!("mint-key: commit failed: {e}");
+        std::process::exit(1);
+    }
+
+    // stderr carries the non-secret facts; stdout is the key and nothing else.
+    eprintln!(
+        "mint-key: minted for tenant {tenant_id} ({tenant_name}) id={} prefix={}",
+        minted.id, minted.prefix
+    );
+    println!("{}", minted.key);
 }
 
 /// The host-side applier (`crm-swift apply-site-settings`, driven by /opt/swift/bin/cs-site-apply.sh

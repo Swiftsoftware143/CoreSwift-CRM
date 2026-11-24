@@ -1,0 +1,14 @@
+-- 207: a workspace may hold MORE THAN ONE active API key.
+--
+-- 152 added `idx_personal_api_keys_one_active`, a partial UNIQUE index on (tenant_id) WHERE
+-- is_active, so a customer had exactly one live key and the only way to get a second was to
+-- ROTATE — which retires the first (src/personal_api_keys.rs::rotate_key). That is a UI
+-- convention, not a tenancy control: every key is already scoped to one tenant_id, hashed, and
+-- resolvable to exactly one account. What it DID cost was a second, purpose-scoped key: minting
+-- one for a sibling app's integration (CoreSwift Custom Objects, POST /api/mcp) silently killed
+-- whatever else held the workspace's key — measured on the SwiftImpact workspace, whose
+-- auto-provisioned key is in daily use.
+--
+-- `create_key` now caps a workspace at 10 active keys instead, so "add another key" stays a
+-- deliberate act and a runaway loop still stops.
+DROP INDEX IF EXISTS idx_personal_api_keys_one_active;

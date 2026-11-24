@@ -104,19 +104,22 @@ pub async fn create_key(
     let user_id = Uuid::parse_str(&c.sub).ok();
     let name = req.name.unwrap_or_else(|| "default".to_string());
 
-    // One active key per account (`migrations/152` adds a partial unique index on tenant_id WHERE
-    // is_active). A second "create" would raise a unique violation, so answer it plainly: replace
-    // the key you already hold with Regenerate rather than minting a second one.
-    let has_active: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM personal_api_keys WHERE tenant_id = $1 AND is_active = true LIMIT 1",
+    // A workspace may hold SEVERAL active keys, each with its own name (migrations/207 dropped the
+    // one-active partial unique index that 152 added), because a second key exists for a second
+    // reason: a sibling app's Custom Objects integration (POST /api/mcp) must not have to rotate —
+    // and therefore kill — the workspace's existing key. The cap keeps that from becoming a
+    // credential pile-up: past ten, the caller is told to revoke one instead.
+    let active: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM personal_api_keys WHERE tenant_id = $1 AND is_active = true",
     )
     .bind(tenant_id)
-    .fetch_optional(&s.db)
+    .fetch_one(&s.db)
     .await
     .map_err(AppError::Database)?;
-    if has_active.is_some() {
+    if active >= 10 {
         return Err(AppError::Conflict(
-            "This account already has an API key. Use Regenerate to replace it.".into(),
+            "This account already has 10 active API keys. Revoke one before minting another."
+                .into(),
         ));
     }
 
