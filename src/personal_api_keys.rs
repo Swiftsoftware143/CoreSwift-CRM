@@ -261,11 +261,14 @@ pub async fn rotate_key(
     .ok_or_else(|| AppError::NotFound("API key not found".into()))?;
 
     let mut tx = s.db.begin().await.map_err(AppError::Database)?;
-    // Retire the old key FIRST, in the same transaction as the mint. `migrations/152` adds a
-    // partial unique index on (tenant_id) WHERE is_active, so insert-then-delete would raise a
-    // unique violation the instant two active rows existed for one account. Clearing is_active
-    // (not deleting) keeps the record, matching revoke and the rest of the fleet; a failure at
-    // either step rolls the whole transaction back, so the customer keeps the old key.
+    // Retire the old key FIRST, in the same transaction as the mint. `migrations/152` used to add a
+    // partial unique index on (tenant_id) WHERE is_active, so insert-then-delete would have raised
+    // a unique violation; `migrations/207` dropped that index (a workspace may hold several active
+    // keys), but retire-first is still the correct order and this is not the place to change it:
+    // it keeps a rotation from EVER having two working secrets at once, and the rotate response
+    // promises "the previous key no longer works". Clearing is_active (not deleting) keeps the
+    // record, matching revoke and the rest of the fleet; a failure at either step rolls the whole
+    // transaction back, so the customer keeps the old key.
     sqlx::query("UPDATE personal_api_keys SET is_active = false WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tenant_id)

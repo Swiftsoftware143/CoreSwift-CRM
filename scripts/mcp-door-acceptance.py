@@ -127,16 +127,27 @@ def audit_lines(path: str) -> int:
         return sum(1 for line in fh if line.strip())
 
 
-def mint_key(db: Db, tenant: str, role: str, user: str | None, name: str, active: bool = True) -> str:
+def mint_key(db: Db, tenant: str, role: str, user: str | None, name: str,
+             active: bool = True) -> tuple[str, str]:
+    """Mint one probe key straight into the DB (the door is what is under test, not the mint API).
+
+    Returns `(token, id)`. The id matters for the ADMIN key: it hangs off the real operator
+    workspace, not a probe one, so deleting the probe workspaces does NOT take it with them —
+    without the id in the cleanup every run leaked an active `probe-admin` key onto that
+    workspace (measured 2026-11-24: eight of them, eight of the ten slots in migration 207's
+    active-key cap, before kanban t_8888093d swept them).
+    """
     token = "csk_" + uuid.uuid4().hex + uuid.uuid4().hex
     digest = hashlib.sha256(token.encode()).hexdigest()
     user_sql = f"'{user}'" if user else "NULL"
-    db.q(
+    key_id = db.one(
         "INSERT INTO personal_api_keys (tenant_id, user_id, name, key_hash, key_prefix, is_active, api_role) "
         f"VALUES ('{tenant}', {user_sql}, '{name}', '{digest}', '{token[:12]}', "
-        f"{'true' if active else 'false'}, '{role}')"
+        f"{'true' if active else 'false'}, '{role}') RETURNING id"
     )
-    return token
+    if not key_id:
+        raise SystemExit("could not mint the probe key")
+    return token, key_id
 
 
 def main() -> int:
@@ -169,15 +180,17 @@ def main() -> int:
     if not a or not b:
         print("FAIL  could not create the probe workspaces")
         return 1
+    admin_key_id = ""
 
     try:
-        ka = mint_key(db, a, "workspace", None, "probe-workspace-a")
-        kb = mint_key(db, b, "workspace", None, "probe-workspace-b")
-        kro = mint_key(db, a, "read_only", None, "probe-read-only")
-        kdead = mint_key(db, a, "workspace", None, "probe-revoked", active=False)
+        ka, _ = mint_key(db, a, "workspace", None, "probe-workspace-a")
+        kb, _ = mint_key(db, b, "workspace", None, "probe-workspace-b")
+        kro, _ = mint_key(db, a, "read_only", None, "probe-read-only")
+        kdead, _ = mint_key(db, a, "workspace", None, "probe-revoked", active=False)
         admin_user = db.one("SELECT id||'|'||tenant_id FROM users WHERE is_platform_admin LIMIT 1")
         admin_id, admin_tenant = admin_user.split("|")
-        kadmin = mint_key(db, admin_tenant, "workspace", admin_id, "probe-admin")
+        # The admin key lives on the REAL operator workspace, so its cleanup is explicit below.
+        kadmin, admin_key_id = mint_key(db, admin_tenant, "workspace", admin_id, "probe-admin")
 
         # ── fixtures: A has 2 contacts + a deal/ticket/line/message, B has 1 contact
         c1 = db.one(
@@ -332,6 +345,13 @@ def main() -> int:
             db.q("DELETE FROM tenants WHERE probe_harness = 'true' AND slug LIKE 'probe-mcp-%'")
             leftover = db.q(f"SELECT count(*) FROM tenants WHERE slug LIKE 'probe-mcp-{stamp}-%'")
             print(f"cleanup: probe workspaces remaining = {leftover[0][0] if leftover else '?'}")
+        # The admin key is NOT a probe-tenant row: cascade does not reach it, so delete it here —
+        # an un-cleaned one is an active credential on the operator's own workspace and one of
+        # the ten slots migration 207 caps.
+        if admin_key_id:
+            db.q(f"DELETE FROM personal_api_keys WHERE id = '{admin_key_id}'")
+            still = db.one(f"SELECT count(*) FROM personal_api_keys WHERE id = '{admin_key_id}'")
+            print(f"cleanup: admin probe key removed = {'yes' if str(still) == '0' else 'NO'}")
 
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
     for name in FAIL:
