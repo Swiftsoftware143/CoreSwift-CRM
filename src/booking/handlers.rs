@@ -136,9 +136,10 @@ pub async fn calendars_summary(
 
     for (cal_id, name, slug, workspace_id, workspace_name) in calendars {
         // Positions, with what is actually on sale: open dated slots and how many are taken.
-        let positions: Vec<(Uuid, String, i64, Option<i64>, i32, i32)> = sqlx::query_as(
-            "SELECT r.id, r.name, r.price_cents, r.compare_at_price_cents, r.capacity, r.duration_min \
-               FROM booking_resources r \
+        let positions: Vec<(Uuid, String, i64, Option<i64>, i32, i32, bool)> = sqlx::query_as(
+            "SELECT r.id, r.name, r.price_cents, r.compare_at_price_cents, r.capacity, r.duration_min,
+                    r.exclusive
+               FROM booking_resources r
               WHERE r.calendar_id = $1 AND r.active ORDER BY r.sort_order, r.name",
         )
         .bind(cal_id)
@@ -146,10 +147,18 @@ pub async fn calendars_summary(
         .await?;
 
         let mut pos_json: Vec<Value> = Vec::with_capacity(positions.len());
-        for (rid, rname, price, compare, capacity, duration) in positions {
+        for (rid, rname, price, compare, capacity, duration, exclusive_flag) in positions {
             let open: i64 = sqlx::query_scalar(
                 "SELECT count(*)::bigint FROM booking_slots \
                   WHERE resource_id = $1 AND status = 'open' AND starts_at > now()",
+            )
+            .bind(rid)
+            .fetch_one(&pool)
+            .await?;
+            // Dates this position has closed BY the exclusivity rule — the visible half of the block.
+            let blocked_slots: i64 = sqlx::query_scalar(
+                "SELECT count(*)::bigint FROM booking_slots \
+                  WHERE resource_id = $1 AND closed_reason LIKE 'exclusive:%'",
             )
             .bind(rid)
             .fetch_one(&pool)
@@ -187,6 +196,10 @@ pub async fn calendars_summary(
                 "duration_min": duration,
                 "open_slots": open,
                 "bookings": taken,
+                // The exclusivity state, read from the rows: the flag plus how many dates this position
+                // has blocked (or been blocked on). Verifiable in one call instead of opening a page.
+                "exclusive": exclusive_flag,
+                "blocked_slots": blocked_slots,
             }));
         }
         if pos_json.is_empty() {

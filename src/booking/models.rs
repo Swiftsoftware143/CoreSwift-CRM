@@ -75,6 +75,9 @@ pub struct Resource {
     /// The "was" price, shown struck through beside `price_cents` and NEVER charged.
     pub compare_at_price_cents: Option<i64>,
     pub duration_min: i32,
+    /// When true, a booking here closes every other position on that date — and any other position
+    /// booked on a date closes this one for that date.
+    pub exclusive: bool,
     pub slot_interval_min: i32,
     pub buffer_min: i32,
     pub min_notice_min: i32,
@@ -96,6 +99,8 @@ pub struct AvailabilityRule {
 pub struct Slot {
     pub id: Uuid,
     pub resource_id: Uuid,
+    /// Set when the slot was closed by an exclusivity rule rather than by hand.
+    pub closed_reason: Option<String>,
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
     pub capacity: i32,
@@ -211,6 +216,9 @@ pub struct NewResource {
     /// never sees or sends it.
     #[serde(default)]
     pub compare_at_price_cents: Option<i64>,
+    /// Blocks every other position on a date this one is booked, in both directions.
+    #[serde(default)]
+    pub exclusive: Option<bool>,
     pub duration_min: Option<i32>,
     pub slot_interval_min: Option<i32>,
     pub buffer_min: Option<i32>,

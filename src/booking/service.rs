@@ -389,8 +389,8 @@ pub async fn create_resource(
     Ok(sqlx::query_as::<_, Resource>(
         "INSERT INTO booking_resources
            (calendar_id, name, description, capacity, price_cents, compare_at_price_cents, duration_min,
-            slot_interval_min, buffer_min, min_notice_min, sort_order, metadata)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *",
+            exclusive, slot_interval_min, buffer_min, min_notice_min, sort_order, metadata)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *",
     )
     .bind(calendar_id)
     .bind(r.name.trim())
@@ -401,6 +401,7 @@ pub async fn create_resource(
     // value at or under the price simply does not render a strike-through.
     .bind(r.compare_at_price_cents.map(|v| v.max(0)))
     .bind(r.duration_min.unwrap_or(30).max(1))
+    .bind(r.exclusive.unwrap_or(false))
     .bind(r.slot_interval_min.or(r.duration_min).unwrap_or(30).max(1))
     .bind(r.buffer_min.unwrap_or(0).max(0))
     .bind(r.min_notice_min.unwrap_or(0).max(0))
@@ -439,8 +440,9 @@ pub async fn update_resource(
     let updated = sqlx::query_as::<_, Resource>(
         "UPDATE booking_resources r SET
              name = $3, description = $4, capacity = $5, price_cents = $6,
-             compare_at_price_cents = $7, duration_min = $8, slot_interval_min = $9,
-             buffer_min = $10, min_notice_min = $11, sort_order = $12
+             compare_at_price_cents = $7, duration_min = $8,
+             exclusive = $9, slot_interval_min = $10, buffer_min = $11,
+             min_notice_min = $12, sort_order = $13
            FROM booking_calendars c
           WHERE r.calendar_id = c.id AND r.id = $1 AND c.tenant_id = $2
         RETURNING r.*",
@@ -453,6 +455,7 @@ pub async fn update_resource(
     .bind(r.price_cents.unwrap_or(0).max(0))
     .bind(r.compare_at_price_cents.map(|v| v.max(0)))
     .bind(r.duration_min.unwrap_or(30).max(1))
+    .bind(r.exclusive.unwrap_or(false))
     .bind(r.slot_interval_min.or(r.duration_min).unwrap_or(30).max(1))
     .bind(r.buffer_min.unwrap_or(0).max(0))
     .bind(r.min_notice_min.unwrap_or(0).max(0))
@@ -1216,6 +1219,121 @@ pub async fn quote(
 
 /// Create a pending order and hold its slots for `calendar.hold_minutes`.
 /// All-or-nothing: if any item is unavailable nothing is held.
+/// DATE EXCLUSIVITY — the same inventory must never be sold twice.
+///
+/// Four positions are sold per issue (Email TOP / MIDDLE / FOOTER / Sponsored Post) and a "Full
+/// Takeover" sells all four in one issue, exclusive. With positions independent, the takeover could be
+/// sold while all four individual slots stayed on sale. This is the one rule that closes that, and it
+/// works in BOTH directions:
+///
+///   * booking an exclusive position closes every other position on that DATE;
+///   * booking any other position closes the exclusive position on that DATE.
+///
+/// Two independent positions on the same date (TOP and FOOTER, say) are untouched: they are different
+/// products on one issue, which is the normal case.
+///
+/// Returns the number of slots closed so the caller can report it.
+async fn apply_date_exclusivity(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    calendar_id: Uuid,
+    resource_id: Uuid,
+    exclusive: bool,
+    date: chrono::NaiveDate,
+    tz: &str,
+) -> Result<usize> {
+    // 1) REFUSE A CONFLICT BEFORE WRITING. If this date already carries a live booking on a position
+    // that conflicts — either this one is exclusive, or the booked one is exclusive — the sale is
+    // stopped with a sentence an operator can act on, rather than sold and then discovered.
+    let conflict: Option<String> = sqlx::query_scalar(
+        "SELECT r.name
+           FROM booking_bookings b
+           JOIN booking_resources r ON r.id = b.resource_id
+          WHERE r.calendar_id = $1
+            AND b.resource_id <> $2
+            AND ($3::bool OR r.exclusive)
+            AND (b.starts_at AT TIME ZONE $4)::date = $5
+            AND (b.status = 'confirmed' OR (b.status = 'held' AND b.hold_expires_at > now()))
+          LIMIT 1",
+    )
+    .bind(calendar_id)
+    .bind(resource_id)
+    .bind(exclusive)
+    .bind(tz)
+    .bind(date)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if let Some(name) = conflict {
+        return Err(BookingError::invalid(format!(
+            "That date is already sold as \"{name}\". Pick another date."
+        )));
+    }
+
+    // 2) CLOSE WHAT CAN NO LONGER BE SOLD: every other position's open, unbooked slot on this date.
+    // A slot already carrying a live booking is never touched — a buyer agreed to a number.
+    let closed = sqlx::query(
+        "UPDATE booking_slots s
+            SET status = 'closed',
+                closed_reason = 'exclusive:' || (SELECT name FROM booking_resources WHERE id = $2)
+           FROM booking_resources r
+          WHERE r.id = s.resource_id
+            AND r.calendar_id = $1
+            AND s.resource_id <> $2
+            AND s.status = 'open'
+            AND ($3::bool OR r.exclusive)
+            AND (s.starts_at AT TIME ZONE $4)::date = $5
+            AND NOT EXISTS (
+                  SELECT 1 FROM booking_bookings b
+                   WHERE b.slot_id = s.id
+                     AND (b.status = 'confirmed'
+                          OR (b.status = 'held' AND b.hold_expires_at > now())))",
+    )
+    .bind(calendar_id)
+    .bind(resource_id)
+    .bind(exclusive)
+    .bind(tz)
+    .bind(date)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected() as usize;
+    Ok(closed)
+}
+
+/// REOPEN what an exclusivity block closed, when the booking that caused it goes away.
+///
+/// A blocked date that stays blocked after a cancellation is lost inventory that nobody can find: the
+/// slot is closed and the reason points at a booking that no longer exists. Only slots closed BY this
+/// rule (never by hand) come back, and only when nothing else on the date is live.
+async fn release_date_exclusivity(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    calendar_id: Uuid,
+    date: chrono::NaiveDate,
+    tz: &str,
+) -> Result<u64> {
+    let freed = sqlx::query(
+        "UPDATE booking_slots s
+            SET status = 'open', closed_reason = NULL
+           FROM booking_resources r
+          WHERE r.id = s.resource_id
+            AND r.calendar_id = $1
+            AND s.closed_reason LIKE 'exclusive:%'
+            AND (s.starts_at AT TIME ZONE $2)::date = $3
+            AND NOT EXISTS (
+                  SELECT 1 FROM booking_bookings b
+                   JOIN booking_resources br ON br.id = b.resource_id
+                   WHERE br.calendar_id = $1
+                     AND (b.starts_at AT TIME ZONE $2)::date = $3
+                     AND (b.status = 'confirmed'
+                          OR (b.status = 'held' AND b.hold_expires_at > now())))",
+    )
+    .bind(calendar_id)
+    .bind(tz)
+    .bind(date)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    Ok(freed)
+}
+
 pub async fn create_order(
     pool: &PgPool,
     cal: &Calendar,
@@ -1307,6 +1425,18 @@ pub async fn create_order(
             item.starts_at,
             item.ends_at,
             item.quantity,
+        )
+        .await?;
+        // One date, one exclusivity rule: refuse a date already committed to a conflicting position,
+        // then close what this booking has just made unsellable.
+        let local_date = item.starts_at.with_timezone(&tz).date_naive();
+        apply_date_exclusivity(
+            &mut tx,
+            cal.id,
+            item.resource.id,
+            item.resource.exclusive,
+            local_date,
+            tz.name(),
         )
         .await?;
         let b = sqlx::query_as::<_, Booking>(
@@ -1459,10 +1589,29 @@ pub async fn cancel_order(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(BookingError::NotFound("order"))?;
+    // A DATE BLOCKED BY A BOOKING THAT NO LONGER EXISTS IS LOST INVENTORY (2026-11-23). Cancelling an
+    // order releases the dates its exclusivity rule closed, so a takeover that falls through does not
+    // leave the whole issue unsellable.
+    let dates: Vec<(chrono::DateTime<Utc>, String)> = sqlx::query_as(
+        "SELECT b.starts_at, coalesce(c.timezone, 'UTC') FROM booking_bookings b
+           JOIN booking_calendars c ON c.id = $2
+          WHERE b.order_id = $1",
+    )
+    .bind(order.id)
+    .bind(order.calendar_id)
+    .fetch_all(&mut *tx)
+    .await?;
     sqlx::query("UPDATE booking_bookings SET status = 'cancelled' WHERE order_id = $1")
         .bind(order.id)
         .execute(&mut *tx)
         .await?;
+    for (starts, tzname) in dates {
+        let local = match tzname.parse::<chrono_tz::Tz>() {
+            Ok(z) => starts.with_timezone(&z).date_naive(),
+            Err(_) => starts.date_naive(),
+        };
+        let _ = release_date_exclusivity(&mut tx, order.calendar_id, local, &tzname).await;
+    }
     let bookings = bookings_of(&mut tx, order.id).await?;
     tx.commit().await?;
     Ok(OrderWithBookings { order, bookings })

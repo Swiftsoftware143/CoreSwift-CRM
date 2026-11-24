@@ -13642,7 +13642,7 @@ function bkListPanel() {
       '<td class="muted">' + escapeHtml(c.timezone || '') + '</td>' +
       '<td style="text-align:right;white-space:nowrap">' +
         '<button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();bkCloneOpen(\'' + c.id + '\')">Copy</button> ' +
-        '<button class="btn btn-secondary btn-sm">Open</button></td></tr>';
+        '<button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();bkOpen(\'' + c.id + '\')">Open</button></td></tr>';
   }).join('');
   return bkHostPanel() +
     '<div class="card"><table class="table"><thead><tr><th>Calendar</th><th>Type</th><th>Workspace</th><th>Currency</th><th>Time zone</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>';
@@ -14546,7 +14546,8 @@ async function bkDeleteField(id) {
 function bkResourcePanel(res, kind) {
   const priceLabel = kind === 'date_range' ? 'Price per day (cents)' : 'Price (cents)';
   const rows = res.map(function (r) {
-    return '<tr><td><strong>' + escapeHtml(r.name) + '</strong></td>' +
+    return '<tr><td><strong>' + escapeHtml(r.name) + '</strong>' +
+      (r.exclusive ? ' <span class="badge" title="Closes every other position on a date this one is sold">Exclusive</span>' : '') + '</td>' +
       '<td>' + bkPriceCell(r) + '</td>' +
       '<td>' + (r.duration_min || 0) + ' min</td>' +
       '<td>' + (r.capacity || 1) + '</td>' +
@@ -14569,6 +14570,15 @@ function bkResourcePanel(res, kind) {
       '<label>Places<input id="bkResCap" type="number" value="1" min="1"></label>' +
       '<label>Padding after (min)<input id="bkResBuf" type="number" value="0" min="0"></label>' +
       '<label>Spacing (min)<input id="bkResInterval" type="number" value="' + (kind === 'appointment' ? 30 : 60) + '"></label>' +
+      // EXCLUSIVE (2026-11-23): a Full Takeover sells all four positions in one issue. Without this, the
+      // takeover and the four individual slots could all be sold on the same date — the same inventory
+      // twice. It blocks in BOTH directions: every other position on a date this one is sold, and this
+      // one when anything else sells that date.
+      '<label style="grid-column:1/-1;display:flex;gap:8px;align-items:flex-start;font-weight:600">' +
+        '<input type="checkbox" id="bkResExclusive" style="margin-top:3px">' +
+        '<span>Exclusive &mdash; closes every other position on a date this one is sold, and is itself closed ' +
+        'when another position sells that date.<span class="muted" style="display:block;font-weight:400">' +
+        'Use it for a Full Takeover. Two ordinary positions on one date are unaffected.</span></span></label>' +
     '</div>' +
     '<button class="btn btn-primary" onclick="bkAddResource()">Add</button></div>';
 }
@@ -14606,6 +14616,7 @@ function bkEditResource(id) {
   set('bkResCap', r.capacity);
   set('bkResBuf', r.buffer_min);
   set('bkResInterval', r.slot_interval_min);
+  var ex = document.getElementById('bkResExclusive'); if (ex) ex.checked = !!r.exclusive;
   var btn = document.querySelector('#bkWrap button[onclick="bkAddResource()"]');
   if (btn) {
     btn.textContent = 'Save changes';
@@ -14659,7 +14670,9 @@ function bkResourceBody(name) {
     duration_min: num('bkResDur', 30),
     capacity: num('bkResCap', 1),
     buffer_min: num('bkResBuf', 0),
-    slot_interval_min: num('bkResInterval', 30)
+    slot_interval_min: num('bkResInterval', 30),
+    // Sent on every save, so unticking it in the form actually clears it.
+    exclusive: !!(document.getElementById('bkResExclusive') || {}).checked
   };
 }
 
@@ -14667,6 +14680,7 @@ function bkResourceBody(name) {
 function bkCancelResourceEdit() {
   BK.editing = null;
   ['bkResName', 'bkResCompare'].forEach(function (i) { var el = document.getElementById(i); if (el) el.value = ''; });
+  var ex = document.getElementById('bkResExclusive'); if (ex) ex.checked = false;
   var btn = document.querySelector('#bkWrap button[onclick="bkSaveResource()"]');
   if (btn) { btn.textContent = 'Add'; btn.setAttribute('onclick', 'bkAddResource()'); }
   var note = document.getElementById('bkResEditNote');
@@ -14699,7 +14713,8 @@ async function bkAddResource() {
       duration_min: parseInt(document.getElementById('bkResDur').value, 10) || 30,
       capacity: parseInt(document.getElementById('bkResCap').value, 10) || 1,
       buffer_min: parseInt(document.getElementById('bkResBuf').value, 10) || 0,
-      slot_interval_min: parseInt(document.getElementById('bkResInterval').value, 10) || 30
+      slot_interval_min: parseInt(document.getElementById('bkResInterval').value, 10) || 30,
+      exclusive: !!(document.getElementById('bkResExclusive') || {}).checked
     });
     await bkOpenDetail(BK.current, true); bkRender(); bkFlash('Added.');
   } catch (e) { bkFlash(e.message, false); }
