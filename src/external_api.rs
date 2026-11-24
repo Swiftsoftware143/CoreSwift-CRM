@@ -412,6 +412,11 @@ pub(crate) async fn upsert_contact(
     .await
     .map_err(AppError::Database)?;
 
+    // A hub lead intake is a NEW LEAD (kanban t_990c386e): tell the automation engine before
+    // returning, so an "instant follow-up" rule can queue its first step. The UPDATE arm above
+    // (re-delivered lead) deliberately does not fire — the event is creation, not arrival.
+    crate::automation::scan::contact_created(s.db.clone(), tenant_id, id);
+
     Ok(id)
 }
 

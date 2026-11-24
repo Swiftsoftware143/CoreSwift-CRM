@@ -51,6 +51,21 @@ pub async fn start_worker(db: PgPool) -> Result<(), Box<dyn std::error::Error + 
     })?;
     sched.add(job2).await?;
 
+    // Job 2b: Every 15 minutes — evaluate the CLOCK-DRIVEN trigger kinds (`date.renewal`,
+    // `contact.inactive`). They have no event to react to, so a rule using them would never fire
+    // without a pass like this (kanban t_990c386e). The pass only QUEUES: each match goes into
+    // `delayed_actions` due at now + the rule's own delay, and the 60-second delayed-action job does
+    // the rest, so a clock trigger honours a delay and a no-reply condition exactly like an event
+    // trigger does.
+    let dbscan = db.clone();
+    let job_scan = Job::new_async("0 */15 * * * *", move |_uuid, _lock| {
+        let db = dbscan.clone();
+        Box::pin(async move {
+            crate::automation::scan::run_scan_triggers(&db).await;
+        })
+    })?;
+    sched.add(job_scan).await?;
+
     // Job 3: Every hour — run health score recalculation for all active tenants
     let db3 = db.clone();
     let job3 = Job::new_async("0 0 * * * *", move |_uuid, _lock| {

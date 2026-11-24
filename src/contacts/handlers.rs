@@ -229,6 +229,11 @@ pub async fn create(
     .fetch_one(&state.db)
     .await?;
 
+    // The console/API contact door is the canonical creation path (kanban t_990c386e): a
+    // `contact.created` rule ("instant new-lead follow-up", "welcome") has to see contacts made
+    // here, which is where a customer's own people add them.
+    crate::automation::scan::contact_created(state.db.clone(), account_id, contact.id);
+
     Ok((StatusCode::CREATED, Json(json!(contact))))
 }
 

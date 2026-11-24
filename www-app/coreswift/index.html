@@ -2095,8 +2095,8 @@ const TAB_RENDERERS = {
     '<div id="rulesContent">' +
       card('How It Works', '<p style="color:var(--text-secondary);margin-bottom:12px">Create powerful automations with a simple trigger → action model.</p>' +
         '<div class="grid-2" style="margin-top:12px">' +
-          '<div style="background:var(--bg-secondary);padding:14px;border-radius:var(--radius);border:1px solid var(--border)"><strong>📥 Triggers</strong><br><small style="color:var(--text-secondary)">Tag added, tag removed, deal stage changed, lead score changed, added to a list, removed from a list</small></div>' +
-          '<div style="background:var(--bg-secondary);padding:14px;border-radius:var(--radius);border:1px solid var(--border)"><strong>📤 Actions</strong><br><small style="color:var(--text-secondary)">Send email, send SMS, add to list, move in pipeline, notify a user, call a webhook</small></div>' +
+          '<div style="background:var(--bg-secondary);padding:14px;border-radius:var(--radius);border:1px solid var(--border)"><strong>📥 Triggers</strong><br><small style="color:var(--text-secondary)">Tag added or removed, added to or removed from a list, deal stage changed, lead score changed, contact created, a date coming up (renewal), no activity for N days</small></div>' +
+          '<div style="background:var(--bg-secondary);padding:14px;border-radius:var(--radius);border:1px solid var(--border)"><strong>📤 Actions</strong><br><small style="color:var(--text-secondary)">Send an email or SMS template, add or remove a tag, add to or remove from a list, notify a user, call a webhook — optionally after a wait, and only if the contact has not replied</small></div>' +
         '</div>', '') +
       '<br>' +
       card('Rules', '<div id="rulesList"><div class="loading-wrap"><div class="spinner"></div> Loading rules...</div></div>', '') +
@@ -4959,33 +4959,215 @@ async function saveCompanyEdit() {
     toast('Update failed: ' + e.message, 'error');
   }
 }
-function showAddRuleModal(){ showModal('New Rule', '<div class="form-group"><label>Rule Name</label><input type="text" id="newRuleName"></div><div class="form-group"><label>Trigger</label><select id="newRuleTrigger"><option value="TagAdded">Tag added</option><option value="TagRemoved">Tag removed</option><option value="StageChanged">Deal stage changed</option><option value="ScoreChanged">Lead score changed</option><option value="ListAdded">Added to a list</option><option value="ListRemoved">Removed from a list</option></select></div><div class="form-group"><label>Action</label><select id="newRuleAction"><option value="send_email">Send email</option><option value="send_sms">Send SMS</option><option value="AddToList">Add to list</option><option value="MovePipeline">Move in pipeline</option><option value="NotifyUser">Notify a user</option><option value="Webhook">Call a webhook</option></select></div>', '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="newRuleCreate" onclick="createAutomationRule()">Create Rule</button>'); }
+// ── Automation rule builder (kanban t_990c386e) ──────────────────────────────────────────────────
+// The engine's own vocabulary: trigger_type is validated by src/automation/handlers.rs::create_rule,
+// the wait is read from trigger_config.delay_minutes, the no-reply condition from
+// trigger_config.condition (src/automation/engine.rs), and the action's config from
+// action_config.template_id / tag_id / list_id (src/automation/actions.rs).
+//
+// DRAFTS FIRST. "Save as draft" always sends is_active:false, and the engine's every filter is
+// `is_active IS NOT FALSE`, so a draft can never fire, enrol anyone or send mail. Nothing on this
+// screen arms a rule behind the operator's back: only their own "Save & activate" does.
+const RULE_TRIGGERS = [
+  ['TagAdded', 'Tag added'],
+  ['TagRemoved', 'Tag removed'],
+  ['ListAdded', 'Added to a list'],
+  ['ListRemoved', 'Removed from a list'],
+  ['StageChanged', 'Deal stage changed'],
+  ['ScoreChanged', 'Lead score changed'],
+  ['contact.created', 'Contact created (new lead)'],
+  ['date.renewal', 'A date is coming up (renewal)'],
+  ['contact.inactive', 'No activity for N days']
+];
+const RULE_ACTIONS = [
+  ['send_email', 'Send an email template'],
+  ['send_sms', 'Send an SMS template'],
+  ['AddTag', 'Add a tag'],
+  ['RemoveTag', 'Remove a tag'],
+  ['AddToList', 'Add to a list'],
+  ['RemoveFromList', 'Remove from a list'],
+  ['NotifyUser', 'Notify a user'],
+  ['Webhook', 'Call a webhook']
+];
+let RULE_PICKERS = { tags: [], lists: [], templates: [] };
+
+function rulePickerOpts(kind, selected) {
+  const rows = RULE_PICKERS[kind] || [];
+  if (!rows.length) return '<option value="">(none yet — create one first)</option>';
+  return rows.map(o => '<option value="' + escapeHtmlAttr(o.id) + '"' + (selected === o.id ? ' selected' : '') + '>' + escapeHtml(o.name || o.subject || o.id) + '</option>').join('');
+}
+
+async function loadRulePickers(force) {
+  if (RULE_PICKERS.loaded && !force) return RULE_PICKERS;
+  const grab = async (path, key) => { try { return famList(await API.get(path), key); } catch (e) { return []; } };
+  const [tags, lists, templates] = await Promise.all([
+    grab('/tags', 'tags'), grab('/lists', 'lists'), grab('/comms/templates', 'templates')
+  ]);
+  RULE_PICKERS = { tags: tags || [], lists: lists || [], templates: templates || [], loaded: true };
+  return RULE_PICKERS;
+}
+
+// Show only the config rows that matter for the chosen trigger/action.
+function ruleConfigChanged() {
+  const t = (document.getElementById('newRuleTrigger') || {}).value || '';
+  const a = (document.getElementById('newRuleAction') || {}).value || '';
+  const show = (id, on) => { const el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; };
+  show('ruleCfgTags', t === 'TagAdded' || t === 'TagRemoved');
+  show('ruleCfgList', t === 'ListAdded' || t === 'ListRemoved');
+  show('ruleCfgScore', t === 'ScoreChanged');
+  show('ruleCfgRenewal', t === 'date.renewal');
+  show('ruleCfgInactive', t === 'contact.inactive');
+  show('ruleCfgTemplate', a === 'send_email' || a === 'send_sms');
+  show('ruleCfgActionTag', a === 'AddTag' || a === 'RemoveTag');
+  show('ruleCfgActionList', a === 'AddToList' || a === 'RemoveFromList');
+  show('ruleCfgNotify', a === 'NotifyUser');
+  show('ruleCfgWebhook', a === 'Webhook');
+  const tpl = document.getElementById('ruleTplSubject');
+  if (tpl) {
+    const sel = document.getElementById('ruleTemplate');
+    const row = (RULE_PICKERS.templates || []).find(x => sel && x.id === sel.value);
+    tpl.textContent = row ? ('Subject: ' + (row.subject || '(no subject — the template body is used as-is)')) : '';
+  }
+}
+
+function showAddRuleModal(){
+  showModal('New Rule',
+    '<div class="form-group"><label>Rule name</label><input type="text" id="newRuleName" placeholder="e.g. New lead: first follow-up"></div>' +
+    '<div class="form-group"><label>When</label><select id="newRuleTrigger" onchange="ruleConfigChanged()">' +
+      RULE_TRIGGERS.map(t => '<option value="' + t[0] + '">' + t[1] + '</option>').join('') +
+    '</select></div>' +
+    '<div class="form-group" id="ruleCfgTags" style="display:none"><label>Which tag (hold Ctrl/Cmd to pick several)</label>' +
+      '<select id="ruleTagIds" multiple size="4">' + rulePickerOpts('tags') + '</select>' +
+      '<small style="color:var(--text-secondary)">The rule fires when one of these tags is added or removed.</small></div>' +
+    '<div class="form-group" id="ruleCfgList" style="display:none"><label>Which list</label>' +
+      '<select id="ruleListId">' + rulePickerOpts('lists') + '</select></div>' +
+    '<div class="form-group" id="ruleCfgScore" style="display:none"><label>Minimum score (optional)</label>' +
+      '<input type="number" id="ruleMinScore" placeholder="e.g. 50"></div>' +
+    '<div class="form-group" id="ruleCfgRenewal" style="display:none"><label>Date field (on the contact)</label>' +
+      '<input type="text" id="ruleRenewalField" value="renewal_date">' +
+      '<small style="color:var(--text-secondary)">A date stored on the contact, e.g. renewal_date. Fires when it is this many days away.</small>' +
+      '<label style="margin-top:8px">Days before</label><input type="number" id="ruleRenewalDays" value="30" min="0"></div>' +
+    '<div class="form-group" id="ruleCfgInactive" style="display:none"><label>Days without activity</label>' +
+      '<input type="number" id="ruleInactiveDays" value="30" min="1"></div>' +
+    '<div class="form-group"><label>Then</label><select id="newRuleAction" onchange="ruleConfigChanged()">' +
+      RULE_ACTIONS.map(a => '<option value="' + a[0] + '">' + a[1] + '</option>').join('') +
+    '</select></div>' +
+    '<div class="form-group" id="ruleCfgTemplate" style="display:none"><label>Email/SMS template</label>' +
+      '<select id="ruleTemplate" onchange="ruleConfigChanged()">' + rulePickerOpts('templates') + '</select>' +
+      '<small id="ruleTplSubject" style="color:var(--text-secondary)"></small></div>' +
+    '<div class="form-group" id="ruleCfgActionTag" style="display:none"><label>Tag to apply</label>' +
+      '<select id="ruleActionTag">' + rulePickerOpts('tags') + '</select></div>' +
+    '<div class="form-group" id="ruleCfgActionList" style="display:none"><label>List</label>' +
+      '<select id="ruleActionList">' + rulePickerOpts('lists') + '</select></div>' +
+    '<div class="form-group" id="ruleCfgNotify" style="display:none"><label>Notification text</label>' +
+      '<input type="text" id="ruleNotifyMsg" placeholder="e.g. Call this new lead back today"></div>' +
+    '<div class="form-group" id="ruleCfgWebhook" style="display:none"><label>Webhook URL</label>' +
+      '<input type="text" id="ruleWebhookUrl" placeholder="https://..."></div>' +
+    '<div class="form-group"><label>Wait before acting</label>' +
+      '<div style="display:flex;gap:8px"><input type="number" id="ruleDelayValue" value="0" min="0" style="flex:1">' +
+      '<select id="ruleDelayUnit" style="flex:1"><option value="minutes">minutes</option><option value="hours">hours</option><option value="days">days</option></select></div>' +
+      '<small style="color:var(--text-secondary)">0 = act as soon as the rule fires. A wait is queued, never sent early.</small></div>' +
+    '<div class="form-group"><label><input type="checkbox" id="ruleNoReply" style="width:auto"> Only if they have NOT replied</label>' +
+      '<small style="color:var(--text-secondary)">Checked: when the wait ends, the step is skipped for any contact who has replied or emailed since the trigger.</small></div>' +
+    '<p style="color:var(--text-secondary);font-size:13px;margin:0">Draft rules never run. Sending is paused across this workspace, so a draft cannot email anyone even when activated.</p>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-ghost" id="newRuleDraft" onclick="createAutomationRule(true)">Save as draft</button>' +
+    '<button class="btn btn-primary" id="newRuleActivate" onclick="createAutomationRule(false)">Save &amp; activate</button>');
+  loadRulePickers().then(() => {
+    ['ruleTagIds','ruleListId','ruleTemplate','ruleActionTag','ruleActionList'].forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const kind = id === 'ruleTagIds' || id === 'ruleActionTag' ? 'tags' : (id === 'ruleListId' || id === 'ruleActionList' ? 'lists' : 'templates');
+      el.innerHTML = rulePickerOpts(kind);
+    });
+    ruleConfigChanged();
+  }).catch(() => ruleConfigChanged());
+}
 // Wired to the real backend (POST /api/automation/rules -> src/automation/handlers.rs::create_rule).
 // This control used to close the modal and toast "Rule created" with NO request, so the operator was
-// told an automation existed while automation_rules held nothing. The Trigger/Action selects carry the
-// engine's OWN vocabulary given in src/automation/handlers.rs::create_rule (trigger_type is validated
-// against TagAdded/TagRemoved/StageChanged/ScoreChanged/ListAdded/ListRemoved; action_type against
-// AddTag/RemoveTag/MovePipeline/AddToList/RemoveFromList/Webhook/NotifyUser/send_email/send_sms), so the
-// old human labels ("Contact created" / "Create task") matched no accepted value and were refused.
-// Body: {name (required), trigger_type, trigger_config:{}, action_type, action_config:{}}; POST answers
-// 201 with the created rule. The panel refreshes from TAB_LOADERS['rules'].
-async function createAutomationRule(){
+// told an automation existed while automation_rules held nothing. Body:
+// {name, trigger_type, trigger_config, action_type, action_config, is_active}; POST answers 201 with
+// the created rule. The panel refreshes from TAB_LOADERS['rules'].
+async function createAutomationRule(saveAsDraft){
   const name=((document.getElementById('newRuleName')||{}).value||'').trim();
   const trigger_type=((document.getElementById('newRuleTrigger')||{}).value||'').trim();
   const action_type=((document.getElementById('newRuleAction')||{}).value||'').trim();
   if(!name){ toast('Rule name is required','error'); return; }
   if(!trigger_type||!action_type){ toast('A trigger and an action are required','error'); return; }
-  const btn=document.getElementById('newRuleCreate');
-  if(btn){ btn.disabled=true; btn.textContent='Creating...'; }
+
+  const trigger_config = {};
+  if (trigger_type === 'TagAdded' || trigger_type === 'TagRemoved') {
+    const sel = document.getElementById('ruleTagIds');
+    const ids = sel ? Array.from(sel.selectedOptions).map(o => o.value).filter(Boolean) : [];
+    if (!ids.length) { toast('Pick at least one tag for this trigger','error'); return; }
+    if (ids.length === 1) trigger_config.tag_id = ids[0]; else trigger_config.tag_ids = ids;
+  } else if (trigger_type === 'ListAdded' || trigger_type === 'ListRemoved') {
+    const lid = ((document.getElementById('ruleListId')||{}).value||'').trim();
+    if (!lid) { toast('Pick a list for this trigger','error'); return; }
+    trigger_config.list_id = lid;
+  } else if (trigger_type === 'ScoreChanged') {
+    const min = ((document.getElementById('ruleMinScore')||{}).value||'').trim();
+    if (min) trigger_config.min_score = parseInt(min, 10);
+  } else if (trigger_type === 'date.renewal') {
+    trigger_config.field = ((document.getElementById('ruleRenewalField')||{}).value||'renewal_date').trim() || 'renewal_date';
+    trigger_config.days_before = parseInt(((document.getElementById('ruleRenewalDays')||{}).value||'30'), 10) || 0;
+  } else if (trigger_type === 'contact.inactive') {
+    trigger_config.days = parseInt(((document.getElementById('ruleInactiveDays')||{}).value||'30'), 10) || 30;
+  }
+
+  const dval = parseInt(((document.getElementById('ruleDelayValue')||{}).value||'0'), 10) || 0;
+  const dunit = ((document.getElementById('ruleDelayUnit')||{}).value||'minutes');
+  const mult = dunit === 'days' ? 1440 : (dunit === 'hours' ? 60 : 1);
+  const delay_minutes = dval * mult;
+  if (delay_minutes > 0) trigger_config.delay_minutes = delay_minutes;
+  if ((document.getElementById('ruleNoReply')||{}).checked) trigger_config.condition = { type: 'no_reply' };
+
+  const action_config = {};
+  if (action_type === 'send_email' || action_type === 'send_sms') {
+    const tpl = ((document.getElementById('ruleTemplate')||{}).value||'').trim();
+    if (!tpl) { toast('Pick a template — an email step needs one','error'); return; }
+    action_config.template_id = tpl;
+  } else if (action_type === 'AddTag' || action_type === 'RemoveTag') {
+    const tid = ((document.getElementById('ruleActionTag')||{}).value||'').trim();
+    if (!tid) { toast('Pick the tag to apply','error'); return; }
+    action_config.tag_id = tid;
+  } else if (action_type === 'AddToList' || action_type === 'RemoveFromList') {
+    const lid = ((document.getElementById('ruleActionList')||{}).value||'').trim();
+    if (!lid) { toast('Pick the list','error'); return; }
+    action_config.list_id = lid;
+  } else if (action_type === 'NotifyUser') {
+    const msg = ((document.getElementById('ruleNotifyMsg')||{}).value||'').trim();
+    if (!msg) { toast('Notification text is required','error'); return; }
+    action_config.message = msg;
+  } else if (action_type === 'Webhook') {
+    const url = ((document.getElementById('ruleWebhookUrl')||{}).value||'').trim();
+    if (!url) { toast('Webhook URL is required','error'); return; }
+    action_config.url = url;
+  }
+
+  const btn=document.getElementById(saveAsDraft?'newRuleDraft':'newRuleActivate');
+  if(btn){ btn.disabled=true; btn.textContent = saveAsDraft ? 'Saving draft...' : 'Saving...'; }
   try {
-    await API.post('/automation/rules', { name: name, trigger_type: trigger_type, trigger_config: {}, action_type: action_type, action_config: {} });
+    await API.post('/automation/rules', {
+      name: name, trigger_type: trigger_type, trigger_config: trigger_config,
+      action_type: action_type, action_config: action_config, is_active: !saveAsDraft
+    });
     closeModal();
-    toast('Rule created','success');
+    toast(saveAsDraft ? 'Rule saved as draft — it will not run until you activate it' : 'Rule created and active','success');
     if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['rules']) TAB_LOADERS['rules']();
   } catch(e){
     toast('Could not create rule: '+((e&&e.message)||e),'error');
-    if(btn){ btn.disabled=false; btn.textContent='Create Rule'; }
+    if(btn){ btn.disabled=false; btn.textContent = saveAsDraft ? 'Save as draft' : 'Save & activate'; }
   }
+}
+
+// Pause / resume from the rules list (PATCH /api/automation/rules/:id {is_active}).
+async function toggleAutomationRule(id, currentlyActive){
+  try {
+    await API.patch('/automation/rules/' + id, { is_active: !currentlyActive });
+    toast(currentlyActive ? 'Rule paused — it will not fire' : 'Rule resumed','success');
+    if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['rules']) TAB_LOADERS['rules']();
+  } catch (e) { toast('Could not change the rule: ' + ((e && e.message) || e), 'error'); }
 }
 // A 402 from API.call is the PLAN GATE, not a failed load. The client collapses every 402 onto the
 // sentinel message 'Payment required' (it fires the upgrade banner first) and carries the SERVER's
@@ -4996,9 +5178,21 @@ function planGateText(e){
   if (e && e.planGate) return e.planMessage || 'This feature is not included in your current plan.';
   return String((e && e.message) || e);
 }
+function ruleNameOf(kind, id) {
+  const row = (RULE_PICKERS[kind] || []).find(x => x.id === id);
+  return row ? (row.name || row.subject || id) : id;
+}
+function ruleHumanDelay(mins) {
+  if (!mins) return 'no wait';
+  if (mins % 1440 === 0) return (mins / 1440) + ' day' + (mins / 1440 === 1 ? '' : 's');
+  if (mins % 60 === 0) return (mins / 60) + ' hour' + (mins / 60 === 1 ? '' : 's');
+  return mins + ' min';
+}
 // Live list for the Automation Rules panel. GET /api/automation/rules answers
 // {"rules":[{name,trigger_type,action_type,is_active,...}]} (src/automation/handlers.rs::list_rules).
 async function loadRulesTab(){
+  // Picker names make the config readable ("tag VIP" not "tag 4f2c...").
+  try { await loadRulePickers(); } catch (e) {}
   // A rule that sends email needs the automation lane; say so before they build one that cannot run.
   try {
     const mrReady = await loadMailReadiness();
@@ -5012,7 +5206,23 @@ async function loadRulesTab(){
     const rules=famList(await API.get('/automation/rules'), 'rules');
     let rows=[];
     if(Array.isArray(rules)) rows=rules.map(r=>{
-      return '<div class="config-item"><div class="config-info"><div class="config-label">'+escapeHtml(r.name||'\u2014')+'</div><div class="config-desc">'+escapeHtml(String(r.trigger_type||''))+' \u2192 '+escapeHtml(String(r.action_type||''))+(r.is_active===false?' \u00b7 inactive':'')+'</div></div></div>';
+      const active = r.is_active !== false;
+      const tc = r.trigger_config || {};
+      const bits = [];
+      if (tc.tag_id) bits.push('tag: ' + ruleNameOf('tags', tc.tag_id));
+      if (Array.isArray(tc.tag_ids) && tc.tag_ids.length) bits.push('tags: ' + tc.tag_ids.map(id=>ruleNameOf('tags', id)).join(', '));
+      if (tc.list_id) bits.push('list: ' + ruleNameOf('lists', tc.list_id));
+      if (tc.days_before !== undefined) bits.push('field ' + (tc.field || 'renewal_date') + ', ' + tc.days_before + ' days before');
+      if (tc.days !== undefined) bits.push(tc.days + ' days quiet');
+      if (tc.min_score !== undefined) bits.push('score \u2265 ' + tc.min_score);
+      if (tc.delay_minutes) bits.push('wait ' + ruleHumanDelay(tc.delay_minutes));
+      if (tc.condition && tc.condition.type === 'no_reply') bits.push('only if no reply');
+      const ac = r.action_config || {};
+      if (ac.template_id) bits.push('template: ' + ruleNameOf('templates', ac.template_id));
+      return '<div class="config-item"><div class="config-info"><div class="config-label">'+escapeHtml(r.name||'\u2014')+
+        ' <span style="font-size:11px;padding:1px 8px;border-radius:10px;background:'+(active?'var(--bg-secondary)':'var(--bg-secondary)')+';color:'+(active?'var(--text-primary)':'var(--text-secondary)')+';border:1px solid var(--border)">'+(active?'Active':'Draft')+'</span></div>'+
+        '<div class="config-desc">'+escapeHtml(String(r.trigger_type||''))+' \u2192 '+escapeHtml(String(r.action_type||''))+(bits.length?' \u00b7 '+escapeHtml(bits.join(' \u00b7 ')):'')+'</div></div>'+
+        '<div class="config-actions"><button class="btn btn-ghost btn-sm" onclick="toggleAutomationRule(\''+escapeHtmlAttr(r.id)+'\','+(active?'true':'false')+')">'+(active?'Pause':'Resume')+'</button></div></div>';
     });
     el.innerHTML=rows.length?('<div class="config-list">'+rows.join('')+'</div>'):'<p style="color:var(--text-secondary)">No rules yet. Use &ldquo;+ New Rule&rdquo;.</p>';
   } catch(e){

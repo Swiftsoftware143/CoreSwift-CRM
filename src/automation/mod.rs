@@ -2,6 +2,7 @@ pub mod actions;
 pub mod engine;
 pub mod handlers;
 pub mod models;
+pub mod scan;
 
 use crate::AppState;
 use axum::{middleware, Router};

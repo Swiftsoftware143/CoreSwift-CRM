@@ -248,6 +248,10 @@ pub async fn receive_v3_contact_sync(
     let metadata_value = Value::Object(metadata);
 
     // Upsert contact by email — COALESCE merge keeps existing values
+    // `created_new` is what tells the automation engine this was a NEW LEAD rather than a satellite
+    // re-sync of somebody we already know (kanban t_990c386e): the `contact.created` trigger must
+    // fire once per contact, never on every inbound touch.
+    let mut created_new = false;
     let contact_id = if !email.is_empty() {
         // Check for existing contact by email
         let existing = sqlx::query_as::<_, (Uuid,)>(
@@ -314,6 +318,7 @@ pub async fn receive_v3_contact_sync(
             .execute(&state.db)
             .await?;
 
+            created_new = true;
             new_id
         }
     } else {
@@ -338,8 +343,13 @@ pub async fn receive_v3_contact_sync(
         .execute(&state.db)
         .await?;
 
+        created_new = true;
         new_id
     };
+
+    if created_new {
+        crate::automation::scan::contact_created(state.db.clone(), tenant_id, contact_id);
+    }
 
     // Process tags — auto-prefix with city prefix if provided
     let mut assigned_tags: Vec<Value> = Vec::new();
