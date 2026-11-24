@@ -312,7 +312,7 @@
     <ol>
       <li><strong>ChatGPT and Claude tabs.</strong> The address and the key are the same for both; only the place you paste them differs, so pick your client and follow the six numbered steps.</li>
       <li><strong>The address</strong>, with a Copy button: <code>https://hooks.swiftsoftware.net/mcp</code>. Use the whole address, nothing on the end. If a client is refused <em>before</em> it authenticates &mdash; a 403 rather than a 401 &mdash; use <code>https://mcp.swiftsoftware.net/mcp</code> instead: same server, on a name our edge does not filter.</li>
-      <li><strong>Your key</strong>, with <strong>View &amp; copy</strong> (re-enter your password to see it). This is the same key the Integration Center shows. Regenerating it disconnects every app using the old one and touches nothing else on the account.</li>
+      <li><strong>Your key</strong>, with <strong>View &amp; copy</strong> (re-enter your password to see it). This is one of the account&#39;s API keys &mdash; the same list the Integration Center shows. Regenerating it disconnects every app using that one key and touches nothing else on the account; <strong>Revoke</strong> retires a key you no longer use without disturbing the others.</li>
       <li><strong>Ready to connect</strong>, naming the account the AI will act as, with <strong>Test connection</strong> (asks the server whether it is up and asking for a key &mdash; it cannot test your key without it), <strong>Copy my setup</strong>, and <strong>Advanced setup</strong>.</li>
       <li><strong>What can I ask CoreSwift</strong> &mdash; example questions in three groups, each with a Copy button, plus a <strong>Don&rsquo;t know what to ask?</strong> box: type what you are trying to do and press <strong>Give me ideas</strong>.</li>
       <li><strong>Everything AI can read</strong> &mdash; eight groups you can open to see exactly what is on offer.</li>
@@ -1816,14 +1816,14 @@ PATCH /api/account/:id — Update name</pre>
 
   <div class="card">
     <h3>API Keys</h3>
-    <p>Every account has <strong>one</strong> API key. That single key is the account&#39;s identity: the apps that work with CoreSwift (FunnelSwift, WorkflowSwift, IncentiveSwift, ADASwift, MissedCall Respondr) use it to send data in, and an AI client uses the same key for MCP. It has:</p>
+    <p>Every account can hold up to <strong>ten active</strong> API keys, each with its own name. A key is the account&#39;s identity: the apps that work with CoreSwift (FunnelSwift, WorkflowSwift, IncentiveSwift, ADASwift, MissedCall Respondr) use it to send data in, and an AI client uses it for MCP. A second key exists for a second reason  -  a sibling product&#39;s own integration, or a second capture app, gets a key of its own instead of forcing you to regenerate the one your AI client already uses. Each key has:</p>
     <ul>
       <li><strong>Prefix</strong>  The leading characters, shown in the console. It is public and is <em>not</em> a secret.</li>
       <li><strong>Full Key</strong>  The credential, sent as <code>Authorization: Bearer &lt;key&gt;</code>. The server stores only its SHA-256 digest (<code>key_hash</code>) and can never recover the key from the row; a sealed copy is kept so you can still view it.</li>
       <li><strong>Status</strong>  Active, or gone once you revoke it (a revoked key authenticates nothing).</li>
       <li><strong>Last Used</strong>  When it most recently authenticated something.</li>
     </ul>
-    <p><strong>Exactly one per account.</strong> The database refuses a second active key. To replace it press <strong>Regenerate</strong>: the old key stops working the moment the new one exists, so update whatever was using it. The key is in <strong>Settings &gt; Integration Center</strong>, and it is mirrored on the <strong>MCP</strong> page where <strong>View &amp; copy</strong> shows it after you re-enter your password.</p>
+    <p><strong>Ten active keys at most, and every one of them works.</strong> To free a slot press <strong>Revoke</strong> on a key you no longer use: it stops authenticating immediately and the record stays in the list for your own audit. At ten active the console refuses another and says so in a sentence, so there is nothing to guess. <strong>Regenerate</strong> replaces one key: the old secret stops working the moment the new one exists, so update whatever was using it, and your other keys are untouched. The list is in <strong>Settings &gt; Integration Center</strong> (it reads &ldquo;N active of M total&rdquo;), and the same list is mirrored on the <strong>MCP</strong> page, where <strong>View &amp; copy</strong> shows a key after you re-enter your password.</p>
     <p><strong>Which way the keys point.</strong> Your satellite apps use <em>this</em> key to send data into CoreSwift  -  CoreSwift does not mint a separate key for each of them. Going the other way, CoreSwift holds each satellite app&#39;s own key under its connection settings, so it can reach out to them.</p>
   </div>
 
