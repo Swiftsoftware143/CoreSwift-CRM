@@ -33,12 +33,14 @@ as) — handy for a human with `curl`, useless to anyone without a credential.
 GET    /api/objects                      list objects + field/record counts
 POST   /api/objects                      {slug,name}
 DELETE /api/objects/{slug}               archive the object (fields too; records kept) — idempotent
+PATCH  /api/objects/{slug}               {unique_together:[...]}  set/clear the composite key
 GET    /api/objects/{slug}/schema        object, live fields, archived fields, record count, addresses
 POST   /api/objects/{slug}/fields        {key,label,kind,required,unique,options,position}
 PATCH  /api/objects/{slug}/fields/{id}   rename / label / position / required / unique / options
 DELETE /api/objects/{slug}/fields/{id}   archive (the data stays)
 GET    /api/objects/{slug}/records       ?limit&offset&sort&filter.<field>=<value>
 POST   /api/objects/{slug}/records       the record's own fields at the top level
+POST   /api/objects/{slug}/records?upsert=k1,k2   replay-safe: insert or update that key
 PATCH  /api/objects/{slug}/records/{id}  merge; only the keys you send change
 DELETE /api/objects/{slug}/records/{id}  soft delete (deleted_at); ?hard=true deletes the row
 GET    /api/objects/{slug}/audit         ?limit  the schema-change trail
@@ -48,14 +50,52 @@ A record body is **the record itself** — `{"email":"a@b.c"}` — not wrapped i
 `insert_record` does take a `data` argument; sending the wrapped shape to REST answers 400 with a
 sentence that says so.)
 
-### MCP tools (10)
+### MCP tools (11)
 
 `list_objects`, `create_object`, `describe_object`, `archive_object`, `add_field`, `archive_field`,
-`insert_record`, `query_records`, `update_record`, `delete_record`.
+`insert_record` (optional `upsert_on`), `set_unique_together`, `query_records`, `update_record`,
+`delete_record`.
 
 No tool takes a workspace or tenant argument. An id belonging to another account answers 404 (never
 403 — a refusal must not confirm the row exists). Unknown arguments are refused by name, so a typo
 cannot silently perform a different operation.
+
+### Composite keys, and writes that can be replayed
+
+A single field can already be `unique`. A **combination** of fields is `unique_together`: the list of
+field keys whose values together must be unique among live records — the shape a producer needs when
+one booking has many positions (`booking_ref` + `position`).
+
+```bash
+# once, per object
+curl -X PATCH https://coreswiftcrm.com/api/objects/ad_fulfillment \
+  -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"unique_together":["booking_ref","position"]}'
+
+# every write is now replay-safe: same key values -> the SAME row, fields merged
+curl -X POST 'https://coreswiftcrm.com/api/objects/ad_fulfillment/records?upsert=booking_ref,position' \
+  -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"booking_ref":"b-1","position":"leaderboard","city":"Apopka","issue_date":"2026-11-24"}'
+```
+
+Rules the writer enforces:
+
+- **Only fields in `unique_together` can key an upsert.** Sending any other set is a 400 that names
+  both lists; the caller must set the key first, not invent one per request.
+- **A record missing any key value is not keyed at all** (it will not collide), so an upsert must
+  carry all of them — otherwise 400.
+- **The constraint holds outside the upsert door.** A plain insert (or a PATCH) that would duplicate
+  an existing combination answers 409 and writes nothing; the message suggests the `?upsert=` form.
+- **It is refused while live rows already collide**, and the refusal names the colliding values and
+  the row ids (`booking_ref='b-1', position='leaderboard' — 2 live rows (ids …)`). Resolve the
+  duplicate, then set the key. Deleting or overwriting a customer's row to satisfy a schema change is
+  never something the writer does on its own.
+- **Existing rows are re-keyed in the same transaction**, so an object with data obeys the constraint
+  immediately instead of only for rows written afterwards.
+- Archiving (`deleted_at`) a row frees the combination again; a hard delete frees it too.
+
+Audit: each successful write of this kind records `record_upserted`, the successful set records
+`unique_together_set`, and both carry the record/field ids only — never the data.
 
 ### Undoing what you created
 
@@ -106,15 +146,20 @@ python3 scripts/custom-objects-acceptance.py                    # against 127.0.
 python3 scripts/custom-objects-acceptance.py --base https://coreswiftcrm.com
 ```
 
-Twenty-two checks covering the spec's eight plus the two exit doors: MCP create + fields, REST insert
-with a key, console-session read of the same row, a second workspace's key answering 404, archiving a
-field keeping data, an unknown key answering 400 with nothing written, a duplicate unique value
-answering 409, audit rows for every schema change, object archive (gone from list, fields archived,
-records kept, idempotent, other workspace 404, slug reusable), record hard-delete (one row gone,
-siblings kept, audit carries the id only), soft delete unchanged, the MCP arms of both, no key/MCP
-path to account-level erase, both refusal doors (no credential, unknown key), and its own cleanup —
-it creates two marked probe tenants (`probe_harness = 'custom-objects-acceptance'`), then deletes
-them and asserts the baseline came back.
+Thirty-three checks covering the spec's eight, the two exit doors, and composite keys + upsert: MCP
+create + fields, REST insert with a key, console-session read of the same row, a second workspace's
+key answering 404, archiving a field keeping data, an unknown key answering 400 with nothing written,
+a duplicate unique value answering 409, audit rows for every schema change, object archive (gone from
+list, fields archived, records kept, idempotent, other workspace 404, slug reusable), record
+hard-delete (one row gone, siblings kept, audit carries the id only), soft delete unchanged, the MCP
+arms of both, no key/MCP path to account-level erase, the composite key being set through PATCH and
+audited, one-upsert-inserts / replay-updates (same id, merged fields, still one row), a second
+position making two rows with replays leaving two, the plain-insert 409 outside the upsert door, the
+second workspace 404 on the key and the upsert door, the unknown-field and wrong-key-set 400s, the
+duplicate refusal naming the values and both ids, the re-key after the duplicate is removed, the MCP
+upsert, both refusal doors (no credential, unknown key), and its own cleanup — it creates two marked
+probe tenants (`probe_harness = 'custom-objects-acceptance'`), then deletes them and asserts the
+baseline came back.
 
 ## Out of Phase 1 (deliberately)
 
