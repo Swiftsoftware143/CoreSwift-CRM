@@ -394,6 +394,32 @@ pub async fn gate(db: &PgPool, tenant_id: Uuid, address: &str, mail_class: &str)
         .as_ref()
         .and_then(|(_, settings)| postal_address(settings));
 
+    // ONE FOOTER, EDITED IN ONE PLACE (David, 2026-11-23): "there should be somewhere in some settings
+    // that makes it universal so if it's edited then it goes everywhere else". The link itself was
+    // already universal — a single signed opt-out URL per (account, address, class) — but the WORDING
+    // around it was hard-coded here, so an owner who wanted different words had to edit every email.
+    // Both lines are settings now, read here, and this gate is on the path of every outgoing message.
+    let footer_copy = row
+        .as_ref()
+        .and_then(|(_, settings)| settings.get("compliance"))
+        .and_then(|c| c.get("footer"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let link_label = footer_copy
+        .get("link_label")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("Stop these emails")
+        .to_string();
+    // An optional sentence above the link: why the person is receiving this. Empty means no line.
+    let reason_line = footer_copy
+        .get("reason_line")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+
     let mut headers = Vec::new();
     let mut footer_html = String::new();
     let mut footer_text = String::new();
@@ -407,15 +433,25 @@ pub async fn gate(db: &PgPool, tenant_id: Uuid, address: &str, mail_class: &str)
             "List-Unsubscribe=One-Click".to_string(),
         ));
         let where_ = postal.as_deref().unwrap_or("");
+        // The wording comes from the account's own setting, so it is edited in ONE place and every
+        // email carries it. Empty means the platform wording.
+        let reason_txt = reason_line
+            .as_deref()
+            .map(|r| format!("{r}\n"))
+            .unwrap_or_default();
+        let reason_html = reason_line
+            .as_deref()
+            .map(|r| format!("{}\n", html_escape(r)))
+            .unwrap_or_default();
         footer_text = format!(
-            "\n\n--\n{account}{sep}{where_}\nStop these emails: {url}\n",
+            "\n\n--\n{account}{sep}{where_}\n{reason_txt}{link_label}: {url}\n",
             sep = if where_.is_empty() { "" } else { " · " }
         );
         footer_html = format!(
             "<hr style=\"border:0;border-top:1px solid #e5e7eb;margin:28px 0 12px\">\
              <p style=\"font:13px/1.5 system-ui,-apple-system,sans-serif;color:#6b7280;margin:0\">\
              {account}{sep}{where_}<br>\
-             <a href=\"{url}\" style=\"color:#4f46e5\">Stop these emails</a></p>",
+             {reason_html}<a href=\"{url}\" style=\"color:#4f46e5\">{link_label}</a></p>",
             sep = if where_.is_empty() { "" } else { " · " }
         );
     }
@@ -1160,6 +1196,9 @@ struct PageCopyIn {
     button_label: Option<String>,
     done_title: Option<String>,
     done_body: Option<String>,
+    /// The words next to the unsubscribe link in EVERY outgoing email (not the opt-out page).
+    link_label: Option<String>,
+    reason_line: Option<String>,
 }
 
 /// "This tenant's owner, or a platform operator" — through the ONE helper that already knows the
@@ -1187,6 +1226,13 @@ async fn get_unsubscribe_page(
     };
     let settings = tenant_settings(&state.db, tenant_id).await;
     let copy = page_copy(&settings, "<the address>");
+    // The footer every outgoing email carries — read here so the same screen edits the link, the page
+    // it opens, and the words around the link.
+    let footer = settings
+        .get("compliance")
+        .and_then(|c| c.get("footer"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     let row = sqlx::query_as::<
         _,
         (
@@ -1215,6 +1261,11 @@ async fn get_unsubscribe_page(
     .unwrap_or((None, None, None, None, None, None));
 
     Json(json!({
+        // The every-email footer, so the same screen reads and writes it.
+        "footer": {
+            "link_label": footer.get("link_label").and_then(|v| v.as_str()).unwrap_or(""),
+            "reason_line": footer.get("reason_line").and_then(|v| v.as_str()).unwrap_or(""),
+        },
         "effective": {
             "title": copy.title, "intro": copy.intro, "all_label": copy.all_label,
             "button_label": copy.button_label, "done_title": copy.done_title,
@@ -1267,6 +1318,11 @@ async fn put_unsubscribe_page(
         "done_title": clean(body.done_title, 120),
         "done_body": clean(body.done_body, 600),
     });
+    // The footer wording, with the same "empty restores the platform default" rule.
+    let footer_patch = json!({
+        "link_label": clean(body.link_label, 60),
+        "reason_line": clean(body.reason_line, 200),
+    });
     // Written field by field: a null clears that override and the default comes back.
     // jsonb_set only creates the LAST key of a path: a path whose INTERMEDIATE key does not exist yet
     // returns the document unchanged, silently. Measured live 2026-11-19 — the save answered 200, the
@@ -1281,13 +1337,19 @@ async fn put_unsubscribe_page(
                   coalesce(settings->'compliance', '{}'::jsonb)
                     || jsonb_build_object(
                          'unsubscribe_page',
-                         coalesce(settings->'compliance'->'unsubscribe_page', '{}'::jsonb) || $2::jsonb
+                         coalesce(settings->'compliance'->'unsubscribe_page', '{}'::jsonb) || $2::jsonb,
+                         -- THE WORDS IN EVERY OUTGOING EMAIL (David, 2026-11-23): saved beside the
+                         -- opt-out page copy, read by the one compliance gate every send passes, so
+                         -- editing them here changes every email at once.
+                         'footer',
+                         coalesce(settings->'compliance'->'footer', '{}'::jsonb) || $3::jsonb
                        ),
                   true)
           WHERE id = $1",
     )
     .bind(tenant_id)
     .bind(patch)
+    .bind(footer_patch)
     .execute(&state.db)
     .await;
     match result {

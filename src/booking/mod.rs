@@ -64,6 +64,15 @@ pub fn admin_router(pool: PgPool) -> Router {
         // WHAT THE BUYER SEES, with the limits applied — the console renders this instead of
         // describing the settings, so console and public page cannot disagree.
         .route("/calendars/:id/buyer-preview", get(h::buyer_preview))
+        // WHAT THE FORM ASKS, AND WHICH ANSWERS ARE MANDATORY (David, 2026-11-23).
+        .route(
+            "/calendars/:id/form-fields",
+            get(h::list_form_fields).post(h::create_form_field),
+        )
+        .route(
+            "/form-fields/:id",
+            patch(h::update_form_field).delete(h::delete_form_field),
+        )
         .route("/calendars/:id/orders", get(h::list_orders))
         .route("/resources/:id/availability-rules", put(h::set_rules))
         // AN EXISTING POSITION CAN BE CORRECTED OR REMOVED (ZaarHub, 2026-11-23): a mis-priced slot
@@ -88,6 +97,7 @@ pub fn public_router(pool: PgPool) -> Router {
         .route("/c/:slug/availability", get(h::public_availability))
         // What the page is showing and why — the line that tells a visitor more dates open later.
         .route("/c/:slug/limits", get(h::public_limits))
+        .route("/c/:slug/form", get(h::public_form))
         .route("/c/:slug/quote", post(h::public_quote))
         .route("/c/:slug/orders", post(h::public_create_order))
         .route("/orders/:id", get(h::public_get_order))

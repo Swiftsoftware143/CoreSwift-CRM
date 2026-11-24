@@ -276,6 +276,37 @@ pub struct OrderItemInput {
     pub meta: Option<Value>,
 }
 
+/// One extra question on the booking form, with whether its answer is required.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct FormField {
+    pub id: Uuid,
+    pub calendar_id: Uuid,
+    pub key: String,
+    pub label: String,
+    pub kind: String,
+    pub required: bool,
+    pub placeholder: Option<String>,
+    pub help: Option<String>,
+    pub sort_order: i32,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NewFormField {
+    pub key: Option<String>,
+    pub label: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub required: Option<bool>,
+    #[serde(default)]
+    pub placeholder: Option<String>,
+    #[serde(default)]
+    pub help: Option<String>,
+    #[serde(default)]
+    pub sort_order: Option<i32>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct QuoteRequest {
     pub items: Vec<OrderItemInput>,
@@ -293,6 +324,11 @@ pub struct NewOrder {
     /// What the buyer ticked, stored with the order. Absent means NO consent: `Option` -> false.
     #[serde(default)]
     pub sms_opt_in: Option<bool>,
+    /// Answers to the calendar's own questions (`booking_form_fields`), keyed by field key. Validated
+    /// server-side against which fields are required — a form rule enforced only in the browser is a
+    /// suggestion, and an order missing a mandatory answer is refused by name.
+    #[serde(default)]
+    pub answers: Option<serde_json::Value>,
     pub items: Vec<OrderItemInput>,
 }
 

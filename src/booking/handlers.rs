@@ -293,6 +293,174 @@ pub async fn calendars_summary(
     })))
 }
 
+/// `GET /api/booking/calendars/:id/form-fields` — the questions this form asks, and which are required.
+pub async fn list_form_fields(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>> {
+    let mut c = pool.acquire().await?;
+    let cal = service::calendar_for_tenant(&mut c, id, t.0).await?;
+    let rows: Vec<crate::booking::models::FormField> = sqlx::query_as(
+        "SELECT id, calendar_id, key, label, kind, required, placeholder, help, sort_order, is_active \
+           FROM booking_form_fields WHERE calendar_id = $1 ORDER BY sort_order, label",
+    )
+    .bind(cal.id)
+    .fetch_all(&mut *c)
+    .await?;
+    Ok(Json(json!({
+        // Name, email and phone are built in: they are how the booking reaches the person and how the
+        // person is found again. The owner chooses whether they are mandatory; they cannot be removed.
+        "builtin": [
+            {"key": "customer_name", "label": "Full name", "required": true, "locked": true, "why": "It is who the booking is for."},
+            {"key": "customer_email", "label": "Email", "required": true, "locked": true, "why": "The confirmation and the manage link go here."},
+            {"key": "phone", "label": "Phone", "required": false, "locked": true, "why": "Optional unless you make it mandatory."}
+        ],
+        "fields": rows,
+    })))
+}
+
+/// `POST /api/booking/calendars/:id/form-fields` — add a question.
+pub async fn create_form_field(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<crate::booking::models::NewFormField>,
+) -> Result<Json<Value>> {
+    let mut c = pool.acquire().await?;
+    let cal = service::calendar_for_tenant(&mut c, id, t.0).await?;
+    let label = body.label.trim().to_string();
+    if label.is_empty() {
+        return Err(BookingError::invalid("Give the question a label."));
+    }
+    // The key is what the answer is stored under. Derived from the label when not given, so the owner
+    // never has to invent machine names.
+    let key = body
+        .key
+        .as_deref()
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map(|k| k.to_ascii_lowercase().replace(' ', "_"))
+        .unwrap_or_else(|| {
+            label
+                .to_ascii_lowercase()
+                .chars()
+                .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                .collect::<String>()
+                .trim_matches('_')
+                .to_string()
+        });
+    if matches!(
+        key.as_str(),
+        "customer_name" | "customer_email" | "phone" | "answers" | "items"
+    ) {
+        return Err(BookingError::invalid(format!(
+            "\"{key}\" is already captured by the booking itself — choose another name."
+        )));
+    }
+    let kind = body.kind.as_deref().unwrap_or("text").to_string();
+    let row: crate::booking::models::FormField = sqlx::query_as(
+        "INSERT INTO booking_form_fields \
+             (tenant_id, calendar_id, key, label, kind, required, placeholder, help, sort_order) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) \
+         ON CONFLICT (calendar_id, lower(key)) DO UPDATE \
+            SET label = EXCLUDED.label, kind = EXCLUDED.kind, required = EXCLUDED.required, \
+                placeholder = EXCLUDED.placeholder, help = EXCLUDED.help, is_active = true, \
+                updated_at = now() \
+         RETURNING id, calendar_id, key, label, kind, required, placeholder, help, sort_order, is_active",
+    )
+    .bind(t.0)
+    .bind(cal.id)
+    .bind(&key)
+    .bind(&label)
+    .bind(&kind)
+    .bind(body.required.unwrap_or(false))
+    .bind(&body.placeholder)
+    .bind(&body.help)
+    .bind(body.sort_order.unwrap_or(0))
+    .fetch_one(&mut *c)
+    .await?;
+    Ok(Json(json!(row)))
+}
+
+/// `PATCH /api/booking/form-fields/:id` — flip required, rename, reorder.
+pub async fn update_form_field(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(field_id): Path<Uuid>,
+    Json(body): Json<crate::booking::models::NewFormField>,
+) -> Result<Json<Value>> {
+    let mut c = pool.acquire().await?;
+    let row: crate::booking::models::FormField = sqlx::query_as(
+        "UPDATE booking_form_fields SET \
+             label = COALESCE($3, label), \
+             kind = COALESCE($4, kind), \
+             required = COALESCE($5, required), \
+             placeholder = COALESCE($6, placeholder), \
+             help = COALESCE($7, help), \
+             sort_order = COALESCE($8, sort_order), \
+             updated_at = now() \
+           WHERE id = $1 AND tenant_id = $2 \
+         RETURNING id, calendar_id, key, label, kind, required, placeholder, help, sort_order, is_active",
+    )
+    .bind(field_id)
+    .bind(t.0)
+    .bind({
+        let l = body.label.trim();
+        if l.is_empty() {
+            None
+        } else {
+            Some(l.to_string())
+        }
+    })
+    .bind(body.kind)
+    .bind(body.required)
+    .bind(body.placeholder)
+    .bind(body.help)
+    .bind(body.sort_order)
+    .fetch_optional(&mut *c)
+    .await?
+    .ok_or_else(|| BookingError::NotFound("question"))?;
+    Ok(Json(json!(row)))
+}
+
+/// `DELETE /api/booking/form-fields/:id` — stop asking it. Answers already given stay on their orders.
+pub async fn delete_form_field(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(field_id): Path<Uuid>,
+) -> Result<Json<Value>> {
+    let done = sqlx::query("DELETE FROM booking_form_fields WHERE id = $1 AND tenant_id = $2")
+        .bind(field_id)
+        .bind(t.0)
+        .execute(&pool)
+        .await?
+        .rows_affected();
+    if done == 0 {
+        return Err(BookingError::NotFound("question"));
+    }
+    Ok(Json(json!({"removed": true})))
+}
+
+/// `GET /api/public/booking/c/:slug/form` — the questions a buyer is asked.
+pub async fn public_form(
+    State(pool): State<PgPool>,
+    Path(slug): Path<String>,
+    Query(q): Query<WsQuery>,
+) -> Result<Json<Value>> {
+    let mut c = pool.acquire().await?;
+    let ws = workspace_of_public(&mut c, &q).await?;
+    let cal = service::calendar_by_slug(&mut c, &slug, ws.as_deref()).await?;
+    let rows: Vec<crate::booking::models::FormField> = sqlx::query_as(
+        "SELECT id, calendar_id, key, label, kind, required, placeholder, help, sort_order, is_active \
+           FROM booking_form_fields WHERE calendar_id = $1 AND is_active ORDER BY sort_order, label",
+    )
+    .bind(cal.id)
+    .fetch_all(&mut *c)
+    .await?;
+    Ok(Json(json!({ "fields": rows })))
+}
+
 /// `GET /api/booking/calendars/:id/buyer-preview` — what the buyer will SEE, with the limits applied.
 ///
 /// The console and the public page must be the same answer rendered twice; a panel that described the

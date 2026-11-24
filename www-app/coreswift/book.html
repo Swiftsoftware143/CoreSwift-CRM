@@ -216,7 +216,8 @@
   var SLUG = ADDR.name;
   // the workspace travels as ?w= when the address could be ambiguous, and nowhere else
   var WSQ = ADDR.ws ? ('w=' + encodeURIComponent(ADDR.ws)) : '';
-  var STATE = { cal: null, avail: [], picked: {}, quote: null, filter: 'all', busy: false };
+  var STATE = {
+    form: [], cal: null, avail: [], picked: {}, quote: null, filter: 'all', busy: false };
   var EMBEDDED = /[?&]embed=1/.test(location.search);
   if (EMBEDDED) document.body.classList.add('embed');
 
@@ -379,6 +380,15 @@
       if (!cal.resources && payload.resources) cal.resources = payload.resources;
       if (!cal.bundles && payload.bundles) cal.bundles = payload.bundles;
       STATE.cal = cal;
+      // The questions this calendar asks. A failure here must not stop a booking: the server enforces
+      // the mandatory ones anyway, and an empty list simply means "no extra questions".
+      try {
+        var slugForForm = (cal.slug || '');
+        fetch('/api/public/booking/c/' + encodeURIComponent(slugForForm) + '/form', { headers: { 'Accept': 'application/json' } })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) { STATE.form = (d && d.fields) || []; if (typeof paint === 'function') paint(); })
+          .catch(function () { STATE.form = []; });
+      } catch (e) { STATE.form = []; }
       // MORE DATES OPEN AS THE CALENDAR ADVANCES (ZaarHub, 2026-11-23). When a horizon or a
       // per-date cap is in force the visitor is told so: a short list that reads as a closed door
       // loses the sale, the same list explained reads as demand. Everything here is derived from the
@@ -542,6 +552,18 @@
       '<label class="field">Phone (optional)<input id="buyerPhone" type="tel" placeholder="+1 305 555 0100" autocomplete="tel"></label>' +
       '<label class="field consent"><input id="buyerSmsOk" type="checkbox"> <span>Text me about this booking and updates. Message rates may apply, and you can reply STOP at any time to stop them.</span></label>' +
       '<label class="field">Anything we should know?<input id="buyerNote" placeholder="Optional"></label>' +
+      // THE CALENDAR'S OWN QUESTIONS (David, 2026-11-23): a mandatory one is marked and enforced by the
+      // server as well, so an order cannot arrive without it just because a browser was lenient.
+      (STATE.form || []).map(function (f) {
+        return '<label class="field" data-key="' + esc(f.key) + '">' + esc(f.label) +
+          (f.required ? ' <span style="color:#dc2626">*</span>' : ' <span style="opacity:.7">(optional)</span>') +
+          (f.kind === 'textarea'
+            ? '<textarea id="bkans_' + esc(f.key) + '" rows="2" placeholder="' + esc(f.placeholder || '') + '"></textarea>'
+            : '<input id="bkans_' + esc(f.key) + '" type="' + (f.kind === 'email' ? 'email' : f.kind === 'tel' ? 'tel' : 'text') +
+              '" placeholder="' + esc(f.placeholder || '') + '">') +
+          (f.help ? '<span style="font-size:11.5px;opacity:.75">' + esc(f.help) + '</span>' : '') +
+          '</label>';
+      }).join('') +
       '<button class="cta" id="payBtn"' + (picked.length ? '' : ' disabled') + ' onclick="BKUI.reserve()">' +
         (picked.length ? 'Reserve & pay' : 'Pick a slot to continue') + '</button>' +
       '</div>';
@@ -615,6 +637,15 @@
       var phone = (el('buyerPhone') || {}).value || '';
       var smsOk = !!(el('buyerSmsOk') || {}).checked;
       if (!name.trim() || !email.trim()) { alert('Your name and email are needed so we can send the confirmation.'); return; }
+      var answers = {};
+      var missing = null;
+      (STATE.form || []).forEach(function (f) {
+        var box = el('bkans_' + f.key);
+        var val = box ? String(box.value || '').trim() : '';
+        if (val) answers[f.key] = val;
+        if (f.required && !val && !missing) missing = f.label;
+      });
+      if (missing) { alert(missing + ' is required for this booking.'); return; }
       var items = Object.keys(STATE.picked).map(function (k) {
         var a = STATE.avail.filter(function (x) { return keyOf(x) === k; })[0];
         return a ? itemOf(a) : null;
@@ -629,6 +660,7 @@
           // Optional, and the consent travels with the order as the buyer gave it.
           phone: phone.trim() || null,
           sms_opt_in: !!smsOk,
+          answers: answers,
           notes: (el('buyerNote') || {}).value || '', items: items
         })
       }).then(function (order) {

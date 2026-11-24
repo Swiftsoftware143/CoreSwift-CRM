@@ -555,15 +555,37 @@ pub async fn generate_slots(
         let Some(start) = super::availability::local_to_utc(tz, day.and_time(g.time)) else {
             continue;
         };
-        let price = g
+        // A ZERO IN THE PRICE BOX IS NOT A PRICE (measured 2026-11-23: "my generate created free
+        // slots"). The box was read as "0 means free", so clearing it produced $0.00 dates under a
+        // $12.00 position — and because a repeat run skipped existing dates, the mistake was permanent.
+        // Zero (and negative) now means "no override", which falls back to the position's own price.
+        // A genuinely free date is set afterwards on that one date, deliberately.
+        let typed = g
             .weekday_prices
             .get(&wd)
             .copied()
             .or(g.price_cents)
-            .unwrap_or(res.price_cents);
+            .filter(|p| *p > 0);
+        let price = typed.unwrap_or(res.price_cents).max(0);
+        // REGENERATING CORRECTS OPEN DATES (2026-11-23). A wrong price on a generated date used to be
+        // permanent: the insert skipped dates that already existed. It now overwrites the price and
+        // capacity of an OPEN date that nobody has booked, so "generate again" is the fix for a
+        // mis-typed run. A date with a live booking (confirmed, or held and unexpired) is never
+        // touched — the buyer agreed to a number.
         let slot = sqlx::query_as::<_, Slot>(
             "INSERT INTO booking_slots (resource_id, starts_at, ends_at, capacity, price_cents, label)
-             VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (resource_id, starts_at) DO NOTHING RETURNING *",
+             VALUES ($1,$2,$3,$4,$5,$6)
+             ON CONFLICT (resource_id, starts_at) DO UPDATE
+                SET price_cents = EXCLUDED.price_cents,
+                    capacity    = EXCLUDED.capacity,
+                    ends_at     = EXCLUDED.ends_at
+              WHERE booking_slots.status = 'open'
+                AND NOT EXISTS (
+                      SELECT 1 FROM booking_bookings b
+                       WHERE b.slot_id = booking_slots.id
+                         AND (b.status = 'confirmed'
+                              OR (b.status = 'held' AND b.hold_expires_at > now())))
+             RETURNING *",
         )
         .bind(res.id)
         .bind(start)
@@ -1166,6 +1188,36 @@ pub async fn create_order(
             "customer_name and a valid customer_email are required",
         ));
     }
+    // MANDATORY ANSWERS ARE ENFORCED HERE (2026-11-23). The form may ask for a company name and mark
+    // it required; an order without it is refused with the field's own label, not a generic 400 — and
+    // refused on the SERVER, because a browser check is advice, not a rule.
+    let answers = input
+        .answers
+        .clone()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let required: Vec<(String, String)> = sqlx::query_as(
+        "SELECT key, label FROM booking_form_fields \
+          WHERE calendar_id = $1 AND is_active AND required ORDER BY sort_order",
+    )
+    .bind(cal.id)
+    .fetch_all(&mut *pool.acquire().await?)
+    .await?;
+    for (key, label) in required {
+        let filled = answers
+            .get(&key)
+            .map(|v| match v {
+                serde_json::Value::String(s) => !s.trim().is_empty(),
+                serde_json::Value::Null => false,
+                _ => true,
+            })
+            .unwrap_or(false);
+        if !filled {
+            return Err(BookingError::invalid(format!(
+                "{label} is required for this booking."
+            )));
+        }
+    }
+
     let tz = tz_of(cal)?;
     let mut tx = pool.begin().await?;
     lock_resources(&mut tx, input.items.iter().map(|i| i.resource_id).collect()).await?;
@@ -1180,8 +1232,8 @@ pub async fn create_order(
 
     let order = sqlx::query_as::<_, Order>(
         "INSERT INTO booking_orders
-           (tenant_id, calendar_id, contact_id, customer_name, customer_email, subtotal_cents, discount_cents, total_cents, bundle_id, hold_expires_at, notes, phone, sms_opt_in)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *",
+           (tenant_id, calendar_id, contact_id, customer_name, customer_email, subtotal_cents, discount_cents, total_cents, bundle_id, hold_expires_at, notes, phone, sms_opt_in, answers)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *",
     )
     .bind(cal.tenant_id)
     .bind(cal.id)
@@ -1196,6 +1248,9 @@ pub async fn create_order(
     .bind(input.notes.clone().unwrap_or_default())
     .bind(input.phone.as_deref().map(str::trim).filter(|p| !p.is_empty()))
     .bind(input.sms_opt_in.unwrap_or(false))
+    // The answers, stored beside the order they belong to (validated above, never trusted from the
+    // browser alone).
+    .bind(&answers)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -2160,7 +2215,9 @@ pub async fn admin_create_booking(
             contact_id: None,
             notes: notes.filter(|n| !n.trim().is_empty()),
             // The operator filling a position by hand has no buyer consent to record: the buyer did not
-            // tick anything in front of them. Both stay empty rather than being guessed.
+            // tick anything in front of them. Both stay empty rather than being guessed. Their answers
+            // are the operator's to type, so an empty set is passed rather than invented.
+            answers: None,
             phone: None,
             sms_opt_in: None,
             items: vec![item],

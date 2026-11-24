@@ -13732,6 +13732,7 @@ async function bkOpen(id) {
 async function bkOpenDetail(id, quiet) {
   try {
     BK.detail = await bkCall('GET', '/calendars/' + id);
+    await bkLoadFormFields();
     if (!quiet) bkRender();
   } catch (e) { bkFlash(e.message, false); }
 }
@@ -13785,6 +13786,7 @@ function bkDetailPanel() {
   html += bkThemePanel(cal);
   html += bkRulesPanel(cal);
   html += bkResourcePanel(res, cal.kind);
+  html += bkFormPanel();
   html += bkManualPanel(res);
   if (cal.kind === 'appointment') html += bkHoursPanel();
   if (cal.kind !== 'appointment') html += bkSlotsPanel(res);
@@ -14432,6 +14434,82 @@ async function bkSaveRules() {
 }
 function bkBack() { BK.current = null; BK.detail = null; bkRender(); }
 
+/* WHAT THE FORM ASKS (David, 2026-11-23): "can I make some of them mandatory and the other optional".
+ * Name, email and phone are captured by the booking itself — locked, so they can never be removed and
+ * a booking always has a way to reach the person. Anything else is a question here, with a required
+ * flag, and the SERVER refuses an order that leaves a mandatory answer empty. */
+function bkFormPanel() {
+  var d = BK.formFields;
+  if (!d) return '';
+  var builtin = (d.builtin || []).map(function (f) {
+    return '<tr><td>' + escapeHtml(f.label) + '</td><td><span class="badge">always</span></td>' +
+      '<td class="muted" style="font-size:12px">' + escapeHtml(f.why || '') + '</td><td></td></tr>';
+  }).join('');
+  var rows = (d.fields || []).map(function (f) {
+    return '<tr><td><strong>' + escapeHtml(f.label) + '</strong><div class="muted" style="font-size:11.5px">' + escapeHtml(f.key) + '</div></td>' +
+      '<td>' + (f.required ? '<span style="color:#b45309">Required</span>' : '<span class="muted">Optional</span>') + '</td>' +
+      '<td class="muted" style="font-size:12px">' + escapeHtml(f.kind || 'text') + '</td>' +
+      '<td style="white-space:nowrap">' +
+        '<button class="btn btn-secondary btn-sm" onclick="bkToggleFieldRequired(\'' + f.id + '\', ' + (!f.required) + ')">Make ' + (f.required ? 'optional' : 'required') + '</button> ' +
+        '<button class="btn btn-secondary btn-sm" onclick="bkDeleteField(\'' + f.id + '\')">Remove</button>' +
+      '</td></tr>';
+  }).join('');
+  return '<div class="card" style="margin-bottom:18px">' +
+    '<h3 style="margin-top:0">What the form asks the booker</h3>' +
+    '<p class="muted" style="margin-top:-6px">A booking always captures the name, the email and the phone — those cannot be removed. Add anything else you need, and mark it required if a booking must not be accepted without it.</p>' +
+    '<table class="table"><thead><tr><th>Question</th><th>Answer</th><th>Type</th><th></th></tr></thead><tbody>' + builtin + rows + '</tbody></table>' +
+    '<div class="bk-form" style="margin-top:12px">' +
+      '<label>New question<input id="bkFieldLabel" placeholder="Company name"></label>' +
+      '<label>Required?<select id="bkFieldRequired"><option value="1">Yes — cannot book without it</option><option value="0">No — optional</option></select></label>' +
+    '</div>' +
+    '<button class="btn btn-primary btn-sm" onclick="bkAddField()">Add question</button>' +
+    '<span class="bk-flash" id="bkFieldFlash"></span>' +
+    '</div>';
+}
+
+function bkFieldFlash(msg, ok) {
+  var el = document.getElementById('bkFieldFlash');
+  if (!el) { bkFlash(msg, ok); return; }
+  el.textContent = msg;
+  el.className = 'bk-flash ' + (ok === false ? 'bad' : 'good');
+  setTimeout(function () { el.textContent = ''; }, 6000);
+}
+
+async function bkLoadFormFields() {
+  try { BK.formFields = await API.get('/booking/calendars/' + encodeURIComponent(BK.current) + '/form-fields'); }
+  catch (e) { BK.formFields = null; }
+}
+
+async function bkAddField() {
+  var label = ((document.getElementById('bkFieldLabel') || {}).value || '').trim();
+  if (!label) { bkFieldFlash('Type the question you want to ask.', false); return; }
+  var required = (document.getElementById('bkFieldRequired') || {}).value === '1';
+  try {
+    await API.post('/booking/calendars/' + encodeURIComponent(BK.current) + '/form-fields', { label: label, required: required });
+    await bkLoadFormFields();
+    bkRender();
+    bkFieldFlash('Added — ' + label + (required ? ' (required).' : ' (optional).'), true);
+  } catch (e) { bkFieldFlash(e.message, false); }
+}
+
+async function bkToggleFieldRequired(id, required) {
+  try {
+    await API.patch('/booking/form-fields/' + encodeURIComponent(id), { required: required });
+    await bkLoadFormFields();
+    bkRender();
+    bkFieldFlash('Saved — that answer is now ' + (required ? 'required.' : 'optional.'), true);
+  } catch (e) { bkFieldFlash(e.message, false); }
+}
+
+async function bkDeleteField(id) {
+  try {
+    await API.delete('/booking/form-fields/' + encodeURIComponent(id));
+    await bkLoadFormFields();
+    bkRender();
+    bkFieldFlash('Question removed. Answers already given stay on their bookings.', true);
+  } catch (e) { bkFieldFlash(e.message, false); }
+}
+
 function bkResourcePanel(res, kind) {
   const priceLabel = kind === 'date_range' ? 'Price per day (cents)' : 'Price (cents)';
   const rows = res.map(function (r) {
@@ -14659,7 +14737,10 @@ function bkSlotsPanel(res) {
       '<label>To<input id="bkGenTo" type="date"></label>' +
       '<label>Weekdays<input id="bkGenDays" value="1,3" placeholder="0=Mon … 6=Sun, e.g. 1,3"></label>' +
       '<label>Time<input id="bkGenTime" type="time" value="07:00"></label>' +
-      '<label>Price (cents)<input id="bkGenPrice" type="number" value="20000"></label>' +
+      // A TYPED PRICE OVERRIDES; A BLANK BOX MEANS "USE THE POSITION'S PRICE" (2026-11-23). Clearing
+      // this box used to generate $0.00 dates, and a repeat run could not correct them.
+      '<label>Price (cents)<input id="bkGenPrice" type="number" min="1" placeholder="leave empty to use the position price">' +
+        '<span class="muted" style="font-weight:400">Only a typed number overrides the position&rsquo;s own price. Re-running for the same dates now corrects any open date that has no booking.</span></label>' +
       '<label>Tuesday price (optional)<input id="bkGenTue" type="number" placeholder="25000"></label>' +
       '<label>Label<input id="bkGenLabel" value="Morning issue"></label>' +
     '</div>' +
@@ -14678,7 +14759,12 @@ async function bkGenSlots() {
     to: document.getElementById('bkGenTo').value,
     weekdays: days,
     time: (document.getElementById('bkGenTime').value || '07:00') + ':00',
-    price_cents: parseInt(document.getElementById('bkGenPrice').value, 10) || 0,
+    price_cents: (function () {
+      var raw = String((document.getElementById('bkGenPrice') || {}).value || '').trim();
+      if (!raw) return null;                    // no override: the position's price is used
+      var n = parseInt(raw, 10);
+      return (!n || n <= 0) ? null : n;         // zero is not a price
+    })(),
     label: document.getElementById('bkGenLabel').value || ''
   };
   const tue = parseInt(document.getElementById('bkGenTue').value, 10);
@@ -15570,6 +15656,17 @@ function mcRender(ov, list, wrap) {
   var nCamp = (MC.copy && MC.copy.campaigns) || 0;
   var copyCard = '<div class="card"><div class="card-header">The opt-out page: your words</div><div class="card-body">' +
     '<p class="form-hint">This is what a person sees when they click unsubscribe. Leave a box empty to use the platform\u2019s wording for that line.</p>' +
+    // ONE FOOTER FOR EVERY EMAIL (David, 2026-11-23): the wording below is read by the single
+    // compliance gate every outgoing message passes, so editing it here changes every email at once —
+    // nothing has to be re-edited per template.
+    '<h4 style="margin:18px 0 6px">The footer on every email you send</h4>' +
+    '<p class="form-hint" style="margin-top:0">Applies to every campaign, sequence and notification on this account. The opt-out link itself is generated per recipient and is never edited.</p>' +
+    '<div class="form-group"><label>Link wording</label>' +
+      '<input id="cpFooterLabel" placeholder="Stop these emails" value="' + escapeHtml((cp.footer && cp.footer.link_label) || '') + '">' +
+      '<span class="form-hint">The words on the unsubscribe link. Empty uses \u201cStop these emails\u201d.</span></div>' +
+    '<div class="form-group"><label>One line above the link (optional)</label>' +
+      '<input id="cpFooterReason" placeholder="You are receiving this because you signed up at our site." value="' + escapeHtml((cp.footer && cp.footer.reason_line) || '') + '">' +
+      '<span class="form-hint">Why they are receiving it. Leave empty for no line.</span></div>' +
     (canEdit ? (
       '<div style="display:grid;gap:10px">' +
       '<label class="form-label">Title<input class="form-input" id="mcCopyTitle" value="' + mcEsc(eff.title || '') + '"></label>' +
@@ -15615,6 +15712,8 @@ async function mcSaveCopy() {
   }
   try {
     var r = await API.put('/mail-compliance/unsubscribe-page', {
+      link_label: (document.getElementById('cpFooterLabel') || {}).value || '',
+      reason_line: (document.getElementById('cpFooterReason') || {}).value || '',
       title: v('mcCopyTitle'), intro: v('mcCopyIntro'),
       all_label: v('mcCopyAll'), button_label: v('mcCopyButton'),
       done_title: v('mcCopyDoneTitle'), done_body: v('mcCopyDoneBody')
