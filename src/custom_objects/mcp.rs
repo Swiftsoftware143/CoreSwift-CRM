@@ -23,10 +23,14 @@ use super::ObjCtx;
 use crate::errors::AppError;
 use crate::AppState;
 
-/// The tool set, in the order the spec lists it. 10 tools: objects, fields and records only — no
+/// The tool set, in the order the spec lists it. 11 tools: objects, fields and records only — no
 /// tool names the ACCOUNT, so no API key can reach account-level erasure (pinned by a route_policy
 /// test; `archive_object` archives a shape, it never deletes a tenant).
-pub const TOOL_NAMES: [&str; 10] = [
+///
+/// `set_unique_together` and `insert_record`'s `upsert_on` are the composite-key pair from migration
+/// 208: a producer that must be able to retry a write names the object's key combination once, then
+/// replays safely.
+pub const TOOL_NAMES: [&str; 11] = [
     "list_objects",
     "create_object",
     "describe_object",
@@ -34,6 +38,7 @@ pub const TOOL_NAMES: [&str; 10] = [
     "add_field",
     "archive_field",
     "insert_record",
+    "set_unique_together",
     "query_records",
     "update_record",
     "delete_record",
@@ -101,11 +106,27 @@ fn tools() -> Value {
         },
         {
             "name": "insert_record",
-            "description": "Insert one record. data is an object of field key -> value; unknown keys and wrong kinds are refused and nothing is written.",
+            "description": "Insert one record. data is an object of field key -> value; unknown keys and wrong kinds are refused and nothing is written. Pass upsert_on (the object's unique_together keys) to make the write replay-safe: a second call with the same key values updates that row and merges data into it instead of adding a duplicate.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "object": s("string"), "data": s("object") },
+                "properties": {
+                    "object": s("string"),
+                    "data": s("object"),
+                    "upsert_on": { "type": "array", "items": { "type": "string" } }
+                },
                 "required": ["object", "data"]
+            }
+        },
+        {
+            "name": "set_unique_together",
+            "description": "Set (or clear) the object's composite key: the combination of field values that must be unique among live records, e.g. [\"booking_ref\",\"position\"]. It is refused, with the colliding values and row ids named, while live records already collide; clearing it with [] removes the constraint. This is also what insert_record's upsert_on must name.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "object": s("string"),
+                    "fields": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["object", "fields"]
             }
         },
         {
@@ -424,7 +445,7 @@ async fn call_tool(
             store::archive_field(&st.db, ctx.tenant_id, &ctx.actor, &obj, &which).await
         }
         "insert_record" => {
-            only_args(&a, &["object", "data"])?;
+            only_args(&a, &["object", "data", "upsert_on"])?;
             let slug = arg_str(&a, "object")?;
             let data = a
                 .get("data")
@@ -435,8 +456,55 @@ async fn call_tool(
                         "'data' is required and must be an object of field key -> value".into(),
                     )
                 })?;
+            let upsert_on = match a.get("upsert_on") {
+                None | Some(Value::Null) => None,
+                Some(v) => {
+                    let list = v.as_array().ok_or_else(|| {
+                        AppError::BadRequest(
+                            "'upsert_on' must be an array of field keys, e.g. [\"booking_ref\",\"position\"]"
+                                .into(),
+                        )
+                    })?;
+                    let mut keys = Vec::with_capacity(list.len());
+                    for item in list {
+                        let Some(k) = item.as_str() else {
+                            return Err(AppError::BadRequest(
+                                "'upsert_on' must contain field keys (strings)".into(),
+                            ));
+                        };
+                        keys.push(k.to_string());
+                    }
+                    if keys.is_empty() {
+                        return Err(AppError::BadRequest(
+                            "'upsert_on' needs at least one field key".into(),
+                        ));
+                    }
+                    Some(keys)
+                }
+            };
             let obj = store::object_by_slug(&st.db, ctx.tenant_id, &slug).await?;
-            store::insert_record(&st.db, ctx.tenant_id, &ctx.actor, &obj, data).await
+            store::insert_record(&st.db, ctx.tenant_id, &ctx.actor, &obj, data, upsert_on).await
+        }
+        "set_unique_together" => {
+            only_args(&a, &["object", "fields"])?;
+            let slug = arg_str(&a, "object")?;
+            let list = a.get("fields").and_then(|v| v.as_array()).ok_or_else(|| {
+                AppError::BadRequest(
+                    "'fields' is required and must be an array of field keys ([] clears the key)"
+                        .into(),
+                )
+            })?;
+            let mut keys = Vec::with_capacity(list.len());
+            for item in list {
+                let Some(k) = item.as_str() else {
+                    return Err(AppError::BadRequest(
+                        "'fields' must contain field keys (strings)".into(),
+                    ));
+                };
+                keys.push(k.to_string());
+            }
+            let obj = store::object_by_slug(&st.db, ctx.tenant_id, &slug).await?;
+            store::set_unique_together(&st.db, ctx.tenant_id, &ctx.actor, &obj, keys).await
         }
         "query_records" => {
             only_args(&a, &["object", "limit", "offset", "sort", "filter"])?;

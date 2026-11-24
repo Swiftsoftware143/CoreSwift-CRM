@@ -153,6 +153,46 @@ pub async fn describe_object(
     })))
 }
 
+/// `PATCH /api/objects/:slug` — today exactly one thing is settable: `unique_together`, the
+/// combination of field values that must be unique among live records (migration 208) and the target
+/// a replay-safe upsert is keyed on.
+///
+/// Deliberately NOT a general "edit the object" door: a slug is an address another application already
+/// calls, so renaming it is a migration with its own coordination, not a patch a caller can make here.
+pub async fn patch_object(
+    State(st): State<AppState>,
+    Extension(ctx): Extension<ObjCtx>,
+    Path(slug): Path<String>,
+    Json(body): Json<Value>,
+) -> ApiResult<Json<Value>> {
+    let m = body_object(body)?;
+    only_keys(&m, &["unique_together"])?;
+    let Some(v) = m.get("unique_together") else {
+        return Err(AppError::BadRequest(
+            "nothing to change — pass {\"unique_together\": [\"field_a\", \"field_b\"]} ([] clears it)"
+                .into(),
+        ));
+    };
+    let Some(list) = v.as_array() else {
+        return Err(AppError::BadRequest(
+            "unique_together must be a JSON array of field keys, e.g. [\"booking_ref\", \"position\"]"
+                .into(),
+        ));
+    };
+    let mut keys: Vec<String> = Vec::with_capacity(list.len());
+    for item in list {
+        let Some(k) = item.as_str() else {
+            return Err(AppError::BadRequest(
+                "unique_together must be a JSON array of field keys (strings)".into(),
+            ));
+        };
+        keys.push(k.to_string());
+    }
+    let obj = store::object_by_slug(&st.db, ctx.tenant_id, &slug).await?;
+    let out = store::set_unique_together(&st.db, ctx.tenant_id, &ctx.actor, &obj, keys).await?;
+    Ok(Json(out))
+}
+
 pub async fn add_field(
     State(st): State<AppState>,
     Extension(ctx): Extension<ObjCtx>,
@@ -311,12 +351,36 @@ pub async fn insert_record(
     State(st): State<AppState>,
     Extension(ctx): Extension<ObjCtx>,
     Path(slug): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
     Json(body): Json<Value>,
 ) -> ApiResult<Json<Value>> {
+    // `?upsert=booking_ref,position` turns this into a replay-safe write keyed on the object's
+    // unique_together; without it the call is the plain insert it always was.
+    for k in q.keys() {
+        if k != "upsert" {
+            return Err(AppError::BadRequest(format!(
+                "unknown query parameter '{k}' — this call accepts: upsert=<field,field>"
+            )));
+        }
+    }
+    let upsert_on = match q.get("upsert") {
+        None => None,
+        Some(raw) if raw.trim().is_empty() => {
+            return Err(AppError::BadRequest(
+                "upsert=... needs at least one field key, e.g. ?upsert=booking_ref,position".into(),
+            ))
+        }
+        Some(raw) => Some(
+            raw.split(',')
+                .map(|s| s.trim().to_string())
+                .collect::<Vec<_>>(),
+        ),
+    };
     let obj = store::object_by_slug(&st.db, ctx.tenant_id, &slug).await?;
     let active = store::fields_for(&st.db, obj.id, false).await?;
     let data = record_body(body, &active)?;
-    let out = store::insert_record(&st.db, ctx.tenant_id, &ctx.actor, &obj, data).await?;
+    let out =
+        store::insert_record(&st.db, ctx.tenant_id, &ctx.actor, &obj, data, upsert_on).await?;
     Ok(Json(out))
 }
 

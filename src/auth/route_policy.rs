@@ -1560,7 +1560,7 @@ mod tests {
             "close_account",
             "erase_data",
         ];
-        const EXPECTED_TOOLS: [&str; 10] = [
+        const EXPECTED_TOOLS: [&str; 11] = [
             "list_objects",
             "create_object",
             "describe_object",
@@ -1568,6 +1568,7 @@ mod tests {
             "add_field",
             "archive_field",
             "insert_record",
+            "set_unique_together",
             "query_records",
             "update_record",
             "delete_record",

@@ -180,6 +180,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/", axum::routing::get(handlers::list_objects))
         .route("/", axum::routing::post(handlers::create_object))
         .route("/:slug", axum::routing::delete(handlers::archive_object))
+        .route("/:slug", axum::routing::patch(handlers::patch_object))
         .route(
             "/:slug/schema",
             axum::routing::get(handlers::describe_object),

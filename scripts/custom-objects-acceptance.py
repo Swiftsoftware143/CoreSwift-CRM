@@ -373,10 +373,187 @@ def main():
         unknown_code = body_unknown.get("error", {}).get("code")
         st_exit, _ = http("POST", f"{base}/api/auth/erase-data", {"password": "x", "confirm": "DELETE"}, key_a)
         check("9h no API-key/MCP path can reach account-level erase",
-              len(names) == 10 and "archive_object" in names and not bad
+              len(names) == 11 and "archive_object" in names and "set_unique_together" in names
+              and not bad
               and st_unknown == 200 and unknown_code == -32601 and st_exit == 401,
               f"names={names} bad={bad} unknown={unknown_code} exitdoor={st_exit}")
 
+        # ── 10. Composite unique + a replay-safe upsert (kanban t_5b6ec9d2, migration 208) ────────
+        # The ZaarHub ad writer's shape: one fulfilment row per (booking_ref, position). Before this,
+        # a retry inserted a second row for the same position — the exact failure these checks pin.
+        def slots_live():
+            return db.q(
+                "SELECT count(*) FROM custom_records r JOIN custom_objects o ON o.id=r.object_id "
+                f"WHERE o.tenant_id='{a}' AND o.slug='slots' AND r.deleted_at IS NULL"
+            )
+
+        mcp(base, key_a, "create_object", {"slug": "slots", "name": "Slots " + stamp})
+        for f in [
+            {"object": "slots", "key": "booking_ref", "kind": "text", "required": True},
+            {"object": "slots", "key": "position", "kind": "text", "required": True},
+            {"object": "slots", "key": "notes", "kind": "text"},
+            {"object": "slots", "key": "artwork_received_at", "kind": "date"},
+        ]:
+            mcp(base, key_a, "add_field", f)
+
+        # 10a. The key is set through the product door (PATCH), stored, and audited.
+        st, body = http("PATCH", f"{base}/api/objects/slots",
+                        {"unique_together": ["booking_ref", "position"]}, key_a)
+        index_exists = db.q(
+            "SELECT count(*) FROM pg_indexes WHERE indexname='custom_records_uniq_key_live'"
+        )
+        ut_ok = db.q(
+            "SELECT (unique_together = '[\"booking_ref\",\"position\"]'::jsonb)::text "
+            f"FROM custom_objects WHERE tenant_id='{a}' AND slug='slots'"
+        )
+        ut_audit = db.q(
+            f"SELECT count(*) FROM custom_object_audit WHERE tenant_id='{a}' "
+            "AND action='unique_together_set' AND object_slug='slots'"
+        )
+        check("10a unique_together is set through the product door, stored, indexed and audited",
+              st == 200 and ut_ok == "true" and index_exists == "1" and ut_audit == "1",
+              f"status={st} stored={ut_ok} index={index_exists} audit={ut_audit} "
+              f"body={json.dumps(body)[:160]}")
+
+        # 10b/10c. One write inserts; the SAME write replayed updates that row and merges the fields.
+        ref = "PROBE-" + stamp
+        st1, b1 = http("POST", f"{base}/api/objects/slots/records?upsert=booking_ref,position",
+                       {"booking_ref": ref, "position": "leaderboard", "notes": "first pass"}, key_a)
+        first_id = b1.get("id")
+        rows_one = slots_live()
+        st2, b2 = http("POST", f"{base}/api/objects/slots/records?upsert=booking_ref,position",
+                       {"booking_ref": ref, "position": "leaderboard", "notes": "replayed"}, key_a)
+        rows_two = slots_live()
+        merged_notes = db.q(f"SELECT data->>'notes' FROM custom_records WHERE id='{first_id}'")
+        check("10b the first upsert inserts exactly one row",
+              st1 == 200 and b1.get("upsert", {}).get("inserted") is True and rows_one == "1",
+              f"status={st1} rows={rows_one} body={json.dumps(b1)[:200]}")
+        check("10c replaying the same key updates that row (same id, merged fields, still 1 row)",
+              st2 == 200 and b2.get("id") == first_id and first_id
+              and b2.get("upsert", {}).get("inserted") is False and rows_two == "1"
+              and merged_notes == "replayed",
+              f"status={st2} id={b2.get('id')} first={first_id} rows={rows_two} notes={merged_notes}")
+
+        # 10d. A second position is a second row; replaying both leaves exactly two.
+        st3, _ = http("POST", f"{base}/api/objects/slots/records?upsert=booking_ref,position",
+                      {"booking_ref": ref, "position": "sidebar", "notes": "side"}, key_a)
+        st4, _ = http("POST", f"{base}/api/objects/slots/records?upsert=booking_ref,position",
+                      {"booking_ref": ref, "position": "leaderboard", "notes": "again"}, key_a)
+        st5, _ = http("POST", f"{base}/api/objects/slots/records?upsert=booking_ref,position",
+                      {"booking_ref": ref, "position": "sidebar", "notes": "again"}, key_a)
+        rows_after = slots_live()
+        per_position = db.q(
+            "SELECT string_agg(k, ',' ORDER BY k) FROM ("
+            "  SELECT data->>'position' || '=' || count(*) AS k FROM custom_records r "
+            "  JOIN custom_objects o ON o.id=r.object_id "
+            f" WHERE o.tenant_id='{a}' AND o.slug='slots' AND r.deleted_at IS NULL "
+            "  GROUP BY data->>'position') s"
+        )
+        check("10d a second position adds a row and replaying both still leaves 2 (one per position)",
+              st3 == 200 and st4 == 200 and st5 == 200 and rows_after == "2"
+              and per_position == "leaderboard=1,sidebar=1",
+              f"statuses={st3},{st4},{st5} rows={rows_after} per_position={per_position}")
+
+        # 10e. Every upsert leaves ONE audit row naming the record id and nothing else.
+        ups_audit = db.q(
+            f"SELECT count(*) FROM custom_object_audit WHERE tenant_id='{a}' "
+            "AND action='record_upserted' AND object_slug='slots'"
+        )
+        ups_detail = db.q(
+            f"SELECT detail::text FROM custom_object_audit WHERE tenant_id='{a}' "
+            "AND action='record_upserted' ORDER BY id DESC LIMIT 1"
+        )
+        ups_keys = ",".join(sorted(json.loads(ups_detail).keys())) if ups_detail else ""
+        check("10e each upsert is audited as record_upserted with the id only",
+              ups_audit == "5" and ups_keys == "id", f"audit={ups_audit} keys={ups_keys}")
+
+        # 10f. The constraint holds OUTSIDE the upsert door too: a plain insert of the same pair 409s.
+        st6, _ = http("POST", f"{base}/api/objects/slots/records",
+                      {"booking_ref": ref, "position": "leaderboard", "notes": "no upsert"}, key_a)
+        rows_plain = slots_live()
+        check("10f a plain insert of the same combination is refused (409, no row added)",
+              st6 == 409 and rows_plain == "2", f"status={st6} rows={rows_plain}")
+
+        # 10g. Tenant isolation is unchanged: another workspace cannot see the object, set its key, or
+        #      write a row into it; and it cannot target a record by key either.
+        st7, _ = http("POST", f"{base}/api/objects/slots/records?upsert=booking_ref,position",
+                      {"booking_ref": ref, "position": "leaderboard"}, key_b)
+        st8, _ = http("PATCH", f"{base}/api/objects/slots", {"unique_together": ["notes"]}, key_b)
+        st9, _ = http("POST", f"{base}/api/objects/slots/records?upsert=booking_ref,position",
+                      {"booking_ref": "OTHER-" + stamp, "position": "leaderboard"}, key_b)
+        rows_foreign = slots_live()
+        foreign_rows = db.q(
+            "SELECT count(*) FROM custom_records r JOIN custom_objects o ON o.id=r.object_id "
+            f"WHERE o.tenant_id='{a}' AND o.slug='slots' AND r.tenant_id <> '{a}'"
+        )
+        check("10g another workspace gets 404 on the object, its key and its upsert door",
+              st7 == 404 and st8 == 404 and st9 == 404 and rows_foreign == "2"
+              and foreign_rows == "0",
+              f"statuses={st7},{st8},{st9} rows={rows_foreign} foreign={foreign_rows}")
+
+        # 10h. Bad key sets are refused with a sentence: an unknown field, and an upsert key that is
+        #      not the object's unique_together.
+        st10, b10 = http("PATCH", f"{base}/api/objects/slots",
+                         {"unique_together": ["no_such_field"]}, key_a)
+        st11, b11 = http("POST", f"{base}/api/objects/slots/records?upsert=notes",
+                         {"booking_ref": ref, "position": "leaderboard", "notes": "x"}, key_a)
+        ut_still = db.q(
+            "SELECT (unique_together = '[\"booking_ref\",\"position\"]'::jsonb)::text "
+            f"FROM custom_objects WHERE tenant_id='{a}' AND slug='slots'"
+        )
+        check("10h an unknown key field and an upsert key that is not unique_together are refused",
+              st10 == 400 and "no_such_field" in json.dumps(b10) and st11 == 400
+              and ut_still == "true",
+              f"patch={st10} upsert={st11} stored={ut_still}")
+
+        # 10i/10j. An object that ALREADY has duplicates cannot take the key: the refusal names the
+        #          colliding values and both row ids, and changes nothing. Remove one, and it applies.
+        mcp(base, key_a, "create_object", {"slug": "dupkey", "name": "Dup key " + stamp})
+        mcp(base, key_a, "add_field", {"object": "dupkey", "key": "booking_ref", "kind": "text"})
+        mcp(base, key_a, "add_field", {"object": "dupkey", "key": "position", "kind": "text"})
+        d1 = http("POST", f"{base}/api/objects/dupkey/records",
+                  {"booking_ref": "D1", "position": "top"}, key_a)[1].get("id")
+        d2 = http("POST", f"{base}/api/objects/dupkey/records",
+                  {"booking_ref": "D1", "position": "top"}, key_a)[1].get("id")
+        st12, b12 = http("PATCH", f"{base}/api/objects/dupkey",
+                         {"unique_together": ["booking_ref", "position"]}, key_a)
+        refusal = json.dumps(b12)
+        dupkey_live = db.q(
+            "SELECT (unique_together = '[]'::jsonb)::text FROM custom_objects "
+            f"WHERE tenant_id='{a}' AND slug='dupkey'"
+        )
+        check("10i setting the key refuses while live rows collide, naming the values and both ids",
+              st12 == 409 and "booking_ref='D1'" in refusal and "position='top'" in refusal
+              and bool(d1) and d1 in refusal and bool(d2) and d2 in refusal
+              and dupkey_live == "true",
+              f"status={st12} stored={dupkey_live} body={refusal[:260]}")
+        http("DELETE", f"{base}/api/objects/dupkey/records/{d2}?hard=true", None, key_a)
+        st13, b13 = http("PATCH", f"{base}/api/objects/dupkey",
+                         {"unique_together": ["booking_ref", "position"]}, key_a)
+        rekeyed = db.q(f"SELECT (uniq_key IS NOT NULL)::text FROM custom_records WHERE id='{d1}'")
+        check("10j after the duplicate is removed the key applies and the surviving row is re-keyed",
+              st13 == 200 and b13.get("rekeyed") == 1 and rekeyed == "true",
+              f"status={st13} rekeyed={b13.get('rekeyed')} uniq_key_set={rekeyed}")
+
+        # 10k. The MCP door is the same writer: upsert_on is replay-safe there too.
+        st14, b14 = mcp(base, key_a, "insert_record", {
+            "object": "slots",
+            "data": {"booking_ref": ref, "position": "leaderboard",
+                     "artwork_received_at": "2026-11-24"},
+            "upsert_on": ["booking_ref", "position"],
+        })
+        mcp_out = tool_out(b14)
+        rows_mcp = slots_live()
+        got_date = db.q(
+            "SELECT data->>'artwork_received_at' FROM custom_records r "
+            "JOIN custom_objects o ON o.id=r.object_id "
+            f"WHERE o.tenant_id='{a}' AND o.slug='slots' AND r.data->>'position'='leaderboard' "
+            "AND r.deleted_at IS NULL"
+        )
+        check("10k the MCP door upserts the same way (still 2 rows, replay updated the row)",
+              st14 == 200 and mcp_out.get("upsert", {}).get("inserted") is False
+              and rows_mcp == "2" and got_date == "2026-11-24",
+              f"status={st14} out={json.dumps(mcp_out)[:200]} rows={rows_mcp} date={got_date}")
 
         st, _ = http("GET", f"{base}/api/objects", None, None)
         check("boundary: no credential -> 401", st == 401, f"status={st}")

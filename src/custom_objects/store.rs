@@ -60,6 +60,9 @@ pub struct Obj {
     pub id: Uuid,
     pub slug: String,
     pub name: String,
+    /// Field keys whose COMBINATION must be unique among live records (migration 208). Empty means
+    /// "no composite key": every field behaves exactly as it did before.
+    pub unique_together: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -98,10 +101,24 @@ impl Obj {
             "id": self.id,
             "slug": self.slug,
             "name": self.name,
+            "unique_together": self.unique_together,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         })
     }
+}
+
+/// The `unique_together` column as a list of field keys. The CHECK constraint (migration 208) keeps
+/// it an array; a non-string element cannot be produced by [`set_unique_together`], so it is dropped
+/// rather than turned into an error on every read of an object row.
+fn keys_from(v: &Value) -> Vec<String> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn field_from(row: &sqlx::postgres::PgRow) -> Field {
@@ -126,7 +143,7 @@ pub async fn object_by_slug(db: &PgPool, tenant: Uuid, slug: &str) -> Result<Obj
     // audit). Its rows stay in the database, readable by id from support/SQL, which is what makes
     // archive a reversible-in-principle removal rather than a delete.
     let row = sqlx::query(
-        "SELECT id, slug, name, created_at, updated_at FROM custom_objects
+        "SELECT id, slug, name, unique_together, created_at, updated_at FROM custom_objects
          WHERE tenant_id = $1 AND slug = $2 AND archived_at IS NULL",
     )
     .bind(tenant)
@@ -142,6 +159,7 @@ pub async fn object_by_slug(db: &PgPool, tenant: Uuid, slug: &str) -> Result<Obj
         id: row.get("id"),
         slug: row.get("slug"),
         name: row.get("name"),
+        unique_together: keys_from(&row.get::<Value, _>("unique_together")),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     })
@@ -149,7 +167,7 @@ pub async fn object_by_slug(db: &PgPool, tenant: Uuid, slug: &str) -> Result<Obj
 
 pub async fn list_objects(db: &PgPool, tenant: Uuid) -> Result<Vec<Value>, AppError> {
     let rows = sqlx::query(
-        "SELECT o.id, o.slug, o.name, o.created_at, o.updated_at,
+        "SELECT o.id, o.slug, o.name, o.unique_together, o.created_at, o.updated_at,
                 (SELECT COUNT(*) FROM custom_fields f
                   WHERE f.object_id = o.id AND f.archived_at IS NULL)          AS field_count,
                 (SELECT COUNT(*) FROM custom_records r
@@ -170,6 +188,7 @@ pub async fn list_objects(db: &PgPool, tenant: Uuid) -> Result<Vec<Value>, AppEr
                 "id": r.get::<Uuid, _>("id"),
                 "slug": r.get::<String, _>("slug"),
                 "name": r.get::<String, _>("name"),
+                "unique_together": keys_from(&r.get::<Value, _>("unique_together")),
                 "created_at": r.get::<DateTime<Utc>, _>("created_at"),
                 "updated_at": r.get::<DateTime<Utc>, _>("updated_at"),
                 "field_count": r.get::<i64, _>("field_count"),
@@ -222,6 +241,8 @@ pub async fn create_object(
         id: row.get("id"),
         slug: row.get("slug"),
         name: row.get("name"),
+        // A brand-new object has no composite key: the caller sets one with set_unique_together.
+        unique_together: Vec::new(),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     };
@@ -317,6 +338,179 @@ pub async fn archive_object(
         "slug": slug,
         "fields_archived": fields_archived,
         "records_kept": true,
+    }))
+}
+
+/// Set (or clear) an object's COMPOSITE key (migration 208): the combination of field values that must
+/// be unique among live records, and the thing a replay-safe upsert is keyed on.
+///
+/// Refuses while duplicates exist and NAMES them — the colliding values and the row ids — because
+/// "which of these two is the duplicate?" is the caller's decision, not something the writer may guess
+/// (deleting or overwriting a customer's row to satisfy a schema change would be far worse than a 409).
+///
+/// On success it also re-keys every live record IN THE SAME TRANSACTION, so an object that already has
+/// rows obeys the new constraint immediately rather than only for rows written afterwards. Clearing it
+/// (`[]`) nulls the stored keys, so a later, different key set cannot inherit an old one.
+pub async fn set_unique_together(
+    db: &PgPool,
+    tenant: Uuid,
+    actor: &str,
+    object: &Obj,
+    requested: Vec<String>,
+) -> Result<Value, AppError> {
+    let active = fields_for(db, object.id, false).await?;
+
+    let mut keys: Vec<String> = Vec::new();
+    for raw in &requested {
+        let k = raw.trim();
+        if k.is_empty() {
+            return Err(AppError::BadRequest(
+                "unique_together cannot contain an empty field key".into(),
+            ));
+        }
+        if keys.iter().any(|c| c == k) {
+            return Err(AppError::BadRequest(format!(
+                "unique_together names '{k}' twice — list each field once"
+            )));
+        }
+        keys.push(k.to_string());
+    }
+    if keys.len() > 8 {
+        return Err(AppError::BadRequest(format!(
+            "unique_together takes at most 8 fields — got {}",
+            keys.len()
+        )));
+    }
+    for k in &keys {
+        let Some(f) = active.iter().find(|f| &f.key == k) else {
+            return Err(AppError::BadRequest(format!(
+                "field '{k}' is not a live field of '{}' — add it first with add_field (or it was \
+                 archived, so it can no longer be part of a key)",
+                object.slug
+            )));
+        };
+        if f.kind == "json" {
+            return Err(AppError::BadRequest(format!(
+                "field '{k}' is a json field — a composite key must be made of text, number, bool, \
+                 date or enum values"
+            )));
+        }
+    }
+
+    let mut tx = db.begin().await.map_err(AppError::Database)?;
+    lock_object(&mut tx, object.id).await?;
+
+    let live = sqlx::query(
+        "SELECT id, data FROM custom_records
+          WHERE object_id = $1 AND deleted_at IS NULL ORDER BY created_at",
+    )
+    .bind(object.id)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(AppError::Database)?;
+
+    // One pass: derive every live record's key under the NEW key set, remembering what each row looks
+    // like so a refusal can name the values as well as the ids.
+    let mut keyed: Vec<(Uuid, Option<String>)> = Vec::with_capacity(live.len());
+    let mut seen: std::collections::HashMap<String, Vec<(Uuid, String)>> =
+        std::collections::HashMap::new();
+    for rec in live.iter() {
+        let id: Uuid = rec.get("id");
+        let data: Value = rec.get("data");
+        let Some(map) = data.as_object() else {
+            continue;
+        };
+        let key = key_for(&keys, map)?;
+        if let Some(k) = &key {
+            let described = keys
+                .iter()
+                .map(|f| {
+                    let v = map.get(f).map(scalar_text).unwrap_or_default();
+                    format!("{f}='{v}'")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            seen.entry(k.clone()).or_default().push((id, described));
+        }
+        keyed.push((id, key));
+    }
+
+    let collisions: Vec<&Vec<(Uuid, String)>> = seen.values().filter(|v| v.len() > 1).collect();
+    if !collisions.is_empty() {
+        let mut examples: Vec<String> = Vec::new();
+        for g in collisions.iter().take(3) {
+            let ids: Vec<String> = g.iter().map(|(id, _)| id.to_string()).collect();
+            examples.push(format!(
+                "{} — {} live rows (ids {})",
+                g[0].1,
+                g.len(),
+                ids.join(", ")
+            ));
+        }
+        let more = if collisions.len() > 3 {
+            format!(
+                "; and {} more colliding combination(s)",
+                collisions.len() - 3
+            )
+        } else {
+            String::new()
+        };
+        tx.rollback().await.ok();
+        return Err(AppError::Duplicate(format!(
+            "cannot set unique_together [{}] on '{}': {} combination(s) of live records collide — \
+             {}{}. Decide which row of each pair is the duplicate (update or delete it) and set the \
+             key again; nothing was changed",
+            keys.join(", "),
+            object.slug,
+            collisions.len(),
+            examples.join("; "),
+            more
+        )));
+    }
+
+    let rekeyed = keyed.len() as i64;
+    sqlx::query("UPDATE custom_objects SET unique_together = $2, updated_at = NOW() WHERE id = $1")
+        .bind(object.id)
+        .bind(json!(&keys))
+        .execute(&mut *tx)
+        .await
+        .map_err(AppError::Database)?;
+
+    // One bound statement per record. The object lock is held for the whole loop, so no writer can slip
+    // a row in between the scan and the re-key (the unique index is the backstop if one ever does).
+    for (id, key) in &keyed {
+        sqlx::query("UPDATE custom_records SET uniq_key = $2 WHERE id = $1")
+            .bind(id)
+            .bind(key.as_deref())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                map_db(
+                    e,
+                    &format!(
+                        "cannot set unique_together on '{}': live records collide on this key",
+                        object.slug
+                    ),
+                )
+            })?;
+    }
+
+    tx.commit().await.map_err(AppError::Database)?;
+
+    audit(
+        db,
+        tenant,
+        actor,
+        "unique_together_set",
+        Some(&object.slug),
+        json!({ "fields": keys, "rekeyed": rekeyed }),
+    )
+    .await?;
+
+    Ok(json!({
+        "object": object.slug,
+        "unique_together": keys,
+        "rekeyed": rekeyed,
     }))
 }
 
@@ -815,44 +1009,194 @@ async fn lock_object(tx: &mut Transaction<'_, Postgres>, object_id: Uuid) -> Res
     Ok(())
 }
 
+/// The canonical text form of a record's COMPOSITE key (migration 208), or `None` when the object has
+/// no `unique_together` or the record does not carry every key value.
+///
+/// A JSON array of the values, never a concatenation: two different splits must not produce the same
+/// string (`("a|b","c")` vs `("a","b|c")`), and the array is exactly what `custom_records.uniq_key`
+/// stores. This is the ONE definition — insert, upsert, update and the re-key backfill all call it, so
+/// a key written by one path matches the key another path looks for.
+pub fn key_for(keys: &[String], data: &Map<String, Value>) -> Result<Option<String>, AppError> {
+    if keys.is_empty() {
+        return Ok(None);
+    }
+    let mut parts: Vec<String> = Vec::with_capacity(keys.len());
+    for k in keys {
+        match data.get(k) {
+            // A record that does not carry every key value is not keyed at all. The unique index is
+            // partial on `uniq_key IS NOT NULL`, so any number of such records may coexist.
+            None | Some(Value::Null) => return Ok(None),
+            Some(v) => parts.push(scalar_text(v)),
+        }
+    }
+    serde_json::to_string(&parts).map(Some).map_err(|e| {
+        AppError::BadRequest(format!("cannot derive this record's composite key: {e}"))
+    })
+}
+
+fn composite_duplicate(object: &Obj, keys: &[String]) -> String {
+    format!(
+        "object '{}' already has a live record with this combination of {} — nothing was written. \
+         Send the same write with ?upsert={} to update that row instead of adding a second one",
+        object.slug,
+        keys.join(" + "),
+        keys.join(",")
+    )
+}
+
+/// The `upsert=` keys of a write, checked against the object's `unique_together`. A caller may name
+/// the keys in any order (the key itself is order-independent here because the whole set is sent),
+/// but the SET must be exactly the object's composite key — anything else has no constraint behind it
+/// and would silently insert a duplicate.
+fn upsert_target(object: &Obj, requested: &[String]) -> Result<Vec<String>, AppError> {
+    let mut clean: Vec<String> = Vec::new();
+    for raw in requested {
+        let k = raw.trim();
+        if k.is_empty() {
+            return Err(AppError::BadRequest(
+                "upsert=... takes a comma-separated list of field keys — one of them was empty"
+                    .into(),
+            ));
+        }
+        if !clean.iter().any(|c| c == k) {
+            clean.push(k.to_string());
+        }
+    }
+    if object.unique_together.is_empty() {
+        return Err(AppError::BadRequest(format!(
+            "object '{}' has no unique_together, so there is no combination a replay could match. \
+             Set one first: PATCH /api/objects/{} {{\"unique_together\":[\"k1\",\"k2\"]}}",
+            object.slug, object.slug
+        )));
+    }
+    let mut have: Vec<&str> = object.unique_together.iter().map(|s| s.as_str()).collect();
+    have.sort_unstable();
+    let mut want: Vec<&str> = clean.iter().map(|s| s.as_str()).collect();
+    want.sort_unstable();
+    if have != want {
+        return Err(AppError::BadRequest(format!(
+            "upsert can only be keyed on this object's unique_together [{}] — asked for [{}]",
+            object.unique_together.join(", "),
+            clean.join(", ")
+        )));
+    }
+    Ok(clean)
+}
+
+/// Write ONE record. With `upsert_on` the write is a REPLAY-SAFE upsert keyed on the object's
+/// `unique_together` (migration 208): a second call with the same key values updates that row and
+/// merges the supplied fields into it, so a producer that retries never inserts a second row.
 pub async fn insert_record(
     db: &PgPool,
     tenant: Uuid,
     actor: &str,
     object: &Obj,
     data: Map<String, Value>,
+    upsert_on: Option<Vec<String>>,
 ) -> Result<Value, AppError> {
     let active: Vec<Field> = fields_for(db, object.id, false).await?;
-    validate_written(&active, &data, true)?;
+
+    // A plain insert must carry the whole required set, exactly as before. An upsert is identified by
+    // its key values, so those are mandatory while the rest of the required set is checked on the
+    // MERGED row after the write — a replay that changes one field must not have to resend the record.
+    let (keys, key) = match &upsert_on {
+        None => {
+            validate_written(&active, &data, true)?;
+            (
+                object.unique_together.clone(),
+                key_for(&object.unique_together, &data)?,
+            )
+        }
+        Some(requested) => {
+            let keys = upsert_target(object, requested)?;
+            let missing: Vec<&str> = keys
+                .iter()
+                .filter(|k| data.get(*k).map(|v| v.is_null()).unwrap_or(true))
+                .map(|k| k.as_str())
+                .collect();
+            if !missing.is_empty() {
+                return Err(AppError::BadRequest(format!(
+                    "upsert needs a value for every key field — missing: {}",
+                    missing.join(", ")
+                )));
+            }
+            validate_written(&active, &data, false)?;
+            let key = key_for(&keys, &data)?;
+            (keys, key)
+        }
+    };
+    let duplicate = composite_duplicate(object, &keys);
 
     let mut tx = db.begin().await.map_err(AppError::Database)?;
     lock_object(&mut tx, object.id).await?;
     ensure_unique(&mut tx, object.id, &active, &data, None).await?;
 
-    let row = sqlx::query(
-        "INSERT INTO custom_records (tenant_id, object_id, data) VALUES ($1, $2, $3)
-         RETURNING id, data, created_at, updated_at",
-    )
-    .bind(tenant)
-    .bind(object.id)
-    .bind(Value::Object(data))
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(AppError::Database)?;
+    let (row, inserted) = if upsert_on.is_some() {
+        // ONE literal statement. The conflict target is the partial unique index from migration 208
+        // (its predicate repeated verbatim, which is what lets PostgreSQL infer it);
+        // `data || EXCLUDED.data` merges the supplied fields into the existing row and leaves every
+        // field the caller did not send untouched.
+        let row = sqlx::query(
+            "INSERT INTO custom_records (tenant_id, object_id, data, uniq_key)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (object_id, uniq_key) WHERE deleted_at IS NULL AND uniq_key IS NOT NULL
+             DO UPDATE SET data = custom_records.data || EXCLUDED.data, updated_at = NOW()
+             RETURNING id, data, created_at, updated_at, (xmax = 0) AS inserted",
+        )
+        .bind(tenant)
+        .bind(object.id)
+        .bind(Value::Object(data))
+        .bind(key.as_deref())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| map_db(e, &duplicate))?;
+        let inserted: bool = row.get("inserted");
+        if let Some(merged) = row.get::<Value, _>("data").as_object() {
+            if let Err(e) = check_required(&active, merged) {
+                // Nothing is written: the transaction is rolled back, so a replay that is missing a
+                // required value cannot leave a half-valid row behind.
+                tx.rollback().await.ok();
+                return Err(e);
+            }
+        }
+        (row, inserted)
+    } else {
+        let row = sqlx::query(
+            "INSERT INTO custom_records (tenant_id, object_id, data, uniq_key)
+             VALUES ($1, $2, $3, $4)
+             RETURNING id, data, created_at, updated_at",
+        )
+        .bind(tenant)
+        .bind(object.id)
+        .bind(Value::Object(data))
+        .bind(key.as_deref())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| map_db(e, &duplicate))?;
+        (row, true)
+    };
     tx.commit().await.map_err(AppError::Database)?;
 
-    let out = json!({
+    let mut out = json!({
         "id": row.get::<Uuid, _>("id"),
         "object": object.slug,
         "data": row.get::<Value, _>("data"),
         "created_at": row.get::<DateTime<Utc>, _>("created_at"),
         "updated_at": row.get::<DateTime<Utc>, _>("updated_at"),
     });
+    let action = if upsert_on.is_some() {
+        // What a replay DID (updated vs inserted) is useful to the caller; the audit row still names
+        // the record id only, exactly like every other record action.
+        out["upsert"] = json!({ "on": keys, "inserted": inserted });
+        "record_upserted"
+    } else {
+        "record_inserted"
+    };
     audit(
         db,
         tenant,
         actor,
-        "record_inserted",
+        action,
         Some(&object.slug),
         json!({ "id": out["id"] }),
     )
@@ -1030,16 +1374,26 @@ pub async fn update_record(
     check_required(&active, &merged)?;
     ensure_unique(&mut tx, object.id, &active, &patch, Some(id)).await?;
 
+    // The composite key is recomputed from the MERGED row, because a patch can change one half of it.
+    let uniq_key = key_for(&object.unique_together, &merged)?;
+    let duplicate = format!(
+        "object '{}' already has a live record with the same combination of {} — this change would \
+         duplicate it, so nothing was written",
+        object.slug,
+        object.unique_together.join(" + ")
+    );
+
     let row = sqlx::query(
-        "UPDATE custom_records SET data = $2, updated_at = NOW()
+        "UPDATE custom_records SET data = $2, uniq_key = $3, updated_at = NOW()
           WHERE id = $1 AND deleted_at IS NULL
           RETURNING id, data, created_at, updated_at",
     )
     .bind(id)
     .bind(Value::Object(merged))
+    .bind(uniq_key.as_deref())
     .fetch_one(&mut *tx)
     .await
-    .map_err(AppError::Database)?;
+    .map_err(|e| map_db(e, &duplicate))?;
     tx.commit().await.map_err(AppError::Database)?;
 
     let out = json!({
