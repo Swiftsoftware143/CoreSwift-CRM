@@ -235,7 +235,9 @@
 //!        address added its two public arms (kanban t_8457bfef), and 31 after the per-calendar
 //!        path added `/api/public/calendar/site/:slug` (kanban t_d4ac5433)
 //!    17 service-to-service entries    -> INTERNAL_ROUTES (all /api, reached with the shared key)
-//!     2 issued-API-key entries        -> API_KEY_ROUTES  (/api/external/**)
+//!    14 issued-API-key entries        -> API_KEY_ROUTES  (/api/external/**, /api/data-mapping/events,
+//!        and the custom-object REST + MCP surface — the one class that also accepts a console JWT,
+//!        decided in `custom_objects::authenticate`)
 //!    11 served surfaces outside the boundary: the SPA mount, /track/:slug, the eight
 //!        /s/:tenant_id/** support-portal mounts and the two /s/:tenant_slug/widgets/**
 //!        embed-widget mounts
@@ -572,6 +574,20 @@ pub const API_KEY_ROUTES: &[&str] = &[
     // The data-mapping intake: a sibling app reports one event with the account's issued key. The
     // tenant comes from the key, never from the payload, so a caller cannot name another tenant.
     "/api/data-mapping/events",
+    // CUSTOM OBJECTS (migration 204) — the owned no-code backend. These are the ONE class of route
+    // in this app that answers BOTH credential classes: `/api/external/**` is key-only, but an agent
+    // (MCP) and an application (REST) must read the same rows, so the boundary here asks only for a
+    // non-empty bearer and `custom_objects::authenticate` decides which credential it is — an issued
+    // `csk_…` key, or a console session JWT. Whichever it is, it resolves to exactly one account and
+    // the module reads the tenant from that resolution, never from the request.
+    "/api/mcp",
+    "/api/objects",
+    "/api/objects/:slug/schema",
+    "/api/objects/:slug/fields",
+    "/api/objects/:slug/fields/:id",
+    "/api/objects/:slug/records",
+    "/api/objects/:slug/records/:id",
+    "/api/objects/:slug/audit",
 ];
 
 /// Is `path` (a concrete request path) one of the committed public templates?
@@ -1015,6 +1031,19 @@ mod tests {
             prefix: "",
             src: include_str!("../mail_compliance/mod.rs"),
             func: "public_router",
+        },
+        // Custom Objects (migration 204): the REST surface and, separately, the MCP door. Two rows
+        // because they are two nests — `main.rs` mounts `/api/objects` and `/api/mcp`, and each
+        // router's own literals are read from its own file.
+        Nest {
+            prefix: "/api/objects",
+            src: include_str!("../custom_objects/mod.rs"),
+            func: "router",
+        },
+        Nest {
+            prefix: "/api/mcp",
+            src: include_str!("../custom_objects/mcp.rs"),
+            func: "router",
         },
     ];
 
@@ -1461,12 +1490,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            532,
+            558,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 518,
+            api, 544,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.

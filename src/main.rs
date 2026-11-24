@@ -31,6 +31,7 @@ mod config;
 pub mod contacts;
 pub mod contacts_internal;
 pub mod csv_handler;
+pub mod custom_objects;
 pub mod dashboard;
 pub mod data_mapping;
 mod db;
@@ -626,6 +627,13 @@ async fn main() -> anyhow::Result<()> {
             "/api/personal-api-keys",
             personal_api_keys::router(state.clone()),
         )
+        // CUSTOM OBJECTS — the owned no-code backend (migration 204). TWO mounts, ONE module: the
+        // REST surface an application calls and the MCP door an agent calls, both resolving the
+        // account from the credential in `custom_objects::authenticate`. `api_key` callers are listed
+        // in `auth::route_policy::API_KEY_ROUTES`; a console session passes the same boundary with a
+        // JWT and is decided by the module's own middleware.
+        .nest("/api/objects", custom_objects::router(state.clone()))
+        .nest("/api/mcp", custom_objects::mcp::router(state.clone()))
         .nest("/api/analytics", analytics::router(state.clone()))
         // THE ACTION AGENT (ticketing suite item 1): limits, the ledger, and the door every action goes
         // through. Acting on a customer's record deserves its own mount, not a corner of another module.
