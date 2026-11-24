@@ -318,12 +318,20 @@ pub fn is_account_admin(role: &str) -> bool {
 /// provider keys) where a `member` holding the tenant id must not be able to manage — or even
 /// enumerate — the workspace's credentials.
 pub fn require_account_admin(c: &Claims) -> Result<(), AppError> {
+    require_account_admin_for(c, "manage workspace credentials")
+}
+
+/// The same refusal with a surface-specific sentence. A `member` works INSIDE the account (the
+/// shared inbox, the pipeline, the contacts) but never manages the account's credentials or the
+/// infrastructure mail depends on — the sending domain, the inboxes on it, the provider key, the
+/// support address. The sentence names the thing they cannot do, because the console paints it.
+pub fn require_account_admin_for(c: &Claims, what: &str) -> Result<(), AppError> {
     if is_account_admin(&c.role) {
         Ok(())
     } else {
-        Err(AppError::ForbiddenReason(
-            "only an account owner or admin can manage workspace credentials".to_string(),
-        ))
+        Err(AppError::ForbiddenReason(format!(
+            "only an account owner or admin can {what}"
+        )))
     }
 }
 

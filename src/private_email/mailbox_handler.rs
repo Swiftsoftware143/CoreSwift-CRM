@@ -18,6 +18,7 @@ pub async fn provision_mailbox(
     Extension(claims): Extension<Claims>,
     Json(req): Json<ProvisionMailboxRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    crate::auth::middleware::require_account_admin_for(&claims, "create or delete an inbox")?;
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     feature_gate::check_mailbox_limit(&state.db, account_id).await?;
@@ -208,6 +209,7 @@ pub async fn delete_mailbox(
     Extension(claims): Extension<Claims>,
     Path(box_id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    crate::auth::middleware::require_account_admin_for(&claims, "create or delete an inbox")?;
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let mailbox = sqlx::query_as::<_, PrivateEmailBox>(

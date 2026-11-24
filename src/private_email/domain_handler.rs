@@ -218,6 +218,10 @@ pub async fn add_domain(
     Extension(claims): Extension<Claims>,
     Json(req): Json<AddDomainRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    crate::auth::middleware::require_account_admin_for(
+        &claims,
+        "add, verify or remove a sending domain",
+    )?;
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     feature_gate::check_domain_limit(&state.db, account_id).await?;
@@ -631,6 +635,10 @@ pub async fn delete_domain(
     Extension(claims): Extension<Claims>,
     Path(domain_id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    crate::auth::middleware::require_account_admin_for(
+        &claims,
+        "add, verify or remove a sending domain",
+    )?;
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let result = sqlx::query("DELETE FROM private_email_domains WHERE id = $1 AND tenant_id = $2")
@@ -653,6 +661,10 @@ pub async fn update_domain(
     Path(domain_id): Path<Uuid>,
     Json(req): Json<UpdateDomainRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    crate::auth::middleware::require_account_admin_for(
+        &claims,
+        "add, verify or remove a sending domain",
+    )?;
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     if let Some(catch_all) = req.catch_all_enabled {
@@ -1027,6 +1039,10 @@ pub async fn verify_domain(
     Extension(claims): Extension<Claims>,
     Path(domain_id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    crate::auth::middleware::require_account_admin_for(
+        &claims,
+        "add, verify or remove a sending domain",
+    )?;
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Sending is deliberately NOT read here: a re-check answers for the RECEIVER, and asking the

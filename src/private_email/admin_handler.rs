@@ -338,6 +338,7 @@ pub async fn set_support_box(
     Extension(claims): Extension<crate::auth::models::Claims>,
     Json(body): Json<SetSupportBoxRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    crate::auth::middleware::require_account_admin_for(&claims, "choose the support address")?;
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     if let Some(box_id) = body.box_id {

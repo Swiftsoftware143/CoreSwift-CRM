@@ -61,6 +61,10 @@ pub async fn list_api_keys(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    crate::auth::middleware::require_account_admin_for(
+        &claims,
+        "manage the workspace's sending key",
+    )?;
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let rows = sqlx::query_as::<_, ApiKeyRow>(
         "SELECT id, tenant_id, label, provider, api_key_encrypted FROM private_email_api_keys WHERE tenant_id = $1 ORDER BY created_at DESC"
@@ -98,6 +102,10 @@ pub async fn add_api_key(
     Extension(claims): Extension<Claims>,
     Json(req): Json<AddApiKeyRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    crate::auth::middleware::require_account_admin_for(
+        &claims,
+        "manage the workspace's sending key",
+    )?;
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // One envelope for the whole app (CS-21/t_45772522): `secret_box::seal` writes the `enc:v1:`
@@ -169,6 +177,10 @@ pub async fn delete_api_key(
     Extension(claims): Extension<Claims>,
     Path(key_id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    crate::auth::middleware::require_account_admin_for(
+        &claims,
+        "manage the workspace's sending key",
+    )?;
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let result = sqlx::query("DELETE FROM private_email_api_keys WHERE id = $1 AND tenant_id = $2")

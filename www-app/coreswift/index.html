@@ -1050,6 +1050,10 @@ function showApp() {
   appWrap.classList.remove('hidden');
   appWrap.style.display = '';
   document.getElementById('userEmail').textContent = STATE.user.email;
+  // ONE answer the tab modules can read: is this person an account administrator? The server
+  // enforces it (auth::middleware::require_account_admin_for); this only keeps a control that
+  // would always be refused off the screen.
+  window.CS_ACCOUNT_ADMIN = ['owner','account_owner','admin','agency_admin'].indexOf(STATE.user.role) >= 0;
   paintAvatar();
   renderSidebar();
   switchTab('dashboard');
@@ -1131,7 +1135,10 @@ const MENU = [
     // The settings half of private email: the domains you send from (with their catch-all switch,
     // provider credential and inbound signing key), mailboxes, auto-replies and the send form. It
     // used to be the 'inbox' tab, which the mail client now owns — see the TAB_RENDERERS note below.
-    { id:'email-settings', icon:'🌐', label:'Email Domains & Sending' }
+    // Owner/admin only: this screen manages the account's sending infrastructure (domains,
+    // inboxes, the provider sending key, the support address) — the same class as the
+    // credential screens. A member reads and sends mail in Shared Inbox, which stays visible.
+    { id:'email-settings', icon:'🌐', label:'Email Domains & Sending', roles:['owner','account_owner','admin','agency_admin'] }
   ]},
   { id:'ai-assistant', icon:'🤖', label:'AI Assistant' },
   { id:'tracked-links', icon:'🔗', label:'Tracked Links' },

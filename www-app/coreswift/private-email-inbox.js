@@ -120,7 +120,10 @@
         + (ready
           ? '<button class="btn btn-primary btn-sm" onclick="peLogin(\'' + esc(base) + '\',\'' + esc(b.email_address) + '\')">LOG IN</button>'
           : '<button class="btn btn-secondary btn-sm" disabled title="This address cannot receive mail yet">LOG IN</button>')
-        + ' <button class="btn btn-ghost btn-xs" title="Delete this inbox" onclick="peDeleteBox(\'' + esc(b.id) + '\',\'' + esc(b.email_address) + '\')">Delete</button>'
+        // Deleting an inbox is account-admin work (it takes the address away, not just the
+        // assignment): the server refuses a member, so the control is not painted for one.
+        + (window.CS_ACCOUNT_ADMIN === false ? ''
+          : ' <button class="btn btn-ghost btn-xs" title="Delete this inbox" onclick="peDeleteBox(\'' + esc(b.id) + '\',\'' + esc(b.email_address) + '\')">Delete</button>')
         + '</td></tr>';
     }).join('');
     return '<table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:left;color:var(--text-secondary)">'
