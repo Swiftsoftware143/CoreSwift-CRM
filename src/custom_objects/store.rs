@@ -633,8 +633,25 @@ fn check_value(f: &Field, v: &Value) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Validate the keys a caller wrote. `require_all` is true for an INSERT and for the merged result
-/// of a PATCH, so a patch can never drop a required value by omitting it.
+/// Every non-archived required field must be present. Separate from [`validate_written`] on purpose:
+/// a PATCH validates the keys it WROTE, but its required check runs over the MERGED record, and that
+/// record can legitimately still carry values of fields that were archived since — those keys are not
+/// writable any more, but they are not errors either.
+pub fn check_required(active: &[Field], merged: &Map<String, Value>) -> Result<(), AppError> {
+    for f in active.iter().filter(|f| f.required) {
+        let present = merged.get(&f.key).map(|v| !v.is_null()).unwrap_or(false);
+        if !present {
+            return Err(AppError::BadRequest(format!(
+                "missing required field '{}'",
+                f.key
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Validate the keys a caller wrote. `require_all` is true for an INSERT, so a fresh record cannot
+/// omit a required value.
 pub fn validate_written(
     active: &[Field],
     written: &Map<String, Value>,
@@ -650,15 +667,7 @@ pub fn validate_written(
         check_value(f, v)?;
     }
     if require_all {
-        for f in active.iter().filter(|f| f.required) {
-            let present = written.get(&f.key).map(|v| !v.is_null()).unwrap_or(false);
-            if !present {
-                return Err(AppError::BadRequest(format!(
-                    "missing required field '{}'",
-                    f.key
-                )));
-            }
-        }
+        check_required(active, written)?;
     }
     Ok(())
 }
@@ -711,8 +720,11 @@ async fn ensure_unique(
 /// inserts (a read-then-write check without a lock is not a constraint). Transaction-scoped: it is
 /// released by COMMIT/ROLLBACK, so a crashed caller cannot wedge the object.
 async fn lock_object(tx: &mut Transaction<'_, Postgres>, object_id: Uuid) -> Result<(), AppError> {
+    // The bind is a STRING, not the uuid: `$1::text` makes Postgres declare the parameter as text,
+    // and sqlx sends a `Uuid` with the uuid type OID — the driver refuses the mismatch at runtime
+    // (the same reason `workspaces::handlers` binds `tid.to_string()` here).
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
-        .bind(object_id)
+        .bind(object_id.to_string())
         .execute(&mut **tx)
         .await
         .map_err(AppError::Database)?;
@@ -928,9 +940,10 @@ pub async fn update_record(
     for (k, v) in patch.iter() {
         merged.insert(k.clone(), v.clone());
     }
-    // Validate what the caller WROTE (unknown keys refused), then the merged row's required set.
+    // Validate what the caller WROTE (unknown keys / wrong kinds refused), then the merged row's
+    // required set — the values of fields archived since are carried but never re-validated.
     validate_written(&active, &patch, false)?;
-    validate_written(&active, &merged, true)?;
+    check_required(&active, &merged)?;
     ensure_unique(&mut tx, object.id, &active, &patch, Some(id)).await?;
 
     let row = sqlx::query(

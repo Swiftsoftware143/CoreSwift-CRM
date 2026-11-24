@@ -204,6 +204,14 @@ def main():
         check("5 archive_field keeps the stored value", st == 200 and kept == "keep me" and archived == "1",
               f"status={st} data={kept!r} archived={archived}")
 
+        # 5b. A patch on a record that still carries an archived field's value must NOT be refused: the
+        # value is not writable any more, but it is not an error either. (This is the arm that a naive
+        # "validate the merged row against live fields" check gets wrong.)
+        st, body = http("PATCH", f"{base}/api/objects/orders/records/{rid}", {"amount": 12}, key_a)
+        kept2 = db.q(f"SELECT data->>'notes' FROM custom_records WHERE id='{rid}'")
+        check("5b PATCH still works while the record carries an archived field",
+              st == 200 and kept2 == "keep me", f"status={st} body={json.dumps(body)[:160]}")
+
         # ── 6. An unknown field key is refused and nothing is written ───────────────────────────
         before = db.q(f"SELECT count(*) FROM custom_records WHERE tenant_id='{a}'")
         st, body = http("POST", f"{base}/api/objects/orders/records",
@@ -231,7 +239,7 @@ def main():
         )
         check("8 audit rows exist for every schema change",
               st == 200 and {"object_created", "field_added", "field_archived"} <= set(actions)
-              and db_schema_changes == "5",  # 1 object + 4 fields + 1 archive
+              and db_schema_changes == "6",  # 1 object_created + 4 field_added + 1 field_archived
               f"status={st} actions={actions} db={db_schema_changes}")
 
         # ── the doors refuse what they should ───────────────────────────────────────────────────
