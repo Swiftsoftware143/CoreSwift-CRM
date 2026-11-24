@@ -38,6 +38,16 @@ pub async fn create_rule(
         "ListRemoved",
         "tag.assigned",
         "tag.unassigned",
+        "stage.changed",
+        // The three trigger kinds the six approved drafts need and the vocabulary was missing
+        // (kanban t_990c386e). Each one has a real emitter: `contact.created` is dispatched from
+        // the contact-creation doors, and `date.renewal` / `contact.inactive` are evaluated by the
+        // clock scanner in src/automation/scan.rs. A label with no emitter is decorative, which is
+        // why none of these is accepted "just in case".
+        "contact.created",
+        "ContactCreated",
+        "date.renewal",
+        "contact.inactive",
     ];
     if !valid_t.contains(&r.trigger_type.as_str()) {
         return Err(AppError::Validation("Invalid trigger_type".into()));
@@ -62,8 +72,13 @@ pub async fn create_rule(
     // the removed `::trigger_type` / `::action_type` casts pointed at enum types that do not
     // exist (pg_type has business_unit, channel_type, user_role, user_state — nothing else), which
     // is why this INSERT had never succeeded for anyone.
-    Ok((StatusCode::CREATED, Json(json!(sqlx::query_as::<_,AutomationRule>(concat!("INSERT INTO automation_rules(id,tenant_id,name,description,trigger_type,trigger_config,action_type,action_config) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ", rule_columns!()))
-        .bind(Uuid::new_v4()).bind(t).bind(&r.name).bind(&r.description).bind(&r.trigger_type).bind(&r.trigger_config).bind(&r.action_type).bind(&r.action_config).fetch_one(&s.db).await?))))
+    //
+    // `is_active` (kanban t_990c386e): COALESCE keeps the old contract — an omitted field is an
+    // ACTIVE rule, exactly as before this change, because the column's own default is true. The
+    // console's "Save as draft" sends false explicitly; nothing in this endpoint can activate a
+    // rule that was created as a draft, and nothing here queues an action.
+    Ok((StatusCode::CREATED, Json(json!(sqlx::query_as::<_,AutomationRule>(concat!("INSERT INTO automation_rules(id,tenant_id,name,description,trigger_type,trigger_config,action_type,action_config,is_active) VALUES($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9,true)) RETURNING ", rule_columns!()))
+        .bind(Uuid::new_v4()).bind(t).bind(&r.name).bind(&r.description).bind(&r.trigger_type).bind(&r.trigger_config).bind(&r.action_type).bind(&r.action_config).bind(r.is_active).fetch_one(&s.db).await?))))
 }
 
 pub async fn get_rule(

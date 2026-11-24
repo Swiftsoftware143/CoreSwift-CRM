@@ -43,6 +43,11 @@ pub struct CreateRuleRequest {
     pub trigger_config: serde_json::Value,
     pub action_type: String,
     pub action_config: serde_json::Value,
+    /// Drafts (kanban t_990c386e). `None` (the field omitted) keeps the historical behaviour — the
+    /// column defaults to `true`, so an old caller still creates an ACTIVE rule. `Some(false)` is
+    /// the console's "Save as draft": the rule exists, lists, edits and deletes, and the engine's
+    /// `is_active IS NOT FALSE` filters keep it from firing.
+    pub is_active: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

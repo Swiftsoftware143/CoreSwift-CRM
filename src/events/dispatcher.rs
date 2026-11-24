@@ -6,31 +6,36 @@
 //! 3. If a delay is required, delayed_actions table tracks it
 //! 4. After timeout, evaluate_delayed_action checks condition and fires
 
+use crate::automation::models::{rule_columns, AutomationRule};
 use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-/// Dispatch an event to all matching automation rules for a tenant.
-/// Fire-and-forget — logs failures but never blocks.
-/// Also triggers onboarding checklists and records health signals for matching events.
-pub async fn dispatch_automation(
+/// Fire the tenant's ACTIVE rules for one event label — the rules half of `dispatch_automation`,
+/// split out so a door that emits a NEW event can run automations without also starting onboarding
+/// checklists and health signals the event was never about (kanban t_990c386e: `contact.created`
+/// is dispatched from the contact writers with exactly this call).
+///
+/// Every match goes through `automation::engine::fire_rule`, the ONE executor, so a rule fired by an
+/// ingested event honours its delay, its no-reply condition and its `template_id` — the same way a
+/// tag/list/score/stage match does. Before this the event path had its own naive executor that read
+/// `action_config.to/subject/body` and ignored templates and conditions entirely.
+pub async fn dispatch_rule_event(
     db: &PgPool,
     tenant_id: Uuid,
     event_type: &str,
     entity_type: Option<&str>,
     entity_id: Option<Uuid>,
-    payload: &serde_json::Value,
 ) {
-    // Find active automation rules matching this trigger
-    let rules = match sqlx::query_as::<
-        _,
-        (Uuid, String, serde_json::Value, String, serde_json::Value),
-    >(
-        r#"SELECT id, trigger_type, trigger_config, action_type, action_config
-           FROM automation_rules
-           WHERE tenant_id = $1 AND is_active = true AND trigger_type = $2
-           ORDER BY execution_count ASC"#,
-    )
+    if !crate::automation::engine::automations_enabled(db, tenant_id).await {
+        return;
+    }
+    let rules = match sqlx::query_as::<_, AutomationRule>(concat!(
+        "SELECT ",
+        rule_columns!(),
+        " FROM automation_rules WHERE tenant_id = $1 AND trigger_type = $2 \
+         AND is_active IS NOT FALSE ORDER BY execution_count ASC"
+    ))
     .bind(tenant_id)
     .bind(event_type)
     .fetch_all(db)
@@ -43,36 +48,59 @@ pub async fn dispatch_automation(
         }
     };
 
-    for (rule_id, _trigger_type, trigger_config, action_type, action_config) in rules {
-        // Check if trigger_config has filter conditions
-        if let Some(conditions) = trigger_config.as_object() {
+    for rule in rules {
+        // Optional entity-type filter, unchanged from the original loop.
+        if let Some(conditions) = rule.trigger_config.as_object() {
             if let Some(entity_match) = conditions.get("entity_type") {
                 if let Some(et) = entity_type {
                     if entity_match.as_str() != Some(et) {
-                        continue; // entity type doesn't match
+                        continue;
                     }
                 }
             }
         }
 
-        // Execute the action
-        execute_action(
-            db,
-            tenant_id,
-            rule_id,
-            &action_type,
-            &action_config,
-            entity_id,
-            payload,
-        )
-        .await;
-
-        // Increment execution count
-        let _ = sqlx::query("UPDATE automation_rules SET execution_count = execution_count + 1, last_executed_at = NOW() WHERE id = $1")
-            .bind(rule_id)
-            .execute(db)
-            .await;
+        match (entity_type, entity_id) {
+            (Some(et), Some(eid)) => {
+                if let Err(e) =
+                    crate::automation::engine::fire_rule(db, &rule, tenant_id, et, eid, false).await
+                {
+                    tracing::warn!(rule = %rule.id, action = %rule.action_type, error = %e, "Automation action failed");
+                }
+            }
+            // No subject: the action cannot be queued per-entity, so keep the legacy path.
+            _ => {
+                execute_action(
+                    db,
+                    tenant_id,
+                    rule.id,
+                    &rule.action_type,
+                    &rule.action_config,
+                    None,
+                    &serde_json::Value::Null,
+                )
+                .await;
+                let _ = sqlx::query("UPDATE automation_rules SET execution_count = COALESCE(execution_count,0) + 1, last_executed_at = NOW() WHERE id = $1")
+                    .bind(rule.id)
+                    .execute(db)
+                    .await;
+            }
+        }
     }
+}
+
+/// Dispatch an event to all matching automation rules for a tenant.
+/// Fire-and-forget — logs failures but never blocks.
+/// Also triggers onboarding checklists and records health signals for matching events.
+pub async fn dispatch_automation(
+    db: &PgPool,
+    tenant_id: Uuid,
+    event_type: &str,
+    entity_type: Option<&str>,
+    entity_id: Option<Uuid>,
+    _payload: &serde_json::Value,
+) {
+    dispatch_rule_event(db, tenant_id, event_type, entity_type, entity_id).await;
 
     // Also trigger onboarding checklists for matching events
     match event_type {
@@ -238,8 +266,66 @@ async fn execute_action(
     }
 }
 
+/// Did THIS contact send/reply since `since`?
+///
+/// Two real signals, because a reply can arrive through either door and neither covers both:
+///   * `private_email_messages` — inbound mail filed by the private-email receiver, matched on the
+///     contact's own email address (case-insensitive). `direction='inbound'` only: our own outgoing
+///     mail must never count as a reply.
+///   * `events` — an ingested reply-ish event whose subject is that contact. The vocabulary is
+///     matched case-insensitively so `email.reply` and `Email.Reply` cannot disagree.
+///
+/// This is the honest boundary of "replied": a reply typed into some surface that writes neither of
+/// these is invisible here, so the condition would fire. That is why the console labels the checkbox
+/// "they have not replied" and the guide says what counts (see www-app/coreswift/guide.html).
+async fn contact_replied_since(
+    db: &PgPool,
+    tenant_id: Uuid,
+    contact_id: Uuid,
+    since: chrono::DateTime<chrono::Utc>,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar::<_, bool>(
+        r#"SELECT EXISTS(
+               SELECT 1 FROM private_email_messages m
+                 JOIN contacts c ON c.id = $2 AND c.tenant_id = m.tenant_id
+                WHERE m.tenant_id = $1 AND m.direction = 'inbound'
+                  AND m.received_at > $3
+                  AND c.email IS NOT NULL AND lower(m.from_address) = lower(c.email)
+           ) OR EXISTS(
+               SELECT 1 FROM events e
+                WHERE e.tenant_id = $1 AND e.created_at > $3
+                  AND e.entity_type = 'contact' AND e.entity_id = $2
+                  AND lower(e.event_type) IN ('email.reply','emailed.reply','reply','inbound.email','email_received')
+           )"#,
+    )
+    .bind(tenant_id)
+    .bind(contact_id)
+    .bind(since)
+    .fetch_one(db)
+    .await
+}
+
+fn is_reply_event(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "email.reply" | "emailed.reply" | "reply" | "inbound.email" | "email_received"
+    )
+}
+
 /// Evaluate a delayed "If-Not-Then" action after its wait period.
 /// Checks if the expected event occurred. If not, fires the action.
+///
+/// CONTACT-SCOPED (kanban t_990c386e). The `no_event` arm used to count `events` rows for the whole
+/// TENANT (`WHERE tenant_id=$1 AND event_type=$2 AND created_at>$3`), so "wait 3 days and follow up
+/// if they have not replied" fired only if NOBODY in the tenant had replied to anything in 3 days —
+/// on any account with traffic, a no-reply sequence could never run. The condition is now about one
+/// contact when the row names one (`condition_config.contact_id`, or `entity_type='contact'`), and
+/// `no_reply` is the explicit spelling the console writes.
+///
+/// A row queued by a RULE (`source_rule_id`) is executed through `automation::actions`, the same
+/// executor every other trigger path uses, so a template, a contact-addressed email and every other
+/// action behaviour are identical whether the wait was zero or three days. Legacy rows (monitoring,
+/// checklists, the public API) keep their old executor.
 pub async fn evaluate_delayed_action(db: &PgPool, action_id: Uuid) {
     let action = match sqlx::query_as::<_, crate::events::models::DelayedAction>(
         "SELECT * FROM delayed_actions WHERE id = $1 AND executed = false AND cancelled = false",
@@ -256,34 +342,102 @@ pub async fn evaluate_delayed_action(db: &PgPool, action_id: Uuid) {
         }
     };
 
-    // Check condition: did the expected event happen?
+    // Who this row is about, and from when. `since` is the trigger instant written by the engine;
+    // rows from older writers fall back to the row's own created_at, which is the same meaning.
+    let contact_id: Option<Uuid> = action
+        .condition_config
+        .get("contact_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .or_else(|| {
+            if action.entity_type.as_deref() == Some("contact") {
+                action.entity_id
+            } else {
+                None
+            }
+        });
+    let since: chrono::DateTime<chrono::Utc> = action
+        .condition_config
+        .get("since")
+        .and_then(|v| v.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|d| d.with_timezone(&chrono::Utc))
+        .unwrap_or(action.created_at);
+    let expected_event = action
+        .condition_config
+        .get("expected_event")
+        .and_then(|v| v.as_str())
+        .unwrap_or("email.reply")
+        .to_string();
+
     // `condition_type` is Option: src/private_email/auto_reply_handler.rs:250 queues its delayed
     // action without one (migration 073 made the column nullable for that writer), so a NULL is
     // real data — "no condition recorded" — and never fires. Before this it was a decode error,
     // which returned early and left the row pending forever (re-fetched every tick).
-    let should_execute = match action.condition_type.as_deref() {
-        Some("timeout") => {
-            // Timeout always fires after the wait period
-            true
-        }
+    let (should_execute, reason) = match action.condition_type.as_deref() {
+        Some("timeout") => (true, "timeout elapsed".to_string()),
+        Some("no_reply") => match contact_id {
+            Some(cid) => match contact_replied_since(db, action.tenant_id, cid, since).await {
+                Ok(true) => (
+                    false,
+                    "contact replied since the trigger — not sent".to_string(),
+                ),
+                Ok(false) => (
+                    true,
+                    "no reply from this contact since the trigger".to_string(),
+                ),
+                Err(e) => (
+                    false,
+                    format!("reply check failed ({e}) — refused rather than sent blind"),
+                ),
+            },
+            // Fail CLOSED: a no-reply condition with no subject cannot be evaluated, and guessing
+            // "probably no reply" would send mail nobody can justify.
+            None => (
+                false,
+                "no_reply condition carries no contact — refused".to_string(),
+            ),
+        },
         Some("no_event") => {
-            // Check if the expected event occurred between trigger and now
-            if let Some(expected_event) = action
-                .condition_config
-                .get("expected_event")
-                .and_then(|v| v.as_str())
-            {
+            // Contact-scoped when we know the subject; the reply vocabulary also consults inbound
+            // mail, which `events` alone would miss.
+            if let Some(cid) = contact_id {
+                let seen = if is_reply_event(&expected_event) {
+                    contact_replied_since(db, action.tenant_id, cid, since).await
+                } else {
+                    sqlx::query_scalar::<_, bool>(
+                        r#"SELECT EXISTS(
+                               SELECT 1 FROM events e
+                                WHERE e.tenant_id = $1 AND e.event_type = $2 AND e.created_at > $3
+                                  AND e.entity_type = 'contact' AND e.entity_id = $4
+                           )"#,
+                    )
+                    .bind(action.tenant_id)
+                    .bind(&expected_event)
+                    .bind(since)
+                    .bind(cid)
+                    .fetch_one(db)
+                    .await
+                };
+                match seen {
+                    Ok(true) => (false, format!("{expected_event} seen for this contact")),
+                    Ok(false) => (true, format!("no {expected_event} for this contact")),
+                    Err(e) => (false, format!("event check failed ({e}) — refused")),
+                }
+            } else {
+                // Legacy tenant-wide arm, unchanged for the writers that queued no subject.
                 let count: i64 = sqlx::query_scalar::<_, Option<i64>>(
                     "SELECT COUNT(*) FROM events WHERE tenant_id = $1 AND event_type = $2 AND created_at > $3"
                 )
                 .bind(action.tenant_id)
-                .bind(expected_event)
-                .bind(action.created_at)
+                .bind(&expected_event)
+                .bind(since)
                 .fetch_one(db)
                 .await.unwrap_or(None).unwrap_or(0);
-                count == 0 // fire if NOT seen
-            } else {
-                true
+                (
+                    count == 0,
+                    format!("{count} tenant-wide {expected_event} rows"),
+                )
             }
         }
         Some("no_action") => match action.trigger_event_id {
@@ -291,7 +445,7 @@ pub async fn evaluate_delayed_action(db: &PgPool, action_id: Uuid) {
             // NULL — and ScheduleDelayedRequest accepts an omitted id). A NULL can never equal a
             // row's value, so no follow-up can be counted and the action fires, which is the
             // intent of the "fire if no follow-up action taken" comment below.
-            None => true,
+            None => (true, "no trigger event — fires".to_string()),
             Some(trigger_event_id) => {
                 let count: i64 = sqlx::query_scalar::<_, Option<i64>>(
                     "SELECT COUNT(*) FROM delayed_actions WHERE tenant_id = $1 AND trigger_event_id = $2 AND executed = true"
@@ -300,30 +454,111 @@ pub async fn evaluate_delayed_action(db: &PgPool, action_id: Uuid) {
                 .bind(trigger_event_id)
                 .fetch_one(db)
                 .await.unwrap_or(None).unwrap_or(0);
-                count == 0 // fire if no follow-up action taken
+                (count == 0, format!("{count} follow-up actions executed"))
             }
         },
-        _ => false,
+        _ => (false, "no condition type recorded".to_string()),
     };
 
+    let mut executed = false;
     if should_execute {
-        tracing::info!(action = %action_id, "Condition met — executing delayed action");
-        execute_action(
-            db,
-            action.tenant_id,
-            action.id,
-            &action.action_type,
-            &action.action_config,
-            None,
-            &serde_json::Value::Null,
-        )
-        .await;
+        tracing::info!(action = %action_id, %reason, "Condition met — executing delayed action");
+        match (action.source_rule_id, action.entity_id) {
+            // A row queued by a RULE runs the RULE's action, through the one executor.
+            (Some(rule_id), Some(entity_id)) => {
+                match sqlx::query_as::<_, AutomationRule>(concat!(
+                    "SELECT ",
+                    rule_columns!(),
+                    " FROM automation_rules WHERE id = $1 AND tenant_id = $2"
+                ))
+                .bind(rule_id)
+                .bind(action.tenant_id)
+                .fetch_optional(db)
+                .await
+                {
+                    Ok(Some(mut rule)) => {
+                        // The QUEUED copy wins: a rule edited between queueing and firing must not
+                        // silently change what the customer was promised at trigger time.
+                        rule.action_type = action.action_type.clone();
+                        rule.action_config = action.action_config.clone();
+                        let entity_type = action
+                            .entity_type
+                            .clone()
+                            .unwrap_or_else(|| "contact".to_string());
+                        match crate::automation::actions::execute_action(
+                            db,
+                            &rule,
+                            action.tenant_id,
+                            &entity_type,
+                            entity_id,
+                        )
+                        .await
+                        {
+                            Ok(()) => {
+                                executed = true;
+                                let _ = sqlx::query(
+                                    "UPDATE automation_rules \
+                                        SET execution_count = COALESCE(execution_count, 0) + 1, \
+                                            last_executed_at = now() \
+                                      WHERE id = $1",
+                                )
+                                .bind(rule_id)
+                                .execute(db)
+                                .await;
+                            }
+                            Err(e) => {
+                                tracing::warn!(rule = %rule_id, action = %rule.action_type, error = %e, "Delayed automation action failed");
+                                let _ = sqlx::query(
+                                    "UPDATE automation_rules \
+                                        SET execution_count = COALESCE(execution_count, 0) + 1, \
+                                            last_executed_at = now() \
+                                      WHERE id = $1",
+                                )
+                                .bind(rule_id)
+                                .execute(db)
+                                .await;
+                            }
+                        }
+                    }
+                    // The rule was deleted while the action waited: run nothing, record why.
+                    Ok(None) => {
+                        tracing::info!(rule = %rule_id, "Delayed action's rule was deleted — skipped");
+                    }
+                    Err(e) => {
+                        tracing::warn!(rule = %rule_id, error = %e, "Could not load delayed action's rule")
+                    }
+                }
+            }
+            // Legacy rows (monitoring, checklists, the public API) keep their own executor.
+            _ => {
+                execute_action(
+                    db,
+                    action.tenant_id,
+                    action.id,
+                    &action.action_type,
+                    &action.action_config,
+                    action.entity_id,
+                    &serde_json::Value::Null,
+                )
+                .await;
+                executed = true;
+            }
+        }
     }
 
-    // Mark as executed regardless — condition already evaluated
-    let _ =
-        sqlx::query("UPDATE delayed_actions SET executed = true, updated_at = NOW() WHERE id = $1")
-            .bind(action_id)
-            .execute(db)
-            .await;
+    // Mark as executed regardless — condition already evaluated. `result` records WHY, so the
+    // evidence for "this follow-up was suppressed because the contact replied" is a row, not a log
+    // line that rotated away.
+    let _ = sqlx::query(
+        "UPDATE delayed_actions SET executed = true, result = $2, updated_at = NOW() WHERE id = $1",
+    )
+    .bind(action_id)
+    .bind(json!({
+        "condition": action.condition_type,
+        "reason": reason,
+        "executed": executed,
+        "contact_id": contact_id,
+    }))
+    .execute(db)
+    .await;
 }

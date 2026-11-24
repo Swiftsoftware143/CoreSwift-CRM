@@ -317,9 +317,9 @@ pub async fn schedule_delayed(
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
 
-    if !["timeout", "no_event", "no_action"].contains(&r.condition_type.as_str()) {
+    if !["timeout", "no_event", "no_action", "no_reply"].contains(&r.condition_type.as_str()) {
         return Err(AppError::Validation(
-            "condition_type must be 'timeout', 'no_event', or 'no_action'".to_string(),
+            "condition_type must be 'timeout', 'no_event', 'no_action', or 'no_reply'".to_string(),
         ));
     }
 

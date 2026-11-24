@@ -53,6 +53,12 @@ pub struct DelayedAction {
     pub executed: bool,
     pub cancelled: bool,
     pub result: Option<serde_json::Value>,
+    /// The trigger's subject. Present on every rule-queued row (kanban t_990c386e); NULL on the
+    /// older writers that never set it.
+    pub entity_type: Option<String>,
+    pub entity_id: Option<Uuid>,
+    /// The rule that queued this row (migration 209). NULL for monitoring/checklist/API writers.
+    pub source_rule_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
