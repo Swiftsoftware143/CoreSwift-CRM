@@ -177,6 +177,9 @@ pub async fn calendars_summary(
                 ));
             }
             pos_json.push(json!({
+                // Ids travel with the report: a read endpoint that cannot name a row cannot be used to
+                // act on it, which is the difference between verifying ten calendars and driving them.
+                "id": rid,
                 "name": rname,
                 "price_cents": price,
                 "compare_at_price_cents": compare,
@@ -270,6 +273,7 @@ pub async fn calendars_summary(
         }
 
         out.push(json!({
+            "id": cal_id,
             "name": name,
             "slug": slug,
             "workspace": workspace_name,
@@ -617,6 +621,19 @@ pub async fn generate_slots(
     Ok((
         StatusCode::CREATED,
         Json(service::generate_slots(&pool, &res, &cal, body).await?),
+    ))
+}
+
+/// Fill the same window across several positions of one calendar, with a per-position report.
+pub async fn generate_slots_for_calendar(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<GenerateForCalendar>,
+) -> Result<(StatusCode, Json<Vec<serde_json::Value>>)> {
+    Ok((
+        StatusCode::CREATED,
+        Json(service::generate_slots_for_calendar(&pool, t.0, id, body).await?),
     ))
 }
 

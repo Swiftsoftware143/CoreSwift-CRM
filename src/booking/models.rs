@@ -239,6 +239,20 @@ pub struct GenerateSlots {
     pub label: Option<String>,
 }
 
+/// Generate dated slots for SEVERAL positions of one calendar in a single run.
+///
+/// Measured 2026-11-23: the console's generator had no position selector at all — it always took the
+/// first position — so on every calendar only ONE of four products could ever be given dates. This
+/// request carries the window plus the positions to fill, so one run can fill all of them.
+#[derive(Debug, Deserialize)]
+pub struct GenerateForCalendar {
+    #[serde(flatten)]
+    pub window: GenerateSlots,
+    /// Position ids. Empty means every position on the calendar.
+    #[serde(default)]
+    pub resource_ids: Vec<Uuid>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct UpdateSlot {
     pub price_cents: Option<i64>,

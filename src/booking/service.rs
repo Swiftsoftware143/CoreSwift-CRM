@@ -2271,3 +2271,102 @@ pub async fn admin_create_booking(
     }
     Ok(order)
 }
+
+/// Fill a window across several positions of one calendar, reporting what each position got.
+///
+/// A per-position report is the point: the console can then say "Sponsored Post: 12 dates created,
+/// 3 corrected" instead of leaving the operator to load the public page and count tiles.
+pub async fn generate_slots_for_calendar(
+    pool: &PgPool,
+    tenant: Uuid,
+    calendar_id: Uuid,
+    req: GenerateForCalendar,
+) -> Result<Vec<serde_json::Value>> {
+    let mut c = pool.acquire().await?;
+    let cal = calendar_for_tenant(&mut c, calendar_id, tenant).await?;
+    let resources: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, name FROM booking_resources WHERE calendar_id = $1 ORDER BY name",
+    )
+    .bind(calendar_id)
+    .fetch_all(&mut *c)
+    .await?;
+    drop(c);
+    if resources.is_empty() {
+        return Err(BookingError::invalid("add a bookable position first"));
+    }
+    let chosen: Vec<(Uuid, String)> = if req.resource_ids.is_empty() {
+        resources
+    } else {
+        let wanted: Vec<Uuid> = req.resource_ids.clone();
+        let picked: Vec<(Uuid, String)> = resources
+            .into_iter()
+            .filter(|(id, _)| wanted.contains(id))
+            .collect();
+        if picked.is_empty() {
+            return Err(BookingError::invalid(
+                "none of those positions belong to this calendar",
+            ));
+        }
+        picked
+    };
+
+    let mut report = Vec::new();
+    for (rid, name) in chosen {
+        let before: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM booking_slots WHERE resource_id = $1 AND status = 'open'",
+        )
+        .bind(rid)
+        .fetch_one(pool)
+        .await?;
+        let mut c = pool.acquire().await?;
+        let (res, cal2) = resource_for_tenant(&mut c, rid, tenant).await?;
+        drop(c);
+        let window = GenerateSlots {
+            from: req.window.from,
+            to: req.window.to,
+            weekdays: req.window.weekdays.clone(),
+            time: req.window.time,
+            duration_min: req.window.duration_min,
+            capacity: req.window.capacity,
+            price_cents: req.window.price_cents,
+            weekday_prices: req.window.weekday_prices.clone(),
+            label: req.window.label.clone(),
+        };
+        let _ = &cal;
+        let result = generate_slots(pool, &res, &cal2, window).await;
+        let (created, corrected, gone, note) = match result {
+            Ok(slots) => {
+                let after: i64 = sqlx::query_scalar(
+                    "SELECT count(*) FROM booking_slots WHERE resource_id = $1 AND status = 'open'",
+                )
+                .bind(rid)
+                .fetch_one(pool)
+                .await?;
+                let touched = slots.len() as i64;
+                let delta = (after - before).max(0);
+                (delta, (touched - delta).max(0), 0_i64, None::<String>)
+            }
+            Err(e) => (0, 0, 0, Some(e.to_string())),
+        };
+        // One row per position, prices read back from the database so the report cannot disagree
+        // with what a buyer will be charged.
+        let prices: Option<String> = sqlx::query_scalar(
+            "SELECT string_agg(DISTINCT (price_cents / 100.0)::text, ', ') \
+               FROM booking_slots WHERE resource_id = $1 AND status = 'open'",
+        )
+        .bind(rid)
+        .fetch_one(pool)
+        .await?;
+        report.push(json!({
+            "resource_id": rid,
+            "resource": name,
+            "created": created,
+            "corrected": corrected,
+            "removed": gone,
+            "open_slots": before + created,
+            "prices": prices.unwrap_or_default(),
+            "error": note,
+        }));
+    }
+    Ok(report)
+}

@@ -14765,7 +14765,22 @@ function bkSlotsPanel(res) {
   if (!res.length) return '<div class="card" style="margin-bottom:18px"><p class="muted">Add a bookable item first — slots belong to one.</p></div>';
   return '<div class="card" style="margin-bottom:18px"><h3 style="margin-top:0">Generate dated slots</h3>' +
     '<p class="muted" style="margin-top:-6px">One run fills a whole quarter. Running it again never duplicates a position.</p>' +
+    // WHICH POSITIONS (measured 2026-11-23): the generator had no position selector at all and always
+    // took the first one, so three of four products could never be given dates. Every position is
+    // listed with a tick, all ticked by default, and the run reports what each position got.
     '<div class="bk-form">' +
+      '<label style="grid-column:1/-1">Positions to fill' +
+        '<div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:6px">' +
+          '<label style="display:flex;gap:6px;align-items:center;font-weight:600">' +
+            '<input type="checkbox" id="bkGenAll" checked onchange="bkGenToggleAll(this.checked)"> All positions</label>' +
+          res.map(function (r) {
+            return '<label style="display:flex;gap:6px;align-items:center;font-weight:400">' +
+              '<input type="checkbox" class="bk-gen-res" value="' + r.id + '" checked> ' +
+              escapeHtml(r.name) + ' <span class="muted">' + bkMoney(r.price_cents) + '</span></label>';
+          }).join('') +
+        '</div>' +
+        '<span class="muted" style="font-weight:400">Each position keeps its own price unless you type one below. Clear the price box to use the position&rsquo;s price.</span>' +
+      '</label>' +
       '<label>From<input id="bkGenFrom" type="date"></label>' +
       '<label>To<input id="bkGenTo" type="date"></label>' +
       '<label>Weekdays<input id="bkGenDays" value="1,3" placeholder="0=Mon … 6=Sun, e.g. 1,3"></label>' +
@@ -14781,10 +14796,17 @@ function bkSlotsPanel(res) {
     '<div id="bkSlotList" style="margin-top:14px"></div></div>';
 }
 
+function bkGenToggleAll(on) {
+  Array.prototype.forEach.call(document.querySelectorAll('.bk-gen-res'), function (el) { el.checked = !!on; });
+}
+
 async function bkGenSlots() {
   const res = (BK.detail && BK.detail.resources) || [];
   if (!res.length) { bkFlash('Add a bookable item first.', false); return; }
-  const rid = window.BK_SLOTS_RESOURCE || res[0].id;
+  const picked = Array.prototype.filter.call(
+    document.querySelectorAll('.bk-gen-res'), function (el) { return el.checked; }
+  ).map(function (el) { return el.value; });
+  if (!picked.length) { bkFlash('Tick at least one position.', false); return; }
   const days = (document.getElementById('bkGenDays').value || '').split(',')
     .map(function (d) { return parseInt(d.trim(), 10); }).filter(function (d) { return d >= 0 && d <= 6; });
   const body = {
@@ -14803,10 +14825,29 @@ async function bkGenSlots() {
   const tue = parseInt(document.getElementById('bkGenTue').value, 10);
   if (!isNaN(tue)) body.weekday_prices = { '1': tue };
   try {
-    await bkCall('POST', '/resources/' + rid + '/slots/generate', body);
-    bkFlash('Generated.');
+    // One call fills every ticked position and returns a per-position report, so the operator sees
+    // what happened without loading the public page and counting tiles.
+    const report = await bkCall(
+      'POST',
+      '/calendars/' + encodeURIComponent(BK.current) + '/slots/generate',
+      Object.assign({}, body, { resource_ids: picked.length === res.length ? [] : picked })
+    );
+    const box = document.getElementById('bkSlotList');
+    const rows = (report || []).map(function (r) {
+      if (r.error) {
+        return '<li><strong>' + escapeHtml(r.resource) + '</strong> — refused: ' + escapeHtml(r.error) + '</li>';
+      }
+      return '<li><strong>' + escapeHtml(r.resource) + '</strong> — ' +
+        (r.created || 0) + ' date(s) added, ' + (r.corrected || 0) + ' corrected · ' +
+        (r.open_slots || 0) + ' open now' +
+        (r.prices ? ' at $' + escapeHtml(r.prices) : '') + '</li>';
+    }).join('');
+    const total = (report || []).reduce(function (n, r) { return n + (r.created || 0); }, 0);
+    bkFlash('Generated ' + total + ' date(s).');
+    if (box) box.innerHTML = '<h4>What this run produced</h4><ul>' + rows + '</ul>';
     await bkOpenDetail(BK.current, true);
     bkRender();
+    if (box) box.innerHTML = '<h4>What this run produced</h4><ul>' + rows + '</ul>';
   } catch (e) { bkFlash(e.message, false); }
 }
 

@@ -471,6 +471,11 @@
     <p><strong>A required answer is enforced by the server, not just the page.</strong> An order that arrives without it is refused with the question&rsquo;s own words &mdash; &ldquo;Company name is required for this booking&rdquo; &mdash; so a browser that was lenient cannot slip an incomplete booking through. The answers are stored on the booking itself and read back with it.</p>
     <p>Removing a question stops it being asked; answers already given stay on the bookings that gave them, because a record of what a customer told you does not disappear when you stop asking.</p>
 
+    <h3>Giving several positions their dates in one run</h3>
+    <p><strong>Generate dated slots</strong> starts with <strong>Positions to fill</strong>: a tick box for <em>All positions</em> and one per position, all ticked. Leave them all ticked to fill every product at once, or tick just one to fill only that product. Each position keeps its own price; typing a price overrides it for the whole run.</p>
+    <p>When the run finishes, <strong>What this run produced</strong> lists a line per position &mdash; dates added, dates corrected, how many are open now and at what price. That report is read back from the saved dates, so it cannot disagree with what a buyer would be charged, and you do not have to open the public page and count tiles.</p>
+    <p>Re-running the same window at the same time corrects open dates instead of duplicating them, so a run with the wrong price or the wrong weekday is repaired by running it again correctly.</p>
+
     <h3>Changing a calendar&rsquo;s web address</h3>
     <p>Open the calendar in <strong>Booking</strong>. Under its public link there are two boxes &mdash; <strong>Calendar name</strong> and <strong>Web address</strong> &mdash; and one button, <strong>Save name and address</strong>. The address is the last part of the link a buyer gets, for example <code>/b/palm-bay-pulse-ads</code>.</p>
     <p>Two things to know before you change it. The address must be unique on your account, so saving one that another calendar already answers on is refused rather than silently accepted. And the <strong>old address stops working</strong>: a link already printed in an email, an ad or a social post will not open afterwards, so change an address before you publish it, not after.</p>

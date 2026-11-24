@@ -82,6 +82,12 @@ pub fn admin_router(pool: PgPool) -> Router {
             patch(h::update_resource).delete(h::delete_resource),
         )
         .route("/resources/:id/slots/generate", post(h::generate_slots))
+        // One run, several positions (2026-11-23): the generator used to target the first position
+        // only, so three of four products could never get dates.
+        .route(
+            "/calendars/:id/slots/generate",
+            post(h::generate_slots_for_calendar),
+        )
         .route("/slots/:id", patch(h::update_slot))
         .route("/orders/:id", get(h::admin_get_order))
         .route("/orders/:id/confirm", post(h::confirm_order))
