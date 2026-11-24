@@ -163,13 +163,7 @@ impl Resolver {
 
         let admin: bool = row.get("admin");
         let api_role: String = row.get("api_role");
-        let role = if admin {
-            Role::Admin
-        } else if api_role == "read_only" {
-            Role::ReadOnly
-        } else {
-            Role::Workspace
-        };
+        let role = key_role(admin, &api_role);
         // `subject` is the audit identity: the key's own id, never the secret.
         Ok(Caller::new(format!("key:{key_id}"), role).with_home(tenant))
     }
@@ -224,6 +218,25 @@ impl Resolver {
         .unwrap_or(false);
         let role = if admin { Role::Admin } else { Role::Workspace };
         Ok(Caller::new(format!("user:{user}"), role).with_home(tenant))
+    }
+}
+
+/// The role a `csk_` key acts with — the ONE decision both the door and its tests use.
+///
+/// The key's own `api_role` is decisive. `read_only` is a promise about THIS credential, so it caps
+/// an operator-owned key exactly as it caps a customer's key: the REST boundary already refuses such
+/// a key on every write (`auth::boundary::require_credential`), and a door that answered 200 to the
+/// same key would make the console's "read-only" label a lie (kanban t_0c16825c).
+///
+/// Being a platform admin only upgrades a key that can already write (`workspace` → `admin`), which
+/// is what lets an operator's own key reach the cross-workspace tools.
+fn key_role(admin: bool, api_role: &str) -> Role {
+    if api_role == "read_only" {
+        Role::ReadOnly
+    } else if admin {
+        Role::Admin
+    } else {
+        Role::Workspace
     }
 }
 
@@ -370,6 +383,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn an_operators_read_only_key_stays_read_only() {
+        // The bug this fixes (kanban t_0c16825c): `admin` was tested before `api_role`, so an
+        // operator's read-only key resolved to Admin and wrote over MCP while REST refused it.
+        assert_eq!(key_role(true, "read_only"), Role::ReadOnly);
+        assert_eq!(key_role(false, "read_only"), Role::ReadOnly);
+        // Admin still upgrades a key that can write at all — that is what reaches the
+        // cross-workspace tools.
+        assert_eq!(key_role(true, "workspace"), Role::Admin);
+        assert_eq!(key_role(false, "workspace"), Role::Workspace);
+    }
+
+    #[test]
+    fn a_read_only_key_is_refused_a_write_tool_even_when_its_owner_is_an_operator() {
+        // `create_object` is a write tool: the registry gates it at Role::Workspace, so this is the
+        // same decision the door's transport makes before the handler runs.
+        let (_, write_min) = custom_object_annotation("create_object");
+        assert_eq!(write_min, Role::Workspace);
+        assert!(
+            !key_role(true, "read_only").can(write_min),
+            "an operator's read-only key must not reach a write tool"
+        );
+        assert!(!key_role(false, "read_only").can(write_min));
+        // …while the operator's write-capable key still passes, and reads still pass for both.
+        assert!(key_role(true, "workspace").can(write_min));
+        let (_, read_min) = custom_object_annotation("list_objects");
+        assert_eq!(read_min, Role::ReadOnly);
+        assert!(key_role(true, "read_only").can(read_min));
     }
 
     #[test]
