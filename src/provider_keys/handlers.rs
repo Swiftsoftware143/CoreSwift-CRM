@@ -51,6 +51,7 @@ pub async fn list_provider_keys(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
+    crate::auth::middleware::require_account_admin(&c)?;
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let rows = sqlx::query(
         "SELECT pk.id, pk.tenant_id, pk.provider, pk.api_key, pk.base_url, pk.metadata, pk.is_active, pk.scope, pk.created_at, pk.updated_at, ap.name AS provider_name, ap.icon AS provider_icon FROM provider_keys pk LEFT JOIN available_providers ap ON ap.key = pk.provider WHERE pk.tenant_id = $1 ORDER BY pk.provider"
@@ -82,6 +83,7 @@ pub async fn get_provider_key(
     Extension(c): Extension<Claims>,
     Path(provider): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
+    crate::auth::middleware::require_account_admin(&c)?;
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let row = sqlx::query(
         "SELECT pk.id, pk.tenant_id, pk.provider, pk.api_key, pk.base_url, pk.metadata, pk.is_active, pk.scope, pk.created_at, pk.updated_at, ap.name AS provider_name, ap.icon AS provider_icon FROM provider_keys pk LEFT JOIN available_providers ap ON ap.key = pk.provider WHERE pk.tenant_id = $1 AND pk.provider = $2"
@@ -117,6 +119,7 @@ pub async fn upsert_provider_key(
     Extension(c): Extension<Claims>,
     Json(req): Json<UpsertProviderKeyRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    crate::auth::middleware::require_account_admin(&c)?;
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     if req.api_key.is_empty() {
         return Err(AppError::Validation("api_key is required".into()));
@@ -215,6 +218,7 @@ pub async fn update_provider_key(
     Path(provider): Path<String>,
     Json(req): Json<UpdateProviderKeyRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    crate::auth::middleware::require_account_admin(&c)?;
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let row = sqlx::query(
         "UPDATE provider_keys SET is_active = COALESCE($1, is_active), base_url = COALESCE($2, base_url), metadata = COALESCE($3, metadata), updated_at = NOW() WHERE tenant_id = $4 AND provider = $5 RETURNING id, tenant_id, provider, api_key, base_url, metadata, is_active, scope, created_at, updated_at"
@@ -247,6 +251,7 @@ pub async fn delete_provider_key(
     Extension(c): Extension<Claims>,
     Path(provider): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
+    crate::auth::middleware::require_account_admin(&c)?;
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let result = sqlx::query("DELETE FROM provider_keys WHERE tenant_id = $1 AND provider = $2")
         .bind(tenant_id)

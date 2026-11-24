@@ -124,11 +124,19 @@ pub struct CreateKeyRequest {
 }
 
 /// POST /api/personal-api-keys — generate a new key
+/// Key management is an ACCOUNT-ADMIN surface: an issued key is the whole workspace's credential,
+/// so only an owner/admin may list, mint, rotate, revoke or reveal one. A `member` reaching these
+/// routes could otherwise rotate the owner's key and walk away with the new plaintext.
+fn require_key_admin(c: &Claims) -> Result<(), AppError> {
+    crate::auth::middleware::require_account_admin(c)
+}
+
 pub async fn create_key(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
     Json(req): Json<CreateKeyRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    require_key_admin(&c)?;
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let user_id = Uuid::parse_str(&c.sub).ok();
     let name = req.name.unwrap_or_else(|| "default".to_string());
@@ -181,6 +189,7 @@ pub async fn list_keys(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
+    require_key_admin(&c)?;
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let rows = sqlx::query(
         "SELECT id, name, key_prefix, api_role, is_active, last_used_at, created_at,
@@ -225,6 +234,7 @@ pub async fn revoke_key(
     Extension(c): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
+    require_key_admin(&c)?;
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     sqlx::query("UPDATE personal_api_keys SET is_active = false WHERE id = $1 AND tenant_id = $2")
         .bind(id)
@@ -247,6 +257,7 @@ pub async fn rotate_key(
     Extension(c): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
+    require_key_admin(&c)?;
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let user_id = Uuid::parse_str(&c.sub).ok();
 
@@ -318,6 +329,7 @@ pub async fn reveal_key(
     headers: HeaderMap,
     Json(req): Json<RevealRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    require_key_admin(&c)?;
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let user_id = Uuid::parse_str(&c.sub).ok();
 

@@ -129,7 +129,8 @@ impl Resolver {
         let hash = hash_token(token);
         let row = sqlx::query(
             "SELECT k.id, k.tenant_id, k.api_role,
-                    coalesce((SELECT u.is_platform_admin FROM users u WHERE u.id = k.user_id), false) AS admin
+                    coalesce((SELECT u.is_platform_admin FROM users u WHERE u.id = k.user_id), false) AS admin,
+                    coalesce((SELECT (u.is_active AND u.closed_at IS NULL) FROM users u WHERE u.id = k.user_id), false) AS creator_live
                FROM personal_api_keys k
               WHERE k.key_hash = $1 AND k.is_active = true",
         )
@@ -140,6 +141,15 @@ impl Resolver {
         let Some(row) = row else {
             return Err(AuthError::Invalid);
         };
+
+        // A key outlives nothing: when the account that minted it is disabled or closed, the key
+        // stops authenticating on the very next call — the same rule every sibling app applies and
+        // the same rule this app already applies to that user's console session.
+        let creator_live: bool = row.get("creator_live");
+        if !creator_live {
+            tracing::warn!("mcp door: rejected a key whose creator is no longer active");
+            return Err(AuthError::Revoked);
+        }
 
         let tenant: Uuid = row.get("tenant_id");
         match crate::auth::middleware::workspace_exists(&self.state.db, &tenant.to_string()).await {

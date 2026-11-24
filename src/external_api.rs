@@ -138,7 +138,9 @@ pub(crate) async fn resolve_key(
 
     let hash = key_hash(&key);
     let row = sqlx::query(
-        "SELECT id, tenant_id FROM personal_api_keys WHERE key_hash = $1 AND is_active = true",
+        "SELECT k.id, k.tenant_id FROM personal_api_keys k \
+          WHERE k.key_hash = $1 AND k.is_active = true \
+            AND coalesce((SELECT (u.is_active AND u.closed_at IS NULL) FROM users u WHERE u.id = k.user_id), false)",
     )
     .bind(&hash)
     .fetch_optional(&s.db)

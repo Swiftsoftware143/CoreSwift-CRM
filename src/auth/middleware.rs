@@ -314,6 +314,19 @@ pub fn is_account_admin(role: &str) -> bool {
     matches!(role, "owner" | "account_owner" | "admin" | "agency_admin")
 }
 
+/// Refuse anything below account-admin. Used by the credential surfaces (issued API keys, BYOK
+/// provider keys) where a `member` holding the tenant id must not be able to manage — or even
+/// enumerate — the workspace's credentials.
+pub fn require_account_admin(c: &Claims) -> Result<(), AppError> {
+    if is_account_admin(&c.role) {
+        Ok(())
+    } else {
+        Err(AppError::ForbiddenReason(
+            "only an account owner or admin can manage workspace credentials".to_string(),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
