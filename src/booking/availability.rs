@@ -71,6 +71,12 @@ mod tests {
             description: String::new(),
             capacity: 1,
             price_cents: 0,
+            // The three fields migrations 199/201/202 added. Their absence here broke the whole
+            // test binary (not this test): a fixture that stops compiling takes every other module's
+            // tests with it, which is how a green suite silently stops running.
+            compare_at_price_cents: None,
+            exclusive: false,
+            size: None,
             duration_min: duration,
             slot_interval_min: step,
             buffer_min: 0,
