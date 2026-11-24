@@ -266,6 +266,11 @@ def main():
         r3 = http("POST", f"{base}/api/objects/orders/records",
                   {"email": "soft-me@example.test", "amount": 30, "status": "open"}, key_a)[1].get("id")
         rows_before = int(db.q(f"SELECT count(*) FROM custom_records WHERE tenant_id='{a}'"))
+        # The wrong workspace cannot reach the record at all — 404 and the row is untouched.
+        st_b, _ = http("DELETE", f"{base}/api/objects/orders/records/{r2}?hard=true", None, key_b)
+        r2_intact = db.q(f"SELECT count(*) FROM custom_records WHERE id='{r2}'")
+        check("9b0 a second workspace's key cannot hard-delete the record (404, row intact)",
+              st_b == 404 and r2_intact == "1", f"status={st_b} row={r2_intact}")
         st, body = http("DELETE", f"{base}/api/objects/orders/records/{r2}?hard=true", None, key_a)
         rows_after = int(db.q(f"SELECT count(*) FROM custom_records WHERE tenant_id='{a}'"))
         gone = db.q(f"SELECT count(*) FROM custom_records WHERE id='{r2}'")

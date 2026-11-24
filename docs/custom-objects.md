@@ -106,7 +106,7 @@ python3 scripts/custom-objects-acceptance.py                    # against 127.0.
 python3 scripts/custom-objects-acceptance.py --base https://coreswiftcrm.com
 ```
 
-Twenty-one checks covering the spec's eight plus the two exit doors: MCP create + fields, REST insert
+Twenty-two checks covering the spec's eight plus the two exit doors: MCP create + fields, REST insert
 with a key, console-session read of the same row, a second workspace's key answering 404, archiving a
 field keeping data, an unknown key answering 400 with nothing written, a duplicate unique value
 answering 409, audit rows for every schema change, object archive (gone from list, fields archived,
