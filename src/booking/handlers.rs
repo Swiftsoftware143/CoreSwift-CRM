@@ -216,23 +216,38 @@ pub async fn calendars_summary(
                 "{name}: no list rule — a booking there adds nobody to a list."
             )),
             Some((_, list_name, _, _)) => {
-                // The check that would have caught the false alarm: does the list belong to this city?
-                let city = workspace_name
-                    .as_deref()
-                    .unwrap_or(&name)
-                    .split(" Local Newsletters")
-                    .next()
-                    .unwrap_or("")
-                    .split(" \u{2014} ")
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-                let first_word = city.split(' ').next().unwrap_or("").to_lowercase();
-                if !first_word.is_empty() && !list_name.to_lowercase().contains(&first_word) {
+                // DOES THE LIST BELONG TO THIS CALENDAR? The first version compared the list against the
+                // WORKSPACE name only, which flagged every correct city list whose newsletter is branded
+                // differently (a "St. Petersburg - Sponsors" list on the "Bay Breeze Bulletin" workspace).
+                // A warning that fires on correct configuration is noise, and noise gets ignored — so the
+                // city is taken from the CALENDAR name too, and a list matching EITHER is accepted.
+                let city_of = |raw: &str| -> String {
+                    raw.split(" Local Newsletters")
+                        .next()
+                        .unwrap_or("")
+                        .split(" \u{2014} ")
+                        .next()
+                        .unwrap_or("")
+                        .split(" \u{2013} ")
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_lowercase()
+                };
+                let cal_city = city_of(&name);
+                let ws_city = workspace_name.as_deref().map(city_of).unwrap_or_default();
+                let list_l = list_name.to_lowercase();
+                let first = |v: &str| v.split(' ').next().unwrap_or("").to_string();
+                let mut tokens: Vec<String> = Vec::new();
+                for t in [first(&cal_city), first(&ws_city)] {
+                    if !t.is_empty() && !tokens.contains(&t) {
+                        tokens.push(t);
+                    }
+                }
+                let matches = tokens.iter().any(|t| list_l.contains(t.as_str()));
+                if !tokens.is_empty() && !matches {
                     problems.push(format!(
-                        "{name}: list rule points at \"{list_name}\", which does not look like this workspace (\"{}\").",
-                        workspace_name.clone().unwrap_or_default()
+                        "{name}: list rule points at \"{list_name}\", which does not look like this city — check it is the right list."
                     ));
                 }
             }
@@ -555,6 +570,7 @@ pub async fn update_calendar(
             t.0,
             id,
             body.name,
+            body.slug,
             body.settings,
             body.reply_to_email,
             body.send_confirmation,

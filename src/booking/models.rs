@@ -358,6 +358,9 @@ pub struct CreativeReview {
 #[derive(Debug, Deserialize)]
 pub struct UpdateCalendar {
     pub name: Option<String>,
+    /// The web address (`/b/<slug>`). Optional; when present it replaces the current one.
+    #[serde(default)]
+    pub slug: Option<String>,
     pub settings: Option<Value>,
     pub reply_to_email: Option<String>,
     pub send_confirmation: Option<bool>,

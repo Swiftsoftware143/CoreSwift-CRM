@@ -10497,7 +10497,8 @@ function calHostRender() {
         '<input type="text" id="calHostSub" value="' + escapeHtmlAttr(h.subdomain) + '" style="max-width:280px" ' +
           'placeholder="your-business"> ' +
         '<span style="color:var(--text-muted)">.' + escapeHtml(h.system_domain || '') + '</span>' +
-        '<button class="btn btn-primary btn-sm" onclick="calHostSaveSub()">Save name</button>' +
+        // Clearly the ACCOUNT's address, not a calendar's: these two were confused once already.
+        '<button class="btn btn-primary btn-sm" onclick="calHostSaveSub()">Save account address</button>' +
       '</div>' +
       '<span class="form-hint">Letters, numbers and hyphens. This is the address your customers keep, so pick the name you want them to remember.</span></div>' +
     '<div class="form-group"><label for="calHostDomain">Use your own domain (optional)</label>' +
@@ -13774,6 +13775,16 @@ function bkDetailPanel() {
     '<h3 style="margin:12px 0 4px">' + escapeHtml(cal.name) + '</h3>' +
     '<p class="muted" style="margin:0">' + bkTypeWords(cal.kind) + ' · ' + escapeHtml(cal.timezone || '') + ' · holds ' + (cal.hold_minutes || 30) + ' min</p>' +
     '<p style="margin:10px 0 0"><strong>Public link:</strong> <a href="' + pub + '" target="_blank" rel="noopener">' + bkFullLink(cal.slug) + '</a></p>' +
+    // THIS CALENDAR'S OWN NAME AND ADDRESS (ZaarHub, 2026-11-23). "Save name" on the Calendar screen
+    // changes the ACCOUNT's address; a calendar's web address could only be set when it was created,
+    // which is why renaming one looked impossible. Both are editable here, together.
+    '<div class="bk-form" style="margin-top:10px">' +
+      '<label>Calendar name<input id="bkCalName" value="' + escapeHtml(cal.name) + '"></label>' +
+      '<label>Web address<input id="bkCalSlug" value="' + escapeHtml(cal.slug) + '">' +
+        '<span class="muted" style="font-weight:400">Letters, numbers and dashes. Changing it stops the OLD address working — links already published will 404.</span></label>' +
+    '</div>' +
+    '<button class="btn btn-secondary btn-sm" onclick="bkSaveCalAddress()">Save name and address</button>' +
+    '<span class="bk-flash" id="bkCalAddrFlash"></span>' +
     (bkSharedLink(cal.slug) !== bkFullLink(cal.slug)
       ? '<p class="muted" style="margin:4px 0 0;font-size:12px">Also: <a href="' + bkSharedLink(cal.slug) + '" target="_blank" rel="noopener">' + bkSharedLink(cal.slug) + '</a> — the same calendar, and the link to publish if this name might be used by another workspace.</p>'
       : '') +
@@ -14473,6 +14484,28 @@ function bkFieldFlash(msg, ok) {
   el.textContent = msg;
   el.className = 'bk-flash ' + (ok === false ? 'bad' : 'good');
   setTimeout(function () { el.textContent = ''; }, 6000);
+}
+
+/* Rename a calendar and/or change the address it answers on, then reload so the list shows the truth. */
+async function bkSaveCalAddress() {
+  var name = ((document.getElementById('bkCalName') || {}).value || '').trim();
+  var slug = ((document.getElementById('bkCalSlug') || {}).value || '').trim().toLowerCase();
+  var flash = document.getElementById('bkCalAddrFlash');
+  var say = function (msg, ok) {
+    if (!flash) { bkFlash(msg, ok); return; }
+    flash.textContent = msg;
+    flash.className = 'bk-flash ' + (ok === false ? 'bad' : 'good');
+  };
+  if (!name) { say('The calendar needs a name.', false); return; }
+  if (slug && !/^[a-z0-9-]{3,60}$/.test(slug)) { say('The address uses letters, numbers and dashes only.', false); return; }
+  try {
+    await API.patch('/booking/calendars/' + encodeURIComponent(BK.current), { name: name, slug: slug || undefined });
+    // Reload the LIST as well as the detail: a stale row label is what sent a rename hunt in circles.
+    await bkInit();
+    await bkOpenDetail(BK.current, true);
+    bkRender();
+    say('Saved — the link below is the new address. Anything published with the old one will not open.', true);
+  } catch (e) { say(e.message, false); }
 }
 
 async function bkLoadFormFields() {

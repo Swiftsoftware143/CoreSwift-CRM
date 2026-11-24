@@ -210,6 +210,7 @@ pub async fn update_calendar(
     tenant: Uuid,
     id: Uuid,
     name: Option<String>,
+    slug: Option<String>,
     settings: Option<serde_json::Value>,
     reply_to_email: Option<String>,
     send_confirmation: Option<bool>,
@@ -232,6 +233,44 @@ pub async fn update_calendar(
             merged = incoming;
         }
     }
+    // THE WEB ADDRESS CAN BE CORRECTED (ZaarHub, 2026-11-23): it could only be set at creation, so a
+    // wrong address meant rebuilding the calendar. Renaming it is allowed, validated the same way as
+    // creation, scoped to the account, and the OLD address stops working — which the console says out
+    // loud before saving, because a link already published in an email will 404 afterwards.
+    let new_slug = match slug {
+        Some(raw) => {
+            let cand = raw.trim().to_lowercase();
+            if cand.is_empty()
+                || cand.len() > 60
+                || !cand
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+            {
+                return Err(BookingError::invalid(
+                    "a web address uses letters, numbers and dashes only (up to 60)",
+                ));
+            }
+            if cand != current.slug {
+                let taken: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM booking_calendars \
+                        WHERE tenant_id = $1 AND slug = $2 AND id <> $3)",
+                )
+                .bind(tenant)
+                .bind(&cand)
+                .bind(id)
+                .fetch_one(&mut *pool.acquire().await?)
+                .await?;
+                if taken {
+                    return Err(BookingError::conflict(format!(
+                        "another calendar on this account already answers on /b/{cand}"
+                    )));
+                }
+            }
+            cand
+        }
+        None => current.slug.clone(),
+    };
+
     // validate the theme if one is present
     if let Some(theme) = merged.get("theme") {
         validate_theme(theme)?;
@@ -259,7 +298,8 @@ pub async fn update_calendar(
 
     sqlx::query_as::<_, Calendar>(
         "UPDATE booking_calendars
-            SET name = $3, settings = $4, reply_to_email = $5, send_confirmation = $6, updated_at = now()
+            SET name = $3, slug = $7, settings = $4, reply_to_email = $5, send_confirmation = $6,
+                updated_at = now()
           WHERE id = $1 AND tenant_id = $2
           RETURNING *",
     )
@@ -269,6 +309,7 @@ pub async fn update_calendar(
     .bind(merged)
     .bind(reply)
     .bind(send)
+    .bind(new_slug)
     .fetch_optional(&mut *pool.acquire().await?)
     .await?
     .ok_or(BookingError::NotFound("calendar"))
