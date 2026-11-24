@@ -94,7 +94,10 @@ surface — create/patch/archive object, field add/patch/archive, record insert/
 intake — answers that 403 and writes nothing. The role is enforced once in the app-wide credential
 boundary (`src/auth/boundary.rs`) from the committed allowlist
 (`auth::route_policy::READ_ONLY_KEY_ROUTES`), so a route added later is refused until it is listed.
-A `workspace` key is unaffected. `GET /api/personal-api-keys` shows each key's `role`. Operator
+A `workspace` key is unaffected. `GET /api/personal-api-keys` shows each key's `role`, and the
+console's Integration Center offers the same choice (a Role picker on **+ Create API key**, with the
+role printed per key in the list and on the AI page); `POST /api/personal-api-keys/:id/rotate` keeps
+the key's role, so a read-only key never rotates into a read-write one. Operator
 authority is not a key role — a platform admin's key resolves to the operator role from
 `users.is_platform_admin`.
 

@@ -250,8 +250,12 @@ pub async fn rotate_key(
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
     let user_id = Uuid::parse_str(&c.sub).ok();
 
-    let name = sqlx::query_scalar::<_, String>(
-        "SELECT name FROM personal_api_keys WHERE id = $1 AND tenant_id = $2",
+    // The ROLE travels with the rotation. Reading only `name` here (the shape this route shipped
+    // with) silently re-minted every rotated key as a `workspace` key, so regenerating a read-only
+    // key handed the customer a read-WRITE credential — a privilege escalation behind a button that
+    // promised nothing but a new secret. Select both and mint with the role the row already carries.
+    let row = sqlx::query(
+        "SELECT name, api_role FROM personal_api_keys WHERE id = $1 AND tenant_id = $2",
     )
     .bind(id)
     .bind(tenant_id)
@@ -259,6 +263,8 @@ pub async fn rotate_key(
     .await
     .map_err(AppError::Database)?
     .ok_or_else(|| AppError::NotFound("API key not found".into()))?;
+    let name: String = row.get("name");
+    let role: String = row.get("api_role");
 
     let mut tx = s.db.begin().await.map_err(AppError::Database)?;
     // Retire the old key FIRST, in the same transaction as the mint. `migrations/152` used to add a
@@ -276,13 +282,14 @@ pub async fn rotate_key(
         .await
         .map_err(AppError::Database)?;
 
-    let minted = mint_on(&mut tx, tenant_id, user_id, &name).await?;
+    let minted = mint_with_role(&mut tx, tenant_id, user_id, &name, &role).await?;
     tx.commit().await.map_err(AppError::Database)?;
 
     Ok(Json(json!({
         "id": minted.id.to_string(),
         "rotated_from": id.to_string(),
         "name": minted.name,
+        "role": role,
         "key": minted.key,
         "prefix": minted.prefix,
         "note": "The previous key no longer works. This one can be viewed again in Settings after re-entering your password."
@@ -315,7 +322,7 @@ pub async fn reveal_key(
     let user_id = Uuid::parse_str(&c.sub).ok();
 
     let row = sqlx::query(
-        "SELECT key_prefix, key_sealed FROM personal_api_keys
+        "SELECT key_prefix, key_sealed, api_role FROM personal_api_keys
          WHERE id = $1 AND tenant_id = $2 AND is_active = true",
     )
     .bind(id)
@@ -327,6 +334,7 @@ pub async fn reveal_key(
 
     let prefix: String = row.get("key_prefix");
     let sealed: Option<String> = row.get("key_sealed");
+    let role: String = row.get("api_role");
 
     // ── re-authenticate ────────────────────────────────────────────────────────────────────────
     let uid = user_id.ok_or(AppError::Unauthorized)?;
@@ -408,6 +416,7 @@ pub async fn reveal_key(
     Ok(Json(json!({
         "id": id.to_string(),
         "prefix": prefix,
+        "role": role,
         "key": full_key
     })))
 }

@@ -304,7 +304,7 @@ pub async fn overview(
 
     // 3. The tenant's csk_ keys — prefix only.
     let key_rows = sqlx::query(
-        "SELECT id, name, key_prefix, is_active, last_used_at, created_at,
+        "SELECT id, name, key_prefix, api_role, is_active, last_used_at, created_at,
                 (key_sealed IS NOT NULL) AS recoverable
          FROM personal_api_keys WHERE tenant_id = $1 ORDER BY created_at DESC",
     )
@@ -319,6 +319,9 @@ pub async fn overview(
                 "id": r.get::<Uuid, _>("id"),
                 "name": r.get::<String, _>("name"),
                 "prefix": r.get::<String, _>("key_prefix"),
+                // `workspace` or `read_only` — the console prints it per key so a customer can
+                // tell a read-write credential from a read-only one at a glance.
+                "role": r.get::<String, _>("api_role"),
                 "is_active": r.get::<bool, _>("is_active"),
                 "last_used_at": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_used_at"),
                 "created_at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),

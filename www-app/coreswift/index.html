@@ -4127,32 +4127,55 @@ async function mcpLoadKey() {
         '<button class="btn btn-primary btn-sm" onclick="icCreateKey()">+ Create API key</button></p>';
       return;
     }
-    const k = active[0];
-    const action = k.recoverable
-      ? '<button class="btn btn-secondary btn-sm" onclick="icViewKey(\'' + escapeHtmlAttr(k.id) + '\')">View &amp; copy</button>'
-      : '<button class="btn btn-secondary btn-sm" onclick="icRotateKey(\'' + escapeHtmlAttr(k.id) + '\')">Regenerate to view</button>';
+    // The MCP page shows the SAME list the Integration Center does, role included: an account can
+    // hold several active keys and they are not interchangeable — a read-only key answers questions
+    // and refuses every write, a workspace key can change the account. Before this the page showed
+    // only the newest prefix, so a customer could not tell which key their AI client was using.
+    const rows = active.map(key => [
+      '<strong>' + escapeHtml(key.name || 'default') + '</strong>',
+      '<code>' + escapeHtml(key.prefix || 'csk_') + '…</code>',
+      icKeyRoleBadge(key.role),
+      (key.recoverable
+        ? '<button class="btn btn-secondary btn-sm" onclick="icViewKey(\'' + escapeHtmlAttr(key.id) + '\')">View &amp; copy</button>'
+        : '<button class="btn btn-secondary btn-sm" onclick="icRotateKey(\'' + escapeHtmlAttr(key.id) + '\')">Regenerate to view</button>')
+    ]);
     el.innerHTML =
-      '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
-        '<code style="padding:6px 10px;background:var(--bg-secondary);border-radius:var(--radius)">' + escapeHtml(k.prefix || 'csk_') + '…</code>' +
-        action +
-      '</div>' +
-      '<p style="color:var(--text-muted);font-size:12px;margin:6px 0 0">This is the token an MCP client uses. Press View &amp; copy, re-enter your password, and the full key appears. It is also managed in the Integration Center.</p>';
+      dataTable(['Name', 'Prefix', 'Role', ''], rows, 'No active API key.') +
+      '<p style="color:var(--text-muted);font-size:12px;margin:8px 0 0">This is the token an MCP client uses. Press <b>View &amp; copy</b>, re-enter your password, and the full key appears. ' +
+      'For an assistant that should only answer questions, use a <b>read-only</b> key: it can read this account and every make-or-change call through it is refused. ' +
+      'Create, regenerate and revoke these keys in the <b>Integration Center</b>.</p>';
   } catch (e) {
     el.innerHTML = '<p style="margin:0;color:var(--text-muted)">Could not load your API key. ' +
       '<button class="btn btn-secondary btn-sm" onclick="switchTab(\'integrations\')">Open Integration Center</button></p>';
   }
 }
 
+// ONE vocabulary for a key's role, shared by the Integration Center list, the once-shown card and
+// the MCP page. The API answers `workspace` | `read_only` (src/personal_api_keys.rs::ROLE_*); the
+// customer-facing words are the same ones the create control offers.
+function icKeyRoleIsReadOnly(role) { return role === 'read_only'; }
+function icKeyRoleBadge(role) {
+  return icKeyRoleIsReadOnly(role)
+    ? '<span class="badge badge-warning" title="Reads only — cannot create or change anything">read-only</span>'
+    : '<span class="badge badge-muted" title="Reads and writes inside this account">read + write</span>';
+}
+function icKeyRoleDetail(role) {
+  return icKeyRoleIsReadOnly(role)
+    ? 'it can read this account and cannot create or change anything; every make-or-change call is refused and writes nothing.'
+    : 'it can read and change this account.';
+}
+
 function icRenderKeys() {
   const el = document.getElementById('icKeysWrap');
   if (!el) return;
   const o = IC.overview || {};
-  if (o.error) { el.innerHTML = icErr('Could not load lead-delivery keys', o.error); return; }
+  if (o.error) { el.innerHTML = icErr('Could not load API keys', o.error); return; }
   const items = (o.personal_keys && o.personal_keys.items) || [];
   const active = items.filter(k => k.is_active).length;
   const rows = items.map(k => [
     '<strong>' + escapeHtml(k.name || 'default') + '</strong>',
     '<code>' + escapeHtml(k.prefix || '') + '…</code>',
+    icKeyRoleBadge(k.role),
     k.is_active ? '<span class="badge badge-success">active</span>' : '<span class="badge badge-muted">revoked</span>',
     escapeHtml(icFmtDate(k.last_used_at)),
     escapeHtml(icFmtDate(k.created_at)),
@@ -4164,17 +4187,35 @@ function icRenderKeys() {
     '<button class="btn btn-ghost btn-xs" onclick="icRotateKey(\'' + escapeHtmlAttr(k.id) + '\')">Regenerate</button> ' +
     '<button class="btn btn-ghost btn-xs" onclick="icRevokeKey(\'' + escapeHtmlAttr(k.id) + '\')">Revoke</button>'
   ]);
-  const body = '<p style="color:var(--text-secondary);margin:0 0 10px">Each key lets a capture app deliver leads into <strong>this account</strong>. ' +
+  const body = '<p style="color:var(--text-secondary);margin:0 0 10px">A key is this account&#39;s identity: a capture app uses one to deliver leads in, and an AI/MCP client uses one to read this account. ' +
+    'A <strong>read + write</strong> key can read and change this account; a <strong>read-only</strong> key can only read — every make-or-change call through it is refused with a sentence and writes nothing. ' +
     'The key itself stays retrievable: press <strong>View</strong> and re-enter your password to see it and copy it again at any time. <strong>' + active + '</strong> active of ' + items.length + ' total.</p>' +
-    dataTable(['Name', 'Prefix', 'Status', 'Last used', 'Created', ''], rows,
-      'No keys yet — create one and paste it into a capture app\'s CoreSwift integration.');
-  const footer = '<button class="btn btn-primary btn-sm" onclick="icCreateKey()">+ Create lead-delivery key</button>';
-  el.innerHTML = card('🔑 Lead-delivery keys (csk_…)', body, footer);
+    dataTable(['Name', 'Prefix', 'Role', 'Status', 'Last used', 'Created', ''], rows,
+      'No keys yet — create one and paste it into a capture app\'s CoreSwift integration, or into an AI client.');
+  const footer = '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">' +
+    '<div class="form-group" style="margin:0"><label for="icNewKeyName">Name (optional)</label>' +
+      '<input id="icNewKeyName" placeholder="e.g. Claude desktop" style="width:170px"></div>' +
+    '<div class="form-group" style="margin:0"><label for="icNewKeyRole">Role</label>' +
+      '<select id="icNewKeyRole" style="width:270px;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary)">' +
+        '<option value="workspace">Read and write (workspace)</option>' +
+        '<option value="read_only">Read-only — cannot create or change anything</option>' +
+      '</select></div>' +
+    '<button class="btn btn-primary btn-sm" onclick="icCreateKey()">+ Create API key</button>' +
+    '</div>';
+  el.innerHTML = card('🔑 API keys (csk_…)', body, footer);
 }
 
 async function icCreateKey() {
+  // The role picker lives in the Integration Center card; the MCP page also calls this when the
+  // account has no key yet, and there the default (a read-write workspace key) is the right answer.
+  const roleEl = document.getElementById('icNewKeyRole');
+  const nameEl = document.getElementById('icNewKeyName');
+  const role = (roleEl && roleEl.value) || 'workspace';
+  if (role !== 'workspace' && role !== 'read_only') { toast('Choose a key role', 'error'); return; }
+  const fallback = icKeyRoleIsReadOnly(role) ? 'Read-only key' : 'Workspace key';
+  const name = ((nameEl && nameEl.value) || '').trim() || fallback;
   try {
-    const d = await API.post('/personal-api-keys', { name: 'lead-capture' });
+    const d = await API.post('/personal-api-keys', { name: name, role: role });
     await icShowKeyOnce(d, 'Key created');
   } catch (e) {
     toast('Could not create key: ' + e.message, 'error');
@@ -4182,7 +4223,10 @@ async function icCreateKey() {
 }
 
 async function icRotateKey(id) {
-  if (!confirm('Regenerate this key? The current key stops working immediately, so anything you have already wired up with it stops delivering until you paste the new one in. You can copy the new key from this screen.')) return;
+  // The API keeps the key's ROLE across a rotation (src/personal_api_keys.rs::rotate_key mints with
+  // the role the row already carries), so say it here instead of leaving the customer to guess
+  // whether regenerating a read-only key hands back a credential that can suddenly write.
+  if (!confirm('Regenerate this key? It keeps its role, and the current key stops working immediately, so anything you have already wired up with it stops until you paste the new one in. You can copy the new key from this screen.')) return;
   try {
     const d = await API.post('/personal-api-keys/' + encodeURIComponent(id) + '/rotate', {});
     await icShowKeyOnce(d, 'Key regenerated');
@@ -4203,16 +4247,24 @@ async function icRevokeKey(id) {
 }
 
 async function icShowKeyOnce(d, title) {
+  const role = d && d.role;
   icShowKeyCard(title, d && d.key, d && d.prefix,
-    'Paste this into the capture app. You can come back and view or copy it again any time — press View and re-enter your password.');
+    (icKeyRoleIsReadOnly(role)
+      ? 'Paste this into the app or AI client that should only READ this account. It is a read-only key, so every make-or-change call through it is refused and writes nothing. '
+      : 'Paste this into the capture app or AI client. It is a read-and-write key: it can read and change this account. ') +
+    'You can come back and view or copy it again any time — press View and re-enter your password.',
+    role);
   await icLoadOverview();
 }
 
 // One key modal shared by creation, regeneration and View: the value is a readonly input (selectable
-// if the clipboard API is unavailable) plus a one-click Copy button.
-function icShowKeyCard(title, key, prefix, blurb) {
+// if the clipboard API is unavailable) plus a one-click Copy button, and the key's ROLE is named so
+// the person can see what they are holding.
+function icShowKeyCard(title, key, prefix, blurb, role) {
   showModal(escapeHtml(title),
     '<p style="margin:0 0 8px">' + escapeHtml(blurb) + '</p>' +
+    '<p style="margin:0 0 8px" id="icNewKeyRoleLine">Role: <strong>' + (icKeyRoleIsReadOnly(role) ? 'Read-only' : 'Read and write (workspace)') + '</strong> — ' +
+      escapeHtml(icKeyRoleDetail(role)) + '</p>' +
     '<div class="form-group"><label>Key</label><input id="icNewKey" readonly value="' + escapeHtmlAttr(key || '') + '"></div>' +
     '<div style="font-size:.75rem;color:var(--text-muted)">Prefix ' + escapeHtml(prefix || '') + '</div>',
     '<button class="btn btn-secondary" onclick="closeModal()">Close</button>' +
@@ -4243,7 +4295,7 @@ async function icDoViewKey(id) {
   if (!pw) { toast('Enter your password', 'error'); return; }
   try {
     const d = await API.post('/personal-api-keys/' + encodeURIComponent(id) + '/reveal', { password: pw });
-    icShowKeyCard('Your API key', d && d.key, d && d.prefix, 'This is the same key as before. Every view is recorded.');
+    icShowKeyCard('Your API key', d && d.key, d && d.prefix, 'This is the same key as before. Every view is recorded.', d && d.role);
   } catch (e) {
     toast('Could not show key: ' + e.message, 'error');
   }
