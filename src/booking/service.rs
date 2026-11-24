@@ -616,29 +616,80 @@ pub async fn generate_slots(
         // capacity of an OPEN date that nobody has booked, so "generate again" is the fix for a
         // mis-typed run. A date with a live booking (confirmed, or held and unexpired) is never
         // touched — the buyer agreed to a number.
-        let slot = sqlx::query_as::<_, Slot>(
-            "INSERT INTO booking_slots (resource_id, starts_at, ends_at, capacity, price_cents, label)
-             VALUES ($1,$2,$3,$4,$5,$6)
-             ON CONFLICT (resource_id, starts_at) DO UPDATE
-                SET price_cents = EXCLUDED.price_cents,
-                    capacity    = EXCLUDED.capacity,
-                    ends_at     = EXCLUDED.ends_at
-              WHERE booking_slots.status = 'open'
-                AND NOT EXISTS (
-                      SELECT 1 FROM booking_bookings b
-                       WHERE b.slot_id = booking_slots.id
-                         AND (b.status = 'confirmed'
-                              OR (b.status = 'held' AND b.hold_expires_at > now())))
-             RETURNING *",
+        // ONE SLOT PER POSITION PER ISSUE DATE (measured live 2026-11-24: "Email — TOP reports
+        // open_slots: 80 while every other position reports 41"). The conflict target was the exact
+        // (resource_id, starts_at) timestamp, so a run at a DIFFERENT time of day created a second slot
+        // on the same date instead of correcting the first: 39 dates ended up on sale twice, and a
+        // sponsor could book the same issue date twice on one position.
+        //
+        // The inventory unit is the DATE, so the date is what a run corrects. A slot already on that
+        // local date with nobody booked has its time, price and capacity corrected in place (same id,
+        // so any tags or links that reference it survive); a slot with a live booking stops the run for
+        // that date rather than sitting beside a duplicate.
+        let first_here = super::availability::local_to_utc(tz, day.and_hms_opt(0, 0, 0).unwrap())
+            .unwrap_or_else(Utc::now);
+        let last_here = first_here + Duration::days(1);
+        let existing: Option<(Uuid, bool)> = sqlx::query_as(
+            "SELECT s.id,
+                    EXISTS (SELECT 1 FROM booking_bookings b
+                             WHERE b.slot_id = s.id
+                               AND (b.status = 'confirmed'
+                                    OR (b.status = 'held' AND b.hold_expires_at > now()))) AS taken
+               FROM booking_slots s
+              WHERE s.resource_id = $1 AND s.starts_at >= $2 AND s.starts_at < $3
+              ORDER BY taken DESC, s.starts_at
+              LIMIT 1",
         )
         .bind(res.id)
-        .bind(start)
-        .bind(start + duration)
-        .bind(g.capacity.unwrap_or(res.capacity).max(1))
-        .bind(price.max(0))
-        .bind(g.label.clone().unwrap_or_default())
+        .bind(first_here)
+        .bind(last_here)
         .fetch_optional(&mut *tx)
         .await?;
+
+        let slot = match existing {
+            Some((_, true)) => None, // the date is sold; a run never moves a date under a buyer
+            Some((sid, false)) => {
+                let updated = sqlx::query_as::<_, Slot>(
+                    "UPDATE booking_slots
+                        SET starts_at = $2, ends_at = $3, capacity = $4, price_cents = $5,
+                            label = $6, status = 'open', closed_reason = NULL
+                      WHERE id = $1
+                        AND status <> 'cancelled'
+                     RETURNING *",
+                )
+                .bind(sid)
+                .bind(start)
+                .bind(start + duration)
+                .bind(g.capacity.unwrap_or(res.capacity).max(1))
+                .bind(price.max(0))
+                .bind(g.label.clone().unwrap_or_default())
+                .fetch_optional(&mut *tx)
+                .await?;
+                // A slot that had been closed by an exclusivity block is reopened by a run that
+                // deliberately includes its date, because closed_reason is cleared above.
+                updated
+            }
+            None => {
+                sqlx::query_as::<_, Slot>(
+                    "INSERT INTO booking_slots
+                        (resource_id, starts_at, ends_at, capacity, price_cents, label)
+                     VALUES ($1,$2,$3,$4,$5,$6)
+                     ON CONFLICT (resource_id, starts_at) DO UPDATE
+                        SET price_cents = EXCLUDED.price_cents,
+                            capacity    = EXCLUDED.capacity,
+                            ends_at     = EXCLUDED.ends_at
+                     RETURNING *",
+                )
+                .bind(res.id)
+                .bind(start)
+                .bind(start + duration)
+                .bind(g.capacity.unwrap_or(res.capacity).max(1))
+                .bind(price.max(0))
+                .bind(g.label.clone().unwrap_or_default())
+                .fetch_optional(&mut *tx)
+                .await?
+            }
+        };
         created.extend(slot);
     }
     tx.commit().await?;

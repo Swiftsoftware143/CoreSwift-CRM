@@ -185,6 +185,25 @@ pub async fn calendars_summary(
                     "{name}: position \"{rname}\" has no open future dates — nothing to book yet."
                 ));
             }
+            // A DATE ON SALE TWICE IS THE ONE THING THIS ENDPOINT MUST SHOUT ABOUT (measured live
+            // 2026-11-24: "Email — TOP reports open_slots: 80"). The generator now corrects by date, so
+            // this catches anything a hand edit or an older run left behind.
+            let doubled: Vec<String> = sqlx::query_scalar(
+                "SELECT (starts_at AT TIME ZONE c.timezone)::date::text
+                   FROM booking_slots s JOIN booking_calendars c ON c.id = $2
+                  WHERE s.resource_id = $1 AND s.status = 'open'
+                  GROUP BY 1 HAVING count(*) > 1",
+            )
+            .bind(rid)
+            .bind(cal_id)
+            .fetch_all(&pool)
+            .await?;
+            if !doubled.is_empty() {
+                problems.push(format!(
+                    "{name}: position \"{rname}\" has the same date on sale more than once ({}), so it could be booked twice for one issue.",
+                    doubled.join(", ")
+                ));
+            }
             pos_json.push(json!({
                 // Ids travel with the report: a read endpoint that cannot name a row cannot be used to
                 // act on it, which is the difference between verifying ten calendars and driving them.
