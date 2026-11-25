@@ -19,9 +19,23 @@ pub struct Plan {
     pub sort_order: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// one_time | recurring. Recurring requires an interval — refused at the door otherwise.
+    #[serde(default)]
+    pub price_type: Option<String>,
+    #[serde(default)]
+    pub billing_interval: Option<String>,
+    #[serde(default)]
+    pub billing_interval_count: Option<i32>,
 }
 
+/// Creating a plan.
+///
+/// `deny_unknown_fields` is deliberate (2026-11-25): the struct used to accept any key and silently drop
+/// what it did not know, so nine different spellings of a billing interval each returned 200 while saving
+/// nothing. A 200 that stores nothing is worse than a refusal — it looks like it worked. Now a key this
+/// endpoint does not take is a 400 that names the key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreatePlanRequest {
     pub name: String,
     pub slug: String,
@@ -32,9 +46,24 @@ pub struct CreatePlanRequest {
     pub checkout_url: Option<String>,
     pub payment_provider: Option<String>,
     pub thank_you_url: Option<String>,
+    /// "one_time" or "recurring".
+    #[serde(default, alias = "priceType")]
+    pub price_type: Option<String>,
+    /// day / week / month / year.
+    #[serde(
+        default,
+        alias = "interval",
+        alias = "billingInterval",
+        alias = "billingPeriod"
+    )]
+    pub billing_interval: Option<String>,
+    /// e.g. 3 with billing_interval="month" is quarterly.
+    #[serde(default, alias = "intervalCount", alias = "billingIntervalCount")]
+    pub billing_interval_count: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdatePlanRequest {
     pub name: Option<String>,
     pub description: Option<String>,
@@ -45,6 +74,19 @@ pub struct UpdatePlanRequest {
     pub payment_provider: Option<String>,
     pub thank_you_url: Option<String>,
     pub is_active: Option<bool>,
+    /// "one_time" or "recurring".
+    #[serde(default, alias = "priceType")]
+    pub price_type: Option<String>,
+    /// day / week / month / year.
+    #[serde(
+        default,
+        alias = "interval",
+        alias = "billingInterval",
+        alias = "billingPeriod"
+    )]
+    pub billing_interval: Option<String>,
+    #[serde(default, alias = "intervalCount", alias = "billingIntervalCount")]
+    pub billing_interval_count: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]

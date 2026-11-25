@@ -84,11 +84,69 @@ pub async fn list_plans(
 }
 
 /// POST /api/billing/plans — Create a plan (admin only)
+/// A RECURRING PRICE MUST SAY HOW OFTEN (measured 2026-11-25: "priceType: recurring saves with no
+/// interval… every one returning 200"). Returns the validated triplet, or a refusal that names the fix.
+///
+/// The rule is deliberately one-sided: a plan may be one_time with no interval, and may carry an interval
+/// for information, but `recurring` without a unit is refused — that is the state that produced a
+/// subscription billing on a schedule nobody recorded.
+fn settled_billing(
+    price_type: Option<&str>,
+    interval: Option<&str>,
+    count: Option<i32>,
+) -> Result<(Option<String>, Option<String>, Option<i32>), AppError> {
+    let ptype = match price_type.map(|v| v.trim().to_lowercase()) {
+        None => None,
+        Some(v) if v.is_empty() => None,
+        Some(v) if v == "one_time" || v == "onetime" || v == "one-time" => {
+            Some("one_time".to_string())
+        }
+        Some(v) if v == "recurring" || v == "reoccurring" || v == "subscription" => {
+            Some("recurring".to_string())
+        }
+        Some(other) => {
+            return Err(AppError::BadRequest(format!(
+                "price_type \"{other}\" is not recognised — use one_time or recurring"
+            )))
+        }
+    };
+    let unit = match interval.map(|v| v.trim().to_lowercase()) {
+        None => None,
+        Some(v) if v.is_empty() => None,
+        Some(v) if matches!(v.as_str(), "day" | "week" | "month" | "year") => Some(v),
+        Some(other) => {
+            return Err(AppError::BadRequest(format!(
+                "billing_interval \"{other}\" is not recognised — use day, week, month or year"
+            )))
+        }
+    };
+    if let Some(c) = count {
+        if c <= 0 {
+            return Err(AppError::BadRequest(
+                "billing_interval_count must be 1 or more".to_string(),
+            ));
+        }
+    }
+    if ptype.as_deref() == Some("recurring") && unit.is_none() {
+        return Err(AppError::BadRequest(
+            "a recurring price needs billing_interval (day, week, month or year) — refusing to save a              subscription that does not say how often it bills"
+                .to_string(),
+        ));
+    }
+    Ok((ptype, unit, count))
+}
+
 pub async fn create_plan(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
     Json(r): Json<CreatePlanRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    // A recurring price without an interval is refused here, before any write (2026-11-25).
+    let (price_type, interval, interval_count) = settled_billing(
+        r.price_type.as_deref(),
+        r.billing_interval.as_deref(),
+        r.billing_interval_count,
+    )?;
     if c.role != "agency_admin" {
         return Err(AppError::Forbidden);
     }
@@ -99,8 +157,8 @@ pub async fn create_plan(
     }
 
     let plan = sqlx::query_as::<_, Plan>(
-        r#"INSERT INTO plans (id, name, slug, description, price_monthly, price_yearly, features, checkout_url, payment_provider, thank_you_url)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *"#
+        r#"INSERT INTO plans (id, name, slug, description, price_monthly, price_yearly, features, checkout_url, payment_provider, thank_you_url, price_type, billing_interval, billing_interval_count)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *"#
     )
     .bind(Uuid::new_v4())
     .bind(&r.name)
@@ -112,6 +170,9 @@ pub async fn create_plan(
     .bind(&r.checkout_url)
     .bind(&r.payment_provider)
     .bind(&r.thank_you_url)
+    .bind(&price_type)
+    .bind(&interval)
+    .bind(interval_count)
     .fetch_one(&s.db)
     .await
     .map_err(|e| {
@@ -185,6 +246,16 @@ pub async fn update_plan(
         .and_then(Decimal::from_f64_retain)
         .unwrap_or(existing.price_yearly);
 
+    // The billing schedule, validated against what is already stored so a plan cannot lose its interval
+    // by being edited with only a price in the payload.
+    let (price_type, interval, interval_count) = settled_billing(
+        r.price_type.as_deref().or(existing.price_type.as_deref()),
+        r.billing_interval
+            .as_deref()
+            .or(existing.billing_interval.as_deref()),
+        r.billing_interval_count.or(existing.billing_interval_count),
+    )?;
+
     let plan = sqlx::query_as::<_, Plan>(
         r#"UPDATE plans SET
             name = COALESCE($1, name),
@@ -196,6 +267,9 @@ pub async fn update_plan(
             payment_provider = COALESCE($7, payment_provider),
             thank_you_url = COALESCE($8, thank_you_url),
             is_active = COALESCE($9, is_active),
+            price_type = $11,
+            billing_interval = $12,
+            billing_interval_count = $13,
             updated_at = NOW()
            WHERE id = $10 RETURNING *"#,
     )
@@ -209,6 +283,9 @@ pub async fn update_plan(
     .bind(&r.thank_you_url)
     .bind(r.is_active)
     .bind(id)
+    .bind(&price_type)
+    .bind(&interval)
+    .bind(interval_count)
     .fetch_one(&s.db)
     .await?;
 

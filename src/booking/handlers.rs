@@ -1372,22 +1372,30 @@ pub async fn put_confirmation_email(
 pub struct PaymentNotice {
     /// THE reference that survives the round trip: the booking page appends it to the checkout address
     /// as `ref=<order id>`, so this is normally the order id.
-    #[serde(default)]
+    #[serde(default, alias = "reference_id", alias = "custom_ref")]
     pub r#ref: Option<String>,
     #[serde(default)]
     pub reference: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "orderId", alias = "order", alias = "booking_id")]
     pub order_id: Option<String>,
     /// The provider's own transaction id, kept so a refund can be matched back.
-    #[serde(default)]
+    #[serde(default, alias = "transactionId", alias = "sale_id")]
     pub transaction_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "txnId")]
     pub txn_id: Option<String>,
-    #[serde(default)]
+    /// Amount in cents, under the spellings providers use for it.
+    #[serde(default, alias = "amountCents", alias = "amount")]
     pub amount_cents: Option<i64>,
     /// "paid" (default) or "refunded".
-    #[serde(default)]
+    #[serde(default, alias = "event", alias = "payment_status")]
     pub status: Option<String>,
+    /// Last-resort matcher when a provider echoes no reference at all: the buyer's address identifies a
+    /// recent booking on this calendar, which beats losing a payment that actually arrived.
+    #[serde(default, alias = "customerEmail", alias = "email")]
+    pub customer_email: Option<String>,
+    /// The calendar's key, for a provider whose panel can only fill a form field.
+    #[serde(default)]
+    pub key: Option<String>,
 }
 
 /// `POST /api/public/booking/payments/:provider` — money arrived (or went back).
@@ -1404,13 +1412,22 @@ pub async fn public_payment_notice(
     headers: axum::http::HeaderMap,
     Json(body): Json<PaymentNotice>,
 ) -> Result<Json<Value>> {
+    // The key may arrive as a header or as a field: some provider panels can only fill a form.
     let header_key = headers
         .get("x-booking-payment-key")
         .and_then(|v| v.to_str().ok())
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .map(str::to_string);
-    let key = header_key.unwrap_or_default();
+    let key = header_key
+        .or_else(|| {
+            body.key
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
 
     let reference = body
         .r#ref
@@ -1418,16 +1435,50 @@ pub async fn public_payment_notice(
         .or_else(|| body.reference.clone())
         .or_else(|| body.order_id.clone())
         .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| {
-            BookingError::invalid(
-                "no booking reference. Send the `ref` the checkout was opened with, or the order id.",
-            )
-        })?;
+        .filter(|v| !v.is_empty());
 
     // The reference is an order id. Accept it as a UUID when it is one, so a typo is a 404 rather than
     // a silent no-op; accept a manage token as the fallback, because a provider can only echo what the
     // checkout address carried.
+    // NO REFERENCE IS NOT A DEAD END (2026-11-25). A provider that echoes nothing would otherwise leave
+    // money received and a booking unpaid with nobody noticing. When no reference arrives, the buyer's
+    // address plus the calendar key identify their most recent unpaid booking.
+    let reference = match reference {
+        Some(r) => r,
+        None => {
+            let Some(email) = body
+                .customer_email
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+            else {
+                return Err(BookingError::invalid(
+                    "no booking reference. Send the `ref` the checkout was opened with, or the order id,                      or the buyer's email so the booking can be found.",
+                ));
+            };
+            let found: Option<String> = sqlx::query_scalar(
+                "SELECT o.id::text FROM booking_orders o
+                   JOIN booking_calendars c ON c.id = o.calendar_id
+                  WHERE lower(o.customer_email) = lower($1)
+                    AND c.payment_webhook_key = $2
+                    AND o.payment_status = 'unpaid'
+                  ORDER BY o.created_at DESC LIMIT 1",
+            )
+            .bind(&email)
+            .bind(&key)
+            .fetch_optional(&pool)
+            .await?;
+            match found {
+                Some(id) => id,
+                None => {
+                    return Err(BookingError::NotFound(
+                        "no unpaid booking on this calendar matches that address",
+                    ))
+                }
+            }
+        }
+    };
+
     let order: Option<(Uuid, Uuid, i64, String)> = if let Ok(oid) = Uuid::parse_str(&reference) {
         sqlx::query_as(
             "SELECT o.id, o.calendar_id, o.total_cents, o.payment_status
