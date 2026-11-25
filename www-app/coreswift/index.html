@@ -2267,7 +2267,7 @@ const TAB_RENDERERS = {
     // find one. The toggle brings them back for anyone who wants the whole platform in one table.
     return pageHeader('Users', 'The people on the platform, with the account they belong to',
         '<label style="display:inline-flex;align-items:center;gap:6px;font-size:.85rem">' +
-        '<input type="checkbox" id="usersIncludePortfolio" onchange="loadUsersTab()"> Include portfolio companies</label>') +
+        '<input type="checkbox" id="usersIncludePortfolio" onchange="TAB_LOADERS[\'users\']()"> Include portfolio companies</label>') +
     '<div id="usersTable"><div class="loading-wrap"><div class="spinner"></div> Loading users...</div></div>';
   },
   'billing': () => {
