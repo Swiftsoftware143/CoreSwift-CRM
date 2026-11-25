@@ -64,7 +64,13 @@ async fn exec_add_tag(
     sqlx::query("INSERT INTO tag_assignments(id,tag_id,entity_type,entity_id,tenant_id) VALUES($1,$2,$3,$4,$5)").bind(Uuid::new_v4()).bind(tag_id).bind(entity_type).bind(entity_id).bind(tenant_id).execute(db).await?;
     // A tag can be the ONLY thing that decides list membership, so the dynamic lists are refreshed
     // here — otherwise a "self-maintaining" list waits for somebody to press Evaluate (2026-11-21).
-    crate::lists::evaluator::refresh_dynamic_lists(db, tenant_id).await;
+    // Boxed because this is one edge of a real cycle: an action adds a tag -> the lists are re-evaluated ->
+    // a membership change fires a list automation -> that action can add a tag again. The compiler cannot
+    // size that future (E0733, measured 2026-11-25 once the evaluator began announcing its own changes).
+    Box::pin(crate::lists::evaluator::refresh_dynamic_lists(
+        db, tenant_id,
+    ))
+    .await;
     Ok(())
 }
 

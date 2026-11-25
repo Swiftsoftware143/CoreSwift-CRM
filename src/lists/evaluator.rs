@@ -88,6 +88,48 @@ pub async fn evaluate_dynamic_list(
                     .await?
                 }
             },
+            // A CONTACT'S OWN FIELDS (2026-11-25). The rule vocabulary was deal-shaped only, so "everyone in
+            // Palm Bay" or "everyone with job title Owner" could not be expressed at all — the two examples
+            // every CRM's dynamic-list documentation leads with. The column is chosen from a fixed list here,
+            // never from the rule, so a rule cannot name a column that is not in it.
+            "contact_field" => {
+                let column = rule
+                    .value
+                    .get("column")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                const ALLOWED: [&str; 9] = [
+                    "city",
+                    "state",
+                    "country",
+                    "job_title",
+                    "title",
+                    "company",
+                    "source",
+                    "score_category",
+                    "gender",
+                ];
+                if !ALLOWED.contains(&column) {
+                    return Err(crate::errors::AppError::Validation(format!(
+                        "\"{column}\" is not a contact field a list can be built on; use one of: {}",
+                        ALLOWED.join(", ")
+                    )));
+                }
+                let wanted = rule
+                    .value
+                    .get("equals")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let sql = format!(
+                    "SELECT id FROM contacts WHERE tenant_id = $1 AND lower({column}) = lower($2)"
+                );
+                sqlx::query_scalar::<_, Uuid>(&sql)
+                    .bind(list.tenant_id)
+                    .bind(&wanted)
+                    .fetch_all(db)
+                    .await?
+            }
             "deal_source" => {
                 let src = rule.value.as_str().unwrap_or("");
                 sqlx::query_scalar::<_, Uuid>(
@@ -203,9 +245,23 @@ pub async fn evaluate_dynamic_list(
         .copied()
         .collect();
 
+    // THE RULES MUST ANNOUNCE THEMSELVES (2026-11-25). `ListAdded` / `ListRemoved` were emitted only from
+    // the manual add/remove handlers and from booking, so a contact who joined a dynamic list BECAUSE THE
+    // RULES PUT THEM THERE fired nothing — the one case where nobody is watching to press a button. Each
+    // membership change made here now fires the same trigger the manual path fires, with the same list id,
+    // so an automation cannot tell the two apart (and should not: the customer's intent is "they're on the
+    // list now").
     for cid in &to_add {
         let _ = sqlx::query("INSERT INTO list_members(id,list_id,contact_id,tenant_id,added_manually) VALUES($1,$2,$3,$4,false) ON CONFLICT DO NOTHING")
             .bind(Uuid::new_v4()).bind(list.id).bind(cid).bind(list.tenant_id).execute(db).await;
+        crate::automation::engine::fire_list_trigger(
+            db,
+            list.tenant_id,
+            *cid,
+            list.id,
+            "ListAdded",
+        )
+        .await;
     }
     for cid in &to_remove {
         let _ = sqlx::query(
@@ -215,6 +271,14 @@ pub async fn evaluate_dynamic_list(
         .bind(cid)
         .bind(list.tenant_id)
         .execute(db)
+        .await;
+        crate::automation::engine::fire_list_trigger(
+            db,
+            list.tenant_id,
+            *cid,
+            list.id,
+            "ListRemoved",
+        )
         .await;
     }
 
