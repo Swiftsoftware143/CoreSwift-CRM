@@ -131,6 +131,24 @@
 //!        resolves 561 mounted `.route(..)` calls / 547 on /api** (strategy unchanged: re-measured
 //!        from the tree, never incremented).
 //!
+//!   +3 mounts / +3 paths (2026-11-25, kanban t_856aaef9 — the pin above had drifted again): the
+//!        booking page's own PAYMENT step. `GET /api/booking/calendars/:id/payment-wiring` (what the
+//!        owner pastes into their provider), its rotate arm
+//!        `POST /api/booking/calendars/:id/payment-wiring/rotate`, and the provider's reporting
+//!        receiver `POST /api/public/booking/payments/:provider` (named in [`PUBLIC_ROUTES`] — the
+//!        provider's own signature is the credential). All three sit on `/api**`, so the root-level
+//!        count is unchanged. RE-MEASURED from the tree with this extractor, never incremented:
+//!        564 mounted / 550 on /api** / 14 root-level.
+//!
+//!   +3 mounts / +3 paths (2026-11-25, kanban t_856aaef9): the ADDRESS REDIRECTS router, shipped in
+//!        cb7e3ca ("Redirects for every address an owner has") and INVISIBLE to this census until it
+//!        joined `NESTS` — `main.rs` nested it, but a mount the table cannot see is a surface nobody
+//!        reviews (and the count stayed where it was while the product grew, which is how the drift
+//!        above went unnoticed). The three arms on `/api/domain-redirects` are the owner's own
+//!        address list (GET), the save (PUT) and the remove (DELETE by host). Session-only: the
+//!        router attaches `auth_middleware` itself and joins no allowlist, so a stranger and an
+//!        issued key are both refused. Measured 567 mounted / 553 on /api** / 14 root-level.
+//!
 //!   +1 mount (2026-11-11, kanban t_5d1d6d31, pinned here because the pin had gone stale): the
 //!        billing screen's one-read bill, `GET /api/billing/summary` (the single amount due, the
 //!        one open plan line, and the line that ended on the last change). It sits on the billing
@@ -1180,6 +1198,16 @@ mod tests {
             src: include_str!("../custom_objects/mcp.rs"),
             func: "router",
         },
+        // Where an owner's own addresses send a visitor (kanban t_856aaef9, shipped in cb7e3ca). The
+        // mount was invisible to this table, so the census could not see a surface that the customer
+        // reaches: the three arms are the owner's own address list (GET), the save (PUT) and the remove
+        // (DELETE by host). Session-only — the router attaches `auth_middleware` itself and is on no
+        // allowlist, so a stranger and an issued key are both refused.
+        Nest {
+            prefix: "/api/domain-redirects",
+            src: include_str!("../domain_redirects/mod.rs"),
+            func: "router",
+        },
     ];
 
     /// The body of `fn <func>`, assuming rustfmt puts the closing brace at column 0.
@@ -1665,12 +1693,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            561,
+            567,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 547,
+            api, 553,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.
