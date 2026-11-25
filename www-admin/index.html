@@ -4830,10 +4830,19 @@ const TAB_LOADERS = {
               : '—')
           ]);
         }
-        usersTableEl.innerHTML = dataTable(
-          ['Name','Email','Role / workspace','Created',''], rows,
-          st.q ? `No person matches “${escapeHtml(st.q)}”.` : 'No users yet.'
-        );
+        if (!rows.length && st.q) {
+          // A search that matched nobody is not "no data yet" — say what was searched.
+          usersTableEl.innerHTML = `<div class="card"><div class="card-body"><div class="empty-state">
+            <div class="empty-icon">🔍</div>
+            <h3>No person matches “${escapeHtml(st.q)}”</h3>
+            <p>Check the spelling, or press Clear to see everyone again.</p>
+          </div></div></div>`;
+        } else {
+          usersTableEl.innerHTML = dataTable(
+            ['Name','Email','Role / workspace','Created',''], rows,
+            'No users yet.'
+          );
+        }
         const countEl = document.getElementById('usersCount');
         if (countEl) {
           countEl.textContent = total === 0
