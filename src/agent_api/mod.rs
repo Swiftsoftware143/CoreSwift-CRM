@@ -40,14 +40,6 @@ pub struct Agent {
     pub label: String,
 }
 
-async fn hash_key(key: &str) -> String {
-    // Same SHA-256 hex the MCP door and the minting path use.
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(key.as_bytes());
-    hex::encode(h.finalize())
-}
-
 /// Resolve either credential to one account.
 async fn authenticate(state: &crate::AppState, headers: &HeaderMap) -> Result<Agent, AppError> {
     let bearer = headers
@@ -59,22 +51,22 @@ async fn authenticate(state: &crate::AppState, headers: &HeaderMap) -> Result<Ag
         .ok_or(AppError::Unauthorized)?;
 
     if bearer.starts_with("csk_") {
-        let hash = hash_key(bearer).await;
-        let row: Option<(Uuid, String, String)> = sqlx::query_as(
-            "SELECT tenant_id, id::text, coalesce(role, 'workspace')
-               FROM personal_api_keys
-              WHERE key_hash = $1 AND is_active
-              LIMIT 1",
-        )
-        .bind(&hash)
-        .fetch_optional(&state.db)
-        .await?;
-        let Some((tenant, key_id, role)) = row else {
-            return Err(AppError::Unauthorized);
-        };
-        if role == "read_only" {
-            return Err(AppError::Forbidden);
+        // The SAME resolver the rest of the issued-key surface uses (`/api/external/**`): it decides
+        // whether the key is live, whether its OWNER may still act (an issued key whose user was
+        // deactivated or closed is not a credential), stamps `last_used_at` and meters the call
+        // against the account's daily ceiling. A second hand-rolled key lookup here would be a
+        // second rule that can disagree with the first.
+        let (tenant, key_id) = crate::external_api::resolve_key(state, headers).await?;
+        let role = crate::external_api::issued_key_role(state, bearer)
+            .await
+            .unwrap_or_default();
+        if role != crate::personal_api_keys::ROLE_WORKSPACE {
+            // The boundary's own sentence, so both doors say the same thing about the same role.
+            return Err(AppError::ForbiddenReason(
+                crate::auth::boundary::READ_ONLY_REFUSAL.to_string(),
+            ));
         }
+        let key_id = key_id.to_string();
         return Ok(Agent {
             claims: Claims {
                 sub: key_id.clone(),

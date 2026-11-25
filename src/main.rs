@@ -666,7 +666,18 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/analytics", analytics::router(state.clone()))
         // THE ACTION AGENT (ticketing suite item 1): limits, the ledger, and the door every action goes
         // through. Acting on a customer's record deserves its own mount, not a corner of another module.
-        .nest("/api/agent", agent::router(state.clone()))
+        //
+        // THE AGENT DOOR (kanban t_d618cd47) shares that prefix: `agent_api` wraps the console
+        // handlers for an AI agent holding an issued key, resolving the credential itself. It is
+        // MERGED into this one nest rather than nested a second time — axum has one nested route per
+        // path, and merge is what preserves the action agent's own routes. The two are separate
+        // routers on purpose: `agent::router` keeps its session middleware (a key never reaches an
+        // action door), while `agent_api` is the one surface that accepts a key, and only for the
+        // routes listed in `auth::route_policy::API_KEY_ROUTES`.
+        .nest(
+            "/api/agent",
+            agent::router(state.clone()).merge(agent_api::router(state.clone())),
+        )
         .nest("/api/ai", ai::router(state.clone()))
         // Billing (plan tiers, feature toggles)
         .nest("/api/campaigns", campaigns::router(state.clone()))

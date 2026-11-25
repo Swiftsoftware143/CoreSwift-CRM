@@ -625,8 +625,9 @@ pub const API_KEY_ROUTES: &[&str] = &[
     // THE AGENT DOOR (2026-11-25). An AI agent holds an issued key, and the console routes correctly
     // refuse one. Rather than widen a session door, these routes accept EITHER credential and resolve it
     // themselves (`agent_api::authenticate`), exactly as `/api/objects` does. A `read_only` key is still
-    // refused, because every write here is outside READ_ONLY_KEY_ROUTES.
-    "/api/agent",
+    // refused, because every write here is outside READ_ONLY_KEY_ROUTES. The nest itself
+    // (`/api/agent`) is not a route: only the 13 leaves below are mounted, and each one is named here
+    // exactly as `agent_api::router` spells it.
     "/api/agent/contacts",
     "/api/agent/contacts/:id",
     "/api/agent/deals",
@@ -964,6 +965,15 @@ mod tests {
         Nest {
             prefix: "/api/agent",
             src: include_str!("../agent/mod.rs"),
+            func: "router",
+        },
+        // THE AGENT DOOR (kanban t_d618cd47). It shares the action agent's prefix — main.rs merges the
+        // two routers into ONE nest — so it is listed as its own row: the census reads route literals
+        // out of each module's own `router`, and a merged half the table cannot see is a keyed write
+        // surface nobody counted. Every leaf here is on API_KEY_ROUTES.
+        Nest {
+            prefix: "/api/agent",
+            src: include_str!("../agent_api/mod.rs"),
             func: "router",
         },
         Nest {
@@ -1705,18 +1715,28 @@ mod tests {
     /// +1 mount / +1 path (2026-11-24): `DELETE /api/objects/:slug` — archiving a Custom Object
     /// (kanban t_933dd588 §6a) — on `/api**`, so the root-level count is unchanged.
     /// 560 mounted / 546 on /api**.
+    ///
+    /// +13 mounts / +13 paths (2026-11-25, kanban t_d618cd47): THE AGENT DOOR — the write surface an
+    /// AI agent holding an issued `csk_…` key calls, each leaf wrapping the console handler it names:
+    /// contacts (create, update), deals (create, update, move stage, add task), list members, tag
+    /// assignment, the two calendar writers, the calendar's payment-key rotation, the resource's
+    /// payment-checkout arm, and the address redirect — 13 leaves in all, measured from
+    /// `agent_api::router`. It shares the action agent's `/api/agent` prefix: main.rs MERGES the two
+    /// routers into one nest, and `NESTS` carries a row for each half, so the merged half is counted
+    /// rather than invisible. Every leaf is on `/api**`, so the 14 root-level mounts are unchanged.
+    /// 580 mounted / 566 on /api**.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
         let mounted = mounted_routes();
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            567,
+            580,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 553,
+            api, 566,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.
