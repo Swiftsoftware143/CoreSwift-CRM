@@ -6022,6 +6022,28 @@ async function tkAssignSave(ticketId) {
   }
 }
 
+// A ticket's own status vocabulary, in the words a person uses. The VALUES are the table's
+// (`tickets_status_check`: new, open, pending, on_hold, solved, closed); the LABELS are plain
+// English, so `pending` reads as "In progress" here exactly as it does on the dashboard tile.
+const TICKET_STATUSES = ['new', 'open', 'pending', 'on_hold', 'solved', 'closed'];
+const TICKET_STATUS_LABELS = { new: 'New', open: 'Open', pending: 'In progress', on_hold: 'On hold', solved: 'Solved', closed: 'Closed' };
+function ticketStatusLabel(v) { return TICKET_STATUS_LABELS[v] || v; }
+// Move this ticket through its own lifecycle from the console. The SERVER validates the word (a
+// wrong one answers 400 and names the six), so a stale page can never write a status the table does
+// not allow. Solved and closed are the two states that also queue the ticket for the knowledge base.
+async function setTicketStatus(id) {
+  const sel = document.getElementById('tkStatusSel');
+  if (!sel) return;
+  const next = sel.value;
+  try {
+    await API.call('PATCH', '/tickets/' + id, { status: next });
+    closeModal();
+    toast('Ticket moved to ' + ticketStatusLabel(next), 'success');
+    switchTab('tickets');
+  } catch (e) {
+    toast('Could not change the status: ' + ((e && e.message) || 'unknown error'), 'error');
+  }
+}
 async function openTicket(id) {
   try {
     const data = await API.get('/tickets/' + id);
@@ -6049,6 +6071,16 @@ async function openTicket(id) {
       // their address plus a reference. The ticket id is already on screen; nothing is hardcoded.
       '<p style="color:var(--text-muted);font-size:12px">Customer portal reference: <code>' +
         escapeHtml(String(t.id || id).slice(0, 8)) + '</code> — the customer opens My Support and signs in with their email address and this reference.</p>' +
+      // WHERE THE WORK IS. The status line above is this desk's own record and until now nothing in
+      // the console could change it, so a ticket could only be moved by an agent or the API. The
+      // options are the table's six values; the labels are the words a person uses for them.
+      '<div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">' +
+        '<label for="tkStatusSel" style="font-size:12px;color:var(--text-muted)">Change status</label>' +
+        '<select id="tkStatusSel" style="padding:6px 8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:13px">' +
+          TICKET_STATUSES.map(v => '<option value="' + v + '"' + ((t.status || 'open') === v ? ' selected' : '') + '>' + ticketStatusLabel(v) + '</option>').join('') +
+        '</select>' +
+        '<button class="btn btn-primary btn-sm" onclick="setTicketStatus(\'' + id + '\')">Save status</button>' +
+      '</div>' +
       '</div></div>';
     html += '<div id="tkHistory" style="margin-top:12px"></div>';
     html += '<div class="card" style="margin-top:12px"><div class="card-header">Thread</div><div class="card-body">';
