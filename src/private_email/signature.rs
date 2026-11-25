@@ -684,6 +684,10 @@ pub struct WorkspaceSignatureBody {
     pub phone: Option<String>,
     #[serde(default)]
     pub line: Option<String>,
+    /// Clearing the workspace signature on purpose. See the mailbox body: an empty request must not be read
+    /// as "erase", because that is what wiped this account's signature on 2026-11-25.
+    #[serde(default)]
+    pub clear: bool,
 }
 
 pub async fn put_workspace_signature(
@@ -692,11 +696,37 @@ pub async fn put_workspace_signature(
     Json(req): Json<WorkspaceSignatureBody>,
 ) -> ApiResult<Json<Value>> {
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    let full_name = clean_field(req.full_name, MAX_FIELD, "Name")?;
-    let job_title = clean_field(req.job_title, MAX_FIELD, "Title")?;
-    let company = clean_field(req.company, MAX_FIELD, "Company")?;
-    let phone = clean_field(req.phone, MAX_FIELD, "Phone")?;
-    let line = clean_field(req.line, MAX_LINE, "Line")?;
+    // THE GUARD BELONGS HERE (measured 2026-11-25, twice): an empty body wrote five empty strings and wiped
+    // the workspace signature. The first fix landed on the per-mailbox handler by mistake, which is why this
+    // door still answered 200 to `{}` after the "fix" deployed. Say what you mean: fields, or clear: true.
+    let named_nothing = req.full_name.is_none()
+        && req.job_title.is_none()
+        && req.company.is_none()
+        && req.phone.is_none()
+        && req.line.is_none();
+    if named_nothing && !req.clear {
+        return Err(AppError::Validation(
+            "send the signature fields you want to change; an empty body would blank the workspace signature.              Send clear: true if you do want it blank."
+                .into(),
+        ));
+    }
+    let full_name = clean_field(
+        if req.clear { None } else { req.full_name },
+        MAX_FIELD,
+        "Name",
+    )?;
+    let job_title = clean_field(
+        if req.clear { None } else { req.job_title },
+        MAX_FIELD,
+        "Title",
+    )?;
+    let company = clean_field(
+        if req.clear { None } else { req.company },
+        MAX_FIELD,
+        "Company",
+    )?;
+    let phone = clean_field(if req.clear { None } else { req.phone }, MAX_FIELD, "Phone")?;
+    let line = clean_field(if req.clear { None } else { req.line }, MAX_LINE, "Line")?;
 
     sqlx::query(
         "INSERT INTO tenant_email_signatures
