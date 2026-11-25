@@ -9,6 +9,12 @@
 //! * twelve **domain reads** ([`DOMAIN_TOOL_NAMES`]) over the CRM's own tables — contacts, companies,
 //!   deals, pipelines, bookings, availability, tickets, billing plan lines and core mail. They are
 //!   read-only, they take no workspace argument, and their tenant filter is inside the statement.
+//! * four **named configuration writers** ([`BOOKING_WRITE_TOOL_NAMES`]) — a product's checkout, a
+//!   calendar's default checkout, a calendar's payment key, and where one of the account's addresses
+//!   sends a visitor. They are the four tools the read-only fleet used to forward here (kanban
+//!   t_bda9b277); the names are unchanged, so a client that called them before the cleanup calls the
+//!   same names today. Each translates its flat arguments into the console call it always meant and
+//!   hands it to `api_proxy`, so the handler keeps its own tenancy, validation and audit.
 //!
 //! Why the crate: the transport (dual-era protocol, 401 semantics, role gate, startup-validated
 //! registry, redacted 0600 audit line) must not differ between products. The app supplies only what
@@ -75,8 +81,11 @@ pub fn door(state: &AppState) -> Result<&'static Arc<Door>, String> {
 }
 
 fn build(state: &AppState) -> DoorSlot {
-    let registry = register_api_tool(
-        reads::register(custom_object_registry(state)?, state),
+    let registry = register_booking_tools(
+        register_api_tool(
+            reads::register(custom_object_registry(state)?, state),
+            state,
+        ),
         state,
     );
     let resolver = Arc::new(Resolver {
@@ -467,6 +476,311 @@ fn app_error_to_tool(e: AppError) -> ToolError {
     }
 }
 
+// ── the four configuration writers the fleet used to forward ──────────────────────────────────
+
+/// The four write tools the read-only fleet used to forward to this app (kanban t_bda9b277).
+///
+/// David's rule made the fleet reader read-only and put every write inside the software. The fleet's
+/// descriptors survived the cleanup; these are the same four names, unchanged, so a client that called
+/// `coreswift_booking_set_product_checkout` (or any of the other three) before the cleanup calls the
+/// same name today and lands on the product's own door with the account's own key.
+pub const BOOKING_WRITE_TOOL_NAMES: [&str; 4] = [
+    "coreswift_booking_set_product_checkout",
+    "coreswift_booking_set_calendar_checkout",
+    "coreswift_booking_rotate_payment_key",
+    "coreswift_domain_set_redirect",
+];
+
+/// A required string argument, refused by name when it is missing or blank.
+fn str_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, ToolError> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| ToolError::Invalid(format!("{key} is required")))
+}
+
+/// An id argument. A name where the API wants an id is the caller's mistake and is said so, rather than
+/// forwarded as a 404 the model cannot learn from.
+fn uuid_arg(args: &Value, key: &str) -> Result<Uuid, ToolError> {
+    Uuid::parse_str(str_arg(args, key)?).map_err(|_| {
+        ToolError::Invalid(format!("{key} must be the id the API returns, not a name"))
+    })
+}
+
+/// The four tool descriptors, written for a model: what each changes, what it cannot do, and which id it
+/// needs. The schemas are the argument shapes the fleet shipped, so nothing a caller learned has to change.
+fn booking_write_specs() -> Vec<ToolSpec> {
+    vec![
+        ToolSpec {
+            name: "coreswift_booking_set_product_checkout".to_string(),
+            description: "WRITE. Set one product's (position's) checkout link or embed code, and when that \
+                          product is paid for. Scoped to your own account; the app validates the address and \
+                          refuses a non-https one. You cannot mark a booking paid with this — money arrives \
+                          only through the payment provider's webhook."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "resource_id": {"type": "string", "description": "The booking_resources id of the product."},
+                    "checkout": {"type": "string", "description": "The checkout link, or the provider's embed code. Only its https address is used."},
+                    "payment_mode": {"type": "string", "enum": ["before", "after"], "description": "before = pay to secure the booking; after = pay on the confirmation. Omit to leave unchanged."}
+                },
+                "required": ["resource_id", "checkout"],
+                "additionalProperties": false
+            }),
+            annotations: Annotations::write("Set a product's checkout".to_string()),
+            min_role: Role::Workspace,
+        },
+        ToolSpec {
+            name: "coreswift_booking_set_calendar_checkout".to_string(),
+            description: "WRITE. Set the DEFAULT checkout for a calendar, used by any product that has none \
+                          of its own. Scoped to your own account; the app validates the address. You cannot \
+                          mark a booking paid with this."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "calendar_id": {"type": "string", "description": "The booking_calendars id."},
+                    "checkout": {"type": "string", "description": "The checkout link or embed code. Only its https address is used. Empty string clears it."},
+                    "payment_mode": {"type": "string", "enum": ["before", "after"], "description": "Omit to follow the calendar type."}
+                },
+                "required": ["calendar_id", "checkout"],
+                "additionalProperties": false
+            }),
+            annotations: Annotations::write("Set a calendar's checkout".to_string()),
+            min_role: Role::Workspace,
+        },
+        ToolSpec {
+            name: "coreswift_booking_rotate_payment_key".to_string(),
+            description: "WRITE and DESTRUCTIVE for the old value: replace the key a payment provider uses \
+                          when it reports a sale for this calendar. The old key stops working immediately, so \
+                          the provider must be updated with the new one. Scoped to your own account."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "calendar_id": {"type": "string", "description": "The booking_calendars id."}
+                },
+                "required": ["calendar_id"],
+                "additionalProperties": false
+            }),
+            annotations: Annotations::destructive("Rotate a calendar's payment key".to_string()),
+            min_role: Role::Workspace,
+        },
+        ToolSpec {
+            name: "coreswift_domain_set_redirect".to_string(),
+            description: "WRITE. Set where one of your own addresses sends a visitor (a booking address, a \
+                          custom domain, or a sending domain). The host must already belong to your account; \
+                          the destination must be an https:// link or a path starting with /. Audited, scoped \
+                          to your account."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "host": {"type": "string", "description": "The hostname exactly as it appears in your address list, e.g. booking.yourdomain.com"},
+                    "target_url": {"type": "string", "description": "https://... or a path such as /pricing"},
+                    "status_code": {"type": "integer", "enum": [301, 302, 307, 308], "description": "302 unless you mean it to be permanent."}
+                },
+                "required": ["host", "target_url"],
+                "additionalProperties": false
+            }),
+            annotations: Annotations::write("Set an address redirect".to_string()),
+            min_role: Role::Workspace,
+        },
+    ]
+}
+
+/// Register the four writers. The handler is chosen by the registered name, so the registry the crate
+/// validates at startup and the handler that runs can never disagree.
+fn register_booking_tools(mut reg: Registry, state: &AppState) -> Registry {
+    for spec in booking_write_specs() {
+        let name = spec.name.clone();
+        let st = state.clone();
+        reg = reg.with_fn(spec, move |ctx: Ctx, args: Value| {
+            let st = st.clone();
+            let name = name.clone();
+            Box::pin(async move {
+                match name.as_str() {
+                    "coreswift_booking_set_product_checkout" => {
+                        product_checkout(&st, &ctx, args).await
+                    }
+                    "coreswift_booking_set_calendar_checkout" => {
+                        calendar_checkout(&st, &ctx, args).await
+                    }
+                    "coreswift_booking_rotate_payment_key" => {
+                        rotate_payment_key(&st, &ctx, args).await
+                    }
+                    "coreswift_domain_set_redirect" => domain_set_redirect(&st, &ctx, args).await,
+                    other => Err(ToolError::Internal(format!(
+                        "booking tool {other} has no handler"
+                    ))),
+                }
+            })
+        });
+    }
+    reg
+}
+
+/// Hand a call to the app's own handler as this account, exactly as the console would. The
+/// `{status, body}` shape is the same one `coreswift_api` returns, so a model reads both the same way.
+async fn forward(
+    state: &AppState,
+    ctx: &Ctx,
+    method: &str,
+    path: &str,
+    body: Value,
+) -> Result<Value, ToolError> {
+    let tenant = ctx
+        .scope
+        .ids()
+        .first()
+        .copied()
+        .ok_or(ToolError::NotFound)?;
+    let (status, text) = crate::api_proxy::call(
+        state,
+        tenant,
+        method,
+        path,
+        Some(body.to_string().into_bytes()),
+    )
+    .await
+    .map_err(app_error_to_tool)?;
+    let payload: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({ "raw": text }));
+    if (200..300).contains(&status) {
+        Ok(json!({ "status": status, "body": payload }))
+    } else {
+        Err(ToolError::Invalid(format!(
+            "the app answered {status}: {payload}"
+        )))
+    }
+}
+
+/// `coreswift_booking_set_product_checkout` — the console's `PATCH /api/booking/resources/:id`.
+///
+/// That handler writes a WHOLE position (name, price, timing, size …), so a checkout-only change that
+/// sent a thin body would blank the product's price and name. The row is read first, scoped to this
+/// account, and the complete body goes to the console handler — which validates the address and keeps
+/// the audit trail.
+async fn product_checkout(state: &AppState, ctx: &Ctx, args: Value) -> Result<Value, ToolError> {
+    let tenant = ctx
+        .scope
+        .ids()
+        .first()
+        .copied()
+        .ok_or(ToolError::NotFound)?;
+    let resource_id = uuid_arg(&args, "resource_id")?;
+    let checkout = str_arg(&args, "checkout")?.to_string();
+
+    let row = sqlx::query(
+        "SELECT to_jsonb(r) AS row FROM booking_resources r \
+           JOIN booking_calendars c ON c.id = r.calendar_id \
+          WHERE r.id = $1 AND c.tenant_id = $2",
+    )
+    .bind(resource_id)
+    .bind(tenant)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ToolError::Internal(format!("booking resource read: {e}")))?
+    .ok_or(ToolError::NotFound)?;
+    let current: Value = row
+        .try_get("row")
+        .map_err(|e| ToolError::Internal(format!("booking resource row: {e}")))?;
+
+    let mut body = serde_json::Map::new();
+    for key in [
+        "name",
+        "description",
+        "capacity",
+        "price_cents",
+        "compare_at_price_cents",
+        "duration_min",
+        "slot_interval_min",
+        "buffer_min",
+        "min_notice_min",
+        "sort_order",
+        "size",
+        "exclusive",
+    ] {
+        body.insert(
+            key.to_string(),
+            current.get(key).cloned().unwrap_or(Value::Null),
+        );
+    }
+    body.insert("checkout_embed".to_string(), json!(checkout));
+    body.insert(
+        "payment_mode".to_string(),
+        match args.get("payment_mode").and_then(|v| v.as_str()) {
+            Some(mode) => json!(mode),
+            None => current.get("payment_mode").cloned().unwrap_or(Value::Null),
+        },
+    );
+    forward(
+        state,
+        ctx,
+        "PATCH",
+        &format!("booking/resources/{resource_id}"),
+        Value::Object(body),
+    )
+    .await
+}
+
+/// `coreswift_booking_set_calendar_checkout` — the console's `PATCH /api/booking/calendars/:id`.
+///
+/// Every other calendar field is sent as an explicit `null` so the handler keeps what it already has;
+/// only the checkout (and the timing, when given) changes.
+async fn calendar_checkout(state: &AppState, ctx: &Ctx, args: Value) -> Result<Value, ToolError> {
+    let calendar_id = uuid_arg(&args, "calendar_id")?;
+    let checkout = str_arg(&args, "checkout")?.to_string();
+    let mut body = json!({
+        "name": Value::Null,
+        "slug": Value::Null,
+        "settings": Value::Null,
+        "reply_to_email": Value::Null,
+        "send_confirmation": Value::Null,
+        "payment_embed": checkout,
+    });
+    if let Some(mode) = args.get("payment_mode").and_then(|v| v.as_str()) {
+        body["payment_mode"] = json!(mode);
+    }
+    forward(
+        state,
+        ctx,
+        "PATCH",
+        &format!("booking/calendars/{calendar_id}"),
+        body,
+    )
+    .await
+}
+
+/// `coreswift_booking_rotate_payment_key` — the console's
+/// `POST /api/booking/calendars/:id/payment-wiring/rotate`. The new secret is returned so the caller can
+/// hand it to the provider, which is the whole point of rotating it.
+async fn rotate_payment_key(state: &AppState, ctx: &Ctx, args: Value) -> Result<Value, ToolError> {
+    let calendar_id = uuid_arg(&args, "calendar_id")?;
+    forward(
+        state,
+        ctx,
+        "POST",
+        &format!("booking/calendars/{calendar_id}/payment-wiring/rotate"),
+        json!({}),
+    )
+    .await
+}
+
+/// `coreswift_domain_set_redirect` — the console's `PUT /api/domain-redirects`. The handler refuses a
+/// host this account does not own and a target that is not an https address or a local path.
+async fn domain_set_redirect(state: &AppState, ctx: &Ctx, args: Value) -> Result<Value, ToolError> {
+    let mut body = json!({
+        "host": str_arg(&args, "host")?,
+        "target_url": str_arg(&args, "target_url")?,
+    });
+    if let Some(code) = args.get("status_code").and_then(|v| v.as_i64()) {
+        body["status_code"] = json!(code);
+    }
+    forward(state, ctx, "PUT", "domain-redirects", body).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -531,6 +845,47 @@ mod tests {
         let (_, read_min) = custom_object_annotation("list_objects");
         assert_eq!(read_min, Role::ReadOnly);
         assert!(key_role(true, "read_only").can(read_min));
+    }
+
+    #[test]
+    fn the_four_fleet_write_names_land_unchanged_on_this_door() {
+        // The mapping is identity on purpose (kanban t_bda9b277): the fleet's four forwarded write
+        // tools are the SAME names here, so no client has to learn a second spelling for a capability
+        // that did not change.
+        let names: Vec<String> = booking_write_specs().into_iter().map(|s| s.name).collect();
+        assert_eq!(names, BOOKING_WRITE_TOOL_NAMES.to_vec());
+        for name in BOOKING_WRITE_TOOL_NAMES {
+            assert!(name.starts_with("coreswift_"));
+            assert!(
+                !DOMAIN_TOOL_NAMES.contains(&name),
+                "{name} collides with a domain read"
+            );
+            assert!(
+                !crate::custom_objects::mcp::TOOL_NAMES.contains(&name),
+                "{name} collides with a shipped Custom Objects tool"
+            );
+            assert_ne!(name, API_TOOL_NAME, "the generic tool is separate");
+        }
+    }
+
+    #[test]
+    fn every_booking_writer_needs_a_write_capable_key() {
+        for spec in booking_write_specs() {
+            assert_eq!(
+                spec.min_role,
+                Role::Workspace,
+                "{} changes configuration, so a read-only key must not reach it",
+                spec.name
+            );
+            assert!(!key_role(true, "read_only").can(spec.min_role));
+            assert!(!key_role(false, "read_only").can(spec.min_role));
+        }
+        // The key rotation is the one that destroys the old value, so a host prompts for it.
+        let rotate = booking_write_specs()
+            .into_iter()
+            .find(|s| s.name == "coreswift_booking_rotate_payment_key")
+            .expect("the rotation tool ships");
+        assert!(rotate.annotations.destructive);
     }
 
     #[test]

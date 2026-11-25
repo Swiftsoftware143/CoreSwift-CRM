@@ -178,6 +178,7 @@ pub async fn info() -> Response {
             "transport": "HTTP POST (Authorization: Bearer <workspace key or console session>)",
             "custom_object_tools": TOOL_NAMES,
             "domain_read_tools": crate::mcp_door::DOMAIN_TOOL_NAMES,
+            "booking_write_tools": crate::mcp_door::BOOKING_WRITE_TOOL_NAMES,
         })),
     )
         .into_response()
