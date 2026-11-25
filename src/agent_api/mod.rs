@@ -205,8 +205,12 @@ async fn calendar_checkout(
     body: Json<Value>,
 ) -> ApiResult<axum::response::Response> {
     let agent = authenticate(&state, &headers).await?;
+    // Accept both spellings: the MCP tool sends `checkout_embed` (the column's name) while this door's first
+    // caller used `checkout`. Refusing one of them is how an agent gets "checkout is required" for a request
+    // that plainly contains a checkout (measured 2026-11-25).
     let checkout = body
         .get("checkout")
+        .or_else(|| body.get("checkout_embed"))
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("checkout is required".into()))?;
     let typed = crate::booking::models::UpdateCalendar {
@@ -239,8 +243,12 @@ async fn resource_checkout(
     body: Json<Value>,
 ) -> ApiResult<axum::response::Response> {
     let agent = authenticate(&state, &headers).await?;
+    // Accept both spellings: the MCP tool sends `checkout_embed` (the column's name) while this door's first
+    // caller used `checkout`. Refusing one of them is how an agent gets "checkout is required" for a request
+    // that plainly contains a checkout (measured 2026-11-25).
     let checkout = body
         .get("checkout")
+        .or_else(|| body.get("checkout_embed"))
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("checkout is required".into()))?;
     // Read the current row first: the console's update writes the WHOLE position, so a checkout change
