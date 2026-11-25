@@ -308,7 +308,8 @@ pub async fn create_account(
 /// plaintext password in its variables).
 ///
 /// Does the credentials mail actually leave? `true` ONLY when a message was queued, `false` when the
-/// send was suppressed (probe/harness class, kanban t_12a8d509) or the send failed.
+/// send was suppressed (probe/harness class, kanban t_12a8d509), when this deployment's mailer is
+/// stopped (`EMAIL_SENDING_PAUSED`), or the send failed.
 /// A send failure is logged and swallowed — the account is already real, and a mail outage must
 /// not turn a completed mint into an error response. But it is now REPORTED: `register` turns a
 /// `false` on a MINTED password into `users.password_undelivered = true`, which is the state
@@ -343,6 +344,26 @@ pub async fn send_credentials_email(
     name: &str,
     password: &str,
 ) -> bool {
+    // ── A STOPPED MAILER MUST NOT PROMISE A PASSWORD (measured 2026-11-25) ──────────────────────
+    // `EMAIL_SENDING_PAUSED=1` (the owner's 2026-11-20 bounce-rate stop) refuses every message at
+    // the transport, but it refuses it LATER, after the queue: the signup door queued the welcome
+    // mail, `send_template_email` answered Ok, and the response told the brand-new customer
+    // `credentials_emailed: true` while the worker recorded
+    // `permanent: Sending is paused for this deployment` — the exact lie `forgot-password` stopped
+    // telling the same day. The account's only password was then in nobody's inbox and
+    // `password_undelivered` was never set, so the "choose your own password" door never appeared.
+    // Answered here, before the queue, so a stop costs no row and the page can say the truth.
+    if crate::communications::providers::mail_sending_paused() {
+        tracing::warn!(
+            email = %email,
+            tenant = %tenant_id,
+            "credentials email NOT QUEUED — this deployment's mailer is stopped \
+             (EMAIL_SENDING_PAUSED); the account is real, the response reports \
+             credentials_emailed:false, and `password_undelivered` is latched so the customer can \
+             choose their own password."
+        );
+        return false;
+    }
     if let Some(reason) = credentials_send_suppression(db, tenant_id, email).await {
         tracing::info!(
             email = %email,
