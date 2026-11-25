@@ -121,9 +121,16 @@ pub async fn evaluate_dynamic_list(
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let sql = format!(
-                    "SELECT id FROM contacts WHERE tenant_id = $1 AND lower({column}) = lower($2)"
-                );
+                // `equals` is exact (case-insensitive); `contains` is a substring match, bound as a
+                // parameter so nothing a customer types can become SQL.
+                let sql = if rule.operator == "contains" {
+                    format!(
+                        "SELECT id FROM contacts WHERE tenant_id = $1 \
+                          AND lower({column}) LIKE '%' || lower($2) || '%'"
+                    )
+                } else {
+                    format!("SELECT id FROM contacts WHERE tenant_id = $1 AND lower({column}) = lower($2)")
+                };
                 sqlx::query_scalar::<_, Uuid>(&sql)
                     .bind(list.tenant_id)
                     .bind(&wanted)

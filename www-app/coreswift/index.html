@@ -9067,8 +9067,12 @@ var LS_FIELDS = [
   { id: 'score',       label: 'Lead score',                  ops: ['gte', 'lte', 'equals'], values: 'number' },
   { id: 'deal_source', label: 'Deal came from a source',     ops: ['equals'], values: 'text' },
   { id: 'deal_stage',  label: 'Deal is in a stage',          ops: ['equals', 'in'], values: 'text' },
-  { id: 'deal_date',   label: 'Deal date is in a window',    ops: ['equals'], values: 'window' }
+  { id: 'deal_date',   label: 'Deal date is in a window',    ops: ['equals'], values: 'window' },
+  // The contact's OWN fields — "everyone in Palm Bay", "job title Owner". The columns are the ones the
+  // evaluator implements; anything else is refused by the server with the list of valid ones.
+  { id: 'contact_field', label: 'A contact field',            ops: ['equals', 'contains'], values: 'contact' }
 ];
+var LS_COLUMNS = ['city', 'state', 'country', 'job_title', 'title', 'company', 'source', 'score_category', 'gender'];
 var LS_WINDOWS = [
   { id: 'today', label: 'today' },
   { id: 'this_week', label: 'this week' },
@@ -9103,7 +9107,15 @@ function lsPaintRules() {
     var spec = LS_FIELDS.filter(function (f) { return f.id === r.field; })[0] || LS_FIELDS[0];
     var val = (r.value === null || r.value === undefined) ? '' : (typeof r.value === 'object' ? (r.value[0] || '') : r.value);
     var valueInput;
-    if (spec.values === 'window') {
+    if (spec.values === 'contact') {
+      var obj = (r.value && typeof r.value === 'object') ? r.value : {};
+      valueInput = '<select onchange="lsSetContact(' + i + ',\'column\',this.value)" style="min-width:130px">' +
+        LS_COLUMNS.map(function (c) {
+          return '<option value="' + c + '"' + ((obj.column || 'city') === c ? ' selected' : '') + '>' + c.replace('_', ' ') + '</option>';
+        }).join('') +
+      '</select>' +
+      '<input type="text" value="' + fh(obj.equals || '') + '" placeholder="value" onchange="lsSetContact(' + i + ',\'equals\',this.value)" style="min-width:140px">';
+    } else if (spec.values === 'window') {
       valueInput = '<select onchange="lsSetRule(' + i + ',\'value\',this.value)" style="min-width:130px">' +
         LS_WINDOWS.map(function (w) {
           return '<option value="' + w.id + '"' + (String(val) === w.id ? ' selected' : '') + '>' + w.label + '</option>';
@@ -9141,6 +9153,17 @@ function lsSetRule(i, key, val) {
   lsPaintRules();
 }
 
+// A contact-field rule carries an object, not a scalar: {column, equals}. Keeping the shape here means the
+// console sends exactly what the evaluator reads.
+function lsSetContact(i, key, val) {
+  if (!LS_RULES[i]) return;
+  var cur = (LS_RULES[i].value && typeof LS_RULES[i].value === 'object') ? LS_RULES[i].value : {};
+  cur[key] = val;
+  if (!cur.column) cur.column = 'city';
+  LS_RULES[i].value = cur;
+  lsPaintRules();
+}
+
 function lsAddRule() {
   LS_RULES.push({ field: 'tag', operator: 'equals', value: '' });
   lsPaintRules();
@@ -9153,6 +9176,10 @@ function lsDropRule(i) {
 
 async function lsSaveRules() {
   var bad = LS_RULES.filter(function (r) {
+    if (r.field === 'contact_field') {
+      var o = (r.value && typeof r.value === 'object') ? r.value : {};
+      return !o.equals || String(o.equals).trim() === '';
+    }
     return r.value === '' || r.value === null || r.value === undefined;
   });
   if (bad.length) { toast('Every rule needs a value — ' + bad.length + ' is missing one.', 'error'); return; }
