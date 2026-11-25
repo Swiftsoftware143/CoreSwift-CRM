@@ -42,6 +42,9 @@ import urllib.error
 import urllib.request
 import uuid
 
+# The public edge answers a bare urllib client with a bot-wall page (Cloudflare 1010), not the app.
+UA = "Mozilla/5.0 (X11; Linux x86_64) CoreSwift-proof/1.0"
+
 PASS: list[str] = []
 FAIL: list[str] = []
 
@@ -116,6 +119,7 @@ class Door:
             method="POST",
             headers={"Content-Type": "application/json",
                      "Accept": "application/json, text/event-stream",
+                     "User-Agent": UA,
                      "Authorization": "Bearer " + token},
         )
         try:
@@ -141,7 +145,8 @@ class Door:
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(
             self.base + path, data=data, method=method,
-            headers={"Content-Type": "application/json", "Authorization": "Bearer " + token},
+            headers={"Content-Type": "application/json", "User-Agent": UA,
+                     "Authorization": "Bearer " + token},
         )
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
