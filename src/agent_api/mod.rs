@@ -22,7 +22,13 @@
 
 use axum::body::Bytes;
 use axum::http::{Method, Uri};
-use axum::{extract::State, http::HeaderMap, routing::any, Router};
+use axum::{
+    extract::{Path, State},
+    http::HeaderMap,
+    routing::any,
+    Extension, Json, Router,
+};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::auth::models::Claims;
@@ -119,6 +125,24 @@ async fn authenticate(state: &crate::AppState, headers: &HeaderMap) -> Result<Ag
 /// Anything the console's own router does not serve answers 404 through the same call.
 pub fn router(state: crate::AppState) -> Router<crate::AppState> {
     Router::new()
+        // THE FOUR CONVENIENCE WRITES, restored 2026-11-25. They are thin: each one reads what the position or
+        // calendar already holds and saves the ONE setting asked for, so an agent (or a person's automation)
+        // cannot blank a price or a size by sending a partial body. They live at the app door, which means the
+        // fleet MCP can forward to them with the caller's own credential and still leave tenancy, validation
+        // and audit inside this app.
+        .route(
+            "/calendars/:id/payment-checkout",
+            axum::routing::patch(calendar_checkout),
+        )
+        .route(
+            "/resources/:id/payment-checkout",
+            axum::routing::patch(resource_checkout),
+        )
+        .route(
+            "/calendars/:id/payment-key/rotate",
+            axum::routing::post(rotate_payment_key),
+        )
+        .route("/redirects", axum::routing::put(domain_redirect))
         .route("/*rest", any(forward))
         .with_state(state)
 }
@@ -160,3 +184,152 @@ async fn forward(
         .map_err(|e| AppError::Internal(e.to_string()))
 } // The denied list now lives in `crate::api_proxy::DENIED_PREFIXES`, beside the one function that applies
   // it: the agent door and the app's own MCP tool must refuse the same surfaces, so they read one list.
+
+/// The booking module keeps its own error type; map it at this boundary so a caller never sees another
+/// module's error shape, and the sentence a customer reads is the module's own.
+fn booking_err(e: crate::booking::error::BookingError) -> AppError {
+    use crate::booking::error::BookingError as B;
+    match e {
+        B::NotFound(_) => AppError::NotFound("that booking setting is not on this account".into()),
+        B::Invalid(m) => AppError::BadRequest(m.to_string()),
+        B::Conflict(m) => AppError::BadRequest(m.to_string()),
+        other => AppError::BadRequest(other.to_string()),
+    }
+}
+
+// ── the four convenience writes the MCP tools call ─────────────────────────────────────────
+async fn calendar_checkout(
+    State(state): State<crate::AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    body: Json<Value>,
+) -> ApiResult<axum::response::Response> {
+    let agent = authenticate(&state, &headers).await?;
+    let checkout = body
+        .get("checkout")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::BadRequest("checkout is required".into()))?;
+    let typed = crate::booking::models::UpdateCalendar {
+        name: None,
+        slug: None,
+        payment_mode: body
+            .get("payment_mode")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        payment_embed: Some(checkout.to_string()),
+        settings: None,
+        reply_to_email: None,
+        send_confirmation: None,
+    };
+    let r = crate::booking::handlers::update_calendar(
+        State(state.db.clone()),
+        Extension(crate::booking::models::TenantId(agent.tenant)),
+        Path(id),
+        Json(typed),
+    )
+    .await
+    .map_err(booking_err)?;
+    Ok(axum::response::IntoResponse::into_response(r))
+}
+
+async fn resource_checkout(
+    State(state): State<crate::AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    body: Json<Value>,
+) -> ApiResult<axum::response::Response> {
+    let agent = authenticate(&state, &headers).await?;
+    let checkout = body
+        .get("checkout")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::BadRequest("checkout is required".into()))?;
+    // Read the current row first: the console's update writes the WHOLE position, so a checkout change
+    // must carry the price, size and timing it already had rather than blanking them.
+    let row: Option<(
+        String,
+        Option<String>,
+        i64,
+        Option<i64>,
+        i32,
+        i32,
+        i32,
+        i32,
+        i32,
+        i32,
+        Option<String>,
+        Option<String>,
+        bool,
+    )> = sqlx::query_as(
+        "SELECT r.name, r.description, r.price_cents, r.compare_at_price_cents, r.duration_min,
+                    r.slot_interval_min, r.buffer_min, r.min_notice_min, r.sort_order, r.capacity,
+                    r.size, r.payment_mode, r.exclusive
+               FROM booking_resources r JOIN booking_calendars c ON c.id = r.calendar_id
+              WHERE r.id = $1 AND c.tenant_id = $2",
+    )
+    .bind(id)
+    .bind(agent.tenant)
+    .fetch_optional(&state.db)
+    .await?;
+    let row = row.ok_or_else(|| AppError::NotFound("no such position on this account".into()))?;
+    let typed = crate::booking::models::NewResource {
+        name: row.0,
+        description: row.1,
+        capacity: Some(row.9),
+        price_cents: Some(row.2),
+        compare_at_price_cents: row.3,
+        duration_min: Some(row.4),
+        exclusive: Some(row.12),
+        size: row.10,
+        checkout_embed: Some(checkout.to_string()),
+        payment_mode: body
+            .get("payment_mode")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .or(row.11),
+        slot_interval_min: Some(row.5),
+        buffer_min: Some(row.6),
+        min_notice_min: Some(row.7),
+        sort_order: Some(row.8),
+        metadata: None,
+    };
+    let r = crate::booking::handlers::update_resource(
+        State(state.db.clone()),
+        Extension(crate::booking::models::TenantId(agent.tenant)),
+        Path(id),
+        Json(typed),
+    )
+    .await
+    .map_err(booking_err)?;
+    Ok(axum::response::IntoResponse::into_response(r))
+}
+
+async fn rotate_payment_key(
+    State(state): State<crate::AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> ApiResult<axum::response::Response> {
+    let agent = authenticate(&state, &headers).await?;
+    let r = crate::booking::handlers::rotate_payment_key(
+        State(state.db.clone()),
+        Extension(crate::booking::models::TenantId(agent.tenant)),
+        Path(id),
+    )
+    .await
+    .map_err(booking_err)?;
+    Ok(axum::response::IntoResponse::into_response(r))
+}
+
+async fn domain_redirect(
+    State(state): State<crate::AppState>,
+    headers: HeaderMap,
+    body: Json<Value>,
+) -> ApiResult<axum::response::Response> {
+    let agent = authenticate(&state, &headers).await?;
+    let r = crate::domain_redirects::handlers::save_redirect(
+        State(state),
+        Extension(agent.claims),
+        Json(body.0),
+    )
+    .await?;
+    Ok(axum::response::IntoResponse::into_response(r))
+}
