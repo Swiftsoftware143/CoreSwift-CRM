@@ -296,11 +296,15 @@ pub async fn delete_rule(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    sqlx::query("DELETE FROM notification_rules WHERE id = $1 AND tenant_id = $2")
+    let deleted = sqlx::query("DELETE FROM notification_rules WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tid)
         .execute(&s.db)
         .await?;
+    // 404 for a row this account does not own, same as it does not exist (kanban t_161fffd5).
+    if deleted.rows_affected() == 0 {
+        return Err(AppError::NotFound("Rule not found".into()));
+    }
     Ok(Json(json!({"message": "Rule deleted"})))
 }
 

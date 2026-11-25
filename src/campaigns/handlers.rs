@@ -480,7 +480,7 @@ pub async fn remove_trigger(
     Path(trigger_id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = parse_tenant(&c)?;
-    sqlx::query(
+    let deleted = sqlx::query(
         "DELETE FROM email_campaign_triggers USING email_campaigns
          WHERE email_campaign_triggers.id = $1
            AND email_campaigns.id = email_campaign_triggers.campaign_id
@@ -490,6 +490,13 @@ pub async fn remove_trigger(
     .bind(tid)
     .execute(&s.db)
     .await?;
+
+    // 404, not 403: the tenant predicate makes "another account's trigger" and "no such trigger"
+    // the same fact for this caller, and a 403 would confirm another account's id (kanban t_161fffd5).
+    if deleted.rows_affected() == 0 {
+        return Err(AppError::NotFound("Trigger not found".into()));
+    }
+
     Ok(Json(json!({"message": "Trigger removed"})))
 }
 

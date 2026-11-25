@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""A DELETE that matched no row must refuse, not answer "deleted" (kanban t_2eba20dd).
+"""A DELETE that matched no row must refuse, not answer "deleted" (kanban t_2eba20dd, t_161fffd5).
 
 Measured by the CEO's harness on 2026-11-25: `DELETE comms/templates/<made-up uuid>` through the
 product MCP door answered `200 {"message":"Template deleted"}`. `campaigns::delete` and
 `campaigns::delete_step` shared the shape: `execute()` with `rows_affected()` dropped.
 
-This harness holds all three routes to one rule, on both doors the console and an agent use:
+t_161fffd5 extended the same harness to the three remaining arms of the class: the campaign
+trigger (`Trigger removed`), the notification rule (`Rule deleted`) and the monitoring threshold
+(`Deleted`), each of which answered 200 for an id that never existed.
+
+This harness holds every route to one rule, on both doors the console and an agent use:
 
   * the product MCP door  POST /api/mcp  tool `coreswift_api`
   * the console route     DELETE /api/...  with a real session token (HS256, this app's own claims)
@@ -161,12 +165,17 @@ def main() -> int:
     ap.add_argument("--base", default="http://127.0.0.1:8084")
     ap.add_argument("--tenant", default="821f3ad5-26a8-4a74-be49-772c0798d568",
                     help="the account the probe runs in (the owner's own: no customer rows)")
+    ap.add_argument("--only", default="",
+                    help="comma-separated route labels to hold to the rule (default: all). Use it to "
+                         "measure the pre arm of a later card on an artifact that already carries an "
+                         "earlier card's fix, without those arms reporting their fix as a failure.")
     args = ap.parse_args()
     fixed = args.mode == "post"
 
     db = Db()
     door = Door(args.base)
     slug = "probe-t-2eba20dd"
+    rule_event = "probe_t_161fffd5"
 
     secret = ""
     for line in open("/etc/swift/env/coreswift.env", encoding="utf-8", errors="replace"):
@@ -193,33 +202,48 @@ def main() -> int:
 
     base_templates = db.count("SELECT count(*) FROM message_templates WHERE tenant_id = '%s'" % args.tenant)
     base_campaigns = db.count("SELECT count(*) FROM email_campaigns WHERE tenant_id = '%s'" % args.tenant)
+    base_rules = db.count("SELECT count(*) FROM notification_rules WHERE tenant_id = '%s'" % args.tenant)
+    base_thresholds = db.count("SELECT count(*) FROM health_thresholds WHERE tenant_id = '%s'" % args.tenant)
+    base_triggers = db.count(
+        "SELECT count(*) FROM email_campaign_triggers ect JOIN email_campaigns ec "
+        "ON ec.id = ect.campaign_id WHERE ec.tenant_id = '%s'" % args.tenant)
 
-    # Routes, missing-row arm. (label, path with a made-up uuid, name the refusal must carry)
+    # Routes, missing-row arm.
+    # (label, path with a made-up uuid, name the refusal must carry, word the old 200 carried)
     missing = [
-        ("template", "comms/templates/%s", "Template"),
-        ("campaign", "campaigns/%s", "Campaign"),
-        ("campaign step", "campaigns/steps/%s", "Campaign step"),
+        ("template", "comms/templates/%s", "Template", "deleted"),
+        ("campaign", "campaigns/%s", "Campaign", "deleted"),
+        ("campaign step", "campaigns/steps/%s", "Campaign step", "deleted"),
+        ("campaign trigger", "campaigns/triggers/%s", "Trigger", "removed"),
+        ("notification rule", "notifications/rules/%s", "Rule", "deleted"),
+        ("monitoring threshold", "monitoring/thresholds/%s", "Threshold", "deleted"),
     ]
+    if args.only:
+        wanted = {w.strip().lower() for w in args.only.split(",") if w.strip()}
+        missing = [m for m in missing if m[0].lower() in wanted]
+        if not missing:
+            raise SystemExit(f"--only matched no route: {args.only}")
 
-    def verdict(label: str, got_status: str, got_body: str, sentence: str, row_name: str) -> None:
+    def verdict(label: str, got_status: str, got_body: str, sentence: str, row_name: str,
+                ok_word: str) -> None:
         where = f"{label}: missing row"
         if fixed:
             carries = (got_status == "error" and "404" in sentence and f"{row_name} not found" in sentence)
             check(f"{where} refused by the door (404 naming the row)", carries,
                   (sentence or got_body)[:110])
         else:
-            deleted = got_status == "200" and "deleted" in got_body.lower()
+            deleted = got_status == "200" and ok_word in got_body.lower()
             check(f"{where} wrongly reported deleted (the bug)", deleted,
                   f"status {got_status} {got_body[:80]}")
 
     try:
-        for label, pattern, row_name in missing:
+        for label, pattern, row_name, ok_word in missing:
             path = pattern % uuid.uuid4()
             status, body, sentence = door.call(key_token, {"method": "DELETE", "path": path})
-            verdict(label, status, body, sentence, row_name)
+            verdict(label, status, body, sentence, row_name, ok_word)
 
         # ── the console door, with a real session token, must answer the same way ──────────────
-        for label, pattern, row_name in missing:
+        for label, pattern, row_name, ok_word in missing:
             path = "/api/" + pattern % uuid.uuid4()
             code, body = door.http("DELETE", path, session)
             where = f"{label}: missing row, console session"
@@ -228,7 +252,7 @@ def main() -> int:
                       code == 404 and f"{row_name} not found" in body, f"{code} {body[:110]}")
             else:
                 check(f"{where} wrongly reported deleted (the bug)",
-                      code == 200 and "deleted" in body.lower(), f"{code} {body[:80]}")
+                      code == 200 and ok_word in body.lower(), f"{code} {body[:80]}")
 
         # ── a real row still deletes, and the database agrees ────────────────────────────────
         status, body, sentence = door.call(key_token, {
@@ -246,6 +270,36 @@ def main() -> int:
             created = json.loads(body)
             camp_id = (created.get("campaign") or {}).get("id", "") if isinstance(created, dict) else ""
         check("probe campaign created", bool(camp_id), f"status {status} {sentence[:80]}")
+
+        # ── the three arms this card adds: a real row of each kind, deleted and read back ─────
+        tag_id = db.one("SELECT id FROM tags WHERE tenant_id = '%s' ORDER BY created_at LIMIT 1" % args.tenant)
+        trig_id = ""
+        code, body = 0, ""
+        if camp_id and tag_id:
+            # Through the console session, not the MCP door: the door refuses a POST on this path by
+            # policy ("sending is not an agent's call"), which is a different rule than this card's.
+            code, body = door.http("POST", f"/api/campaigns/{camp_id}/triggers", session,
+                                   {"tag_id": tag_id})
+            created = json.loads(body) if code in (200, 201) and body not in ("", "null") else {}
+            trig_id = created.get("id", "") if isinstance(created, dict) else ""
+        check("probe campaign trigger created", bool(trig_id),
+              f"{code} {body[:90]}" if camp_id and tag_id else "no campaign/tag fixture")
+
+        status, body, sentence = door.call(key_token, {
+            "method": "POST", "path": "notifications/rules",
+            "body": {"trigger_event": rule_event, "action": "in_app",
+                     "target_entity": "contact", "is_active": True},
+        })
+        rule_id = json.loads(body).get("id", "") if status in ("200", "201") else ""
+        check("probe notification rule created", bool(rule_id), f"status {status} {sentence[:80]}")
+
+        status, body, sentence = door.call(key_token, {
+            "method": "POST", "path": "monitoring/thresholds",
+            "body": {"name": slug, "entity_type": "contact", "metric": "engagement_score",
+                     "operator": "lt", "value": 10, "risk_level": "at_risk"},
+        })
+        thr_id = json.loads(body).get("id", "") if status in ("200", "201") else ""
+        check("probe monitoring threshold created", bool(thr_id), f"status {status} {sentence[:80]}")
 
         status, body, sentence = door.call(key_token, {
             "method": "POST", "path": "campaigns/steps",
@@ -267,6 +321,25 @@ def main() -> int:
             check("own campaign step deletes over the console and the row is gone",
                   code == 200 and gone, f"{code} db-left {int(not gone)}")
 
+        if trig_id:
+            code, body = door.http("DELETE", f"/api/campaigns/triggers/{trig_id}", session)
+            gone = db.count("SELECT count(*) FROM email_campaign_triggers WHERE id = '%s'" % trig_id) == 0
+            check("own campaign trigger deletes over the console and the row is gone",
+                  code == 200 and gone, f"{code} db-left {int(not gone)}")
+
+        if rule_id:
+            status, body, sentence = door.call(key_token,
+                                               {"method": "DELETE", "path": f"notifications/rules/{rule_id}"})
+            gone = db.count("SELECT count(*) FROM notification_rules WHERE id = '%s'" % rule_id) == 0
+            check("own notification rule deletes through the door and the row is gone",
+                  status == "200" and gone, f"status {status} db-left {int(not gone)}")
+
+        if thr_id:
+            code, body = door.http("DELETE", f"/api/monitoring/thresholds/{thr_id}", session)
+            gone = db.count("SELECT count(*) FROM health_thresholds WHERE id = '%s'" % thr_id) == 0
+            check("own monitoring threshold deletes over the console and the row is gone",
+                  code == 200 and gone, f"{code} db-left {int(not gone)}")
+
         if camp_id:
             code, body = door.http("DELETE", f"/api/campaigns/{camp_id}", session)
             gone = db.count("SELECT count(*) FROM email_campaigns WHERE id = '%s'" % camp_id) == 0
@@ -275,25 +348,45 @@ def main() -> int:
 
     finally:
         # never leave a probe row behind, whatever the run did
+        db.one("DELETE FROM email_campaign_triggers WHERE campaign_id IN "
+               "(SELECT id FROM email_campaigns WHERE tenant_id = '%s' AND name = '%s')"
+               % (args.tenant, slug))
         db.one("DELETE FROM email_campaign_steps WHERE campaign_id IN "
                "(SELECT id FROM email_campaigns WHERE tenant_id = '%s' AND name = '%s')"
                % (args.tenant, slug))
         db.one("DELETE FROM email_campaigns WHERE tenant_id = '%s' AND name = '%s'" % (args.tenant, slug))
         db.one("DELETE FROM message_templates WHERE tenant_id = '%s' AND name = '%s'" % (args.tenant, slug))
+        db.one("DELETE FROM notification_rules WHERE tenant_id = '%s' AND trigger_event = '%s'"
+               % (args.tenant, rule_event))
+        db.one("DELETE FROM health_thresholds WHERE tenant_id = '%s' AND name = '%s'" % (args.tenant, slug))
         db.one("DELETE FROM personal_api_keys WHERE id = '%s'" % key_id)
 
     residue = (
         db.count("SELECT count(*) FROM message_templates WHERE tenant_id = '%s' AND name = '%s'" % (args.tenant, slug))
         + db.count("SELECT count(*) FROM email_campaigns WHERE tenant_id = '%s' AND name = '%s'" % (args.tenant, slug))
+        + db.count("SELECT count(*) FROM notification_rules WHERE tenant_id = '%s' AND trigger_event = '%s'"
+                   % (args.tenant, rule_event))
+        + db.count("SELECT count(*) FROM health_thresholds WHERE tenant_id = '%s' AND name = '%s'" % (args.tenant, slug))
         + db.count("SELECT count(*) FROM personal_api_keys WHERE tenant_id = '%s' AND name = '%s'" % (args.tenant, slug))
     )
     check("probe residue is zero", residue == 0, f"{residue} rows")
     after_templates = db.count("SELECT count(*) FROM message_templates WHERE tenant_id = '%s'" % args.tenant)
     after_campaigns = db.count("SELECT count(*) FROM email_campaigns WHERE tenant_id = '%s'" % args.tenant)
+    after_rules = db.count("SELECT count(*) FROM notification_rules WHERE tenant_id = '%s'" % args.tenant)
+    after_thresholds = db.count("SELECT count(*) FROM health_thresholds WHERE tenant_id = '%s'" % args.tenant)
+    after_triggers = db.count(
+        "SELECT count(*) FROM email_campaign_triggers ect JOIN email_campaigns ec "
+        "ON ec.id = ect.campaign_id WHERE ec.tenant_id = '%s'" % args.tenant)
     check("tenant template count back to baseline", after_templates == base_templates,
           f"{base_templates} -> {after_templates}")
     check("tenant campaign count back to baseline", after_campaigns == base_campaigns,
           f"{base_campaigns} -> {after_campaigns}")
+    check("tenant notification-rule count back to baseline", after_rules == base_rules,
+          f"{base_rules} -> {after_rules}")
+    check("tenant threshold count back to baseline", after_thresholds == base_thresholds,
+          f"{base_thresholds} -> {after_thresholds}")
+    check("tenant campaign-trigger count back to baseline", after_triggers == base_triggers,
+          f"{base_triggers} -> {after_triggers}")
 
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed  ({args.mode} arm, {args.base})")
     return 0 if not FAIL else 1
