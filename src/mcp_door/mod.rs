@@ -356,7 +356,15 @@ async fn api_tool_call(state: &AppState, ctx: &Ctx, args: Value) -> Result<Value
     // Parse when the app answered JSON so the model sees fields, not a string of escaped JSON.
     let payload: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({ "raw": text }));
     if (200..300).contains(&status) {
-        Ok(json!({ "status": status, "body": payload }))
+        // SAY WHICH ACCOUNT AND WHICH PATH ANSWERED (2026-11-25). An empty `contacts` list looked like a bug
+        // until the caller could see the tenant it was reading: two doors, two tenants, and "17 contacts"
+        // against "empty" were both true. The scope travels with the answer so the next reader cannot make
+        // that mistake twice.
+        Ok(json!({
+            "status": status,
+            "scope": { "tenant_id": tenant.to_string(), "path": path },
+            "body": payload
+        }))
     } else {
         // The app's own refusal sentence, carried through verbatim: an agent reading "amount does not
         // match" must not be shown a generic "upstream error" it cannot act on.
