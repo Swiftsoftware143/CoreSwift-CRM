@@ -14,6 +14,7 @@ pub mod agent_api;
 pub mod ai;
 mod alerts;
 pub mod analytics;
+mod api_proxy;
 pub mod audit;
 pub mod auth;
 pub mod automation;

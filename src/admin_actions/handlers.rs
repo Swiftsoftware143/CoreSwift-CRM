@@ -883,6 +883,20 @@ pub async fn list_all_users(
     );
     let offset = (page - 1) * per_page;
 
+    // ── SEARCH (2026-11-25) ─────────────────────────────────────────────────────────────────
+    // This screen asked for one fixed page of 50 rows and offered no way to look past it, so on
+    // a platform with hundreds of people a specific person was unreachable unless they happened
+    // to sit on that page — the same complaint that split portfolio companies out of this list
+    // ("if I have a hundred users or even a thousand users I have to go through all those to
+    // find..."). `q` matches a person's name, their email or their workspace's name; the count
+    // returned beside it is the FILTERED total, so the panel can say what it is showing.
+    let q: Option<String> = p
+        .get("q")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.chars().take(100).collect());
+
     #[derive(sqlx::FromRow, serde::Serialize)]
     struct AdminUserRow {
         id: String,
@@ -922,21 +936,32 @@ pub async fn list_all_users(
                   EXISTS (SELECT 1 FROM portfolio_companies pc WHERE pc.account_tenant_id = u.tenant_id) AS is_portfolio
            FROM users u
            LEFT JOIN tenants t ON t.id = u.tenant_id
-           WHERE $3 OR NOT EXISTS (SELECT 1 FROM portfolio_companies pc WHERE pc.account_tenant_id = u.tenant_id)
+           WHERE ($3 OR NOT EXISTS (SELECT 1 FROM portfolio_companies pc WHERE pc.account_tenant_id = u.tenant_id))
+             AND ($4::text IS NULL
+                  OR u.name ILIKE '%' || $4 || '%'
+                  OR u.email ILIKE '%' || $4 || '%'
+                  OR COALESCE(t.name, '') ILIKE '%' || $4 || '%')
            ORDER BY u.created_at DESC
            LIMIT $1 OFFSET $2"#,
     )
     .bind(per_page)
     .bind(offset)
     .bind(include_portfolio)
+    .bind(q.clone())
     .fetch_all(&s.db)
     .await?;
 
     let total: i64 = sqlx::query_scalar(
         r#"SELECT COUNT(*) FROM users u
-            WHERE $1 OR NOT EXISTS (SELECT 1 FROM portfolio_companies pc WHERE pc.account_tenant_id = u.tenant_id)"#,
+            LEFT JOIN tenants t ON t.id = u.tenant_id
+            WHERE ($1 OR NOT EXISTS (SELECT 1 FROM portfolio_companies pc WHERE pc.account_tenant_id = u.tenant_id))
+              AND ($2::text IS NULL
+                   OR u.name ILIKE '%' || $2 || '%'
+                   OR u.email ILIKE '%' || $2 || '%'
+                   OR COALESCE(t.name, '') ILIKE '%' || $2 || '%')"#,
     )
     .bind(include_portfolio)
+    .bind(q.clone())
     .fetch_one(&s.db)
     .await?;
 
@@ -945,6 +970,7 @@ pub async fn list_all_users(
         "count": total,
         "page": page,
         "per_page": per_page,
+        "q": q,
     })))
 }
 

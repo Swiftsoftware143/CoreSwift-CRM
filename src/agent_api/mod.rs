@@ -149,80 +149,21 @@ async fn forward(
     body: Bytes,
 ) -> ApiResult<axum::response::Response> {
     let agent = authenticate(&state, &headers).await?;
-    let rest = uri.path().trim_start_matches('/');
-    let first = rest.split('/').next().unwrap_or("");
-    if DENIED.contains(&first) {
-        // The boundary's own sentence: the two doors must agree about what a key may not do.
-        return Err(AppError::ForbiddenReason(
-            crate::auth::boundary::READ_ONLY_REFUSAL.to_string(),
-        ));
-    }
-
-    // Act as a real person of the account: several writers key attribution to `users(id)`, and a handler's
-    // own role check must see the operator's real role rather than the word "api_key".
-    let row: Option<(String, Option<Uuid>)> =
-        sqlx::query_as("SELECT role, workspace_id FROM users WHERE id = $1 AND tenant_id = $2")
-            .bind(Uuid::parse_str(&agent.claims.sub).unwrap_or_default())
-            .bind(agent.tenant)
-            .fetch_optional(&state.db)
-            .await?;
-    let Some((role, wsid)) = row else {
-        return Err(AppError::Forbidden);
-    };
-
-    let now = chrono::Utc::now().timestamp();
-    let claims = crate::auth::models::Claims {
-        sub: agent.claims.sub.clone(),
-        aid: agent.claims.aid.clone(),
-        role,
-        wsid: wsid.map(|w| w.to_string()),
-        exp: (now + 120) as usize,
-        iat: now as usize,
-        aud: Some("coreswift-api".to_string()),
-        iss: Some("coreswift".to_string()),
-    };
-    // Short-lived on purpose: it exists only for this one forwarded call.
-    let token = crate::auth::middleware::create_access_token(&claims, &state.config.jwt_secret)?;
-
+    let rest = uri.path().trim_start_matches('/').to_string();
     let query = uri.query().map(|q| format!("?{q}")).unwrap_or_default();
-    let url = format!("http://127.0.0.1:{}/api/{rest}{query}", state.config.port);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| AppError::Internal(format!("agent forward: {e}")))?;
-    let m = reqwest::Method::from_bytes(method.as_str().as_bytes())
-        .map_err(|_| AppError::Validation("unsupported method".into()))?;
-    let mut req = client.request(m, &url).bearer_auth(&token);
-    if let Some(ct) = headers.get("content-type").and_then(|v| v.to_str().ok()) {
-        req = req.header("content-type", ct);
-    }
-    let out =
-        req.body(body.to_vec()).send().await.map_err(|e| {
-            AppError::Internal(format!("agent forward could not reach the app: {e}"))
-        })?;
-    let status = out.status();
-    let ctype = out
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("application/json")
-        .to_string();
-    let bytes = out
-        .bytes()
-        .await
-        .map_err(|e| AppError::Internal(format!("agent forward: {e}")))?;
-    let mut resp = axum::response::Response::builder()
-        .status(
-            axum::http::StatusCode::from_u16(status.as_u16())
-                .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
-        )
-        .header("content-type", ctype);
-    if status.as_u16() == 204 {
-        return resp
-            .body(axum::body::Body::empty())
-            .map_err(|e| AppError::Internal(e.to_string()));
-    }
-    resp = resp.header("x-agent-door", "forwarded");
-    resp.body(axum::body::Body::from(bytes))
+    // ONE implementation of "act as this account, as this person": the app's own MCP door uses it too
+    // (`crate::api_proxy`). A second copy here would be a second rule about who a call is attributed to.
+    let (status, text) =
+        crate::api_proxy::call(&state, agent.tenant, method.as_str(), &format!("{rest}{query}"), Some(body.to_vec()))
+            .await?;
+    let code = axum::http::StatusCode::from_u16(status)
+        .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    axum::response::Response::builder()
+        .status(code)
+        .header("content-type", "application/json")
+        .header("x-agent-door", "forwarded")
+        .body(axum::body::Body::from(text))
         .map_err(|e| AppError::Internal(e.to_string()))
+}
+
 }

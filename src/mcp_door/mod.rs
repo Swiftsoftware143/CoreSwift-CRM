@@ -41,6 +41,10 @@ use crate::AppState;
 
 pub mod reads;
 
+/// The generic write/read door, on top of the twelve domain reads below: every `/api/**` path this account
+/// can call, with the caller's own identity. One tool instead of two hundred wrappers.
+pub const API_TOOL_NAME: &str = "coreswift_api";
+
 /// The twelve domain reads this port adds. The eleven Custom Objects tool names stay in
 /// [`crate::custom_objects::mcp::TOOL_NAMES`] and are not repeated here.
 pub const DOMAIN_TOOL_NAMES: [&str; 12] = [
@@ -71,7 +75,10 @@ pub fn door(state: &AppState) -> Result<&'static Arc<Door>, String> {
 }
 
 fn build(state: &AppState) -> DoorSlot {
-    let registry = reads::register(custom_object_registry(state)?, state);
+    let registry = register_api_tool(
+        reads::register(custom_object_registry(state)?, state),
+        state,
+    );
     let resolver = Arc::new(Resolver {
         state: state.clone(),
     });
@@ -247,6 +254,93 @@ fn key_role(admin: bool, api_role: &str) -> Role {
         Role::Admin
     } else {
         Role::Workspace
+    }
+}
+
+/// The generic door: `coreswift_api` calls any `/api/**` path this account can call, with the caller's own
+/// identity.
+///
+/// David, 2026-11-25: *"read only is the fleet MCP but the write should be within the software MCP"*. The
+/// fleet service reads databases; the product owns the writes, so the write door lives here, behind this
+/// account's own credential, its own role gate and its own audit line. It is ONE tool rather than two
+/// hundred because every handler it reaches is the console's own handler — tenancy, validation and audit
+/// are not re-implemented, they are inherited.
+///
+/// A read-only credential is refused by the registry's role gate before the handler runs, exactly as it is
+/// on the Custom Objects tools.
+fn register_api_tool(reg: Registry, state: &AppState) -> Registry {
+    let spec = ToolSpec {
+        name: API_TOOL_NAME.to_string(),
+        description: "Call any CoreSwift API path as this account. Use it to run the business: create and \
+                      update contacts, deals and tasks; move a deal's stage; add a contact to a list or \
+                      change a list's membership rules; tag a record; create or edit booking calendars and \
+                      positions; generate dates; read or change the universal email footer; set a domain \
+                      redirect; edit plans. `path` is relative to /api (for example \"contacts\", \
+                      \"booking/calendars/<id>/slots/generate\"). GET reads, POST creates, PATCH updates, \
+                      DELETE removes. Credential surfaces (auth, personal-keys, keys, mcp) are refused."
+            .to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "method": {
+                    "type": "string",
+                    "enum": ["GET", "POST", "PATCH", "PUT", "DELETE"],
+                    "description": "HTTP method. GET reads; POST creates; PATCH updates; PUT replaces; DELETE removes."
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Path relative to /api, e.g. \"contacts\" or \"deals/<id>/stage\". No scheme, no host."
+                },
+                "body": {
+                    "type": "object",
+                    "description": "JSON body for POST/PATCH/PUT. Omit for GET and DELETE."
+                }
+            },
+            "required": ["method", "path"]
+        }),
+        annotations: Annotations::write("CoreSwift API".to_string()),
+        min_role: Role::Workspace,
+    };
+    let st = state.clone();
+    reg.with_fn(spec, move |ctx: Ctx, args: Value| {
+        let st = st.clone();
+        Box::pin(async move { api_tool_call(&st, &ctx, args).await })
+    })
+}
+
+async fn api_tool_call(state: &AppState, ctx: &Ctx, args: Value) -> Result<Value, ToolError> {
+    let tenant = ctx
+        .scope
+        .ids()
+        .first()
+        .copied()
+        .ok_or(ToolError::NotFound)?;
+    let method = args
+        .get("method")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::Invalid("method is required".into()))?;
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::Invalid("path is required".into()))?;
+    let body = args
+        .get("body")
+        .filter(|v| !v.is_null())
+        .map(|v| v.to_string().into_bytes());
+    let (status, text) = crate::api_proxy::call(state, tenant, method, path, body)
+        .await
+        .map_err(app_error_to_tool)?;
+    // Parse when the app answered JSON so the model sees fields, not a string of escaped JSON.
+    let payload: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({ "raw": text }));
+    if (200..300).contains(&status) {
+        Ok(json!({ "status": status, "body": payload }))
+    } else {
+        // The app's own refusal sentence, carried through verbatim: an agent reading "amount does not
+        // match" must not be shown a generic "upstream error" it cannot act on.
+        Err(ToolError::Invalid(format!(
+            "the app answered {status}: {}",
+            payload
+        )))
     }
 }
 
