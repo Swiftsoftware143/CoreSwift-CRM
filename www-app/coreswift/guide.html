@@ -1486,7 +1486,8 @@ DELETE /api/comms/templates/:id</pre>
        admin (<code>users.is_platform_admin</code>, carried in the session as <code>platform_admin</code>). A tenant
        <code>owner</code>/<code>admin</code> role is not platform authority. The entries are:</p>
     <ul>
-      <li><strong>Users</strong> &mdash; Every user on the platform with the account they belong to (read-only list).</li>
+      <li><strong>Users</strong> &mdash; Every person on the platform in one list (name, email, role, joined date), with a <strong>Send reset</strong> button on every real person's row.</li>
+      <li><strong>Workspaces</strong> &mdash; every customer workspace in one table with its owner, status, plan and created date, plus the bulk-retire controls (probe workspaces are hidden until you tick <strong>Show probe workspaces</strong>).</li>
       <li><strong>Revenue &gt; Billing &amp; Plans</strong> &mdash; Subscription plans, pricing and limits.</li>
       <li><strong>Platform &gt; Webhooks</strong> &mdash; a pointer to where outbound webhook endpoints are
           configured: each account registers its own in the account console under
@@ -1501,7 +1502,7 @@ DELETE /api/comms/templates/:id</pre>
 
   <div class="card">
     <h3>Admin: Users &amp; Accounts</h3>
-    <p>People live on the <strong>Users</strong> screen &#8212; every account's users in one list with name, email, role and joined date.</p>
+    <p>People live on the <strong>Users</strong> screen &#8212; every account's users in one list with name, email, role and joined date. Workspaces live on their own <strong>Workspaces</strong> screen &#8212; one row per customer workspace with its owner, status, plan and created date, plus the bulk-retire controls; probe workspaces are hidden until you tick <strong>Show probe workspaces</strong>, and your own portfolio companies are listed on <strong>Portfolio Companies</strong> instead.</p>
     <pre>GET /api/admin/users
 GET /api/admin/tenants</pre>
   </div>
