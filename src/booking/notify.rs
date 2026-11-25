@@ -19,6 +19,9 @@ struct Line {
     price_cents: i64,
     /// The artwork spec on the position, e.g. "600x150". None means no spec is stated.
     size: Option<String>,
+    /// The product's own checkout address, when it has one — so a pay-after booking can be settled
+    /// from the confirmation instead of waiting for someone to send a link.
+    checkout_url: Option<String>,
 }
 
 struct Context {
@@ -64,25 +67,33 @@ async fn load(pool: &PgPool, order_id: Uuid) -> Option<Context> {
     .await
     .ok()??;
 
-    let lines: Vec<Line> = sqlx::query_as::<_, (String, DateTime<Utc>, i64, Option<String>)>(
-        "SELECT r.name, b.starts_at, b.price_cents, r.size
+    let lines: Vec<Line> =
+        sqlx::query_as::<_, (String, DateTime<Utc>, i64, Option<String>, Option<String>)>(
+            "SELECT r.name, b.starts_at, b.price_cents, r.size,
+                coalesce(nullif(r.checkout_embed, ''), nullif(c.payment_embed, ''))
            FROM booking_bookings b
            JOIN booking_resources r ON r.id = b.resource_id
+           JOIN booking_calendars c ON c.id = r.calendar_id
           WHERE b.order_id = $1 AND b.status <> 'cancelled'
           ORDER BY b.starts_at",
-    )
-    .bind(order_id)
-    .fetch_all(pool)
-    .await
-    .ok()?
-    .into_iter()
-    .map(|(resource_name, starts_at, price_cents, size)| Line {
-        resource_name,
-        starts_at,
-        price_cents,
-        size,
-    })
-    .collect();
+        )
+        .bind(order_id)
+        .fetch_all(pool)
+        .await
+        .ok()?
+        .into_iter()
+        .map(
+            |(resource_name, starts_at, price_cents, size, checkout)| Line {
+                resource_name,
+                starts_at,
+                price_cents,
+                size,
+                checkout_url: checkout
+                    .as_deref()
+                    .and_then(super::service::extract_checkout_url),
+            },
+        )
+        .collect();
 
     Some(Context {
         tenant_id: row.0,
@@ -181,6 +192,7 @@ fn vars(ctx: &Context) -> serde_json::Value {
         "dates": dates,
         // One line per position with its spec and date — what the artwork request lists.
         "artwork_block": artwork_block(ctx),
+        "payment_url": ctx.lines.iter().find_map(|l| l.checkout_url.clone()).unwrap_or_default(),
         "total": money(ctx.total_cents),
         "manage_url": manage_url(ctx),
     })

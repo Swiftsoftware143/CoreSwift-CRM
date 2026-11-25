@@ -214,6 +214,8 @@ pub async fn update_calendar(
     settings: Option<serde_json::Value>,
     reply_to_email: Option<String>,
     send_confirmation: Option<bool>,
+    payment_mode: Option<String>,
+    payment_embed: Option<String>,
 ) -> Result<Calendar> {
     let current = calendar_for_tenant(&mut *pool.acquire().await?, id, tenant).await?;
 
@@ -289,6 +291,43 @@ pub async fn update_calendar(
         }
     }
 
+    // WHEN THE BUYER PAYS, and the code that collects it (2026-11-24). A consultant charges for the
+    // time, so payment secures the booking; a newsletter slot is paid on the confirmation. The mode is
+    // stored as the owner chose it, and an empty string clears it so the kind's default applies again.
+    // The pasted code is validated here rather than at render time: an embed with no https address is
+    // refused in the owner's face, not silently dropped later.
+    let new_mode = match payment_mode {
+        Some(v) => {
+            let t = v.trim().to_lowercase();
+            match t.as_str() {
+                "" => None,
+                "before" | "after" => Some(t),
+                _ => {
+                    return Err(BookingError::invalid(
+                        "payment timing is either \"before\" the booking or \"after\" it",
+                    ))
+                }
+            }
+        }
+        None => current.payment_mode.clone(),
+    };
+    let new_embed = match payment_embed {
+        Some(raw) => {
+            let trimmed = raw.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                if extract_checkout_url(&trimmed).is_none() {
+                    return Err(BookingError::invalid(
+                        "that does not contain an https checkout address. Paste the link, or your                          provider's embed code that carries an https src.",
+                    ));
+                }
+                Some(trimmed)
+            }
+        }
+        None => current.payment_embed.clone(),
+    };
+
     let reply = match reply_to_email {
         Some(v) if v.trim().is_empty() => None,
         Some(v) => Some(v.trim().to_string()),
@@ -299,7 +338,7 @@ pub async fn update_calendar(
     sqlx::query_as::<_, Calendar>(
         "UPDATE booking_calendars
             SET name = $3, slug = $7, settings = $4, reply_to_email = $5, send_confirmation = $6,
-                updated_at = now()
+                payment_mode = $8, payment_embed = $9, updated_at = now()
           WHERE id = $1 AND tenant_id = $2
           RETURNING *",
     )
@@ -310,6 +349,8 @@ pub async fn update_calendar(
     .bind(reply)
     .bind(send)
     .bind(new_slug)
+    .bind(new_mode)
+    .bind(new_embed)
     .fetch_optional(&mut *pool.acquire().await?)
     .await?
     .ok_or(BookingError::NotFound("calendar"))
@@ -389,8 +430,9 @@ pub async fn create_resource(
     Ok(sqlx::query_as::<_, Resource>(
         "INSERT INTO booking_resources
            (calendar_id, name, description, capacity, price_cents, compare_at_price_cents, duration_min,
-            exclusive, slot_interval_min, buffer_min, min_notice_min, sort_order, metadata, size)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *",
+            exclusive, slot_interval_min, buffer_min, min_notice_min, sort_order, metadata, size,
+            checkout_embed, payment_mode)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *",
     )
     .bind(calendar_id)
     .bind(r.name.trim())
@@ -408,6 +450,8 @@ pub async fn create_resource(
     .bind(r.sort_order.unwrap_or(0))
     .bind(r.metadata.unwrap_or_else(|| json!({})))
     .bind(r.size.as_deref().map(str::trim).filter(|v| !v.is_empty()))
+    .bind(clean_checkout(r.checkout_embed.as_deref())?)
+    .bind(clean_mode(r.payment_mode.as_deref())?)
     .fetch_one(conn)
     .await?)
 }
@@ -443,7 +487,8 @@ pub async fn update_resource(
              name = $3, description = $4, capacity = $5, price_cents = $6,
              compare_at_price_cents = $7, duration_min = $8,
              exclusive = $9, slot_interval_min = $10, buffer_min = $11,
-             min_notice_min = $12, sort_order = $13, size = $14
+             min_notice_min = $12, sort_order = $13, size = $14,
+             checkout_embed = $15, payment_mode = $16
            FROM booking_calendars c
           WHERE r.calendar_id = c.id AND r.id = $1 AND c.tenant_id = $2
         RETURNING r.*",
@@ -462,6 +507,8 @@ pub async fn update_resource(
     .bind(r.min_notice_min.unwrap_or(0).max(0))
     .bind(r.sort_order.unwrap_or(0))
     .bind(r.size.as_deref().map(str::trim).filter(|v| !v.is_empty()))
+    .bind(clean_checkout(r.checkout_embed.as_deref())?)
+    .bind(clean_mode(r.payment_mode.as_deref())?)
     .fetch_optional(&mut *conn)
     .await?
     .ok_or_else(|| BookingError::NotFound("resource"))?;
@@ -1442,10 +1489,34 @@ pub async fn create_order(
     let q = price(&resolved, &bundles);
     let hold_until = Utc::now() + Duration::minutes(cal.hold_minutes as i64);
 
+    // WHERE THE BOOKING CAME FROM (2026-11-25). Attribution is stored with the booking so a sponsor's
+    // issue can be traced to the source that sold it. Anything that is not a plain http(s) link or a
+    // short code is dropped rather than stored: this value ends up in reports and exports, and a
+    // `javascript:` string in a report is a stored attack, not an attribution.
+    let tracking = input
+        .tracking_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .and_then(|v| {
+            if v.len() > 500 {
+                None
+            } else if v.starts_with("https://") || v.starts_with("http://") {
+                Some(v.to_string())
+            } else if v
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        });
+
     let order = sqlx::query_as::<_, Order>(
         "INSERT INTO booking_orders
-           (tenant_id, calendar_id, contact_id, customer_name, customer_email, subtotal_cents, discount_cents, total_cents, bundle_id, hold_expires_at, notes, phone, sms_opt_in, answers)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *",
+           (tenant_id, calendar_id, contact_id, customer_name, customer_email, subtotal_cents, discount_cents, total_cents, bundle_id, hold_expires_at, notes, phone, sms_opt_in, answers, tracking_url)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *",
     )
     .bind(cal.tenant_id)
     .bind(cal.id)
@@ -1463,6 +1534,7 @@ pub async fn create_order(
     // The answers, stored beside the order they belong to (validated above, never trusted from the
     // browser alone).
     .bind(&answers)
+    .bind(&tracking)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -2463,6 +2535,8 @@ pub async fn admin_create_booking(
             answers: None,
             phone: None,
             sms_opt_in: None,
+            // An operator sale has no inbound link to attribute — the operator IS the source.
+            tracking_url: None,
             items: vec![item],
         },
     )
@@ -2472,6 +2546,96 @@ pub async fn admin_create_booking(
         return confirm_order(pool, order.order.id, Some(tenant), None).await;
     }
     Ok(order)
+}
+
+/// Read the https checkout address out of what an owner pasted.
+///
+/// Owners paste three different things: a bare link, an `<iframe src="...">`, or a provider's script
+/// embed. Only the ADDRESS is ever used — the page renders its own iframe around it — so nothing an
+/// owner pastes can run foreign JavaScript on a customer-facing page. JavaScript and data URLs are
+/// refused outright, because they are navigations, not checkouts.
+/// Validate what an owner pasted for a checkout, or refuse it with a sentence they can act on.
+pub fn clean_checkout(raw: Option<&str>) -> Result<Option<String>> {
+    match raw.map(str::trim) {
+        None => Ok(None),
+        Some("") => Ok(None),
+        Some(v) => {
+            if extract_checkout_url(v).is_none() {
+                return Err(BookingError::invalid(
+                    "that does not contain an https checkout address. Paste the link, or the embed \
+                     code that carries an https src.",
+                ));
+            }
+            Ok(Some(v.to_string()))
+        }
+    }
+}
+
+/// "before" / "after" / empty, shared by the calendar and the product.
+pub fn clean_mode(raw: Option<&str>) -> Result<Option<String>> {
+    match raw.map(|v| v.trim().to_lowercase()) {
+        None => Ok(None),
+        Some(v) if v.is_empty() => Ok(None),
+        Some(v) if v == "before" || v == "after" => Ok(Some(v)),
+        Some(_) => Err(BookingError::invalid(
+            "payment timing is either \"before\" the booking or \"after\" it",
+        )),
+    }
+}
+
+pub fn extract_checkout_url(raw: &str) -> Option<String> {
+    let lower = raw.to_lowercase();
+    // 1) an explicit src attribute, which is what an iframe or script embed carries
+    for marker in ["src=\"", "src='"] {
+        if let Some(idx) = lower.find(marker) {
+            let rest = &raw[idx + marker.len()..];
+            let quote = if marker.ends_with('"') { '"' } else { '\'' };
+            if let Some(end) = rest.find(quote) {
+                let url = rest[..end].trim();
+                if url.starts_with("https://") {
+                    return Some(url.to_string());
+                }
+            }
+        }
+    }
+    // 2) a bare link on its own
+    for token in
+        raw.split(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '<' || c == '>')
+    {
+        let t = token.trim();
+        if t.starts_with("https://") && t.len() > 12 {
+            return Some(t.trim_end_matches(['.', ',', ')']).to_string());
+        }
+    }
+    None
+}
+
+/// When this product is paid for, and where.
+///
+/// Resolution order, most specific first: the position's own settings, then the calendar's, then what
+/// the calendar kind implies — an appointment is paid to secure the time, an inventory or date_range
+/// slot is paid on the confirmation. `None` means no checkout is configured at all, and the booking
+/// page says plainly that nothing has been charged.
+pub fn payment_for(
+    kind: CalendarKind,
+    cal_mode: Option<&str>,
+    cal_embed: Option<&str>,
+    res: Option<&Resource>,
+) -> Option<serde_json::Value> {
+    let raw = res
+        .and_then(|r| r.checkout_embed.as_deref())
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| cal_embed.filter(|v| !v.trim().is_empty()))?;
+    let url = extract_checkout_url(raw)?;
+    let mode = res
+        .and_then(|r| r.payment_mode.as_deref())
+        .or(cal_mode)
+        .map(str::to_string)
+        .unwrap_or_else(|| match kind {
+            CalendarKind::Appointment => "before".to_string(),
+            _ => "after".to_string(),
+        });
+    Some(serde_json::json!({ "mode": mode, "url": url }))
 }
 
 /// Fill a window across several positions of one calendar, reporting what each position got.

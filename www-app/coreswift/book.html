@@ -14,6 +14,33 @@
     --r:14px;
   }
   *{box-sizing:border-box}
+  /* ---- the payment sheet -------------------------------------------------------------
+     The payment is taken INSIDE this page: a panel that slides up over the summary instead of
+     sending the buyer to another site. Transform + opacity only, so it needs no animation
+     library and no build step. */
+  .paysheet{position:fixed;inset:0;z-index:80;display:flex;align-items:flex-end;justify-content:center;
+            pointer-events:none}
+  .paysheet.open{pointer-events:auto}
+  .paysheet .veil{position:absolute;inset:0;background:rgba(15,23,42,.42);opacity:0;
+                  transition:opacity .26s ease}
+  .paysheet.open .veil{opacity:1}
+  .paysheet .sheet{position:relative;width:100%;max-width:640px;max-height:88vh;overflow:auto;
+                   background:var(--card);border-radius:18px 18px 0 0;box-shadow:var(--shadow-lg);
+                   transform:translateY(102%);transition:transform .3s cubic-bezier(.22,.9,.3,1);
+                   padding:18px 18px 22px}
+  .paysheet.open .sheet{transform:translateY(0)}
+  .paysheet h2{margin:0 0 4px;font-size:19px;letter-spacing:-.01em}
+  .paysheet .sub{margin:0 0 14px;color:var(--muted);font-size:13px}
+  .paysheet iframe{width:100%;min-height:420px;border:0;border-radius:12px;background:#fff}
+  .paysheet .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+  .paysheet .note{font-size:12.5px;color:var(--muted);margin-top:10px}
+  .paysheet .x{position:absolute;top:10px;right:12px;border:0;background:transparent;font-size:22px;
+               line-height:1;color:var(--muted);cursor:pointer}
+  .paystep{border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:0 0 10px;
+           background:#fff}
+  .paystep .when{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+  .paystep .what{font-weight:700;margin:2px 0 8px}
+  @media (min-width:720px){ .paysheet{align-items:center} .paysheet .sheet{border-radius:18px} }
   body{margin:0;background:var(--bg);color:var(--ink);
        font:15px/1.5 "Inter","Plus Jakarta Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
        -webkit-font-smoothing:antialiased}
@@ -219,6 +246,13 @@
   var STATE = {
     form: [], cal: null, avail: [], picked: {}, quote: null, filter: 'all', busy: false };
   var EMBEDDED = /[?&]embed=1/.test(location.search);
+  // WHERE THIS VISITOR CAME FROM (2026-11-25). A tracking link lands here with ?t= or ?tracking=, and
+  // that value rides on the order so the sponsor's issue can be traced back to the source that sold it.
+  var TRACKING = (function () {
+    var q = new URLSearchParams(location.search);
+    var v = q.get('t') || q.get('tracking') || q.get('source') || '';
+    return v.trim().slice(0, 500);
+  })();
   if (EMBEDDED) document.body.classList.add('embed');
 
   // An embedded calendar must never be cut off, so it tells the host page how tall it is whenever
@@ -630,6 +664,11 @@
     },
     filter: function (id) { STATE.filter = id; render(); refreshQuote().then(render); },
     reload: function () { loadAvailability(); },
+    openPayFor: function () {
+      if (STATE.paySteps && STATE.paySteps.length) { openPay(STATE.payOrder || {}, STATE.paySteps); }
+    },
+    closePay: closePay,
+    paid: paid,
     reserve: function () {
       if (STATE.busy) return;
       var name = (el('buyerName') || {}).value || '';
@@ -661,20 +700,30 @@
           phone: phone.trim() || null,
           sms_opt_in: !!smsOk,
           answers: answers,
+          // Attribution, if this visitor arrived through a tracking link.
+          tracking_url: TRACKING || null,
           notes: (el('buyerNote') || {}).value || '', items: items
         })
       }).then(function (order) {
-        // Money to collect: hand the buyer to the owner's checkout page, carrying the reference so
-        // the two sides can be matched. No checkout configured -> the in-house thank-you page says
-        // plainly that the slots are held and a payment link is coming.
+        // THE PAYMENT HAPPENS IN THIS PAGE (David, 2026-11-24). It used to be a jump to the owner's
+        // checkout, which loses the buyer and looks like leaving a form half-filled. Now the checkout is
+        // embedded and slides up, and WHERE it sits depends on what was bought:
+        //   * a product paid "before" (a consultant's time) is paid to secure the booking, so the sheet
+        //     opens here, before the thank-you;
+        //   * a product paid "after" (a newsletter slot) is paid on the confirmation, so the thank-you
+        //     carries a Pay now button that opens the same sheet.
         var total = order.total_cents || 0;
-        var checkout = (STATE.cal && STATE.cal.settings && STATE.cal.settings.checkout_url) || '';
-        if (total > 0 && checkout) {
-          var sep = checkout.indexOf('?') === -1 ? '?' : '&';
-          window.location.href = checkout + sep + 'ref=' + encodeURIComponent(order.id || '');
+        var steps = paymentSteps(items);
+        STATE.payOrder = order;
+        STATE.paySteps = steps;
+        STATE.lastItems = items;
+        if (total > 0 && steps.length) {
+          var first = steps.filter(function (x) { return x.mode === 'before'; })[0];
+          if (first) { openPay(order, steps); return; }
+          thankYou(order, items, steps);
           return;
         }
-        thankYou(order, items);
+        thankYou(order, items, []);
       }).catch(function (e) {
         STATE.busy = false;
         btns.forEach(function (b) { b.disabled = false; b.textContent = 'Reserve & pay'; });
@@ -684,7 +733,91 @@
     }
   };
 
-  function thankYou(order, items) {
+  /* Which checkout settles which line, and when.
+   *
+   * The server resolves each product's payment (its own checkout first, then the calendar's, then what
+   * the calendar kind implies) and the page only reads it — one implementation, in Rust, so the price a
+   * buyer is asked to pay can never come from a second guess in JavaScript. A line with no checkout is
+   * simply not in this list, and the thank-you page says plainly that nothing has been charged.
+   */
+  function paymentSteps(items) {
+    var byId = {};
+    ((STATE.cal && STATE.cal.resources) || []).forEach(function (r) { byId[r.id] = r; });
+    var seen = {};
+    var out = [];
+    items.forEach(function (i) {
+      var res = byId[i.resource_id];
+      var pay = res && res.payment;
+      if (!pay || !pay.url) return;
+      var key = pay.mode + '|' + pay.url;
+      if (seen[key]) { seen[key].lines.push(res.name || 'Slot'); return; }
+      var step = { mode: pay.mode || 'after', url: pay.url, lines: [res.name || 'Slot'] };
+      seen[key] = step;
+      out.push(step);
+    });
+    return out;
+  }
+
+  /* The payment sheet: one iframe per distinct checkout, opened without leaving the page. */
+  function openPay(order, steps) {
+    var due = steps.filter(function (x) { return x.mode === 'before'; });
+    var list = due.length ? due : steps;
+    var existing = document.getElementById('paySheet');
+    if (existing) existing.parentNode.removeChild(existing);
+    var sheet = document.createElement('div');
+    sheet.className = 'paysheet';
+    sheet.id = 'paySheet';
+    sheet.innerHTML =
+      '<div class="veil" onclick="BKUI.closePay()"></div>' +
+      '<div class="sheet" role="dialog" aria-modal="true" aria-label="Pay for your booking">' +
+        '<button class="x" onclick="BKUI.closePay()" aria-label="Close">&#215;</button>' +
+        '<h2>Pay for your booking</h2>' +
+        '<p class="sub">Your ' + (list.length > 1 ? 'places are' : 'place is') + ' held' +
+          ((STATE.cal && STATE.cal.hold_minutes) ? ' for ' + STATE.cal.hold_minutes + ' minutes' : '') +
+          ' while you pay. Nothing is charged twice — this is the same checkout you would have been sent to.</p>' +
+        list.map(function (s, n) {
+          return (list.length > 1 ? '<div class="paystep"><div class="when">Paid ' +
+              (s.mode === 'before' ? 'to secure the booking' : 'on confirmation') + '</div>' +
+            '<div class="what">' + esc(s.lines.join(', ')) + '</div>' : '') +
+            '<iframe src="' + esc(s.url + (s.url.indexOf('?') === -1 ? '?' : '&') +
+              'ref=' + encodeURIComponent(order.id || '') + '&embed=1') + '"' +
+            ' title="Checkout" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>' +
+            (list.length > 1 ? '</div>' : '');
+        }).join('') +
+        '<div class="row">' +
+          '<button class="cta" style="flex:1" onclick="BKUI.paid()">I have paid — finish</button>' +
+          '<button class="btn-ghost" style="flex:0 0 auto" onclick="BKUI.closePay()">Pay in a moment</button>' +
+        '</div>' +
+        '<p class="note">If the form does not load, your confirmation email carries the same payment link. ' +
+          'Your places stay held until the timer runs out.</p>' +
+      '</div>';
+    document.body.appendChild(sheet);
+    requestAnimationFrame(function () { sheet.classList.add('open'); });
+    STATE.payOrder = order;
+    STATE.paySteps = steps;
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closePay() {
+    var sheet = document.getElementById('paySheet');
+    if (sheet) {
+      sheet.classList.remove('open');
+      setTimeout(function () { if (sheet.parentNode) sheet.parentNode.removeChild(sheet); }, 320);
+    }
+    document.body.style.overflow = '';
+  }
+
+  function paid() {
+    closePay();
+    var order = STATE.payOrder || {};
+    var items = (STATE.lastItems || []);
+    thankYou(order, items, STATE.paySteps || []);
+  }
+
+  function thankYou(order, items, steps) {
+    steps = steps || [];
+    // Remember the lines so "I have paid" can rebuild the thank-you without re-asking the API.
+    STATE.lastItems = items || [];
     var picked = items.map(function (i) {
       return STATE.avail.filter(function (a) {
         return (i.slot_id && a.slot_id === i.slot_id) || (!i.slot_id && a.starts_at === i.starts_at);
@@ -708,7 +841,16 @@
       '<h1>Thank you — your slots are held</h1>' +
       '<p>We have emailed ' + esc((order.customer_email || '')) + ' with the details.</p>' +
       ((order.total_cents || 0) > 0
-        ? '<p style="margin-top:8px"><b>Payment:</b> nothing has been charged yet — a payment link is on its way to that address, and your slots are held until it is settled.</p>'
+        ? (steps.length
+            ? '<div style="margin-top:14px"><b>Payment</b>' +
+              steps.map(function (s) {
+                return '<div class="paystep" style="margin-top:8px"><div class="when">Paid ' +
+                  (s.mode === 'before' ? 'to secure the booking' : 'on confirmation') + '</div>' +
+                  '<div class="what">' + esc(s.lines.join(', ')) + '</div>' +
+                  '<button class="cta" style="margin-top:6px" onclick="BKUI.openPayFor()">Pay now</button></div>';
+              }).join('') +
+              '<p class="note">The form opens right here — you are not sent to another site.</p></div>'
+            : '<p style="margin-top:8px"><b>Payment:</b> nothing has been charged yet — a payment link is on its way to that address, and your slots are held until it is settled.</p>')
         : '') +
       '<div class="ref">' + esc(order.id || '') + '</div>' +
       '<ul>' +

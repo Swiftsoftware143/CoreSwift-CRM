@@ -8,6 +8,7 @@ use axum::{
     http::StatusCode,
     Extension, Json,
 };
+use chrono::Utc;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -610,6 +611,8 @@ pub async fn update_calendar(
             body.settings,
             body.reply_to_email,
             body.send_confirmation,
+            body.payment_mode,
+            body.payment_embed,
         )
         .await?,
     ))
@@ -820,10 +823,38 @@ pub async fn public_calendar(
     .await
     .ok()
     .flatten();
+    // THE PAYMENT TRAVELS WITH THE PRODUCT (2026-11-24). A position may carry its own checkout, so the
+    // page is told, per product, WHEN it is paid for and WHERE — resolved here once (position, then
+    // calendar, then the kind's default) instead of being re-derived in the browser. Only the https
+    // address is sent; the owner's pasted code never reaches the page.
+    let payment_calendar = service::payment_for(
+        cal.kind,
+        cal.payment_mode.as_deref(),
+        cal.payment_embed.as_deref(),
+        None,
+    );
+    let resource_json: Vec<Value> = resources
+        .iter()
+        .map(|r| {
+            let pay = service::payment_for(
+                cal.kind,
+                cal.payment_mode.as_deref(),
+                cal.payment_embed.as_deref(),
+                Some(r),
+            );
+            let mut v = serde_json::to_value(r).unwrap_or(Value::Null);
+            if let Some(obj) = v.as_object_mut() {
+                obj.remove("checkout_embed");
+                obj.insert("payment".to_string(), pay.unwrap_or(Value::Null));
+            }
+            v
+        })
+        .collect();
     Ok(Json(json!({
         "calendar": { "name": cal.name, "slug": cal.slug, "kind": cal.kind, "timezone": cal.timezone,
                       "currency": cal.currency, "hold_minutes": cal.hold_minutes, "settings": cal.settings },
-        "resources": resources,
+        "payment": payment_calendar,
+        "resources": resource_json,
         "bundles": bundles,
         "branding": branding,
     })))
@@ -1331,4 +1362,224 @@ pub async fn put_confirmation_email(
         }
     }
     Ok(Json(json!({"saved": true})))
+}
+
+// ---------- a payment provider says a booking is paid ----------
+
+/// What a provider posts when a sale completes. Field names are deliberately forgiving: every provider
+/// spells these differently, and a webhook that 422s on a name is a payment nobody hears about.
+#[derive(Debug, serde::Deserialize)]
+pub struct PaymentNotice {
+    /// THE reference that survives the round trip: the booking page appends it to the checkout address
+    /// as `ref=<order id>`, so this is normally the order id.
+    #[serde(default)]
+    pub r#ref: Option<String>,
+    #[serde(default)]
+    pub reference: Option<String>,
+    #[serde(default)]
+    pub order_id: Option<String>,
+    /// The provider's own transaction id, kept so a refund can be matched back.
+    #[serde(default)]
+    pub transaction_id: Option<String>,
+    #[serde(default)]
+    pub txn_id: Option<String>,
+    #[serde(default)]
+    pub amount_cents: Option<i64>,
+    /// "paid" (default) or "refunded".
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+/// `POST /api/public/booking/payments/:provider` — money arrived (or went back).
+///
+/// Public because a provider cannot hold a session, and guarded by the calendar's own key in
+/// `x-booking-payment-key` (or a `key` in the body, which several providers can be told to send).
+/// Three things are checked before anything is written: the key belongs to the calendar, the reference
+/// names a booking on THIS calendar, and — when the provider sends an amount — it matches what the
+/// booking is for. A mismatched amount is refused rather than marked paid, because marking a
+/// part-payment as settled is how a sponsor gets their ad for less than the price.
+pub async fn public_payment_notice(
+    State(pool): State<PgPool>,
+    Path(provider): Path<String>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<PaymentNotice>,
+) -> Result<Json<Value>> {
+    let header_key = headers
+        .get("x-booking-payment-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    let key = header_key.unwrap_or_default();
+
+    let reference = body
+        .r#ref
+        .clone()
+        .or_else(|| body.reference.clone())
+        .or_else(|| body.order_id.clone())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            BookingError::invalid(
+                "no booking reference. Send the `ref` the checkout was opened with, or the order id.",
+            )
+        })?;
+
+    // The reference is an order id. Accept it as a UUID when it is one, so a typo is a 404 rather than
+    // a silent no-op; accept a manage token as the fallback, because a provider can only echo what the
+    // checkout address carried.
+    let order: Option<(Uuid, Uuid, i64, String)> = if let Ok(oid) = Uuid::parse_str(&reference) {
+        sqlx::query_as(
+            "SELECT o.id, o.calendar_id, o.total_cents, o.payment_status
+               FROM booking_orders o
+              WHERE o.id = $1",
+        )
+        .bind(oid)
+        .fetch_optional(&pool)
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT o.id, o.calendar_id, o.total_cents, o.payment_status
+               FROM booking_orders o
+              WHERE o.manage_token = $1",
+        )
+        .bind(&reference)
+        .fetch_optional(&pool)
+        .await?
+    };
+    let Some((order_id, calendar_id, total_cents, current_status)) = order else {
+        return Err(BookingError::NotFound(
+            "no booking on this calendar matches that reference",
+        ));
+    };
+
+    // The calendar's key, compared in one place. An empty stored key refuses rather than accepting
+    // anything: a webhook door with no lock must be closed, not open.
+    let stored_key: Option<String> =
+        sqlx::query_scalar("SELECT payment_webhook_key FROM booking_calendars WHERE id = $1")
+            .bind(calendar_id)
+            .fetch_optional(&pool)
+            .await?
+            .flatten();
+    let expected = stored_key.unwrap_or_default();
+    if expected.trim().is_empty() || key != expected {
+        return Err(BookingError::invalid(
+            "that payment key does not belong to this calendar",
+        ));
+    }
+
+    let new_status = match body.status.as_deref().map(str::trim).map(str::to_lowercase) {
+        None => "paid".to_string(),
+        Some(s) if s == "paid" || s == "completed" || s == "complete" || s == "succeeded" => {
+            "paid".to_string()
+        }
+        Some(s) if s == "refunded" || s == "refund" || s == "reversed" => "refunded".to_string(),
+        Some(other) => {
+            return Err(BookingError::invalid(format!(
+                "\"{other}\" is not a payment state this calendar records (paid or refunded)"
+            )))
+        }
+    };
+
+    if new_status == "paid" {
+        if let Some(sent) = body.amount_cents {
+            if sent != total_cents {
+                return Err(BookingError::invalid(format!(
+                    "the amount sent ({sent}) does not match this booking ({total_cents}). Nothing was marked paid."
+                )));
+            }
+        }
+    }
+
+    let txn = body.transaction_id.clone().or_else(|| body.txn_id.clone());
+    let paid_at = if new_status == "paid" {
+        Some(Utc::now())
+    } else {
+        None
+    };
+    sqlx::query(
+        "UPDATE booking_orders
+            SET payment_status = $2,
+                paid_at = CASE WHEN $2 = 'paid' THEN coalesce(paid_at, $3) ELSE paid_at END,
+                payment_reference = coalesce($4, payment_reference),
+                payment_provider = $5
+          WHERE id = $1",
+    )
+    .bind(order_id)
+    .bind(&new_status)
+    .bind(paid_at)
+    .bind(&txn)
+    .bind(provider.trim())
+    .execute(&pool)
+    .await?;
+
+    tracing::info!(
+        order = %order_id, provider = %provider, status = %new_status, previous = %current_status,
+        "booking payment notice recorded"
+    );
+    Ok(Json(json!({
+        "recorded": true,
+        "order_id": order_id,
+        "payment_status": new_status,
+        "previous": current_status,
+    })))
+}
+
+/// `GET /api/booking/calendars/:id/payment-wiring` — the two strings an owner pastes into their
+/// payment provider: the address to post to, and the key to post with.
+///
+/// The key is generated on first read and can be rotated, because it is a credential that gets pasted
+/// into a third-party panel: if it leaks, the owner must be able to change it without rebuilding the
+/// calendar, and the old one stops working immediately.
+pub async fn get_payment_wiring(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(calendar_id): Path<Uuid>,
+) -> Result<Json<Value>> {
+    let mut c = pool.acquire().await?;
+    let cal = service::calendar_for_tenant(&mut c, calendar_id, t.0).await?;
+    drop(c);
+    let key = match cal
+        .payment_webhook_key
+        .clone()
+        .filter(|k| !k.trim().is_empty())
+    {
+        Some(k) => k,
+        None => {
+            let fresh = Uuid::new_v4().simple().to_string();
+            sqlx::query("UPDATE booking_calendars SET payment_webhook_key = $2 WHERE id = $1")
+                .bind(calendar_id)
+                .bind(&fresh)
+                .execute(&pool)
+                .await?;
+            fresh
+        }
+    };
+    let system = std::env::var("APP_DOMAIN").unwrap_or_else(|_| "coreswiftcrm.com".to_string());
+    Ok(Json(json!({
+        "url": format!("https://{system}/api/public/booking/payments/groovesell"),
+        "key": key,
+        "header": "x-booking-payment-key",
+        "reference_field": "ref",
+        "calendar_id": calendar_id,
+        "note": "Send the reference the checkout was opened with (it is appended as ?ref=<order id>). The key can go in the x-booking-payment-key header or a key field in the body.",
+    })))
+}
+
+/// `POST /api/booking/calendars/:id/payment-wiring/rotate` — a new key, immediately.
+pub async fn rotate_payment_key(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(calendar_id): Path<Uuid>,
+) -> Result<Json<Value>> {
+    let mut c = pool.acquire().await?;
+    service::calendar_for_tenant(&mut c, calendar_id, t.0).await?;
+    drop(c);
+    let fresh = Uuid::new_v4().simple().to_string();
+    sqlx::query("UPDATE booking_calendars SET payment_webhook_key = $2 WHERE id = $1")
+        .bind(calendar_id)
+        .bind(&fresh)
+        .execute(&pool)
+        .await?;
+    Ok(Json(json!({"rotated": true, "key": fresh})))
 }

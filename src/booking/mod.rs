@@ -60,6 +60,12 @@ pub fn admin_router(pool: PgPool) -> Router {
         )
         // Can a customer book this calendar right now, and if not why (David, 2026-11-20).
         .route("/calendars/:id/readiness", get(h::readiness))
+        // What an owner pastes into their payment provider, and how to rotate it (2026-11-25).
+        .route("/calendars/:id/payment-wiring", get(h::get_payment_wiring))
+        .route(
+            "/calendars/:id/payment-wiring/rotate",
+            post(h::rotate_payment_key),
+        )
         // What the customer's confirmation says, and the account's own wording for it (2026-11-24).
         .route(
             "/calendars/:id/confirmation-email",
@@ -112,6 +118,9 @@ pub fn public_router(pool: PgPool) -> Router {
         .route("/c/:slug/quote", post(h::public_quote))
         .route("/c/:slug/orders", post(h::public_create_order))
         .route("/orders/:id", get(h::public_get_order))
+        // A payment provider reports a completed sale. Public by necessity (a provider holds no
+        // session), guarded by the calendar's own key — see handlers::public_payment_notice.
+        .route("/payments/:provider", post(h::public_payment_notice))
         .route(
             "/orders/:order_id/bookings/:booking_id/creative",
             put(h::public_submit_creative),

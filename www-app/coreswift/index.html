@@ -1809,6 +1809,7 @@ const MCP_ENTITY_SPECS = [
   ['coreswift_booking_availability_rules', 'booking availability rules'],
   ['coreswift_booking_calendars', 'booking calendars'],
   ['coreswift_booking_orders', 'booking orders'],
+  ['coreswift_booking_payment', 'booking payment (each product\'s checkout, and when it charges)'],
   ['coreswift_booking_reminders', 'booking reminders'],
   ['coreswift_booking_resources', 'booking resources'],
   ['coreswift_business_profiles', 'business profiles'],
@@ -14225,6 +14226,8 @@ function bkDetailPanel() {
 
   html += bkThemePanel(cal);
   html += bkRulesPanel(cal);
+  html += bkPayPanel(cal);
+  setTimeout(bkLoadPayWire, 0);
   html += bkResourcePanel(res, cal.kind);
   html += bkFormPanel();
   html += bkManualPanel(res);
@@ -14974,6 +14977,84 @@ async function bkDeleteField(id) {
   } catch (e) { bkFieldFlash(e.message, false); }
 }
 
+/* GETTING PAID — the default for this calendar, and where each product's own checkout goes.
+ *
+ * The product's checkout wins; this is what applies to any product that has not set one. Both are
+ * shown here so an owner can see the whole payment story on one screen instead of wondering why a
+ * product is or is not taking money.
+ */
+function bkPayPanel(cal) {
+  var own = (cal.settings && cal.settings.checkout_url) || '';
+  var withOwn = ((BK.detail && BK.detail.resources) || []).filter(function (r) { return r.checkout_embed; }).length;
+  return '<div class="card" style="margin-bottom:18px"><h3 style="margin-top:0">Getting paid</h3>' +
+    '<p class="muted" style="margin-top:-6px">The payment is taken <strong>inside the booking page</strong> in a panel that slides up — ' +
+      'the buyer is never sent to another site. Set a checkout per product below; this is the default for products that have none.</p>' +
+    '<div class="bk-form">' +
+      '<label style="grid-column:1/-1">Checkout link or embed code' +
+        '<textarea id="bkCalPay" rows="3" placeholder="https://checkout.example.com/… or <iframe src=&quot;https://…&quot;>">' +
+          escapeHtml(cal.payment_embed || own) + '</textarea>' +
+        '<span class="muted" style="font-weight:400">Only the https address is used; nothing pasted here runs as code. Leave empty for no checkout.</span></label>' +
+      '<label>When the buyer pays' +
+        '<select id="bkCalPayMode">' +
+          '<option value=""' + (!cal.payment_mode ? ' selected' : '') + '>Follow the calendar type (appointments before, newsletter slots after)</option>' +
+          '<option value="before"' + (cal.payment_mode === 'before' ? ' selected' : '') + '>Before — pay to secure the booking</option>' +
+          '<option value="after"' + (cal.payment_mode === 'after' ? ' selected' : '') + '>After — pay on the confirmation</option>' +
+        '</select></label>' +
+    '</div>' +
+    '<button class="btn btn-primary btn-sm" onclick="bkSavePay()">Save payment settings</button>' +
+    '<span class="bk-flash" id="bkPayFlash"></span>' +
+    // WHAT TO PASTE INTO THE PROVIDER (2026-11-25). Without this the loop cannot be closed: the
+    // provider needs an address to post to and a key to post with, and the owner needs to see the
+    // reference the checkout carries. Shown, copyable, rotatable.
+    '<div id="bkPayWire" style="margin-top:14px"></div>' +
+    '<p class="muted" style="font-size:12px;margin-top:10px">' +
+      (withOwn ? withOwn + ' product(s) here have their own checkout, which overrides this. ' : '') +
+      'A product with its own checkout shows it in <em>What customers can book</em>.</p>' +
+    '</div>';
+}
+
+async function bkLoadPayWire() {
+  var box = document.getElementById('bkPayWire');
+  if (!box) return;
+  try {
+    var w = await API.get('/booking/calendars/' + encodeURIComponent(BK.current) + '/payment-wiring');
+    box.innerHTML = '<h4 style="margin:0 0 6px">Tell your payment provider</h4>' +
+      '<p class="muted" style="font-size:12.5px;margin:0 0 8px">Paste these two into GrooveSell (or any provider). ' +
+        'The booking page adds <code>?ref=&lt;booking id&gt;</code> to the checkout address, so the sale comes back to the right booking.</p>' +
+      '<div class="bk-form">' +
+        '<label style="grid-column:1/-1">Webhook URL<input readonly value="' + escapeHtml(w.url) + '" onclick="this.select()"></label>' +
+        '<label style="grid-column:1/-1">Key<input readonly value="' + escapeHtml(w.key) + '" onclick="this.select()">' +
+          '<span class="muted" style="font-weight:400">Sent as the <code>' + escapeHtml(w.header) + '</code> header (or a key field in the body).</span></label>' +
+      '</div>' +
+      '<button class="btn btn-secondary btn-sm" onclick="bkRotatePayKey()">Make a new key</button>' +
+      '<p class="muted" style="font-size:12px;margin-top:8px">A new key stops the old one immediately &mdash; do it if the key ever leaks.</p>';
+  } catch (e) {
+    box.innerHTML = '<p class="muted" style="font-size:12.5px">Could not read the payment wiring: ' + escapeHtml(e.message) + '</p>';
+  }
+}
+
+async function bkRotatePayKey() {
+  if (!confirm('Make a new key? The old one stops working immediately, so paste the new one into your provider.')) return;
+  try {
+    await API.post('/booking/calendars/' + encodeURIComponent(BK.current) + '/payment-wiring/rotate', {});
+    await bkLoadPayWire();
+  } catch (e) { bkFlash(e.message, false); }
+}
+
+async function bkSavePay() {
+  var flash = document.getElementById('bkPayFlash');
+  var say = function (m, ok) { if (flash) { flash.textContent = m; flash.className = 'bk-flash ' + (ok === false ? 'bad' : 'good'); } };
+  try {
+    await API.patch('/booking/calendars/' + encodeURIComponent(BK.current), {
+      payment_embed: ((document.getElementById('bkCalPay') || {}).value || '').trim(),
+      payment_mode: ((document.getElementById('bkCalPayMode') || {}).value || '').trim()
+    });
+    await bkOpenDetail(BK.current, true);
+    bkRender();
+    say('Saved — the booking page uses this immediately.', true);
+  } catch (e) { say(e.message, false); }
+}
+
 function bkResourcePanel(res, kind) {
   const priceLabel = kind === 'date_range' ? 'Price per day (cents)' : 'Price (cents)';
   const rows = res.map(function (r) {
@@ -15000,6 +15081,18 @@ function bkResourcePanel(res, kind) {
       '<label>Length (min)<input id="bkResDur" type="number" value="' + (kind === 'appointment' ? 30 : 60) + '"></label>' +
       // THE ARTWORK SPEC (ZaarHub, 2026-11-24): the confirmation email states it, so it belongs to the
       // position rather than being hardcoded per product name in a mail template.
+      // THE CHECKOUT BELONGS TO THE PRODUCT (David, 2026-11-24): "we have multiple different
+      // newsletters and it's priced differently... in the product section is where we connected to a
+      // certain checkout link or embed." Empty here means the calendar's default is used.
+      '<label style="grid-column:1/-1">Checkout for this product &mdash; link or embed code' +
+        '<textarea id="bkResPay" rows="3" placeholder="https://checkout.example.com/… or <iframe src=&quot;https://…&quot;>"></textarea>' +
+        '<span class="muted" style="font-weight:400">Pasted in, and shown INSIDE your booking page in a panel that slides up — the buyer is never sent to another site. Only the https address is used; nothing you paste runs as code. Leave empty to use the calendar&rsquo;s default.</span></label>' +
+      '<label>When this product is paid for' +
+        '<select id="bkResPayMode">' +
+          '<option value="">Use the calendar&rsquo;s setting</option>' +
+          '<option value="before">Before &mdash; pay to secure the booking (a consultant&rsquo;s time)</option>' +
+          '<option value="after">After &mdash; pay on the confirmation (a newsletter slot)</option>' +
+        '</select></label>' +
       '<label>Artwork size<input id="bkResSize" placeholder="600x150">' +
         '<span class="muted" style="font-weight:400">Stated in the confirmation email. Leave empty if a sponsor can send any size.</span></label>' +
       '<label>Places<input id="bkResCap" type="number" value="1" min="1"></label>' +
@@ -15053,6 +15146,8 @@ function bkEditResource(id) {
   set('bkResInterval', r.slot_interval_min);
   var ex = document.getElementById('bkResExclusive'); if (ex) ex.checked = !!r.exclusive;
   set('bkResSize', r.size);
+  set('bkResPay', r.checkout_embed);
+  set('bkResPayMode', r.payment_mode || '');
   var btn = document.querySelector('#bkWrap button[onclick="bkAddResource()"]');
   if (btn) {
     btn.textContent = 'Save changes';
@@ -15109,14 +15204,17 @@ function bkResourceBody(name) {
     slot_interval_min: num('bkResInterval', 30),
     // Sent on every save, so unticking it in the form actually clears it.
     exclusive: !!(document.getElementById('bkResExclusive') || {}).checked,
-    size: ((document.getElementById('bkResSize') || {}).value || '').trim() || null
+    size: ((document.getElementById('bkResSize') || {}).value || '').trim() || null,
+    checkout_embed: ((document.getElementById('bkResPay') || {}).value || '').trim() || null,
+    payment_mode: ((document.getElementById('bkResPayMode') || {}).value || '').trim() || null
   };
 }
 
 /* Cancel leaves the form ready for a NEW position, not the one that was being edited. */
 function bkCancelResourceEdit() {
   BK.editing = null;
-  ['bkResName', 'bkResCompare', 'bkResSize'].forEach(function (i) { var el = document.getElementById(i); if (el) el.value = ''; });
+  ['bkResName', 'bkResCompare', 'bkResSize', 'bkResPay'].forEach(function (i) { var el = document.getElementById(i); if (el) el.value = ''; });
+  var pm = document.getElementById('bkResPayMode'); if (pm) pm.value = '';
   var ex = document.getElementById('bkResExclusive'); if (ex) ex.checked = false;
   var btn = document.querySelector('#bkWrap button[onclick="bkSaveResource()"]');
   if (btn) { btn.textContent = 'Add'; btn.setAttribute('onclick', 'bkAddResource()'); }
@@ -15152,7 +15250,9 @@ async function bkAddResource() {
       buffer_min: parseInt(document.getElementById('bkResBuf').value, 10) || 0,
       slot_interval_min: parseInt(document.getElementById('bkResInterval').value, 10) || 30,
       exclusive: !!(document.getElementById('bkResExclusive') || {}).checked,
-      size: ((document.getElementById('bkResSize') || {}).value || '').trim() || null
+      size: ((document.getElementById('bkResSize') || {}).value || '').trim() || null,
+      checkout_embed: ((document.getElementById('bkResPay') || {}).value || '').trim() || null,
+      payment_mode: ((document.getElementById('bkResPayMode') || {}).value || '').trim() || null
     });
     await bkOpenDetail(BK.current, true); bkRender(); bkFlash('Added.');
   } catch (e) { bkFlash(e.message, false); }
@@ -15355,12 +15455,17 @@ async function bkLoadOrders() {
     const res = await bkCall('GET', '/calendars/' + BK.current + '/orders');
     const rows = (res && res.orders) ? res.orders : (Array.isArray(res) ? res : []);
     if (!rows.length) { el.innerHTML = '<p class="muted">No orders yet.</p>'; return; }
-    el.innerHTML = '<table class="table"><thead><tr><th>Customer</th><th>Total</th><th>Status</th><th>When</th><th></th></tr></thead><tbody>' +
+    el.innerHTML = '<table class="table"><thead><tr><th>Customer</th><th>Total</th><th>Booking</th><th>Payment</th><th>Came from</th><th>When</th><th></th></tr></thead><tbody>' +
       rows.map(function (o) {
         const live = o.status === 'pending';
         return '<tr><td>' + escapeHtml(o.customer_name || '') + '<div class="muted" style="font-size:12px">' + escapeHtml(o.customer_email || '') + '</div></td>' +
           '<td>' + bkMoney(o.total_cents) + '</td>' +
           '<td><span class="badge">' + escapeHtml(o.status) + '</span></td>' +
+          // paid / unpaid, in plain words. Internal only: a sponsor is told "booked", never "purchased".
+          '<td><span class="badge" style="' + (o.payment_status === 'paid' ? 'background:#065f46;color:#d1fae5' : o.payment_status === 'refunded' ? 'background:#7c2d12;color:#ffedd5' : '') + '">' +
+            escapeHtml(o.payment_status || 'unpaid') + '</span></td>' +
+          '<td class="muted" style="font-size:12px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+            (o.tracking_url ? '<a href="' + escapeHtml(o.tracking_url) + '" target="_blank" rel="noopener">' + escapeHtml(o.tracking_url) + '</a>' : '—') + '</td>' +
           '<td class="muted">' + escapeHtml((o.created_at || '').slice(0, 16).replace('T', ' ')) + '</td>' +
           '<td style="text-align:right">' + (live
             ? '<button class="btn btn-primary btn-sm" onclick="bkConfirmOrder(\'' + o.id + '\')">Confirm</button> ' +

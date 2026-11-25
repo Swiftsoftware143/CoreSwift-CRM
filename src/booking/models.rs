@@ -61,6 +61,15 @@ pub struct Calendar {
     pub reply_to_email: Option<String>,
     #[serde(default)]
     pub send_confirmation: bool,
+    /// "before" = pay to secure the booking; "after" = pay on the confirmation. NULL follows the kind.
+    #[serde(default)]
+    pub payment_mode: Option<String>,
+    /// The calendar's default checkout code/link; a position can override it.
+    #[serde(default)]
+    pub payment_embed: Option<String>,
+    /// The key a payment provider must present when reporting a completed sale.
+    #[serde(default)]
+    pub payment_webhook_key: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -80,6 +89,10 @@ pub struct Resource {
     pub exclusive: bool,
     /// Artwork spec for this position, e.g. "600x150". None means the mail states no size.
     pub size: Option<String>,
+    /// This product's own checkout code/link; None means "use the calendar's".
+    pub checkout_embed: Option<String>,
+    /// "before" | "after"; None means "use the calendar's".
+    pub payment_mode: Option<String>,
     pub slot_interval_min: i32,
     pub buffer_min: i32,
     pub min_notice_min: i32,
@@ -143,6 +156,19 @@ pub struct Order {
     pub payment_ref: Option<String>,
     pub notes: String,
     pub created_at: DateTime<Utc>,
+    /// unpaid | paid | refunded. INTERNAL state: the sponsor is told "booked", never "purchased".
+    #[serde(default)]
+    pub payment_status: String,
+    #[serde(default)]
+    pub paid_at: Option<DateTime<Utc>>,
+    /// The provider's own transaction id, when it sent one.
+    #[serde(default)]
+    pub payment_reference: Option<String>,
+    /// The tracking link that produced this booking — attribution, never shown to a sponsor.
+    #[serde(default)]
+    pub tracking_url: Option<String>,
+    #[serde(default)]
+    pub payment_provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, FromRow)]
@@ -224,6 +250,12 @@ pub struct NewResource {
     /// The artwork spec, e.g. "600x150". Stated in the confirmation email.
     #[serde(default)]
     pub size: Option<String>,
+    /// This product's OWN checkout code or link. Empty falls back to the calendar's.
+    #[serde(default)]
+    pub checkout_embed: Option<String>,
+    /// This product's payment timing: "before" or "after". Empty falls back to the calendar's.
+    #[serde(default)]
+    pub payment_mode: Option<String>,
     pub duration_min: Option<i32>,
     pub slot_interval_min: Option<i32>,
     pub buffer_min: Option<i32>,
@@ -351,6 +383,9 @@ pub struct NewOrder {
     /// What the buyer ticked, stored with the order. Absent means NO consent: `Option` -> false.
     #[serde(default)]
     pub sms_opt_in: Option<bool>,
+    /// The tracking link (or short code) that produced this booking. Attribution only.
+    #[serde(default)]
+    pub tracking_url: Option<String>,
     /// Answers to the calendar's own questions (`booking_form_fields`), keyed by field key. Validated
     /// server-side against which fields are required — a form rule enforced only in the browser is a
     /// suggestion, and an order missing a mandatory answer is refused by name.
@@ -385,6 +420,12 @@ pub struct CreativeReview {
 #[derive(Debug, Deserialize)]
 pub struct UpdateCalendar {
     pub name: Option<String>,
+    /// When the buyer pays: "before" or "after". Empty string clears it back to the kind's default.
+    #[serde(default)]
+    pub payment_mode: Option<String>,
+    /// The provider's embed code or checkout link, pasted in.
+    #[serde(default)]
+    pub payment_embed: Option<String>,
     /// The web address (`/b/<slug>`). Optional; when present it replaces the current one.
     #[serde(default)]
     pub slug: Option<String>,

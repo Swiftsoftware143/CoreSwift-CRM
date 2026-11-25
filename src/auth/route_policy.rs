@@ -502,6 +502,11 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/public/booking/c/:slug/form",
     "/api/public/booking/c/:slug/quote",
     "/api/public/booking/c/:slug/orders",
+    // A PAYMENT PROVIDER REPORTS A COMPLETED SALE (2026-11-25). Anonymous because a provider holds no
+    // session; the lock is the calendar's own key in `x-booking-payment-key`, checked in
+    // `booking::handlers::public_payment_notice`, which also refuses a wrong amount or an unknown
+    // reference. Declared here so the door is measurable rather than an accident of the path.
+    "/api/public/booking/payments/:provider",
     "/api/public/booking/orders/:id",
     "/api/public/booking/orders/:order_id/bookings/:booking_id/creative",
     // The manage link a confirmation carries. The 64-character token IS the credential, so these
