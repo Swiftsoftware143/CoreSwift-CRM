@@ -322,6 +322,24 @@ pub async fn update_ticket(
     let new_description = body.description.unwrap_or(ticket.description);
     let new_status = body.status.unwrap_or(ticket.status);
     let new_priority = body.priority.unwrap_or(ticket.priority);
+    // NAME THE VOCABULARY THE TABLE ACTUALLY HAS. Measured 2026-11-25: a status of "in_progress" — the very
+    // word `/tickets/stats` reported back — answered 500 from `tickets_status_check`, which is an error an
+    // operator (or an agent) cannot act on. These two lists are the constraint's own values, so a wrong
+    // word is now a 400 that says which words work.
+    const STATUSES: [&str; 6] = ["new", "open", "pending", "on_hold", "solved", "closed"];
+    const PRIORITIES: [&str; 4] = ["low", "medium", "high", "urgent"];
+    if !STATUSES.contains(&new_status.as_str()) {
+        return Err(AppError::Validation(format!(
+            "\"{new_status}\" is not a ticket status; use one of: {}",
+            STATUSES.join(", ")
+        )));
+    }
+    if !PRIORITIES.contains(&new_priority.as_str()) {
+        return Err(AppError::Validation(format!(
+            "\"{new_priority}\" is not a priority; use one of: {}",
+            PRIORITIES.join(", ")
+        )));
+    }
     // Three states, and they must stay distinct: an id assigns, `clear_assignee` empties, and saying
     // nothing leaves the current owner alone.
     let new_assigned_to = if body.clear_assignee {
@@ -579,14 +597,20 @@ pub async fn ticket_stats(
         .find(|r| r.status == "open")
         .and_then(|r| r.count)
         .unwrap_or(0);
-    let in_progress = rows
+    // `in_progress` is NOT a status this table allows (`tickets_status_check`: new, open, pending, on_hold,
+    // solved, closed) - measured 2026-11-25, when setting a ticket to in_progress answered 500. The bucket
+    // an operator means by "in progress" is `pending`, so report that, and keep the old key pointing at the
+    // same number so an existing dashboard tile does not silently read zero.
+    let pending = rows
         .iter()
-        .find(|r| r.status == "in_progress")
+        .find(|r| r.status == "pending")
         .and_then(|r| r.count)
         .unwrap_or(0);
+    let in_progress = pending;
+    // `resolved` is likewise not in the vocabulary; `solved` is what the table uses.
     let resolved = rows
         .iter()
-        .find(|r| r.status == "resolved")
+        .find(|r| r.status == "solved")
         .and_then(|r| r.count)
         .unwrap_or(0);
     let closed = rows
@@ -598,6 +622,7 @@ pub async fn ticket_stats(
     Ok(Json(json!({
         "total": total,
         "open": open,
+        "pending": pending,
         "in_progress": in_progress,
         "resolved": resolved,
         "closed": closed
@@ -688,7 +713,7 @@ pub async fn public_support_request(
     let existing: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM tickets \
           WHERE tenant_id IS NULL AND lower(contact_email) = $1 \
-            AND lower(subject) = lower($2) AND status IN ('open','in_progress') \
+            AND lower(subject) = lower($2) AND status IN ('open','pending') \
           ORDER BY created_at DESC LIMIT 1",
     )
     .bind(&email)
@@ -832,7 +857,7 @@ pub async fn file_signup_plan_request(
             WHERE NOT EXISTS (
                 SELECT 1 FROM tickets
                  WHERE tenant_id IS NULL AND lower(contact_email) = lower($3)
-                   AND lower(subject) = lower($1) AND status IN ('open','in_progress'))
+                   AND lower(subject) = lower($1) AND status IN ('open','pending'))
            RETURNING id"#,
     )
     .bind(&subject)

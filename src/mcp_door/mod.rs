@@ -271,13 +271,25 @@ fn key_role(admin: bool, api_role: &str) -> Role {
 fn register_api_tool(reg: Registry, state: &AppState) -> Registry {
     let spec = ToolSpec {
         name: API_TOOL_NAME.to_string(),
-        description: "Call any CoreSwift API path as this account. Use it to run the business: create and \
-                      update contacts, deals and tasks; move a deal's stage; add a contact to a list or \
-                      change a list's membership rules; tag a record; create or edit booking calendars and \
-                      positions; generate dates; read or change the universal email footer; set a domain \
-                      redirect; edit plans. `path` is relative to /api (for example \"contacts\", \
-                      \"booking/calendars/<id>/slots/generate\"). GET reads, POST creates, PATCH updates, \
-                      DELETE removes. Credential surfaces (auth, personal-keys, keys, mcp) are refused."
+        description: "Call any CoreSwift API path as this account. Use it to run the business. \
+                      `path` is relative to /api. The families that matter most: \"contacts\", \"deals\", \
+                      \"deals/<id>/stage\", \"deals/<id>/tasks\", \"lists\" (a list's membership rules are \
+                      `rules` on PATCH \"lists/<id>\", then POST \"lists/<id>/evaluate\"), \"tags/assign\", \
+                      \"pipelines\"; CALENDAR \"booking/calendars\", \"booking/calendars/summary\", \
+                      \"booking/calendars/<id>\", \"booking/calendars/<id>/resources\", \
+                      \"booking/resources/<id>/slots/generate\", \"booking/calendars/<id>/orders\", \
+                      \"booking/orders/<id>/confirm\", \"booking/orders/<id>/cancel\", \
+                      \"booking/calendars/<id>/form-fields\", \"booking/calendars/<id>/confirmation-email\", \
+                      \"booking/calendars/<id>/clone\"; INBOX \"private-email/messages\" (add ?folder=inbox), \
+                      \"private-email/messages/counts\", \"private-email/messages/<id>\", \
+                      \"private-email/messages/<id>/reply\" (body: message), \
+                      \"private-email/messages/<id>/ticket\" (turn a message into a ticket), \
+                      \"private-email/folders\"; TICKETS \"tickets\", \"tickets/<id>\", \
+                      \"tickets/<id>/messages\" (body: {message, kind: reply|note}), \"tickets/stats\"; \
+                      also \"mail-compliance\", \"domain-redirects\", \"billing/plans\". A message body is large \
+                      HTML: read \"private-email/messages/counts\" for what is new and ask for one message by \
+                      id rather than listing everything. GET reads, POST creates, PATCH updates, DELETE \
+                      removes. Credential surfaces (auth, personal-keys, keys, mcp) are refused."
             .to_string(),
         input_schema: json!({
             "type": "object",
