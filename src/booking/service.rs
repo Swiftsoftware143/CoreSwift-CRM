@@ -1500,7 +1500,23 @@ pub async fn create_order(
     // Matching is by email, per account. `contacts` has no unique index on (tenant, email), so the upsert
     // is a SELECT-then-write under an advisory lock keyed on that pair - two sponsors submitting at once
     // must not create two records for one address.
-    let contact_id: Option<Uuid> = {
+    // A TEST BOOKING MUST NOT INVENT A CUSTOMER (2026-11-25). The fleet's own harnesses book through
+    // this very route with reserved addresses (`probe-…@example.invalid`), and without this gate every
+    // walk minted a real CRM contact, tagged it, and put it on a live "<City> - Sponsors" list —
+    // measured: 26 probe contacts in this account in one day, sitting in the operator's contact list.
+    // The rule is the mail-hygiene one: gate on the REQUESTER (never on the route, because the same
+    // route serves real customers). A real sponsor is captured exactly as before; a synthetic one still
+    // gets the order it asked for and nothing else. `contact_id` stays whatever the caller passed, so
+    // the order still names its buyer.
+    let probe_reason = crate::security::probe_addr::synthetic_requester(&email, name);
+    let contact_id: Option<Uuid> = if let Some(reason) = probe_reason {
+        tracing::info!(
+            reason,
+            email = %email,
+            "booking sponsor capture skipped: synthetic requester"
+        );
+        None
+    } else {
         let split = |full: &str| -> (String, String) {
             let mut parts = full.trim().splitn(2, ' ');
             let first = parts.next().unwrap_or("").trim().to_string();
