@@ -66,7 +66,10 @@ class Db:
         )
         if out.returncode != 0:
             raise SystemExit(f"psql failed: {out.stderr.strip()[:400]}")
-        return out.stdout.strip()
+        # `-At` still prints the command tag for a statement with RETURNING ("INSERT 0 1"), so the
+        # value is the FIRST line — otherwise an id reads as "<uuid>\nINSERT 0 1" and the cleanup
+        # that uses it fails (measured on the first run of this harness).
+        return out.stdout.strip().splitlines()[0] if out.stdout.strip() else ""
 
 
 class Door:
