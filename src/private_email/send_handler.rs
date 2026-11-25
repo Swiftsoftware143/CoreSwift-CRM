@@ -108,6 +108,27 @@ pub async fn deliver(
         }
     }
 
+    // ── THE COMPLIANCE GATE, ON THIS PATH TOO ────────────────────────────────────────────────
+    // Measured on the wire 2026-11-25: a message sent from the inbox arrived with NO opt-out footer and
+    // without the account's suppression list being consulted, because this function talked to the provider
+    // directly and never passed `communications::providers::deliver`, which is where the gate lives. David's
+    // rule is one footer, edited once, on every email — so the gate is called here, and a suppressed address
+    // is refused here rather than at the provider.
+    let gate =
+        crate::mail_compliance::gate(db, tenant_id, to, crate::mail_compliance::CLASS_BULK).await;
+    if let Some(reason) = gate.blocked.as_deref() {
+        return Err(AppError::BadRequest(format!(
+            "not sent: {reason}. An address that has asked not to be mailed, or is on the account's \
+             suppression list, can only be reached by clearing that suppression first."
+        )));
+    }
+    let mut body_text = body_text;
+    let mut body_html = body_html;
+    if !gate.footer_text.is_empty() {
+        body_text.push_str(&gate.footer_text);
+        body_html.push_str(&gate.footer_html);
+    }
+
     let provider = providers::provider_for(&provider_config);
     let result = provider
         .send(
