@@ -77,6 +77,11 @@ mod tests {
             compare_at_price_cents: None,
             exclusive: false,
             size: None,
+            // The per-product checkout pair (migrations that added `checkout_embed` and
+            // `payment_mode`; kanban t_a68c7658): None means "use the calendar's", which is what
+            // this fixture is about — the availability maths, not the payment arm.
+            checkout_embed: None,
+            payment_mode: None,
             duration_min: duration,
             slot_interval_min: step,
             buffer_min: 0,
