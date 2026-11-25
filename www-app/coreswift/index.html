@@ -880,13 +880,19 @@ function showModal(title, bodyHtml, footerHtml, large) {
 }
 function closeModal() { document.getElementById('modalContainer').innerHTML = ''; }
 
-// ── ACCESSIBLE NAMES FOR EVERY RENDERED CONTROL (kanban t_ba8d1cbf) ─────────────────────────────
-// The console's forms are built as strings: `<div class="form-group"><label>First name *</label>
-// <input id="ctAddFirst"></div>`. The visible label is there, but without `for`/`id` axe reports
-// every one of them as an unlabelled control (the modal forms alone were ~110 nodes). Rather than
-// restamp ~110 template strings — and have the next form reintroduce the defect — ONE pass binds
-// each label to the control that follows it, and names any control that still has no label from its
-// id (a stable, human word: ctAddFirst → "Add First"). Called on every modal and every tab render.
+/* The rules editor's modal shell. Kept beside closeModal so the two ways of opening a dialog in this file
+ * stay in one place. */
+function lsRulesModal() {
+  showModal('Membership rules',
+    '<p style="color:var(--text-secondary);font-size:13px;margin-top:0">Every rule must match. Membership is ' +
+      'recomputed whenever a deal or a tag changes, so the list maintains itself.</p>' +
+    '<div id="lsRulesBody"></div>' +
+    '<button class="btn btn-secondary btn-sm" style="margin-top:10px" onclick="lsAddRule()">Add a rule</button>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-secondary" onclick="lsEvaluateNow()">Evaluate now</button>' +
+    '<button class="btn btn-primary" onclick="lsSaveRules()">Save rules</button>', true);
+}
+
 function a11yWords(id) {
   var s = String(id || '').replace(/^[a-z]{1,4}(?=[A-Z])/, '').replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -9005,13 +9011,136 @@ async function loadListsTab() {
         '<span class="badge ' + (dyn ? 'badge-primary' : 'badge-muted') + '">' + fh(l.list_type) + '</span>',
         l.created_at ? new Date(l.created_at).toLocaleDateString() : '—',
         '<button class="btn btn-secondary btn-xs" onclick="lsMembers(\'' + l.id + '\')">Members</button>' +
-        (dyn ? '<button class="btn btn-primary btn-xs" onclick="lsEvaluate(\'' + l.id + '\')">Evaluate</button>' : '')
+        (dyn ? '<button class="btn btn-secondary btn-xs" onclick="lsRules(\'' + l.id + '\')">Rules</button>' +
+               '<button class="btn btn-primary btn-xs" onclick="lsEvaluate(\'' + l.id + '\')">Evaluate</button>' : '')
       ];
     });
     el.innerHTML = dataTable(['Name', 'Members', 'Type', 'Created', 'Actions'], rows,
       'No lists yet. Create a list to segment your contacts.');
   } catch (e) { famErr(el, 'Lists', e); }
 }
+/* A DYNAMIC LIST'S RULES, EDITABLE (2026-11-25).
+ *
+ * The engine has been live for weeks — membership is recomputed from rules and refreshed at the writers —
+ * but nothing in this console could WRITE a rule, so "dynamic" was a label an operator could pick and then
+ * never configure. This is that missing half: the same vocabulary the evaluator implements, no invented
+ * options, so a rule the user saves is a rule the engine can actually run.
+ *
+ * Vocabulary comes from src/lists/evaluator.rs: tag · score · deal_source · deal_stage · deal_date.
+ * An unknown field is silently ignored by the engine, which would show as "no rules matched" — so the
+ * dropdowns are built from that list and nothing else.
+ */
+var LS_FIELDS = [
+  { id: 'tag',         label: 'Contact has a tag',           ops: ['equals'], values: 'tag' },
+  { id: 'score',       label: 'Lead score',                  ops: ['gte', 'lte', 'equals'], values: 'number' },
+  { id: 'deal_source', label: 'Deal came from a source',     ops: ['equals'], values: 'text' },
+  { id: 'deal_stage',  label: 'Deal is in a stage',          ops: ['equals', 'in'], values: 'text' },
+  { id: 'deal_date',   label: 'Deal date is in a window',    ops: ['equals'], values: 'window' }
+];
+var LS_WINDOWS = [
+  { id: 'today', label: 'today' },
+  { id: 'this_week', label: 'this week' },
+  { id: 'this_month', label: 'this month' },
+  { id: 'later', label: 'today or later' }
+];
+var LS_RULES = [];
+var LS_LIST_ID = null;
+
+async function lsRules(listId) {
+  LS_LIST_ID = listId;
+  LS_RULES = [];
+  lsRulesModal();
+  try {
+    const l = await API.get('/lists/' + listId);
+    document.getElementById('lsRulesTitle').textContent = (l.name || 'List') + ' — membership rules';
+    LS_RULES = (l.rules || []).map(function (r) {
+      return { field: r.field, operator: r.operator, value: r.value };
+    });
+    lsPaintRules();
+  } catch (e) { toast('Could not read the rules: ' + e.message, 'error'); }
+}
+
+function lsPaintRules() {
+  var body = document.getElementById('lsRulesBody');
+  if (!body) return;
+  if (!LS_RULES.length) {
+    body.innerHTML = '<p style="color:var(--text-secondary);font-size:13px;margin:0">No rules yet — a dynamic list with no rules has no members. Add the first rule below.</p>';
+    return;
+  }
+  body.innerHTML = LS_RULES.map(function (r, i) {
+    var spec = LS_FIELDS.filter(function (f) { return f.id === r.field; })[0] || LS_FIELDS[0];
+    var val = (r.value === null || r.value === undefined) ? '' : (typeof r.value === 'object' ? (r.value[0] || '') : r.value);
+    var valueInput;
+    if (spec.values === 'window') {
+      valueInput = '<select onchange="lsSetRule(' + i + ',\'value\',this.value)" style="min-width:130px">' +
+        LS_WINDOWS.map(function (w) {
+          return '<option value="' + w.id + '"' + (String(val) === w.id ? ' selected' : '') + '>' + w.label + '</option>';
+        }).join('') + '</select>';
+    } else if (spec.values === 'number') {
+      valueInput = '<input type="number" value="' + fh(val) + '" onchange="lsSetRule(' + i + ',\'value\',parseFloat(this.value))" style="width:110px">';
+    } else {
+      valueInput = '<input type="text" value="' + fh(val) + '" placeholder="' + (spec.values === 'tag' ? 'tag name' : 'exact value') + '" onchange="lsSetRule(' + i + ',\'value\',this.value)" style="min-width:160px">';
+    }
+    return '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:6px 0;border-top:1px solid rgba(128,128,128,.18)">' +
+      '<select onchange="lsSetRule(' + i + ',\'field\',this.value)" style="min-width:200px">' +
+        LS_FIELDS.map(function (f) {
+          return '<option value="' + f.id + '"' + (f.id === r.field ? ' selected' : '') + '>' + f.label + '</option>';
+        }).join('') +
+      '</select>' +
+      '<select onchange="lsSetRule(' + i + ',\'operator\',this.value)">' +
+        spec.ops.map(function (o) {
+          return '<option value="' + o + '"' + (o === r.operator ? ' selected' : '') + '>' + (o === 'gte' ? 'at least' : o === 'lte' ? 'at most' : o) + '</option>';
+        }).join('') +
+      '</select>' +
+      valueInput +
+      '<button class="btn btn-ghost btn-xs" onclick="lsDropRule(' + i + ')">Remove</button>' +
+    '</div>';
+  }).join('');
+}
+
+function lsSetRule(i, key, val) {
+  if (!LS_RULES[i]) return;
+  LS_RULES[i][key] = val;
+  if (key === 'field') {
+    var spec = LS_FIELDS.filter(function (f) { return f.id === val; })[0];
+    LS_RULES[i].operator = spec.ops[0];
+    LS_RULES[i].value = '';
+  }
+  lsPaintRules();
+}
+
+function lsAddRule() {
+  LS_RULES.push({ field: 'tag', operator: 'equals', value: '' });
+  lsPaintRules();
+}
+
+function lsDropRule(i) {
+  LS_RULES.splice(i, 1);
+  lsPaintRules();
+}
+
+async function lsSaveRules() {
+  var bad = LS_RULES.filter(function (r) {
+    return r.value === '' || r.value === null || r.value === undefined;
+  });
+  if (bad.length) { toast('Every rule needs a value — ' + bad.length + ' is missing one.', 'error'); return; }
+  try {
+    await API.patch('/lists/' + LS_LIST_ID, { rules: LS_RULES });
+    var res = await API.post('/lists/' + LS_LIST_ID + '/evaluate', {});
+    LS_RULES = LS_RULES;
+    toast('Saved. ' + (res.total_matched !== undefined ? res.total_matched + ' contact(s) match, ' + res.added + ' added, ' + res.removed + ' removed.' : 'Rules saved.'), 'success');
+    loadListsTab();
+  } catch (e) { toast('Save failed: ' + e.message, 'error'); }
+}
+
+async function lsEvaluateNow() {
+  try {
+    var res = await API.post('/lists/' + LS_LIST_ID + '/evaluate', {});
+    toast('Evaluated: ' + (res.total_matched || 0) + ' match, ' + (res.added || 0) + ' added, ' + (res.removed || 0) + ' removed.', 'success');
+    loadListsTab();
+  } catch (e) { toast('Evaluate failed: ' + e.message, 'error'); }
+}
+
 function lsNewList() {
   showModal('New List',
     '<div class="form-group"><label>Name</label><input type="text" id="lsName"></div>' +
