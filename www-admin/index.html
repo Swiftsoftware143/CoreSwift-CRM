@@ -1402,7 +1402,12 @@ const ADMIN_MENU = [
   // select-all header and ONE "Delete selected" control. Until now this console could LIST tenants
   // (the plan pickers read GET /api/admin/tenants) and had no way to remove one — clearing a
   // probe/junk workspace meant a psql session.
-  { id:'tenants', icon:'🗂️', label:'Users' },
+  // People and workspaces are TWO different screens and both are reachable (kanban t_d01de2ad).
+  // This entry used to carry the label 'Users' while dispatching to the workspace list, so the
+  // complete Users screen below (TAB_RENDERERS['users'] + TAB_LOADERS['users'] -> GET
+  // /api/admin/users) had NO navigation entry and could not be opened at all.
+  { id:'users', icon:'👥', label:'Users' },
+  { id:'tenants', icon:'🗂️', label:'Workspaces' },
   { type:'group', icon:'💰', label:'Revenue', children:[
     { id:'billing', icon:'💳', label:'Billing & Plans' },
   ]},
@@ -2530,7 +2535,7 @@ const TAB_RENDERERS = {
   // Every workspace, with the bulk retire control (kanban t_ac2fe688). The button is inert until a
   // row is picked; the loader below arms it with the count and wires the write.
   'tenants': () => {
-    return pageHeader('Users', 'Customers on the platform — one row per workspace — select rows to retire them. Probe/test workspaces are hidden until you tick Show probe workspaces; your own portfolio companies live on Admin → Portfolio Companies, not here',
+    return pageHeader('Workspaces', 'Customers on the platform — one row per workspace — select rows to retire them. Probe/test workspaces are hidden until you tick Show probe workspaces; your own portfolio companies live on Admin → Portfolio Companies, not here',
       '<label style="display:inline-flex;align-items:center;gap:6px;margin-right:12px;font-size:13px"><input type="checkbox" id="tnShowProbes"> Show probe workspaces</label> ' +
       '<span id="tnProbeHidden" class="badge badge-warning" style="display:none;margin-right:12px"></span> ' +
       '<span id="tnPortfolioHidden" class="badge badge-muted" style="display:none;margin-right:12px"></span> ' +
