@@ -686,6 +686,25 @@ pub async fn forgot_password(
     // the lookup matches `lower(email)` so a row stored before normalisation still resolves.
     let email = email_addr::normalize(&req.email).map_err(AppError::Validation)?;
 
+    // ── A PAUSED MAILER MUST NOT PROMISE A LINK (measured 2026-11-25) ───────────────────────────
+    // This deployment's outbound mail is stopped by its own kill switch (`EMAIL_SENDING_PAUSED=1`,
+    // the owner's 2026-11-20 bounce-rate stop). Until this branch existed the route queued nothing,
+    // still answered "a reset link has been sent", and a locked-out customer waited for mail that
+    // was never going to arrive — the same lie the signup door already refuses to tell (it reports
+    // `credentials_emailed`). The stop is a DEPLOYMENT state, never a property of the address, so
+    // this is answered BEFORE the account lookup and every caller gets the identical sentence: it
+    // can never become an account-existence oracle. Lifting the stop restores the old answer with
+    // no code change.
+    if crate::communications::providers::mail_sending_paused() {
+        return Ok(Json(json!({
+            "message": "Email delivery is paused on this deployment right now, so a reset link \
+                        cannot be sent to any address. Ask your workspace admin to set a new \
+                        password for you from the console, then try this again once email has \
+                        been restored.",
+            "delivery": "paused"
+        })));
+    }
+
     // Look up user. `tenant_id` comes along because the mail path needs it: `outbound_messages.tenant_id`
     // is a NOT NULL FK to `tenants`, so queueing the reset with `Uuid::nil()` violated the constraint
     // and the send was swallowed by the `let _ =` below — the reset mail never left the box at all,
