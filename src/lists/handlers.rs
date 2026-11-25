@@ -20,6 +20,46 @@ pub async fn list(
         json!({"lists": sqlx::query_as::<_,List>("SELECT * FROM lists WHERE tenant_id=$1 AND is_active=true ORDER BY name").bind(t).fetch_all(&s.db).await?}),
     ))
 }
+/// Refuse a rule the engine cannot run.
+///
+/// Measured live (2026-11-25): a rule built on `city` saved 200 and then evaluated to zero members, so an
+/// unsupported condition looked exactly like a list nobody qualifies for. The console's dropdowns offer
+/// only these fields, but an API caller or an agent can send anything, and a saved rule that silently does
+/// nothing is worse than an error because it is believed.
+fn check_rules(rules: &[crate::lists::models::ListRule]) -> Result<(), AppError> {
+    const FIELDS: [&str; 5] = ["tag", "score", "deal_source", "deal_stage", "deal_date"];
+    const OPS: [&str; 4] = ["equals", "gte", "lte", "in"];
+    for r in rules {
+        if !FIELDS.contains(&r.field.as_str()) {
+            return Err(AppError::Validation(format!(
+                "a rule cannot be built on \"{}\"; this list can evaluate: {}",
+                r.field,
+                FIELDS.join(", ")
+            )));
+        }
+        if !OPS.contains(&r.operator.as_str()) {
+            return Err(AppError::Validation(format!(
+                "\"{}\" is not an operator here; use one of: {}",
+                r.operator,
+                OPS.join(", ")
+            )));
+        }
+        let empty = match &r.value {
+            serde_json::Value::Null => true,
+            serde_json::Value::String(v) => v.trim().is_empty(),
+            serde_json::Value::Array(v) => v.is_empty(),
+            _ => false,
+        };
+        if empty {
+            return Err(AppError::Validation(format!(
+                "the rule on \"{}\" has no value, so it can never match",
+                r.field
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub async fn create(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
@@ -34,6 +74,9 @@ pub async fn create(
         return Err(AppError::Validation(
             "list_type must be static/dynamic".into(),
         ));
+    }
+    if let Some(ref rules) = r.rules {
+        check_rules(rules)?;
     }
     let rules = r
         .rules
@@ -66,6 +109,9 @@ pub async fn update(
     Json(r): Json<UpdateListRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    if let Some(ref rules) = r.rules {
+        check_rules(rules)?;
+    }
     let rules = r
         .rules
         .map(|r| serde_json::to_value(r).unwrap_or(serde_json::Value::Array(vec![])));
