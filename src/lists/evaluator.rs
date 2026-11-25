@@ -121,19 +121,36 @@ pub async fn evaluate_dynamic_list(
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                // `equals` is exact (case-insensitive); `contains` is a substring match, bound as a
-                // parameter so nothing a customer types can become SQL.
-                let sql = if rule.operator == "contains" {
-                    format!(
-                        "SELECT id FROM contacts WHERE tenant_id = $1 \
-                          AND lower({column}) LIKE '%' || lower($2) || '%'"
-                    )
-                } else {
-                    format!("SELECT id FROM contacts WHERE tenant_id = $1 AND lower({column}) = lower($2)")
-                };
-                sqlx::query_scalar::<_, Uuid>(&sql)
+                // NO CONCATENATED SQL. The column is a parameter here ($3) and the statement is a const
+                // literal, because the fleet gate refuses format!-built SQL and is right to: it cannot tell a
+                // whitelisted column from an injected one, and neither can a reader six months later. Each
+                // allowed column gets its own OR arm, guarded by the column name AND the operator.
+                const CONTACT_FIELD_SQL: &str = "SELECT id FROM contacts WHERE tenant_id = $1 AND ( \
+                     ($4 = 'contains' AND ( \
+                         ($3 = 'city'           AND lower(city)           LIKE '%' || lower($2) || '%') OR \
+                         ($3 = 'state'          AND lower(state)          LIKE '%' || lower($2) || '%') OR \
+                         ($3 = 'country'        AND lower(country)        LIKE '%' || lower($2) || '%') OR \
+                         ($3 = 'job_title'      AND lower(job_title)      LIKE '%' || lower($2) || '%') OR \
+                         ($3 = 'title'          AND lower(title)          LIKE '%' || lower($2) || '%') OR \
+                         ($3 = 'company'        AND lower(company)        LIKE '%' || lower($2) || '%') OR \
+                         ($3 = 'source'         AND lower(source)         LIKE '%' || lower($2) || '%') OR \
+                         ($3 = 'score_category' AND lower(score_category) LIKE '%' || lower($2) || '%') OR \
+                         ($3 = 'gender'         AND lower(gender)         LIKE '%' || lower($2) || '%') )) \
+                     OR ($4 <> 'contains' AND ( \
+                         ($3 = 'city'           AND lower(city)           = lower($2)) OR \
+                         ($3 = 'state'          AND lower(state)          = lower($2)) OR \
+                         ($3 = 'country'        AND lower(country)        = lower($2)) OR \
+                         ($3 = 'job_title'      AND lower(job_title)      = lower($2)) OR \
+                         ($3 = 'title'          AND lower(title)          = lower($2)) OR \
+                         ($3 = 'company'        AND lower(company)        = lower($2)) OR \
+                         ($3 = 'source'         AND lower(source)         = lower($2)) OR \
+                         ($3 = 'score_category' AND lower(score_category) = lower($2)) OR \
+                         ($3 = 'gender'         AND lower(gender)         = lower($2)) )) )";
+                sqlx::query_scalar::<_, Uuid>(CONTACT_FIELD_SQL)
                     .bind(list.tenant_id)
                     .bind(&wanted)
+                    .bind(column)
+                    .bind(&rule.operator)
                     .fetch_all(db)
                     .await?
             }
