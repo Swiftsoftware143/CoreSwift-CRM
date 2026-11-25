@@ -724,24 +724,54 @@ pub async fn public_support_request(
     // notification that makes anyone read it. Until it existed a locked-out customer's only way back
     // in was a console nobody had been told to open. Best effort by design: the ticket is already
     // written, so a mail failure is logged and the 201 kept (never lose a filed request to a mailer).
-    if let Err(e) =
-        crate::email::send_support_request_operator_alert(&s.db, &name, &email, &subject, &message)
-            .await
+    // WHAT THE CUSTOMER IS TOLD MUST MATCH WHAT HAPPENED (2026-11-25). This route answered one
+    // sentence whether the operator alert went out or was withheld, and the plan-request screen built
+    // its confirmation on that sentence: "CoreSwift has been notified … and will email you". Under the
+    // mail stop, and for a request filed from the operator's own workspace, nothing was mailed at all —
+    // so the screen promised an inbox that was never going to receive anything. The ticket row is the
+    // record in every outcome (it stays in the queue), which is why the answer now says which of the two
+    // happened and leaves the promise to the branch that can keep it.
+    let (notified, notified_reason) = match crate::email::send_support_request_operator_alert(
+        &s.db, &name, &email, &subject, &message,
+    )
+    .await
     {
-        tracing::warn!(
-            ticket = %ticket_id,
-            "public support request operator alert was not sent: {e}"
-        );
-    }
+        Ok(crate::email::SupportAlert::Sent) => (true, None),
+        Ok(crate::email::SupportAlert::Withheld(reason)) => {
+            tracing::info!(
+                ticket = %ticket_id,
+                reason,
+                "operator alert withheld; the queue row still stands"
+            );
+            (false, Some(reason.to_string()))
+        }
+        Err(e) => {
+            tracing::warn!(
+                ticket = %ticket_id,
+                "public support request operator alert was not sent: {e}"
+            );
+            (
+                false,
+                Some("no notification email could be sent for this request".to_string()),
+            )
+        }
+    };
 
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({
-            "status": "open",
-            "ticket_id": ticket_id,
-            "message": "Your message is with our team. We will reply to the address you gave."
-        })),
-    ))
+    let mut body = json!({
+        "status": "open",
+        "ticket_id": ticket_id,
+        "notified": notified,
+        // The queue sentence is true under every outcome; only the first sentence may promise a reply.
+        "message": if notified {
+            "Your message is with our team. We will reply to the address you gave."
+        } else {
+            "Your message is in our queue — the team reads it there. No notification email could be sent for this request."
+        }
+    });
+    if let Some(reason) = notified_reason {
+        body["notified_reason"] = json!(reason);
+    }
+    Ok((StatusCode::CREATED, Json(body)))
 }
 
 /// File the tier a visitor picked on the price list, at the moment their account is minted

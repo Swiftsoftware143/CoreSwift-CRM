@@ -1519,8 +1519,18 @@ async function requestPlanChange(idx, btn) {
     const note = document.querySelector('[data-plan-request-note]');
     if (note) {
       note.style.display = 'block';
-      note.textContent = 'Request sent — CoreSwift has been notified and will review this account'
-        + ' for the ' + name + ' plan and email you. Nothing was charged.';
+      // THE PROMISE IS THE SERVER'S TO MAKE (2026-11-25). This screen used to answer the same
+      // sentence whatever happened — "CoreSwift has been notified … and will email you" — while the
+      // intake withholds the operator alert whenever sending is stopped (EMAIL_SENDING_PAUSED), when
+      // the request comes from the operator's own workspace, or from a test identity. The row is
+      // always in the queue; only the mail differs, so the copy branches on `notified`.
+      const notified = d && d.notified === true;
+      note.textContent = notified
+        ? 'Request sent — CoreSwift has been notified and will review this account'
+          + ' for the ' + name + ' plan and email you. Nothing was charged.'
+        : 'Request sent — it is in CoreSwift’s queue for the ' + name + ' plan, and the team reads'
+          + ' it there. No notification email went out for this request, so nothing is waiting in'
+          + ' your inbox. Nothing was charged.';
     }
   } catch (e) {
     btn.disabled = false;

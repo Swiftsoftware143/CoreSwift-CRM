@@ -761,13 +761,27 @@ async fn operator_self_request(db: &PgPool, requester: &str) -> Option<&'static 
 ///
 /// Best effort by design: the ticket row is already the record, so a failure is logged by the caller
 /// and never turns a filed request into an error page.
+/// What became of the operator alert — so a caller can tell a customer the truth.
+///
+/// The ticket row is the record under EVERY one of these outcomes; only the mail differs. Before this
+/// type the function answered `Ok(())` for "queued", "withheld: test identity", "withheld: the
+/// operator's own request" and "no mailbox configured" alike, so the plan-request screen could not
+/// learn that the notification it was promising had not been sent (2026-11-25).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupportAlert {
+    /// Handed to the provider on the platform transport.
+    Sent,
+    /// Recorded in the queue, but no mail left. The sentence says why, for a log and an API field.
+    Withheld(&'static str),
+}
+
 pub async fn send_support_request_operator_alert(
     db: &PgPool,
     who: &str,
     reply_to: &str,
     subject_line: &str,
     message: &str,
-) -> Result<(), String> {
+) -> Result<SupportAlert, String> {
     // ── A HARNESS MUST NEVER PAGE A HUMAN (kanban t_a27fd2a4, fleet parity t_f17b5802) ────────
     // The recipient of this alert is the OPERATOR whatever address the requester typed, so the
     // requester is the only thing that can tell a customer from a proof run. Measured on the
@@ -781,7 +795,9 @@ pub async fn send_support_request_operator_alert(
             requester = %reply_to,
             "operator alert WITHHELD: the requester is a synthetic (harness) identity"
         );
-        return Ok(());
+        return Ok(SupportAlert::Withheld(
+            "this request came from a test identity",
+        ));
     }
 
     // ── THE OPERATOR'S OWN REQUEST IS NOT A CUSTOMER WAITING (2026-11-20) ──────────────────────
@@ -794,13 +810,15 @@ pub async fn send_support_request_operator_alert(
             requester = %reply_to,
             "operator self-request: alert suppressed"
         );
-        return Ok(());
+        return Ok(SupportAlert::Withheld("the requester is the operator"));
     }
 
     let Some(to) = crate::communications::platform_mail_config::operator_alert_email(db).await
     else {
         // Nothing configured is a normal state, not a failure: no mailbox is invented.
-        return Ok(());
+        return Ok(SupportAlert::Withheld(
+            "no operator mailbox is configured on this deployment",
+        ));
     };
     let Some(transport) = crate::communications::platform_mail_config::resolved(db).await else {
         return Err(
@@ -864,7 +882,7 @@ pub async fn send_support_request_operator_alert(
             to = %to,
             "support-request operator alert accepted by the provider"
         );
-        return Ok(());
+        return Ok(SupportAlert::Sent);
     }
 
     // No workspace owns this row, so the queue can never retry it (the worker retires a NULL-tenant
