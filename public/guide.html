@@ -482,6 +482,10 @@
     <p>The booking page appends <code>?ref=&lt;booking id&gt;</code> to the checkout address, so the reference travels from the calendar to the checkout and back. The provider posts the sale back with that reference and the calendar marks that booking paid. Three checks happen before anything is recorded: the key must belong to that calendar, the reference must name a booking on it, and if the provider sends an amount it must match what the booking is for. A mismatched amount is refused rather than marked paid &mdash; a part-payment recorded as settled is a slot given away cheaply.</p>
     <p>Nothing on the booking page changes if no provider is connected: a booking is simply held and the confirmation says nothing has been charged yet.</p>
 
+    <h3>The footer is on inbox mail too</h3>
+    <p>Every message this account sends carries the same footer: your account name, the link wording you set once in Settings, and a signed one-click unsubscribe link. That includes mail you send from the <strong>shared inbox</strong> &mdash; not just campaigns. Measured on the wire, this was not true until recently: the inbox's own send path went straight to the mail provider and skipped the compliance check, so an inbox message arrived with no opt-out line and without your suppression list being consulted at all.</p>
+    <p>It also means an address on your suppression list <strong>cannot</strong> be mailed from the inbox. The send is refused with the reason, and the only way to reach that address is to clear the suppression first. If you are testing, use an address that is not suppressed.</p>
+
     <h3>Clearing a signature or a support address is its own request</h3>
     <p>An empty save no longer means &ldquo;erase everything&rdquo;. If you blank every field of your email signature and press Save, the console tells the server this is a deliberate clear &mdash; and the server requires that statement. An API caller that sends nothing gets a refusal explaining it, rather than wiping the signature. The same rule applies to the support address: name the mailbox, or say explicitly that there should not be one.</p>
 

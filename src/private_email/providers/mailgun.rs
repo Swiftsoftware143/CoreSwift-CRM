@@ -99,6 +99,8 @@ impl EmailProvider for MailgunProvider {
         inline: Option<&InlineImage>,
         attachments: &[OutgoingAttachment],
         in_reply_to: Option<&str>,
+        // See the trait: opt-out headers ride on this send when present.
+        unsubscribe_url: Option<&str>,
     ) -> SendResult {
         // THE MAIL STOP reaches THIS leaf too. Measured 2026-11-20: with the switch set in
         // `communications::providers::deliver`, a private-email send still went out — because this provider
@@ -163,6 +165,15 @@ impl EmailProvider for MailgunProvider {
 
         if let Some(ref reply_to) = in_reply_to {
             form.push(("h:In-Reply-To".into(), reply_to.to_string()));
+            if let Some(url) = unsubscribe_url {
+                // RFC 2369 + RFC 8058: the visible link is in the footer; these headers are what a mailbox
+                // provider uses to draw its own one-click button.
+                form.push(("h:List-Unsubscribe".into(), format!("<{url}>")));
+                form.push((
+                    "h:List-Unsubscribe-Post".into(),
+                    "List-Unsubscribe=One-Click".to_string(),
+                ));
+            }
         }
         // Cc is visible to everyone; Bcc is sent as Mailgun's own `bcc` field so those addresses
         // never appear in the delivered headers.

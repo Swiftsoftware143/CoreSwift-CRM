@@ -964,6 +964,9 @@ async fn deliver_via_own_smtp(cfg: &DeliveryConfig) -> DeliveryOutcome {
             None,
             &[],
             None,
+            // No opt-out header on the relay path: the footer it carries is appended by its own caller, and
+            // a relay message is not an opt-out-class send.
+            None,
         )
         .await;
 

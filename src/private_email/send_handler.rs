@@ -122,6 +122,14 @@ pub async fn deliver(
              suppression list, can only be reached by clearing that suppression first."
         )));
     }
+    // The gate already built the signed one-click URL for this (account, address, class); take it from the
+    // headers it would have sent so the provider can put it in List-Unsubscribe rather than inventing one.
+    let unsubscribe_url: Option<String> = gate
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("h:List-Unsubscribe"))
+        .map(|(_, value)| value.trim_matches(|c| c == '<' || c == '>').to_string());
+
     let mut body_text = body_text;
     let mut body_html = body_html;
     if !gate.footer_text.is_empty() {
@@ -143,6 +151,7 @@ pub async fn deliver(
             inline.as_ref(),
             attachments,
             in_reply_to,
+            unsubscribe_url.as_deref(),
         )
         .await;
 
@@ -524,6 +533,8 @@ pub async fn send_via_provider(
             None,
             // A preview carries no attachment: it proves the renderer, not a customer's file.
             &[],
+            None,
+            // A preview is not a send: no opt-out header, because there is no message to opt out of.
             None,
         )
         .await;

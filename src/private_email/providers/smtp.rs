@@ -37,6 +37,8 @@ impl EmailProvider for SmtpProvider {
         inline: Option<&InlineImage>,
         attachments: &[OutgoingAttachment],
         in_reply_to: Option<&str>,
+        // See the trait: opt-out headers ride on this send when present.
+        unsubscribe_url: Option<&str>,
     ) -> SendResult {
         // THE MAIL STOP reaches THIS leaf too. Measured 2026-11-20: with the switch set in
         // `communications::providers::deliver`, a private-email send still went out — because this provider

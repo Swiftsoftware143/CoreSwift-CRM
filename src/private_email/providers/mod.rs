@@ -187,6 +187,11 @@ pub trait EmailProvider: Send + Sync {
         inline: Option<&InlineImage>,
         attachments: &[OutgoingAttachment],
         in_reply_to: Option<&str>,
+        // OPT-OUT HEADERS: the signed one-click unsubscribe URL when this send is opt-out class. Each
+        // provider puts it in its own `List-Unsubscribe` + `List-Unsubscribe-Post` headers, which is what
+        // lets Gmail and Yahoo draw their own unsubscribe button. Campaign mail has carried these since the
+        // gate shipped; inbox mail did not, because its send path bypassed the gate (fixed 2026-11-25).
+        unsubscribe_url: Option<&str>,
     ) -> SendResult;
 
     /// Validate and parse an inbound webhook payload into a normalized InboundEmail.
