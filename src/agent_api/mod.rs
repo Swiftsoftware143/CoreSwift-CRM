@@ -153,9 +153,14 @@ async fn forward(
     let query = uri.query().map(|q| format!("?{q}")).unwrap_or_default();
     // ONE implementation of "act as this account, as this person": the app's own MCP door uses it too
     // (`crate::api_proxy`). A second copy here would be a second rule about who a call is attributed to.
-    let (status, text) =
-        crate::api_proxy::call(&state, agent.tenant, method.as_str(), &format!("{rest}{query}"), Some(body.to_vec()))
-            .await?;
+    let (status, text) = crate::api_proxy::call(
+        &state,
+        agent.tenant,
+        method.as_str(),
+        &format!("{rest}{query}"),
+        Some(body.to_vec()),
+    )
+    .await?;
     let code = axum::http::StatusCode::from_u16(status)
         .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
     axum::response::Response::builder()
@@ -164,6 +169,4 @@ async fn forward(
         .header("x-agent-door", "forwarded")
         .body(axum::body::Body::from(text))
         .map_err(|e| AppError::Internal(e.to_string()))
-}
-
 }
