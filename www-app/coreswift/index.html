@@ -1890,7 +1890,7 @@ const MCP_ENTITY_SPECS = [
 const MCP_CONFIG_TEXT = '{\n'
   + '  "mcpServers": {\n'
   + '    "coreswift": {\n'
-  + '      "url": "https://hooks.swiftsoftware.net/mcp",\n'
+  + '      "url": "https://app.coreswiftcrm.com/api/mcp",\n'
   + '      "headers": { "Authorization": "Bearer YOUR_API_KEY" }\n'
   + '    }\n'
   + '  }\n'
@@ -3968,8 +3968,8 @@ function mcpPaintSteps() {
   if (!host) return;
   var address = '<div style="margin-top:6px"><div style="font-size:11px;color:var(--text-muted);letter-spacing:.08em;font-weight:700">ADDRESS</div>' +
     '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px">' +
-    '<code style="padding:6px 10px;background:var(--bg-secondary);border-radius:var(--radius)">https://hooks.swiftsoftware.net/mcp</code>' +
-    '<button class="btn btn-ghost btn-xs" onclick="tlCopyUrl(\'https://hooks.swiftsoftware.net/mcp\', this)">Copy</button></div>' +
+    '<code style="padding:6px 10px;background:var(--bg-secondary);border-radius:var(--radius)">https://app.coreswiftcrm.com/api/mcp</code>' +
+    '<button class="btn btn-ghost btn-xs" onclick="tlCopyUrl(\'https://app.coreswiftcrm.com/api/mcp\', this)">Copy</button></div>' +
     '<div style="font-size:12px;opacity:.85;margin-top:6px">The whole address, nothing on the end. ' +
     'If your client is refused by our edge before it authenticates (a 403, not a 401), use ' +
     '<code>https://mcp.swiftsoftware.net/mcp</code> — same server, unfiltered name.</div></div>';
@@ -4110,7 +4110,7 @@ var MCP_DEV_PANELS = [
   '<button class="btn btn-secondary btn-sm" onclick="mcpJumpTo(\'mcpKeyWrap\')">Show my key</button>',
   '<h4 style="margin:0 0 8px">Claude Code</h4>' +
   '<pre style="background:var(--bg-secondary);padding:12px;border-radius:var(--radius);font-size:12px;overflow-x:auto;margin:0">' +
-  'claude mcp add --transport http coreswift \\\n  https://hooks.swiftsoftware.net/mcp \\\n  --header "Authorization: Bearer YOUR_API_KEY"</pre>',
+  'claude mcp add --transport http coreswift \\\n  https://app.coreswiftcrm.com/api/mcp \\\n  --header "Authorization: Bearer YOUR_API_KEY"</pre>',
   '<h4 style="margin:0 0 8px">Claude Desktop</h4>' +
   '<p style="color:var(--text-secondary);font-size:13px;margin:0 0 8px">Settings, then Connectors, then Add custom connector. ' +
   'Paste the address and choose to authenticate with a token. Or add it to the config file:</p>' +
@@ -13918,7 +13918,7 @@ async function wsSwitchBusiness(idx) {
    hash, so switchTab() tells the widget which screen is open via window.inlineGuidePage(tabId). */
 window.appGuidePages = {
   dashboard:       { title: "Dashboard", desc: "Your account at a glance — contacts, deals, activity and what needs attention today.", actions: ["Scan the counters and recent activity", "Jump to anything that needs a follow-up", "Use the account switcher (🗂️ top bar) to move between accounts"] },
-  mcp:             { title: "MCP", desc: "Connect your AI tools to this account. Point an MCP client (Claude Code, Cursor, Hermes, or your own agent) at https://hooks.swiftsoftware.net/mcp, using your API key as the token. Every MCP tool is read-only and scoped to this account — there is no free-form SQL door. The same key can also WRITE through this app's own agent routes (/api/agent/…): add and edit contacts and deals, move a deal's stage, add a task, add a contact to a list, assign a tag, and change booking and redirect settings — it can never delete anything, and it can never mark a booking paid.", actions: ["Copy the endpoint", "Press View to see your key (one click, and the view is recorded)", "Press Copy to put the key on your clipboard without showing it", "Replace or revoke a key on the API Keys card in the Integration Center", "Paste both into your MCP client", "Point an agent at /api/agent/… with the same key when you want it to write"] },
+  mcp:             { title: "MCP", desc: "Connect your AI tools to this account. Point an MCP client (Claude Code, Cursor, Hermes, or your own agent) at https://app.coreswiftcrm.com/api/mcp, using your API key as the token. Its tools read AND write, scoped to this account and running the same handlers the console uses — no deletes, no sending mail or starting a campaign, no credential screens, and no free-form SQL door. The same key can also WRITE through this app's own agent routes (/api/agent/…): add and edit contacts and deals, move a deal's stage, add a task, add a contact to a list, assign a tag, and change booking and redirect settings — it can never delete anything, and it can never mark a booking paid.", actions: ["Copy the endpoint", "Press View to see your key (one click, and the view is recorded)", "Press Copy to put the key on your clipboard without showing it", "Replace or revoke a key on the API Keys card in the Integration Center", "Paste both into your MCP client", "Point an agent at /api/agent/… with the same key when you want it to write"] },
   "booking":       { title: "Booking", desc: "One booking engine, three kinds of calendar. Pick the type when you create it: appointment times (a Calendly replacement), dated slots you sell (newsletter placements, ad spots), or a date range (a featured listing or a rental). Set your open hours once and use the shortcuts to fill a whole week; generate a quarter of dated slots in one run with a different price per weekday; add a bulk price. Every calendar has its own public address, and the screen gives you two snippets to put it on your own site — inline in the page, or a popup button that opens over it.", actions: ["Create a calendar and pick its type", "Add what customers can book, with a price and a length", "Set open hours, or generate dated slots", "Add a bulk-pricing rule", "Copy the link or an embed snippet"] },
   "data-mapping":  { title: "Data mapping", desc: "Bring another SwiftSoftware app's leads into this CRM without code. Pick the source app, then drop its fields into your contact fields as data pills — the preview shows exactly what CoreSwift would receive before anything is saved. If the app has already sent you data, the field list is built from what actually arrived.", actions: ["Pick the source app and the kind of row", "Click a source field to drop it into a destination", "Test with a sample row, then Save", "Check Runs to see what was refused and why"] },
   contacts:        { title: "Contacts", desc: "The people and companies you do business with. Each contact carries its history, tags and deals.", actions: ["Add a contact", "Open one to see its full record", "Search by name or email"] },

@@ -40,6 +40,107 @@ pub fn allowed(path: &str) -> bool {
     !DENIED_PREFIXES.contains(&first)
 }
 
+/// Calls the forwarding doors may not carry, as (method, path-pattern) pairs. `*` matches exactly one
+/// path segment.
+///
+/// A SEND cannot be undone: once mail leaves, every recipient has it. So the arms that hand a message to
+/// the provider — or start an automation that does — are refused here, at the one place both doors pass
+/// through, rather than trusted to a prompt. A model told "do not send" is a wish; a refusal at the door
+/// is a control. Drafting, editing and scheduling are all still allowed: the work is kept, only the
+/// irreversible click is not the agent's.
+pub const DENIED_CALLS: &[(&str, &str)] = &[
+    // Start or resume a campaign's sending loop.
+    ("POST", "campaigns/*/activate"),
+    // Put a person into a campaign (the enroll arm sends the next step).
+    ("POST", "campaigns/*/enroll"),
+    // Attach a trigger that can enroll people on its own.
+    ("POST", "campaigns/*/triggers"),
+    // Hand a message straight to the transport.
+    ("POST", "comms/messages"),
+];
+
+/// One user-visible sentence, so both doors say the same thing about the same refusal.
+pub const SEND_REFUSAL: &str =
+    "sending is not an agent's call: draft it, and a person presses send";
+
+/// Does (method, path) match a one-segment `*` pattern?
+fn pattern_matches(pattern: &str, path: &str) -> bool {
+    let t: Vec<&str> = pattern.split('/').collect();
+    let p: Vec<&str> = path.split('/').collect();
+    if t.len() != p.len() {
+        return false;
+    }
+    t.iter()
+        .zip(p.iter())
+        .all(|(tseg, pseg)| *tseg == "*" || tseg == pseg)
+}
+
+/// May this method + path be forwarded at all? (The credential surfaces are refused by [`allowed`]; this
+/// answers the second question — is it a send?)
+pub fn send_allowed(method: &str, path: &str) -> bool {
+    let clean = path.trim_start_matches('/');
+    let m = method.to_uppercase();
+    !DENIED_CALLS
+        .iter()
+        .any(|(pm, pp)| *pm == m && pattern_matches(pp, clean))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credential_surfaces_are_refused_and_ordinary_paths_pass() {
+        for p in [
+            "auth/login",
+            "personal-keys",
+            "api-keys/1/reveal",
+            "keys",
+            "mcp",
+            "internal/x",
+            "agent/contacts",
+        ] {
+            assert!(
+                !allowed(p),
+                "{p} must not be reachable through a forwarded door"
+            );
+        }
+        for p in [
+            "contacts",
+            "comms/templates",
+            "campaigns/9/steps",
+            "booking/calendars",
+        ] {
+            assert!(allowed(p), "{p} is ordinary console work");
+        }
+    }
+
+    #[test]
+    fn the_send_arms_are_the_only_calls_refused_by_method_and_path() {
+        // Refused: the four irreversible arms, on the method that performs them.
+        for (m, p) in [
+            ("POST", "campaigns/abc/activate"),
+            ("post", "campaigns/abc/enroll"),
+            ("POST", "campaigns/abc/triggers"),
+            ("POST", "comms/messages"),
+        ] {
+            assert!(!send_allowed(m, p), "{m} {p} must be refused");
+        }
+        // Allowed: everything that keeps the work without sending it.
+        for (m, p) in [
+            ("PATCH", "campaigns/abc"),
+            ("POST", "campaigns"),           // create a draft
+            ("POST", "campaigns/abc/steps"), // add a step to a draft
+            ("PATCH", "campaigns/abc/1"),    // edit a step
+            ("POST", "comms/templates"),     // write a template
+            ("POST", "comms/messages/42"),   // not a route; also not the send arm
+            ("GET", "campaigns/abc/activate"),
+        ] {
+            assert!(send_allowed(m, p), "{m} {p} must still be allowed");
+        }
+    }
+}
+
 /// Who a call made with a credential is attributed to: a real user of the account.
 ///
 /// Several writers put `claims.sub` straight into a column with a foreign key to `users(id)`
@@ -86,6 +187,11 @@ pub async fn call(
         return Err(AppError::ForbiddenReason(
             "that surface hands out credentials, so an agent may not call it".into(),
         ));
+    }
+    // A send is refused HERE, for a key and for an agent, on both forwarding doors. It is not the
+    // prompt's job to remember: the door is where "irreversible" can be enforced.
+    if !send_allowed(method, clean) {
+        return Err(AppError::ForbiddenReason(SEND_REFUSAL.into()));
     }
 
     let (user_id, role, wsid) = acting_user(state, tenant).await?;
