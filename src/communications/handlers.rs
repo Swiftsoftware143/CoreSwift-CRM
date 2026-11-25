@@ -301,11 +301,14 @@ pub async fn delete_template(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    sqlx::query("DELETE FROM message_templates WHERE id = $1 AND tenant_id = $2")
+    let deleted = sqlx::query("DELETE FROM message_templates WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tid)
         .execute(&s.db)
         .await?;
+    if deleted.rows_affected() == 0 {
+        return Err(AppError::NotFound("Template not found".into()));
+    }
     Ok(Json(json!({"message": "Template deleted"})))
 }
 

@@ -244,11 +244,14 @@ pub async fn delete(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = parse_tenant(&c)?;
-    sqlx::query("DELETE FROM email_campaigns WHERE id = $1 AND tenant_id = $2")
+    let deleted = sqlx::query("DELETE FROM email_campaigns WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tid)
         .execute(&s.db)
         .await?;
+    if deleted.rows_affected() == 0 {
+        return Err(AppError::NotFound("Campaign not found".into()));
+    }
     Ok(Json(json!({"message": "Campaign deleted"})))
 }
 
@@ -405,7 +408,7 @@ pub async fn delete_step(
 ) -> ApiResult<impl IntoResponse> {
     let tid = parse_tenant(&c)?;
 
-    sqlx::query(
+    let deleted = sqlx::query(
         "DELETE FROM email_campaign_steps USING email_campaigns
          WHERE email_campaign_steps.id = $1
            AND email_campaigns.id = email_campaign_steps.campaign_id
@@ -415,6 +418,10 @@ pub async fn delete_step(
     .bind(tid)
     .execute(&s.db)
     .await?;
+
+    if deleted.rows_affected() == 0 {
+        return Err(AppError::NotFound("Campaign step not found".into()));
+    }
 
     Ok(Json(json!({"message": "Step deleted"})))
 }
