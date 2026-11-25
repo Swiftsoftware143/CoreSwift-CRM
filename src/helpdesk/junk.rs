@@ -23,6 +23,49 @@
 //! The header-based rules (auto-reply, bulk precedence, delivery-status reports, mailing lists) are
 //! already applied by the inbound provider parser and arrive as `InboundEmail::is_auto_generated`.
 
+use std::collections::HashSet;
+use std::sync::OnceLock;
+
+/// The vendored community disposable / temporary-mailbox blocklist (MIT), fetched once and
+/// committed beside the inbox module. `include_str!` embeds it, so the process never opens a
+/// socket or a file to answer this question.
+const DISPOSABLE_DOMAINS_TXT: &str = include_str!("../private_email/disposable_domains.txt");
+
+/// The blocklist as a set, built on first use and kept for the life of the process.
+fn disposable_domains() -> &'static HashSet<&'static str> {
+    static SET: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    SET.get_or_init(|| {
+        DISPOSABLE_DOMAINS_TXT
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| line.trim_end_matches('.'))
+            .collect()
+    })
+}
+
+/// Is the sender's host a disposable / temporary mailbox provider?
+///
+/// Matches the exact domain AND any subdomain (`inbox.mailinator.com` -> `mailinator.com`),
+/// walking label boundaries so `mailinator.com.evil.net` is not a match.
+pub fn is_disposable_domain(from: &str) -> bool {
+    let host = host_of(from);
+    if host.is_empty() {
+        return false;
+    }
+    let set = disposable_domains();
+    let mut candidate: &str = &host;
+    loop {
+        if set.contains(candidate) {
+            return true;
+        }
+        match candidate.split_once('.') {
+            Some((_, rest)) => candidate = rest,
+            None => return false,
+        }
+    }
+}
+
 /// The local part of an address (`"noreply"` for `"noreply@dmarc.yahoo.com"`).
 fn local_part(from: &str) -> &str {
     from.split('@').next().unwrap_or("").trim()
@@ -65,6 +108,8 @@ pub fn subject_is_machine_report(subject: &str) -> bool {
         "delivery status notification",
         "returned mail:",
         "failure notice",
+        "new message on microsoft teams",
+        "new voicemail in mailbox",
         "automatic reply:",
         "auto-reply:",
         "out of office",
@@ -93,6 +138,7 @@ pub fn sender_is_a_robot(from: &str) -> bool {
     const PREFIXES: &[&str] = &[
         "mailer-daemon",
         "postmaster",
+        "hostmaster",
         "noreply",
         "no-reply",
         "do-not-reply",
@@ -229,6 +275,69 @@ fn body_reads_like_a_mailshot(body: &str) -> bool {
     MARKERS.iter().any(|m| s.contains(m))
 }
 
+/// A body that only a mass mailing carries: an opt-out or a reader-app link, an affiliate
+/// disclosure, or the standing phrasing of a customer newsletter.
+///
+/// Deliberately narrower than [`body_reads_like_a_mailshot`]: none of these is something a person
+/// writes when they are asking for help.
+fn body_carries_a_bulk_marker(body: &str) -> bool {
+    let s = body.trim().to_ascii_lowercase();
+    if s.is_empty() {
+        return false;
+    }
+    const MARKERS: &[&str] = &[
+        "unsubscribe",
+        "view this email in your browser",
+        "view in browser",
+        "you are receiving this",
+        "affiliate links",
+        "thank you for being part of",
+        "referral fee",
+    ];
+    MARKERS.iter().any(|m| s.contains(m))
+}
+
+/// Does the subject read like a person asking us something (a question, a reply in a thread, or a
+/// request), rather than like a newsletter headline?
+fn subject_is_a_person_asking(subject: &str) -> bool {
+    let s = subject.trim().to_ascii_lowercase();
+    if s.contains('?') {
+        return true;
+    }
+    if s.starts_with("re:")
+        || s.starts_with("re :")
+        || s.starts_with("fwd:")
+        || s.starts_with("fw:")
+    {
+        return true;
+    }
+    const REQUESTS: &[&str] = &[
+        "help",
+        "please",
+        "question",
+        "issue",
+        "problem",
+        "not working",
+        "broken",
+        "refund",
+        "order",
+        "invoice",
+        "charged",
+        "cancel",
+        "error",
+        "can't",
+        "cannot",
+        "unable",
+    ];
+    REQUESTS.iter().any(|m| s.contains(m))
+}
+
+/// A bulk mailshot is not a prospect: the body carries a mass-mailing marker and the subject is a
+/// headline, not a request from a person (kanban t_a48c8797).
+fn is_bulk_mailshot(subject: &str, body_plain: &str) -> bool {
+    body_carries_a_bulk_marker(body_plain) && !subject_is_a_person_asking(subject)
+}
+
 /// Would filing this message put noise in the queue?
 ///
 /// `body_plain` is only consulted for the advert rule, together with an impersonated desk address.
@@ -260,9 +369,25 @@ pub fn is_noise(
     if sender_is_a_robot(&from_lower) {
         return true;
     }
+    // A disposable / temporary mailbox cannot be a customer we can ever reach again.
+    if is_disposable_domain(&from_lower) {
+        return true;
+    }
+    // A fleet probe identity is machinery, decided from the address alone. `probe_contact_addr` and
+    // not `synthetic_requester`: the latter also matches every address on the brand domain
+    // (`david@swiftsoftware.com` is a real person here), while this one requires the machine SHAPE
+    // on the brand domain and matches a machine-minted local part on any domain.
+    if crate::security::probe_addr::probe_contact_addr(&from_lower) {
+        return true;
+    }
     // Bulk promotional mail wearing a desk address. Both halves are required: see the module note.
-    impersonates_a_desk(&from_lower)
+    if impersonates_a_desk(&from_lower)
         && (subject_reads_like_an_advert(subject) || body_reads_like_a_mailshot(body_plain))
+    {
+        return true;
+    }
+    // A mailshot that did not impersonate a desk: mass-mailing body + a headline subject.
+    is_bulk_mailshot(subject, body_plain)
 }
 
 #[cfg(test)]
@@ -319,7 +444,7 @@ mod tests {
         ));
         assert!(!is_noise(
             "hello",
-            "customer@example.com",
+            "customer@acme.com",
             "",
             false,
             &["support@brand.com".to_string()]
@@ -391,6 +516,111 @@ mod tests {
             "Please cancel",
             "support@acme.com",
             "Unsubscribe me from the digest, I am leaving."
+        ));
+    }
+
+    #[test]
+    fn disposable_mailboxes_are_recognised_by_domain_and_subdomain() {
+        assert!(is_disposable_domain("someone@mailinator.com"));
+        assert!(is_disposable_domain("Someone@Inbox.MAILINATOR.COM."));
+        assert!(is_disposable_domain("x@yopmail.com"));
+        assert!(!is_disposable_domain("dana@acme.com"));
+        assert!(!is_disposable_domain("dana@mailinator.com.evil.net"));
+        assert!(!is_disposable_domain("gmail.com"));
+    }
+
+    #[test]
+    fn the_measured_inbound_senders_never_become_contacts() {
+        // The exact 13 senders measured live in tenant SwiftImpact on 2026-11-25, each with the
+        // subject the inbox stored. Every one is machine mail or a bulk mailshot, never a prospect.
+        let measured: &[(&str, &str, &str)] = &[
+            (
+                "hostmastercsawa@pop-shop-online.ru",
+                "[Black Friday] Defined by Luxury: High-End Timepieces Starting at Just $250",
+                "To unsubscribe, click here.",
+            ),
+            (
+                "supportpress@b1.map-bookshop.ru",
+                "[Black Friday 2026 Limited Time Offer] Premium Genuine Leather Travel Bags - Classic Style",
+                "TIMELESS LEATHER. Shop now.",
+            ),
+            (
+                "supportfah@kloiuhs.com",
+                "[Black Friday 2026] Elevate Your Style: Iconic Luxury Watches Starting at $250",
+                "To unsubscribe, click here.",
+            ),
+            (
+                "hostmastervivid@mvovwg.com",
+                "[Black Friday] Rolex Watches Starting at Just $250",
+                "To unsubscribe, click here.",
+            ),
+            (
+                "media@hyeperca.click",
+                "Enjoy Dating Beautiful Russian Singles",
+                "To unsubscribe, please click here. Click here to unsubscribe.",
+            ),
+            (
+                "trending_items@hyeperca.click",
+                "The TOP 10 products are in high demand right now at a great price.",
+                "This email contains affiliate links. Shop Now. Unsubscribe.",
+            ),
+            (
+                "3i7x-agokb-yak-vwzmxtgowwotm.kwuacxxwzbaeqnbquxikbawtcbqwva.kwu@scoutcamp.bounces.google.com",
+                "New reasons prevent pages from being indexed on site zaarhub.com",
+                "",
+            ),
+            (
+                "38rv2agokb2aqa-lmpcnjwemmejc.amkqsnnmprqugdrgkn8arqmjsrgmlq.amk@scoutcamp.bounces.google.com",
+                "New owner for zaarhub.com",
+                "",
+            ),
+            (
+                "3b1b6agokb2que-pqtgrnaiqqing.eqouwrrqtvuykhvkorcevuqnwvkqpu.eqo@scoutcamp.bounces.google.com",
+                "New reasons prevent pages from being indexed on site zaarhub.com",
+                "",
+            ),
+            (
+                "officeteams-michelle.perreault@email.cz",
+                "New Message on Microsoft Teams Meeting - michelle.perreault",
+                "",
+            ),
+            (
+                "vm-michelle.perreault@servermail.com",
+                "New voicemail in mailbox 1 on 17.11.2026 18:14:08",
+                "",
+            ),
+            (
+                "chris@proactivedata.com",
+                "AI, Your Business & the Next 18 Months",
+                "Know A Business We Can Help? We pay referral fees of up to $5,000. Thank you for being part of Proactive Data.",
+            ),
+            (
+                "support@pilates-studio.com.au",
+                "You deserve more than unpredictable growth",
+                "Grow Your Business. You are receiving this email because you were contacted about a business opportunity. Unsubscribe",
+            ),
+        ];
+        for (from, subject, body) in measured {
+            assert!(
+                noise(subject, from, body),
+                "{from} must be refused as a contact"
+            );
+        }
+
+        // Controls: a person asking a question and a real desk mailbox must still mint a contact.
+        assert!(!noise(
+            "Where is my order?",
+            "dana@acme.com",
+            "It never arrived."
+        ));
+        // `support@brand.com` is a CUSTOMER's desk mailbox here; our own outbound desk is a
+        // different address, so the loop rule does not swallow it.
+        assert!(!is_noise(
+            "Help with my account",
+            "support@brand.com",
+            "Which tier am I on? I cannot log in.",
+            false,
+            &["support@ourhelpdesk.com".to_string()]
         ));
     }
 }

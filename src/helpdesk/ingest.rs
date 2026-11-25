@@ -288,7 +288,7 @@ async fn insert_message(
 }
 
 /// The addresses this account sends support mail from — mail arriving from one of these is a loop.
-async fn own_addresses(
+pub(crate) async fn own_addresses(
     tx: &mut Transaction<'_, Postgres>,
     tenant_id: Uuid,
 ) -> Result<Vec<String>, AppError> {

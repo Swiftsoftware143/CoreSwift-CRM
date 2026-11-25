@@ -602,46 +602,6 @@ async fn route_recipient(
     }
 }
 
-/// A machine/system sender is not a person to contact back. These are bounce delivery-status
-/// notifications (whose envelope sender is a fresh `bounces-<…>@…` address per failure — hence the
-/// unbounded contact growth a naive mint produces), postmaster / mailer-daemon notices and
-/// `no-reply` robots. Their message is still stored so the bounce stays visible in the inbox, but
-/// no contact row is created for them (kanban t_162b4d57).
-fn is_machine_sender(email: &str) -> bool {
-    let (local, domain) = match email.rsplit_once('@') {
-        Some((l, d)) => (l.trim().to_ascii_lowercase(), d.trim().to_ascii_lowercase()),
-        None => (email.trim().to_ascii_lowercase(), String::new()),
-    };
-    // Brevo/Sendinblue (and other senders) deliver a bounce's DSN from an address on the
-    // `…sender-sib.com` Return-Path domain; treating that whole domain as machine is what keeps a
-    // single failure from minting one new contact for ever.
-    if domain == "sender-sib.com" || domain.ends_with(".sender-sib.com") {
-        return true;
-    }
-    matches!(
-        local.as_str(),
-        "postmaster"
-            | "mailer-daemon"
-            | "mailer_daemon"
-            | "mailerdaemon"
-            | "mailer.daemon"
-            | "double-bounce"
-            | "daemon"
-            | "abuse"
-            | "root"
-            | "hostmaster"
-            | "webmaster"
-            | "no-reply"
-            | "no_reply"
-            | "noreply"
-    ) || local == "bounce"
-        || local == "bounces"
-        || local.starts_with("bounce-")
-        || local.starts_with("bounces-")
-        || local.starts_with("bounce+")
-        || local.starts_with("bounces+")
-}
-
 /// One authenticated delivery → a stored message, a contact, maybe a ticket, an event.
 ///
 /// Shared by both receivers. The provider name is passed in, never guessed: it is written onto the
@@ -779,11 +739,26 @@ async fn ingest(state: &AppState, d: Delivery) -> ApiResult<Json<serde_json::Val
     }
 
     // ── Step 4: find or create the contact ─────────────────────────────────────────────────────
-    // A machine/system sender (a bounce DSN, postmaster, a no-reply robot) is not a person to
-    // contact back, and a bounce's envelope sender is a fresh address per failure — so no contact
-    // row is minted for it (kanban t_162b4d57). The message is already stored above; only the
-    // contact (and the contact-keyed event below) is skipped.
-    let contact_id: Option<Uuid> = if is_machine_sender(&inbound.from) {
+    // The SAME predicate that decides a ticket decides whether this sender is a person worth
+    // keeping: `helpdesk::junk::is_noise`, exactly as `helpdesk::ingest` calls it. Two different
+    // acceptance rules on one message is what minted 13 machine / bulk senders as CRM contacts
+    // (kanban t_a48c8797). Machine mail, a disposable mailbox, a fleet probe identity and a bulk
+    // mailshot are STILL STORED exactly as before — only the contact row (and the contact-keyed
+    // event below) is skipped, and the inbox can still turn any message into a ticket by hand.
+    let own = {
+        let mut tx = state.db.begin().await.map_err(AppError::Database)?;
+        let list = crate::helpdesk::ingest::own_addresses(&mut tx, tenant_id).await?;
+        let _ = tx.rollback().await;
+        list
+    };
+    let machine_mail = crate::helpdesk::junk::is_noise(
+        &inbound.subject,
+        &inbound.from,
+        &inbound.body_plain,
+        inbound.is_auto_generated,
+        &own,
+    );
+    let contact_id: Option<Uuid> = if machine_mail {
         None
     } else {
         Some(
@@ -911,25 +886,28 @@ async fn ingest(state: &AppState, d: Delivery) -> ApiResult<Json<serde_json::Val
     // a multi-byte character (an accented name in the first paragraph is enough). `chars().take`
     // cannot.
     if message_created {
-        let preview: String = inbound.body_plain.chars().take(500).collect();
-        let event_payload = serde_json::json!({
-            "from": inbound.from,
-            "to": inbound.to,
-            "subject": inbound.subject,
-            "body_preview": preview,
-            "message_id": inbound.message_id,
-            "in_reply_to": inbound.in_reply_to,
-            "provider_message_id": inbound.provider_message_id,
-            "provider": provider_name,
-            "message_row_id": message_id,
-            "ticket_id": ticket_created,
-        });
-        let event_title = if inbound.subject.trim().is_empty() {
-            "(no subject)".to_string()
-        } else {
-            inbound.subject.clone()
-        };
-        if let Err(e) = sqlx::query(
+        // No contact → no contact-keyed event (kanban t_a48c8797). The stored message is the
+        // record; the auto-reply arm below keeps behaving exactly as it did for machine senders.
+        if let Some(contact_id) = contact_id {
+            let preview: String = inbound.body_plain.chars().take(500).collect();
+            let event_payload = serde_json::json!({
+                "from": inbound.from,
+                "to": inbound.to,
+                "subject": inbound.subject,
+                "body_preview": preview,
+                "message_id": inbound.message_id,
+                "in_reply_to": inbound.in_reply_to,
+                "provider_message_id": inbound.provider_message_id,
+                "provider": provider_name,
+                "message_row_id": message_id,
+                "ticket_id": ticket_created,
+            });
+            let event_title = if inbound.subject.trim().is_empty() {
+                "(no subject)".to_string()
+            } else {
+                inbound.subject.clone()
+            };
+            if let Err(e) = sqlx::query(
             r#"
             INSERT INTO events (id, tenant_id, title, source, event_type, entity_type, entity_id, payload, created_at)
             VALUES (gen_random_uuid(), $1, $2, 'private_email', 'email_received', 'contact', $3, $4, NOW())
@@ -943,6 +921,7 @@ async fn ingest(state: &AppState, d: Delivery) -> ApiResult<Json<serde_json::Val
         .await
         {
             tracing::warn!(error = %e, "inbound email processed, but recording the event failed");
+        }
         }
 
         // Fire auto-reply rules
@@ -1338,29 +1317,37 @@ mod tests {
     }
 
     #[test]
-    fn machine_senders_are_not_minted_as_contacts() {
-        // A bounce DSN's envelope sender, a postmaster notice and a no-reply robot are machine
-        // senders — skip the contact mint, or every bounce grows the contact list for ever.
-        assert!(is_machine_sender(
-            "bounces-180158782-3752652062@ha.d.sender-sib.com"
+    fn the_contact_gate_is_the_helpdesk_predicate() {
+        // Step 4 no longer has a private rule: a bounce DSN, a no-reply robot and a disposable
+        // mailbox are the same answers the ticket decision gives, so the two arms cannot disagree.
+        let own: &[String] = &["support@ourhelpdesk.com".to_string()];
+        for (from, subject, body) in [
+            (
+                "bounces-180158782-3752652062@ha.d.sender-sib.com",
+                "Delivery status notification",
+                "",
+            ),
+            ("postmaster@zaarhub.com", "CoreSwift mail check", ""),
+            ("no-reply@swiftsoftware.net", "Your receipt", ""),
+            (
+                "someone@mailinator.com",
+                "Hello there",
+                "Here is what I wanted to share.",
+            ),
+        ] {
+            assert!(
+                crate::helpdesk::junk::is_noise(subject, from, body, false, own),
+                "{from} must not mint a contact"
+            );
+        }
+        // A person asking for help still mints one.
+        assert!(!crate::helpdesk::junk::is_noise(
+            "Where is my order?",
+            "dana@acme.com",
+            "It never arrived.",
+            false,
+            own,
         ));
-        assert!(is_machine_sender("postmaster@zaarhub.com"));
-        assert!(is_machine_sender("MAILER-DAEMON@example.com"));
-        assert!(is_machine_sender("no-reply@swiftsoftware.net"));
-        assert!(is_machine_sender("No-Reply@x.com"));
-        assert!(is_machine_sender("noreply@x.com"));
-        assert!(is_machine_sender("bounce@example.com"));
-        assert!(is_machine_sender("bounces@example.com"));
-        assert!(is_machine_sender("double-bounce@example.com"));
-        assert!(is_machine_sender(
-            "bounce+abc.def-news=city.com@mail.coreswiftcrm.com"
-        ));
-        assert!(is_machine_sender("bounces+abc@example.com"));
-
-        // A real person still mints a contact — a domain that merely LOOKS machine-like is not enough.
-        assert!(!is_machine_sender("david@example.com"));
-        assert!(!is_machine_sender("someone@swiftsoftware.net"));
-        assert!(!is_machine_sender("hello@bouncycastle.com"));
     }
 
     #[test]
