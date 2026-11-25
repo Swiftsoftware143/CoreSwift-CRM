@@ -1,0 +1,65 @@
+{
+  "tag": "a20bef",
+  "checks": [
+    {
+      "check": "a contact exists with a city",
+      "ok": true,
+      "detail": "201 {'address_line1': None, 'address_line2': None, 'city': 'Palm Bay', 'company': None, 'company_id': None, 'country': None, 'created_at': '2026-11-25T21:20:51.598660Z', 'email': '"
+    },
+    {
+      "check": "a dynamic list is created",
+      "ok": true,
+      "detail": "201 {'created_at': '2026-11-25T21:20:51.676403Z', 'description': None, 'id': '4308ba74-e788-467d-a48c-e27e782c1bb0', 'is_active': True, 'list_type': 'dynamic', 'member_count': 0, '"
+    },
+    {
+      "check": "a contact-field rule saves",
+      "ok": true,
+      "detail": "200 {'created_at': '2026-11-25T21:20:51.676403Z', 'description': None, 'id': '4308ba74-e788-467d-a48c-e27e782c1bb0', 'is_active': True, 'list_type': 'dynamic', 'member_count': 0, '"
+    },
+    {
+      "check": "the RULE puts the contact on the list",
+      "ok": true,
+      "detail": "200 {'added': 1, 'message': 'Evaluated', 'removed': 0, 'total_matched': 1}"
+    },
+    {
+      "check": "the stored count agrees with the membership",
+      "ok": true,
+      "detail": "200 count=1"
+    },
+    {
+      "check": "the probe contact is one of the members",
+      "ok": true,
+      "detail": "200 members=1"
+    },
+    {
+      "check": "the contact's city can change",
+      "ok": true,
+      "detail": "200"
+    },
+    {
+      "check": "it leaves when it stops matching",
+      "ok": true,
+      "detail": "200 {'added': 0, 'message': 'Evaluated', 'removed': 1, 'total_matched': 0}"
+    },
+    {
+      "check": "an unknown field is refused by name",
+      "ok": true,
+      "detail": "422 {'app': '{\"error\":\"invalid\",\"message\":\"the app answered 422: {\\\\\"code\\\\\":422,\\\\\"error\\\\\":true,\\\\\"message\\\\\":\\\\\"a rule cannot be built on \\\\\\\\\\\\\"city\\\\\\\\\\\\\"; this list can evalu"
+    },
+    {
+      "check": "an operator that field cannot run is refused",
+      "ok": true,
+      "detail": "422 {'app': '{\"error\":\"invalid\",\"message\":\"the app answered 422: {\\\\\"code\\\\\":422,\\\\\"error\\\\\":true,\\\\\"message\\\\\":\\\\\"\\\\\\\\\\\\\"gte\\\\\\\\\\\\\" cannot be used on \\\\\\\\\\\\\"contact_field\\\\\\\\\\\\\"; "
+    },
+    {
+      "check": "a rule with no value is refused",
+      "ok": true,
+      "detail": "422 {'app': '{\"error\":\"invalid\",\"message\":\"the app answered 422: {\\\\\"code\\\\\":422,\\\\\"error\\\\\":true,\\\\\"message\\\\\":\\\\\"the rule on \\\\\\\\\\\\\"city\\\\\\\\\\\\\" has no value, so it can never matc"
+    },
+    {
+      "check": "a column that is not whitelisted is refused",
+      "ok": true,
+      "detail": "422 {'app': '{\"error\":\"invalid\",\"message\":\"the app answered 422: {\\\\\"code\\\\\":422,\\\\\"error\\\\\":true,\\\\\"message\\\\\":\\\\\"\\\\\\\\\\\\\"salary\\\\\\\\\\\\\" is not a contact field a list can be built o"
+    }
+  ]
+}
