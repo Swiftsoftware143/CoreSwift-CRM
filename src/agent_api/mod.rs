@@ -67,9 +67,24 @@ async fn authenticate(state: &crate::AppState, headers: &HeaderMap) -> Result<Ag
             ));
         }
         let key_id = key_id.to_string();
+        // ACT AS A REAL USER OF THE ACCOUNT (measured 2026-11-25). Several writers put `claims.sub` into
+        // a column with a foreign key to `users(id)` — `opportunity_stage_history.moved_by` is one — so a
+        // key's own id produced 500 "Database error" on the first deal an agent created. The key
+        // authenticates the caller; the record is attributed to a real person of that account, which is
+        // also what an audit reads months later.
+        let actor: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM users WHERE tenant_id = $1
+              ORDER BY (role = 'account_owner') DESC, created_at LIMIT 1",
+        )
+        .bind(tenant)
+        .fetch_optional(&state.db)
+        .await?;
+        let Some(actor) = actor else {
+            return Err(AppError::Forbidden);
+        };
         return Ok(Agent {
             claims: Claims {
-                sub: key_id.clone(),
+                sub: actor.to_string(),
                 aid: tenant.to_string(),
                 // A key is not a person: it holds no admin role, so every handler's own role check
                 // (an agency_admin door, for instance) refuses it exactly as it would a member.
@@ -81,7 +96,7 @@ async fn authenticate(state: &crate::AppState, headers: &HeaderMap) -> Result<Ag
                 iss: None,
             },
             tenant,
-            label: format!("agent key {key_id}"),
+            label: format!("agent key {key_id} → acting as {actor}"),
         });
     }
 
