@@ -1525,7 +1525,17 @@ async function requestPlanChange(idx, btn) {
       // the request comes from the operator's own workspace, or from a test identity. The row is
       // always in the queue; only the mail differs, so the copy branches on `notified`.
       const notified = d && d.notified === true;
-      note.textContent = notified
+      // A REPEAT PRESS IS NOT A NEW REQUEST (2026-11-25). The intake answers status:'existing'
+      // for the same address and subject while a ticket is still open, and that arm attempts no
+      // alert at all — so `notified` is simply absent, and the old copy told a customer who had
+      // pressed Upgrade twice that no notification email went out, about a request already in
+      // the queue. `status` is read first because it decides what the sentence is about.
+      const already_filed = String((d && d.status) || '') === 'existing';
+      note.textContent = already_filed
+        ? 'Already with our team — this account’s request for the ' + name
+          + ' plan was filed earlier and is in CoreSwift’s queue, so there is nothing'
+          + ' more to send. Nothing was charged.'
+        : notified
         ? 'Request sent — CoreSwift has been notified and will review this account'
           + ' for the ' + name + ' plan and email you. Nothing was charged.'
         : 'Request sent — it is in CoreSwift’s queue for the ' + name + ' plan, and the team reads'
@@ -1554,7 +1564,7 @@ async function recordPaymentHandoff(idx) {
   const note = document.querySelector('#modalContainer [data-pay-note="' + idx + '"]');
   if (note) {
     note.style.display = 'block';
-    note.textContent = 'Opening ' + name + '’s payment page — CoreSwift is told you are paying for it.';
+    note.textContent = 'Opening ' + name + '’s payment page — nothing is charged by this app.';
   }
   if (!user.email) return;   // no address means no way to reach this buyer; the page still opens
   try {
@@ -1577,10 +1587,15 @@ async function recordPaymentHandoff(idx) {
         email: user.email || ''
       })
     });
+    const d = await res.json().catch(function () { return {}; });
     if (!res.ok) throw new Error('HTTP ' + res.status);
+    // THE SAME SHAPES AS THE UPGRADE BUTTON. status:'existing' means an earlier press already
+    // filed this purchase, so the note says that rather than promising a hand-off twice.
     if (note) {
-      note.textContent = 'Noted — CoreSwift will switch this account onto ' + name
-        + ' once your payment lands. Nothing is charged by this app.';
+      note.textContent = (d && d.status === 'existing')
+        ? 'Your payment page is opening. This purchase was already in CoreSwift’s queue from an earlier press, so the team will match your payment to it.'
+        : 'Noted — CoreSwift will switch this account onto ' + name
+          + ' once your payment lands. Nothing is charged by this app.';
     }
   } catch (e) {
     // The payment page is already opening; a failed note is not a failed purchase.
