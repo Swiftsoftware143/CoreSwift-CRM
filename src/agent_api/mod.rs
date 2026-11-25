@@ -65,27 +65,15 @@ async fn authenticate(state: &crate::AppState, headers: &HeaderMap) -> Result<Ag
             ));
         }
         let key_id = key_id.to_string();
-        // ACT AS A REAL USER OF THE ACCOUNT (measured 2026-11-25). Several writers put `claims.sub` into
-        // a column with a foreign key to `users(id)` — `opportunity_stage_history.moved_by` is one — so a
-        // key's own id produced 500 "Database error" on the first deal an agent created. The key
-        // authenticates the caller; the record is attributed to a real person of that account, which is
-        // also what an audit reads months later.
-        let actor: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM users WHERE tenant_id = $1
-              ORDER BY (role = 'account_owner') DESC, created_at LIMIT 1",
-        )
-        .bind(tenant)
-        .fetch_optional(&state.db)
-        .await?;
-        let Some(actor) = actor else {
-            return Err(AppError::Forbidden);
-        };
+        // The key authenticates the caller; WHO the forwarded call is attributed to is decided in exactly
+        // one place (`api_proxy::acting_user`, shared with the app's MCP door), which picks a real, active
+        // user of this account. A second copy of that rule here would be a second answer to "who did it".
         return Ok(Agent {
             claims: Claims {
-                sub: actor.to_string(),
+                sub: key_id.clone(),
                 aid: tenant.to_string(),
-                // A key is not a person: it holds no admin role, so every handler's own role check
-                // (an agency_admin door, for instance) refuses it exactly as it would a member.
+                // A key is not a person and holds no role: the forwarded call carries the acting user's
+                // own role, decided by `api_proxy`.
                 role: "api_key".to_string(),
                 wsid: None,
                 exp: 0,
@@ -94,7 +82,7 @@ async fn authenticate(state: &crate::AppState, headers: &HeaderMap) -> Result<Ag
                 iss: None,
             },
             tenant,
-            label: format!("agent key {key_id} → acting as {actor}"),
+            label: format!("agent key {key_id}"),
         });
     }
 
@@ -123,23 +111,21 @@ async fn authenticate(state: &crate::AppState, headers: &HeaderMap) -> Result<Ag
 /// Three things stay shut, deliberately:
 ///   * the surfaces that hand out the account's own credentials (`auth/`, key reveal/rotate, personal
 ///     keys) — an issued key must not be able to widen itself into a session credential;
-///   * everything under `/api/mcp` — an agent calling itself in a loop;
-///   * anything not in the console's own router: a path the console does not serve is a 404 here too.
+///   * everything under `/api/mcp` — an agent calling itself in a loop — and `/api/agent` itself, so a
+///     forwarded path can never re-enter this door;
+///   * **DELETE**, refused here before anything is forwarded: an agent may run the business, but a
+///     delete is the one action nobody can undo, and no agent should hold it. Nothing in this app marks
+///     a booking paid either — money arrives as the provider's own signed fact, never an agent's word.
+/// Anything the console's own router does not serve answers 404 through the same call.
 pub fn router(state: crate::AppState) -> Router<crate::AppState> {
     Router::new()
-        .route("/{*rest}", any(forward))
+        .route("/*rest", any(forward))
         .with_state(state)
 }
 
-/// The paths an issued key may never reach, checked on the forwarded path's first segment.
-const DENIED: [&str; 6] = [
-    "auth",
-    "personal-keys",
-    "api-keys",
-    "keys",
-    "mcp",
-    "internal",
-];
+/// The sentence a caller gets when it asks the door to delete something.
+const DELETE_REFUSAL: &str =
+    "an agent may not delete: this door forwards reads and writes, never a delete";
 
 async fn forward(
     State(state): State<crate::AppState>,
@@ -149,6 +135,9 @@ async fn forward(
     body: Bytes,
 ) -> ApiResult<axum::response::Response> {
     let agent = authenticate(&state, &headers).await?;
+    if method == Method::DELETE {
+        return Err(AppError::ForbiddenReason(DELETE_REFUSAL.to_string()));
+    }
     let rest = uri.path().trim_start_matches('/').to_string();
     let query = uri.query().map(|q| format!("?{q}")).unwrap_or_default();
     // ONE implementation of "act as this account, as this person": the app's own MCP door uses it too
@@ -169,4 +158,5 @@ async fn forward(
         .header("x-agent-door", "forwarded")
         .body(axum::body::Body::from(text))
         .map_err(|e| AppError::Internal(e.to_string()))
-}
+} // The denied list now lives in `crate::api_proxy::DENIED_PREFIXES`, beside the one function that applies
+  // it: the agent door and the app's own MCP tool must refuse the same surfaces, so they read one list.

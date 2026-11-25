@@ -23,13 +23,15 @@ use crate::AppState;
 
 /// Paths an issued key or an agent may never reach, whatever door it came through. These hand out the
 /// account's own credentials, so reaching one would let a key widen itself into a session credential.
-pub const DENIED_PREFIXES: [&str; 6] = [
+pub const DENIED_PREFIXES: [&str; 7] = [
     "auth",
     "personal-keys",
     "api-keys",
     "keys",
     "mcp",
     "internal",
+    // A forwarded path must never re-enter the forwarding door itself.
+    "agent",
 ];
 
 /// Is this forwarded path allowed?
@@ -83,6 +85,16 @@ pub async fn call(
     }
 
     let (user_id, role, wsid) = acting_user(state, tenant).await?;
+    // NEVER carry the PLATFORM role through this door. `agency_admin` is the fleet operator's role and its
+    // surfaces answer for every tenant at once, so a key minted for ONE account must not inherit it — that
+    // would turn a workspace key into a cross-tenant read (`t_d8d782f2` tenancy rule: no tenant sees
+    // another's data). The account's own owner is the ceiling: everything inside the account, nothing
+    // outside it.
+    let role = if role == "agency_admin" {
+        "owner".to_string()
+    } else {
+        role
+    };
     let now = chrono::Utc::now().timestamp();
     let claims = crate::auth::models::Claims {
         sub: user_id.to_string(),

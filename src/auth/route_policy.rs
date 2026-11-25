@@ -300,7 +300,9 @@
 //!    route that merely shares a prefix with an allowlisted one
 //!    (`/api/public/bookings/public/slots/available/:tenant_id` does NOT cover its own
 //!    `/api/public/bookings/public/slots/available`, which is private) is private until it is
-//!    written down here.
+//!    written down here. **One exception, written as a trailing `*name`**: `/api/agent/*rest`, the
+//!    forwarding agent door, which is one route by design and needs one entry. Every other template
+//!    keeps the segment-exact rule, including `/api/agentX/...` — a bare prefix is still not a match.
 //!
 //! The one NAMED GAP this census found — `/api/telnyx/{webhook,sms-webhook}` verified neither a
 //! signature nor a shared key, so an anonymous POST was answered `{"status":"ack"}` — is now CLOSED
@@ -625,12 +627,13 @@ pub const API_KEY_ROUTES: &[&str] = &[
     // THE AGENT DOOR (2026-11-25). An AI agent holds an issued key, and the console routes correctly
     // refuse one. Rather than widen a session door, these routes accept EITHER credential and resolve it
     // themselves (`agent_api::authenticate`), exactly as `/api/objects` does. A `read_only` key is still
-    // The agent door is ONE forwarded door now: `/api/agent/<any console path>` authenticates the caller
-    // (key or session) and re-issues the request against the console's own handler. Thirteen named leaves
-    // became this wildcard on 2026-11-25, when David asked for the whole business rather than thirteen
-    // writes. It is listed here as the router spells it, and the surfaces it may not reach (auth,
-    // personal-keys, api-keys, keys, mcp, internal) are refused inside `api_proxy::allowed`.
-    "/api/agent/{*rest}",
+    // The agent door is ONE forwarder: `/api/agent/<any console path>` authenticates the caller (key or
+    // session) and re-issues the request against the console's own handler, so it is one route with a
+    // wildcard tail — not thirteen named leaves. The tail is `*rest` in this app's axum 0.7 spelling, and
+    // `matches_template` understands a trailing `*` as "one or more remaining segments"; the surfaces it
+    // may not reach (`auth`, `personal-keys`, `api-keys`, `keys`, `mcp`, `internal`, and `agent` itself)
+    // are refused inside `api_proxy::allowed`, and DELETE never passes the door at all.
+    "/api/agent/*rest",
     "/api/mcp",
     "/api/objects",
     "/api/objects/:slug",
@@ -736,6 +739,25 @@ pub fn is_guarded_path(path: &str) -> bool {
 fn matches_template(template: &str, path: &str) -> bool {
     let t: Vec<&str> = template.split('/').collect();
     let p: Vec<&str> = path.split('/').collect();
+    // A trailing `*name` is the ONE prefix-shaped arm, and it exists for exactly one surface: the agent
+    // door (`/api/agent/*rest`), which forwards every console path it is allowed to reach. It matches one
+    // or more remaining segments, never zero (`/api/agent` alone is not a route) and never a bare
+    // `starts_with` across a segment boundary (`/api/agentX/...` is a different path).
+    if let Some(last) = t.last() {
+        if last.starts_with('*') {
+            let head = &t[..t.len() - 1];
+            if p.len() <= head.len() {
+                return false;
+            }
+            return head.iter().zip(p.iter()).all(|(tseg, pseg)| {
+                if tseg.strip_prefix(':').is_some() {
+                    !pseg.is_empty()
+                } else {
+                    tseg == pseg
+                }
+            });
+        }
+    }
     if t.len() != p.len() {
         return false;
     }
@@ -1621,6 +1643,18 @@ mod tests {
         assert!(!matches_template(
             "/inbound/:key_prefix/:event_type",
             "/inbound//sync"
+        ));
+        // The agent door is the ONE trailing-wildcard template: it covers the console paths it forwards,
+        // never the nest itself, never zero segments, and never a prefix that is not a segment boundary.
+        assert!(matches_template("/api/agent/*rest", "/api/agent/contacts"));
+        assert!(matches_template(
+            "/api/agent/*rest",
+            "/api/agent/booking/calendars/abc/slots/generate"
+        ));
+        assert!(!matches_template("/api/agent/*rest", "/api/agent"));
+        assert!(!matches_template(
+            "/api/agent/*rest",
+            "/api/agentX/contacts"
         ));
     }
 
