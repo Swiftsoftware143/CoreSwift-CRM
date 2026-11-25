@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Contact us — CoreSwift CRM</title>
+<meta name="description" content="Locked out, missing your password email, or have a question about CoreSwift CRM? Send the team a message — no sign-in needed.">
+<style>
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#f8fafc;color:#0f172a}
+.wrap{max-width:520px;margin:0 auto;padding:40px 20px}
+.card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;box-shadow:0 1px 2px rgba(15,23,42,.05)}
+h1{font-size:20px;margin:0 0 6px}
+p.sub{margin:0 0 20px;color:#475569;font-size:14px;line-height:1.5}
+label{display:block;font-size:13px;font-weight:600;margin:14px 0 6px}
+input,textarea{width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;font-family:inherit;color:#0f172a}
+input:focus,textarea:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 2px rgba(99,102,241,.18)}
+textarea{min-height:120px;resize:vertical}
+button{width:100%;margin-top:18px;padding:12px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
+button:hover{background:#4f46e5}
+button:disabled{opacity:.6;cursor:default}
+.msg{margin-top:14px;font-size:14px;display:none;line-height:1.5}
+.msg.ok{display:block;color:#4338ca}
+.msg.err{display:block;color:#b91c1c}
+.back{margin-top:18px;font-size:13px;text-align:center}
+.back a{color:#6366f1;text-decoration:none}
+</style>
+<script id="cs-theme-boot">/* day/night, applied before first paint (shared: cs-theme-shared)
+   THE CHOICE HAS TO CROSS SUBDOMAINS (CEO correction, 2026-11-21): localStorage is per-ORIGIN, so a
+   choice made on app.coreswiftcrm.com was invisible on booking./admin./inbox. — four products wearing
+   one name. The value therefore lives in a cookie on the registrable domain, which every subdomain
+   sends back; localStorage is kept as a per-origin fallback for a browser that refuses cookies. */
+(function(){
+  function fromCookie(){try{var m=document.cookie.match(/(?:^|;\s*)cs_theme=(dark|light)/);return m?m[1]:null;}catch(e){return null;}}
+  try{
+    var t=fromCookie();
+    if(!t){try{t=localStorage.getItem('cs_theme');}catch(e){}}
+    if(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)t='dark';
+    if(t)document.documentElement.setAttribute('data-theme',t);
+  }catch(e){}
+})();
+</script>
+<style id="cs-theme-shared">
+  /* Shared day/night palette for the standalone CoreSwift pages. Additive: it only reacts to the
+     attribute, so nothing here changes a page that never opts in. Both hosts (app. and booking.) ship
+     this same block, which is what makes the product feel like one product across subdomains. */
+  html{color-scheme:light}
+  html[data-theme="dark"]{color-scheme:dark}
+  html[data-theme="light"]{color-scheme:light}
+  html[data-theme="light"] body{background:#f6f7fb !important;color:#16181d !important}
+  html[data-theme="light"] .card,html[data-theme="light"] .panel,html[data-theme="light"] .box,
+  html[data-theme="light"] .wrap,html[data-theme="light"] .container,html[data-theme="light"] .modal,
+  html[data-theme="light"] form,html[data-theme="light"] section{background:#ffffff !important;border-color:#dde1ea !important}
+  html[data-theme="light"] input,html[data-theme="light"] select,html[data-theme="light"] textarea{
+    background:#ffffff !important;color:#16181d !important;border-color:#c9cfdb !important}
+  html[data-theme="light"] h1,html[data-theme="light"] h2,html[data-theme="light"] h3,
+  html[data-theme="light"] h4,html[data-theme="light"] strong,html[data-theme="light"] label{color:#16181d !important}
+  html[data-theme="light"] p,html[data-theme="light"] li,html[data-theme="light"] span,
+  html[data-theme="light"] td,html[data-theme="light"] small{color:#4b5563 !important}
+  html[data-theme="light"] a{color:#4f46e5 !important}
+  html[data-theme="light"] table,html[data-theme="light"] td,html[data-theme="light"] th{border-color:#dde1ea !important}
+  html[data-theme="light"] pre,html[data-theme="light"] code{background:#eef0f6 !important;color:#16181d !important}
+  html[data-theme="dark"] body{background:#0f1117 !important;color:#e8eaed !important}
+  html[data-theme="dark"] .card,html[data-theme="dark"] .panel,html[data-theme="dark"] .box,
+  html[data-theme="dark"] .wrap,html[data-theme="dark"] .container,html[data-theme="dark"] .modal,
+  html[data-theme="dark"] form,html[data-theme="dark"] section{background:#1a1d27 !important;border-color:#2d3148 !important}
+  html[data-theme="dark"] input,html[data-theme="dark"] select,html[data-theme="dark"] textarea{
+    background:#11131b !important;color:#e8eaed !important;border-color:#2d3148 !important}
+  html[data-theme="dark"] h1,html[data-theme="dark"] h2,html[data-theme="dark"] h3,
+  html[data-theme="dark"] h4,html[data-theme="dark"] strong,html[data-theme="dark"] label{color:#f3f4f6 !important}
+  html[data-theme="dark"] p,html[data-theme="dark"] li,html[data-theme="dark"] span,
+  html[data-theme="dark"] td,html[data-theme="dark"] small{color:#c3c8d1 !important}
+  html[data-theme="dark"] a{color:#93c5fd !important}
+  html[data-theme="dark"] table,html[data-theme="dark"] td,html[data-theme="dark"] th{border-color:#2d3148 !important}
+  html[data-theme="dark"] pre,html[data-theme="dark"] code{background:#11131b !important;color:#e8eaed !important}
+  html[data-theme="dark"] hr{border-color:#2d3148 !important}
+  #csThemeBtn{position:fixed;left:12px;bottom:12px;z-index:2147483000;display:flex;align-items:center;gap:6px;
+    padding:7px 11px;border-radius:999px;border:1px solid rgba(120,130,150,.45);background:rgba(20,22,30,.86);
+    color:#e8eaed;font:600 12px system-ui,-apple-system,sans-serif;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.25)}
+  html[data-theme="dark"] #csThemeBtn{background:rgba(246,247,251,.92);color:#16181d;border-color:rgba(20,24,40,.25)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>Contact us</h1>
+    <p class="sub">Locked out, missing your password email, or just have a question? Send us a message and we will reply to the address you give — no sign-in needed.</p>
+    <form id="f" novalidate>
+      <label for="nm">Your name <span style="font-weight:400;color:#64748b">(optional)</span></label>
+      <input id="nm" type="text" autocomplete="name" maxlength="120">
+      <label for="em">Email we should reply to</label>
+      <input id="em" type="email" autocomplete="email" required maxlength="254">
+      <label for="sb">Subject</label>
+      <input id="sb" type="text" required maxlength="200">
+      <label for="bd">Message</label>
+      <textarea id="bd" required maxlength="4000"></textarea>
+      <button id="send" type="submit">Send message</button>
+      <div id="m" class="msg" role="status" aria-live="polite"></div>
+    </form>
+    <div class="back"><a href="/login">&larr; Back to sign in</a></div>
+  </div>
+
+  <div class="card" style="margin-top:18px" id="answer-card">
+    <h1 style="font-size:17px">Already wrote to us?</h1>
+    <p class="sub">Read the team's answer here. Type the reference you were given when you sent your
+      message, and the same email address you filed with.</p>
+    <form id="af" novalidate>
+      <label for="ref">Reference</label>
+      <input id="ref" type="text" autocomplete="off" spellcheck="false" required maxlength="40" placeholder="e.g. 3f7c1a20-9d4e-...">
+      <label for="aem">Email you filed with</label>
+      <input id="aem" type="email" autocomplete="email" required maxlength="254">
+      <button id="read" type="submit">Read our answer</button>
+      <div id="am" class="msg" role="status" aria-live="polite"></div>
+    </form>
+    <div id="thread" style="display:none;margin-top:14px"></div>
+  </div>
+</div>
+<script>
+(function(){
+  var f=document.getElementById('f'), m=document.getElementById('m'), b=document.getElementById('send');
+  function say(t,ok){ m.textContent=t; m.className='msg '+(ok?'ok':'err'); }
+  function val(id){ return (document.getElementById(id).value||'').trim(); }
+  f.addEventListener('submit', function(e){
+    e.preventDefault();
+    var email=val('em'), subject=val('sb'), body=val('bd');
+    if(!email){ say('Enter the email address we should reply to.',false); return; }
+    if(subject.length<2){ say('Give your message a short subject.',false); return; }
+    if(body.length<2){ say('Write your message so we know what you need.',false); return; }
+    b.disabled=true;
+    fetch('/api/public/support-request',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name:val('nm'),email:email,subject:subject,body:body})
+    }).then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,body:j}; }); })
+      .then(function(res){
+        if(res.ok){
+          var ref=(res.body&&res.body.ticket_id)||'';
+          say(((res.body&&res.body.message)||'Your message is with our team.')
+              + (ref?(' Your reference is ' + ref + ' \u2014 keep it: come back to this page with it and your email to read our answer.') : '')
+              + (ref? '' : ''), true);
+          if(ref){ var rf=document.getElementById('ref'); if(rf){ rf.value=ref; } var ae=document.getElementById('aem'); if(ae && !ae.value){ ae.value=email; } }
+          f.querySelectorAll('input,textarea').forEach(function(el){ el.value=''; });
+          b.disabled=true; b.textContent='Sent';
+        } else if(res.status===429){
+          say('You have sent us several messages in the last hour. Please wait a little, or reply to the email we already have from you.',false);
+          b.disabled=false;
+        } else {
+          say((res.body&&(res.body.error||res.body.message))||'That did not go through. Try again in a moment.',false);
+          b.disabled=false;
+        }
+      })
+      .catch(function(){ say('That did not go through. Check your connection and try again.',false); b.disabled=false; });
+  });
+
+  // ── Read the team's answer ────────────────────────────────────────────────
+  // The message this page files belongs to no account, so a locked-out visitor has no sign-in that
+  // would ever show it. The reference handed out above plus the address they filed with is the
+  // whole capability; the panel below prints the thread the operator answered on.
+  var af=document.getElementById('af'), am=document.getElementById('am'), th=document.getElementById('thread'),
+      rb=document.getElementById('read');
+  function asay(t,ok){ am.textContent=t; am.className='msg '+(ok?'ok':'err'); }
+  function esc(t){ return String(t==null?'':t).replace(/[&<>"']/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  af.addEventListener('submit', function(e){
+    e.preventDefault();
+    var ref=(document.getElementById('ref').value||'').trim(),
+        em=(document.getElementById('aem').value||'').trim();
+    if(!ref){ asay('Enter the reference you were given.',false); return; }
+    if(!em){ asay('Enter the email address you filed with.',false); return; }
+    rb.disabled=true; th.style.display='none'; asay('Looking…',true);
+    fetch('/api/public/support-answer',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ticket_id:ref,email:em})
+    }).then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,body:j}; }); })
+      .then(function(res){
+        rb.disabled=false;
+        if(!res.ok){
+          asay((res.body&&(res.body.error||res.body.message))||'We have no message from that address with that reference. Check both and try again.',false);
+          return;
+        }
+        var d=res.body||{}, msgs=Array.isArray(d.messages)?d.messages:[];
+        var html='<div style="font-size:13px;color:#475569;margin-bottom:10px">'
+               + 'Subject: <strong>'+esc(d.subject)+'</strong> &middot; status: '+esc(d.status)+'</div>';
+        if(!msgs.length){
+          html+='<div class="msg ok" style="display:block">Your message is with the team. No answer yet \u2014 come back with the same reference.</div>';
+        } else {
+          for(var i=0;i<msgs.length;i++){
+            var m=msgs[i], ours=m.from==='us';
+            html+='<div style="margin:8px 0;padding:10px 12px;border-radius:10px;background:'+(ours?'#eef2ff':'#f1f5f9')+';border:1px solid '+(ours?'#c7d2fe':'#e2e8f0')+'">'
+                + '<div style="font-size:11px;font-weight:700;letter-spacing:.03em;color:'+(ours?'#4338ca':'#64748b')+';text-transform:uppercase">'+(ours?'Our team':'You')+'</div>'
+                + '<div style="font-size:14px;line-height:1.55;white-space:pre-wrap;margin-top:4px">'+esc(m.message)+'</div></div>';
+          }
+        }
+        th.innerHTML=html; th.style.display='block';
+        asay(d.answered?'Here is our answer.':(msgs.length?'Your message and our thread so far.':'No answer yet.'),true);
+      })
+      .catch(function(){ rb.disabled=false; asay('That did not load. Check your connection and try again.',false); });
+  });
+})();
+</script>
+<script id="cs-theme-shared-js">/* the switch itself (shared): describes what pressing it will DO, not the current state */
+(function(){
+  function label(){var t=document.documentElement.getAttribute('data-theme')==='dark';
+    var b=document.getElementById('csThemeBtn');
+    if(b) b.innerHTML=(t?'&#9728;&#65039; <span>Day mode</span>':'&#127770; <span>Night mode</span>');}
+  function remember(v){
+    try{localStorage.setItem('cs_theme',v);}catch(e){}
+    /* Same cookie WorkflowSwift uses, for the same reason: set once on any CoreSwift address and every
+       other subdomain sends it back, so the switch holds across app., booking., admin. and inbox. */
+    try{document.cookie='cs_theme=;path=/;max-age=0';}catch(e){}   /* drop any host-only twin first */
+    try{document.cookie='cs_theme='+v+';domain=coreswiftcrm.com;path=/;max-age=31536000;SameSite=Lax';}catch(e){}
+  }
+  function flip(){
+    var next=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';
+    document.documentElement.setAttribute('data-theme',next);
+    remember(next);
+    label();
+  }
+  function mount(){
+    if(document.getElementById('csThemeBtn')){label();return;}
+    var b=document.createElement('button');
+    b.id='csThemeBtn'; b.type='button'; b.title='Switch day / night mode';
+    b.onclick=flip; document.body.appendChild(b); label();
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',mount); else mount();
+})();
+</script>
+</body>
+</html>

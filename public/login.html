@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in — CoreSwift CRM</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f1117;color:#e1e4ed;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.card{background:#1a1d27;border:1px solid #2d3248;border-radius:12px;padding:28px;width:100%;max-width:400px;box-shadow:0 12px 40px rgba(0,0,0,.4)}
+h1{font-size:22px;font-weight:700;text-align:center}
+.sub{color:#8b8fa3;font-size:13px;text-align:center;margin:6px 0 20px}
+.tabs{display:flex;margin-bottom:20px;border-bottom:1px solid #2d3248}
+.tab{flex:1;text-align:center;padding:10px;cursor:pointer;font-size:14px;font-weight:600;color:#8b8fa3;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab.on{color:#38bdf8;border-bottom-color:#38bdf8}
+.pane{display:none}.pane.on{display:block}
+label{display:block;font-size:12px;color:#8b8fa3;margin:12px 0 5px}
+input{background:#232736;border:1px solid #2d3248;color:#e1e4ed;padding:11px 13px;border-radius:8px;font-size:14px;width:100%}
+input:focus{outline:none;border-color:#38bdf8}
+button{width:100%;margin-top:18px;background:#38bdf8;color:#0b1220;border:none;border-radius:8px;padding:12px;font-size:15px;font-weight:700;cursor:pointer}
+button:disabled{opacity:.6;cursor:not-allowed}
+.msg{display:none;margin-top:14px;padding:10px 12px;border-radius:8px;font-size:13px;line-height:1.5}
+.msg.err{display:block;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.4);color:#fca5a5}
+.msg.ok{display:block;background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.4);color:#6ee7b7}
+.foot{text-align:center;font-size:12px;color:#8b8fa3;margin-top:18px}
+.sup{text-align:center;font-size:12px;color:#8b8fa3;line-height:1.55;margin-top:10px;padding:0 6px}
+.sup a{color:#38bdf8}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid #0b1220;border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes sp{to{transform:rotate(360deg)}}
+</style>
+<script id="cs-theme-boot">/* day/night, applied before first paint (shared: cs-theme-shared)
+   THE CHOICE HAS TO CROSS SUBDOMAINS (CEO correction, 2026-11-21): localStorage is per-ORIGIN, so a
+   choice made on app.coreswiftcrm.com was invisible on booking./admin./inbox. — four products wearing
+   one name. The value therefore lives in a cookie on the registrable domain, which every subdomain
+   sends back; localStorage is kept as a per-origin fallback for a browser that refuses cookies. */
+(function(){
+  function fromCookie(){try{var m=document.cookie.match(/(?:^|;\s*)cs_theme=(dark|light)/);return m?m[1]:null;}catch(e){return null;}}
+  try{
+    var t=fromCookie();
+    if(!t){try{t=localStorage.getItem('cs_theme');}catch(e){}}
+    if(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)t='dark';
+    if(t)document.documentElement.setAttribute('data-theme',t);
+  }catch(e){}
+})();
+</script>
+<style id="cs-theme-shared">
+  /* Shared day/night palette for the standalone CoreSwift pages. Additive: it only reacts to the
+     attribute, so nothing here changes a page that never opts in. Both hosts (app. and booking.) ship
+     this same block, which is what makes the product feel like one product across subdomains. */
+  html{color-scheme:light}
+  html[data-theme="dark"]{color-scheme:dark}
+  html[data-theme="light"]{color-scheme:light}
+  html[data-theme="light"] body{background:#f6f7fb !important;color:#16181d !important}
+  html[data-theme="light"] .card,html[data-theme="light"] .panel,html[data-theme="light"] .box,
+  html[data-theme="light"] .wrap,html[data-theme="light"] .container,html[data-theme="light"] .modal,
+  html[data-theme="light"] form,html[data-theme="light"] section{background:#ffffff !important;border-color:#dde1ea !important}
+  html[data-theme="light"] input,html[data-theme="light"] select,html[data-theme="light"] textarea{
+    background:#ffffff !important;color:#16181d !important;border-color:#c9cfdb !important}
+  html[data-theme="light"] h1,html[data-theme="light"] h2,html[data-theme="light"] h3,
+  html[data-theme="light"] h4,html[data-theme="light"] strong,html[data-theme="light"] label{color:#16181d !important}
+  html[data-theme="light"] p,html[data-theme="light"] li,html[data-theme="light"] span,
+  html[data-theme="light"] td,html[data-theme="light"] small{color:#4b5563 !important}
+  html[data-theme="light"] a{color:#4f46e5 !important}
+  html[data-theme="light"] table,html[data-theme="light"] td,html[data-theme="light"] th{border-color:#dde1ea !important}
+  html[data-theme="light"] pre,html[data-theme="light"] code{background:#eef0f6 !important;color:#16181d !important}
+  html[data-theme="dark"] body{background:#0f1117 !important;color:#e8eaed !important}
+  html[data-theme="dark"] .card,html[data-theme="dark"] .panel,html[data-theme="dark"] .box,
+  html[data-theme="dark"] .wrap,html[data-theme="dark"] .container,html[data-theme="dark"] .modal,
+  html[data-theme="dark"] form,html[data-theme="dark"] section{background:#1a1d27 !important;border-color:#2d3148 !important}
+  html[data-theme="dark"] input,html[data-theme="dark"] select,html[data-theme="dark"] textarea{
+    background:#11131b !important;color:#e8eaed !important;border-color:#2d3148 !important}
+  html[data-theme="dark"] h1,html[data-theme="dark"] h2,html[data-theme="dark"] h3,
+  html[data-theme="dark"] h4,html[data-theme="dark"] strong,html[data-theme="dark"] label{color:#f3f4f6 !important}
+  html[data-theme="dark"] p,html[data-theme="dark"] li,html[data-theme="dark"] span,
+  html[data-theme="dark"] td,html[data-theme="dark"] small{color:#c3c8d1 !important}
+  html[data-theme="dark"] a{color:#93c5fd !important}
+  html[data-theme="dark"] table,html[data-theme="dark"] td,html[data-theme="dark"] th{border-color:#2d3148 !important}
+  html[data-theme="dark"] pre,html[data-theme="dark"] code{background:#11131b !important;color:#e8eaed !important}
+  html[data-theme="dark"] hr{border-color:#2d3148 !important}
+  #csThemeBtn{position:fixed;left:12px;bottom:12px;z-index:2147483000;display:flex;align-items:center;gap:6px;
+    padding:7px 11px;border-radius:999px;border:1px solid rgba(120,130,150,.45);background:rgba(20,22,30,.86);
+    color:#e8eaed;font:600 12px system-ui,-apple-system,sans-serif;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.25)}
+  html[data-theme="dark"] #csThemeBtn{background:rgba(246,247,251,.92);color:#16181d;border-color:rgba(20,24,40,.25)}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>CoreSwift CRM</h1>
+  <p class="sub" id="authSub">Sign in to your workspace</p>
+  <div class="tabs">
+    <div class="tab on" id="tabLogin">Sign in</div>
+    <div class="tab" id="tabRegister">Create account</div>
+  </div>
+
+  <form class="pane on" id="paneLogin">
+    <label for="liEmail">Email</label><input id="liEmail" type="email" autocomplete="email" required>
+    <label for="liPass">Password</label><input id="liPass" type="password" autocomplete="current-password" required>
+    <button type="submit" id="liBtn">Sign in</button>
+    <p class="foot" style="margin-top:12px"><a href="/forgot-password.html" style="color:#38bdf8">Forgot password?</a> &middot; <a href="/guide.html" target="_blank" rel="noopener" style="color:#38bdf8">User Guide</a> &middot; <a href="https://coreswiftcrm.com/privacy" style="color:#38bdf8">Privacy</a> &middot; <a href="https://coreswiftcrm.com/terms" style="color:#38bdf8">Terms</a></p>
+    <p class="sup">Never received your password email, or still locked out after <a href="/forgot-password.html">resetting it</a>? Write to <a href="/contact.html">our contact page</a> and we will get you signed in.</p>
+  </form>
+
+  <form class="pane" id="paneRegister">
+    <div class="msg ok" id="inviteNote" style="display:none;margin:0 0 14px"></div>
+    <div class="msg ok" id="rgPlanNote" style="display:none;margin:0 0 14px"></div>
+    <label for="rgName">Full name</label><input id="rgName" autocomplete="name" required>
+    <!-- The workspace is NAMED at signup (David, 2026-11-14): every account gets exactly one, and its
+         name becomes the address the team and customers use. Never auto-named. -->
+    <div id="rgWsWrap">
+      <label for="rgWs">Workspace name</label>
+      <input id="rgWs" autocomplete="organization" placeholder="Your company name">
+      <p class="hint" id="rgWsAddr" style="margin:4px 0 10px">This becomes your address in CoreSwift — your team and your customers will see it. You can add more workspaces later if your plan allows.</p>
+    </div>
+    <label for="rgEmail">Work email</label><input id="rgEmail" type="email" autocomplete="email" required>
+    <button type="submit" id="rgBtn">Create free account</button>
+    <p class="foot" style="margin-top:12px" id="rgFoot">Starts on the Free plan — no credit card required.</p>
+  </form>
+
+  <div class="msg" id="msg"></div>
+  <div class="foot">CoreSwift CRM &copy; 2026</div>
+</div>
+<script>
+(function () {
+  'use strict';
+  var TOKEN_KEY = 'cs_token', USER_KEY = 'cs_user', ACCOUNT_KEY = 'cs_account';
+  // Invite landing (?invite_token=<uuid>): the workspace already exists, so the invitee only
+  // creates their own login and joins it. POST /api/auth/register requires the token.
+  var INVITE = '';
+  try { INVITE = new URLSearchParams(window.location.search).get('invite_token') || ''; } catch (e) { INVITE = ''; }
+  // ── The tier the visitor picked on the price list (kanban t_71a3a39f) ──────────────────────────
+  // The pricing page's per-tier "Get started" buttons carry `?plan=<slug>`, and nginx carries it
+  // through all eight sign-up doors. Read it HERE or the pick dies at the form: the buyer would get a
+  // Free workspace and no operator would ever learn they had asked for Professional.
+  //
+  // Only a slug SHAPED like a plan is kept, and only the display name lives in this page: the SERVER
+  // validates the slug against the live catalogue (an unknown, inactive or free tier files nothing),
+  // and no price is printed — a price written into this page would drift from the catalogue the app
+  // actually enforces.
+  var PLAN = '';
+  try { PLAN = (new URLSearchParams(window.location.search).get('plan') || '').trim().toLowerCase(); } catch (e) { PLAN = ''; }
+  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(PLAN) || PLAN === 'free') PLAN = '';
+  var PLAN_NAMES = { starter: 'Starter', professional: 'Professional', enterprise: 'Enterprise', agency: 'Agency' };
+  function planLabel() {
+    return PLAN_NAMES[PLAN] || (PLAN.charAt(0).toUpperCase() + PLAN.slice(1));
+  }
+  var msg = document.getElementById('msg');
+
+  function show(text, ok) {
+    msg.className = 'msg ' + (ok ? 'ok' : 'err');
+    msg.textContent = text;
+  }
+  function hide() { msg.className = 'msg'; msg.textContent = ''; }
+
+  // Already signed in? Go straight to the app — unless this is an invite link, which has to
+  // show the register pane (it may well be opened in a browser that is already signed in).
+  if (!INVITE && sessionStorage.getItem(TOKEN_KEY) && sessionStorage.getItem(USER_KEY)) {
+    window.location.replace('/');
+    return;
+  }
+
+  document.getElementById('tabLogin').addEventListener('click', function () { swap(true); });
+  document.getElementById('tabRegister').addEventListener('click', function () { swap(false); });
+  function swap(isLogin) {
+    hide();
+    // The tab and the subtitle follow the pane. Measured live 2026-11-17: the $1 Inbox page's
+    // "Start free" CTA lands on /register/?plan=inbox, which opens the CREATE-ACCOUNT pane — and
+    // the browser tab still read "Sign in" while the line under the heading said "Sign in to your
+    // workspace". A buyer who pressed Start free was being told to sign in.
+    document.title = isLogin ? 'Sign in \u2014 CoreSwift CRM' : 'Create your account \u2014 CoreSwift CRM';
+    var sub = document.getElementById('authSub');
+    if (sub) {
+      sub.textContent = isLogin ? 'Sign in to your workspace' : 'Create your free account \u2014 no card needed';
+    }
+    document.getElementById('tabLogin').classList.toggle('on', isLogin);
+    document.getElementById('tabRegister').classList.toggle('on', !isLogin);
+    document.getElementById('paneLogin').classList.toggle('on', isLogin);
+    document.getElementById('paneRegister').classList.toggle('on', !isLogin);
+  }
+
+  // The marketing site's Sign-up / "Start Free" links 301 here with ?register=1 (coreswift.conf),
+  // so open the create-account pane directly: the visitor who asked to sign UP must not be shown a
+  // sign-in form with a "Create account" toggle they have to find. Mirrors WorkflowSwift's login.
+  try { if (new URLSearchParams(window.location.search).get('register')) swap(false); } catch (e) {}
+
+  // A pick on the price list also opens the create-account pane: the visitor asked to START, so the
+  // sign-in form with a "Create account" toggle is the wrong first screen. The note NAMES the tier so
+  // the buyer can see their choice survived the click through two hosts.
+  if (PLAN) {
+    swap(false);
+    var planNote = document.getElementById('rgPlanNote');
+    // NOTHING is promised here: the server is the only thing that knows whether a pick can be
+    // filed, and it says so in the register answer (`plan_request`). Measured 2026-11-14: a tier
+    // that is not on sale (`inbox`, is_active = false) files NOTHING, so a sentence promising a
+    // handoff was untrue for exactly the buyer this note exists for.
+    planNote.textContent = 'You picked the ' + planLabel() + ' plan. Create your free account here — '
+      + 'nothing is charged today, and your workspace starts on the free tier.';
+    planNote.style.display = 'block';
+  }
+
+  if (INVITE) {
+    // Joining an existing workspace: no workspace to name, the token decides the tenant.
+    var wsWrap = document.getElementById('rgWsWrap');
+    if (wsWrap) wsWrap.style.display = 'none';
+    swap(false);
+    document.getElementById('rgBtn').textContent = 'Join workspace';
+    document.getElementById('rgFoot').textContent = 'You will be added to the workspace as soon as you sign up.';
+    var note = document.getElementById('inviteNote');
+    note.textContent = 'You have been invited to join a CoreSwift CRM workspace. Create your login below — you will join the existing workspace, not a new one.';
+    note.style.display = 'block';
+    document.title = 'Join your workspace — CoreSwift CRM';
+  }
+
+  // ── The workspace NAME is the ADDRESS (cron 2026-11-17) ──────────────────────────────────────
+  // Every account gets one workspace, and the signup model says its name "becomes the address your
+  // team and customers use". The server can only build that address from the name when it is HANDED
+  // the slug: with none, `signup::tenant_identity` derives it from the EMAIL's local part plus random
+  // hex, so a customer who named their workspace "Acme Plumbing" landed on
+  // `bob-3f2a1c9d.coreswiftcrm.com` — an address nobody would share, and two customers called "bob"
+  // got unrelated random addresses. The form therefore derives the slug from the typed name, shows
+  // the address back live, and sends it with the signup.
+  function slugifyWs(v) {
+    var s = String(v || '').toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+    if (s.length > 40) { s = s.slice(0, 40).replace(/-$/, ''); }
+    return s;
+  }
+  (function () {
+    var input = document.getElementById('rgWs');
+    var hint = document.getElementById('rgWsAddr');
+    if (!input || !hint) return;
+    var base = hint.textContent;
+    function paint() {
+      var s = slugifyWs(input.value);
+      hint.textContent = s ? 'Your address: ' + s + '.coreswiftcrm.com' : base;
+    }
+    input.addEventListener('input', paint);
+    paint();
+  })();
+
+  // POST the signup and hand back {res, data} so the caller can retry a TAKEN address:
+  // `tenants.slug` is UNIQUE and the refusal is a readable 409, never a 500.
+  function postSignup(b) {
+    return fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(b)
+    }).then(function (res) {
+      return res.text().then(function (text) {
+        var data = null;
+        try { data = text ? JSON.parse(text) : null; } catch (err) { data = null; }
+        return { res: res, data: data };
+      });
+    });
+  }
+
+  function submit(url, body, btn, label, okText) {
+    hide();
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin"></span>' + label;
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      return res.text().then(function (text) {
+        var data = null;
+        try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+        if (!res.ok) {
+          throw new Error((data && (data.message || data.error)) || ('Request failed (HTTP ' + res.status + ')'));
+        }
+        if (!data || !data.access_token) { throw new Error('Login succeeded but no access token was returned.'); }
+        sessionStorage.setItem(TOKEN_KEY, data.access_token);
+        sessionStorage.setItem(USER_KEY, JSON.stringify(data.team_member || {}));
+        sessionStorage.setItem(ACCOUNT_KEY, JSON.stringify(data.account || {}));
+        // The SPA at '/' reads localStorage 'crm_token'/'crm_user'. Mirror the session into
+        // those keys or signing in here bounces to '/' and the SPA shows the login form again.
+        localStorage.setItem('crm_token', data.access_token);
+        localStorage.setItem('crm_user', JSON.stringify(data.team_member || {}));
+        show(okText, true);
+        window.location.replace('/');
+      });
+    }).catch(function (e) {
+      btn.disabled = false;
+      btn.textContent = label;
+      show(e.message, false);
+    });
+  }
+
+  // ── The mail-independent way in (kanban t_d841df4f) ────────────────────────────────────────────
+  // `POST /api/auth/initial-password` takes the SIGNUP SESSION'S own token, needs no email at all,
+  // and is gated in SQL on `users.password_undelivered` — so it can never overwrite a password the
+  // customer already knows, and a replay is refused. Every sibling app offers the same door on this
+  // arm (ADASwift, FunnelSwift, IncentiveSwift, missedcallrespondr, WorkflowSwift).
+  //
+  // The field is a SIBLING of the message box, never markup appended into it: a later follow-up does
+  // `msg.appendChild(...)`, and rebuilding that box's contents would destroy the input and its
+  // listener mid-typing. Built with the DOM API and `textContent`, so nothing typed here is ever
+  // re-parsed as HTML.
+  function offerInitialPassword(token, email) {
+    var box = document.createElement('div');
+    box.style.cssText = 'margin-top:12px;padding:12px;border:1px solid rgba(56,189,248,.4);background:rgba(56,189,248,.08);border-radius:8px';
+    var title = document.createElement('div');
+    title.style.cssText = 'font-weight:700;font-size:13px;margin-bottom:6px';
+    title.textContent = 'Set your password now';
+    var hint = document.createElement('div');
+    hint.style.cssText = 'font-size:12px;color:#8b8fa3;margin-bottom:8px';
+    hint.textContent = 'You are already signed up — choose the password you will sign in with. No email needed.';
+    var input = document.createElement('input');
+    input.type = 'password';
+    input.id = 'initPw';
+    input.minLength = 8;
+    input.autocomplete = 'new-password';
+    input.placeholder = 'At least 8 characters';
+    var save = document.createElement('button');
+    save.type = 'button';
+    save.textContent = 'Save password';
+    var note = document.createElement('div');
+    note.style.cssText = 'font-size:12px;line-height:1.5;margin-top:8px';
+    box.appendChild(title);
+    box.appendChild(hint);
+    box.appendChild(input);
+    box.appendChild(save);
+    box.appendChild(note);
+    msg.parentNode.insertBefore(box, msg.nextSibling);
+
+    save.addEventListener('click', function () {
+      var pw = input.value || '';
+      if (pw.length < 8) {
+        note.style.color = '#fca5a5';
+        note.textContent = 'That is shorter than 8 characters — try again.';
+        return;
+      }
+      if (!token) {
+        note.style.color = '#fca5a5';
+        note.textContent = 'Your signup session has expired. Ask for a reset code, or write to us from /contact.html.';
+        return;
+      }
+      save.disabled = true;
+      // A direct fetch, NOT the shared API helper: this route answers 401 when there is nothing
+      // left to set, and that must render beside the field instead of being treated as a dead
+      // session and bouncing the page.
+      fetch('/api/auth/initial-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ password: pw })
+      }).then(function (r) {
+        return r.text().then(function (t) {
+          var d = null;
+          try { d = t ? JSON.parse(t) : null; } catch (e) { d = null; }
+          if (!r.ok) {
+            throw new Error((d && (d.message || d.error)) || 'Could not save that password.');
+          }
+          while (box.firstChild) { box.removeChild(box.firstChild); }
+          var ok = document.createElement('div');
+          ok.style.cssText = 'font-size:13px;color:#6ee7b7;font-weight:700';
+          ok.textContent = 'Password saved. Signing you in with it…';
+          box.appendChild(ok);
+          document.getElementById('liEmail').value = email;
+          setTimeout(function () {
+            swap(true);
+            document.getElementById('liPass').focus();
+          }, 900);
+        });
+      }).catch(function (err) {
+        save.disabled = false;
+        note.style.color = '#fca5a5';
+        note.textContent = err.message;
+      });
+    });
+  }
+
+  // Did the account's plan request actually reach the team? The API answers `plan_request` only when
+  // it FILED one (or found the same tier already open on the queue), so this sentence can never claim
+  // an ask that was not made (kanban t_71a3a39f).
+  // A tier the price list prints but the app does not sell yet files NOTHING in the register POST:
+  // measured 2026-11-15, `plan_slug=starter` answers `plan_request {status: filed}` while
+  // `plan_slug=inbox` (the $1 plan, page live at /inbox) answers `plan_request: null`. The visitor
+  // was then told to send the request themselves — an ask that depends on a second click most people
+  // never make. This files it for them through the PUBLIC support door
+  // (POST /api/public/support-request, which dedupes one email+subject per hour), and only claims it
+  // once that door has answered 2xx.
+  var PLAN_ASK = false;
+  function askTeamForPlan(who) {
+    if (PLAN_ASK || !PLAN) return;
+    PLAN_ASK = true;
+    fetch('/api/public/support-request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: (who && who.name) || '',
+        email: (who && who.email) || '',
+        subject: planLabel() + ' plan request',
+        body: 'I started a free account from the ' + planLabel() + ' page and would like the '
+          + planLabel() + ' plan switched on when it is available. My workspace is '
+          + ((who && who.ws) || 'the one I just created') + '.'
+      })
+    }).then(function (r) {
+      if (!r.ok) return null;
+      return r.json().catch(function () { return null; });
+    }).then(function (d) {
+      if (!d) return;
+      var pill = document.getElementById('rgPlanNote');
+      if (!pill) return;
+      pill.textContent = '';
+      pill.appendChild(document.createTextNode(
+        'Your ' + planLabel() + ' plan is not on self-serve checkout yet, so we passed your request '
+        + 'to the CoreSwift team — they will switch it on and email you.'));
+      pill.style.display = 'block';
+    }).catch(function () {});
+  }
+
+  function notePlanRequest(data, who) {
+    if (!data || !data.plan_request || !data.plan_request.plan_name) {
+      // The pick was NOT filed (a tier the price list does not sell: no request row, no alert).
+      // Replace the neutral note with what happened and the door that DOES file a request.
+      if (PLAN) {
+        var pill = document.getElementById('rgPlanNote');
+        if (pill) {
+          pill.textContent = '';
+          pill.appendChild(document.createTextNode(
+            'Your ' + planLabel() + ' plan is not on self-serve checkout yet, so it was not passed '
+            + 'automatically. Ask the team to set it up for you: '));
+          var link = document.createElement('a');
+          link.href = '/contact.html';
+          link.style.fontWeight = '600';
+          link.textContent = 'send the request';
+          pill.appendChild(link);
+          pill.appendChild(document.createTextNode('.'));
+          pill.style.display = 'block';
+        }
+        // File the ask instead of waiting for the visitor to make a second trip to /contact.html.
+        askTeamForPlan(who);
+      }
+      return;
+    }
+    var row = document.createElement('div');
+    row.style.cssText = 'margin-top:10px;font-size:13px;font-weight:600;color:#065f46';
+    row.textContent = 'Your ' + data.plan_request.plan_name + ' plan request is with the CoreSwift team'
+      + ' — nothing was charged.';
+    msg.appendChild(row);
+    var pill = document.getElementById('rgPlanNote');
+    if (pill) pill.style.display = 'none';
+  }
+
+  document.getElementById('paneLogin').addEventListener('submit', function (e) {
+    e.preventDefault();
+    submit('/api/auth/login', {
+      email: document.getElementById('liEmail').value.trim(),
+      password: document.getElementById('liPass').value
+    }, document.getElementById('liBtn'), 'Sign in', 'Welcome back — opening your workspace…');
+  });
+
+  document.getElementById('paneRegister').addEventListener('submit', function (e) {
+    e.preventDefault();
+    hide();
+    // A whitespace-only "Full name" passes the HTML `required` attribute (a space is still a
+    // non-empty string, so the browser submits) and trims to "" right here — and the server used
+    // to store it verbatim. Measured LIVE 2026-10-16: POST /api/auth/register {"name":"   "}
+    // answered 201 and minted a workspace labelled "   's Workspace" whose owner has no name.
+    // Refused here with a sentence so the user never pays a round-trip for it; the BACKEND gate
+    // now refuses the same input with 422 "name: is required" at the ONE account writer
+    // (auth::signup::create_account, kanban t_0ab34bd3), which BOTH /api/auth/register and the
+    // machine provisioning door inherit — a direct API caller gets the same answer.
+    var name = document.getElementById('rgName').value.trim();
+    if (!name) { show('Please enter your name.', false); return; }
+    var btn = document.getElementById('rgBtn');
+    var ws = (document.getElementById('rgWs') || {}).value || '';
+    ws = ws.trim();
+    if (!INVITE && !ws) { show('Please name your workspace — it becomes your address in CoreSwift.', false); return; }
+    var body = {
+      name: name,
+      email: document.getElementById('rgEmail').value.trim()
+      // NO password: the server mints the login credentials and emails them (David's signup
+      // model). Nothing is stored here and there is no auto-login — the user confirms their
+      // address by signing in with the password we sent.
+    };
+    if (!INVITE) {
+      body.account_name = ws;
+      // The address follows the name (see slugifyWs). Omitted when the name yields nothing usable —
+      // the server then derives its own, so a signup can never be BLOCKED on the address.
+      var wsSlug = slugifyWs(ws);
+      if (wsSlug) body.account_slug = wsSlug;
+    }
+    if (INVITE) {
+      // resolve_account() joins the inviter's tenant when this field is present and ignores
+      // account_name/account_slug, so they are deliberately omitted on the invite path.
+      body.invite_token = INVITE;
+    }
+    // The tier the visitor picked on the price list travels WITH the signup, so the request is filed
+    // by the same POST that mints the account (kanban t_71a3a39f) — no second call the page could
+    // lose to a dropped connection.
+    if (PLAN) body.plan_slug = PLAN;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin"></span>' + (INVITE ? 'Joining…' : 'Creating account…');
+    postSignup(body).then(function (first) {
+      // A TAKEN address is not a failed signup. Retry with a short suffix, and only then let the
+      // server derive its own, so the customer is never told their signup failed because someone
+      // else already had "acme-plumbing".
+      if (first.res.status === 409 && body.account_slug) {
+        var alt = {};
+        for (var k1 in body) { alt[k1] = body[k1]; }
+        alt.account_slug = body.account_slug + '-' + Math.random().toString(36).slice(2, 6);
+        return postSignup(alt).then(function (second) {
+          if (second.res.status !== 409) return second;
+          var third = {};
+          for (var k2 in body) { third[k2] = body[k2]; }
+          delete third.account_slug;
+          return postSignup(third);
+        });
+      }
+      return first;
+    }).then(function (r) {
+      var res = r.res;
+      var data = r.data;
+        if (!res.ok) {
+          throw new Error((data && (data.message || data.error)) || ('Request failed (HTTP ' + res.status + ')'));
+        }
+        // Did the login mail actually leave? The API answers `credentials_emailed` (kanban
+        // t_d841df4f). `false` means the account exists but its generated password is in nobody's
+        // inbox — a send failure, or an address the sender withholds. Promising "check your email"
+        // on that arm was a lie, and the reset link below travels the SAME mail path that just
+        // failed, so it was a dead end. Offer the mail-independent door instead: the token this
+        // response already carries is all `POST /api/auth/initial-password` needs.
+        var mailed = !(data && data.credentials_emailed === false);
+        if (!mailed) {
+          show(INVITE
+            ? 'You have joined the workspace — but we could not send your login details to ' + body.email + '.'
+            : 'Account created — but we could not send your login details to ' + body.email + '.',
+            false);
+          offerInitialPassword(data && data.access_token, body.email);
+          notePlanRequest(data, { name: body.name, email: body.email, ws: body.account_name });
+          btn.disabled = false;
+          btn.textContent = 'Set your password below';
+          return;
+        }
+        // The account exists and the credentials were emailed. Show the two-step confirmation and
+        // stop — no session is stored, so the user must sign in with the password we sent.
+        show(INVITE
+          ? 'You have joined the workspace. Check your email — we sent your login details to ' + body.email + '.'
+          : 'Account created! Check your email — we sent your login details to ' + body.email +
+            '. You can change your password any time in your profile settings.', true);
+        notePlanRequest(data, { name: body.name, email: body.email, ws: body.account_name });
+        // A customer whose credentials mail never arrived has a way back in (cron 2026-10-19):
+        // the address they just typed is carried into the reset-request page, so nothing is retyped.
+        (function () {
+          var d = document.createElement('div');
+          d.style.cssText = 'margin-top:12px;padding-top:10px;border-top:1px solid rgba(0,0,0,.08);font-size:13px';
+          d.appendChild(document.createTextNode('Nothing in your inbox after a minute? Check your spam folder, then '));
+          var a = document.createElement('a');
+          a.href = '/forgot-password.html?email=' + encodeURIComponent(body.email);
+          a.style.fontWeight = '600';
+          a.textContent = 'send yourself a reset code';
+          d.appendChild(a);
+          d.appendChild(document.createTextNode('.'));
+          msg.appendChild(d);
+        })();
+        btn.disabled = false;
+        btn.textContent = INVITE ? 'Join workspace' : 'Check your email';
+    }).catch(function (err) {
+      btn.disabled = false;
+      btn.textContent = INVITE ? 'Join workspace' : 'Create free account';
+      show(err.message, false);
+    });
+  });
+})();
+</script>
+<script id="cs-theme-shared-js">/* the switch itself (shared): describes what pressing it will DO, not the current state */
+(function(){
+  function label(){var t=document.documentElement.getAttribute('data-theme')==='dark';
+    var b=document.getElementById('csThemeBtn');
+    if(b) b.innerHTML=(t?'&#9728;&#65039; <span>Day mode</span>':'&#127770; <span>Night mode</span>');}
+  function remember(v){
+    try{localStorage.setItem('cs_theme',v);}catch(e){}
+    /* Same cookie WorkflowSwift uses, for the same reason: set once on any CoreSwift address and every
+       other subdomain sends it back, so the switch holds across app., booking., admin. and inbox. */
+    try{document.cookie='cs_theme=;path=/;max-age=0';}catch(e){}   /* drop any host-only twin first */
+    try{document.cookie='cs_theme='+v+';domain=coreswiftcrm.com;path=/;max-age=31536000;SameSite=Lax';}catch(e){}
+  }
+  function flip(){
+    var next=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';
+    document.documentElement.setAttribute('data-theme',next);
+    remember(next);
+    label();
+  }
+  function mount(){
+    if(document.getElementById('csThemeBtn')){label();return;}
+    var b=document.createElement('button');
+    b.id='csThemeBtn'; b.type='button'; b.title='Switch day / night mode';
+    b.onclick=flip; document.body.appendChild(b); label();
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',mount); else mount();
+})();
+</script>
+</body>
+</html>
