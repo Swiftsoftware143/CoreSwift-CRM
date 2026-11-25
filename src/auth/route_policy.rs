@@ -622,6 +622,24 @@ pub const API_KEY_ROUTES: &[&str] = &[
     // non-empty bearer and `custom_objects::authenticate` decides which credential it is — an issued
     // `csk_…` key, or a console session JWT. Whichever it is, it resolves to exactly one account and
     // the module reads the tenant from that resolution, never from the request.
+    // THE AGENT DOOR (2026-11-25). An AI agent holds an issued key, and the console routes correctly
+    // refuse one. Rather than widen a session door, these routes accept EITHER credential and resolve it
+    // themselves (`agent_api::authenticate`), exactly as `/api/objects` does. A `read_only` key is still
+    // refused, because every write here is outside READ_ONLY_KEY_ROUTES.
+    "/api/agent",
+    "/api/agent/contacts",
+    "/api/agent/contacts/:id",
+    "/api/agent/deals",
+    "/api/agent/deals/:id",
+    "/api/agent/deals/:id/stage",
+    "/api/agent/deals/:id/tasks",
+    "/api/agent/lists/:id/members",
+    "/api/agent/tags/assign",
+    "/api/agent/calendars/:id",
+    "/api/agent/calendars/:id/payment-checkout",
+    "/api/agent/calendars/:id/payment-key/rotate",
+    "/api/agent/resources/:id/payment-checkout",
+    "/api/agent/redirects",
     "/api/mcp",
     "/api/objects",
     "/api/objects/:slug",

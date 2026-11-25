@@ -10,6 +10,7 @@ pub mod account;
 pub mod account_match;
 pub mod admin_actions;
 pub mod agent;
+pub mod agent_api;
 pub mod ai;
 mod alerts;
 pub mod analytics;

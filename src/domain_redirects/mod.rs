@@ -20,6 +20,12 @@ use serde_json::{json, Value};
 use crate::auth::models::Claims;
 use crate::errors::{ApiResult, AppError};
 
+/// The module's handlers, reachable by the agent door (which resolves its own credential and must call
+/// the SAME implementation rather than a second copy).
+pub mod handlers {
+    pub use super::save_redirect;
+}
+
 pub fn router(state: crate::AppState) -> Router<crate::AppState> {
     // Take AppState and pull the pool out, exactly like every other router here: a `Router<Pool<..>>`
     // nests as the wrong service and answers 404 at run time while every gate stays green.
@@ -195,7 +201,7 @@ async fn list_addresses(
 }
 
 /// Save (or replace) where one of these addresses sends a visitor.
-async fn save_redirect(
+pub async fn save_redirect(
     State(state): State<crate::AppState>,
     Extension(user): Extension<Claims>,
     Json(body): Json<Value>,
