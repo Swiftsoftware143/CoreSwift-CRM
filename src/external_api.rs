@@ -73,6 +73,11 @@
 //!   The hub writes `contacts.metadata.source_app` (first touch — preserved when the same
 //!   lead is pushed again) and `contacts.metadata.last_source_app` (every push), plus
 //!   `contacts.source = <slug>` on first arrival unless the body set an explicit `source`.
+//!   ONE exception (kanban t_538195c3): an address that is a fleet HARNESS identity
+//!   (`probe-x@…`, `realcustomer-<unix-ts>@swiftsoftware.com`, anything on the reserved class)
+//!   is labelled `contacts.source = 'probe'` on every push, so a customer's pipeline count is
+//!   never inflated by probe traffic. The ADDRESS alone decides; the pushed name never does, and
+//!   `metadata.source_app` still records the spoke that sent it.
 //!   Both the column and the metadata are therefore first-touch, so "leads by capture app"
 //!   never moves a lead from the app that found it to the app that re-sent it. An
 //!   unrecognized slug is kept verbatim rather than dropped, so it still shows in reporting.
@@ -305,6 +310,15 @@ pub(crate) async fn ensure_field(
     Ok(id)
 }
 
+/// Is this pushed identity a fleet harness probe rather than a customer? Address-only: the pushed
+/// NAME is never consulted, so a real contact called "Probe Farm" is still a customer.
+pub(crate) fn probe_identity(email: Option<&str>) -> bool {
+    email
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .is_some_and(crate::security::probe_addr::probe_contact_addr)
+}
+
 pub(crate) async fn upsert_contact(
     s: &AppState,
     tenant_id: Uuid,
@@ -326,6 +340,11 @@ pub(crate) async fn upsert_contact(
     let country = builtin.get("country").cloned();
     let notes = builtin.get("notes").cloned();
     let source = builtin.get("source").cloned();
+    // A harness probe is labelled at the HUB (kanban t_538195c3): the ADASwift operator tenant is
+    // the SAME tenant every real ADASwift signup arrives through, so excluding it would drop real
+    // leads, and blocking the push at the spoke would remove the end-to-end proof of the push
+    // path. Tag the row instead — one rule for every spoke, present and future.
+    let probe = probe_identity(email.as_deref());
 
     if first_name.is_empty() && email.is_none() && phone.is_none() {
         return Err(AppError::BadRequest(
@@ -359,8 +378,11 @@ pub(crate) async fn upsert_contact(
                     -- Attribution is first-touch on BOTH paths so the plain column and
                     -- the leads-by-capture-app rollup cannot disagree: the source app
                     -- that found the lead keeps it, and every later push only moves
-                    -- metadata.last_source_app.
-                    source     = COALESCE(NULLIF(source, ''), NULLIF($12, '')),
+                    -- metadata.last_source_app. A HARNESS PROBE is the one exception and it
+                    -- wins every time ($15), so a repeat push of a probe row stays 'probe'
+                    -- instead of settling on the spoke slug.
+                    source     = CASE WHEN $15::bool THEN 'probe'
+                                      ELSE COALESCE(NULLIF(source, ''), NULLIF($12, '')) END,
                     metadata   = COALESCE(metadata, '{}'::jsonb)
                                  || jsonb_build_object('last_source_app', $13::text, 'source_raw', $14::text)
                                  || CASE WHEN COALESCE(metadata, '{}'::jsonb) ? 'source_app'
@@ -383,6 +405,7 @@ pub(crate) async fn upsert_contact(
             .bind(&source)
             .bind(source_app)
             .bind(source_raw)
+            .bind(probe)
             .execute(&s.db)
             .await
             .map_err(AppError::Database)?;
@@ -410,6 +433,13 @@ pub(crate) async fn upsert_contact(
     // The UPDATE arm above stays ungated too: a re-delivered lead must keep resolving to its row
     // rather than start 402ing (t_f49e4299).
     let id = Uuid::new_v4();
+    // The pipeline-facing label. A probe row is 'probe' from the first push; every other lead keeps
+    // the spoke slug exactly as before (the handler already defaulted `source` to it).
+    let insert_source = if probe {
+        Some("probe".to_string())
+    } else {
+        source.clone()
+    };
     let attribution = json!({
         "source_app": source_app,
         "source_raw": source_raw,
@@ -431,7 +461,7 @@ pub(crate) async fn upsert_contact(
     .bind(&state)
     .bind(&country)
     .bind(&notes)
-    .bind(&source)
+    .bind(&insert_source)
     .bind(&attribution)
     .execute(&s.db)
     .await
@@ -948,4 +978,36 @@ pub fn router() -> axum::Router<AppState> {
         .route("/deals", post(external_upsert_deal))
         .route("/deals/:external_ref/stage", patch(external_deal_stage))
         .route("/deals/:external_ref/status", post(external_deal_status))
+}
+
+/// The hub's pipeline label on a PUSHED identity (kanban t_538195c3). The three positives are the
+/// identities the fleet's harnesses actually mint; the three controls are real leads whose last
+/// line of defence is this test — `david@swiftsoftware.com` is the owner's own mailbox on the
+/// brand domain and must never enter a customer's pipeline as a probe.
+#[cfg(test)]
+mod probe_identity_tests {
+    use super::probe_identity;
+
+    #[test]
+    fn harness_identities_are_probes() {
+        assert!(probe_identity(Some(
+            "realcustomer-1795045484@swiftsoftware.com"
+        )));
+        assert!(probe_identity(Some("probe-x@maxxspace.com")));
+        assert!(probe_identity(Some("x@example.invalid")));
+    }
+
+    #[test]
+    fn real_leads_are_not_probes() {
+        assert!(!probe_identity(Some("owner@albert-tire.com")));
+        assert!(!probe_identity(Some("jane@acme.io")));
+        assert!(!probe_identity(Some("david@swiftsoftware.com")));
+    }
+
+    #[test]
+    fn no_email_is_never_a_probe() {
+        assert!(!probe_identity(None));
+        assert!(!probe_identity(Some("")));
+        assert!(!probe_identity(Some("   ")));
+    }
 }

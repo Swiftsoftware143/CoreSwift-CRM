@@ -152,6 +152,12 @@ pub const SYNTHETIC_REQUESTER_DOMAINS: &[&str] = &[
 /// Local parts a harness mints. `bounce+` is the shape a deliverability probe uses.
 pub const SYNTHETIC_LOCAL_PREFIXES: &[&str] = &["probe-", "canary-", "bounce+", "verify"];
 
+/// The fleet's BRAND domain — the one domain in [`SYNTHETIC_REQUESTER_DOMAINS`] where the fleet's
+/// own humans hold real mailboxes. A probe identity on it is still machinery, but it has to be
+/// named by SHAPE (`realcustomer-<unix-ts>`), never by the domain alone (see
+/// [`probe_contact_addr`]).
+pub const BRAND_DOMAIN: &str = "swiftsoftware.com";
+
 /// Workspace/account name fragments that name fleet machinery in words.
 pub const SYNTHETIC_NAME_FRAGMENTS: &[&str] =
     &["probe", "canary", "synthetic", "smoke test", "test farm"];
@@ -197,6 +203,73 @@ pub fn synthetic_requester(email: &str, name: &str) -> Option<&'static str> {
         }
     }
     None
+}
+
+/// Is `addr` a machine identity a fleet harness PUSHES into the CRM — a probe contact — rather
+/// than a customer? ADDRESS-ONLY, and that is the point: [`synthetic_requester`] also matches
+/// NAME fragments, so passing the pushed name would tag a real contact called "Probe Farm".
+///
+/// This is the hub's pipeline-facing classifier (kanban t_538195c3). The ADASwift operator tenant
+/// is the ONLY path a real ADASwift signup is pushed through, so a probe cannot be excluded at the
+/// tenant or blocked at the spoke; the hub labels the ROW instead, which covers every spoke
+/// (present and future) with one rule.
+///
+/// It is deliberately NOT a bare [`synthetic_requester`] answer, because that predicate is the
+/// ALERT one and its domain list carries the brand domain (`swiftsoftware.com`) so fleet mail
+/// never pages a human. In the CRM the brand domain is where the fleet's own people hold real
+/// mailboxes — `david@swiftsoftware.com` is the owner and must stay a customer row — so there the
+/// identity has to be machine-SHAPED: `realcustomer-<unix-ts>@swiftsoftware.com`, the identity
+/// ADASwift's signup probe pushes.
+pub fn probe_contact_addr(addr: &str) -> bool {
+    let addr = addr.trim();
+    let Some((local, domain)) = addr.rsplit_once('@') else {
+        return false;
+    };
+    let local = local.trim().to_ascii_lowercase();
+    let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    if local.is_empty() || domain.is_empty() {
+        return false;
+    }
+
+    // 1. A machine-minted local part names harness machinery on ANY domain — the fleet's own proof
+    //    scripts address real, registrable domains (`probe-x@maxxspace.com`).
+    if SYNTHETIC_LOCAL_PREFIXES
+        .iter()
+        .any(|p| local.starts_with(p))
+    {
+        return true;
+    }
+    // 2. The harness MAIL class: no customer can hold an address there.
+    if harness_domain(addr).is_some() {
+        return true;
+    }
+    // 3. The brand domain — humans live here, machinery has a shape.
+    if domain_is(&domain, BRAND_DOMAIN) {
+        return machine_minted_local(&local);
+    }
+    // 4. The rest of the alert predicate's domain class (`x.com`, `test.com`, `example.test`): the
+    //    fleet's proof scripts address those, and no captured lead arrives from one. The brand
+    //    domain is handled at 3, never here.
+    SYNTHETIC_REQUESTER_DOMAINS
+        .iter()
+        .any(|d| domain_is(&domain, d))
+}
+
+/// `domain` is `d` or a subdomain of it — matched on the LABEL boundary, so
+/// `x@notswiftsoftware.com` is not on the brand domain.
+fn domain_is(domain: &str, d: &str) -> bool {
+    domain == d || (domain.len() > d.len() + 1 && domain.ends_with(&format!(".{d}")))
+}
+
+/// `<word>-<at least 8 digits>`: a timestamp on a machine-minted mailbox
+/// (`realcustomer-1795045484`), never a person (`john-1985`).
+fn machine_minted_local(local: &str) -> bool {
+    match local.rsplit_once('-') {
+        Some((stem, tail)) => {
+            !stem.is_empty() && tail.len() >= 8 && tail.bytes().all(|b| b.is_ascii_digit())
+        }
+        None => false,
+    }
 }
 
 /// Fictitious numbers that can never receive a text.
@@ -445,5 +518,55 @@ mod number_tests {
         // Too short to judge is not a probe verdict.
         assert_eq!(undeliverable_number("5550101"), None);
         assert_eq!(undeliverable_number(""), None);
+    }
+}
+
+/// The hub's pipeline label (kanban t_538195c3): a pushed identity is a probe only when the
+/// ADDRESS is machine-minted. The controls matter as much as the positives — the brand-domain arm
+/// of `synthetic_requester` must never turn an operator's own mailbox into a probe row.
+#[cfg(test)]
+mod probe_contact_addr_tests {
+    use super::probe_contact_addr;
+
+    #[test]
+    fn harness_identities_are_probes() {
+        // ADASwift's signup probe, as pushed into the SwiftImpact tenant.
+        assert!(probe_contact_addr(
+            "realcustomer-1795045484@swiftsoftware.com"
+        ));
+        // A machine-minted local part on a real, registrable domain.
+        assert!(probe_contact_addr("probe-x@maxxspace.com"));
+        // The reserved class.
+        assert!(probe_contact_addr("x@example.invalid"));
+        // Shape/normalisation: case, whitespace and the trailing root dot do not decide it.
+        assert!(probe_contact_addr(
+            "  RealCustomer-1795045484@SwiftSoftware.COM.  "
+        ));
+        // A fingerprint on a harness mail domain, whatever the local part.
+        assert!(probe_contact_addr("someone@mail.swiftsoftware.dev"));
+        // The rest of the alert class.
+        assert!(probe_contact_addr("proof@test.com"));
+    }
+
+    #[test]
+    fn real_customers_are_not_probes() {
+        assert!(!probe_contact_addr("owner@albert-tire.com"));
+        assert!(!probe_contact_addr("jane@acme.io"));
+        // The owner's own mailbox on the brand domain — a customer row, never a probe.
+        assert!(!probe_contact_addr("david@swiftsoftware.com"));
+        // A person with digits in the mailbox is still a person.
+        assert!(!probe_contact_addr("john-1985@swiftsoftware.com"));
+        // Label boundary: a domain that merely contains the brand name is a customer.
+        assert!(!probe_contact_addr("someone@notswiftsoftware.com"));
+        assert!(!probe_contact_addr("owner@notalbert-tire.com"));
+    }
+
+    #[test]
+    fn unparseable_or_empty_is_never_a_probe() {
+        assert!(!probe_contact_addr(""));
+        assert!(!probe_contact_addr("   "));
+        assert!(!probe_contact_addr("not-an-address"));
+        assert!(!probe_contact_addr("@swiftsoftware.com"));
+        assert!(!probe_contact_addr("probe-x@"));
     }
 }
