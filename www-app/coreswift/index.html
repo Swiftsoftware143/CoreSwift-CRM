@@ -3927,7 +3927,7 @@ function icRenderLeadSources() {
 }
 
 // MCP page: surface the account's API key inline so a user never has to leave the page to grab the
-// token an MCP client needs. Reveal/copy reuses the Integration Center flow (password-gated).
+// token an MCP client needs. Reveal/copy reuses the Integration Center flow — one click, session only.
 // ── MCP page helpers (2026-11-21) ───────────────────────────────────────────────────────────────
 // Small behaviours the reference screen has and this one needs: a server check that tells the truth,
 // an idea generator that does not invent capabilities we do not have, and a developer drawer that
@@ -4174,7 +4174,7 @@ async function mcpLoadKey() {
     ]);
     el.innerHTML =
       dataTable(['Name', 'Prefix', 'Role', ''], rows, 'No active API key.') +
-      '<p style="color:var(--text-muted);font-size:12px;margin:8px 0 0">This is the token an MCP client uses. Press <b>View &amp; copy</b>, re-enter your password, and the full key appears. ' +
+      '<p style="color:var(--text-muted);font-size:12px;margin:8px 0 0">This is the token an MCP client uses. Press <b>View &amp; copy</b> — one click, and the full key appears. ' +
       'For an assistant that should only answer questions, use a <b>read-only</b> key: it can read this account and every make-or-change call through it is refused. ' +
       'Create, regenerate and revoke these keys in the <b>Integration Center</b>.</p>';
   } catch (e) {
@@ -4222,7 +4222,7 @@ function icRenderKeys() {
   ]);
   const body = '<p style="color:var(--text-secondary);margin:0 0 10px">A key is this account&#39;s identity: a capture app uses one to deliver leads in, and an AI/MCP client uses one to read this account. ' +
     'A <strong>read + write</strong> key can read and change this account; a <strong>read-only</strong> key can only read — every make-or-change call through it is refused with a sentence and writes nothing. ' +
-    'The key itself stays retrievable: press <strong>View</strong> and re-enter your password to see it and copy it again at any time. <strong>' + active + '</strong> active of ' + items.length + ' total.</p>' +
+    'The key itself stays retrievable: press <strong>View</strong> to see it and copy it again at any time — one click, and the view is recorded. <strong>' + active + '</strong> active of ' + items.length + ' total.</p>' +
     dataTable(['Name', 'Prefix', 'Role', 'Status', 'Last used', 'Created', ''], rows,
       'No keys yet — create one and paste it into a capture app\'s CoreSwift integration, or into an AI client.');
   const footer = '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">' +
@@ -4285,7 +4285,7 @@ async function icShowKeyOnce(d, title) {
     (icKeyRoleIsReadOnly(role)
       ? 'Paste this into the app or AI client that should only READ this account. It is a read-only key, so every make-or-change call through it is refused and writes nothing. '
       : 'Paste this into the capture app or AI client. It is a read-and-write key: it can read and change this account. ') +
-    'You can come back and view or copy it again any time — press View and re-enter your password.',
+    'You can come back and view or copy it again any time — press View, one click.',
     role);
   await icLoadOverview();
 }
@@ -4308,27 +4308,32 @@ function icShowKeyCard(title, key, prefix, blurb, role) {
 
 function icCopyShownKey() {
   const inp = document.getElementById('icNewKey');
-  if (!inp || !inp.value) return;
-  tlCopyUrl(inp.value);
+  const s = inp ? String(inp.value || '') : '';
+  if (!s) { toast('Nothing to copy', 'error'); return; }
+  const fallback = function () {
+    inp.focus(); inp.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    return ok;
+  };
+  // Never echo the secret: `tlCopyUrl` toasts the payload it copied, which is right for a link and
+  // wrong for a credential.
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(s).then(function () { toast('Key copied', 'success'); },
+      function () { toast(fallback() ? 'Key copied' : 'Could not copy — select the key and copy it', fallback() ? 'success' : 'error'); });
+  } else {
+    toast(fallback() ? 'Key copied' : 'Could not copy — select the key and copy it', fallback() ? 'success' : 'error');
+  }
 }
 
-// View = re-authenticate, then show the SAME stored key. Repeatable: nothing is consumed.
+// View = show the SAME stored key, in ONE CLICK (plan §6.2 / kanban t_76d82f06). The console session
+// is the whole credential: the server takes no password and no body, opens the sealed copy and
+// records the view. Repeatable: nothing is consumed.
 async function icViewKey(id) {
-  showModal('View your API key',
-    '<p style="margin:0 0 8px">Confirm it is you before the key is shown. Enter your account password.</p>' +
-    '<div class="form-group"><label>Password</label><input type="password" id="icViewPassword" autocomplete="current-password"></div>',
-    '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>' +
-    '<button class="btn btn-primary" onclick="icDoViewKey(\'' + escapeHtmlAttr(id) + '\')">Show key</button>');
-  const inp = document.getElementById('icViewPassword');
-  if (inp) inp.focus();
-}
-
-async function icDoViewKey(id) {
-  const pw = (document.getElementById('icViewPassword') || {}).value || '';
-  if (!pw) { toast('Enter your password', 'error'); return; }
   try {
-    const d = await API.post('/personal-api-keys/' + encodeURIComponent(id) + '/reveal', { password: pw });
-    icShowKeyCard('Your API key', d && d.key, d && d.prefix, 'This is the same key as before. Every view is recorded.', d && d.role);
+    const d = await API.post('/personal-api-keys/' + encodeURIComponent(id) + '/reveal', {});
+    if (!d || !d.key) { toast('Could not show key: the server returned no key', 'error'); return; }
+    icShowKeyCard('Your API key', d && d.key, d && d.prefix, 'This is the same key as before — nothing was replaced, and this view is recorded.', d && d.role);
   } catch (e) {
     toast('Could not show key: ' + e.message, 'error');
   }
@@ -13720,7 +13725,7 @@ async function wsSwitchBusiness(idx) {
    hash, so switchTab() tells the widget which screen is open via window.inlineGuidePage(tabId). */
 window.appGuidePages = {
   dashboard:       { title: "Dashboard", desc: "Your account at a glance — contacts, deals, activity and what needs attention today.", actions: ["Scan the counters and recent activity", "Jump to anything that needs a follow-up", "Use the account switcher (🗂️ top bar) to move between accounts"] },
-  mcp:             { title: "MCP", desc: "Connect your AI tools to read this account. Point an MCP client (Claude Code, Cursor, Hermes, or your own agent) at https://hooks.swiftsoftware.net/mcp, using your API key as the token. Every tool is read-only and scoped to this account — there is no write tool and no free-form SQL door.", actions: ["Copy the endpoint", "View & copy your API key (re-enter your password)", "Paste both into your MCP client"] },
+  mcp:             { title: "MCP", desc: "Connect your AI tools to read this account. Point an MCP client (Claude Code, Cursor, Hermes, or your own agent) at https://hooks.swiftsoftware.net/mcp, using your API key as the token. Every tool is read-only and scoped to this account — there is no write tool and no free-form SQL door.", actions: ["Copy the endpoint", "View & copy your API key (one click)", "Paste both into your MCP client"] },
   "booking":       { title: "Booking", desc: "One booking engine, three kinds of calendar. Pick the type when you create it: appointment times (a Calendly replacement), dated slots you sell (newsletter placements, ad spots), or a date range (a featured listing or a rental). Set your open hours once and use the shortcuts to fill a whole week; generate a quarter of dated slots in one run with a different price per weekday; add a bulk price. Every calendar has its own public address, and the screen gives you two snippets to put it on your own site — inline in the page, or a popup button that opens over it.", actions: ["Create a calendar and pick its type", "Add what customers can book, with a price and a length", "Set open hours, or generate dated slots", "Add a bulk-pricing rule", "Copy the link or an embed snippet"] },
   "data-mapping":  { title: "Data mapping", desc: "Bring another SwiftSoftware app's leads into this CRM without code. Pick the source app, then drop its fields into your contact fields as data pills — the preview shows exactly what CoreSwift would receive before anything is saved. If the app has already sent you data, the field list is built from what actually arrived.", actions: ["Pick the source app and the kind of row", "Click a source field to drop it into a destination", "Test with a sample row, then Save", "Check Runs to see what was refused and why"] },
   contacts:        { title: "Contacts", desc: "The people and companies you do business with. Each contact carries its history, tags and deals.", actions: ["Add a contact", "Open one to see its full record", "Search by name or email"] },

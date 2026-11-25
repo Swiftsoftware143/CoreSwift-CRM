@@ -190,10 +190,10 @@ def main():
         f"where tenant_id='{tenant}' and is_active limit 1"
     ).split("|", 1)
     check("workspace holds an issued API key", bool(key_id), "no active key")
-    # The reveal ROUTE re-authenticates with the human's password (deliberately — a stolen session
-    # must not be able to read a live credential). This harness runs on the box as the operator, so
-    # it opens the SAME sealed envelope the app opens, with the SAME master secret and the same
-    # tenant-scoped derivation. No credential is minted, rotated or left behind.
+    # The reveal ROUTE is one click from a console session (plan §6.2, kanban t_76d82f06 — no password
+    # re-prompt), but this harness runs on the box as the operator, so it opens the SAME sealed envelope
+    # the app opens, with the SAME master secret and the same tenant-scoped derivation. No credential is
+    # minted, rotated or left behind.
     api_key = open_sealed(tenant, sealed) if sealed else ""
     check("the workspace's issued key is usable (sealed store opens)",
           bool(api_key) and api_key.startswith("csk_"), "sealed key did not open")

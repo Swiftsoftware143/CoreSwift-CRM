@@ -123,12 +123,12 @@ def rpc(base: str, token: str, name: str, args: dict) -> tuple[bool, dict]:
     return bool(result.get("isError")), payload
 
 
-def mint_key(db: Db, tenant: str, role: str, name: str) -> tuple[str, str]:
+def mint_key(db: Db, tenant: str, user: str, role: str, name: str) -> tuple[str, str]:
     token = "csk_" + uuid.uuid4().hex + uuid.uuid4().hex
     digest = hashlib.sha256(token.encode()).hexdigest()
     key_id = db.one(
-        "INSERT INTO personal_api_keys (tenant_id, name, key_hash, key_prefix, is_active, api_role) "
-        f"VALUES ('{tenant}', '{name}', '{digest}', '{token[:12]}', true, '{role}') RETURNING id"
+        "INSERT INTO personal_api_keys (tenant_id, user_id, name, key_hash, key_prefix, is_active, api_role) "
+        f"VALUES ('{tenant}', '{user}', '{name}', '{digest}', '{token[:12]}', true, '{role}') RETURNING id"
     )
     if not key_id:
         raise SystemExit("could not mint the probe key")
@@ -159,8 +159,15 @@ def main() -> int:
             f"VALUES ('probe-ro-{stamp}', 'probe-ro-{stamp}', true, 'api-key-role-acceptance') "
             "RETURNING id"
         )
-        ro_key, _ = mint_key(db, tenant, "read_only", "probe-read-only")
-        rw_key, _ = mint_key(db, tenant, "workspace", "probe-workspace")
+        # `external_api::resolve_key` admits a key only while its `user_id` names a live, enabled
+        # user (a deleted owner must revoke their keys). A probe key with no user answers 401, so
+        # the fixture creates the owner first — without this every API-key arm fails at the door.
+        user = db.one(
+            "INSERT INTO users (tenant_id, email, password_hash, name) "
+            f"VALUES ('{tenant}', 'probe-ro-{stamp}@example.test', 'x', 'probe-ro owner') RETURNING id"
+        )
+        ro_key, ro_key_id = mint_key(db, tenant, user, "read_only", "probe-read-only")
+        rw_key, _ = mint_key(db, tenant, user, "workspace", "probe-workspace")
         slug = f"ro_probe_{stamp}"
 
         # ── fixtures, written with the WORKSPACE key (so they exist on any binary) ──────────────
@@ -226,6 +233,14 @@ def main() -> int:
               f"status={st} body={json.dumps(body)[:120]}")
         st, body = http("GET", f"{base}/api/external/lists", None, rw_key)
         check("E3 a workspace key still reads /api/external/lists (200)", st == 200, f"status={st}")
+
+        # ── F. a key cannot use the session-only reveal door (plan §6.2 / §8) ──────────────────
+        # The reveal route opens the sealed copy; a read-only key reaching it would hand back the
+        # account's read+write secret. Session-only means an issued key is refused 403 here.
+        st, body = http("POST", f"{base}/api/personal-api-keys/{ro_key_id}/reveal", None, ro_key)
+        check("F0 a read_only key cannot reveal keys (403, session-only)",
+              st == 403 and "console session" in json.dumps(body),
+              f"status={st} body={json.dumps(body)[:160]}")
 
         # ── B. every WRITE arm answers 403 + the sentence ─────────────────────────────────────
         writes = [

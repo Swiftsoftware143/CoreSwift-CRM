@@ -6,11 +6,13 @@
 //! request to a path [`crate::auth::route_policy::is_guarded_path`] covers is decided here first.
 //!
 //! It answers exactly one question — *does this caller present a credential?* — and it can only
-//! refuse an anonymous caller, plus ONE property of the credential itself: a `read_only` issued key
+//! refuse an anonymous caller, plus TWO properties of the credential itself: a `read_only` issued key
 //! (kanban t_ce51cf34) is refused on every method/path that is not one of the read arms in
 //! [`route_policy::READ_ONLY_KEY_ROUTES`], so the REST surface can never be wider than the MCP door
-//! that role was minted for. Authorization (which tenant, which row) stays where it already was: the
-//! module's own `auth_middleware` and the handler.
+//! that role was minted for; and an issued key presented on a CONSOLE route is refused 403 (plan
+//! §6.2/§8, kanban t_76d82f06), because a key must never reach a session door such as the key-reveal
+//! route. Authorization (which tenant, which row) stays where it already was: the module's own
+//! `auth_middleware` and the handler.
 //!
 //! The refusal is deliberately distinguishable from every handler's own: the body is
 //! `{"error":"Authentication required"}` with no `code` field, which is what makes the boundary
@@ -37,6 +39,13 @@ pub const BOUNDARY_REFUSAL: &str = "Authentication required";
 /// 401: the key is real and valid — it is the ROLE that refuses, and the caller is told which key to
 /// use instead.
 pub const READ_ONLY_REFUSAL: &str = "this key is read-only — use a workspace key to write";
+
+/// The one user-visible sentence for "a key where a console session is required" (plan §6.2/§8,
+/// kanban t_76d82f06). 403, not 401: the caller holds a real credential of the WRONG KIND, and
+/// `POST /api/personal-api-keys/:id/reveal` must never be reachable with an issued key — a
+/// read-only key could otherwise read the account's read+write secret.
+pub const KEY_ON_SESSION_DOOR: &str =
+    "this route needs a console session — an API key cannot be used here";
 
 /// Length-independent constant-time compare, same shape as the handler-local helpers in
 /// `contacts_internal` / `tags::internal_handler` / `bookings::handlers`; this copy is the one the
@@ -167,8 +176,16 @@ pub async fn require_credential(
     }
 
     // ── everything else: a valid app JWT ────────────────────────────────────────────────────────
+    // A `csk_` bearer here is a real credential of the WRONG KIND — this is a console door. 403,
+    // not 401, so the client is told why rather than being sent to sign in again; and it is the arm
+    // that makes `POST /api/personal-api-keys/:id/reveal` session-only even for a key that has no
+    // role restriction (plan §6.2/§8, kanban t_76d82f06). A key is never a JWT, so this arm cannot
+    // shadow a valid session.
+    let issued_key_presented = bearer(&req).map(|t| t.starts_with("csk_")).unwrap_or(false);
     if presents_app_jwt(&state, &req) {
         next.run(req).await
+    } else if issued_key_presented {
+        reject(StatusCode::FORBIDDEN, KEY_ON_SESSION_DOOR)
     } else {
         reject(StatusCode::UNAUTHORIZED, BOUNDARY_REFUSAL)
     }

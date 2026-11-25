@@ -180,7 +180,7 @@ pub async fn create_key(
         "role": role,
         "key": minted.key,
         "prefix": minted.prefix,
-        "note": "This key can be viewed again in Settings > Integration Center after re-entering your password."
+        "note": "This key can be viewed again in Settings > Integration Center with View — one click, and the view is recorded."
     })))
 }
 
@@ -303,31 +303,30 @@ pub async fn rotate_key(
         "role": role,
         "key": minted.key,
         "prefix": minted.prefix,
-        "note": "The previous key no longer works. This one can be viewed again in Settings after re-entering your password."
+        "note": "The previous key no longer works. This one can be viewed again in Settings with View."
     })))
 }
 
-#[derive(Deserialize)]
-pub struct RevealRequest {
-    /// The caller's CURRENT password. A stolen session token must not be enough to read a live
-    /// credential — the same rule `profile::change_password` already applies.
-    pub password: String,
-}
-
-/// POST /api/personal-api-keys/:id/reveal — show the full key again (repeatable).
+/// POST /api/personal-api-keys/:id/reveal — show the full key again (repeatable), in ONE CLICK.
 ///
-/// David, 2026-11-11: the key must stay retrievable. The plaintext lives in `key_sealed` and is
-/// decrypted HERE and nowhere else; authentication still hashes the presented key and compares
-/// `key_hash`, so this column can never become an auth shortcut.
+/// David, 2026-11-25 (plan §6.2, primary record in §8 of
+/// `docs/fleet-per-account-keys-and-mcp-2026-11-25.md`): "they should be able to see the key it
+/// should be private and then it should be a click to view and then also a copy button". A console
+/// SESSION is the whole credential — there is no password re-prompt, and no body is required.
 ///
-/// Every reveal is written to `personal_api_key_reveals` (who, when, which prefix, from where) and
-/// to the app log — never the secret itself.
+/// The session is enough because this route is not on the issued-key surface: the console router
+/// takes a JWT, and `auth::boundary` refuses a `csk_` bearer with 403 here, so a read-only key can
+/// never use this door to obtain the account's read+write secret. Every reveal is still written to
+/// `personal_api_key_reveals` (who, when, which prefix, from where) and to the app log — never the
+/// secret itself — and the row is still scoped by `id AND tenant_id AND is_active`.
+///
+/// A legacy `{"password":"…"}` body is ACCEPTED AND IGNORED: the handler reads no body at all, so an
+/// older console keeps working against this binary.
 pub async fn reveal_key(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
-    Json(req): Json<RevealRequest>,
 ) -> ApiResult<impl IntoResponse> {
     require_key_admin(&c)?;
     let tenant_id = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
@@ -347,19 +346,6 @@ pub async fn reveal_key(
     let prefix: String = row.get("key_prefix");
     let sealed: Option<String> = row.get("key_sealed");
     let role: String = row.get("api_role");
-
-    // ── re-authenticate ────────────────────────────────────────────────────────────────────────
-    let uid = user_id.ok_or(AppError::Unauthorized)?;
-    let stored: Option<String> =
-        sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1 AND is_active = true")
-            .bind(uid)
-            .fetch_optional(&s.db)
-            .await
-            .map_err(AppError::Database)?;
-    let stored = stored.ok_or(AppError::Unauthorized)?;
-    if !crate::auth::handlers::verify_password(&req.password, &stored)? {
-        return Err(AppError::UnauthorizedReason("Password is incorrect".into()));
-    }
 
     // ── open the sealed copy ──────────────────────────────────────────────────────────────────
     let sealed = sealed.ok_or_else(|| {

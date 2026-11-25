@@ -2483,7 +2483,7 @@ const TAB_RENDERERS = {
       card('\U0001f310 Endpoint',
         '<div style="display:flex;gap:8px;align-items:center"><code id="mcpEp" style="flex:1;font-size:12px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;padding:8px;word-break:break-all">' + escapeHtml(ep) + '</code>' +
         '<button class="btn btn-secondary btn-sm" onclick="mcpCopy(\'#mcpEp\', this)">Copy</button></div>' +
-        '<p style="color:var(--text-secondary);margin:10px 0 0;font-size:13px">The credential is a key from <strong>Integration Center &rarr; API keys</strong>. Create one there (choose <strong>read-only</strong> for a client that should only read), then copy it at creation or press <strong>View</strong> (your password is asked for and the view is recorded). One key per capture app and one per AI client — revoking a key stops that client only.</p>') +
+        '<p style="color:var(--text-secondary);margin:10px 0 0;font-size:13px">The credential is a key from <strong>Integration Center &rarr; API keys</strong>. Create one there (choose <strong>read-only</strong> for a client that should only read), then copy it at creation or press <strong>View</strong> (one click — the full key appears and the view is recorded). One key per capture app and one per AI client — revoking a key stops that client only.</p>') +
       card('\u2699\ufe0f Client config',
         '<p style="color:var(--text-secondary);margin:0 0 8px;font-size:13px">Paste this into your client&rsquo;s MCP config and replace <code>YOUR_API_KEY</code> with the key.</p>' +
         '<pre id="mcpCfg" style="background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;font-size:11px;overflow-x:auto;margin:0">' + escapeHtml(cfg) + '</pre>' +
@@ -5745,7 +5745,7 @@ function icRenderKeys() {
   ]);
   const body = '<p style="color:var(--text-secondary);margin:0 0 10px">Each key is this account&#39;s identity: a capture app uses one to deliver leads in, and an AI/MCP client uses one to read this account. ' +
     'A <strong>read + write</strong> key can read and change this account; a <strong>read-only</strong> key can only read — every make-or-change call through it is refused with a sentence and writes nothing. ' +
-    'The page shows only the prefix; <strong>View</strong> asks for your password and then shows the full key so you can copy it again — every view is recorded, and nothing is consumed by looking. A row marked <strong>cannot be shown</strong> predates recoverable storage: Rotate it to get a key you can display. <strong>' + active + '</strong> active of ' + items.length + ' total.</p>' +
+    'The page shows only the prefix; <strong>View</strong> shows the full key in one click so you can copy it again — every view is recorded, and nothing is consumed by looking. A row marked <strong>cannot be shown</strong> predates recoverable storage: Rotate it to get a key you can display. <strong>' + active + '</strong> active of ' + items.length + ' total.</p>' +
     dataTable(['Name', 'Prefix', 'Role', 'Status', 'Last used', 'Created', ''], rows,
       'No keys yet — create one and paste it into a capture app\'s CoreSwift integration, or into an AI client.');
   const footer = '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">' +
@@ -5802,57 +5802,51 @@ async function icRevokeKey(id) {
   }
 }
 
-// kanban t_e033b249 — View: `POST /api/personal-api-keys/:id/reveal` existed with NO caller in
-// this panel, and the panel's own copy claimed the secret was "shown once, at creation" — untrue:
-// the server keeps a sealed copy, re-issues it on demand and writes a personal_api_key_reveals row
-// (who, when, which prefix, from where). The call is made with fetch and NOT through API.post,
-// because API.call ends the session on ANY 401 and a mistyped password here IS a 401 from the
-// re-authentication arm — the operator must be told the password is wrong, not signed out.
+// kanban t_76d82f06 / plan §6.2 — View is ONE CLICK. A console session is the whole credential:
+// `POST /api/personal-api-keys/:id/reveal` takes no password and no body, opens the sealed copy and
+// writes a personal_api_key_reveals row (who, when, which prefix, from where). The old bespoke
+// fetch existed only because a wrong password was a 401 that would have ended the session; there is
+// no password arm any more, so a 401 now really means the session ended and API.post's own handling
+// is correct. Copy is its own control and never echoes the secret into a toast.
 async function icViewKey(id) {
-  showModal('View this key',
-    '<p style="margin:0 0 8px">Confirm it is you before the key is shown. Enter your account password.</p>' +
-    '<div class="form-group"><label>Password</label><input type="password" id="icViewPassword" autocomplete="current-password"></div>',
-    '<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>' +
-    '<button class="btn btn-primary" onclick="icDoViewKey(\'' + escapeHtmlAttr(id) + '\')">Show key</button>');
-  const inp = document.getElementById('icViewPassword');
-  if (inp) inp.focus();
+  let d = null;
+  try {
+    d = await API.post('/personal-api-keys/' + encodeURIComponent(id) + '/reveal', {});
+  } catch (e) {
+    toast('Could not show key: ' + e.message, 'error');
+    return;
+  }
+  if (!d || !d.key) { toast('Could not show key: the server returned no key', 'error'); return; }
+  showModal('Your API key',
+    '<p style="margin:0 0 8px">This is the same key as before — nothing was replaced, and this view is recorded.</p>' +
+    '<p style="margin:0 0 8px" id="icNewKeyRoleLine">Role: <strong>' + (icKeyRoleIsReadOnly(d.role) ? 'Read-only' : 'Read and write (workspace)') + '</strong> — ' +
+      escapeHtml(icKeyRoleDetail(d.role)) + '</p>' +
+    '<div class="form-group"><label>Key</label><input id="icRevealedKey" readonly value="' + escapeHtmlAttr(d.key) + '"></div>' +
+    '<div style="font-size:.75rem;color:var(--text-muted)">Prefix ' + escapeHtml(d.prefix || '') + '</div>',
+    '<button class="btn btn-secondary" onclick="closeModal()">Done</button>' +
+    '<button class="btn btn-primary" onclick="icCopyRevealedKey()">Copy key</button>');
+  const shown = document.getElementById('icRevealedKey');
+  if (shown) { shown.focus(); shown.select(); }
 }
 
-async function icDoViewKey(id) {
-  const pw = (document.getElementById('icViewPassword') || {}).value || '';
-  if (!pw) { toast('Enter your password', 'error'); return; }
-  let res = null;
-  let d = {};
-  try {
-    res = await fetch('/api/personal-api-keys/' + encodeURIComponent(id) + '/reveal', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + STATE.token },
-      body: JSON.stringify({ password: pw })
-    });
-    try { d = await res.json(); } catch (e) { d = {}; }
-  } catch (e) {
-    toast('Could not reach the server: ' + e.message, 'error');
-    return;
+// Copy the shown key WITHOUT printing it: `tlCopyUrl`'s toast quotes the payload, which is fine for
+// a link and wrong for a credential.
+function icCopyRevealedKey() {
+  const inp = document.getElementById('icRevealedKey');
+  const s = inp ? String(inp.value || '') : '';
+  if (!s) { toast('Nothing to copy', 'error'); return; }
+  const fallback = function () {
+    inp.focus(); inp.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    return ok;
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(s).then(function () { toast('Key copied', 'success'); },
+      function () { toast(fallback() ? 'Key copied' : 'Could not copy — select the key and copy it', fallback() ? 'success' : 'error'); });
+  } else {
+    toast(fallback() ? 'Key copied' : 'Could not copy — select the key and copy it', fallback() ? 'success' : 'error');
   }
-  if (res.ok && d && d.key) {
-    showModal('Your API key',
-      '<p style="margin:0 0 8px">This is the same key as before — nothing was replaced, and this view is recorded.</p>' +
-      '<p style="margin:0 0 8px" id="icNewKeyRoleLine">Role: <strong>' + (icKeyRoleIsReadOnly(d.role) ? 'Read-only' : 'Read and write (workspace)') + '</strong> — ' +
-        escapeHtml(icKeyRoleDetail(d.role)) + '</p>' +
-      '<div class="form-group"><label>Key</label><input id="icRevealedKey" readonly value="' + escapeHtmlAttr(d.key) + '"></div>' +
-      '<div style="font-size:.75rem;color:var(--text-muted)">Prefix ' + escapeHtml(d.prefix || '') + '</div>',
-      '<button class="btn btn-secondary" onclick="closeModal()">Done</button>');
-    const shown = document.getElementById('icRevealedKey');
-    if (shown) { shown.focus(); shown.select(); }
-    return;
-  }
-  const serverMsg = (d && typeof d.message === 'string' && d.message) ? d.message : ('the server did not give a reason');
-  if (res.status === 401 && !/password/i.test(serverMsg)) {
-    toast('Your session ended — sign in again', 'error');
-    logout(true);
-    return;
-  }
-  toast('Could not show key: ' + serverMsg, 'error');
 }
 
 async function icShowKeyOnce(d, title) {
@@ -5861,7 +5855,7 @@ async function icShowKeyOnce(d, title) {
     '<p style="margin:0 0 8px">' + (icKeyRoleIsReadOnly(role)
       ? 'Paste this into the app or AI client that should only READ this account — this is a read-only key. '
       : 'Paste this into the capture app or AI client — this key can read and change this account. ') +
-    'You can see it again later with <strong>View</strong> on its row — that asks for your password and records the view.</p>' +
+    'You can see it again later with <strong>View</strong> on its row — one click, and the view is recorded.</p>' +
     '<p style="margin:0 0 8px" id="icNewKeyRoleLine">Role: <strong>' + (icKeyRoleIsReadOnly(role) ? 'Read-only' : 'Read and write (workspace)') + '</strong> — ' +
       escapeHtml(icKeyRoleDetail(role)) + '</p>' +
     '<div class="form-group"><label>Key</label><input id="icNewKey" readonly value="' + escapeHtmlAttr(d && d.key || '') + '"></div>' +
