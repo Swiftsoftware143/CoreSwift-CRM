@@ -1797,8 +1797,8 @@ function pageHeader(title, desc, actions) {
   </div>`;
 }
 
-function card(header, body, footer) {
-  return `<div class="card">
+function card(header, body, footer, elId) {
+  return `<div class="card"${elId ? ` id="${elId}"` : ''}>
     ${header ? `<div class="card-header">${header}</div>` : ''}
     ${body ? `<div class="card-body">${body}</div>` : ''}
     ${footer ? `<div class="card-footer">${footer}</div>` : ''}
@@ -1917,7 +1917,8 @@ const TAB_RENDERERS = {
     //  1. It connects "with one click" over OAuth. CoreSwift authenticates with the account's own API
     //     key, so the steps say that instead of printing "choose OAuth".
     //  2. It lists the apps you connected. We keep no such list — the key IS the connection — so that
-    //     block says so and names the one action that revokes everything (regenerate the key).
+    //     block says so and names the one action that replaces everything (replace the key on the API
+//     Keys screen — this page never replaces a key).
     //  3. Its examples add contacts and fire tags. CoreSwift's MCP is READ-ONLY by construction (the
     //     database role is SELECT-only), so every example is a question and the limitations state
     //     plainly that nothing is written.
@@ -1989,6 +1990,13 @@ const TAB_RENDERERS = {
     return pageHeader('Connect AI with CoreSwift',
         'Ask Claude or ChatGPT about your contacts, tags and deals — and have it find things for you') +
 
+      // ── the key itself, FIRST (plan §6 rule 4 / David 2026-11-25): the credential is the top of
+      // this screen, and this view carries View + Copy ONLY. Replacing a key is done on the API Keys
+      // screen in the Integration Center, so no rotate control or handler lives on this page.
+      card('Your API key',
+        '<div id="mcpKeyWrap"><div class="loading-wrap"><div class="spinner"></div> Loading your API key...</div></div>',
+        undefined, 'mcp-key-card') +
+
       // ── CLIENT TABS + numbered steps
       card('',
         '<div style="display:flex;gap:8px;margin-bottom:12px">' +
@@ -2002,15 +2010,12 @@ const TAB_RENDERERS = {
         '<div id="mcpSteps"></div>' +
         '') +
 
-      // ── the key itself, in its own card so it is impossible to miss
-      card('Your API key',
-        '<div id="mcpKeyWrap"><div class="loading-wrap"><div class="spinner"></div> Loading your API key...</div></div>') +
-
+      // ── (the key card now sits at the TOP of this screen — plan §6 rule 4)
       card('Ready to connect',
         '<p style="color:var(--text-secondary);font-size:13px;margin:0 0 10px">Your account: <strong id="mcpAccountEmail">this account</strong>' +
         ' — the AI reads this account and no other.</p>' +
         '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-          '<button class="btn btn-primary btn-sm" onclick="mcpJumpTo(\'mcpKeyWrap\')">View &amp; copy my key</button>' +
+          '<button class="btn btn-primary btn-sm" onclick="mcpJumpTo(\'mcpKeyWrap\')">Show my key</button>' +
           '<button class="btn btn-secondary btn-sm" onclick="mcpCheckServer(this)">Test connection</button>' +
           '<button class="btn btn-secondary btn-sm" onclick="tlCopyUrl(MCP_CONFIG_TEXT, this)">Copy my setup</button>' +
           '<button class="btn btn-ghost btn-sm" onclick="mcpJumpTo(\'mcpAdvanced\')">Advanced setup</button>' +
@@ -2019,8 +2024,8 @@ const TAB_RENDERERS = {
 
       '<div class="sunken">' + card('How the connection works',
         '<p style="color:var(--text-secondary);font-size:13px;margin:0;max-width:70ch">We do not keep a list of the apps you have ' +
-        'connected — your key is the connection. That means one action disconnects everything at once: regenerate ' +
-        'the key above and every client using the old one stops working immediately.</p>') + '</div>' +
+        'connected — your key is the connection. That means one action disconnects everything at once: replace ' +
+        'the key on the API Keys screen in the Integration Center and every client using the old one stops working immediately.</p>') + '</div>' +
 
       // ── what you can ask, in two columns like the reference
       card('',
@@ -3979,7 +3984,7 @@ function mcpPaintSteps() {
     step(5, 'Where it asks how to sign in, choose API key (Bearer token).',
       'There is no OAuth approval here. Paste the key from the card below into the token field.') +
     step(6, 'Press Create, then ask it a question.',
-      'Try “Show me my contacts.” If no tools appear, the key was rejected — regenerate it and paste the new one.');
+      'Try “Show me my contacts.” If no tools appear, the key was rejected — replace it on the API Keys screen and paste the new one.');
   var claude = step(1, 'Open Claude on the web, on a computer.',
       'Settings then Connectors then Add custom connector. The Claude phone app cannot add one.') +
     step(2, 'Name it CoreSwift and paste the address below.', 'The whole address, nothing on the end.', address) +
@@ -4034,7 +4039,7 @@ function mcpCheckServer(btn) {
   }).then(function (r) {
     if (out) out.textContent = (r.status === 401)
       ? 'The server answered and asked for a key — that is the right state. Paste your key into the client.'
-      : 'The server answered with status ' + r.status + '. If your client reports nothing, regenerate the key.';
+      : 'The server answered with status ' + r.status + '. If your client reports nothing, replace the key on the API Keys screen.';
   }).catch(function () {
     if (out) out.textContent = 'This browser could not reach the server (it may be blocked on your network). The service itself is up — check from the client.';
   }).then(function () {
@@ -4092,8 +4097,9 @@ var MCP_DEV_PANELS = [
   'and applies that account as a filter on every query — there is no parameter that can widen it. ' +
   'The database user behind it can only run SELECT.</p>',
   '<h4 style="margin:0 0 8px">Your API token</h4>' +
-  '<p style="color:var(--text-secondary);font-size:13px;margin:0 0 10px">One key per account. Press View &amp; copy at the top of this page, ' +
-  'or open the Integration Center. Regenerating it disconnects every app using the old key.</p>' +
+  '<p style="color:var(--text-secondary);font-size:13px;margin:0 0 10px">One key per account, listed on the card at the top of this page. ' +
+  'Press <b>View</b> to see it — one click, and every view is recorded — or <b>Copy</b> to put it on the clipboard without showing it. ' +
+  'To replace it, use the API Keys screen in the Integration Center: replacing a key there disconnects every app using the old one.</p>' +
   '<button class="btn btn-secondary btn-sm" onclick="mcpJumpTo(\'mcpKeyWrap\')">Show my key</button>',
   '<h4 style="margin:0 0 8px">Claude Code</h4>' +
   '<pre style="background:var(--bg-secondary);padding:12px;border-radius:var(--radius);font-size:12px;overflow-x:auto;margin:0">' +
@@ -4116,14 +4122,14 @@ var MCP_DEV_PANELS = [
   '<h4 style="margin:0 0 8px">FAQ</h4>' +
   '<ul style="margin:0;padding-left:20px;color:var(--text-secondary);font-size:13px;line-height:1.8">' +
   '<li><strong>Does it cost anything?</strong> No. It is your own account reading its own data.</li>' +
-  '<li><strong>Can I connect more than one app?</strong> Yes, with the same key. Regenerating the key disconnects all of them.</li>' +
+  '<li><strong>Can I connect more than one app?</strong> Yes, with the same key. Replacing the key on the API Keys screen disconnects all of them.</li>' +
   '<li><strong>Who can use it?</strong> Anyone holding the key can read the account, so treat it like a password.</li>' +
   '<li><strong>Why do I see zero rows?</strong> Because that part of the account is empty, or the rows are outside it. ' +
   'Zero is an answer, not an error.</li>' +
   '</ul>',
   '<h4 style="margin:0 0 8px">Troubleshooting</h4>' +
   '<ul style="margin:0;padding-left:20px;color:var(--text-secondary);font-size:13px;line-height:1.8">' +
-  '<li><strong>No tools appear.</strong> The key was rejected. Regenerate it and paste the new one.</li>' +
+  '<li><strong>No tools appear.</strong> The key was rejected. Replace it on the API Keys screen and paste the new one.</li>' +
   '<li><strong>A 403 before any sign-in.</strong> The edge in front of the primary name filtered your client. Use ' +
   '<code>https://mcp.swiftsoftware.net/mcp</code>.</li>' +
   '<li><strong>It answers but returns nothing.</strong> That is usually correct: a scope that genuinely holds no rows answers zero. ' +
@@ -4160,23 +4166,26 @@ async function mcpLoadKey() {
         '<button class="btn btn-primary btn-sm" onclick="icCreateKey()">+ Create API key</button></p>';
       return;
     }
-    // The MCP page shows the SAME list the Integration Center does, role included: an account can
-    // hold several active keys and they are not interchangeable — a read-only key answers questions
-    // and refuses every write, a workspace key can change the account. Before this the page showed
-    // only the newest prefix, so a customer could not tell which key their AI client was using.
+    // The MCP page lists the account's ACTIVE keys, masked (prefix only), each with View and Copy.
+    // There is deliberately NO rotate/regenerate control and no rotate handler on this view (plan
+    // §6 rule 4): replacing a key happens on the API Keys screen in the Integration Center, which is
+    // the original location for View, Copy, Rotate and Revoke. A key minted before keys were stored
+    // recoverably cannot be shown here; the card says where to replace it.
     const rows = active.map(key => [
       '<strong>' + escapeHtml(key.name || 'default') + '</strong>',
       '<code>' + escapeHtml(key.prefix || 'csk_') + '…</code>',
       icKeyRoleBadge(key.role),
       (key.recoverable
-        ? '<button class="btn btn-secondary btn-sm" onclick="icViewKey(\'' + escapeHtmlAttr(key.id) + '\')">View &amp; copy</button>'
-        : '<button class="btn btn-secondary btn-sm" onclick="icRotateKey(\'' + escapeHtmlAttr(key.id) + '\')">Regenerate to view</button>')
+        ? '<button class="btn btn-secondary btn-sm" onclick="icViewKey(\'' + escapeHtmlAttr(key.id) + '\')">View</button> ' +
+          '<button class="btn btn-secondary btn-sm" onclick="icCopyKey(\'' + escapeHtmlAttr(key.id) + '\')">Copy</button>'
+        : '<span style="color:var(--text-muted);font-size:12px">Older key — replace it on the API Keys screen to get one you can view</span>')
     ]);
     el.innerHTML =
       dataTable(['Name', 'Prefix', 'Role', ''], rows, 'No active API key.') +
-      '<p style="color:var(--text-muted);font-size:12px;margin:8px 0 0">This is the token an MCP client uses. Press <b>View &amp; copy</b> — one click, and the full key appears. ' +
+      '<p style="color:var(--text-muted);font-size:12px;margin:8px 0 0">This is the token an MCP client uses. ' +
+      'Press <b>View</b> to see it — one click, and every view is recorded — or <b>Copy</b> to put it on the clipboard without showing it. ' +
       'For an assistant that should only answer questions, use a <b>read-only</b> key: it can read this account and every make-or-change call through it is refused. ' +
-      'Create, regenerate and revoke these keys in the <b>Integration Center</b>.</p>';
+      'To replace, revoke or add a key, use the <b>API Keys</b> card in the <b>Integration Center</b>.</p>';
   } catch (e) {
     el.innerHTML = '<p style="margin:0;color:var(--text-muted)">Could not load your API key. ' +
       '<button class="btn btn-secondary btn-sm" onclick="switchTab(\'integrations\')">Open Integration Center</button></p>';
@@ -4214,7 +4223,8 @@ function icRenderKeys() {
     escapeHtml(icFmtDate(k.created_at)),
     (k.is_active
       ? (k.recoverable
-          ? '<button class="btn btn-ghost btn-xs" onclick="icViewKey(\'' + escapeHtmlAttr(k.id) + '\')">View</button> '
+          ? '<button class="btn btn-ghost btn-xs" onclick="icViewKey(\'' + escapeHtmlAttr(k.id) + '\')">View</button> ' +
+            '<button class="btn btn-ghost btn-xs" onclick="icCopyKey(\'' + escapeHtmlAttr(k.id) + '\')">Copy</button> '
           : '<button class="btn btn-ghost btn-xs" title="Created before keys were stored recoverably — regenerate to get a key you can view" onclick="icRotateKey(\'' + escapeHtmlAttr(k.id) + '\')">Regenerate to view</button> ')
       : '') +
     '<button class="btn btn-ghost btn-xs" onclick="icRotateKey(\'' + escapeHtmlAttr(k.id) + '\')">Regenerate</button> ' +
@@ -4323,6 +4333,27 @@ function icCopyShownKey() {
       function () { toast(fallback() ? 'Key copied' : 'Could not copy — select the key and copy it', fallback() ? 'success' : 'error'); });
   } else {
     toast(fallback() ? 'Key copied' : 'Could not copy — select the key and copy it', fallback() ? 'success' : 'error');
+  }
+}
+
+// Copy = fetch the sealed value (the SAME session-only POST reveal View uses) and write it straight
+// to the clipboard WITHOUT rendering it (plan §6 rule 2). The secret never reaches the modal, a
+// <code> element or any other part of the DOM — only the toast is painted.
+async function icCopyKey(id) {
+  try {
+    const d = await API.post('/personal-api-keys/' + encodeURIComponent(id) + '/reveal', {});
+    const s = d && d.key ? String(d.key) : '';
+    if (!s) { toast('Could not copy the key: the server returned no key', 'error'); return; }
+    const done = function (ok) {
+      toast(ok ? 'Key copied' : 'Could not copy — press View and copy it from the box', ok ? 'success' : 'error');
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(s).then(function () { done(true); }, function () { done(false); });
+    } else {
+      done(false);
+    }
+  } catch (e) {
+    toast('Could not copy the key: ' + e.message, 'error');
   }
 }
 
@@ -13725,7 +13756,7 @@ async function wsSwitchBusiness(idx) {
    hash, so switchTab() tells the widget which screen is open via window.inlineGuidePage(tabId). */
 window.appGuidePages = {
   dashboard:       { title: "Dashboard", desc: "Your account at a glance — contacts, deals, activity and what needs attention today.", actions: ["Scan the counters and recent activity", "Jump to anything that needs a follow-up", "Use the account switcher (🗂️ top bar) to move between accounts"] },
-  mcp:             { title: "MCP", desc: "Connect your AI tools to read this account. Point an MCP client (Claude Code, Cursor, Hermes, or your own agent) at https://hooks.swiftsoftware.net/mcp, using your API key as the token. Every tool is read-only and scoped to this account — there is no write tool and no free-form SQL door.", actions: ["Copy the endpoint", "View & copy your API key (one click)", "Paste both into your MCP client"] },
+  mcp:             { title: "MCP", desc: "Connect your AI tools to read this account. Point an MCP client (Claude Code, Cursor, Hermes, or your own agent) at https://hooks.swiftsoftware.net/mcp, using your API key as the token. Every tool is read-only and scoped to this account — there is no write tool and no free-form SQL door.", actions: ["Copy the endpoint", "Press View to see your key (one click, and the view is recorded)", "Press Copy to put the key on your clipboard without showing it", "Replace or revoke a key on the API Keys card in the Integration Center", "Paste both into your MCP client"] },
   "booking":       { title: "Booking", desc: "One booking engine, three kinds of calendar. Pick the type when you create it: appointment times (a Calendly replacement), dated slots you sell (newsletter placements, ad spots), or a date range (a featured listing or a rental). Set your open hours once and use the shortcuts to fill a whole week; generate a quarter of dated slots in one run with a different price per weekday; add a bulk price. Every calendar has its own public address, and the screen gives you two snippets to put it on your own site — inline in the page, or a popup button that opens over it.", actions: ["Create a calendar and pick its type", "Add what customers can book, with a price and a length", "Set open hours, or generate dated slots", "Add a bulk-pricing rule", "Copy the link or an embed snippet"] },
   "data-mapping":  { title: "Data mapping", desc: "Bring another SwiftSoftware app's leads into this CRM without code. Pick the source app, then drop its fields into your contact fields as data pills — the preview shows exactly what CoreSwift would receive before anything is saved. If the app has already sent you data, the field list is built from what actually arrived.", actions: ["Pick the source app and the kind of row", "Click a source field to drop it into a destination", "Test with a sample row, then Save", "Check Runs to see what was refused and why"] },
   contacts:        { title: "Contacts", desc: "The people and companies you do business with. Each contact carries its history, tags and deals.", actions: ["Add a contact", "Open one to see its full record", "Search by name or email"] },
@@ -13755,7 +13786,7 @@ window.appGuidePages = {
   // NO `profile` entry on purpose (kanban t_87b857f8): the inline-guide widget auto-OPENS its panel
   // for any key it has an entry for, which would cover the Profile form's Save button on a first
   // visit. With no entry, updateGuide() closes the panel and hides its "?" toggle on that screen.
-  integrations:    { title: "Integration Center", desc: "Connect the outside services the CRM uses — email, texting, AI and payment providers.", actions: ["Add a provider's credentials", "Test the connection"] },
+  integrations:    { title: "Integration Center", desc: "Connect the outside services the CRM uses — email, texting, AI and payment providers.", actions: ["Add a provider's credentials", "Test the connection", "Open the API Keys card: View, Copy, Regenerate and Revoke a key"] },
   team:            { title: "Team & Invites", desc: "The people who share this account and what each of them can do. A seat is one person who can sign in, the owner included: on this ladder Free includes 1, Starter 3, Professional 15, Enterprise 20 and Agency 100 (Pro and the $1 Inbox line are not on sale), and the $1 Inbox line includes nobody beyond the owner. You type the address and a role; the app makes the password, emails it, and never shows it to you. Removing somebody ends their access at their next click, puts their inboxes and conversations back to the workspace, and deletes nothing.", actions: ["Invite someone by email and choose Member or Admin", "When every seat is used, the answer names the plan that adds more and its price \u2014 nothing is charged by itself", "Create invite link for a teammate who would rather choose their own password (7 days, one use)", "The teammate signs in with the address and password the email carries and lands on the Dashboard; their mail is in the Shared Inbox tab", "Watch the Shared Inbox tab's Assigned to column to see who owns which address"] },
   webhooks:        { title: "Webhooks", desc: "Send your account's events out to another system in real time.", actions: ["Add an endpoint", "Pick which events it receives"] },
   portfolio:       { title: "Portfolio Companies", desc: "Platform operator view: the businesses managed on this platform. Sync New Company gives a company its own workspace and owner login, emails the owner the login details, and converts a record that has no account behind it \u2014 pressing it again only refreshes the details.", actions: ["Open a company", "Change its plan", "Press \ud83d\udd04 Sync New Company to give a record its own account \u2014 the owner is emailed the login"] },

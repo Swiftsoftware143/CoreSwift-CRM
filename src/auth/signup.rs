@@ -288,9 +288,12 @@ pub async fn create_account(
     // Two doors reach this function (the public signup and the machine provisioning endpoint), so
     // the mint lives at the ONE account writer: every account that exists has a key, and a refusal
     // after this point rolls the key back with the workspace and the user.
+    // Labelled `MCP — <account>` (David 2026-11-25, plan §6 rule 5): the account's OWN name, in the
+    // SAME transaction as the account row, so no account is ever keyless and a new account's key is
+    // recognisable on the API Keys screen without the customer renaming it.
+    let key_label = format!("MCP — {}", tenant_name);
     let api_key =
-        crate::personal_api_keys::mint_on(&mut *conn, tenant_id, Some(user.id), "auto-provisioned")
-            .await?;
+        crate::personal_api_keys::mint_on(&mut *conn, tenant_id, Some(user.id), &key_label).await?;
 
     Ok(CreatedAccount {
         user,
