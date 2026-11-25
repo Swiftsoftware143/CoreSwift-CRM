@@ -287,7 +287,13 @@ pub async fn trigger_purge(
 
 #[derive(Debug, serde::Deserialize)]
 pub struct SetSupportBoxRequest {
+    /// Absent means "leave it alone". It NEVER means "clear it": measured 2026-11-25, a PUT with `{}` read
+    /// as absent and removed the account's support address. `clear: true` is the way to say "no support
+    /// address", so an empty request and a deliberate erasure cannot be the same call.
+    #[serde(default)]
     pub box_id: Option<Uuid>,
+    #[serde(default)]
+    pub clear: bool,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -365,7 +371,7 @@ pub async fn set_support_box(
         .execute(&state.db)
         .await
         .map_err(AppError::Database)?;
-    } else {
+    } else if body.clear {
         sqlx::query(
             "UPDATE tenants SET settings = settings - 'support_email_box_id' WHERE id = $1",
         )
@@ -373,6 +379,12 @@ pub async fn set_support_box(
         .execute(&state.db)
         .await
         .map_err(AppError::Database)?;
+    } else {
+        // Nothing named and nothing cleared: say so instead of silently reporting success.
+        return Err(AppError::Validation(
+            "send the box_id of the mailbox that should receive support mail, or clear: true to remove it"
+                .into(),
+        ));
     }
 
     Ok(Json(serde_json::json!({"status": "ok"})))

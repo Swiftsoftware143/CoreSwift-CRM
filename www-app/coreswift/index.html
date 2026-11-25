@@ -10741,6 +10741,11 @@ async function saveSignature() {
     phone: val('sigPhone'),
     line: val('sigLine'),
   };
+  // An all-blank form is a deliberate CLEAR, and the server refuses to treat "nothing was sent" as one.
+  // Saying so explicitly is what tells the difference (2026-11-25: a probe with an empty body wiped a
+  // workspace signature, which is why the guard exists).
+  const allBlank = !payload.full_name && !payload.job_title && !payload.company && !payload.phone && !payload.line;
+  if (allBlank) payload.clear = true;
   if (box) box.textContent = 'Saving\u2026';
   try {
     const d = await API.put('/private-email/signature/workspace', payload);

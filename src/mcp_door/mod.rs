@@ -283,7 +283,11 @@ fn register_api_tool(reg: Registry, state: &AppState) -> Registry {
         description: "Call any CoreSwift API path as this account. Use it to run the business. \
                       `path` is relative to /api. The families that matter most: \"contacts\", \"deals\", \
                       \"deals/<id>/stage\", \"deals/<id>/tasks\", \"lists\" (a list's membership rules are \
-                      `rules` on PATCH \"lists/<id>\", then POST \"lists/<id>/evaluate\"), \"tags/assign\", \
+                      `rules` on PATCH \"lists/<id>\", then POST \"lists/<id>/evaluate\"; a rule is \
+                      {field, operator, value} where field is one of tag, score, contact_field, \
+                      deal_source, deal_stage, deal_date - contact_field carries \
+                      {column: city|state|country|job_title|title|company|source|score_category|gender, \
+                      equals: \"value\"} with operator equals or contains), \"tags/assign\", \
                       \"pipelines\"; CALENDAR \"booking/calendars\", \"booking/calendars/summary\", \
                       \"booking/calendars/<id>\", \"booking/calendars/<id>/resources\", \
                       \"booking/resources/<id>/slots/generate\", \"booking/calendars/<id>/orders\", \

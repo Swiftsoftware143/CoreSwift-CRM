@@ -543,6 +543,11 @@ pub struct MailboxSignatureBody {
     pub phone: Option<String>,
     #[serde(default)]
     pub line: Option<String>,
+    /// Clearing the signature on purpose. Measured 2026-11-25, the hard way: a PUT with a body of `{}` —
+    /// every field absent — wrote five empty strings and wiped the workspace signature. "Nothing was sent"
+    /// and "blank everything" must not be the same request. Send `clear: true` to mean it.
+    #[serde(default)]
+    pub clear: bool,
 }
 
 pub async fn put_signature(
@@ -563,11 +568,36 @@ pub async fn put_signature(
         return Err(AppError::Validation("Which address is this for?".into()));
     }
 
-    let full_name = clean_field(req.full_name, MAX_FIELD, "Name")?;
-    let job_title = clean_field(req.job_title, MAX_FIELD, "Title")?;
-    let company = clean_field(req.company, MAX_FIELD, "Company")?;
-    let phone = clean_field(req.phone, MAX_FIELD, "Phone")?;
-    let line = clean_field(req.line, MAX_LINE, "Line")?;
+    // Guard before anything is written: a request that names no field at all is a mistake, not a request to
+    // erase. `clear: true` is the only way to blank a signature.
+    let named_nothing = req.full_name.is_none()
+        && req.job_title.is_none()
+        && req.company.is_none()
+        && req.phone.is_none()
+        && req.line.is_none();
+    if named_nothing && !req.clear {
+        return Err(crate::errors::AppError::Validation(
+            "send the signature fields you want to change; an empty body would blank the whole signature.              Send clear: true if you do want it blank."
+                .into(),
+        ));
+    }
+    let full_name = clean_field(
+        if req.clear { None } else { req.full_name },
+        MAX_FIELD,
+        "Name",
+    )?;
+    let job_title = clean_field(
+        if req.clear { None } else { req.job_title },
+        MAX_FIELD,
+        "Title",
+    )?;
+    let company = clean_field(
+        if req.clear { None } else { req.company },
+        MAX_FIELD,
+        "Company",
+    )?;
+    let phone = clean_field(if req.clear { None } else { req.phone }, MAX_FIELD, "Phone")?;
+    let line = clean_field(if req.clear { None } else { req.line }, MAX_LINE, "Line")?;
 
     let updated: Option<(Uuid,)> = sqlx::query_as(
         "UPDATE private_email_boxes
