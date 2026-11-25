@@ -1,0 +1,245 @@
+{
+  "door": "http://127.0.0.1:8084/api/mcp",
+  "rows": [
+    {
+      "area": "calendar",
+      "method": "GET",
+      "path": "booking/calendars",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "calendar list"
+    },
+    {
+      "area": "calendar",
+      "method": "GET",
+      "path": "booking/calendars/summary",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "every calendar + problems in one call"
+    },
+    {
+      "area": "calendar",
+      "method": "GET",
+      "path": "booking/calendars/<cal>",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "one calendar"
+    },
+    {
+      "area": "calendar",
+      "method": "GET",
+      "path": "booking/calendars/<cal>/orders",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "bookings for a calendar"
+    },
+    {
+      "area": "calendar",
+      "method": "GET",
+      "path": "booking/calendars/<cal>/form-fields",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "booking questions"
+    },
+    {
+      "area": "calendar",
+      "method": "GET",
+      "path": "booking/calendars/<cal>/confirmation-email",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "confirmation wording"
+    },
+    {
+      "area": "calendar",
+      "method": "GET",
+      "path": "booking/calendars/<cal>/readiness",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "what still needs setting up"
+    },
+    {
+      "area": "calendar",
+      "method": "GET",
+      "path": "booking/calendars/<cal>/payment-wiring",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "payment wiring state"
+    },
+    {
+      "area": "inbox",
+      "method": "GET",
+      "path": "private-email/messages?limit=5",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "newest messages"
+    },
+    {
+      "area": "inbox",
+      "method": "GET",
+      "path": "private-email/messages/counts",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "what is new, per folder"
+    },
+    {
+      "area": "inbox",
+      "method": "GET",
+      "path": "private-email/messages/<msg>",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "one message"
+    },
+    {
+      "area": "inbox",
+      "method": "GET",
+      "path": "private-email/folders",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "folders"
+    },
+    {
+      "area": "inbox",
+      "method": "GET",
+      "path": "private-email/addresses",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "the account's own mailboxes"
+    },
+    {
+      "area": "inbox",
+      "method": "GET",
+      "path": "private-email/readiness",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "mail setup state"
+    },
+    {
+      "area": "tickets",
+      "method": "GET",
+      "path": "tickets",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "ticket list"
+    },
+    {
+      "area": "tickets",
+      "method": "GET",
+      "path": "tickets/stats",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "counts by status"
+    },
+    {
+      "area": "tickets",
+      "method": "GET",
+      "path": "tickets/<ticket>",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "one ticket"
+    },
+    {
+      "area": "tickets",
+      "method": "GET",
+      "path": "helpdesk/tickets/<ticket>/attachments",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "attachments the console asks for"
+    },
+    {
+      "area": "tickets",
+      "method": "POST",
+      "path": "tickets",
+      "status": 201,
+      "verdict": "reachable",
+      "note": "create"
+    },
+    {
+      "area": "tickets",
+      "method": "POST",
+      "path": "tickets/<new>/messages",
+      "status": 201,
+      "verdict": "reachable",
+      "note": "internal note"
+    },
+    {
+      "area": "tickets",
+      "method": "PATCH",
+      "path": "tickets/<new>",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "status change"
+    },
+    {
+      "area": "tickets",
+      "method": "DELETE",
+      "path": "tickets/<new>",
+      "status": 200,
+      "verdict": "reachable",
+      "note": "delete the probe"
+    },
+    {
+      "area": "inbox",
+      "method": "POST",
+      "path": "private-email/send",
+      "status": "skipped",
+      "verdict": "not exercised",
+      "note": "would send real mail"
+    },
+    {
+      "area": "inbox",
+      "method": "POST",
+      "path": "private-email/keys",
+      "status": "skipped",
+      "verdict": "not exercised",
+      "note": "would mint a mailbox credential"
+    },
+    {
+      "area": "inbox",
+      "method": "POST",
+      "path": "private-email/boxes",
+      "status": "skipped",
+      "verdict": "not exercised",
+      "note": "would change live mailbox config"
+    },
+    {
+      "area": "inbox",
+      "method": "PATCH",
+      "path": "private-email/boxes/<id>",
+      "status": "skipped",
+      "verdict": "not exercised",
+      "note": "would change live mailbox config"
+    },
+    {
+      "area": "inbox",
+      "method": "POST",
+      "path": "private-email/domains",
+      "status": "skipped",
+      "verdict": "not exercised",
+      "note": "would change live domain config"
+    },
+    {
+      "area": "inbox",
+      "method": "POST",
+      "path": "private-email/auto-replies",
+      "status": "skipped",
+      "verdict": "not exercised",
+      "note": "would change live auto-reply behaviour"
+    },
+    {
+      "area": "inbox",
+      "method": "POST",
+      "path": "private-email/admin/purge/run",
+      "status": "skipped",
+      "verdict": "not exercised",
+      "note": "would delete mail"
+    },
+    {
+      "area": "calendar",
+      "method": "PATCH",
+      "path": "booking/calendars/<cal>",
+      "status": "skipped",
+      "verdict": "not exercised",
+      "note": "would change a live customer calendar"
+    }
+  ]
+}
