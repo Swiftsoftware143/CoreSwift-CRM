@@ -625,22 +625,12 @@ pub const API_KEY_ROUTES: &[&str] = &[
     // THE AGENT DOOR (2026-11-25). An AI agent holds an issued key, and the console routes correctly
     // refuse one. Rather than widen a session door, these routes accept EITHER credential and resolve it
     // themselves (`agent_api::authenticate`), exactly as `/api/objects` does. A `read_only` key is still
-    // refused, because every write here is outside READ_ONLY_KEY_ROUTES. The nest itself
-    // (`/api/agent`) is not a route: only the 13 leaves below are mounted, and each one is named here
-    // exactly as `agent_api::router` spells it.
-    "/api/agent/contacts",
-    "/api/agent/contacts/:id",
-    "/api/agent/deals",
-    "/api/agent/deals/:id",
-    "/api/agent/deals/:id/stage",
-    "/api/agent/deals/:id/tasks",
-    "/api/agent/lists/:id/members",
-    "/api/agent/tags/assign",
-    "/api/agent/calendars/:id",
-    "/api/agent/calendars/:id/payment-checkout",
-    "/api/agent/calendars/:id/payment-key/rotate",
-    "/api/agent/resources/:id/payment-checkout",
-    "/api/agent/redirects",
+    // The agent door is ONE forwarded door now: `/api/agent/<any console path>` authenticates the caller
+    // (key or session) and re-issues the request against the console's own handler. Thirteen named leaves
+    // became this wildcard on 2026-11-25, when David asked for the whole business rather than thirteen
+    // writes. It is listed here as the router spells it, and the surfaces it may not reach (auth,
+    // personal-keys, api-keys, keys, mcp, internal) are refused inside `api_proxy::allowed`.
+    "/api/agent/{*rest}",
     "/api/mcp",
     "/api/objects",
     "/api/objects/:slug",
@@ -1724,19 +1714,20 @@ mod tests {
     /// `agent_api::router`. It shares the action agent's `/api/agent` prefix: main.rs MERGES the two
     /// routers into one nest, and `NESTS` carries a row for each half, so the merged half is counted
     /// rather than invisible. Every leaf is on `/api**`, so the 14 root-level mounts are unchanged.
-    /// 580 mounted / 566 on /api**.
+    /// 568 mounted / 554 on /api** — the agent door's thirteen named leaves became one forwarded
+    /// wildcard on 2026-11-25, so twelve routes left the census.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
         let mounted = mounted_routes();
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            580,
+            568,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 566,
+            api, 554,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.
