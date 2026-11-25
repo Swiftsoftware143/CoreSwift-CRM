@@ -2529,8 +2529,24 @@ const TAB_RENDERERS = {
     '<div id="portfolioTable" data-ops="portfolio-companies"><div class="loading-wrap"><div class="spinner"></div> Loading portfolio companies...</div></div>';
   },
   'users': () => {
-    return pageHeader('Users', 'Manage platform users and permissions') +
-    '<div id="usersTable"><div class="loading-wrap"><div class="spinner"></div> Loading users...</div></div>';
+    // SEARCH + PAGING (2026-11-25): this screen used to fetch one fixed page of 50 rows and say
+    // nothing about the rest, so on a platform with hundreds of people a specific person could
+    // not be found at all. The read behind it takes `q` (name, email, workspace) and `page`, and
+    // answers the filtered total, so the panel now says how many it is showing and can walk the
+    // list.
+    return pageHeader('Users', 'Every person on the platform and the workspace they belong to — search by name, email or workspace') +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">' +
+      '<input class="input" id="usersSearch" type="search" placeholder="Search a person, email or workspace" aria-label="Search users" style="max-width:340px">' +
+      '<button class="btn btn-secondary btn-sm" data-ops="users-search">Search</button>' +
+      '<button class="btn btn-ghost btn-sm" data-ops="users-search-clear">Clear</button>' +
+      '<label style="display:inline-flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="usersShowPortfolio"> Include portfolio companies</label>' +
+      '<span id="usersCount" style="font-size:13px;color:var(--text-secondary)"></span>' +
+    '</div>' +
+    '<div id="usersTable"><div class="loading-wrap"><div class="spinner"></div> Loading users...</div></div>' +
+    '<div style="display:flex;gap:8px;margin-top:12px">' +
+      '<button class="btn btn-outline btn-sm" id="usersPrev" data-ops="users-prev" disabled>← Previous</button>' +
+      '<button class="btn btn-outline btn-sm" id="usersNext" data-ops="users-next" disabled>Next →</button>' +
+    '</div>';
   },
   // Every workspace, with the bulk retire control (kanban t_ac2fe688). The button is inert until a
   // row is picked; the loader below arms it with the count and wires the write.
@@ -4774,33 +4790,77 @@ const TAB_LOADERS = {
   'users': async () => {
     const usersTableEl = document.getElementById('usersTable');
     if (!usersTableEl) return;
-    try {
-      // GET /api/users was never registered (404). People across ALL tenants live next to the
-      // tenant list under the platform-admin gate: GET /api/admin/users -> {users, count}.
-      // (The tenant shell carries this same correction for its own Users tab.)
-      const uRes = await API.get('/admin/users?per_page=50');
-      const users = Array.isArray(uRes) ? uRes : (uRes.users || []);
-      let rows = [];
-      if (Array.isArray(users)) {
-        rows = users.slice(0, 50).map(u => [
-          escapeHtml(u.name || '—'),
-          escapeHtml(u.email || '—') + (isProbeOwner(u.email)
-            ? ' <span class="badge badge-warning" title="a reserved or fleet-probe address — a probe, not a person">probe</span>'
-            : ''),
-          `<span class="badge ${u.role==='agency_admin'?'badge-primary':'badge-muted'}">${escapeHtml(roleLabel(u.role))}</span>`,
-          escapeHtml(u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'),
-          (u.email && !isProbeOwner(u.email)
-            ? `<button class="btn btn-ghost btn-xs" data-ops="user-send-reset" data-email="${escapeHtmlAttr(u.email)}" onclick="adminSendReset(this)">Send reset</button>`
-            : '—')
-        ]);
+    // Paging state lives on the window so re-entering the tab keeps the last search (and the
+    // renderer is rebuilt, so the input has to be re-seeded with it).
+    const st = window._usersState = window._usersState || { page: 1, q: '', portfolio: false };
+    const searchEl = document.getElementById('usersSearch');
+    if (searchEl && searchEl.value !== st.q) searchEl.value = st.q;
+    const pfEl = document.getElementById('usersShowPortfolio');
+    if (pfEl) pfEl.checked = !!st.portfolio;
+
+    const runSearch = () => {
+      st.q = searchEl ? String(searchEl.value || '').trim() : '';
+      st.page = 1;
+      loadUsers();
+    };
+    const loadUsers = async () => {
+      try {
+        // GET /api/users was never registered (404). People across ALL tenants live next to the
+        // tenant list under the platform-admin gate: GET /api/admin/users -> {users, count, page,
+        // per_page}. `q` filters by name, email or workspace and `count` is the FILTERED total, so
+        // the panel can say what it is showing instead of silently truncating at one page.
+        const params = new URLSearchParams({ per_page: '50', page: String(st.page) });
+        if (st.q) params.set('q', st.q);
+        if (st.portfolio) params.set('include_portfolio', 'true');
+        const uRes = await API.get('/admin/users?' + params.toString());
+        const users = Array.isArray(uRes) ? uRes : (uRes.users || []);
+        const total = (uRes && typeof uRes.count === 'number') ? uRes.count : users.length;
+        let rows = [];
+        if (Array.isArray(users)) {
+          rows = users.map(u => [
+            escapeHtml(u.name || '—'),
+            escapeHtml(u.email || '—') + (isProbeOwner(u.email)
+              ? ' <span class="badge badge-warning" title="a reserved or fleet-probe address — a probe, not a person">probe</span>'
+              : ''),
+            `<span class="badge ${u.role==='agency_admin'?'badge-primary':'badge-muted'}">${escapeHtml(roleLabel(u.role))}</span>` +
+              (u.tenant_name ? ` <span style="font-size:12px;color:var(--text-secondary)">${escapeHtml(u.tenant_name)}</span>` : ''),
+            escapeHtml(u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'),
+            (u.email && !isProbeOwner(u.email)
+              ? `<button class="btn btn-ghost btn-xs" data-ops="user-send-reset" data-email="${escapeHtmlAttr(u.email)}" onclick="adminSendReset(this)">Send reset</button>`
+              : '—')
+          ]);
+        }
+        usersTableEl.innerHTML = dataTable(
+          ['Name','Email','Role / workspace','Created',''], rows,
+          st.q ? `No person matches “${escapeHtml(st.q)}”.` : 'No users yet.'
+        );
+        const countEl = document.getElementById('usersCount');
+        if (countEl) {
+          countEl.textContent = total === 0
+            ? 'Nothing to show'
+            : `Showing ${users.length} of ${total}${st.q ? ' matching' : ''} — page ${st.page}`;
+        }
+        const prevEl = document.getElementById('usersPrev');
+        if (prevEl) prevEl.disabled = st.page <= 1;
+        const nextEl = document.getElementById('usersNext');
+        if (nextEl) nextEl.disabled = st.page * 50 >= total;
+      } catch(e) {
+        usersTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Users endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
       }
-      usersTableEl.innerHTML = dataTable(
-        ['Name','Email','Role','Created',''], rows,
-        'No users yet.'
-      );
-    } catch(e) {
-      usersTableEl.innerHTML = `<div class="card"><div class="card-body"><p style="color:var(--text-secondary)">Users endpoint: ${escapeHtml(planGateText(e))}</p></div></div>`;
-    }
+    };
+
+    // Wire the controls every time the tab is opened (the renderer rebuilds them).
+    const btnSearch = document.querySelector('[data-ops="users-search"]');
+    if (btnSearch) btnSearch.onclick = runSearch;
+    const btnClear = document.querySelector('[data-ops="users-search-clear"]');
+    if (btnClear) btnClear.onclick = () => { if (searchEl) searchEl.value = ''; st.q = ''; st.page = 1; loadUsers(); };
+    if (searchEl) searchEl.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } };
+    if (pfEl) pfEl.onchange = () => { st.portfolio = !!pfEl.checked; st.page = 1; loadUsers(); };
+    const prevEl = document.getElementById('usersPrev');
+    if (prevEl) prevEl.onclick = () => { if (st.page > 1) { st.page -= 1; loadUsers(); } };
+    const nextEl = document.getElementById('usersNext');
+    if (nextEl) nextEl.onclick = () => { st.page += 1; loadUsers(); };
+    await loadUsers();
   },
 
   // === ROUND 7 ADMIN OPS LOADERS ===
