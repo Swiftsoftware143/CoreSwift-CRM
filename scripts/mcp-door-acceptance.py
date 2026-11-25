@@ -8,7 +8,8 @@ Checks (each printed PASS/FAIL with the number that decided it):
   3  the same id with A's key               -> the row, with A's data
   4  a read-only key reads (contacts) and is REFUSED on a Custom Objects write (create_object)
   4b the crate's ROLE FILTER: a read-only key's `tools/list` is exactly the 15 read-only tools and
-     its raw bytes carry NO write tool name (mcp-door 0.1.2), while a workspace key still sees 23
+     its raw bytes carry NO write tool name (mcp-door 0.1.2), while a workspace key still sees 28
+     (11 Custom Objects + 12 domain reads + the generic API tool + the four named writers)
   5  a revoked key                          -> 401
   6  a platform admin's key                 -> authenticated, protocol-era discovery answers
   7  the shared protocol probe               -> 14/14 (python3 <crate>/scripts/door-contract.py)
@@ -333,7 +334,7 @@ def main() -> int:
         check("and on a record insert", err_w2, f"{w2.get('error')}")
 
         # 4b ── the crate's ROLE FILTER (mcp-door 0.1.2, kanban t_46a81465).
-        # On the 0.1.0 pin a read-only key was handed all 23 tools and only refused when it called
+        # On the 0.1.0 pin a read-only key was handed every tool and only refused when it called
         # a write: the tool list LIED. The filter is a claim about response BYTES, so measure them.
         ro_floor = sorted({
             # the three Custom Objects tools the registry gates at Role::ReadOnly
@@ -345,7 +346,12 @@ def main() -> int:
             "coreswift_list_tickets", "coreswift_list_billing", "coreswift_list_messages",
         })
         write_tools = ["create_object", "archive_object", "add_field", "archive_field",
-                       "insert_record", "set_unique_together", "update_record", "delete_record"]
+                       "insert_record", "set_unique_together", "update_record", "delete_record",
+                       # the four named configuration writers (kanban t_bda9b277)
+                       "coreswift_booking_set_product_checkout",
+                       "coreswift_booking_set_calendar_checkout",
+                       "coreswift_booking_rotate_payment_key",
+                       "coreswift_domain_set_redirect"]
         st_ro, raw_ro = rpc_raw(base, kro, "tools/list")
         ro_names = sorted(tool_names(raw_ro))
         check("a read-only key's tools/list is exactly the read-only floor (15)",
@@ -358,7 +364,7 @@ def main() -> int:
               "leaked=" + ",".join(leaked))
         st_ws, raw_ws = rpc_raw(base, ka, "tools/list")
         ws_names = set(tool_names(raw_ws))
-        check("a workspace key still sees all 23 tools", st_ws == 200 and len(ws_names) == 23,
+        check("a workspace key still sees all 28 tools", st_ws == 200 and len(ws_names) == 28,
               f"status={st_ws} n={len(ws_names)}")
         check("a workspace key still sees every write tool", set(write_tools) <= ws_names,
               "missing=" + ",".join(sorted(set(write_tools) - ws_names)))
@@ -376,7 +382,8 @@ def main() -> int:
               f"status={st_admin} versions={versions[:1]}")
         _, tools_list = rpc(base, ka, "tools/list")
         names = [t.get("name") for t in ((tools_list.get("result") or {}).get("tools") or [])]
-        check("the door offers 23 tools (11 custom objects + 12 reads)", len(names) == 23, f"n={len(names)}")
+        check("the door offers 28 tools (11 custom objects + 12 reads + the API tool + 4 named writers)",
+              len(names) == 28, f"n={len(names)}")
 
         # 7 ── the shared protocol probe. The crate grows checks (14 -> 16 when tools/list became
         # role-filtered), so assert "none failed and most of them ran" instead of a frozen count.
