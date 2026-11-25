@@ -282,7 +282,9 @@ fn register_api_tool(reg: Registry, state: &AppState) -> Registry {
                       \"booking/calendars/<id>/form-fields\", \"booking/calendars/<id>/confirmation-email\", \
                       \"booking/calendars/<id>/clone\"; INBOX \"private-email/messages\" (add ?folder=inbox), \
                       \"private-email/messages/counts\", \"private-email/messages/<id>\", \
-                      \"private-email/messages/<id>/reply\" (body: message), \
+                      \"private-email/messages/<id>/reply\" (body: {from_address: one of your own \
+                      mailboxes from \"private-email/addresses\", body, mode: reply|reply_all|forward}), \
+                      \"private-email/addresses\", \
                       \"private-email/messages/<id>/ticket\" (turn a message into a ticket), \
                       \"private-email/folders\"; TICKETS \"tickets\", \"tickets/<id>\", \
                       \"tickets/<id>/messages\" (body: {message, kind: reply|note}), \"tickets/stats\"; \
