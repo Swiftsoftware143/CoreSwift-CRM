@@ -49,8 +49,11 @@ pub async fn acting_user(
     state: &AppState,
     tenant: Uuid,
 ) -> Result<(Uuid, String, Option<Uuid>), AppError> {
-    let row: Option<(Uuid, String, Option<Uuid>)> = sqlx::query_as(
-        "SELECT id, role, workspace_id FROM users
+    // `users` has NO workspace_id column (measured 2026-11-25: a first attempt selected it and every
+    // forwarded call answered "internal error"). A user's workspace is chosen per request, not stored on
+    // the row — which is why the login path also puts `wsid: None` in its claims.
+    let row: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, role FROM users
           WHERE tenant_id = $1 AND (is_active IS NULL OR is_active = true)
           ORDER BY (role = 'account_owner') DESC, created_at LIMIT 1",
     )
@@ -58,7 +61,8 @@ pub async fn acting_user(
     .fetch_optional(&state.db)
     .await
     .map_err(AppError::Database)?;
-    row.ok_or(AppError::Forbidden)
+    let (id, role) = row.ok_or(AppError::Forbidden)?;
+    Ok((id, role, None))
 }
 
 /// Call this app's own API as `tenant`, acting as a real user of it.
