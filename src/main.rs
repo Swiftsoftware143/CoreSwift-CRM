@@ -36,6 +36,7 @@ pub mod dashboard;
 pub mod data_mapping;
 mod db;
 pub mod deals;
+pub mod domain_redirects;
 pub mod email;
 pub mod email_templates;
 mod errors;
@@ -512,6 +513,11 @@ async fn main() -> anyhow::Result<()> {
         )
         // Protected routes
         .nest("/api/account", account::router(state.clone()))
+        // Where an owner's own addresses send a visitor (2026-11-25).
+        .nest(
+            "/api/domain-redirects",
+            domain_redirects::router(state.clone()),
+        )
         // FLEET-CONTRACT ALIAS for the data copy (kanban t_e2ec5452). The other five apps all
         // answer `GET /api/v1/account/export` from their customer console; this app's account
         // surface lives at `/api/account/*`, so ONE extra mount keeps the documented fleet path

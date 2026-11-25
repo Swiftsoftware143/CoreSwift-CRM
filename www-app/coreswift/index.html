@@ -1850,6 +1850,7 @@ const MCP_ENTITY_SPECS = [
   ['coreswift_cs_messages', 'messages'],
   ['coreswift_deal_activities', 'deal activities'],
   ['coreswift_deal_tasks', 'deal tasks'],
+  ['coreswift_domain_redirects', 'domain redirects (where each owned address sends a visitor)'],
   ['coreswift_email_campaign_enrollments', 'email campaign enrollments'],
   ['coreswift_email_campaign_optouts', 'email campaign opt-outs'],
   ['coreswift_email_campaigns', 'email campaigns'],
@@ -14138,6 +14139,7 @@ async function bkOpen(id) {
   // thing an owner needs and it must not wait behind the slot and order reads below.
   await bkPaintReadiness(id);
   await bkLoadConfirmation();
+  await bkLoadRedirects();
   await bkLoadNotify();
   await bkLoadOpenSlots();
   await bkLoadOrders();
@@ -14287,6 +14289,7 @@ function bkDetailPanel() {
 
   html += bkThemePanel(cal);
   html += bkRulesPanel(cal);
+  html += bkRedirectPanel();
   html += bkPayPanel(cal);
   setTimeout(bkLoadPayWire, 0);
   html += bkResourcePanel(res, cal.kind);
@@ -15044,6 +15047,72 @@ async function bkDeleteField(id) {
  * shown here so an owner can see the whole payment story on one screen instead of wondering why a
  * product is or is not taking money.
  */
+/* WHERE EACH OF YOUR ADDRESSES SENDS A VISITOR (David, 2026-11-25).
+ *
+ * "That feature should be found anywhere that users put their custom domain, even sender domain." So this
+ * lists EVERY address the account owns — the account booking address, each workspace address, each
+ * calendar's own address and each sending domain — with one destination box each. A sending domain opens
+ * to nothing at all without one, which is exactly what looks broken to whoever types it.
+ */
+function bkRedirectPanel() {
+  return '<div class="card" style="margin-bottom:18px"><h3 style="margin-top:0">Where your addresses send visitors</h3>' +
+    '<p class="muted" style="margin-top:-6px">Anyone who opens one of these addresses is sent to the destination you set. ' +
+      'This is served by the web server, so it keeps working while the app restarts. Leave a box empty for no redirect.</p>' +
+    '<div id="bkRedirectList"><div class="loading-wrap"><div class="spinner"></div> Loading addresses…</div></div></div>';
+}
+
+async function bkLoadRedirects() {
+  const box = document.getElementById('bkRedirectList');
+  if (!box) return;
+  try {
+    const r = await API.get('/domain-redirects/');
+    const rows = r.addresses || [];
+    if (!rows.length) { box.innerHTML = '<p class="muted">No addresses yet — add a workspace or custom domain and they appear here.</p>'; return; }
+    box.innerHTML = rows.map(function (a, i) {
+      const target = a.sends_visitors_to || '';
+      return '<div class="paystep" style="margin-bottom:10px">' +
+        '<div class="when">' + escapeHtml(a.source || 'address') + '</div>' +
+        '<div class="what" style="margin-bottom:6px">' + escapeHtml(a.host) +
+          (target ? ' <span class="badge">redirects</span>' : '') + '</div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
+          '<input id="bkRedir' + i + '" placeholder="https://your-main-site.com  or  /pricing" value="' + escapeHtml(target) + '" style="flex:1;min-width:220px">' +
+          '<select id="bkRedirCode' + i + '" style="width:110px">' +
+            '<option value="302"' + ((a.status_code || 302) === 302 ? ' selected' : '') + '>302</option>' +
+            '<option value="301"' + (a.status_code === 301 ? ' selected' : '') + '>301</option>' +
+          '</select>' +
+          '<button class="btn btn-primary btn-sm" onclick="bkSaveRedirect(' + i + ', ' + JSON.stringify(a.host).replace(/"/g, '&quot;') + ')">Save</button>' +
+          (target ? '<button class="btn btn-secondary btn-sm" onclick="bkRemoveRedirect(' + JSON.stringify(a.host).replace(/"/g, '&quot;') + ')">Remove</button>' : '') +
+        '</div>' +
+        '<div class="muted" style="font-size:12px;margin-top:6px">' +
+          (target ? 'Visitors go to ' + escapeHtml(target) : 'Nothing there yet — the address answers with no page.') + '</div>' +
+      '</div>';
+    }).join('');
+  } catch (e) {
+    box.innerHTML = '<p class="muted">Could not read the addresses: ' + escapeHtml(e.message) + '</p>';
+  }
+}
+
+async function bkSaveRedirect(i, host) {
+  var box = document.getElementById('bkRedir' + i);
+  var code = document.getElementById('bkRedirCode' + i);
+  var target = box ? String(box.value || '').trim() : '';
+  if (!target) { bkFlash('Type a destination, or use Remove to stop redirecting.', false); return; }
+  try {
+    await API.put('/domain-redirects/', { host: host, target_url: target, status_code: parseInt(code.value, 10) || 302 });
+    await bkLoadRedirects();
+    bkFlash('Saved — ' + host + ' now sends visitors to ' + target, true);
+  } catch (e) { bkFlash(e.message, false); }
+}
+
+async function bkRemoveRedirect(host) {
+  if (!confirm('Stop redirecting ' + host + '?')) return;
+  try {
+    await API.delete('/domain-redirects/' + encodeURIComponent(host));
+    await bkLoadRedirects();
+    bkFlash('Removed.', true);
+  } catch (e) { bkFlash(e.message, false); }
+}
+
 function bkPayPanel(cal) {
   var own = (cal.settings && cal.settings.checkout_url) || '';
   var withOwn = ((BK.detail && BK.detail.resources) || []).filter(function (r) { return r.checkout_embed; }).length;
