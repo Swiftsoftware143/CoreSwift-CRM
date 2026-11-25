@@ -583,6 +583,7 @@
       // PHONE IS OPTIONAL AND THE CONSENT IS EXPLICIT (David, 2026-11-21): a number with no tick is
       // not permission, so the checkbox is unticked by default and the text says what it is for. The
       // phone field exists so the opt-in has somewhere to live; the booking never requires it.
+      '<label class="field">Company (optional)<input id="buyerCompany" type="text" placeholder="Your business" autocomplete="organization"></label>' +
       '<label class="field">Phone (optional)<input id="buyerPhone" type="tel" placeholder="+1 305 555 0100" autocomplete="tel"></label>' +
       '<label class="field consent"><input id="buyerSmsOk" type="checkbox"> <span>Text me about this booking and updates. Message rates may apply, and you can reply STOP at any time to stop them.</span></label>' +
       '<label class="field">Anything we should know?<input id="buyerNote" placeholder="Optional"></label>' +
@@ -702,6 +703,7 @@
           answers: answers,
           // Attribution, if this visitor arrived through a tracking link.
           tracking_url: TRACKING || null,
+          company: (el('buyerCompany') || {}).value || '',
           notes: (el('buyerNote') || {}).value || '', items: items
         })
       }).then(function (order) {

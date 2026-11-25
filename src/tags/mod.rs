@@ -41,3 +41,64 @@ pub fn router(state: AppState) -> Router<AppState> {
             crate::auth::middleware::auth_middleware,
         ))
 }
+
+/// Apply a tag to one record BY NAME, idempotently, with the module's own fan-out.
+///
+/// Written for the booking path (ZaarHub CEO, 2026-11-25): a booking creates a CRM contact and must land on
+/// the "‹City› - Sponsors" list, which is a dynamic list whose rule is that same tag. Doing it with a raw
+/// INSERT would put the contact on the list only when somebody pressed Evaluate, because the list refresh
+/// and the TagAdded automations hang off the fan-out below.
+///
+/// Refuses quietly (returns Ok(None)) when the account has no such tag: a booking must never fail because
+/// a calendar names a tag that was renamed or deleted, and inventing the tag here would fork the vocabulary
+/// the operator maintains by hand.
+pub async fn apply_by_name(
+    db: &sqlx::PgPool,
+    tenant_id: uuid::Uuid,
+    entity_type: &str,
+    entity_id: uuid::Uuid,
+    name: &str,
+    actor: Option<uuid::Uuid>,
+) -> Result<Option<uuid::Uuid>, crate::errors::AppError> {
+    let tag_name = name.trim();
+    if tag_name.is_empty() {
+        return Ok(None);
+    }
+    let tag_id: Option<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id FROM tags WHERE tenant_id = $1 AND lower(name) = lower($2) LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(tag_name)
+    .fetch_optional(db)
+    .await?;
+    let Some(tag_id) = tag_id else {
+        tracing::warn!(tenant = %tenant_id, tag = %tag_name,
+            "booking named a tag this account does not have; no tag applied");
+        return Ok(None);
+    };
+    sqlx::query(
+        "INSERT INTO tag_assignments(id, tag_id, entity_type, entity_id, tenant_id, assigned_by)
+         VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(tag_id)
+    .bind(entity_type)
+    .bind(entity_id)
+    .bind(tenant_id)
+    .bind(actor)
+    .execute(db)
+    .await?;
+    // The fan-out: TagAdded automations, then the dynamic lists (a list whose rule is this tag must gain the
+    // member now, not when somebody presses Evaluate).
+    crate::automation::engine::fire_tag_trigger(
+        db,
+        tenant_id,
+        entity_type,
+        entity_id,
+        tag_id,
+        "TagAdded",
+    )
+    .await;
+    crate::lists::evaluator::refresh_dynamic_lists(db, tenant_id).await;
+    Ok(Some(tag_id))
+}

@@ -103,6 +103,8 @@ pub fn admin_router(pool: PgPool) -> Router {
         .route("/orders/:id", get(h::admin_get_order))
         .route("/orders/:id/confirm", post(h::confirm_order))
         .route("/orders/:id/cancel", post(h::cancel_order))
+        // The id an operator can actually see (a held slot's booking id) cancels too.
+        .route("/bookings/:id/cancel", post(h::cancel_booking))
         .route("/bookings/:id/creative/review", post(h::review_creative))
         .with_state(pool)
 }

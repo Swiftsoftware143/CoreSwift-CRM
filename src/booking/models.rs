@@ -67,6 +67,10 @@ pub struct Calendar {
     /// The calendar's default checkout code/link; a position can override it.
     #[serde(default)]
     pub payment_embed: Option<String>,
+    /// The CRM tag applied to the contact this calendar's bookings create, e.g. "Palm Bay - Sponsor".
+    /// Null/empty means this calendar does not tag. One field, ten calendars, no code branch per city.
+    #[serde(default)]
+    pub sponsor_tag: Option<String>,
     /// The key a payment provider must present when reporting a completed sale.
     #[serde(default)]
     pub payment_webhook_key: Option<String>,
@@ -376,6 +380,9 @@ pub struct NewOrder {
     pub customer_name: String,
     pub customer_email: String,
     pub contact_id: Option<Uuid>,
+    /// The buyer's company, as the booking form captured it. Optional: a booking must never depend on it.
+    #[serde(default, alias = "buyerCompany", alias = "company")]
+    pub company: Option<String>,
     pub notes: Option<String>,
     /// Optional, because a booking must never depend on a phone number.
     #[serde(default)]
@@ -432,6 +439,9 @@ pub struct UpdateCalendar {
     pub settings: Option<Value>,
     pub reply_to_email: Option<String>,
     pub send_confirmation: Option<bool>,
+    /// Empty string CLEARS it; a name sets it. Absent leaves it alone.
+    #[serde(default)]
+    pub sponsor_tag: Option<String>,
 }
 
 /// The notification set as the console sends it: whole lists, replaced together.

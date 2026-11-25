@@ -216,8 +216,16 @@ pub async fn update_calendar(
     send_confirmation: Option<bool>,
     payment_mode: Option<String>,
     payment_embed: Option<String>,
+    sponsor_tag: Option<String>,
 ) -> Result<Calendar> {
     let current = calendar_for_tenant(&mut *pool.acquire().await?, id, tenant).await?;
+    // Empty string CLEARS the tag; a value sets it; absent leaves it. Same three states as the assignee on a
+    // ticket, and for the same reason: "not mentioned" must never mean "erase".
+    let new_sponsor_tag: Option<String> = match sponsor_tag {
+        Some(v) if v.trim().is_empty() => None,
+        Some(v) => Some(v.trim().to_string()),
+        None => current.sponsor_tag.clone(),
+    };
 
     let new_name = match name {
         Some(n) if !n.trim().is_empty() => n.trim().to_string(),
@@ -338,7 +346,7 @@ pub async fn update_calendar(
     sqlx::query_as::<_, Calendar>(
         "UPDATE booking_calendars
             SET name = $3, slug = $7, settings = $4, reply_to_email = $5, send_confirmation = $6,
-                payment_mode = $8, payment_embed = $9, updated_at = now()
+                payment_mode = $8, payment_embed = $9, sponsor_tag = $10, updated_at = now()
           WHERE id = $1 AND tenant_id = $2
           RETURNING *",
     )
@@ -351,6 +359,7 @@ pub async fn update_calendar(
     .bind(new_slug)
     .bind(new_mode)
     .bind(new_embed)
+    .bind(new_sponsor_tag)
     .fetch_optional(&mut *pool.acquire().await?)
     .await?
     .ok_or(BookingError::NotFound("calendar"))
@@ -604,6 +613,7 @@ pub async fn set_rules(
         }
     }
     let mut tx = pool.begin().await?;
+
     sqlx::query("DELETE FROM booking_availability_rules WHERE resource_id = $1")
         .bind(resource_id)
         .execute(&mut *tx)
@@ -1479,6 +1489,92 @@ pub async fn create_order(
 
     let tz = tz_of(cal)?;
     let mut tx = pool.begin().await?;
+    // ── THE BOOKING CAPTURES A CRM CONTACT (ZaarHub CEO, 2026-11-25) ────────────────────────────────
+    // A sponsor who filled the form became nothing: no contact, no tag, and ten "‹City› - Sponsors" lists
+    // with zero members. The contact is created HERE, in the order's own transaction, so a booking either
+    // produces its contact or produces nothing.
+    //
+    // Captured on HELD, not on paid: a held booking is a real sponsor who reached the form, and if they
+    // abandon we still have the lead. The CEO's lean, stated plainly so the funnel is described correctly.
+    //
+    // Matching is by email, per account. `contacts` has no unique index on (tenant, email), so the upsert
+    // is a SELECT-then-write under an advisory lock keyed on that pair - two sponsors submitting at once
+    // must not create two records for one address.
+    let contact_id: Option<Uuid> = {
+        let split = |full: &str| -> (String, String) {
+            let mut parts = full.trim().splitn(2, ' ');
+            let first = parts.next().unwrap_or("").trim().to_string();
+            let last = parts.next().unwrap_or("").trim().to_string();
+            (first, last)
+        };
+        let (first_name, last_name) = split(name);
+        let phone = input
+            .phone
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty());
+        let company = input
+            .company
+            .as_deref()
+            .map(str::trim)
+            .filter(|c| !c.is_empty());
+
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)")
+            .bind(format!("{}:{}", cal.tenant_id, email))
+            .execute(&mut *tx)
+            .await?;
+
+        let existing: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM contacts WHERE tenant_id = $1 AND lower(email) = lower($2) LIMIT 1",
+        )
+        .bind(cal.tenant_id)
+        .bind(&email)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        match existing {
+            Some(id) => {
+                // Only fill what is EMPTY: a returning sponsor's own record must not be overwritten by a
+                // form they filled in a hurry.
+                sqlx::query(
+                    "UPDATE contacts SET \
+                        first_name = COALESCE(NULLIF(first_name,''), $2), \
+                        last_name  = COALESCE(NULLIF(last_name,''),  $3), \
+                        phone      = COALESCE(NULLIF(phone,''),      $4), \
+                        company    = COALESCE(NULLIF(company,''),    $5), \
+                        updated_at = now() \
+                      WHERE id = $1 AND tenant_id = $6",
+                )
+                .bind(id)
+                .bind(&first_name)
+                .bind(&last_name)
+                .bind(phone)
+                .bind(company)
+                .bind(cal.tenant_id)
+                .execute(&mut *tx)
+                .await?;
+                Some(id)
+            }
+            None => {
+                let id = Uuid::new_v4();
+                sqlx::query(
+                    "INSERT INTO contacts (id, tenant_id, first_name, last_name, email, phone, company, \
+                                           source, is_active, created_at, updated_at) \
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,'booking',true,now(),now())",
+                )
+                .bind(id)
+                .bind(cal.tenant_id)
+                .bind(&first_name)
+                .bind(&last_name)
+                .bind(&email)
+                .bind(phone)
+                .bind(company)
+                .execute(&mut *tx)
+                .await?;
+                Some(id)
+            }
+        }
+    };
     lock_resources(&mut tx, input.items.iter().map(|i| i.resource_id).collect()).await?;
 
     let mut resolved = Vec::with_capacity(input.items.len());
@@ -1520,7 +1616,7 @@ pub async fn create_order(
     )
     .bind(cal.tenant_id)
     .bind(cal.id)
-    .bind(input.contact_id)
+    .bind(contact_id.or(input.contact_id))
     .bind(name)
     .bind(&email)
     .bind(q.subtotal_cents)
@@ -1582,6 +1678,19 @@ pub async fn create_order(
         bookings.push(b);
     }
     tx.commit().await?;
+    // ── THE SPONSOR TAG, after the order stands ─────────────────────────────────────────────────────
+    // Applied through the tags module's own writer so the TagAdded automations fire and the dynamic
+    // "‹City› - Sponsors" list gains the member immediately (it did not, when the tag was written by hand).
+    // A calendar with no tag, or a tag this account no longer has, changes nothing and fails nothing.
+    if let (Some(tag_name), Some(cid)) = (cal.sponsor_tag.as_deref(), contact_id) {
+        if let Err(e) =
+            crate::tags::apply_by_name(pool, cal.tenant_id, "contact", cid, tag_name, None).await
+        {
+            tracing::warn!(error = %e, tag = %tag_name,
+                "the booking stands but its sponsor tag could not be applied");
+        }
+    }
+
     Ok(OrderWithBookings { order, bookings })
 }
 
@@ -2528,6 +2637,8 @@ pub async fn admin_create_booking(
             customer_name: name,
             customer_email: email,
             contact_id: None,
+            // An operator booking by hand has no buyer company typed in front of them.
+            company: None,
             notes: notes.filter(|n| !n.trim().is_empty()),
             // The operator filling a position by hand has no buyer consent to record: the buyer did not
             // tick anything in front of them. Both stay empty rather than being guessed. Their answers

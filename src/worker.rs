@@ -43,6 +43,19 @@ pub async fn start_worker(db: PgPool) -> Result<(), Box<dyn std::error::Error + 
 
     // Job 2: Every 5 minutes — check for inactive trials and mark health
     let db2 = db.clone();
+    // ── EXPIRED HOLDS ARE RELEASED (ZaarHub CEO, 2026-11-25) ─────────────────────────────────────
+    // A held booking past its hold_minutes was invisible to availability but still read "held" on every
+    // operator screen, and there was no route to cancel it — so a slot looked unsellable forever. Expiry was
+    // a query condition, never a state change. Every minute: expire the holds, free the slot they held.
+    let dbh = db.clone();
+    let job_holds = Job::new_async("30 * * * * *", move |_uuid, _lock| {
+        let db = dbh.clone();
+        Box::pin(async move {
+            release_expired_holds(&db).await;
+        })
+    })?;
+    sched.add(job_holds).await?;
+
     let job2 = Job::new_async("0 */5 * * * *", move |_uuid, _lock| {
         let db = db2.clone();
         Box::pin(async move {
@@ -1033,4 +1046,58 @@ async fn process_followup_queue(db: &PgPool) {
         skipped,
         "followup_queue drained (claimed rows are marked executed)"
     );
+}
+
+/// Release booking holds that have run out.
+///
+/// A hold that expired used to leave two lies on screen: the booking still read `held`, and the slot still
+/// looked taken, even though availability had already stopped counting it. Nothing swept them, so an
+/// abandoned booking parked inventory indefinitely. This flips the state and frees the slot — and it only
+/// frees a slot that has no other live booking on it.
+pub async fn release_expired_holds(db: &PgPool) {
+    let expired = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+        "UPDATE booking_bookings SET status = 'expired'
+          WHERE status = 'held' AND hold_expires_at <= now()
+          RETURNING id, slot_id",
+    )
+    .fetch_all(db)
+    .await;
+    let rows = match expired {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "hold sweep could not expire bookings");
+            return;
+        }
+    };
+    if rows.is_empty() {
+        return;
+    }
+    // Their orders go too, unless something else on the same order is still live.
+    let _ = sqlx::query(
+        "UPDATE booking_orders o SET status = 'expired'
+          WHERE o.status = 'held'
+            AND o.hold_expires_at IS NOT NULL AND o.hold_expires_at <= now()
+            AND NOT EXISTS (SELECT 1 FROM booking_bookings b
+                             WHERE b.order_id = o.id
+                               AND b.status IN ('held','confirmed'))",
+    )
+    .execute(db)
+    .await;
+
+    for (_, slot_id) in &rows {
+        if let Some(slot) = slot_id {
+            let _ = sqlx::query(
+                "UPDATE booking_slots s SET status = 'open'
+                  WHERE s.id = $1 AND s.status = 'held'
+                    AND NOT EXISTS (SELECT 1 FROM booking_bookings b
+                                     WHERE b.slot_id = s.id
+                                       AND (b.status = 'confirmed'
+                                            OR (b.status = 'held' AND b.hold_expires_at > now())))",
+            )
+            .bind(slot)
+            .execute(db)
+            .await;
+        }
+    }
+    tracing::info!(released = rows.len(), "expired booking holds released");
 }

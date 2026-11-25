@@ -224,6 +224,7 @@ async fn calendar_checkout(
         settings: None,
         reply_to_email: None,
         send_confirmation: None,
+        sponsor_tag: None,
     };
     let r = crate::booking::handlers::update_calendar(
         State(state.db.clone()),

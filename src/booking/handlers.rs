@@ -613,6 +613,7 @@ pub async fn update_calendar(
             body.send_confirmation,
             body.payment_mode,
             body.payment_embed,
+            body.sponsor_tag,
         )
         .await?,
     ))
@@ -751,6 +752,35 @@ pub async fn cancel_order(
     let res = service::cancel_order(&pool, id, Some(t.0)).await?;
     let pool2 = pool.clone();
     let oid = res.order.id;
+    tokio::spawn(async move { super::notify::on_cancelled(&pool2, oid).await });
+    Ok(Json(res))
+}
+
+/// Cancel by BOOKING id, which is the id an operator actually sees on a held slot.
+///
+/// Measured complaint (ZaarHub CEO, 2026-11-25): he tried eight paths and every one 404'd, because the
+/// only cancel route takes an ORDER id and nothing on screen shows it. A booking line knows its order, so
+/// this resolves it and runs the SAME cancel — one implementation, two ways in.
+pub async fn cancel_booking(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(booking_id): Path<Uuid>,
+) -> Result<Json<OrderWithBookings>> {
+    let order_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT b.order_id FROM booking_bookings b
+           JOIN booking_orders o ON o.id = b.order_id
+          WHERE b.id = $1 AND o.tenant_id = $2",
+    )
+    .bind(booking_id)
+    .bind(t.0)
+    .fetch_optional(&pool)
+    .await?;
+    let order_id = order_id.ok_or_else(|| {
+        crate::booking::error::BookingError::NotFound("that booking is not on this account")
+    })?;
+    let res = service::cancel_order(&pool, order_id, Some(t.0)).await?;
+    let pool2 = pool.clone();
+    let oid = order_id;
     tokio::spawn(async move { super::notify::on_cancelled(&pool2, oid).await });
     Ok(Json(res))
 }

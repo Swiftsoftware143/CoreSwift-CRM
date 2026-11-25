@@ -14466,6 +14466,8 @@ function bkDetailPanel() {
     // which is why renaming one looked impossible. Both are editable here, together.
     '<div class="bk-form" style="margin-top:10px">' +
       '<label>Calendar name<input id="bkCalName" value="' + escapeHtml(cal.name) + '"></label>' +
+      '<label>Sponsor tag<input id="bkCalSponsorTag" value="' + escapeHtml(cal.sponsor_tag || '') + '" placeholder="Palm Bay - Sponsor">' +
+        '<span class="muted" style="font-weight:400">Applied to the CRM contact every booking creates. Must be a tag that already exists here. Blank means no tag.</span></label>' +
       '<label>Web address<input id="bkCalSlug" value="' + escapeHtml(cal.slug) + '">' +
         '<span class="muted" style="font-weight:400">Letters, numbers and dashes. Changing it stops the OLD address working — links already published will 404.</span></label>' +
     '</div>' +
@@ -15179,6 +15181,8 @@ function bkFieldFlash(msg, ok) {
 
 /* Rename a calendar and/or change the address it answers on, then reload so the list shows the truth. */
 async function bkSaveCalAddress() {
+  // The sponsor tag rides with the name and address: one save, three fields, so a calendar can be made to
+  // feed its city's sponsor list without a second screen or a raw API call.
   var name = ((document.getElementById('bkCalName') || {}).value || '').trim();
   var slug = ((document.getElementById('bkCalSlug') || {}).value || '').trim().toLowerCase();
   var flash = document.getElementById('bkCalAddrFlash');
@@ -15190,7 +15194,15 @@ async function bkSaveCalAddress() {
   if (!name) { say('The calendar needs a name.', false); return; }
   if (slug && !/^[a-z0-9-]{3,60}$/.test(slug)) { say('The address uses letters, numbers and dashes only.', false); return; }
   try {
-    await API.patch('/booking/calendars/' + encodeURIComponent(BK.current), { name: name, slug: slug || undefined });
+    var tagEl = document.getElementById('bkCalSponsorTag');
+    var tag = tagEl ? (tagEl.value || '').trim() : null;
+    await API.patch('/booking/calendars/' + encodeURIComponent(BK.current), {
+      name: name,
+      slug: slug || undefined,
+      // Sent as '' to CLEAR it, or the name to set it. Absent would mean "leave alone", which is why the
+      // field is always read from the page rather than omitted.
+      sponsor_tag: tag === null ? undefined : tag
+    });
     // Reload the LIST as well as the detail: a stale row label is what sent a rename hunt in circles.
     await bkInit();
     await bkOpenDetail(BK.current, true);
