@@ -159,6 +159,12 @@ pub async fn provision(
             .await?;
             tx.commit().await.map_err(AppError::Database)?;
             out.user_created = true;
+            // The account writer minted the key inside that transaction (plan §6 rule 5), so the
+            // report must say so instead of claiming a later mint created it.
+            if let Some(key) = minted.api_key {
+                out.key_created = true;
+                out.key_prefix = Some(key.prefix);
+            }
             (minted.tenant_id, minted.user.id)
         }
     };
@@ -209,7 +215,11 @@ pub async fn provision(
     .map_err(AppError::Database)?;
     match active {
         Some(prefix) => {
-            out.key_existed = true;
+            // `key_created` above means the account writer minted it in the same transaction; this
+            // check exists for a workspace that already had a key before this sync touched it.
+            if !out.key_created {
+                out.key_existed = true;
+            }
             out.key_prefix = Some(prefix);
         }
         None => {

@@ -73,7 +73,11 @@ pub struct CreatedAccount {
     /// t_7863696b). An account is not fully provisioned without one: a rolled-back signup leaves no
     /// key row, and a committed signup always has one. The plaintext rides in memory only for the
     /// registration response; the database keeps the hash and the sealed copy.
-    pub api_key: crate::personal_api_keys::MintedKey,
+    ///
+    /// `None` only when this call JOINED a workspace that already held a key (an invite, or the
+    /// adoption of a machine-minted sink): the mint is `if_missing`, because an unconditional mint
+    /// would hand a freshly invited teammate a brand-new working secret for the whole workspace.
+    pub api_key: Option<crate::personal_api_keys::MintedKey>,
 }
 
 /// Everything [`create_account`] needs. `email` must ALREADY be normalised
@@ -291,9 +295,17 @@ pub async fn create_account(
     // Labelled `MCP — <account>` (David 2026-11-25, plan §6 rule 5): the account's OWN name, in the
     // SAME transaction as the account row, so no account is ever keyless and a new account's key is
     // recognisable on the API Keys screen without the customer renaming it.
-    let key_label = format!("MCP — {}", tenant_name);
-    let api_key =
-        crate::personal_api_keys::mint_on(&mut *conn, tenant_id, Some(user.id), &key_label).await?;
+    //
+    // `if_missing` (kanban t_a68c7658): the invite and adoption arms land on a workspace that may
+    // already be keyed — by a signup, or by the tag sink that adopted it — and an unconditional mint
+    // would leave that workspace with TWO secrets, one of them handed to a non-owner teammate.
+    let api_key = crate::personal_api_keys::mint_account_key_if_missing(
+        &mut *conn,
+        tenant_id,
+        Some(user.id),
+        &tenant_name,
+    )
+    .await?;
 
     Ok(CreatedAccount {
         user,

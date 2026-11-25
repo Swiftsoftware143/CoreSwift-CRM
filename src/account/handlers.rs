@@ -48,6 +48,11 @@ pub async fn create(
         .bind(Uuid::new_v4()).bind(&r.name).bind(&r.slug).bind(&r.logo_url).bind(&r.primary_color).bind(&r.accent_color).bind(&r.custom_domain)
         .fetch_one(&mut *tx).await.map_err(|e| { if let sqlx::Error::Database(ref d) = e { if d.constraint() == Some("tenants_slug_key") { return AppError::Duplicate(format!("Slug '{}' exists", r.slug)); } } AppError::Database(e) })?;
     crate::billing::seat_default_plan(&mut tx, account.id).await?;
+    // The account's own key, in the SAME transaction (plan §6 rule 5, kanban t_a68c7658): a
+    // sub-account minted here is a real workspace an operator will hand to a client, so it must
+    // never land keyless. No user is created on this door, so the key is attributed to the
+    // workspace itself (`user_id` NULL is the shape this table already allows).
+    crate::personal_api_keys::mint_account_key(&mut tx, account.id, None, &account.name).await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(json!(account))))
 }

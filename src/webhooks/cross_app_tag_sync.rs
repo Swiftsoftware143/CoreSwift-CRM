@@ -132,6 +132,21 @@ pub async fn handle_tag_sync(
         }
         tx.commit().await?;
 
+        // …and its key (plan §6 rule 5, kanban t_a68c7658). BEST EFFORT on purpose: this is an
+        // ingest arm and must never refuse a capture because a key could not be minted
+        // (kanban t_e2364c41). The mint runs the moment the tenant commits, so the workspace is
+        // keyed before this response returns in the normal case; a failure is logged and
+        // `personal_api_keys::sweep_missing_account_keys` repairs it on its next tick.
+        if created.is_some() {
+            crate::personal_api_keys::mint_account_key_best_effort(
+                &s.db,
+                tenant_id,
+                None,
+                &tenant_name,
+            )
+            .await;
+        }
+
         tracing::info!(
             "TagSync: Auto-created tenant {} ({})",
             tenant_id,

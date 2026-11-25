@@ -200,13 +200,18 @@ pub async fn register(
     let is_first_user = account.is_first_user;
     // Minted inside the signup transaction; the page shows it once here AND it stays viewable in
     // Settings (kanban t_7863696b).
-    let api_key = json!({
-        "id": account.api_key.id.to_string(),
-        "name": account.api_key.name,
-        "prefix": account.api_key.prefix,
-        "key": account.api_key.key,
-        "note": "Your account's API key. View and copy it any time in Settings > Integration Center."
-    });
+    // `null` when this call joined a workspace that already held its key (an invite): the new
+    // member is never handed the workspace's existing secret, and the owner sees it in Settings.
+    let api_key = match account.api_key {
+        Some(k) => json!({
+            "id": k.id.to_string(),
+            "name": k.name,
+            "prefix": k.prefix,
+            "key": k.key,
+            "note": "Your account's API key. View and copy it any time in Settings > Integration Center."
+        }),
+        None => serde_json::Value::Null,
+    };
 
     // Platform authority is resolved from the DATABASE by the token subject, never from
     // `user.role`: a fresh signup is `owner` of its own tenant, which grants nothing

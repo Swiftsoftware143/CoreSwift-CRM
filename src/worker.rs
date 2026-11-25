@@ -94,6 +94,26 @@ pub async fn start_worker(db: PgPool) -> Result<(), Box<dyn std::error::Error + 
     })?;
     sched.add(job3b).await?;
 
+    // Job 3c: Every 10 minutes — give a key to any workspace that has NEVER held one (plan §6
+    // rule 5, kanban t_a68c7658). The doors that create a workspace inside their own transaction
+    // mint there and fail closed, so they cannot produce a keyless row; this sweep covers the two
+    // ingest sinks (which mint best-effort so a capture is never refused) and any creation door
+    // added tomorrow — the same "property of the DATA, not of nine call sites" shape as the
+    // calendar-address sweep above. It never re-mints for a workspace that has a key row, active or
+    // revoked, so a customer who revoked every key is left alone.
+    let db3c = db.clone();
+    let job3c = Job::new_async("0 5/10 * * * *", move |_uuid, _lock| {
+        let db = db3c.clone();
+        Box::pin(async move {
+            match crate::personal_api_keys::sweep_missing_account_keys(&db).await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(minted = n, "account keys: keyed workspaces that had none"),
+                Err(e) => tracing::error!(error = %e, "account keys: sweep failed this tick"),
+            }
+        })
+    })?;
+    sched.add(job3c).await?;
+
     // Job 4: Every 5 minutes — check for abandoned directory sign-ups (Case A)
     let db4 = db.clone();
     let job4 = Job::new_async("0 */5 * * * *", move |_uuid, _lock| {

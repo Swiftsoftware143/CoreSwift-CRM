@@ -236,6 +236,21 @@ pub async fn handle_tag_provision(
     }
     tx.commit().await?;
 
+    // …and its key (plan §6 rule 5, kanban t_a68c7658). BEST EFFORT for the same reason as the
+    // sibling sink: a capture is never refused because a key could not be minted (kanban
+    // t_e2364c41); the sweep repairs a miss. When this workspace is later ADOPTED by the
+    // provisioning door, `auth::signup::create_account` mints `if_missing`, so an adopted sink ends
+    // with exactly ONE key rather than a second one.
+    if created.is_some() {
+        crate::personal_api_keys::mint_account_key_best_effort(
+            &s.db,
+            tenant_id,
+            None,
+            &tenant_name,
+        )
+        .await;
+    }
+
     tracing::info!(
         "tag_provision: created tenant {} ({})",
         tenant_id,

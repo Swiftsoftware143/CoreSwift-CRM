@@ -309,6 +309,10 @@ pub async fn internal_create(
     .await?;
     if created.is_some() {
         crate::billing::seat_default_plan(&mut tx, tenant_id).await?;
+        // …and its key, in the SAME transaction (plan §6 rule 5, kanban t_a68c7658). Only for the
+        // tenant this request actually CREATED: the ON CONFLICT arm above is an existing workspace
+        // and keeps whatever key it already holds.
+        crate::personal_api_keys::mint_account_key(&mut tx, tenant_id, None, &name).await?;
     }
     tx.commit().await?;
 

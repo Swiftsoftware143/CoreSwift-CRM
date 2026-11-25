@@ -1119,12 +1119,16 @@ pub async fn route_action(
                 name.to_lowercase().replace(' ', "-"),
                 &Uuid::new_v4().to_string()[..8]
             );
+            // ONE unit (plan §6 rule 5, kanban t_a68c7658): workspace + owner login + plan row + key
+            // commit together, so a failure past the tenant INSERT cannot leave a workspace with no
+            // owner (or, after this card, one with no key).
             let new_tid = Uuid::new_v4();
+            let mut tx = db.begin().await.map_err(|e| format!("DB error: {}", e))?;
             sqlx::query("INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)")
                 .bind(new_tid)
                 .bind(name)
                 .bind(&slug)
-                .execute(db)
+                .execute(&mut *tx)
                 .await
                 .map_err(|e| format!("Failed to create tenant: {}", e))?;
 
@@ -1142,13 +1146,13 @@ pub async fn route_action(
                 "INSERT INTO users (id, tenant_id, email, password_hash, name, role) VALUES ($1, $2, $3, $4, $5, 'account_owner')"
             )
             .bind(uid).bind(new_tid).bind(&email).bind(&pw_hash).bind(name)
-            .execute(db).await
+            .execute(&mut *tx).await
             .map_err(|e| format!("Failed to create user: {}", e))?;
 
             // Assign free plan
             let plan =
                 sqlx::query_scalar::<_, Uuid>("SELECT id FROM plans WHERE slug = 'free' LIMIT 1")
-                    .fetch_optional(db)
+                    .fetch_optional(&mut *tx)
                     .await
                     .map_err(|e| format!("DB error: {}", e))?;
 
@@ -1157,8 +1161,15 @@ pub async fn route_action(
                     "INSERT INTO tenant_plans (id, tenant_id, plan_id, status, billing_cycle) VALUES ($1, $2, $3, 'active', 'monthly') ON CONFLICT (tenant_id) DO NOTHING"
                 )
                 .bind(Uuid::new_v4()).bind(new_tid).bind(plan_id)
-                .execute(db).await;
+                .execute(&mut *tx).await;
             }
+
+            // The account's own key, in the SAME transaction (plan §6 rule 5): this arm provisions a
+            // real login for a real workspace, so it must never land keyless.
+            crate::personal_api_keys::mint_account_key(&mut tx, new_tid, Some(uid), name)
+                .await
+                .map_err(|e| format!("Failed to mint the account key: {}", e))?;
+            tx.commit().await.map_err(|e| format!("DB error: {}", e))?;
 
             Ok((
                 201,

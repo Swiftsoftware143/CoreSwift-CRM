@@ -12,7 +12,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use sqlx::{PgConnection, Row};
+use sqlx::{PgConnection, PgPool, Row};
 use uuid::Uuid;
 
 use crate::auth::models::Claims;
@@ -114,6 +114,142 @@ pub async fn mint_with_role(
         key: full_key,
         prefix,
     })
+}
+
+/// The label every key minted AT ACCOUNT CREATION carries: `MCP — <account name>` (David,
+/// 2026-11-25, plan §6 rule 5).
+///
+/// ONE rule in ONE place: the public signup, the machine provisioning door and every other
+/// workspace-creating path in this app name their key the same way, so the customer's key already
+/// says which account it belongs to and never needs renaming on the API Keys screen.
+pub fn account_key_label(account_name: &str) -> String {
+    format!("MCP — {}", account_name)
+}
+
+/// Mint the account's OWN key on the caller's connection — pass `&mut *tx` from inside the
+/// transaction that creates the workspace, so a workspace can never commit without its key
+/// (plan §6 rule 5: "a created account with no key is a defect").
+///
+/// Fails CLOSED for a real account: `mint_with_role`'s `seal` refuses when the server secret is
+/// missing, so a creation door rolls the workspace back instead of landing keyless.
+pub async fn mint_account_key(
+    conn: &mut PgConnection,
+    tenant_id: Uuid,
+    user_id: Option<Uuid>,
+    account_name: &str,
+) -> Result<MintedKey, AppError> {
+    mint_on(conn, tenant_id, user_id, &account_key_label(account_name)).await
+}
+
+/// Mint the account key ONLY when this workspace has never held one, on the caller's connection.
+///
+/// The account writer needs this shape rather than an unconditional mint: its invite and adoption
+/// arms land on a workspace that already exists and may already be keyed, and an unconditional mint
+/// there would hand a just-invited teammate a second working secret for the whole workspace (and
+/// double-mint an adopted sink).
+///
+/// The predicate is "any row at all", NOT `is_active`: a workspace whose owner deliberately revoked
+/// every key must never have one re-minted behind their back — the same rule
+/// `backfill_missing_keys` follows.
+pub async fn mint_account_key_if_missing(
+    conn: &mut PgConnection,
+    tenant_id: Uuid,
+    user_id: Option<Uuid>,
+    account_name: &str,
+) -> Result<Option<MintedKey>, AppError> {
+    let ever_keyed: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM personal_api_keys WHERE tenant_id = $1)")
+            .bind(tenant_id)
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(AppError::Database)?;
+    if ever_keyed {
+        return Ok(None);
+    }
+    mint_account_key(conn, tenant_id, user_id, account_name)
+        .await
+        .map(Some)
+}
+
+/// Key a workspace that was just created, WITHOUT ever failing the request that created it.
+///
+/// The two cross-app ingest sinks mint a workspace out of a lead (a capture), and those arms must
+/// never refuse a capture (kanban t_e2364c41): a missing server secret would otherwise turn "a key
+/// cannot be minted" into "the lead is dropped". So the sink mints AFTER its tenant transaction has
+/// committed, logs any failure, and `sweep_missing_account_keys` repairs it on the next tick — the
+/// workspace is keyed either way, one sweep window later at worst.
+pub async fn mint_account_key_best_effort(
+    db: &PgPool,
+    tenant_id: Uuid,
+    user_id: Option<Uuid>,
+    account_name: &str,
+) {
+    let attempt: Result<Option<MintedKey>, AppError> = async {
+        let mut tx = db.begin().await.map_err(AppError::Database)?;
+        let minted = mint_account_key_if_missing(&mut tx, tenant_id, user_id, account_name).await?;
+        tx.commit().await.map_err(AppError::Database)?;
+        Ok(minted)
+    }
+    .await;
+
+    match attempt {
+        Ok(Some(minted)) => tracing::info!(
+            tenant_id = %tenant_id,
+            prefix = %minted.prefix,
+            "account key minted for a newly created workspace"
+        ),
+        Ok(None) => {}
+        Err(e) => tracing::error!(
+            tenant_id = %tenant_id,
+            error = %e,
+            "account key NOT minted for a newly created workspace — the keyless sweep will repair it"
+        ),
+    }
+}
+
+/// The repair step: give a key to every ACTIVE workspace that has never held one.
+///
+/// Every door that creates a workspace inside its own transaction mints there and fails closed, so
+/// it cannot produce a keyless row. This sweep exists for the class that cannot take that guarantee
+/// (the two ingest sinks, via `mint_account_key_best_effort`) and for any door added tomorrow —
+/// exactly as `calendar_host::ensure_all` covers a new workspace door for calendar addresses. The
+/// invariant is a property of the DATA, not of nine call sites remembering to call a function.
+///
+/// Never mints for a workspace that HAS a key row, active or revoked: revoking every key is the
+/// owner's deliberate act (the reason `backfill_missing_keys` is gated to run once).
+pub async fn sweep_missing_account_keys(db: &PgPool) -> Result<usize, AppError> {
+    let mut tx = db.begin().await.map_err(AppError::Database)?;
+    // Serialise across instances and overlapping ticks: two sweeps must never mint two keys.
+    sqlx::query("SELECT pg_advisory_xact_lock(7263114002)")
+        .execute(&mut *tx)
+        .await
+        .map_err(AppError::Database)?;
+
+    let missing: Vec<(Uuid, String, Option<Uuid>)> = sqlx::query_as(
+        r#"SELECT t.id, t.name,
+                  (SELECT u.id FROM users u WHERE u.tenant_id = t.id ORDER BY u.created_at LIMIT 1)
+             FROM tenants t
+            WHERE t.is_active
+              AND NOT EXISTS (SELECT 1 FROM personal_api_keys k WHERE k.tenant_id = t.id)
+            ORDER BY t.created_at
+            LIMIT 500"#,
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(AppError::Database)?;
+
+    let mut minted = 0usize;
+    for (tenant_id, name, user_id) in missing {
+        if mint_account_key_if_missing(&mut tx, tenant_id, user_id, &name)
+            .await?
+            .is_some()
+        {
+            minted += 1;
+        }
+    }
+
+    tx.commit().await.map_err(AppError::Database)?;
+    Ok(minted)
 }
 
 #[derive(Deserialize)]
