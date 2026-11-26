@@ -27,16 +27,29 @@ pub async fn create_category(
     Json(r): Json<CreateCategoryRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    if r.name.is_empty() {
-        return Err(AppError::Validation("Name required".into()));
-    }
+    // A category name pasted out of a spreadsheet, an email or another CRM can carry an INVISIBLE
+    // NUL byte, which Postgres cannot store in a text column: the write used to answer
+    // `500 {"code":500,...,"message":"Database error"}` with nothing saved and no field named
+    // (measured live 2026-11-26 on `POST /api/tags/categories`). The shared hygiene helper strips
+    // the NUL, trims, refuses a blank name and any OTHER control character BY NAME, and caps the
+    // value at the column's own width (`tag_categories.name` is varchar(100)) so an over-long name
+    // cannot 500 either. Bind the value it returns, never the raw input.
+    let name = crate::security::free_text::single_line(&r.name, "Category name", 100)?;
+    let color = match r.color.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => {
+            Some(crate::security::tag_name::color_or_validation(
+                &crate::security::free_text::strip_nul(raw),
+            )?)
+        }
+        _ => None,
+    };
     let cat = sqlx::query_as::<_, TagCategory>(
         "INSERT INTO tag_categories(id,tenant_id,name,color) VALUES($1,$2,$3,$4) RETURNING *",
     )
     .bind(Uuid::new_v4())
     .bind(t)
-    .bind(&r.name)
-    .bind(&r.color)
+    .bind(&name)
+    .bind(&color)
     .fetch_one(&s.db)
     .await
     .map_err(|e| {
@@ -56,8 +69,20 @@ pub async fn update_category(
     Json(r): Json<UpdateCategoryRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    // Same hygiene on the rename path: a NUL 500'd here too, a whitespace-only name would have been
+    // stored verbatim, and an over-long name or colour reached a column that cannot hold it. A blank
+    // supplied name means "leave it alone" (the COALESCE arm), matching the other rename doors.
+    let name = crate::security::free_text::optional_line(r.name.as_deref(), "Category name", 100)?;
+    let color = match r.color.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => {
+            Some(crate::security::tag_name::color_or_validation(
+                &crate::security::free_text::strip_nul(raw),
+            )?)
+        }
+        _ => None,
+    };
     Ok(Json(json!(sqlx::query_as::<_,TagCategory>("UPDATE tag_categories SET name=COALESCE($1,name), color=COALESCE($2,color) WHERE id=$3 AND tenant_id=$4 RETURNING *")
-        .bind(&r.name).bind(&r.color).bind(id).bind(t).fetch_optional(&s.db).await.map_err(|e| {
+        .bind(&name).bind(&color).bind(id).bind(t).fetch_optional(&s.db).await.map_err(|e| {
             // 086 added idx_tag_categories_name_tenant, so renaming a category onto an existing
             // name in the same tenant is now a real violation on this path too.
             if let sqlx::Error::Database(ref d) = e {
