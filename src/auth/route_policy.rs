@@ -1748,9 +1748,11 @@ mod tests {
     /// `agent_api::router`. It shares the action agent's `/api/agent` prefix: main.rs MERGES the two
     /// routers into one nest, and `NESTS` carries a row for each half, so the merged half is counted
     /// rather than invisible. Every leaf is on `/api**`, so the 14 root-level mounts are unchanged.
-    /// 576 mounted / 562 on /api**. The eight leaves this move covered were: the contact custom-field
-    /// manager (three paths), the operator's cancel-by-booking-id, and the booking sponsor flow.
-    /// wildcard on 2026-11-25, so twelve routes left the census.
+    /// 576 mounted / 562 on /api** — eight leaves moved this pin. Four of them are this lane's and are
+    /// named here so the next reader can check them: `/api/contacts/custom-fields`,
+    /// `/api/contacts/custom-fields/:id`, `/api/contacts/:id/fields` (the contact custom-field manager) and
+    /// `/api/booking/bookings/:id/cancel` (the operator's cancel by booking id). The other four arrived from
+    /// the booking sponsor work and other lanes before this census; the test's own walk is what counts them.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
         let mounted = mounted_routes();
