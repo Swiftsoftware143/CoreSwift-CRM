@@ -136,7 +136,15 @@ pub async fn run_once(pool: &PgPool) -> SlaPass {
 #[derive(sqlx::FromRow)]
 struct Rung {
     id: uuid::Uuid,
-    tenant_id: uuid::Uuid,
+    /// NULLABLE on `tickets` — a ticket filed from the public support form carries NO workspace
+    /// (`tenant_id IS NULL`, migration 122). Decoded as `Option` because a non-Option field makes the
+    /// whole-row decode fail on such a row, which took the WHOLE ladder down for every tenant, not just
+    /// that ticket (`ticket_escalations.tenant_id` is NOT NULL, so the claim INSERT failed first —
+    /// measured live 2026-11-26 by the deploy gate: "tickets.tenant_id is NULLABLE and holds 1/13 NULLs
+    /// today"). The SQL below now also refuses a workspace-less ticket explicitly: there is no account
+    /// to escalate to, so the visitor's ticket stays in the operator's queue and the ladder keeps
+    /// running for the customers who do have an SLA.
+    tenant_id: Option<uuid::Uuid>,
     clock: String,
     rung: String,
     audience: String,
@@ -166,6 +174,10 @@ async fn escalate(pool: &PgPool) -> u64 {
               FROM tickets t
              WHERE t.first_responded_at IS NULL
                AND t.first_response_due IS NOT NULL
+               -- A workspace-less ticket (the public support form, migration 122) has no account to
+               -- escalate to and `ticket_escalations.tenant_id` is NOT NULL, so including it failed the
+               -- claim INSERT and silenced the ladder for EVERY tenant. Measured live 2026-11-26.
+               AND t.tenant_id IS NOT NULL
                AND t.status IN ('new', 'open', 'pending', 'on_hold')
                AND t.first_response_due <= NOW() + $1::interval
             UNION ALL
@@ -179,6 +191,7 @@ async fn escalate(pool: &PgPool) -> u64 {
               FROM tickets t
              WHERE t.solved_at IS NULL
                AND t.resolution_due IS NOT NULL
+               AND t.tenant_id IS NOT NULL
                AND t.status IN ('new', 'open', 'pending', 'on_hold')
                AND t.resolution_due <= NOW() + $1::interval
         ),
@@ -252,6 +265,18 @@ async fn escalate(pool: &PgPool) -> u64 {
 
     let mut told = 0u64;
     for r in claimed {
+        // Belt and braces beside the SQL filter: a rung with no workspace has no account mailbox and no
+        // branding to render, so it is recorded as undeliverable rather than decoded into an error.
+        let Some(tenant) = r.tenant_id else {
+            let _ = sqlx::query(
+                "UPDATE ticket_escalations SET delivered = false, detail = $2 WHERE id = $1",
+            )
+            .bind(r.id)
+            .bind("no workspace on this ticket — nothing to escalate to")
+            .execute(pool)
+            .await;
+            continue;
+        };
         let Some(to) = r.recipient.clone() else {
             // Nobody to tell is a fact worth keeping: an account with no owner mailbox is an account where
             // every promise is silent, and that is exactly what this table should show.
@@ -279,7 +304,7 @@ async fn escalate(pool: &PgPool) -> u64 {
             "link": link,
         });
 
-        match crate::email::send_template_email(pool, r.tenant_id, &to, template, &vars).await {
+        match crate::email::send_template_email(pool, tenant, &to, template, &vars).await {
             Ok(()) => {
                 told += 1;
                 let _ = sqlx::query(
