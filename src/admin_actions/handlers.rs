@@ -1,7 +1,7 @@
 //! Chat action handlers — single endpoint to orchestrate multi-app flows
 
 use axum::{
-    extract::{Extension, Json, Query, State},
+    extract::{Extension, Json, Path, Query, State},
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
@@ -972,6 +972,138 @@ pub async fn list_all_users(
         "per_page": per_page,
         "q": q,
     })))
+}
+
+/// DELETE /api/admin/users/{id} — remove a person from the platform for good.
+///
+/// THE RULE (fleet-wide, David 2026-11-26): an action that removes a person from the UI must remove
+/// the row from the database. This app could not delete a user at all — an operator could take
+/// someone out of a routing pool (`round_robin_members`) and the account row survived forever, so
+/// "deleted" was never true. ADASwift's `remove_member`, MissedCall's `delete_contact` and
+/// FunnelSwift's `delete_tenant_user` all hard-delete; this is CoreSwift's door.
+///
+/// All 29 foreign keys that reference `users` are `SET NULL` or `CASCADE` (measured on the live
+/// schema 2026-11-26 — there is no `NO ACTION` FK), so one `DELETE FROM users` needs no manual
+/// unpicking: history survives and its owner column clears to NULL. Do not add clean-up deletes.
+///
+/// Refusals, each with its own sentence: yourself (400), the workspace's owner (403), the last
+/// remaining admin of a workspace (400 — "promote someone else first"), a portfolio company's own
+/// login (403). Unknown id → 404, never 403, so the door cannot confirm that a stranger's row exists.
+///
+/// The delete and its audit row commit TOGETHER: if the trail cannot be written the person is not
+/// removed, so "deleted with no record of who did it" is impossible.
+pub async fn delete_user(
+    State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
+    crate::auth::platform_admin::require_platform_admin(&s.db, &c.sub).await?;
+
+    let actor = Uuid::parse_str(&c.sub).map_err(|_| AppError::Unauthorized)?;
+    if actor == id {
+        return Err(AppError::BadRequest(
+            "you cannot delete the account you are signed in as".to_string(),
+        ));
+    }
+
+    #[derive(sqlx::FromRow)]
+    struct Target {
+        tenant_id: Uuid,
+        role: String,
+        is_active: bool,
+        tenant_name: String,
+        tenant_slug: String,
+    }
+
+    let target: Option<Target> = sqlx::query_as(
+        r#"SELECT u.tenant_id, u.role::text AS role, u.is_active,
+                  COALESCE(t.name, '') AS tenant_name, COALESCE(t.slug, '') AS tenant_slug
+             FROM users u
+             LEFT JOIN tenants t ON t.id = u.tenant_id
+            WHERE u.id = $1"#,
+    )
+    .bind(id)
+    .fetch_optional(&s.db)
+    .await?;
+
+    let t = target.ok_or_else(|| AppError::NotFound(format!("User {id} not found")))?;
+
+    // A workspace's owner is not removable from a platform list: that is a lockout of the account,
+    // and ownership has to be transferred first (the refusal says so).
+    if t.role == "owner" {
+        return Err(AppError::ForbiddenReason(
+            "that is the workspace's owner — transfer ownership to someone else first".to_string(),
+        ));
+    }
+
+    // The owner's own companies are never removed from anywhere in this app; their login is the one
+    // account on the platform a delete must not reach (the registry the portfolio sync writes is the
+    // authority — not a hand-written name list).
+    match crate::tenant_purge::portfolio_registry_hit(
+        &s.db,
+        t.tenant_id,
+        &t.tenant_name,
+        &t.tenant_slug,
+    )
+    .await
+    {
+        Ok(Some(company)) => {
+            return Err(AppError::ForbiddenReason(format!(
+                "refusing to delete the login of portfolio company '{company}'"
+            )))
+        }
+        Ok(None) => {}
+        // An UNKNOWN answer from the authority is a refusal, never a licence to delete.
+        Err(e) => return Err(e),
+    }
+
+    // A workspace must never be left with nobody who can administer it. `is_account_admin` is the
+    // app's ONE role vocabulary; the SQL below compares against the same four spellings as text, so
+    // the Rust check and the count cannot disagree.
+    if t.is_active && crate::auth::middleware::is_account_admin(&t.role) {
+        let others: i64 = sqlx::query_scalar(
+            r#"SELECT COUNT(*) FROM users
+                WHERE tenant_id = $1 AND id <> $2 AND is_active
+                  AND role::text IN ('owner','account_owner','admin','agency_admin')"#,
+        )
+        .bind(t.tenant_id)
+        .bind(id)
+        .fetch_one(&s.db)
+        .await?;
+        if others == 0 {
+            return Err(AppError::BadRequest(
+                "that is the workspace's only admin — promote someone else first".to_string(),
+            ));
+        }
+    }
+
+    let mut tx = s.db.begin().await.map_err(AppError::Database)?;
+    let removed = sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if removed == 0 {
+        // The row went between the read and the write: answer 404, not a claim of success. Dropping
+        // `tx` rolls the transaction back.
+        return Err(AppError::NotFound(format!("User {id} not found")));
+    }
+    // The actor is recorded on the row; the target's personal data is NOT copied into the trail
+    // (entity_id names the person who went, which is the whole record needed).
+    crate::audit::logger::log_event_tx(
+        &mut tx,
+        t.tenant_id,
+        Some(actor),
+        "user.delete",
+        "user",
+        Some(id),
+        None,
+        None,
+    )
+    .await?;
+    tx.commit().await.map_err(AppError::Database)?;
+
+    Ok(Json(json!({ "deleted": true, "id": id.to_string() })))
 }
 
 /// POST /api/admin/portfolio-sync — the console's "Sync New Company": give a company a REAL account.

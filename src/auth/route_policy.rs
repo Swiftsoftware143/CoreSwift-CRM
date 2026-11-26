@@ -1753,20 +1753,22 @@ mod tests {
     /// `/api/contacts/custom-fields/:id`, `/api/contacts/:id/fields` (the contact custom-field manager) and
     /// `/api/booking/bookings/:id/cancel` (the operator's cancel by booking id). The other four arrived from
     /// the booking sponsor work and other lanes before this census; the test's own walk is what counts them.
+    /// 577 mounted / 563 on /api** (2026-11-26, kanban t_d7474aee): `DELETE /api/admin/users/:id` — the
+    /// admin delete-user door. One leaf, on `/api**`, so the 14 root-level mounts are unchanged.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
         let mounted = mounted_routes();
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            576,
+            577,
             "mounted route count moved — update the census in the module docs.\
              The number to pin is the one THIS assertion reports as `left`: mounted_routes() walks the \
              router itself. scripts/route-census.py is a partial PARSER and a LOWER BOUND (it missed 23 \
              mounts on 2026-11-25); never pin its total."
         );
         assert_eq!(
-            api, 562,
+            api, 563,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.

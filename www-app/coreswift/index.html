@@ -2994,12 +2994,23 @@ const TAB_LOADERS = {
       const allUsers = (d && d.users) || [];
       const testUsers = allUsers.filter(u => csIsTestIdentity(u.email));
       const users = CS_SHOW_TEST_USERS ? allUsers : allUsers.filter(u => !csIsTestIdentity(u.email));
+      const meId = (STATE && STATE.user && STATE.user.id) || null;
+      const meEmail = ((STATE && STATE.user && STATE.user.email) || '').toLowerCase();
       const rows = users.slice(0, 50).map(u => [
         escapeHtml(u.name || '—'),
         escapeHtml(u.email || '—'),
         `<span class="badge ${u.is_platform_admin?'badge-primary':'badge-muted'}">${escapeHtml(roleLabel(u.role))}${u.is_platform_admin?' · platform':''}</span>`,
         escapeHtml(u.tenant_name || '—') + (u.is_portfolio ? ' <span class="badge badge-muted">portfolio</span>' : ''),
-        escapeHtml(u.created_at ? new Date(u.created_at).toLocaleDateString() : '—')
+        escapeHtml(u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'),
+        // DELETE A PERSON (kanban t_d7474aee). The control says "permanently" because the API removes
+        // the row; the confirm says what survives, so nobody presses it expecting a flag flip. The
+        // signed-in account is not offered at all — the API refuses it with a 400, and a button that
+        // can only fail must not be offered.
+        (u.id && u.id !== meId && (u.email || '').toLowerCase() !== meEmail)
+          ? '<button class="btn btn-ghost btn-xs" data-del-user-id="' + escapeHtml(u.id) + '"'
+            + ' data-del-email="' + escapeHtml(u.email || '') + '"'
+            + ' onclick="csDeleteUser(this.dataset.delUserId, this.dataset.delEmail)">Delete</button>'
+          : '<span class="badge badge-muted" title="you are signed in as this account">you</span>'
       ]);
       const note = testUsers.length
         ? '<p style="font-size:12px;color:var(--text-secondary);margin:6px 2px">' + testUsers.length
@@ -3008,7 +3019,7 @@ const TAB_LOADERS = {
           + (CS_SHOW_TEST_USERS ? 'Hide test identities' : 'Show ' + testUsers.length + ' test identities') + '</button></p>'
         : '';
       el.innerHTML = dataTable(
-        ['Name','Email','Role','Account','Created'], rows,
+        ['Name','Email','Role','Account','Created',''], rows,
         'No users yet.'
       ) + note;
     } catch(e) {
@@ -3017,6 +3028,26 @@ const TAB_LOADERS = {
   },
 
   // === ROUND 7 ADMIN OPS LOADERS ===
+
+  // Delete a person across tenants (platform admin only). One request, one answer: the API decides
+  // whether the row goes or the action is refused, and the sentence the operator reads is the API's.
+  window.csDeleteUser = async function (id, email) {
+    if (!id) return;
+    const who = email || 'this person';
+    if (!confirm('Delete ' + who + ' permanently?\n\n'
+      + 'This removes their login and their place in this account for good.\n'
+      + 'Their deals, notes and invoice history stay, and are no longer assigned to anyone.')) return;
+    try {
+      const r = await API.del('/admin/users/' + id);
+      if (r && r.deleted) toast('Deleted ' + who + '.', 'success');
+      else if (r && r.deactivated) toast('Deactivated — ' + (r.reason || 'history is kept.'), 'success');
+      else toast('The API did not report a deletion.', 'error');
+      if (TAB_LOADERS['users']) TAB_LOADERS['users']();
+    } catch (e) {
+      // 400/403/404 carry the reason (self, owner, last admin, unknown id). Show it as written.
+      toast(e.message || 'Could not delete.', 'error');
+    }
+  };
 
   'portfolio': async () => {
     const el = document.getElementById('portfolioTable');
@@ -9838,7 +9869,7 @@ async function rrLoadMembers(teamId) {
       members.map(function (m) {
         return [fh(m.user_id), m.weight, m.max_concurrent_bookings,
           m.is_active ? '<span class="badge badge-success">yes</span>' : '<span class="badge badge-muted">no</span>',
-          '<button class="btn btn-ghost btn-xs" onclick="rrRemoveMember(\'' + teamId + '\',\'' + m.id + '\')">Remove</button>'];
+          '<button class="btn btn-ghost btn-xs" title="takes them out of this queue; their account is untouched" onclick="rrRemoveMember(\'' + teamId + '\',\'' + m.id + '\')">Remove from pool</button>'];
       }), 'No members on this team yet.');
   } catch (e) { famErr(el, 'Team members', e); }
 }

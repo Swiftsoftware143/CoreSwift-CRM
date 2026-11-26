@@ -10,6 +10,7 @@
 //! GET  /api/admin/portfolio-companies — list all portfolio companies (admin)
 //! GET  /api/admin/tenants — list all tenants (admin)
 //! GET  /api/admin/users — list users across all tenants (admin)
+//! DELETE /api/admin/users/:id — remove a person from the platform for good (admin; kanban t_d7474aee)
 //! POST /api/admin/portfolio-sync — cross-app sync
 //! GET  /api/admin/email-config — platform mail transport, masked (admin)
 //! PUT  /api/admin/email-config — save the platform provider + credential (admin)
@@ -66,6 +67,11 @@ pub fn router(state: AppState) -> Router<AppState> {
         // People across every tenant — the counterpart of /tenants. The admin shell's Users tab
         // called a bare /api/users that nothing registered; this is the route it now calls.
         .route("/users", axum::routing::get(handlers::list_all_users))
+        // DELETE a person from the platform (kanban t_d7474aee). The fleet rule: an action that
+        // removes a person from the UI must remove the row — this app had no such door at all, so
+        // the row survived forever. Refusals (self/owner/last admin/portfolio) live in the handler;
+        // the platform-admin gate above covers this route like every other one on this router.
+        .route("/users/:id", axum::routing::delete(handlers::delete_user))
         .route(
             "/portfolio-sync",
             axum::routing::post(handlers::cross_app_sync),
