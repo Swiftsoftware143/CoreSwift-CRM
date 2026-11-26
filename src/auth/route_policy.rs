@@ -1748,7 +1748,8 @@ mod tests {
     /// `agent_api::router`. It shares the action agent's `/api/agent` prefix: main.rs MERGES the two
     /// routers into one nest, and `NESTS` carries a row for each half, so the merged half is counted
     /// rather than invisible. Every leaf is on `/api**`, so the 14 root-level mounts are unchanged.
-    /// 568 mounted / 554 on /api** — the agent door's thirteen named leaves became one forwarded
+    /// 576 mounted / 562 on /api** — the contact custom-field manager (three paths), the operator's
+    /// cancel-by-booking-id, and the booking sponsor flow added eight leaves after the last census.
     /// wildcard on 2026-11-25, so twelve routes left the census.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
@@ -1756,12 +1757,12 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            568,
+            576,
             "mounted route count moved — update the census in the module docs \
              (regenerate: python3 scripts/route-census.py)"
         );
         assert_eq!(
-            api, 554,
+            api, 562,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.
