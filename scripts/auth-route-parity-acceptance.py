@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
 import urllib.error
 import urllib.request
@@ -141,7 +142,11 @@ def main() -> int:
     )
 
     # E — one auth bucket on both prefixes (5/min per client IP).
-    ip = "203.0.113.77"
+    # A FRESH bucket per run: the governor is a 5-per-minute token bucket keyed by client IP, so a
+    # fixed address would inherit the previous run's tokens and make this leg flaky (measured: a
+    # re-run inside the refill window answered [401, 429, 429, 429, 429, 429]). TEST-NET-2/3
+    # addresses are documentation-only, so no real client can share this bucket.
+    ip = f"198.51.100.{random.randint(10, 250)}"
     codes = []
     for i in range(6):
         st, _ = post(base, "/api/v1/auth/login", wrong, ip=ip)
@@ -157,7 +162,7 @@ def main() -> int:
         st_old == 429,
         f"old path from the exhausted IP -> {st_old}",
     )
-    st_fresh, _ = post(base, "/api/auth/login", wrong, ip="203.0.113.78")
+    st_fresh, _ = post(base, "/api/auth/login", wrong, ip=f"198.51.101.{random.randint(10, 250)}")
     check(
         "E the bucket is per client IP, not global",
         st_fresh == 401,
