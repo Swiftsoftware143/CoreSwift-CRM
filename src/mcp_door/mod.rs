@@ -70,21 +70,70 @@ pub const DOMAIN_TOOL_NAMES: [&str; 12] = [
 
 type DoorSlot = Result<Arc<Door>, String>;
 static DOOR: OnceLock<DoorSlot> = OnceLock::new();
+static DOOR_NO_DELETE: OnceLock<DoorSlot> = OnceLock::new();
 
 /// The process-wide door. Built once (the tool registry is validated at that moment and the door
 /// refuses to exist when it is malformed) and then shared; `main.rs` calls this at startup so a bad
 /// registry stops the boot instead of answering a customer's first call with a 500.
 pub fn door(state: &AppState) -> Result<&'static Arc<Door>, String> {
-    DOOR.get_or_init(|| build(state))
+    DOOR.get_or_init(|| build(state, true))
         .as_ref()
         .map_err(|e| e.clone())
 }
 
-fn build(state: &AppState) -> DoorSlot {
+/// The SAME door, for a credential that may read and write but never delete (kanban t_30fc7d62).
+///
+/// One credential resolver and one audit file, TWO registries: this one has no destructive tool in
+/// it at all, so a delete is not "refused by a role check the client could talk around" — there is
+/// no tool name to call. Its `coreswift_api` is registered without `DELETE` in its schema and with a
+/// handler that refuses a delete-shaped call before anything is forwarded.
+///
+/// The capability lives at the KEY, not in a client: a customer who restrains their own agent is
+/// trusting the agent, and the point of the role is that the trust is not required.
+pub fn door_no_delete(state: &AppState) -> Result<&'static Arc<Door>, String> {
+    DOOR_NO_DELETE
+        .get_or_init(|| build(state, false))
+        .as_ref()
+        .map_err(|e| e.clone())
+}
+
+/// Which registry this request is served from. Decided by the CREDENTIAL, before the door resolves
+/// it, because a door's tool list is fixed when it is built and `tools/list` must not offer a tool
+/// the credential may never call.
+///
+/// Only `workspace` gets the full registry. `read_write_no_delete`, `read_only`, and anything the
+/// lookup cannot name (an unknown hash, a database that cannot answer) get the RESTRICTED one: the
+/// door's own resolver refuses a credential that is not live a moment later, and a failure must
+/// never widen a credential. A console session is the person at the keyboard and keeps the full
+/// door — an issued key is the only thing that can carry the cap.
+pub async fn door_for_bearer(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+) -> Result<&'static Arc<Door>, String> {
+    let key = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|k| k.starts_with("csk_"));
+    let Some(key) = key else {
+        return door(state);
+    };
+    match crate::external_api::issued_key_role(state, key)
+        .await
+        .as_deref()
+    {
+        Some(crate::personal_api_keys::ROLE_WORKSPACE) => door(state),
+        _ => door_no_delete(state),
+    }
+}
+
+fn build(state: &AppState, allow_delete: bool) -> DoorSlot {
     let registry = register_booking_tools(
         register_api_tool(
-            reads::register(custom_object_registry(state)?, state),
+            reads::register(custom_object_registry(state, allow_delete)?, state),
             state,
+            allow_delete,
         ),
         state,
     );
@@ -249,6 +298,11 @@ impl Resolver {
 
 /// The role a `csk_` key acts with — the ONE decision both the door and its tests use.
 ///
+/// `read_write_no_delete` is capped BEFORE operator elevation (the same order the read-only role got
+/// in 8232826): a key minted by a platform admin is still a credential that may not delete, so it
+/// never inherits the operator's tools. It keeps `Workspace`, which is every non-destructive write;
+/// the delete tools are not in its registry at all (see [`door_no_delete`]).
+///
 /// The key's own `api_role` is decisive. `read_only` is a promise about THIS credential, so it caps
 /// an operator-owned key exactly as it caps a customer's key: the REST boundary already refuses such
 /// a key on every write (`auth::boundary::require_credential`), and a door that answered 200 to the
@@ -257,8 +311,10 @@ impl Resolver {
 /// Being a platform admin only upgrades a key that can already write (`workspace` → `admin`), which
 /// is what lets an operator's own key reach the cross-workspace tools.
 fn key_role(admin: bool, api_role: &str) -> Role {
-    if api_role == "read_only" {
+    if api_role == crate::personal_api_keys::ROLE_READ_ONLY {
         Role::ReadOnly
+    } else if api_role == crate::personal_api_keys::ROLE_READ_WRITE_NO_DELETE {
+        Role::Workspace
     } else if admin {
         Role::Admin
     } else {
@@ -277,7 +333,7 @@ fn key_role(admin: bool, api_role: &str) -> Role {
 ///
 /// A read-only credential is refused by the registry's role gate before the handler runs, exactly as it is
 /// on the Custom Objects tools.
-fn register_api_tool(reg: Registry, state: &AppState) -> Registry {
+fn register_api_tool(reg: Registry, state: &AppState, allow_delete: bool) -> Registry {
     let spec = ToolSpec {
         name: API_TOOL_NAME.to_string(),
         description: "Call any CoreSwift API path as this account. Use it to run the business. \
@@ -304,15 +360,27 @@ fn register_api_tool(reg: Registry, state: &AppState) -> Registry {
                       also \"mail-compliance\", \"domain-redirects\", \"billing/plans\". A message body is large \
                       HTML: read \"private-email/messages/counts\" for what is new and ask for one message by \
                       id rather than listing everything. GET reads, POST creates, PATCH updates, DELETE \
-                      removes. Credential surfaces (auth, personal-keys, keys, mcp) are refused."
-            .to_string(),
+                      removes only where this key is allowed to delete. Credential surfaces (auth,
+                      personal-keys, keys, mcp) are refused."
+            .to_string()
+            + if allow_delete {
+                ""
+            } else {
+                " DELETE is NOT available to this key: a delete call is refused and nothing is removed."
+            },
         input_schema: json!({
             "type": "object",
             "properties": {
                 "method": {
                     "type": "string",
-                    "enum": ["GET", "POST", "PATCH", "PUT", "DELETE"],
-                    "description": "HTTP method. GET reads; POST creates; PATCH updates; PUT replaces; DELETE removes."
+                    // A key that may not delete is never OFFERED the verb: the door does not make a
+                    // claim it would refuse, and the state a model reads is the capability it holds.
+                    "enum": if allow_delete {
+                        json!(["GET", "POST", "PATCH", "PUT", "DELETE"])
+                    } else {
+                        json!(["GET", "POST", "PATCH", "PUT"])
+                    },
+                    "description": "HTTP method. GET reads; POST creates; PATCH updates; PUT replaces."
                 },
                 "path": {
                     "type": "string",
@@ -331,11 +399,16 @@ fn register_api_tool(reg: Registry, state: &AppState) -> Registry {
     let st = state.clone();
     reg.with_fn(spec, move |ctx: Ctx, args: Value| {
         let st = st.clone();
-        Box::pin(async move { api_tool_call(&st, &ctx, args).await })
+        Box::pin(async move { api_tool_call(&st, &ctx, args, allow_delete).await })
     })
 }
 
-async fn api_tool_call(state: &AppState, ctx: &Ctx, args: Value) -> Result<Value, ToolError> {
+async fn api_tool_call(
+    state: &AppState,
+    ctx: &Ctx,
+    args: Value,
+    allow_delete: bool,
+) -> Result<Value, ToolError> {
     let tenant = ctx
         .scope
         .ids()
@@ -354,7 +427,7 @@ async fn api_tool_call(state: &AppState, ctx: &Ctx, args: Value) -> Result<Value
         .get("body")
         .filter(|v| !v.is_null())
         .map(|v| v.to_string().into_bytes());
-    let (status, text) = crate::api_proxy::call(state, tenant, method, path, body)
+    let (status, text) = crate::api_proxy::call(state, tenant, method, path, body, allow_delete)
         .await
         .map_err(app_error_to_tool)?;
     // Parse when the app answered JSON so the model sees fields, not a string of escaped JSON.
@@ -386,7 +459,7 @@ async fn api_tool_call(state: &AppState, ctx: &Ctx, args: Value) -> Result<Value
 ///
 /// Fails closed on a malformed list: a door that silently shipped without the eleven frozen tools
 /// would break every client that already calls them and read as "the server is down".
-fn custom_object_registry(state: &AppState) -> Result<Registry, String> {
+fn custom_object_registry(state: &AppState, allow_delete: bool) -> Result<Registry, String> {
     let descriptors = crate::custom_objects::mcp::tool_descriptors();
     let list = descriptors.as_array().cloned().unwrap_or_default();
     if list.is_empty() {
@@ -407,6 +480,12 @@ fn custom_object_registry(state: &AppState) -> Result<Registry, String> {
             .cloned()
             .unwrap_or_else(|| json!({ "type": "object", "properties": {} }));
         let (annotations, min_role) = custom_object_annotation(name);
+        // A credential that may not delete is never OFFERED a destructive tool (kanban t_30fc7d62).
+        // The annotation is the one place that already says which tools remove data, so the filter
+        // reads it rather than a second hand-kept list that could drift from it.
+        if !allow_delete && annotations.destructive {
+            continue;
+        }
         let spec = ToolSpec {
             name: name.to_string(),
             description: description.to_string(),
@@ -655,6 +734,9 @@ async fn forward(
         method,
         path,
         Some(body.to_string().into_bytes()),
+        // These four arms are fixed POST/PATCH writers — a booking setting, a payment key, a
+        // redirect — so they carry no delete for any caller. Saying so keeps the guard closed.
+        false,
     )
     .await
     .map_err(app_error_to_tool)?;
@@ -911,5 +993,22 @@ mod tests {
             mcp_door::Scope::for_caller(&Caller::new("key:x", Role::Workspace).with_tenant(mine));
         let err = scope.require(foreign).unwrap_err();
         assert_eq!(err.code(), "not_found");
+    }
+
+    /// The delete-free role keeps every ordinary write and never inherits the operator's tools —
+    /// the cap is read BEFORE the admin elevation, exactly as the read-only cap is (kanban
+    /// t_30fc7d62, precedent 8232826).
+    #[test]
+    fn a_no_delete_key_is_capped_before_operator_elevation() {
+        use crate::personal_api_keys::{ROLE_READ_ONLY, ROLE_READ_WRITE_NO_DELETE, ROLE_WORKSPACE};
+        assert_eq!(
+            key_role(true, ROLE_READ_WRITE_NO_DELETE),
+            Role::Workspace,
+            "an operator-owned no-delete key is still a no-delete key"
+        );
+        assert_eq!(key_role(false, ROLE_READ_WRITE_NO_DELETE), Role::Workspace);
+        assert_eq!(key_role(true, ROLE_READ_ONLY), Role::ReadOnly);
+        assert_eq!(key_role(true, ROLE_WORKSPACE), Role::Admin);
+        assert_eq!(key_role(false, ROLE_WORKSPACE), Role::Workspace);
     }
 }

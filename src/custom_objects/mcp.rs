@@ -187,12 +187,16 @@ pub async fn info() -> Response {
 /// The authenticated door. Credential resolution (key or console session, with the app's canonical
 /// checks), protocol negotiation, the role gate and the audit line all live in the shared
 /// `mcp-door` crate; this module owns only what the tools DO.
+///
+/// WHICH registry answers is the credential's own capability (kanban t_30fc7d62): a key that may not
+/// delete is served by the door that does not contain a destructive tool. The choice is made before
+/// the door resolves the caller because a tool list is fixed at startup.
 pub async fn handle(
     State(st): State<AppState>,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    match crate::mcp_door::door(&st) {
+    match crate::mcp_door::door_for_bearer(&st, &headers).await {
         Ok(door) => door.dispatch(&headers, &body).await,
         Err(e) => {
             tracing::error!(error = %e, "mcp door unavailable");

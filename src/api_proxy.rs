@@ -63,6 +63,27 @@ pub const DENIED_CALLS: &[(&str, &str)] = &[
 pub const SEND_REFUSAL: &str =
     "sending is not an agent's call: draft it, and a person presses send";
 
+/// Is this call a DELETE, in the sense a key that may not delete must be refused on?
+///
+/// Two shapes, one decision, so no door can be more generous than another:
+///   * the DELETE method itself — every removing arm in this app is a `delete` route;
+///   * a non-read call whose own PATH names a delete (a bulk-delete POST, for example), which is a
+///     delete that happens to be spelled POST. Reads are never deletes, so a `?q=delete` search
+///     cannot be over-refused by this rule.
+pub fn delete_refused(method: &str, path: &str) -> bool {
+    let m = method.to_uppercase();
+    if m == "DELETE" {
+        return true;
+    }
+    if m == "GET" || m == "HEAD" {
+        return false;
+    }
+    let clean = path.split('?').next().unwrap_or("").trim_start_matches('/');
+    clean
+        .split('/')
+        .any(|seg| seg.to_ascii_lowercase().contains("delete"))
+}
+
 /// Does (method, path) match a one-segment `*` pattern?
 fn pattern_matches(pattern: &str, path: &str) -> bool {
     let t: Vec<&str> = pattern.split('/').collect();
@@ -112,6 +133,32 @@ mod tests {
             "booking/calendars",
         ] {
             assert!(allowed(p), "{p} is ordinary console work");
+        }
+    }
+
+    /// A key that may not delete is refused on the DELETE method and on a non-read arm whose own
+    /// path names a delete — and nothing else, so ordinary writes keep working.
+    #[test]
+    fn a_no_delete_credential_is_refused_only_on_deletes() {
+        for (m, p) in [
+            ("DELETE", "contacts/9b1c7d2e"),
+            ("delete", "/api/objects/orders/records/9b1c7d2e"),
+            ("POST", "contacts/bulk-delete"),
+            ("PATCH", "objects/orders/fields/bulk-delete"),
+        ] {
+            assert!(delete_refused(m, p), "{m} {p} is a delete");
+        }
+        for (m, p) in [
+            ("GET", "contacts"),
+            ("GET", "contacts?q=delete"),
+            ("HEAD", "contacts?q=delete"),
+            ("POST", "contacts"),
+            ("PATCH", "contacts/9b1c7d2e"),
+            ("PUT", "redirects"),
+            ("POST", "booking/orders/42/cancel"),
+            ("POST", "campaigns/abc/steps"),
+        ] {
+            assert!(!delete_refused(m, p), "{m} {p} is not a delete");
         }
     }
 
@@ -169,6 +216,9 @@ pub async fn acting_user(
 /// Call this app's own API as `tenant`, acting as a real user of it.
 ///
 /// `path` is relative to `/api` (e.g. `contacts` or `booking/calendars/<id>/slots/generate`).
+/// `delete_allowed` is the CALLER's own capability, and it is a required argument on purpose: a
+/// forwarding door has to say which credential it is acting for, so "may not delete" cannot be
+/// forgotten and default to yes (kanban t_30fc7d62).
 /// Returns the status code and the body, exactly as the app answered.
 pub async fn call(
     state: &AppState,
@@ -176,6 +226,7 @@ pub async fn call(
     method: &str,
     path: &str,
     body: Option<Vec<u8>>,
+    delete_allowed: bool,
 ) -> Result<(u16, String), AppError> {
     let clean = path.trim_start_matches('/');
     if clean.contains("..") || clean.contains("://") || clean.starts_with('/') {
@@ -192,6 +243,14 @@ pub async fn call(
     // prompt's job to remember: the door is where "irreversible" can be enforced.
     if !send_allowed(method, clean) {
         return Err(AppError::ForbiddenReason(SEND_REFUSAL.into()));
+    }
+    // A delete is refused HERE, for a credential that may not delete, before anything is
+    // forwarded — the same place both forwarding doors pass through. A model told "do not delete"
+    // is a wish; a refusal at the door is a control.
+    if !delete_allowed && delete_refused(method, &clean) {
+        return Err(AppError::ForbiddenReason(
+            crate::personal_api_keys::NO_DELETE_REFUSAL.into(),
+        ));
     }
 
     let (user_id, role, wsid) = acting_user(state, tenant).await?;

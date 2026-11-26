@@ -43,12 +43,35 @@ pub struct MintedKey {
     pub prefix: String,
 }
 
-/// The role an issued key carries. `workspace` is the customer's own key (read and write inside
-/// their own workspace); `read_only` may call read tools only — the MCP door refuses it on every
-/// write before the handler runs. Operator authority is NOT a key role: it comes from
-/// `users.is_platform_admin` (see `src/mcp_door/mod.rs::Resolver`).
+/// The role an issued key carries.
+///
+/// * `workspace` — the customer's own key: read, write AND delete inside their own workspace.
+/// * `read_write_no_delete` — the same key minus the one action nobody can undo. The capability is
+///   gone at the CREDENTIAL, not restrained in a client: the MCP door serves it from a registry with
+///   no destructive tool in it, the forwarding proxy refuses a delete-shaped call before it
+///   forwards, and the REST key surface refuses DELETE before the handler runs (kanban t_30fc7d62).
+/// * `read_only` — may call read tools only; the MCP door refuses it on every write before the
+///   handler runs.
+///
+/// Operator authority is NOT a key role: it comes from `users.is_platform_admin` (see
+/// `src/mcp_door/mod.rs::Resolver`).
 pub const ROLE_WORKSPACE: &str = "workspace";
 pub const ROLE_READ_ONLY: &str = "read_only";
+pub const ROLE_READ_WRITE_NO_DELETE: &str = "read_write_no_delete";
+
+/// The three roles a key may carry. ONE answer for the mint, the console control and the SQL CHECK
+/// constraint: a role is never accepted by one and refused by another.
+pub fn is_key_role(role: &str) -> bool {
+    matches!(
+        role,
+        ROLE_WORKSPACE | ROLE_READ_WRITE_NO_DELETE | ROLE_READ_ONLY
+    )
+}
+
+/// The one sentence every door uses when a key that may not delete asks to delete. 403 at the
+/// caller, never a 500: the key is real and valid — it is the ROLE that refuses, and the caller is
+/// told which key to use instead.
+pub const NO_DELETE_REFUSAL: &str = "this key may not delete — use a workspace key to delete";
 
 /// Mint one key for a tenant and INSERT it on the caller's connection.
 ///
@@ -78,9 +101,9 @@ pub async fn mint_with_role(
     name: &str,
     api_role: &str,
 ) -> Result<MintedKey, AppError> {
-    if api_role != ROLE_WORKSPACE && api_role != ROLE_READ_ONLY {
+    if !is_key_role(api_role) {
         return Err(AppError::BadRequest(format!(
-            "'{api_role}' is not a key role — use '{ROLE_WORKSPACE}' or '{ROLE_READ_ONLY}'"
+            "'{api_role}' is not a key role — use '{ROLE_WORKSPACE}', '{ROLE_READ_WRITE_NO_DELETE}' or '{ROLE_READ_ONLY}'"
         )));
     }
     let full_key = generate_key();
@@ -255,7 +278,8 @@ pub async fn sweep_missing_account_keys(db: &PgPool) -> Result<usize, AppError> 
 #[derive(Deserialize)]
 pub struct CreateKeyRequest {
     pub name: Option<String>,
-    /// `workspace` (default) or `read_only`. Anything else is refused, not defaulted.
+    /// `workspace` (default), `read_write_no_delete` or `read_only`. Anything else is refused, not
+    /// defaulted.
     pub role: Option<String>,
 }
 
@@ -281,9 +305,9 @@ pub async fn create_key(
         .unwrap_or_else(|| ROLE_WORKSPACE.to_string())
         .trim()
         .to_string();
-    if role != ROLE_WORKSPACE && role != ROLE_READ_ONLY {
+    if !is_key_role(&role) {
         return Err(AppError::BadRequest(format!(
-            "'{role}' is not a key role — use '{ROLE_WORKSPACE}' or '{ROLE_READ_ONLY}'"
+            "'{role}' is not a key role — use '{ROLE_WORKSPACE}', '{ROLE_READ_WRITE_NO_DELETE}' or '{ROLE_READ_ONLY}'"
         )));
     }
 

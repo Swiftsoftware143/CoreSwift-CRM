@@ -5786,15 +5786,24 @@ function icRenderLeadSources() {
 // the MCP page. The API answers `workspace` | `read_only` (src/personal_api_keys.rs::ROLE_*); the
 // customer-facing words are the same ones the create control offers.
 function icKeyRoleIsReadOnly(role) { return role === 'read_only'; }
+// A key that may read and write but never delete (src/personal_api_keys.rs::ROLE_READ_WRITE_NO_DELETE).
+// The API enforces it at the credential — the MCP door does not even list a delete tool for it and
+// refuses a delete through the forwarding tool — so this label DESCRIBES the key, it is not the control.
+function icKeyRoleCannotDelete(role) { return role === 'read_write_no_delete'; }
 function icKeyRoleBadge(role) {
-  return icKeyRoleIsReadOnly(role)
-    ? '<span class="badge badge-warning" style="white-space:nowrap" title="Reads only — cannot create or change anything">read-only</span>'
-    : '<span class="badge badge-muted" style="white-space:nowrap" title="Reads and writes inside this account">read + write</span>';
+  if (icKeyRoleIsReadOnly(role)) return '<span class="badge badge-warning" style="white-space:nowrap" title="Reads only — cannot create or change anything">read-only</span>';
+  if (icKeyRoleCannotDelete(role)) return '<span class="badge badge-muted" style="white-space:nowrap" title="Reads and writes inside this account, but cannot delete anything">read + write, no delete</span>';
+  return '<span class="badge badge-muted" style="white-space:nowrap" title="Reads and writes inside this account">read + write</span>';
 }
 function icKeyRoleDetail(role) {
-  return icKeyRoleIsReadOnly(role)
-    ? 'it can read this account and cannot create or change anything; every make-or-change call is refused and writes nothing.'
-    : 'it can read and change this account.';
+  if (icKeyRoleIsReadOnly(role)) return 'it can read this account and cannot create or change anything; every make-or-change call is refused and writes nothing.';
+  if (icKeyRoleCannotDelete(role)) return 'it can read and change this account, but every delete is refused at the key itself — it cannot remove a contact, a record or an object.';
+  return 'it can read and change this account.';
+}
+function icKeyRoleLabel(role) {
+  if (icKeyRoleIsReadOnly(role)) return 'Read-only';
+  if (icKeyRoleCannotDelete(role)) return 'Read and write, no delete';
+  return 'Read and write (workspace)';
 }
 
 function icRenderKeys() {
@@ -5818,7 +5827,7 @@ function icRenderKeys() {
     '<button class="btn btn-ghost btn-xs" onclick="icRevokeKey(\'' + escapeHtmlAttr(k.id) + '\')">Revoke</button>'
   ]);
   const body = '<p style="color:var(--text-secondary);margin:0 0 10px">Each key is this account&#39;s identity: a capture app uses one to deliver leads in, and an AI/MCP client uses one to read this account. ' +
-    'A <strong>read + write</strong> key can read and change this account; a <strong>read-only</strong> key can only read — every make-or-change call through it is refused with a sentence and writes nothing. ' +
+    'A <strong>read + write</strong> key can read and change this account; a <strong>read + write, no delete</strong> key can do the same except delete — every delete is refused at the key itself; a <strong>read-only</strong> key can only read — every make-or-change call through it is refused with a sentence and writes nothing. ' +
     'The page shows only the prefix; <strong>View</strong> shows the full key in one click so you can copy it again — every view is recorded, and nothing is consumed by looking. A row marked <strong>cannot be shown</strong> predates recoverable storage: Rotate it to get a key you can display. <strong>' + active + '</strong> active of ' + items.length + ' total.</p>' +
     dataTable(['Name', 'Prefix', 'Role', 'Status', 'Last used', 'Created', ''], rows,
       'No keys yet — create one and paste it into a capture app\'s CoreSwift integration, or into an AI client.');
@@ -5828,6 +5837,7 @@ function icRenderKeys() {
     '<div class="form-group" style="margin:0"><label for="icNewKeyRole">Role</label>' +
       '<select id="icNewKeyRole" style="width:270px;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary)">' +
         '<option value="workspace">Read and write (workspace)</option>' +
+        '<option value="read_write_no_delete">Read and write — cannot delete</option>' +
         '<option value="read_only">Read-only — cannot create or change anything</option>' +
       '</select></div>' +
     '<button class="btn btn-primary btn-sm" onclick="icCreateKey()">+ Create API key</button>' +
@@ -5842,8 +5852,8 @@ async function icCreateKey() {
   const roleEl = document.getElementById('icNewKeyRole');
   const nameEl = document.getElementById('icNewKeyName');
   const role = (roleEl && roleEl.value) || 'workspace';
-  if (role !== 'workspace' && role !== 'read_only') { toast('Choose a key role', 'error'); return; }
-  const fallback = icKeyRoleIsReadOnly(role) ? 'Read-only key' : 'Workspace key';
+  if (role !== 'workspace' && role !== 'read_only' && role !== 'read_write_no_delete') { toast('Choose a key role', 'error'); return; }
+  const fallback = icKeyRoleIsReadOnly(role) ? 'Read-only key' : (icKeyRoleCannotDelete(role) ? 'No-delete key' : 'Workspace key');
   const name = ((nameEl && nameEl.value) || '').trim() || fallback;
   try {
     const d = await API.post('/personal-api-keys', { name: name, role: role });
@@ -5893,7 +5903,7 @@ async function icViewKey(id) {
   if (!d || !d.key) { toast('Could not show key: the server returned no key', 'error'); return; }
   showModal('Your API key',
     '<p style="margin:0 0 8px">This is the same key as before — nothing was replaced, and this view is recorded.</p>' +
-    '<p style="margin:0 0 8px" id="icNewKeyRoleLine">Role: <strong>' + (icKeyRoleIsReadOnly(d.role) ? 'Read-only' : 'Read and write (workspace)') + '</strong> — ' +
+    '<p style="margin:0 0 8px" id="icNewKeyRoleLine">Role: <strong>' + icKeyRoleLabel(d.role) + '</strong> — ' +
       escapeHtml(icKeyRoleDetail(d.role)) + '</p>' +
     '<div class="form-group"><label>Key</label><input id="icRevealedKey" readonly value="' + escapeHtmlAttr(d.key) + '"></div>' +
     '<div style="font-size:.75rem;color:var(--text-muted)">Prefix ' + escapeHtml(d.prefix || '') + '</div>',
@@ -5928,9 +5938,11 @@ async function icShowKeyOnce(d, title) {
   showModal(escapeHtml(title),
     '<p style="margin:0 0 8px">' + (icKeyRoleIsReadOnly(role)
       ? 'Paste this into the app or AI client that should only READ this account — this is a read-only key. '
-      : 'Paste this into the capture app or AI client — this key can read and change this account. ') +
+      : (icKeyRoleCannotDelete(role)
+        ? 'Paste this into the app or AI client — this key can read and change this account but cannot delete: every delete is refused at the key itself. '
+        : 'Paste this into the capture app or AI client — this key can read and change this account. ')) +
     'You can see it again later with <strong>View</strong> on its row — one click, and the view is recorded.</p>' +
-    '<p style="margin:0 0 8px" id="icNewKeyRoleLine">Role: <strong>' + (icKeyRoleIsReadOnly(role) ? 'Read-only' : 'Read and write (workspace)') + '</strong> — ' +
+    '<p style="margin:0 0 8px" id="icNewKeyRoleLine">Role: <strong>' + icKeyRoleLabel(role) + '</strong> — ' +
       escapeHtml(icKeyRoleDetail(role)) + '</p>' +
     '<div class="form-group"><label>Key</label><input id="icNewKey" readonly value="' + escapeHtmlAttr(d && d.key || '') + '"></div>' +
     '<div style="font-size:.75rem;color:var(--text-muted)">Prefix ' + escapeHtml(d && d.prefix || '') + '</div>',
@@ -8149,7 +8161,7 @@ window.appGuidePages = {
   profile: { title: 'Profile', desc: 'Your own name, company, password and picture.', actions: ['Update your name and company and save', 'Upload a picture (PNG/JPEG/GIF/WebP, up to 2 MB)', 'Change your password (your current one is required)'] },
   'email-branding': { title: 'Email Branding', desc: 'Your logo and display name on every transactional email this account sends. Leave it blank and mail keeps the CoreSwift look.', actions: ['Upload a logo (PNG/JPEG/GIF/WebP, up to 2 MB)', 'Set a brand name and colour, then save', 'Press “Email it to me” to have the exact message sent to your own inbox'] },
   'do-not-mail': { title: 'Do not mail', desc: 'The addresses this workspace must never email again — from an unsubscribe click, a hard bounce or a spam complaint reported by the mail provider, or a request you took by phone. Every send on the account consults this list first, so an address here is skipped by campaign mail, notices and account mail alike. Lifting an address lets future mail through again; nothing already sent is recalled.', actions: ['Add an address that asked by phone, with an optional reason', 'Read why and when each address was added', 'Press Allow again to lift one', 'Download the whole list, or just the addresses, as a CSV'] },
-  integrations: { title: 'Integration Center', desc: 'Connect the services this workspace uses, each with your own provider key (BYOK).', actions: ['Paste a provider key and save', 'Email integrations drive the mail you send'] },
+  integrations: { title: 'Integration Center', desc: 'Connect the services this workspace uses, each with your own provider key (BYOK). The API keys card issues every key with a role: read + write, read + write with no delete, or read-only.', actions: ['Paste a provider key and save', 'Email integrations drive the mail you send'] },
   portfolio: { title: 'Portfolio Companies', desc: 'Advisory portfolios — one parent whose companies are managed together. Sync New Company gives a company its own workspace and owner login and emails the login details to the owner; a record with no account behind it is converted by the same press, and a second press only refreshes the details.', actions: ['Add a portfolio and its companies', 'Press 🔄 Sync New Company — the owner receives the login by email', 'Pick the plan the new account is seated on'] },
   tenants: { title: 'Users', desc: 'Every workspace on the platform, with a per-row checkbox, a Select probes picker and Delete selected to retire junk workspaces (the server refuses a protected row and shows why). This is the workspace list, not an invite screen: people join an account through that account\u2019s own Team & Invites. Each row also names the plan that account is actually on, read from the same entitlement check the plan card uses \u2014 "no plan row" means the workspace has no active plan and the every-module default applies, never that it is on a paid tier. The chips above the table count how many workspaces sit on each plan; pressing one shows only those workspaces, and All workspaces shows the full list again.', actions: ['Tick the workspaces to retire, or press Select probes to tick every probe/test workspace at once', 'Press a plan chip (All workspaces, Free, Agency, no plan row) to show only those workspaces', 'Read the Plan column to see each workspace\u2019s real tier \u2014 an account with no plan row is called out rather than guessed', 'Delete selected removes them with their data', 'To add a person, open the tenant console\u2019s Team & Invites for that account'] },
   users: { title: 'Users', desc: 'Read-only list of the people on the platform and the workspace each belongs to. No screen here invites anybody.', actions: ['Look up a person and the workspace they belong to', 'Add somebody in the tenant console under Team & Invites'] },

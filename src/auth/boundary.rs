@@ -47,6 +47,29 @@ pub const READ_ONLY_REFUSAL: &str = "this key is read-only — use a workspace k
 pub const KEY_ON_SESSION_DOOR: &str =
     "this route needs a console session — an API key cannot be used here";
 
+/// Which refusal (if any) a key's own ROLE puts on this call, on the REST key surface.
+///
+/// ONE decision, used by the middleware and pinned by the test below, so the two cannot drift:
+///
+/// * `read_only` — refused on everything that is not a committed read arm (kanban t_ce51cf34);
+/// * `read_write_no_delete` — refused on a delete, and on nothing else (kanban t_30fc7d62). The MCP
+///   door serves this role from a registry with no destructive tool and the forwarding proxy refuses
+///   a delete before it forwards; this is the third door — a raw `csk_` key on `/api/objects/**` —
+///   and a credential that may not delete must not delete through whichever door it reaches first.
+pub fn refused_for_role(role: &str, method: &str, path: &str) -> Option<&'static str> {
+    if role == crate::personal_api_keys::ROLE_READ_ONLY
+        && !route_policy::is_read_only_allowed(method, path)
+    {
+        return Some(READ_ONLY_REFUSAL);
+    }
+    if role == crate::personal_api_keys::ROLE_READ_WRITE_NO_DELETE
+        && crate::api_proxy::delete_refused(method, path)
+    {
+        return Some(crate::personal_api_keys::NO_DELETE_REFUSAL);
+    }
+    None
+}
+
 /// Length-independent constant-time compare, same shape as the handler-local helpers in
 /// `contacts_internal` / `tags::internal_handler` / `bookings::handlers`; this copy is the one the
 /// boundary uses.
@@ -165,10 +188,8 @@ pub async fn require_credential(
             .map(str::to_owned);
         if let Some(token) = issued {
             if let Some(role) = crate::external_api::issued_key_role(&state, &token).await {
-                if role == crate::personal_api_keys::ROLE_READ_ONLY
-                    && !route_policy::is_read_only_allowed(req.method().as_str(), &path)
-                {
-                    return reject(StatusCode::FORBIDDEN, READ_ONLY_REFUSAL);
+                if let Some(refusal) = refused_for_role(&role, req.method().as_str(), &path) {
+                    return reject(StatusCode::FORBIDDEN, refusal);
                 }
             }
         }
@@ -206,6 +227,56 @@ mod tests {
         assert!(!ct_eq("s3cre", "s3cret"));
         // An empty configured key is refused before the compare (see presents_internal_key).
         assert!(ct_eq("", ""));
+    }
+
+    /// A key that may not delete is refused on the REST key surface for the DELETE method and for a
+    /// non-read arm whose own path names a delete — and keeps every ordinary read and write.
+    #[test]
+    fn a_no_delete_key_is_refused_only_on_deletes() {
+        use crate::personal_api_keys::{
+            NO_DELETE_REFUSAL, ROLE_READ_ONLY, ROLE_READ_WRITE_NO_DELETE, ROLE_WORKSPACE,
+        };
+        assert_eq!(
+            refused_for_role(ROLE_READ_WRITE_NO_DELETE, "DELETE", "/api/objects/orders"),
+            Some(NO_DELETE_REFUSAL)
+        );
+        assert_eq!(
+            refused_for_role(
+                ROLE_READ_WRITE_NO_DELETE,
+                "DELETE",
+                "/api/objects/orders/records/9b1c7d2e"
+            ),
+            Some(NO_DELETE_REFUSAL)
+        );
+        assert_eq!(
+            refused_for_role(
+                ROLE_READ_WRITE_NO_DELETE,
+                "POST",
+                "/api/objects/x/bulk-delete"
+            ),
+            Some(NO_DELETE_REFUSAL)
+        );
+        // The same key reads and writes: a restricted key is not a read-only key.
+        for (m, p) in [
+            ("GET", "/api/objects/orders/records"),
+            ("POST", "/api/objects/orders/records"),
+            ("PATCH", "/api/objects/orders/records/9b1c7d2e"),
+        ] {
+            assert_eq!(
+                refused_for_role(ROLE_READ_WRITE_NO_DELETE, m, p),
+                None,
+                "{m} {p}"
+            );
+        }
+        // The full workspace key keeps its delete, and read-only is unchanged.
+        assert_eq!(
+            refused_for_role(ROLE_WORKSPACE, "DELETE", "/api/objects/orders"),
+            None
+        );
+        assert_eq!(
+            refused_for_role(ROLE_READ_ONLY, "DELETE", "/api/objects/orders"),
+            Some(READ_ONLY_REFUSAL)
+        );
     }
 
     /// The boundary reads the committed allowlist, not a local array: this pins the delegation so

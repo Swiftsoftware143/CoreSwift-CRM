@@ -64,7 +64,12 @@ async fn authenticate(state: &crate::AppState, headers: &HeaderMap) -> Result<Ag
         let role = crate::external_api::issued_key_role(state, bearer)
             .await
             .unwrap_or_default();
-        if role != crate::personal_api_keys::ROLE_WORKSPACE {
+        // Two roles may use this door: a full workspace key, and a key that may read and write but
+        // never delete (kanban t_30fc7d62) — DELETE is refused below for every caller, so the
+        // restricted key is not a wire around its own cap.
+        if role != crate::personal_api_keys::ROLE_WORKSPACE
+            && role != crate::personal_api_keys::ROLE_READ_WRITE_NO_DELETE
+        {
             // The boundary's own sentence, so both doors say the same thing about the same role.
             return Err(AppError::ForbiddenReason(
                 crate::auth::boundary::READ_ONLY_REFUSAL.to_string(),
@@ -172,6 +177,9 @@ async fn forward(
         method.as_str(),
         &format!("{rest}{query}"),
         Some(body.to_vec()),
+        // This door never carries a delete (the arm above refuses DELETE before it gets here); the
+        // flag makes that a property of the forwarding function too, not only of this caller.
+        false,
     )
     .await?;
     let code = axum::http::StatusCode::from_u16(status)

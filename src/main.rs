@@ -418,6 +418,11 @@ async fn main() -> anyhow::Result<()> {
     if let Err(e) = crate::mcp_door::door(&state) {
         anyhow::bail!("{e}");
     }
+    // The delete-free registry is built at the same moment and for the same reason: a key that may
+    // not delete must never be the caller that discovers a malformed tool list (kanban t_30fc7d62).
+    if let Err(e) = crate::mcp_door::door_no_delete(&state) {
+        anyhow::bail!("{e}");
+    }
 
     // Request ID middleware — adds X-Request-Id to every response
     let request_id_middleware = axum::middleware::from_fn(request_id_middleware_fn);

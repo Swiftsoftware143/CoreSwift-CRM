@@ -4192,6 +4192,7 @@ async function mcpLoadKey() {
       '<p style="color:var(--text-muted);font-size:12px;margin:8px 0 0">This is the token an MCP client uses. ' +
       'Press <b>View</b> to see it — one click, and every view is recorded — or <b>Copy</b> to put it on the clipboard without showing it. ' +
       'For an assistant that should only answer questions, use a <b>read-only</b> key: it can read this account and every make-or-change call through it is refused. ' +
+      'For a client that should run the account but never remove anything, use a <b>read + write, no delete</b> key: it reads and writes, and every delete is refused at the key itself. ' +
       'To replace, revoke or add a key, use the <b>API Keys</b> card in the <b>Integration Center</b>.</p>';
   } catch (e) {
     el.innerHTML = '<p style="margin:0;color:var(--text-muted)">Could not load your API key. ' +
@@ -4203,15 +4204,24 @@ async function mcpLoadKey() {
 // the MCP page. The API answers `workspace` | `read_only` (src/personal_api_keys.rs::ROLE_*); the
 // customer-facing words are the same ones the create control offers.
 function icKeyRoleIsReadOnly(role) { return role === 'read_only'; }
+// A key that may read and write but never delete (src/personal_api_keys.rs::ROLE_READ_WRITE_NO_DELETE).
+// The API enforces it at the credential — the MCP door does not even list a delete tool for it and
+// refuses a delete through the forwarding tool — so this label DESCRIBES the key, it is not the control.
+function icKeyRoleCannotDelete(role) { return role === 'read_write_no_delete'; }
 function icKeyRoleBadge(role) {
-  return icKeyRoleIsReadOnly(role)
-    ? '<span class="badge badge-warning" style="white-space:nowrap" title="Reads only — cannot create or change anything">read-only</span>'
-    : '<span class="badge badge-muted" style="white-space:nowrap" title="Reads and writes inside this account">read + write</span>';
+  if (icKeyRoleIsReadOnly(role)) return '<span class="badge badge-warning" style="white-space:nowrap" title="Reads only — cannot create or change anything">read-only</span>';
+  if (icKeyRoleCannotDelete(role)) return '<span class="badge badge-muted" style="white-space:nowrap" title="Reads and writes inside this account, but cannot delete anything">read + write, no delete</span>';
+  return '<span class="badge badge-muted" style="white-space:nowrap" title="Reads and writes inside this account">read + write</span>';
 }
 function icKeyRoleDetail(role) {
-  return icKeyRoleIsReadOnly(role)
-    ? 'it can read this account and cannot create or change anything; every make-or-change call is refused and writes nothing.'
-    : 'it can read and change this account.';
+  if (icKeyRoleIsReadOnly(role)) return 'it can read this account and cannot create or change anything; every make-or-change call is refused and writes nothing.';
+  if (icKeyRoleCannotDelete(role)) return 'it can read and change this account, but every delete is refused at the key itself — it cannot remove a contact, a record or an object.';
+  return 'it can read and change this account.';
+}
+function icKeyRoleLabel(role) {
+  if (icKeyRoleIsReadOnly(role)) return 'Read-only';
+  if (icKeyRoleCannotDelete(role)) return 'Read and write, no delete';
+  return 'Read and write (workspace)';
 }
 
 function icRenderKeys() {
@@ -4238,7 +4248,7 @@ function icRenderKeys() {
     '<button class="btn btn-ghost btn-xs" onclick="icRevokeKey(\'' + escapeHtmlAttr(k.id) + '\')">Revoke</button>'
   ]);
   const body = '<p style="color:var(--text-secondary);margin:0 0 10px">A key is this account&#39;s identity: a capture app uses one to deliver leads in, and an AI/MCP client uses one to read this account. ' +
-    'A <strong>read + write</strong> key can read and change this account; a <strong>read-only</strong> key can only read — every make-or-change call through it is refused with a sentence and writes nothing. ' +
+    'A <strong>read + write</strong> key can read and change this account; a <strong>read + write, no delete</strong> key can do the same except delete — every delete is refused at the key itself; a <strong>read-only</strong> key can only read — every make-or-change call through it is refused with a sentence and writes nothing. ' +
     'The key itself stays retrievable: press <strong>View</strong> to see it and copy it again at any time — one click, and the view is recorded. <strong>' + active + '</strong> active of ' + items.length + ' total.</p>' +
     dataTable(['Name', 'Prefix', 'Role', 'Status', 'Last used', 'Created', ''], rows,
       'No keys yet — create one and paste it into a capture app\'s CoreSwift integration, or into an AI client.');
@@ -4248,6 +4258,7 @@ function icRenderKeys() {
     '<div class="form-group" style="margin:0"><label for="icNewKeyRole">Role</label>' +
       '<select id="icNewKeyRole" style="width:270px;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary)">' +
         '<option value="workspace">Read and write (workspace)</option>' +
+        '<option value="read_write_no_delete">Read and write — cannot delete</option>' +
         '<option value="read_only">Read-only — cannot create or change anything</option>' +
       '</select></div>' +
     '<button class="btn btn-primary btn-sm" onclick="icCreateKey()">+ Create API key</button>' +
@@ -4261,8 +4272,8 @@ async function icCreateKey() {
   const roleEl = document.getElementById('icNewKeyRole');
   const nameEl = document.getElementById('icNewKeyName');
   const role = (roleEl && roleEl.value) || 'workspace';
-  if (role !== 'workspace' && role !== 'read_only') { toast('Choose a key role', 'error'); return; }
-  const fallback = icKeyRoleIsReadOnly(role) ? 'Read-only key' : 'Workspace key';
+  if (role !== 'workspace' && role !== 'read_only' && role !== 'read_write_no_delete') { toast('Choose a key role', 'error'); return; }
+  const fallback = icKeyRoleIsReadOnly(role) ? 'Read-only key' : (icKeyRoleCannotDelete(role) ? 'No-delete key' : 'Workspace key');
   const name = ((nameEl && nameEl.value) || '').trim() || fallback;
   try {
     const d = await API.post('/personal-api-keys', { name: name, role: role });
@@ -4301,7 +4312,9 @@ async function icShowKeyOnce(d, title) {
   icShowKeyCard(title, d && d.key, d && d.prefix,
     (icKeyRoleIsReadOnly(role)
       ? 'Paste this into the app or AI client that should only READ this account. It is a read-only key, so every make-or-change call through it is refused and writes nothing. '
-      : 'Paste this into the capture app or AI client. It is a read-and-write key: it can read and change this account. ') +
+      : (icKeyRoleCannotDelete(role)
+        ? 'Paste this into the app or AI client. It can read and change this account but cannot delete: every delete is refused at the key itself. '
+        : 'Paste this into the capture app or AI client. It is a read-and-write key: it can read and change this account. ')) +
     'You can come back and view or copy it again any time — press View, one click.',
     role);
   await icLoadOverview();
@@ -4313,7 +4326,7 @@ async function icShowKeyOnce(d, title) {
 function icShowKeyCard(title, key, prefix, blurb, role) {
   showModal(escapeHtml(title),
     '<p style="margin:0 0 8px">' + escapeHtml(blurb) + '</p>' +
-    '<p style="margin:0 0 8px" id="icNewKeyRoleLine">Role: <strong>' + (icKeyRoleIsReadOnly(role) ? 'Read-only' : 'Read and write (workspace)') + '</strong> — ' +
+    '<p style="margin:0 0 8px" id="icNewKeyRoleLine">Role: <strong>' + icKeyRoleLabel(role) + '</strong> — ' +
       escapeHtml(icKeyRoleDetail(role)) + '</p>' +
     '<div class="form-group"><label>Key</label><input id="icNewKey" readonly value="' + escapeHtmlAttr(key || '') + '"></div>' +
     '<div style="font-size:.75rem;color:var(--text-muted)">Prefix ' + escapeHtml(prefix || '') + '</div>',
@@ -14000,7 +14013,7 @@ async function wsSwitchBusiness(idx) {
    hash, so switchTab() tells the widget which screen is open via window.inlineGuidePage(tabId). */
 window.appGuidePages = {
   dashboard:       { title: "Dashboard", desc: "Your account at a glance — contacts, deals, activity and what needs attention today.", actions: ["Scan the counters and recent activity", "Jump to anything that needs a follow-up", "Use the account switcher (🗂️ top bar) to move between accounts"] },
-  mcp:             { title: "MCP", desc: "Connect your AI tools to this account. Point an MCP client (Claude Code, Cursor, Hermes, or your own agent) at https://app.coreswiftcrm.com/api/mcp, using your API key as the token. Its tools read AND write, scoped to this account and running the same handlers the console uses — no deletes, no sending mail or starting a campaign, no credential screens, and no free-form SQL door. The same key can also WRITE through this app's own agent routes (/api/agent/…): add and edit contacts and deals, move a deal's stage, add a task, add a contact to a list, assign a tag, and change booking and redirect settings — it can never delete anything, and it can never mark a booking paid.", actions: ["Copy the endpoint", "Press View to see your key (one click, and the view is recorded)", "Press Copy to put the key on your clipboard without showing it", "Replace or revoke a key on the API Keys card in the Integration Center", "Paste both into your MCP client", "Point an agent at /api/agent/… with the same key when you want it to write"] },
+  mcp:             { title: "MCP", desc: "Connect your AI tools to this account. Point an MCP client (Claude Code, Cursor, Hermes, or your own agent) at https://app.coreswiftcrm.com/api/mcp, using your API key as the token. Its tools read AND write, scoped to this account and running the same handlers the console uses — no deletes, no sending mail or starting a campaign, no credential screens, and no free-form SQL door. The same key can also WRITE through this app's own agent routes (/api/agent/…): add and edit contacts and deals, move a deal's stage, add a task, add a contact to a list, assign a tag, and change booking and redirect settings — it can never delete anything, and it can never mark a booking paid. A key created as read + write, no delete is not offered a delete tool at all, on either door.", actions: ["Copy the endpoint", "Press View to see your key (one click, and the view is recorded)", "Press Copy to put the key on your clipboard without showing it", "Replace or revoke a key on the API Keys card in the Integration Center", "Paste both into your MCP client", "Point an agent at /api/agent/… with the same key when you want it to write"] },
   "booking":       { title: "Booking", desc: "One booking engine, three kinds of calendar. Pick the type when you create it: appointment times (a Calendly replacement), dated slots you sell (newsletter placements, ad spots), or a date range (a featured listing or a rental). Set your open hours once and use the shortcuts to fill a whole week; generate a quarter of dated slots in one run with a different price per weekday; add a bulk price. Every calendar has its own public address, and the screen gives you two snippets to put it on your own site — inline in the page, or a popup button that opens over it.", actions: ["Create a calendar and pick its type", "Add what customers can book, with a price and a length", "Set open hours, or generate dated slots", "Add a bulk-pricing rule", "Copy the link or an embed snippet"] },
   "data-mapping":  { title: "Data mapping", desc: "Bring another SwiftSoftware app's leads into this CRM without code. Pick the source app, then drop its fields into your contact fields as data pills — the preview shows exactly what CoreSwift would receive before anything is saved. If the app has already sent you data, the field list is built from what actually arrived.", actions: ["Pick the source app and the kind of row", "Click a source field to drop it into a destination", "Test with a sample row, then Save", "Check Runs to see what was refused and why"] },
   contacts:        { title: "Contacts", desc: "The people and companies you do business with. Each contact carries its history, tags and deals.", actions: ["Add a contact", "Open one to see its full record", "Search by name or email"] },
