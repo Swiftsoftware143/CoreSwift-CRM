@@ -4914,23 +4914,62 @@ let CT_EDIT_ID = null;
 // Contact editor — GET /api/contacts/{id} then PATCH, so an existing contact (its company
 // included) can be corrected by hand. Until t_fbb30c16 this was
 // toast('Editing contact: ' + id): the per-row Edit button fetched nothing and saved nothing.
+// THE CONTACT CARD (David, 2026-11-25). "First and last name at the top but the person's title might be
+// right under it even before phone number and email... contact cards only show cards that's filled... if a
+// user opens a contact card and has to add a field specifically there's a button to do it."
+//
+// So the order is fixed for every user — name, title, phone, email, then the rest — and the CUSTOM fields
+// rendered are only the ones that hold a value. A contact with two custom values shows two rows, not
+// twenty blanks. The button at the bottom creates a field and re-opens the card with it ready to fill.
 async function editContact(id) {
   let c;
   try { c = await API.get('/contacts/' + encodeURIComponent(id)); }
   catch (e) { toast('Could not load contact: ' + e.message, 'error'); return; }
   if (!c || !c.id) { toast('Contact not found', 'error'); return; }
   CT_EDIT_ID = id;
-  showModal('Edit Contact',
+  // Filled custom fields only. A failure here must not stop the card opening: the built-in fields are the
+  // reason somebody clicked.
+  let filled = [];
+  try { const d = await API.get('/contacts/' + encodeURIComponent(id) + '/fields'); filled = d.fields || []; }
+  catch (e) { filled = []; }
+  const customRows = filled.map(function (f) {
+    return '<div class="form-group" data-cf="' + escapeHtmlAttr(f.key) + '">' +
+      '<label>' + escapeHtml(f.label) + '</label>' +
+      '<input type="text" data-cfkey="' + escapeHtmlAttr(f.key) + '" value="' + escapeHtmlAttr(f.value || '') + '">' +
+      '</div>';
+  }).join('');
+  showModal('Contact',
     '<div class="form-group"><label>First name *</label><input type="text" id="ctEditFirst" value="' + escapeHtmlAttr(c.first_name || '') + '"></div>' +
     '<div class="form-group"><label>Last name *</label><input type="text" id="ctEditLast" value="' + escapeHtmlAttr(c.last_name || '') + '"></div>' +
-    '<div class="form-group"><label>Email</label><input type="email" id="ctEditEmail" value="' + escapeHtmlAttr(c.email || '') + '"></div>' +
+    // Title sits directly under the name, before phone and email.
+    '<div class="form-group"><label>Title</label><input type="text" id="ctEditTitle" value="' + escapeHtmlAttr(c.title || '') + '"></div>' +
     '<div class="form-group"><label>Phone</label><input type="text" id="ctEditPhone" value="' + escapeHtmlAttr(c.phone || '') + '"></div>' +
+    '<div class="form-group"><label>Email</label><input type="email" id="ctEditEmail" value="' + escapeHtmlAttr(c.email || '') + '"></div>' +
     '<div class="form-group"><label>Company</label><input type="text" id="ctEditCompany" value="' + escapeHtmlAttr(c.company || '') + '"></div>' +
     '<div class="form-group"><label>City</label><input type="text" id="ctEditCity" value="' + escapeHtmlAttr(c.city || '') + '"></div>' +
-    '<div class="form-group"><label>State</label><input type="text" id="ctEditState" value="' + escapeHtmlAttr(c.state || '') + '"></div>',
+    '<div class="form-group"><label>State</label><input type="text" id="ctEditState" value="' + escapeHtmlAttr(c.state || '') + '"></div>' +
+    (customRows ? '<hr style="margin:12px 0;border:0;border-top:1px solid rgba(128,128,128,.25)">' + customRows : '') +
+    '<div class="form-group" style="margin-top:10px">' +
+      '<label style="font-weight:400;color:var(--text-secondary)">Add a field to this contact</label>' +
+      '<div style="display:flex;gap:8px">' +
+        '<input type="text" id="ctNewFieldLabel" placeholder="Field name, e.g. Sponsor tier" style="flex:1">' +
+        '<button class="btn btn-secondary btn-sm" onclick="addContactField()">Add a field</button>' +
+      '</div></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
     '<button class="btn btn-danger btn-sm" data-ops="contact-delete-from-editor" onclick="deleteContactFromEditor()">Delete</button>' +
     '<button class="btn btn-primary btn-sm" data-ops="contact-update" onclick="saveContactEdit()">Save</button>');
+}
+
+// Create a field on the fly from the card, then re-open the card so it can be filled immediately. The field
+// is a real account field from this moment: it appears on every contact's card that carries a value.
+async function addContactField() {
+  const label = (ctModalValue('ctNewFieldLabel') || '').trim();
+  if (!label) { toast('Name the field first', 'error'); return; }
+  try {
+    await API.post('/contacts/custom-fields', { label: label, field_type: 'text' });
+    toast('Field added — fill it in', 'success');
+    editContact(CT_EDIT_ID);
+  } catch (e) { toast('Could not add the field: ' + e.message, 'error'); }
 }
 
 async function saveContactEdit() {
@@ -4942,9 +4981,20 @@ async function saveContactEdit() {
     await API.patch('/contacts/' + encodeURIComponent(id), {
       first_name: first, last_name: last,
       email: ctModalValue('ctEditEmail'), phone: ctModalValue('ctEditPhone'),
+      title: ctModalValue('ctEditTitle'),
       company: ctModalValue('ctEditCompany'),
       city: ctModalValue('ctEditCity'), state: ctModalValue('ctEditState'),
     });
+    // The custom fields on the card go to their own endpoint. Only the ones RENDERED are sent, which are the
+    // ones already filled — plus anything just typed. An empty box clears that field, which is how a value
+    // comes off a card without opening a manager.
+    const cfInputs = document.querySelectorAll('[data-cfkey]');
+    if (cfInputs.length) {
+      const values = {};
+      cfInputs.forEach(function (inp) { values[inp.getAttribute('data-cfkey')] = inp.value; });
+      try { await API.put('/contacts/' + encodeURIComponent(id) + '/fields', { values: values }); }
+      catch (e) { toast('Saved the contact, but a field was refused: ' + e.message, 'error'); }
+    }
     closeModal();
     toast('Contact updated', 'success');
     if (typeof TAB_LOADERS !== 'undefined' && TAB_LOADERS['contacts']) TAB_LOADERS['contacts']();
