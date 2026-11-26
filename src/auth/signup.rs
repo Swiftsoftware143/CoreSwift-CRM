@@ -106,7 +106,8 @@ pub struct MintRequest<'a> {
     pub harness: Option<&'a str>,
 }
 
-/// The owner's name, trimmed — or the ONE refusal every account door shares (kanban t_0ab34bd3).
+/// The owner's name, NUL-free and trimmed — or the ONE refusal every account door shares
+/// (kanban t_0ab34bd3).
 ///
 /// Kept out of [`create_account`] so the gate is unit-testable without a database: a whitespace-only
 /// name is refused as `AppError::Validation`, which renders as HTTP 422
@@ -115,12 +116,29 @@ pub struct MintRequest<'a> {
 /// it (`str::trim` — Unicode whitespace), so `""`, `"   "`, `"\t\n "` and `"\u{a0}"` are all
 /// refused while `"  Bob  "` becomes `Bob`, which is what `users.name` stores and what the
 /// auto-named workspace label `"<name>'s Workspace"` interpolates.
-fn validated_owner_name(name: &str) -> Result<&str, AppError> {
-    let trimmed = name.trim();
+///
+/// A NUL BYTE IS STRIPPED, NOT REFUSED (measured live 2026-11-26 on this app's running binary).
+/// A name pasted out of a document or another CRM can carry an invisible control character, and
+/// Postgres cannot store a NUL in a text column — so the mint's own `tenants`/`users` INSERTs
+/// failed and the whole signup answered `500 {"code":500,"error":true,"message":"Database error"}`
+/// with NOTHING created and no field named:
+///
+/// ```text
+/// POST /api/auth/register {"name":"Jo\u0000hn","account_name":"Nul Probe Workspace"} -> 500
+/// POST /api/auth/register {"name":"Nulprobe","account_name":"Nul\u0000 Workspace"}   -> 500
+/// POST /api/auth/register {"name":"Nulprobe Control","account_name":"Nul Control …"} -> 201
+/// ```
+///
+/// The person is the front door of the business, so the invisible byte is dropped and every
+/// character they can see is kept — the same rule `security::free_text` follows on the CRM's
+/// other write doors. Both doors inherit it, because this is the ONE account writer.
+fn validated_owner_name(name: &str) -> Result<String, AppError> {
+    let stripped = crate::security::free_text::strip_nul(name);
+    let trimmed = stripped.trim();
     if trimmed.is_empty() {
         return Err(AppError::Validation("name: is required".to_string()));
     }
-    Ok(trimmed)
+    Ok(trimmed.to_string())
 }
 
 /// Mint one account — or join one, when `invite_token`/`into_tenant` say so.
@@ -173,7 +191,7 @@ pub async fn create_account(
         seat_entry_plan(&mut *conn, existing, req.entry_plan_slug).await?;
         (existing, name, slug, is_active, None)
     } else {
-        let (name, slug) = tenant_identity(&req, owner_name);
+        let (name, slug) = tenant_identity(&req, &owner_name);
         let tenant_id = Uuid::new_v4();
         let row: (String, String, Option<bool>) = sqlx::query_as(
             r#"INSERT INTO tenants (id, name, slug, probe_harness)
@@ -270,7 +288,7 @@ pub async fn create_account(
     .bind(tenant_id)
     .bind(req.email)
     .bind(&password_hash)
-    .bind(owner_name)
+    .bind(&owner_name)
     .bind(role)
     .fetch_one(&mut *conn)
     .await
@@ -488,14 +506,19 @@ pub async fn seat_entry_plan(
     Ok(())
 }
 
-/// A caller-supplied workspace field that IS a customisation: trimmed, and `None` when the caller
-/// sent nothing but whitespace.
+/// A caller-supplied workspace field that IS a customisation: NUL-free, trimmed, and `None` when
+/// the caller sent nothing but whitespace.
 ///
 /// The same optional-string shape the app already uses elsewhere
 /// (`option.as_deref().map(str::trim).filter(|s| !s.is_empty())`), lifted out so both halves of
-/// [`tenant_identity`] judge a value identically.
-fn supplied(value: Option<&str>) -> Option<&str> {
-    value.map(str::trim).filter(|s| !s.is_empty())
+/// [`tenant_identity`] judge a value identically. The invisible NUL byte goes here for the same
+/// measured reason the owner's name does: `tenants.name` / `tenants.slug` are text columns, so a
+/// pasted control byte turned the whole signup into `500 Database error` with nothing created.
+fn supplied(value: Option<&str>) -> Option<String> {
+    value
+        .map(crate::security::free_text::strip_nul)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// The workspace's name and slug, exactly as the signup has always derived them — except that a
@@ -515,16 +538,12 @@ fn supplied(value: Option<&str>) -> Option<&str> {
 /// exactly that), and no caller that used to get a `201` now gets a refusal — a blank explicit
 /// value is a caller saying "no preference", which is precisely what the auto arm is for.
 fn tenant_identity(req: &MintRequest<'_>, owner_name: &str) -> (String, String) {
-    let name = supplied(req.account_name)
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("{}'s Workspace", owner_name));
+    let name = supplied(req.account_name).unwrap_or_else(|| format!("{}'s Workspace", owner_name));
 
-    let slug = supplied(req.account_slug)
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            let local_part = req.email.split('@').next().unwrap_or("user");
-            format!("{}-{}", local_part, &Uuid::new_v4().to_string()[..8])
-        });
+    let slug = supplied(req.account_slug).unwrap_or_else(|| {
+        let local_part = req.email.split('@').next().unwrap_or("user");
+        format!("{}-{}", local_part, &Uuid::new_v4().to_string()[..8])
+    });
 
     (name, slug)
 }
@@ -613,7 +632,7 @@ mod tests {
         }
     }
 
-    /// The trim reaches the value, not just the gate: this is what `users.name` binds and what
+    /// The same trim reaches the value, not just the gate: this is what `users.name` binds and what
     /// `tenant_identity` interpolates into `"<name>'s Workspace"`.
     #[test]
     fn a_padded_owner_name_is_trimmed_for_the_store_and_the_label() {
@@ -621,6 +640,21 @@ mod tests {
         assert_eq!(validated_owner_name("\tBob\n").unwrap(), "Bob");
         assert_eq!(validated_owner_name("Bob").unwrap(), "Bob");
         assert_eq!(validated_owner_name("\u{a0}Bob\u{a0}").unwrap(), "Bob");
+    }
+
+    /// The invisible byte goes, every visible character stays (kanban measured live 2026-11-26:
+    /// a pasted NUL in the name OR the workspace name answered `500 Database error` and created
+    /// nothing). Both columns the mint writes are covered by the same rule.
+    #[test]
+    fn a_pasted_nul_is_stripped_and_the_visible_name_survives() {
+        assert_eq!(validated_owner_name("Jo\u{0}hn").unwrap(), "John");
+        match validated_owner_name("\u{0}\u{0}") {
+            Err(AppError::Validation(message)) => assert_eq!(message, "name: is required"),
+            other => panic!("a name of nothing but NULs must be refused, got {other:?}"),
+        }
+        let (name, slug) = identity(Some("Nul\u{0} Workspace"), Some("nul\u{0}-slug"));
+        assert_eq!(name, "Nul Workspace");
+        assert_eq!(slug, "nul-slug");
     }
 
     /// The same family, the OTHER input (kanban t_2e40c9a5): a whitespace-only `account_name` is
