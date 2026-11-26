@@ -324,15 +324,15 @@ pub async fn set_values(
     let mut written = 0usize;
     let mut cleared = 0usize;
     for (key, value) in req.values {
-        let field: Option<(Uuid, String, String)> = sqlx::query_as(
-            "SELECT id, field_type, label FROM contact_custom_fields
+        let field: Option<(Uuid, String, String, Value)> = sqlx::query_as(
+            "SELECT id, field_type, label, options FROM contact_custom_fields
               WHERE tenant_id = $1 AND key = $2 AND is_active",
         )
         .bind(tenant)
         .bind(&key)
         .fetch_optional(&state.db)
         .await?;
-        let Some((field_id, field_type, label)) = field else {
+        let Some((field_id, field_type, label, options)) = field else {
             return Err(AppError::Validation(format!(
                 "\"{key}\" is not a field on this account; create it first (POST contacts/custom-fields)"
             )));
@@ -350,6 +350,24 @@ pub async fn set_values(
                 .await?;
             cleared += 1;
             continue;
+        }
+        // A SELECT accepts only the choices the field itself lists. Measured 2026-11-25: without this, any
+        // text went into a select and the card showed a value the owner never offered.
+        if field_type == "select" {
+            let allowed: Vec<String> = options
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !allowed.is_empty() && !allowed.iter().any(|a| a.eq_ignore_ascii_case(&raw)) {
+                return Err(AppError::Validation(format!(
+                    "\"{label}\" accepts: {}; \"{raw}\" is not one of them",
+                    allowed.join(", ")
+                )));
+            }
         }
         if !value_fits(&field_type, &raw) {
             return Err(AppError::Validation(format!(
