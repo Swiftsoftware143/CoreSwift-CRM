@@ -91,6 +91,17 @@ pub async fn create_template(
         return Err(AppError::Validation("Trigger type is required".to_string()));
     }
 
+    // FREE-TEXT HYGIENE BEFORE THE WRITE (`security::free_text`), the same rule the other console
+    // doors follow. Measured live 2026-11-26: POST /api/checklists/templates with a U+0000 in the
+    // name or the description reached the INSERT and answered `500 {"message":"Database error"}`,
+    // losing the whole template — a NUL is invisible and unstorable. It is STRIPPED (every visible
+    // character survives); a newline or any other control character in the name is refused with a
+    // sentence naming the field.
+    let name = crate::security::free_text::single_line(&req.name, "Template name", 255)?;
+    let description = crate::security::free_text::nul_free(req.description);
+    let trigger_type =
+        crate::security::free_text::single_line(&req.trigger_type, "Trigger type", 64)?;
+
     let template = sqlx::query_as::<_, ChecklistTemplate>(
         r#"INSERT INTO checklist_templates (id, tenant_id, name, description, trigger_type, stage_count, days_per_stage)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -98,9 +109,9 @@ pub async fn create_template(
     )
     .bind(Uuid::new_v4())
     .bind(account_id)
-    .bind(&req.name)
-    .bind(&req.description)
-    .bind(&req.trigger_type)
+    .bind(&name)
+    .bind(&description)
+    .bind(&trigger_type)
     .bind(req.stage_count.unwrap_or(4))
     .bind(req.days_per_stage.unwrap_or(2))
     .fetch_one(&state.db)
@@ -145,6 +156,14 @@ pub async fn update_template(
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
+    // Same free-text hygiene as the create door: a NUL pasted into a template's name or
+    // description must not turn an edit into a 500 that saves nothing (`security::free_text`).
+    let name =
+        crate::security::free_text::optional_line(req.name.as_deref(), "Template name", 255)?;
+    let description = crate::security::free_text::nul_free(req.description);
+    let trigger_type =
+        crate::security::free_text::optional_line(req.trigger_type.as_deref(), "Trigger type", 64)?;
+
     let template = sqlx::query_as::<_, ChecklistTemplate>(
         r#"UPDATE checklist_templates SET
             name = COALESCE($1, name),
@@ -157,9 +176,9 @@ pub async fn update_template(
            WHERE id = $7 AND tenant_id = $8
            RETURNING *"#,
     )
-    .bind(&req.name)
-    .bind(&req.description)
-    .bind(&req.trigger_type)
+    .bind(&name)
+    .bind(&description)
+    .bind(&trigger_type)
     .bind(req.stage_count)
     .bind(req.days_per_stage)
     .bind(req.is_active)
@@ -318,10 +337,13 @@ pub async fn update_progress(
         .and_then(|v| v.as_i64())
         .ok_or(AppError::Validation("stage_order required".to_string()))?;
 
-    let action_taken = req
-        .get("action_taken")
-        .and_then(|v| v.as_str())
-        .unwrap_or("completed");
+    // `action_taken` is free text a person types when they tick a stage off; a NUL must not fail
+    // the whole progress update (`security::free_text`).
+    let action_taken = crate::security::free_text::strip_nul(
+        req.get("action_taken")
+            .and_then(|v| v.as_str())
+            .unwrap_or("completed"),
+    );
 
     // Mark this stage complete
     let _ = sqlx::query(
