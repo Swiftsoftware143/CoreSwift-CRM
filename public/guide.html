@@ -492,6 +492,7 @@
     <h3>Running the business from an agent</h3>
     <p>Every screen in this console has an API path behind it, and an agent holding the account's key can call any of them through the MCP door's <strong>coreswift_api</strong> tool &mdash; method, path, body. The door acts as the account's owner, so tenancy, validation and audit are the same ones your own clicks go through.</p>
     <p>The paths worth knowing: <strong>contacts</strong>, <strong>deals</strong>, <strong>deals/&lt;id&gt;/stage</strong>, <strong>deals/&lt;id&gt;/tasks</strong>, <strong>lists</strong> (a dynamic list's rules are the <em>rules</em> field on a PATCH of <em>lists/&lt;id&gt;</em>, then POST <em>lists/&lt;id&gt;/evaluate</em>), <strong>tags/assign</strong>, <strong>pipelines</strong>.</p>
+    <p><strong>What a booking does to the CRM:</strong> <em>GET/PUT booking/calendars/&lt;id&gt;/capture</em> &mdash; the tags, tag <em>categories</em> and lists a calendar applies. Send <em>{"tags": ["{product} hot"], "categories": ["&lt;id&gt;"], "lists": ["&lt;id&gt;"]}</em>; an absent key leaves that arm alone and an empty array clears it.</p>
     <p><strong>Calendar:</strong> <em>booking/calendars</em>, <em>booking/calendars/summary</em> (every calendar with its positions, rules and problems in one call), <em>booking/calendars/&lt;id&gt;/resources</em>, <em>booking/resources/&lt;id&gt;/slots/generate</em> (body may carry <em>resource_ids</em>), <em>booking/calendars/&lt;id&gt;/orders</em>, <em>booking/orders/&lt;id&gt;/confirm</em> and <em>/cancel</em>, <em>booking/calendars/&lt;id&gt;/form-fields</em>, <em>booking/calendars/&lt;id&gt;/confirmation-email</em>, <em>booking/calendars/&lt;id&gt;/clone</em>.</p>
     <p><strong>Four settings are also their own named tools</strong>, so an agent does not have to know a path: <em>coreswift_booking_set_product_checkout</em> (a product&rsquo;s checkout link or embed code, and whether the buyer pays before or after), <em>coreswift_booking_set_calendar_checkout</em> (the calendar&rsquo;s default checkout, used by any product with none of its own), <em>coreswift_booking_rotate_payment_key</em> (a new key for the payment provider &mdash; the old one stops working immediately), and <em>coreswift_domain_set_redirect</em> (where one of your own addresses sends a visitor). All four need a read-and-write key; the app refuses an address that is not yours and a checkout that is not an https link.</p>
     <p><strong>Inbox:</strong> <em>private-email/messages</em> (add <em>?folder=inbox</em>), <em>private-email/messages/counts</em> for what is new, <em>private-email/messages/&lt;id&gt;</em> for one message, <em>/reply</em> to answer it (send <em>{"from_address": "one of your own mailboxes", "body": "..."}</em> &mdash; the address must be one of the account's, which is refused otherwise), <em>/ticket</em> to turn it into a ticket, and <em>private-email/folders</em>. A message body is a large HTML document, so read the counts and then fetch one message by id rather than listing everything.</p>
@@ -2505,6 +2506,27 @@ it follows your computer's light or dark setting.</li>
 <li>If your browser refuses cookies, the switch still works; the choice just stays with the address you set it
 on.</li>
 </ul>
+
+<h2 id="booking-capture">What a booking does to your CRM &mdash; several tags, whole categories, several lists</h2>
+<p>A purchase is not one fact. It is the product the person bought, the city they came from, and how warm the lead is &mdash; three tags on one contact &mdash; and that person then belongs on more than one list, because a nurture list and a customer list are different lists for the same person.</p>
+<p>Open any calendar and press <strong>Edit capture settings</strong> beside its name and address. There are three arms, and each one is a row you can see and correct:</p>
+<ul>
+<li><strong>Tags.</strong> Type the tag names a booking should apply. They may contain <em>{product}</em> (the position the buyer booked), <em>{city}</em> (when the form asks for one) and <em>{calendar}</em>. A template whose placeholder has no value is skipped rather than half-applied &mdash; a tag called &ldquo;&nbsp;&ndash;&nbsp;booking&rdquo; would match nothing.</li>
+<li><strong>Tag categories.</strong> Tick a category &mdash; &ldquo;Products&rdquo;, &ldquo;Services&rdquo; &mdash; and every tag inside it is applied. The membership is read at the moment of booking, so a product you add to that category tomorrow is on tomorrow's bookings without editing any calendar.</li>
+<li><strong>Lists.</strong> Tick the lists the contact joins. They join them in addition to anything a dynamic list's own rule matches.</li>
+</ul>
+<p>The tags and lists are applied the moment the booking is <em>held</em>, not when it is paid: somebody who filled in the form and then abandoned it is still a lead worth keeping. If a tag name is rejected the booking is never lost &mdash; the tag is skipped and the order stands.</p>
+<p>The single <strong>Sponsor tag</strong> field above the button still works and still shows; every calendar that had one was carried across as a one-row tag set, so nothing changed until you add to it.</p>
+
+<h2 id="exclusive-tag-categories">One tag at a time &mdash; and why the old rule left people with two temperatures</h2>
+<p>Some tags describe the same thing and cannot both be true. A contact is <strong>Hot</strong> or <strong>Warm</strong> or <strong>Cold</strong> &mdash; never two of them. Assigning Hot to somebody who already held Warm used to leave both, which does not merely look untidy: every count, score and routing rule that reads that group is then wrong, and the screen disagrees with the automation.</p>
+<p>The fix is a switch on the category. On the <strong>Tags</strong> screen, when you create a category (or with the one-press toggle on any row), choose <strong>&ldquo;Only one tag from this category at a time&rdquo;</strong>. From then on:</p>
+<ul>
+<li>Applying a tag from that category <strong>removes the others from it</strong> on that contact &mdash; automatically, whoever applied it: the assign screen, a booking, an automation, a dynamic list, or an agent through the API.</li>
+<li>The new tag is put in place <strong>before</strong> the old one is removed, so a contact is never left with no temperature at all.</li>
+<li>The rule lives in the database, not in one screen &mdash; so the same thing happens no matter which door the change came through.</li>
+</ul>
+<p>The other half of the same need is already in automations: when a tag is applied you can also <strong>remove another tag</strong> from that contact, <strong>add them to a list</strong>, or <strong>take them off a list</strong> &mdash; which is how you move somebody from a nurture list to a customer list in one step.</p>
 
 <h2 id="account-vs-workspace">An account and a workspace are not the same thing</h2>
 <p>An <strong>account</strong> is the business — it is what you signed up for, what your plan belongs to, and what

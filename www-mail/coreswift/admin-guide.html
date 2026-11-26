@@ -432,6 +432,17 @@ mislabels the message and stops a ticket from being opened for it.</p>
 
 <!-- guide-2026-11-21 -->
 
+<h2 id="booking-capture-admin">What a booking writes to the CRM, and the one-tag-at-a-time rule</h2>
+<p>Two settings decide what a booking does to a customer's CRM, and both are worth knowing when a customer asks why a contact carries the tags it does.</p>
+<h3>Capture settings on a calendar</h3>
+<p>Each calendar carries three lists, read at the moment somebody books: tag <strong>templates</strong> (with <em>{product}</em>, <em>{city}</em>, <em>{calendar}</em> substituted from what the buyer chose), tag <strong>categories</strong> whose whole membership is applied, and the <strong>lists</strong> the contact joins. They live in <em>booking_calendar_capture_tags</em>, <em>booking_calendar_capture_categories</em> and <em>booking_calendar_capture_lists</em>, and are edited through <em>GET/PUT booking/calendars/&lt;id&gt;/capture</em>.</p>
+<p>They are applied when the booking is <strong>held</strong>, not paid &mdash; a form fill is a real lead even if the payment never lands. A template whose placeholder has no value is skipped; a rejected tag name is a warning, never a failed booking. A contact who is already on a list is not added twice and does not re-fire their welcome automation.</p>
+<p>Before this, a calendar had one nullable <em>sponsor_tag</em> column and no list membership at all. Every existing sponsor tag was carried across as a one-row tag set, so old calendars behave exactly as they did.</p>
+<h3>One tag at a time from a category</h3>
+<p><em>tag_categories.is_exclusive</em> makes a category mutually exclusive: applying a tag from it removes the contact's other tags in the same category. It exists for lead temperature &mdash; Hot OR Warm OR Cold &mdash; because leaving both makes every count and score that reads the group wrong.</p>
+<p>The rule is enforced by an <strong>AFTER INSERT trigger on <em>tag_assignments</em></strong>, not in a handler, because the assign endpoint, the booking capture, the automation actions, the dynamic-list evaluator and the MCP door all write that table. <strong>After</strong> insert is deliberate: the new tag is in place before the siblings are removed, so a contact is never left with no tag from the group.</p>
+<p>If a customer wants the old behaviour back, the toggle is on the Tags screen and reads &ldquo;Allow several&rdquo; once flipped.</p>
+
 <h2 id="operator-actions">Operator Actions — doing on a customer's behalf</h2>
 <p><strong>Operator Actions</strong> sits in the operator menu beside Portfolio and Users. It is the console door
 to the same action runner an AI agent uses, so nothing here is a second implementation of a rule.</p>

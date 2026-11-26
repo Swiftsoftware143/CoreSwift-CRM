@@ -352,6 +352,7 @@ fn register_api_tool(reg: Registry, state: &AppState, allow_delete: bool) -> Reg
                       \"booking/resources/<id>/slots/generate\", \"booking/calendars/<id>/orders\", \
                       \"booking/orders/<id>/confirm\", \"booking/orders/<id>/cancel\", \
                       \"booking/calendars/<id>/form-fields\", \"booking/calendars/<id>/confirmation-email\", \
+                      and booking/calendars/<id>/capture sets what a booking writes to the CRM: tags (templates using {product}, {city}, {calendar}), tag categories, and lists. A tag category with is_exclusive true keeps ONE tag per contact: applying a second removes the first after it is in place. \
                       \"booking/calendars/<id>/clone\"; INBOX \"private-email/messages\" (add ?folder=inbox), \
                       \"private-email/messages/counts\", \"private-email/messages/<id>\", \
                       \"private-email/messages/<id>/reply\" (body: {from_address: one of your own \
