@@ -1476,3 +1476,40 @@ pub async fn erase_data(
 
     Ok(Json(report.to_json()))
 }
+
+/// GET /api/session/check — is the caller holding a live session? 204 or 401, nothing else.
+///
+/// Exists for the WEB SERVER, not for the app: the guides and the onboarding page are static documents,
+/// and a static request carries no Authorization header. So the console also writes the session token into
+/// a cookie, and nginx asks this question with `auth_request` before serving any of them. Without it the
+/// whole setup documentation is readable by anyone who guesses the URL — before anybody logs in
+/// (David, 2026-11-26: "make sure none of that is before the login").
+///
+/// It answers a FACT only: a valid signature and an unexpired claim. It does not name the user and it
+/// reveals nothing, so a 204 tells the server "let them in" and nothing more.
+pub async fn session_check(
+    State(s): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> crate::errors::ApiResult<axum::http::StatusCode> {
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    let cookie = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|raw| {
+            raw.split(';')
+                .filter_map(|kv| kv.trim().split_once('='))
+                .find(|(k, _)| *k == "cs_token")
+                .map(|(_, v)| v.trim().to_string())
+        });
+    let token = bearer.map(|s| s.to_string()).or(cookie);
+    let Some(token) = token else {
+        return Err(AppError::Unauthorized);
+    };
+    crate::auth::middleware::verify_token(&token, &s.config.jwt_secret)?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}

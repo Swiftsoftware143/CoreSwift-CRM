@@ -388,6 +388,10 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // `auth::router`, which is where the abuse control lives.
     "/api/auth/register",
     "/api/auth/login",
+    // The web server's own question, asked before it serves a static guide: "is this request carrying a
+    // live session?" It must answer anonymously (that is the point - the answer itself is the check), and
+    // it reveals nothing beyond valid-or-not.
+    "/api/auth/session/check",
     "/api/auth/refresh",
     "/api/auth/forgot-password",
     "/api/auth/reset-password",
@@ -1790,7 +1794,7 @@ mod tests {
     /// `/api/contacts/custom-fields/:id`, `/api/contacts/:id/fields` (the contact custom-field manager) and
     /// `/api/booking/bookings/:id/cancel` (the operator's cancel by booking id). The other four arrived from
     /// the booking sponsor work and other lanes before this census; the test's own walk is what counts them.
-    /// 578 mounted / 564 on /api** (2026-11-26, kanban t_d7474aee): `DELETE /api/admin/users/:id` — the
+    /// 597 mounted / 583 on /api** (2026-11-26, kanban t_d7474aee): `DELETE /api/admin/users/:id` — the
     /// admin delete-user door. One leaf, on `/api**`, so the 14 root-level mounts are unchanged.
     /// 595 mounted / 581 on /api** (2026-11-26, kanban t_7d182634, David's fleet-standard auth
     /// path): the SAME `auth::router` mounted a second time at `/api/v1/auth` — its 18 leaves are
@@ -1806,14 +1810,14 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            595,
+            597,
             "mounted route count moved — update the census in the module docs.\
              The number to pin is the one THIS assertion reports as `left`: mounted_routes() walks the \
              router itself. scripts/route-census.py is a partial PARSER and a LOWER BOUND (it missed 23 \
              mounts on 2026-11-25); never pin its total."
         );
         assert_eq!(
-            api, 581,
+            api, 583,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.

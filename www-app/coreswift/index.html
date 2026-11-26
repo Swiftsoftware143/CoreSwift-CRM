@@ -590,6 +590,7 @@ const API = {
       const tok = d.token || d.access_token || d.accessToken;
       if (!tok) return false;
       STATE.token = tok;
+  csSyncSessionCookie(tok);
       localStorage.setItem('crm_token', tok);
       if (d.refresh_token) localStorage.setItem('crm_refresh', d.refresh_token);
       return true;
@@ -962,6 +963,7 @@ async function doLogin() {
     }
     const data = await res.json();
     STATE.token = data.access_token || data.token;
+  csSyncSessionCookie(data.access_token || data.token);
     // The API returns `team_member` and NEVER `user`, so `data.user || {...role:'agency_admin'}`
     // always fell through and stamped EVERY login as a platform admin — which silently
     // defeated the role-filtered nav (every tenant rendered the platform menu).
@@ -1019,6 +1021,23 @@ function themeToggle() {
   document.documentElement.setAttribute('data-theme', saved === 'light' ? 'light' : 'dark');
 })();
 
+
+// ===== THE COOKIE THE WEB SERVER CHECKS (David, 2026-11-26) =====
+// The guides and the setup walk-through are static documents. A static request carries no Authorization
+// header, so the app cannot tell a signed-in reader from a stranger - which meant the whole setup
+// documentation was readable before anybody logged in. So the session token is mirrored into a cookie and
+// nginx asks the app about it before serving those pages. It is written on every path that sets a token,
+// and cleared on logout, so the two can never disagree for longer than one request.
+function csSyncSessionCookie(token) {
+  try {
+    if (token) {
+      document.cookie = 'cs_token=' + encodeURIComponent(token) + '; path=/; max-age=43200; Secure; SameSite=Lax';
+    } else {
+      document.cookie = 'cs_token=; path=/; max-age=0; Secure; SameSite=Lax';
+    }
+  } catch (e) { /* a blocked cookie must never break the console */ }
+}
+
 function logout(silent) {
   // Server-side session invalidation. POST /api/auth/logout blacklists this token in
   // Redis for its remaining TTL; clearing the token client-side alone left the session
@@ -1036,6 +1055,7 @@ function logout(silent) {
   }
   stopNotifPoll();
   STATE.token = null;
+  csSyncSessionCookie(null);
   STATE.user = null;
   localStorage.removeItem('crm_token');
   localStorage.removeItem('crm_user');
@@ -7095,6 +7115,7 @@ window.addEventListener('DOMContentLoaded', () => {
   if (token && userStr) {
     try {
       STATE.token = token;
+  csSyncSessionCookie(token);
       STATE.user = JSON.parse(userStr);
       showApp();
       reconcileSession();
@@ -14064,6 +14085,7 @@ async function wsSwitch(idx) {
     const tok = d.access_token || d.token;
     if (!tok) throw new Error('No token returned');
     STATE.token = tok;
+  csSyncSessionCookie(tok);
     localStorage.setItem('crm_token', tok);
     const ws = d.workspace || w;
     try { localStorage.setItem('crm_workspace', JSON.stringify(ws)); } catch (e) {}
@@ -14164,6 +14186,7 @@ async function pfImpersonate(accountTenantId, name) {
     const tok = (d && (d.impersonation_token || d.access_token)) || '';
     if (!tok) throw new Error('No token returned');
     STATE.token = tok;
+  csSyncSessionCookie(tok);
     localStorage.setItem('crm_token', tok);
     localStorage.removeItem('crm_workspace');
     try { localStorage.setItem('crm_impersonating', name || 'portfolio company'); } catch (e) {}
@@ -14182,6 +14205,7 @@ async function wsSwitchBusiness(idx) {
     const tok = d.impersonation_token || d.access_token;
     if (!tok) throw new Error('No token returned');
     STATE.token = tok;
+  csSyncSessionCookie(tok);
     localStorage.setItem('crm_token', tok);
     localStorage.removeItem('crm_workspace');
     window.location.reload();

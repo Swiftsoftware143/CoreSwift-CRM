@@ -51,6 +51,11 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/team/members/:id",
             axum::routing::delete(team::remove_member),
         )
+        // The web server asks this before serving a static guide (session from a cookie, not a header).
+        .route(
+            "/session/check",
+            axum::routing::get(handlers::session_check),
+        )
         .route("/me/usage", axum::routing::get(handlers::get_usage))
         // The way back in when signup MINTED a password and the mail carrying it did not go out
         // (kanban t_d841df4f). Authenticated like every other act on the caller's own account: the
