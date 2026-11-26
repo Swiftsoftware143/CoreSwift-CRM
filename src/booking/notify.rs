@@ -529,6 +529,22 @@ async fn apply_tags(pool: &PgPool, ctx: &Context, stage: &str) {
 }
 
 async fn find_or_create_contact(pool: &PgPool, ctx: &Context) -> Option<Uuid> {
+    // A SYNTHETIC REQUESTER MUST NOT INVENT A CUSTOMER (kanban t_d4396db5). The service's own capture arm
+    // refuses a probe address (`service.rs` -> `security::probe_addr::synthetic_requester`), but THIS
+    // second writer did not, so a probe booking the service deliberately skipped minted its contact here
+    // anyway — measured live 2026-11-26 on the SwiftSoftware tenant: a `probe-…@example.invalid` booking
+    // produced a contact with tags and a list membership. Same predicate, same answer: no contact, and
+    // therefore no `contact.created` either.
+    if let Some(reason) =
+        crate::security::probe_addr::synthetic_requester(&ctx.customer_email, &ctx.customer_name)
+    {
+        tracing::info!(
+            reason,
+            email = %ctx.customer_email,
+            "booking tag capture skipped: synthetic requester"
+        );
+        return None;
+    }
     if let Ok(Some(id)) = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM contacts WHERE tenant_id = $1 AND lower(email) = lower($2) LIMIT 1",
     )
@@ -541,7 +557,7 @@ async fn find_or_create_contact(pool: &PgPool, ctx: &Context) -> Option<Uuid> {
     }
 
     let (first, last) = split_name(&ctx.customer_name);
-    sqlx::query_scalar::<_, Uuid>(
+    let created = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO contacts (id, tenant_id, first_name, last_name, email, source, metadata)
          VALUES (gen_random_uuid(), $1, $2, $3, $4, 'booking', jsonb_build_object('source_app','coreswift','from_booking',true))
          ON CONFLICT DO NOTHING
@@ -554,7 +570,16 @@ async fn find_or_create_contact(pool: &PgPool, ctx: &Context) -> Option<Uuid> {
     .fetch_optional(pool)
     .await
     .ok()
-    .flatten()
+    .flatten();
+    // A contact this function brings into existence is a LEAD ARRIVING, exactly as it is on the three
+    // other contact doors (`contacts/handlers`, `inbound/handlers`, `external_api`), so it dispatches the
+    // same fire-and-forget `contact.created` (kanban t_d4396db5). Only when the INSERT actually returned a
+    // row: the SELECT above already found no contact, so a result here is a new one — a returning sponsor
+    // takes the SELECT arm and re-runs no lead automation.
+    if let Some(id) = created {
+        crate::automation::scan::contact_created(pool.clone(), ctx.tenant_id, id);
+    }
+    created
 }
 
 fn split_name(full: &str) -> (String, Option<String>) {

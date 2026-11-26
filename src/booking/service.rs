@@ -1509,6 +1509,10 @@ pub async fn create_order(
     // gets the order it asked for and nothing else. `contact_id` stays whatever the caller passed, so
     // the order still names its buyer.
     let probe_reason = crate::security::probe_addr::synthetic_requester(&email, name);
+    // Whether THIS booking brought the contact into existence. The `contact.created` event is
+    // dispatched after the commit for a genuinely new contact only (kanban t_d4396db5): a rebooking by
+    // an existing sponsor must never re-run lead automations ("New lead — warm" would re-tag them).
+    let mut contact_is_new = false;
     let contact_id: Option<Uuid> = if let Some(reason) = probe_reason {
         tracing::info!(
             reason,
@@ -1587,6 +1591,7 @@ pub async fn create_order(
                 .bind(company)
                 .execute(&mut *tx)
                 .await?;
+                contact_is_new = true;
                 Some(id)
             }
         }
@@ -1703,6 +1708,17 @@ pub async fn create_order(
         bookings.push(b);
     }
     tx.commit().await?;
+    // ── THE NEW CONTACT ANNOUNCES ITSELF (kanban t_d4396db5) ────────────────────────────────────────
+    // A booking used to INSERT its contact silently, so a `ContactCreated` rule ("New lead — warm") never
+    // ran for the main lead door — the public calendar. The same fire-and-forget call the three other
+    // contact doors make (contacts/inbound/external_api) is made here, AFTER the commit so the contact
+    // really exists, and ONLY for a contact this booking created: the event says a lead arrived, and a
+    // rebooking (or a booking by a known customer) must not re-run lead automations.
+    // Deliberately not a tag: applying "warm" through the calendar's capture settings would cool a
+    // contact who is already hot.
+    if let (Some(cid), true) = (contact_id, contact_is_new) {
+        crate::automation::scan::contact_created(pool.clone(), cal.tenant_id, cid);
+    }
     // ── THE SPONSOR TAG, after the order stands ─────────────────────────────────────────────────────
     // Applied through the tags module's own writer so the TagAdded automations fire and the dynamic
     // "‹City› - Sponsors" list gains the member immediately (it did not, when the tag was written by hand).
