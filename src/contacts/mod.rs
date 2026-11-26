@@ -2,6 +2,7 @@
 //!
 //! Full CRUD with tenant-scoped queries, search, and pagination.
 
+pub mod fields;
 pub mod handlers;
 pub mod internal_handler;
 pub mod models;
@@ -46,6 +47,18 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/", axum::routing::get(handlers::list))
         .route("/", axum::routing::post(handlers::create))
         .route("/search", axum::routing::get(handlers::search))
+        // ── THE CONTACT CUSTOM-FIELD MANAGER (2026-11-25) ──────────────────────────────────────────
+        // The tables existed and 33 fields were defined on ZaarHub with no route to create, order or rename
+        // one, because only the DEALS twin ever got a manager. A field created at any capture lands here, and
+        // these routes are what an agent calls through `coreswift_api`.
+        .route(
+            "/custom-fields",
+            axum::routing::get(fields::list_fields).post(fields::create_field),
+        )
+        .route(
+            "/custom-fields/:id",
+            axum::routing::patch(fields::update_field).delete(fields::retire_field),
+        )
         .route("/:id", axum::routing::get(handlers::get))
         // The contact's message timeline. Lives under the contacts path because that is the address a
         // reader expects, but the reader itself belongs to communications (it owns the messages table).

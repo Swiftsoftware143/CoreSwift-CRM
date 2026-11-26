@@ -1698,6 +1698,51 @@ pub async fn create_order(
     // Applied through the tags module's own writer so the TagAdded automations fire and the dynamic
     // "‹City› - Sponsors" list gains the member immediately (it did not, when the tag was written by hand).
     // A calendar with no tag, or a tag this account no longer has, changes nothing and fails nothing.
+    // ── A CAPTURE'S ANSWERS BECOME CONTACT FIELDS ───────────────────────────────────────────────────
+    // David, 2026-11-25: "anywhere that there is a capture the user should be able to create a field".
+    // The booking form already stores free-form answers; when a custom field exists whose key matches an
+    // answer, the answer is stored on the CONTACT too, so it shows on their card without anybody copying it.
+    // An answer with no matching field is left where it is: the order keeps it, nothing is invented.
+    if let Some(cid) = contact_id {
+        let answers = input
+            .answers
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(map) = answers.as_object() {
+            for (key, value) in map {
+                let text = match value {
+                    serde_json::Value::String(s) => s.trim().to_string(),
+                    serde_json::Value::Null => String::new(),
+                    other => other.to_string(),
+                };
+                if text.is_empty() {
+                    continue;
+                }
+                let matched: Option<Uuid> = sqlx::query_scalar(
+                    "SELECT id FROM contact_custom_fields
+                      WHERE tenant_id = $1 AND key = $2 AND is_active",
+                )
+                .bind(cal.tenant_id)
+                .bind(key)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+                if let Some(field_id) = matched {
+                    let _ = sqlx::query(
+                        "INSERT INTO contact_field_values (contact_id, field_id, value)
+                         VALUES ($1,$2,$3)
+                         ON CONFLICT (contact_id, field_id) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+                    )
+                    .bind(cid)
+                    .bind(field_id)
+                    .bind(&text)
+                    .execute(pool)
+                    .await;
+                }
+            }
+        }
+    }
+
     if let (Some(tag_name), Some(cid)) = (cal.sponsor_tag.as_deref(), contact_id) {
         if let Err(e) =
             crate::tags::apply_by_name(pool, cal.tenant_id, "contact", cid, tag_name, None).await
