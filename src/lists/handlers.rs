@@ -112,12 +112,14 @@ fn check_rules(rules: &[crate::lists::models::ListRule]) -> Result<(), AppError>
 pub async fn create(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
-    Json(r): Json<CreateListRequest>,
+    Json(mut r): Json<CreateListRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
-    if r.name.is_empty() {
-        return Err(AppError::Validation("Name required".into()));
-    }
+    // FREE-TEXT HYGIENE BEFORE THE WRITE (`security::free_text`). Measured live 2026-11-26:
+    // `POST /api/lists {"name":"L\u0000ist"}` answered 500 "Database error"; the description had
+    // the same hole.
+    r.name = crate::security::free_text::single_line(&r.name, "Name", 255)?;
+    r.description = crate::security::free_text::nul_free(r.description);
     let lt = r.list_type.unwrap_or_else(|| "static".into());
     if lt != "static" && lt != "dynamic" {
         return Err(AppError::Validation(
@@ -155,9 +157,15 @@ pub async fn update(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
     Path(id): Path<Uuid>,
-    Json(r): Json<UpdateListRequest>,
+    Json(mut r): Json<UpdateListRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    // Same hygiene as the create door (see `security::free_text`): an edit carrying a NUL put a
+    // 500 on the update with nothing written.
+    if let Some(raw) = r.name.as_deref() {
+        r.name = Some(crate::security::free_text::single_line(raw, "Name", 255)?);
+    }
+    r.description = crate::security::free_text::nul_free(r.description);
     if let Some(ref rules) = r.rules {
         check_rules(rules)?;
     }

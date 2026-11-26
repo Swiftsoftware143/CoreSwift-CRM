@@ -98,9 +98,34 @@ pub async fn search(
 pub async fn create(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
-    Json(req): Json<CreateContactRequest>,
+    Json(mut req): Json<CreateContactRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+
+    // FREE-TEXT HYGIENE BEFORE THE WRITE (`security::free_text`). A contact pasted out of a
+    // spreadsheet or an email carried a NUL byte into the INSERT, and Postgres answered it as
+    // `500 {"code":500,"error":true,"message":"Database error"}` with nothing saved and no field
+    // named. The same byte is stripped from every other text column on the row.
+    req.first_name = crate::security::free_text::single_line(&req.first_name, "First name", 100)?;
+    req.last_name = crate::security::free_text::single_line(&req.last_name, "Last name", 100)?;
+    for field in [
+        &mut req.email,
+        &mut req.phone,
+        &mut req.title,
+        &mut req.company,
+        &mut req.gender,
+        &mut req.address_line1,
+        &mut req.address_line2,
+        &mut req.city,
+        &mut req.state,
+        &mut req.postal_code,
+        &mut req.country,
+        &mut req.notes,
+    ] {
+        if let Some(value) = field.as_mut() {
+            *value = crate::security::free_text::strip_nul(value);
+        }
+    }
 
     if req.first_name.is_empty() || req.last_name.is_empty() {
         return Err(AppError::Validation(

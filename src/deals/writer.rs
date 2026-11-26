@@ -988,9 +988,31 @@ fn status_flags(status: Option<&str>) -> Result<Option<(bool, bool)>, AppError> 
 pub async fn upsert(
     state: &AppState,
     tenant_id: Uuid,
-    req: DealUpsert,
+    mut req: DealUpsert,
     actor: &Actor<'_>,
 ) -> Result<UpsertOutcome, AppError> {
+    // FREE-TEXT HYGIENE BEFORE THE WRITE (`security::free_text`). Measured live 2026-11-26:
+    // `POST /api/deals {"title":"D\u0000eal"}` answered 500 "Database error" because the NUL byte
+    // reached the INSERT (Postgres cannot store one in a text column). This is the ONE funnel every
+    // deal door calls (console, machine writers, internal sync), so cleaning here covers them all.
+    if let Some(raw) = req.name.as_deref() {
+        req.name = Some(crate::security::free_text::single_line(
+            raw,
+            "Deal name",
+            255,
+        )?);
+    }
+    for field in [
+        &mut req.contact_name,
+        &mut req.company_name,
+        &mut req.notes,
+        &mut req.source,
+        &mut req.lost_reason,
+    ] {
+        if let Some(value) = field.as_mut() {
+            *value = crate::security::free_text::strip_nul(value);
+        }
+    }
     let external_ref = blank(&req.external_ref);
     if req.external_ref.is_some() && external_ref.is_none() {
         return Err(AppError::Validation(

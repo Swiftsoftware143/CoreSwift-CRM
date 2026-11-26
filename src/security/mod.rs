@@ -1,5 +1,6 @@
 //! Security primitives shared by the request paths that carry a login identity.
 
 pub mod email_addr;
+pub mod free_text;
 pub mod probe_addr;
 pub mod tag_name;

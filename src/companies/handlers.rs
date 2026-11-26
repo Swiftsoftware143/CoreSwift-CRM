@@ -33,11 +33,34 @@ pub async fn list(
 pub async fn create(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
-    Json(req): Json<CreateCompanyRequest>,
+    Json(mut req): Json<CreateCompanyRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    if req.name.is_empty() {
-        return Err(AppError::Validation("Company name is required".to_string()));
+    // FREE-TEXT HYGIENE BEFORE THE WRITE (`security::free_text`). Measured live 2026-11-26 on the
+    // running binary: `POST /api/companies {"name":"Co\u0000one"}` answered
+    // `500 {"code":500,"error":true,"message":"Database error"}` because the NUL byte reached the
+    // INSERT (Postgres cannot store one in a text column). Every optional text field below had the
+    // same hole, so the whole row is cleaned, not just the name.
+    req.name = crate::security::free_text::single_line(&req.name, "Company name", 255)?;
+    for field in [
+        &mut req.domain,
+        &mut req.industry,
+        &mut req.size,
+        &mut req.phone,
+        &mut req.email,
+        &mut req.address_line1,
+        &mut req.address_line2,
+        &mut req.city,
+        &mut req.state,
+        &mut req.postal_code,
+        &mut req.country,
+        &mut req.website,
+        &mut req.notes,
+        &mut req.description,
+    ] {
+        if let Some(value) = field.as_mut() {
+            *value = crate::security::free_text::strip_nul(value);
+        }
     }
     let company = sqlx::query_as::<_, Company>(
         r#"INSERT INTO companies AS co (id, tenant_id, name, domain, industry, size, phone, email,
@@ -94,9 +117,38 @@ pub async fn update(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
-    Json(req): Json<UpdateCompanyRequest>,
+    Json(mut req): Json<UpdateCompanyRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    // Same free-text hygiene as `create` (see `security::free_text`): an edit pasted out of a
+    // spreadsheet put a NUL into the UPDATE and answered 500 with nothing saved.
+    if let Some(raw) = req.name.as_deref() {
+        req.name = Some(crate::security::free_text::single_line(
+            raw,
+            "Company name",
+            255,
+        )?);
+    }
+    for field in [
+        &mut req.domain,
+        &mut req.industry,
+        &mut req.size,
+        &mut req.phone,
+        &mut req.email,
+        &mut req.address_line1,
+        &mut req.address_line2,
+        &mut req.city,
+        &mut req.state,
+        &mut req.postal_code,
+        &mut req.country,
+        &mut req.website,
+        &mut req.notes,
+        &mut req.description,
+    ] {
+        if let Some(value) = field.as_mut() {
+            *value = crate::security::free_text::strip_nul(value);
+        }
+    }
     let company = sqlx::query_as::<_, Company>(
         r#"UPDATE companies AS co SET name = COALESCE($1, name), domain = COALESCE($2, domain),
             industry = COALESCE($3, industry), size = COALESCE($4, size),

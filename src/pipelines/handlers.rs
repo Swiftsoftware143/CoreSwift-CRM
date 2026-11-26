@@ -41,14 +41,14 @@ pub async fn list_pipelines(
 pub async fn create_pipeline(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
-    Json(req): Json<CreatePipelineRequest>,
+    Json(mut req): Json<CreatePipelineRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    if req.name.is_empty() {
-        return Err(AppError::Validation(
-            "Pipeline name is required".to_string(),
-        ));
-    }
+    // FREE-TEXT HYGIENE BEFORE THE WRITE (`security::free_text`). Measured live 2026-11-26:
+    // `POST /api/pipelines {"name":"P\u0000ipe"}` answered 500 "Database error" because the NUL
+    // reached the INSERT; the description had the same hole.
+    req.name = crate::security::free_text::single_line(&req.name, "Pipeline name", 255)?;
+    req.description = crate::security::free_text::nul_free(req.description);
 
     // Usage ceiling (`limit_pipelines`): checked on the route that ADDS a pipeline and nowhere else
     // — its GET/PATCH/DELETE siblings must keep working at the ceiling, or the tenant cannot even
@@ -110,9 +110,18 @@ pub async fn update_pipeline(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
-    Json(req): Json<UpdatePipelineRequest>,
+    Json(mut req): Json<UpdatePipelineRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    // Same hygiene as the create door (see `security::free_text`).
+    if let Some(raw) = req.name.as_deref() {
+        req.name = Some(crate::security::free_text::single_line(
+            raw,
+            "Pipeline name",
+            255,
+        )?);
+    }
+    req.description = crate::security::free_text::nul_free(req.description);
     let pipeline = sqlx::query_as::<_, Pipeline>(
         r#"UPDATE pipelines SET name = COALESCE($1,name), description = COALESCE($2,description),
             is_default = COALESCE($3,is_default), is_active = COALESCE($4,is_active), updated_at = NOW()
