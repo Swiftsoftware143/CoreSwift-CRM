@@ -235,6 +235,24 @@ impl DeliveryOutcome {
         }
     }
 
+    /// Withheld before any provider traffic because the ADDRESS cannot exist at all — an RFC 2606 /
+    /// 6761 reserved name (`example.invalid`, `.test`, `example.com`).
+    ///
+    /// Same row shape as [`Self::unreachable`]: permanent by nature and flagged so
+    /// [`record_attempt`] stores `suppressed` rather than `failed`. A `failed` row would blame a mail
+    /// provider that was never contacted, and would show up in the workspace's own communications log
+    /// as a delivery failure for an address no mail client can ever own.
+    pub fn cannot_exist(reason: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            error: Some(reason.into()),
+            permanent: true,
+            provider: None,
+            provider_message_id: None,
+            suppressed: true,
+        }
+    }
+
     /// Withheld before any provider traffic: the destination cannot receive the message.
     ///
     /// Permanent by nature (no retry can make a fiction-block number deliverable), and flagged so
@@ -560,7 +578,7 @@ pub fn reserved_domain(address: &str) -> Option<String> {
 /// message a customer sees on the row is the message the tests pin down.
 fn refuse_reserved_destination(to: &str) -> Option<DeliveryOutcome> {
     let domain = reserved_domain(to)?;
-    Some(DeliveryOutcome::permanent(format!(
+    Some(DeliveryOutcome::cannot_exist(format!(
         "destination '{to}' cannot exist: '{domain}' is a name reserved by RFC 2606 / RFC 6761 for \
          documentation and tests, so it is unreachable from the internet and no provider can deliver \
          to it. Not dispatched — sending would only produce a bounce against this account."
@@ -2202,6 +2220,10 @@ mod tests {
             let refusal = refuse_reserved_destination(addr)
                 .unwrap_or_else(|| panic!("{addr} must be refused, not dispatched"));
             assert!(refusal.permanent && !refusal.ok, "{addr}");
+            assert!(
+                refusal.suppressed,
+                "{addr} must be recorded `suppressed`, not `failed`: no provider was asked"
+            );
             assert!(
                 refusal.provider.is_none() && refusal.provider_message_id.is_none(),
                 "{addr} must not claim a provider accepted it"
