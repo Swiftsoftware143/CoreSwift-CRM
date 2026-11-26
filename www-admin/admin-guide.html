@@ -254,6 +254,14 @@ screen is <strong>Close my account</strong>. It asks for their password and the 
 only then posts <code>POST /api/auth/close-account</code> (the fleet path <code>/api/v1/auth/close-account</code>
 answers the same handler). Nothing is deleted: the row keeps a <code>closed_at</code> timestamp, so you still
 see the account, its contacts, deals and history in every operator read.</p>
+<p><strong>The fleet-standard address.</strong> Every anonymous sign-in path in this app also answers
+at the prefix the other five apps use: <code>POST /api/v1/auth/login</code> (and <code>/register</code>,
+<code>/refresh</code>, <code>/forgot-password</code>, <code>/reset-password</code>,
+<code>/email-change/confirm</code>) runs the very same handler as its <code>/api/auth/*</code> twin, inside
+the same rate-limit bucket. <code>/api/auth/*</code> stays permanently supported for anything already
+pointed at it; the guarded arms (<code>/me</code>, <code>/invite</code>, <code>/team/*</code>,
+<code>/email-change</code>, <code>/close-account</code>, <code>/erase-data</code>) answer on both prefixes
+and stay closed to an anonymous caller on both.</p>
 <p>What a closure ends: every token minted before it (the account's session line,
 <code>users.sessions_valid_from</code>, is moved one second past the moment of the close), every live API key
 on the account (the rows are kept and marked inactive, so the record is auditable), and every way back in

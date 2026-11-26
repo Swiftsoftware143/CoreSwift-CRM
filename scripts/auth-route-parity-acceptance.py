@@ -32,7 +32,7 @@ import urllib.request
 
 CRED_ENV = "/opt/swift/secure/cred.env"
 VAULT_ENTRY = "coreswift-login-giraudy-capital"
-VAULT_URL = "http://127.0.0.1:8090/vault/" + VAULT_ENTRY
+VAULT_URL = "http://127.0.0.1:8100/vault/" + VAULT_ENTRY
 ORIGIN = "http://127.0.0.1:8084"
 BROWSER_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
