@@ -124,7 +124,7 @@ pub async fn apply_all(pool: &PgPool, cal: &Calendar, contact_id: Uuid, ctx: &Ca
                 if applied.iter().any(|a| a.eq_ignore_ascii_case(&name)) {
                     continue;
                 }
-                match crate::tags::apply_by_name(
+                match crate::tags::apply_or_create_by_name(
                     pool,
                     cal.tenant_id,
                     "contact",

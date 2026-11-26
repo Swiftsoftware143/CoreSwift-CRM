@@ -102,3 +102,45 @@ pub async fn apply_by_name(
     crate::lists::evaluator::refresh_dynamic_lists(db, tenant_id).await;
     Ok(Some(tag_id))
 }
+
+/// Apply a tag by name, CREATING it when the account does not have it yet.
+///
+/// `apply_by_name` refuses a name it cannot find, which is right for a hand-typed name on a booking form
+/// (a typo should not mint a tag) but wrong for a CAPTURE TEMPLATE: `{product} lead` expands to
+/// "Full Takeover lead", and an owner cannot pre-create every product-by-temperature combination that
+/// will ever be sold. The CRM convention is that assigning an unknown tag creates it, and a template
+/// that silently does nothing is the failure David reported: "they will get tagged with the product they
+/// purchase" — which cannot work if the tag has to exist first.
+///
+/// A tag created this way has no category, so it cannot join an exclusive group by accident.
+pub async fn apply_or_create_by_name(
+    db: &sqlx::PgPool,
+    tenant_id: uuid::Uuid,
+    entity_type: &str,
+    entity_id: uuid::Uuid,
+    name: &str,
+    actor: Option<uuid::Uuid>,
+) -> Result<Option<uuid::Uuid>, crate::errors::AppError> {
+    let tag_name = name.trim();
+    if tag_name.is_empty() {
+        return Ok(None);
+    }
+    let existing: Option<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id FROM tags WHERE tenant_id = $1 AND lower(name) = lower($2) LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(tag_name)
+    .fetch_optional(db)
+    .await?;
+    if existing.is_none() {
+        sqlx::query(
+            "INSERT INTO tags (id, tenant_id, name) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(tenant_id)
+        .bind(tag_name)
+        .execute(db)
+        .await?;
+    }
+    apply_by_name(db, tenant_id, entity_type, entity_id, tag_name, actor).await
+}

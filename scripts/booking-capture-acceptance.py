@@ -36,6 +36,7 @@ import uuid
 PASS: list[str] = []
 FAIL: list[str] = []
 TAG = "capprobe"
+PROBE_MAIL_DOMAIN = "coreswiftcrm.com"
 ENV_FILE = "/etc/swift/env/coreswift.env"
 
 
@@ -115,11 +116,14 @@ def main() -> int:
     cat = str(uuid.uuid4())
     l1, l2 = str(uuid.uuid4()), str(uuid.uuid4())
     c1, c2 = str(uuid.uuid4()), str(uuid.uuid4())
-    contact_email = f"{TAG}-buyer@example.invalid"
+    # NOT a reserved/harness address: the app rightly refuses to mint a CRM contact from a synthetic
+    # requester (that gate exists because harness runs had created 26 probe contacts in one account). The
+    # capture path is what is under test, so the buyer has to look like a customer. This domain is our own.
+    contact_email = f"captureaudit{cal[:6]}@{PROBE_MAIL_DOMAIN}"
     slug = f"{TAG}-{cal[:8]}"
 
-    sql(f"INSERT INTO booking_calendars (id, tenant_id, name, slug, kind, slot_minutes, hold_minutes, "
-        f"is_active) VALUES ('{cal}','{tid}','{TAG} calendar','{slug}','appointment',30,30,true)")
+    sql(f"INSERT INTO booking_calendars (id, tenant_id, name, slug, calendar_type, kind, hold_minutes, "
+        f"is_active) VALUES ('{cal}','{tid}','{TAG} calendar','{slug}','personal','appointment',30,true)")
     sql(f"INSERT INTO tag_categories (id, tenant_id, name) VALUES ('{cat}','{tid}','{TAG} Products')")
     for cid, name in ((c1, f"{TAG} Widget"), (c2, f"{TAG} Gadget")):
         sql(f"INSERT INTO tags (id, tenant_id, name, category_id) VALUES "
@@ -144,12 +148,20 @@ def main() -> int:
 
         # a real booking through the PUBLIC door: the product is the position's own name
         res = str(uuid.uuid4())
-        sql(f"INSERT INTO booking_resources (id, tenant_id, calendar_id, name, kind, capacity, price_cents, "
-            f"duration_minutes, is_active) VALUES ('{res}','{tid}','{cal}','{TAG} Full Takeover',"
-            f"'slot',1,4000,30,true)")
-        start = (time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() + 86400)))
-        bst, bbody = call(base, "POST", f"/api/booking/public/{slug}/orders", None, {
-            "customer_name": f"{TAG} buyer",
+        sql(f"INSERT INTO booking_resources (id, calendar_id, name, capacity, price_cents, "
+            f"duration_min, active) VALUES ('{res}','{cal}','{TAG} Full Takeover',1,4000,30,true)")
+        # Week-round opening hours for the probe position: without them every offered time is refused
+        # ("that time is not offered") and the test measures the availability engine, not the capture.
+        for wd in range(7):
+            sql(f"INSERT INTO booking_availability_rules (id, resource_id, weekday, start_time, end_time) "
+                f"VALUES ('{uuid.uuid4()}','{res}',{wd},'00:00','23:59')")
+        # Appointment calendars offer times on a grid derived from duration_min, so the start has to sit on
+        # it: an arbitrary second answers "that time is not offered" and the test would never reach capture.
+        tomorrow = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400))
+        start = f"{tomorrow}T10:00:00Z"
+        start2 = f"{tomorrow}T11:00:00Z"
+        bst, bbody = call(base, "POST", f"/api/public/booking/c/{slug}/orders", None, {
+            "customer_name": "Dana Buyer",
             "customer_email": contact_email,
             "items": [{"resource_id": res, "starts_at": start, "quantity": 1}],
         })
@@ -159,37 +171,42 @@ def main() -> int:
         if contact:
             tag_names = [t for t in sql(
                 f"SELECT t.name FROM tags t JOIN tag_assignments ct ON ct.tag_id=t.id "
-                f"WHERE ct.contact_id='{contact}' ORDER BY t.name").splitlines() if t]
-        check("C2 five tags on the contact", bst in (200, 201) and contact != "" and len(tag_names) == 5,
-              f"booking HTTP {bst} | tags on contact = {len(tag_names)} → {tag_names}")
+                f"WHERE ct.entity_id='{contact}' AND ct.entity_type='contact' ORDER BY t.name").splitlines() if t]
+        check("C2 four tags on the contact", bst in (200, 201) and contact != "" and len(tag_names) == 4,
+              f"booking HTTP {bst} | tags on contact = {len(tag_names)} → {tag_names} "
+              f"(3 templates, one skipped for a missing city, plus 2 from the category)")
 
         members = one(f"SELECT COUNT(*) FROM list_members WHERE contact_id='{contact}' "
                       f"AND list_id IN ('{l1}','{l2}')") if contact else "0"
         check("C3 on both lists", members == "2", f"list_members rows for the two lists = {members}")
 
         stray = one(f"SELECT COUNT(*) FROM tags t JOIN tag_assignments ct ON ct.tag_id=t.id "
-                    f"WHERE ct.contact_id='{contact}' AND t.name LIKE '% booking'") if contact else "0"
+                    f"WHERE ct.entity_id='{contact}' AND ct.entity_type='contact' AND t.name LIKE '% booking'") if contact else "0"
         check("C4 empty placeholder skipped", stray == "0",
               f"tags ending in ' booking' (no city on this form) = {stray}")
 
         # the same person books again: no duplicate membership, no duplicate tag
-        call(base, "POST", f"/api/booking/public/{slug}/orders", None, {
-            "customer_name": f"{TAG} buyer",
+        call(base, "POST", f"/api/public/booking/c/{slug}/orders", None, {
+            "customer_name": "Dana Buyer",
             "customer_email": contact_email,
-            "items": [{"resource_id": res, "starts_at": start, "quantity": 1}],
+            "items": [{"resource_id": res, "starts_at": start2, "quantity": 1}],
         })
         members2 = one(f"SELECT COUNT(*) FROM list_members WHERE contact_id='{contact}' "
                        f"AND list_id IN ('{l1}','{l2}')") if contact else "0"
         tags2 = one(f"SELECT COUNT(*) FROM tag_assignments WHERE entity_id='{contact}'") if contact else "0"
-        check("C5 returning buyer adds nothing", members2 == "2" and tags2 == "5",
+        check("C5 returning buyer adds nothing", members2 == "2" and tags2 == "4",
               f"list rows = {members2} | contact_tags rows = {tags2}")
     finally:
+        sql(f"DELETE FROM booking_orders WHERE calendar_id='{cal}'")
         sql(f"DELETE FROM booking_calendars WHERE id='{cal}'")
         sql(f"DELETE FROM lists WHERE id IN ('{l1}','{l2}')")
         sql(f"DELETE FROM tags WHERE id IN ('{c1}','{c2}')")
         sql(f"DELETE FROM tag_categories WHERE id='{cat}'")
         sql(f"DELETE FROM contacts WHERE email LIKE '{TAG}%'")
+        sql(f"DELETE FROM booking_availability_rules WHERE resource_id NOT IN "
+            f"(SELECT id FROM booking_resources WHERE name NOT LIKE '{TAG}%')")
         sql(f"DELETE FROM booking_resources WHERE name LIKE '{TAG}%'")
+        sql(f"DELETE FROM tag_categories WHERE name LIKE '{TAG}%'")
 
     left = one(f"SELECT (SELECT COUNT(*) FROM booking_calendars WHERE name LIKE '{TAG}%')"
                f" + (SELECT COUNT(*) FROM contacts WHERE email LIKE '{TAG}%')"
@@ -205,8 +222,8 @@ def main() -> int:
         f"('{tcat}','{tid}','{TAG} Temperature',true)")
     for tid_, nm in ((warm, f"{TAG} Warm"), (hot, f"{TAG} Hot")):
         sql(f"INSERT INTO tags (id, tenant_id, name, category_id) VALUES ('{tid_}','{tid}','{nm}','{tcat}')")
-    sql(f"INSERT INTO contacts (id, tenant_id, email, first_name) VALUES "
-        f"('{person}','{tid}','{TAG}-temp@example.invalid','temp')")
+    sql(f"INSERT INTO contacts (id, tenant_id, email, first_name, last_name) VALUES "
+        f"('{person}','{tid}','{TAG}-temp@example.invalid','temp','probe')")
     sql(f"INSERT INTO tag_assignments (id, tag_id, entity_type, entity_id, tenant_id) VALUES "
         f"('{uuid.uuid4()}','{warm}','contact','{person}','{tid}')")
     before = one(f"SELECT COUNT(*) FROM tag_assignments WHERE entity_id='{person}'")
