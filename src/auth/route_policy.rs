@@ -1748,8 +1748,8 @@ mod tests {
     /// `agent_api::router`. It shares the action agent's `/api/agent` prefix: main.rs MERGES the two
     /// routers into one nest, and `NESTS` carries a row for each half, so the merged half is counted
     /// rather than invisible. Every leaf is on `/api**`, so the 14 root-level mounts are unchanged.
-    /// 576 mounted / 562 on /api** — the contact custom-field manager (three paths), the operator's
-    /// cancel-by-booking-id, and the booking sponsor flow added eight leaves after the last census.
+    /// 576 mounted / 562 on /api**. The eight leaves this move covered were: the contact custom-field
+    /// manager (three paths), the operator's cancel-by-booking-id, and the booking sponsor flow.
     /// wildcard on 2026-11-25, so twelve routes left the census.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
@@ -1758,8 +1758,10 @@ mod tests {
         assert_eq!(
             mounted.len(),
             576,
-            "mounted route count moved — update the census in the module docs \
-             (regenerate: python3 scripts/route-census.py)"
+            "mounted route count moved — update the census in the module docs.\
+             The number to pin is the one THIS assertion reports as `left`: mounted_routes() walks the \
+             router itself. scripts/route-census.py is a partial PARSER and a LOWER BOUND (it missed 23 \
+             mounts on 2026-11-25); never pin its total."
         );
         assert_eq!(
             api, 562,
