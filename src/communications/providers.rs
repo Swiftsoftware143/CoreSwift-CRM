@@ -179,6 +179,13 @@ pub fn pick_byok(
     settings.or(private_email)
 }
 
+/// How long a paused deployment parks a queued message before the worker looks at it again.
+///
+/// The worker re-defers on every tick, so this is a poll interval, not a deadline: nothing is lost
+/// however long the pause lasts. Thirty minutes is short enough that a spot pause lifted at 09:00
+/// resumes by 09:30 and long enough to keep a week-long stop from rewriting the queue every minute.
+pub const PAUSE_DEFER_MINUTES: i64 = 30;
+
 /// Result of ONE delivery attempt.
 ///
 /// `permanent` is the difference between "retrying cannot help" (missing/bad credentials, a
@@ -197,6 +204,13 @@ pub struct DeliveryOutcome {
     /// a NANP fiction-block number (2026-11-22). Its own flag, because a `failed` row would blame a
     /// carrier that was never contacted.
     pub suppressed: bool,
+    /// Refused because the WHOLE DEPLOYMENT's mailer is stopped (`EMAIL_SENDING_PAUSED`).
+    ///
+    /// Not a failure: nothing was attempted and nothing is wrong with the message or the address.
+    /// [`record_attempt`] therefore puts the row back in the queue with a later `scheduled_at`
+    /// rather than burning it as `failed`, so the mail resumes by itself the moment the pause is
+    /// lifted and a customer's notification is never destroyed by an operator's safety stop.
+    pub paused: bool,
 }
 
 impl DeliveryOutcome {
@@ -208,6 +222,7 @@ impl DeliveryOutcome {
             provider: Some(provider.to_string()),
             provider_message_id,
             suppressed: false,
+            paused: false,
         }
     }
 
@@ -220,6 +235,7 @@ impl DeliveryOutcome {
             provider: None,
             provider_message_id: None,
             suppressed: false,
+            paused: false,
         }
     }
 
@@ -232,6 +248,7 @@ impl DeliveryOutcome {
             provider: None,
             provider_message_id: None,
             suppressed: false,
+            paused: false,
         }
     }
 
@@ -250,6 +267,7 @@ impl DeliveryOutcome {
             provider: None,
             provider_message_id: None,
             suppressed: true,
+            paused: false,
         }
     }
 
@@ -265,6 +283,24 @@ impl DeliveryOutcome {
             provider: None,
             provider_message_id: None,
             suppressed: true,
+            paused: false,
+        }
+    }
+
+    /// Withheld because this deployment's mailer is STOPPED, not because anything is wrong.
+    ///
+    /// Unlike a permanent failure, nothing is lost: [`record_attempt`] leaves the row `queued` and
+    /// pushes `scheduled_at` forward WITHOUT consuming `retry_count`, so the message waits out the
+    /// pause and goes out by itself when the switch is turned back off (2026-11-26).
+    pub fn paused_until_lifted(msg: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            error: Some(msg.into()),
+            permanent: false,
+            provider: None,
+            provider_message_id: None,
+            suppressed: false,
+            paused: true,
         }
     }
 }
@@ -821,9 +857,14 @@ async fn deliver_via_mailgun(
             to = %cfg.to,
             "SENDING PAUSED by EMAIL_SENDING_PAUSED — this message was refused, not attempted"
         );
-        // A PERMANENT refusal on purpose: a paused send is not something to retry, and an error would send
-        // the queue into a retry storm against a provider we are trying to stop talking to.
-        return DeliveryOutcome::permanent(
+        // DEFERRED, NOT DESTROYED (2026-11-26). This used to be a PERMANENT refusal, which kept the
+        // queue from retry-storming a provider we are trying to stop talking to — but it also burned
+        // every queued message as `failed` for ever. Measured: the owner's 2026-11-20 bounce-rate stop
+        // destroyed real customer notifications (`A promised deadline was missed`, `A ticket you own
+        // is close to its deadline`) that were already in the queue. A pause is temporary by
+        // definition, so the row now waits it out (see `record_attempt`) and the retry budget is not
+        // consumed either: no provider traffic, no lost mail.
+        return DeliveryOutcome::paused_until_lifted(
             "Sending is paused for this deployment (EMAIL_SENDING_PAUSED): no mail leaves until it is \
              switched off.",
         );
@@ -1720,6 +1761,11 @@ pub enum AttemptRecord {
     Failed {
         attempts: i32,
     },
+    /// The deployment's mailer is stopped — the row stays queued, the pause is waited out, and no
+    /// attempt is counted against `retry_count`.
+    Deferred {
+        resume_at: chrono::DateTime<chrono::Utc>,
+    },
     /// Transient failure — requeued with backoff.
     Retrying {
         attempt: i32,
@@ -1796,6 +1842,30 @@ pub async fn record_attempt(
         .await?;
         tracing::info!(msg = %msg_id, error = %err, "outbound message withheld: the destination cannot receive it");
         return Ok(AttemptRecord::Suppressed { attempts });
+    }
+
+    // PAUSED IS NOT FAILED (2026-11-26). Checked BEFORE the permanent/transient policy so a stop
+    // can never consume an attempt or a message. The row keeps `status='queued'`, gets a later
+    // `scheduled_at`, and its `retry_count` is untouched — so a 5-day pause costs a customer
+    // nothing and the worker simply does not see the row until the pause is lifted.
+    if outcome.paused {
+        let resume_at = chrono::Utc::now() + chrono::Duration::minutes(PAUSE_DEFER_MINUTES);
+        sqlx::query(
+            "UPDATE outbound_messages
+                SET status = 'queued', error_message = $2, scheduled_at = $3
+              WHERE id = $1",
+        )
+        .bind(msg_id)
+        .bind(format!("deferred: {err}"))
+        .bind(resume_at)
+        .execute(db)
+        .await?;
+        tracing::info!(
+            msg = %msg_id,
+            resume_at = %resume_at,
+            "outbound message DEFERRED: this deployment's mailer is paused; the row stays queued and no attempt was counted"
+        );
+        return Ok(AttemptRecord::Deferred { resume_at });
     }
 
     if outcome.permanent || attempts >= max_retries {
