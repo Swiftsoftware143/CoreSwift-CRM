@@ -1046,6 +1046,50 @@ function logout(silent) {
   if (!silent) toast('Signed out', 'info');
 }
 
+// ── SESSION RECONCILE ON BOOT (cron 2026-11-26) ────────────────────────────────────────────────
+// `crm_user` is a CACHE of who the server said this person was at their last sign-in. Roles, the
+// platform-admin flag, the display name and the avatar are all decided server-side and can change
+// afterwards, and every reload used to re-read the same stale copy: measured 2026-11-26, a user
+// granted platform admin (users.is_platform_admin=true) reloaded the console and saw NO ADMIN menu,
+// because the stored blob still said platform_admin:false — the menu only came back after a fresh
+// sign-in. Ask the server once per boot and repaint when the answer differs. Best-effort by
+// design: a transient failure keeps the cached session, and only a 401 (a genuinely dead token)
+// ends it — this call must never be able to block a working console.
+async function reconcileSession() {
+  if (!STATE.token) return;
+  try {
+    const res = await fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + STATE.token } });
+    if (res.status === 401) { logout(true); return; }
+    if (!res.ok) return;
+    const d = await res.json();
+    const m = d.team_member || d.user || d.account || null;
+    if (!m) return;
+    const before = JSON.stringify(STATE.user);
+    const next = Object.assign({}, STATE.user, {
+      email: m.email != null ? m.email : STATE.user.email,
+      name: (m.name != null && m.name !== '') ? m.name : STATE.user.name,
+      role: m.role != null ? m.role : STATE.user.role,
+      company: m.company !== undefined ? m.company : STATE.user.company,
+      avatar_url: m.avatar_url !== undefined ? m.avatar_url : STATE.user.avatar_url,
+      username: m.username !== undefined ? m.username : STATE.user.username
+    });
+    // The platform flag is authoritative from the TOP of the payload (resolved from the database by
+    // the token subject), and falls back to the team_member copy only if the top field is absent.
+    if (typeof d.platform_admin === 'boolean') next.platform_admin = d.platform_admin;
+    else if (m.platform_admin !== undefined) next.platform_admin = m.platform_admin;
+    if (d.account_id) next.account_id = d.account_id;
+    else if (m.account_id) next.account_id = m.account_id;
+    STATE.user = next;
+    if (JSON.stringify(STATE.user) !== before) {
+      try { localStorage.setItem('crm_user', JSON.stringify(STATE.user)); } catch (_) {}
+      window.CS_ACCOUNT_ADMIN = ['owner','account_owner','admin','agency_admin'].indexOf(STATE.user.role) >= 0;
+      paintAvatar();
+      if (typeof renderSidebar === 'function') renderSidebar();
+      if (typeof checkPlan === 'function') checkPlan();
+    }
+  } catch (_) { /* a failed reconcile must never break the console */ }
+}
+
 function showApp() {
   document.getElementById('loginScreen').style.display = 'none';
   // NOTE: #appWrap ships with class="hidden" and the stylesheet has
@@ -7022,6 +7066,7 @@ window.addEventListener('DOMContentLoaded', () => {
       STATE.token = token;
       STATE.user = JSON.parse(userStr);
       showApp();
+      reconcileSession();
     } catch(e) {
       logout(true);
     }
