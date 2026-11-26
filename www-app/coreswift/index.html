@@ -9752,7 +9752,9 @@ async function loadTagsTab() {
             fh(c.name),
             '<span class="badge" style="background:' + (c.color || 'var(--accent-subtle)') + ';color:#fff">' + fh(c.color) + '</span>',
             c.created_at ? new Date(c.created_at).toLocaleDateString() : '—',
-            '<button class="btn btn-ghost btn-xs" onclick="tgDeleteCategory(\'' + c.id + '\')">Delete</button>'
+            '<button class="btn btn-ghost btn-xs" onclick="tgToggleExclusive(\'' + c.id + '\',' + (c.is_exclusive ? 'false' : 'true') + ')">'
+            + (c.is_exclusive ? 'Allow several' : 'Only one at a time') + '</button>' +
+          '<button class="btn btn-ghost btn-xs" onclick="tgDeleteCategory(\'' + c.id + '\')">Delete</button>'
           ];
         }), 'No categories yet — create one to group your tags.'), '');
     h += '<br>' + card('Tags (' + tags.length + ')',
@@ -9769,7 +9771,13 @@ async function loadTagsTab() {
 function tgNewCategory() {
   showModal('New Tag Category',
     '<div class="form-group"><label>Name</label><input type="text" id="tgCatName"></div>' +
-    '<div class="form-group"><label>Colour</label><input type="text" id="tgCatColor" value="#6366f1"></div>',
+    '<div class="form-group"><label>Colour</label><input type="text" id="tgCatColor" value="#6366f1"></div>' +
+    '<div class="form-group"><label style="display:flex;gap:8px;align-items:flex-start">' +
+      '<input type="checkbox" id="tgCatExclusive" style="margin-top:3px">' +
+      '<span><strong>Only one tag from this category at a time</strong>' +
+      '<br><span class="config-desc">For a lead temperature: a contact is Hot <em>or</em> Warm <em>or</em> Cold. ' +
+      'When a new one is applied the old one is removed, after the new one is in place, so nobody is ever left ' +
+      'with no temperature.</span></span></label></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
     '<button class="btn btn-primary" onclick="tgCreateCategory()">Create</button>');
 }
@@ -9777,9 +9785,20 @@ async function tgCreateCategory() {
   const name = (document.getElementById('tgCatName').value || '').trim();
   if (!name) { toast('Category name is required', 'error'); return; }
   try {
-    await API.post('/tags/categories', { name: name, color: (document.getElementById('tgCatColor').value || '').trim() || null });
+    const exclusiveEl = document.getElementById('tgCatExclusive');
+    await API.post('/tags/categories', { name: name,
+      color: (document.getElementById('tgCatColor').value || '').trim() || null,
+      is_exclusive: !!(exclusiveEl && exclusiveEl.checked) });
     closeModal(); toast('Category created', 'success'); loadTagsTab();
   } catch (e) { toast('Create failed: ' + e.message, 'error'); }
+}
+function tgToggleExclusive(id, on) {
+  API.patch('/tags/categories/' + id, { is_exclusive: on })
+    .then(function () {
+      toast(on ? 'One tag at a time from now on.' : 'Several tags from this category allowed.', 'success');
+      loadTagsTab();
+    })
+    .catch(function (e) { toast('Could not change: ' + e.message, 'error'); });
 }
 function tgDeleteCategory(id) {
   confirmThen('Delete this category? Tags keep their name but lose the grouping.', function () {

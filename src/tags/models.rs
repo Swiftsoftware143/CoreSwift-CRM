@@ -55,11 +55,16 @@ pub struct TagAssignment {
 pub struct CreateCategoryRequest {
     pub name: String,
     pub color: Option<String>,
+    /// True = one tag from this category per contact (Hot OR Warm OR Cold). Assigning a second one
+    /// removes the first — enforced by a database trigger, so every writer obeys it.
+    #[serde(default)]
+    pub is_exclusive: bool,
 }
 #[derive(Debug, Deserialize)]
 pub struct UpdateCategoryRequest {
     pub name: Option<String>,
     pub color: Option<String>,
+    pub is_exclusive: Option<bool>,
 }
 #[derive(Debug, Deserialize)]
 pub struct CreateTagRequest {

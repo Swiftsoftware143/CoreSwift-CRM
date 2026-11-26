@@ -44,12 +44,13 @@ pub async fn create_category(
         _ => None,
     };
     let cat = sqlx::query_as::<_, TagCategory>(
-        "INSERT INTO tag_categories(id,tenant_id,name,color) VALUES($1,$2,$3,$4) RETURNING *",
+        "INSERT INTO tag_categories(id,tenant_id,name,color,is_exclusive) VALUES($1,$2,$3,$4,$5) RETURNING *",
     )
     .bind(Uuid::new_v4())
     .bind(t)
     .bind(&name)
     .bind(&color)
+    .bind(r.is_exclusive)
     .fetch_one(&s.db)
     .await
     .map_err(|e| {
@@ -81,8 +82,8 @@ pub async fn update_category(
         }
         _ => None,
     };
-    Ok(Json(json!(sqlx::query_as::<_,TagCategory>("UPDATE tag_categories SET name=COALESCE($1,name), color=COALESCE($2,color) WHERE id=$3 AND tenant_id=$4 RETURNING *")
-        .bind(&name).bind(&color).bind(id).bind(t).fetch_optional(&s.db).await.map_err(|e| {
+    Ok(Json(json!(sqlx::query_as::<_,TagCategory>("UPDATE tag_categories SET name=COALESCE($1,name), color=COALESCE($2,color), is_exclusive=COALESCE($5,is_exclusive) WHERE id=$3 AND tenant_id=$4 RETURNING *")
+        .bind(&name).bind(&color).bind(id).bind(t).bind(r.is_exclusive).fetch_optional(&s.db).await.map_err(|e| {
             // 086 added idx_tag_categories_name_tenant, so renaming a category onto an existing
             // name in the same tenant is now a real violation on this path too.
             if let sqlx::Error::Database(ref d) = e {
