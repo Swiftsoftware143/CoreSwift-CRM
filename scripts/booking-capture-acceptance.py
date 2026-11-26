@@ -200,12 +200,16 @@ def main() -> int:
         sql(f"DELETE FROM booking_orders WHERE calendar_id='{cal}'")
         sql(f"DELETE FROM booking_calendars WHERE id='{cal}'")
         sql(f"DELETE FROM lists WHERE id IN ('{l1}','{l2}')")
-        sql(f"DELETE FROM tags WHERE id IN ('{c1}','{c2}')")
+        sql(f"DELETE FROM tag_assignments WHERE tag_id IN "
+            f"(SELECT id FROM tags WHERE name LIKE '{TAG}%')")
+        sql(f"DELETE FROM tags WHERE name LIKE '{TAG}%'")
         sql(f"DELETE FROM tag_categories WHERE id='{cat}'")
         sql(f"DELETE FROM contacts WHERE email LIKE '{TAG}%'")
         sql(f"DELETE FROM booking_availability_rules WHERE resource_id NOT IN "
             f"(SELECT id FROM booking_resources WHERE name NOT LIKE '{TAG}%')")
         sql(f"DELETE FROM booking_resources WHERE name LIKE '{TAG}%'")
+        # capture CREATES the tags it expands to, so their assignments must go before the tags themselves
+        sql(f"DELETE FROM tag_assignments WHERE tag_id IN (SELECT id FROM tags WHERE name LIKE '{TAG}%')")
         sql(f"DELETE FROM tag_categories WHERE name LIKE '{TAG}%'")
 
     left = one(f"SELECT (SELECT COUNT(*) FROM booking_calendars WHERE name LIKE '{TAG}%')"
