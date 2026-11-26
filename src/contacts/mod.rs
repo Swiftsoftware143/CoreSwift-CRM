@@ -59,6 +59,11 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/custom-fields/:id",
             axum::routing::patch(fields::update_field).delete(fields::retire_field),
         )
+        // A contact's own values: GET returns FILLED ONLY (what a card renders), PUT sets or clears them.
+        .route(
+            "/:id/fields",
+            axum::routing::get(fields::get_values).put(fields::set_values),
+        )
         .route("/:id", axum::routing::get(handlers::get))
         // The contact's message timeline. Lives under the contacts path because that is the address a
         // reader expects, but the reader itself belongs to communications (it owns the messages table).
