@@ -723,10 +723,46 @@ pub async fn list_orders(
     State(pool): State<PgPool>,
     Extension(t): Extension<TenantId>,
     Path(id): Path<Uuid>,
-) -> Result<Json<Vec<Order>>> {
+) -> Result<Json<Vec<Value>>> {
     let mut c = pool.acquire().await?;
     service::calendar_for_tenant(&mut c, id, t.0).await?;
-    Ok(Json(service::list_orders(&mut c, id).await?))
+    // EVERY ORDER SAYS WHAT IT DID TO THE CRM (David, 2026-11-26: "if one of the CEOs does a test that's
+    // what should happen so we know that it's working"). A test booking on a reserved address is
+    // deliberately NOT allowed to mint a contact, and until now that looked identical to a broken
+    // capture. So each order carries its own verdict: captured, or the reason it was not.
+    let orders = service::list_orders(&mut c, id).await?;
+    let out: Vec<Value> = orders
+        .into_iter()
+        .map(|o| {
+            let mut v = serde_json::to_value(&o).unwrap_or(Value::Null);
+            let capture = match o.contact_id {
+                Some(cid) => json!({"captured": true, "contact_id": cid, "reason": Value::Null}),
+                None => {
+                    let reason = crate::security::probe_addr::synthetic_requester(
+                        &o.customer_email,
+                        &o.customer_name,
+                    )
+                    .map(|d| {
+                        format!(
+                            "no contact: this buyer address is a synthetic test identity ({d}), and a \
+                             test must not invent a customer"
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        "no contact: this order predates contact capture or was created by an \
+                         operator without a contact"
+                            .to_string()
+                    });
+                    json!({"captured": false, "contact_id": Value::Null, "reason": reason})
+                }
+            };
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("capture".to_string(), capture);
+            }
+            v
+        })
+        .collect();
+    Ok(Json(out))
 }
 
 pub async fn admin_get_order(

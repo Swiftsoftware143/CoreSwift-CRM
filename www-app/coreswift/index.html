@@ -16045,10 +16045,21 @@ async function bkLoadOrders() {
     const res = await bkCall('GET', '/calendars/' + BK.current + '/orders');
     const rows = (res && res.orders) ? res.orders : (Array.isArray(res) ? res : []);
     if (!rows.length) { el.innerHTML = '<p class="muted">No orders yet.</p>'; return; }
-    el.innerHTML = '<table class="table"><thead><tr><th>Customer</th><th>Total</th><th>Booking</th><th>Payment</th><th>Came from</th><th>When</th><th></th></tr></thead><tbody>' +
+    el.innerHTML = '<table class="table"><thead><tr><th>Customer</th><th>CRM contact</th><th>Total</th><th>Booking</th><th>Payment</th><th>Came from</th><th>When</th><th></th></tr></thead><tbody>' +
       rows.map(function (o) {
         const live = o.status === 'pending';
-        return '<tr><td>' + escapeHtml(o.customer_name || '') + '<div class="muted" style="font-size:12px">' + escapeHtml(o.customer_email || '') + '</div></td>' +
+        // DID THIS ORDER MAKE A CONTACT? (David, 2026-11-26) A test booking on a reserved address is
+        // deliberately not allowed to mint a customer, and that used to look exactly like a broken
+        // capture. The API answers the question per order; the screen repeats its sentence.
+        const cap = o.capture || {};
+        const capCell = cap.captured
+          ? '<span class="badge badge-success">created</span>'
+          : '<span class="badge badge-muted" title="' + escapeHtml(cap.reason || '') + '">none</span>'
+            + (cap.reason ? '<div class="muted" style="font-size:11px;max-width:230px">' + escapeHtml(cap.reason) + '</div>' : '');
+        return '<tr><td>' + escapeHtml(o.customer_name || '') +
+          '<div class="muted" style="font-size:12px">' + escapeHtml(o.customer_email || '') + '</div></td>' +
+          '<td>' + capCell + '</td>' +
+          
           '<td>' + bkMoney(o.total_cents) + '</td>' +
           '<td><span class="badge">' + escapeHtml(o.status) + '</span></td>' +
           // paid / unpaid, in plain words. Internal only: a sponsor is told "booked", never "purchased".
