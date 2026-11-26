@@ -640,6 +640,39 @@ pub async fn deliver(db: &sqlx::PgPool, cfg: &DeliveryConfig, mail_class: &str) 
         };
     }
 
+    // ── THE MAIL STOP ─────────────────────────────────────────────────────────────────────────────────
+    // Set `EMAIL_SENDING_PAUSED=1` and NOTHING sends, on ANY transport, until it is removed.
+    //
+    // MEASURED 2026-11-26: this check used to live inside `deliver_via_mailgun` under a comment
+    // claiming it was "the one place every send reaches". It was not. `deliver_via_smtp` (the
+    // SMTP.com vendor API) and `deliver_via_own_smtp` (the customer's own mail server) sit beside it
+    // in the same match below and never read the switch — so an operator who stopped mail after a
+    // bounce-rate alarm kept mailing every workspace on those two transports, from the one screen
+    // that promised the opposite. It now sits ahead of the provider choice and ahead of the
+    // compliance gate, so a pause costs no quota, writes no delivery attempt and cannot be
+    // transport-dependent.
+    //
+    // Measured 2026-11-20 (owner's Mailgun dashboard read 37.02% bounces over 30 days): the answer to
+    // "stop all mail" cannot be a code change per feature while mail is already going out.
+    //
+    // DEFERRED, NOT DESTROYED (2026-11-26). This used to be a PERMANENT refusal, which kept the
+    // queue from retry-storming a provider we are trying to stop talking to — but it also burned
+    // every queued message as `failed` for ever. Measured: the owner's 2026-11-20 stop destroyed real
+    // customer notifications (`A promised deadline was missed`, `A ticket you own is close to its
+    // deadline`) that were already in the queue. A pause is temporary by definition, so the row now
+    // waits it out (see `record_attempt`) and the retry budget is not consumed either: no provider
+    // traffic, no lost mail.
+    if mail_sending_paused() {
+        tracing::warn!(
+            to = %cfg.to,
+            "SENDING PAUSED by EMAIL_SENDING_PAUSED — this message was refused, not attempted"
+        );
+        return DeliveryOutcome::paused_until_lifted(
+            "Sending is paused for this deployment (EMAIL_SENDING_PAUSED): no mail leaves until it is \
+             switched off.",
+        );
+    }
+
     let gate = crate::mail_compliance::gate(db, cfg.tenant_id, &cfg.to, mail_class).await;
     if let Some(reason) = gate.blocked.as_deref() {
         tracing::info!(
@@ -841,34 +874,6 @@ async fn deliver_via_mailgun(
         .mailgun_domain
         .clone()
         .unwrap_or_else(|| url.split("/v3/").nth(1).unwrap_or("").to_string());
-
-    // ── THE MAIL STOP ─────────────────────────────────────────────────────────────────────────────────
-    // Set `EMAIL_SENDING_PAUSED=1` and NOTHING sends, from any path, until it is removed. This is the
-    // one place every send reaches, which is why the switch lives here rather than in each caller: a
-    // bounce-rate emergency has to be stoppable in one move, not by finding every feature that mails.
-    //
-    // Measured 2026-11-20 (owner's Mailgun dashboard read 37.02% bounces over 30 days): the answer to
-    // "stop all mail" cannot be a code change per feature while mail is already going out.
-    //
-    // It returns Ok and records the refusal instead of erroring, deliberately: an error sends the
-    // queue into retry storms, and a paused send is not a failure the sender should keep retrying.
-    if mail_sending_paused() {
-        tracing::warn!(
-            to = %cfg.to,
-            "SENDING PAUSED by EMAIL_SENDING_PAUSED — this message was refused, not attempted"
-        );
-        // DEFERRED, NOT DESTROYED (2026-11-26). This used to be a PERMANENT refusal, which kept the
-        // queue from retry-storming a provider we are trying to stop talking to — but it also burned
-        // every queued message as `failed` for ever. Measured: the owner's 2026-11-20 bounce-rate stop
-        // destroyed real customer notifications (`A promised deadline was missed`, `A ticket you own
-        // is close to its deadline`) that were already in the queue. A pause is temporary by
-        // definition, so the row now waits it out (see `record_attempt`) and the retry budget is not
-        // consumed either: no provider traffic, no lost mail.
-        return DeliveryOutcome::paused_until_lifted(
-            "Sending is paused for this deployment (EMAIL_SENDING_PAUSED): no mail leaves until it is \
-             switched off.",
-        );
-    }
 
     // On the platform transport `from_email` is already EMAIL_FROM (set in load_delivery_config);
     // the tenant's own identity rides along as Reply-To so replies still reach the workspace.
