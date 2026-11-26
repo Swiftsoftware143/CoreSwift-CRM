@@ -343,7 +343,10 @@ fn register_api_tool(reg: Registry, state: &AppState, allow_delete: bool) -> Reg
                       {field, operator, value} where field is one of tag, score, contact_field, \
                       deal_source, deal_stage, deal_date - contact_field carries \
                       {column: city|state|country|job_title|title|company|source|score_category|gender, \
-                      equals: \"value\"} with operator equals or contains), \"tags/assign\", \
+                      equals: \"value\"} with operator equals or contains), and TAGS THEMSELVES - \"POST \"tags\" {name, color?} CREATES a tag (this path, not a separate tool), PATCH \"tags/<id>\" renames, GET \"tags\" lists,\
+                      \"tags/assign\" puts one on an entity, \"tags/assign/<id>\" takes it off.\
+                      DELETES are a person's act in the console, not a key's: a removing call is\
+                      refused here unless this key's class allows it, so never report a delete as available), \
                       \"pipelines\"; CALENDAR \"booking/calendars\", \"booking/calendars/summary\", \
                       \"booking/calendars/<id>\", \"booking/calendars/<id>/resources\", \
                       \"booking/resources/<id>/slots/generate\", \"booking/calendars/<id>/orders\", \
