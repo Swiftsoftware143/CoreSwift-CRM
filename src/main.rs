@@ -503,21 +503,20 @@ async fn main() -> anyhow::Result<()> {
         .nest_service("/", ServeDir::new("public"))
         // Auth routes (public group + auth-middleware-guarded /invite & /me/usage)
         .nest("/api/auth", auth::router(state.clone()))
-        // FLEET-CONTRACT ALIAS for the close door (kanban t_ae02611a). Every sibling app serves
-        // `POST /api/v1/auth/close-account`; this app's customer auth lives at `/api/auth/*` (there
-        // is no /api/v1 auth tree), so ONE extra mount keeps the documented fleet path answering
-        // here. SAME handler and SAME middleware as the app-native `/api/auth/close-account`, which
-        // is what the console calls: private by default (it appears on no allowlist, so the
-        // credential boundary refuses an anonymous caller before the handler runs).
-        .route(
-            "/api/v1/auth/close-account",
-            axum::routing::post(crate::auth::handlers::close_account).layer(
-                axum::middleware::from_fn_with_state(
-                    state.clone(),
-                    crate::auth::middleware::auth_middleware,
-                ),
-            ),
-        )
+        // THE FLEET-STANDARD AUTH TREE (David, 2026-11-26). The other five apps answer
+        // `/api/v1/auth/*`; this app's customer auth was born at `/api/auth/*`. The SAME router is
+        // mounted a SECOND time here — one implementation, two prefixes, no forked handler — so
+        // `POST /api/v1/auth/login` (and register / refresh / forgot-password / reset-password /
+        // email-change/confirm / ...) answers exactly as its `/api/auth/*` twin, inside the same
+        // `auth::router` rate-limit and body-deadline layers. `/api/auth/*` STAYS as a permanent
+        // alias: 22 files call it, including the served customer login pages
+        // (`nginx/www/coreswift/login.html`, `www-app/coreswift/index.html`) and the admin console,
+        // and removing it would break the console and the signup funnel for no gain.
+        // This supersedes the single `close-account` fleet alias (kanban t_ae02611a): the whole
+        // GUARDED group now answers on both prefixes, so the credential boundary refuses an
+        // anonymous caller at `/api/v1/auth/close-account` exactly as it did before (it is on no
+        // allowlist).
+        .nest("/api/v1/auth", auth::router(state.clone()))
         // Protected routes
         .nest("/api/account", account::router(state.clone()))
         // Where an owner's own addresses send a visitor (2026-11-25).
