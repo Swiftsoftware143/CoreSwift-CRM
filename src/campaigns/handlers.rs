@@ -67,16 +67,38 @@ pub async fn list(
 }
 
 /// POST /api/campaigns — Create a campaign
+/// Drop the NUL byte from every free-text field of a step.
+///
+/// Postgres cannot store a NUL in a text column, so one invisible byte pasted into a subject or a
+/// body answered `500 Database error` for the whole campaign — measured live 2026-11-26 on the
+/// running binary: `POST /api/campaigns {"name":"C\\u0000amp"}` answered 500 while the sibling
+/// doors (contacts, companies, lists, pipelines, deals, tags) refused or stripped the same byte.
+/// A NUL is invisible, so it is dropped rather than refused: refusing it gives the operator an
+/// error they cannot act on.
+fn clean_step(step: &mut StepDefinition) {
+    step.template_name = crate::security::free_text::strip_nul(&step.template_name);
+    if let Some(subject) = step.subject.as_mut() {
+        *subject = crate::security::free_text::strip_nul(subject);
+    }
+    step.body = crate::security::free_text::strip_nul(&step.body);
+}
+
 pub async fn create(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
-    Json(r): Json<CreateCampaignRequest>,
+    Json(mut r): Json<CreateCampaignRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = parse_tenant(&c)?;
     let uid = parse_user(&c);
 
-    if r.name.is_empty() {
-        return Err(AppError::Validation("name is required".into()));
+    // A campaign name is a single line rendered in a list row and a document title: NUL stripped,
+    // blank refused, other control characters refused BY NAME rather than surfacing as a raw 500.
+    r.name = crate::security::free_text::single_line(&r.name, "Campaign name", 200)?;
+    r.description = crate::security::free_text::nul_free(r.description);
+    if let Some(steps) = r.steps.as_mut() {
+        for step in steps.iter_mut() {
+            clean_step(step);
+        }
     }
 
     // `tags.name` is `varchar(100)` and this value is CALLER-SUPPLIED, so before this guard an
@@ -213,9 +235,19 @@ pub async fn update(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
     Path(id): Path<Uuid>,
-    Json(r): Json<UpdateCampaignRequest>,
+    Json(mut r): Json<UpdateCampaignRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = parse_tenant(&c)?;
+
+    // Same hygiene as `create`: a rename must not be the way a NUL reaches the column.
+    if let Some(raw) = r.name.clone() {
+        r.name = Some(crate::security::free_text::single_line(
+            &raw,
+            "Campaign name",
+            200,
+        )?);
+    }
+    r.description = crate::security::free_text::nul_free(r.description);
 
     let campaign = sqlx::query_as::<_, EmailCampaign>(
         r#"UPDATE email_campaigns SET
@@ -320,9 +352,12 @@ pub async fn pause(
 pub async fn add_step(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
-    Json(r): Json<AddStepRequest>,
+    Json(mut r): Json<AddStepRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = parse_tenant(&c)?;
+    r.template_name = crate::security::free_text::strip_nul(&r.template_name);
+    r.subject = crate::security::free_text::nul_free(r.subject);
+    r.body = crate::security::free_text::strip_nul(&r.body);
 
     // The route is not campaign-scoped, so the campaign must be named in the body and prove ownership.
     let owned: Option<Uuid> = sqlx::query_scalar::<_, Uuid>(
@@ -369,9 +404,12 @@ pub async fn update_step(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
     Path(step_id): Path<Uuid>,
-    Json(r): Json<UpdateStepRequest>,
+    Json(mut r): Json<UpdateStepRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = parse_tenant(&c)?;
+    r.template_name = crate::security::free_text::nul_free(r.template_name);
+    r.subject = crate::security::free_text::nul_free(r.subject);
+    r.body = crate::security::free_text::nul_free(r.body);
 
     let step = sqlx::query_as::<_, CampaignStep>(
         r#"UPDATE email_campaign_steps SET
@@ -679,13 +717,15 @@ pub async fn update_enrollment(
 pub async fn build_campaign(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
-    Json(r): Json<BuildCampaignRequest>,
+    Json(mut r): Json<BuildCampaignRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let tid = parse_tenant(&c)?;
     let uid = parse_user(&c);
 
-    if r.name.is_empty() {
-        return Err(AppError::Validation("Campaign name is required".into()));
+    r.name = crate::security::free_text::single_line(&r.name, "Campaign name", 200)?;
+    r.description = crate::security::free_text::nul_free(r.description);
+    for step in r.steps.iter_mut() {
+        clean_step(step);
     }
 
     // Same guard as `create`: `tags.name` is varchar(100) and the tag is written AFTER the campaign
