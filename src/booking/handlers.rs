@@ -1673,3 +1673,193 @@ pub async fn rotate_payment_key(
         .await?;
     Ok(Json(json!({"rotated": true, "key": fresh})))
 }
+
+/// GET /api/booking/calendars/:id/capture — every tag, category and list a booking applies here.
+///
+/// The screen needs the NAMES, not just ids: an owner editing this must see "Palm Bay - Sponsor" and the
+/// list called "Palm Bay - Sponsors", because an id tells them nothing. So the answer carries both the
+/// saved ids and the tenant's whole vocabulary to choose from.
+pub async fn get_capture(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(calendar_id): Path<Uuid>,
+) -> Result<Json<Value>> {
+    let mut c = pool.acquire().await?;
+    let cal = service::calendar_for_tenant(&mut c, calendar_id, t.0).await?;
+    drop(c);
+
+    let tags: Vec<String> = crate::booking::capture::tag_templates(&pool, cal.id).await?;
+    let categories = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT cc.category_id, c.name
+           FROM booking_calendar_capture_categories cc
+           JOIN tag_categories c ON c.id = cc.category_id AND c.tenant_id = cc.tenant_id
+          WHERE cc.calendar_id = $1 ORDER BY cc.created_at",
+    )
+    .bind(cal.id)
+    .fetch_all(&pool)
+    .await?;
+    let lists = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT cl.list_id, l.name
+           FROM booking_calendar_capture_lists cl
+           JOIN lists l ON l.id = cl.list_id AND l.tenant_id = cl.tenant_id
+          WHERE cl.calendar_id = $1 ORDER BY cl.created_at",
+    )
+    .bind(cal.id)
+    .fetch_all(&pool)
+    .await?;
+
+    // The vocabulary this tenant can choose from, so the screen never offers an empty picker.
+    let all_categories = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, name FROM tag_categories WHERE tenant_id = $1 ORDER BY name",
+    )
+    .bind(t.0)
+    .fetch_all(&pool)
+    .await?;
+    let all_lists = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, name FROM lists WHERE tenant_id = $1 ORDER BY name LIMIT 500",
+    )
+    .bind(t.0)
+    .fetch_all(&pool)
+    .await?;
+
+    Ok(Json(json!({
+        "calendar_id": cal.id,
+        "tags": tags,
+        // The old single field still shows, so nobody wonders where their sponsor tag went.
+        "legacy_sponsor_tag": cal.sponsor_tag,
+        "categories": categories.iter().map(|(id, n)| json!({"id": id, "name": n})).collect::<Vec<_>>(),
+        "lists": lists.iter().map(|(id, n)| json!({"id": id, "name": n})).collect::<Vec<_>>(),
+        "available_categories": all_categories.iter().map(|(id, n)| json!({"id": id, "name": n})).collect::<Vec<_>>(),
+        "available_lists": all_lists.iter().map(|(id, n)| json!({"id": id, "name": n})).collect::<Vec<_>>(),
+        "placeholders": [
+            {"token": "{product}", "means": "the position/product the buyer booked"},
+            {"token": "{city}", "means": "the city on the booking form, when the form asks for one"},
+            {"token": "{calendar}", "means": "this calendar's own name"},
+        ],
+    })))
+}
+
+/// PUT /api/booking/calendars/:id/capture — replace the whole set. Absent key = leave that arm alone;
+/// an empty array = clear that arm. (An empty save must never be an erasure by accident, and a request
+/// that only touches lists must not silently clear the tags.)
+pub async fn put_capture(
+    State(pool): State<PgPool>,
+    Extension(t): Extension<TenantId>,
+    Path(calendar_id): Path<Uuid>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>> {
+    let mut c = pool.acquire().await?;
+    let cal = service::calendar_for_tenant(&mut c, calendar_id, t.0).await?;
+    drop(c);
+
+    if !body.is_object() {
+        return Err(BookingError::Invalid("send an object".into()));
+    }
+    let has_tags = body.get("tags").is_some();
+    let has_categories = body.get("categories").is_some();
+    let has_lists = body.get("lists").is_some();
+    if !has_tags && !has_categories && !has_lists {
+        return Err(BookingError::Invalid(
+            "nothing to save: send tags, categories or lists".into(),
+        ));
+    }
+
+    let mut tx = pool.begin().await?;
+
+    if has_tags {
+        let tags: Vec<String> = serde_json::from_value(body["tags"].clone())
+            .map_err(|_| BookingError::Invalid("tags must be a list of strings".into()))?;
+        sqlx::query("DELETE FROM booking_calendar_capture_tags WHERE calendar_id = $1")
+            .bind(cal.id)
+            .execute(&mut *tx)
+            .await?;
+        for raw in tags {
+            let name = raw.trim();
+            if name.is_empty() {
+                continue;
+            }
+            if name.len() > 120 {
+                return Err(BookingError::Invalid(
+                    "a tag is longer than 120 characters".into(),
+                ));
+            }
+            sqlx::query(
+                "INSERT INTO booking_calendar_capture_tags (tenant_id, calendar_id, template)
+                 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+            )
+            .bind(t.0)
+            .bind(cal.id)
+            .bind(name)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
+    if has_categories {
+        let ids: Vec<Uuid> = serde_json::from_value(body["categories"].clone())
+            .map_err(|_| BookingError::Invalid("categories must be a list of ids".into()))?;
+        for id in &ids {
+            let owned: Option<String> = sqlx::query_scalar(
+                "SELECT name FROM tag_categories WHERE id = $1 AND tenant_id = $2",
+            )
+            .bind(id)
+            .bind(t.0)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if owned.is_none() {
+                return Err(BookingError::NotFound(
+                    "that tag category is not on this account",
+                ));
+            }
+        }
+        sqlx::query("DELETE FROM booking_calendar_capture_categories WHERE calendar_id = $1")
+            .bind(cal.id)
+            .execute(&mut *tx)
+            .await?;
+        for id in ids {
+            sqlx::query(
+                "INSERT INTO booking_calendar_capture_categories (tenant_id, calendar_id, category_id)
+                 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+            )
+            .bind(t.0)
+            .bind(cal.id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
+    if has_lists {
+        let ids: Vec<Uuid> = serde_json::from_value(body["lists"].clone())
+            .map_err(|_| BookingError::Invalid("lists must be a list of ids".into()))?;
+        for id in &ids {
+            let owned: Option<String> =
+                sqlx::query_scalar("SELECT name FROM lists WHERE id = $1 AND tenant_id = $2")
+                    .bind(id)
+                    .bind(t.0)
+                    .fetch_optional(&mut *tx)
+                    .await?;
+            if owned.is_none() {
+                return Err(BookingError::NotFound("that list is not on this account"));
+            }
+        }
+        sqlx::query("DELETE FROM booking_calendar_capture_lists WHERE calendar_id = $1")
+            .bind(cal.id)
+            .execute(&mut *tx)
+            .await?;
+        for id in ids {
+            sqlx::query(
+                "INSERT INTO booking_calendar_capture_lists (tenant_id, calendar_id, list_id)
+                 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+            )
+            .bind(t.0)
+            .bind(cal.id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
+    tx.commit().await?;
+    Ok(Json(json!({"saved": true, "calendar_id": cal.id})))
+}

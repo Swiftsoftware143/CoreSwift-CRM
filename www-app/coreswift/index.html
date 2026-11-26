@@ -7320,6 +7320,94 @@ async function deactivateIndustry(slug) {
   loadUsage();
 }
 
+
+// ===== WHAT A BOOKING DOES TO THE CRM (David, 2026-11-26) =====
+// A purchase is several facts at once — the product, the city, "hot lead" — and the person belongs on
+// more than one list. So this panel is three arms: tags you type (with {product}/{city}/{calendar}),
+// tag CATEGORIES whose whole membership is applied, and the lists the contact joins. Everything here
+// is a row you can see and correct; nothing is inferred from a name.
+window.bkCaptureOpen = async function (calendarId) {
+  const box = document.getElementById('bkCaptureBox');
+  if (!box) return;
+  box.dataset.calendar = calendarId;
+  box.style.display = 'block';
+  box.innerHTML = '<p style="color:var(--text-secondary)">Loading…</p>';
+  try {
+    const d = await API.get('/booking/calendars/' + calendarId + '/capture');
+    const tagRows = (d.tags || []).map((t, i) =>
+      '<div class="bk-cap-row" style="display:flex;gap:6px;margin-bottom:4px">'
+      + '<input class="form-input" data-cap-tag="' + i + '" value="' + escapeHtml(t) + '" style="flex:1">'
+      + '<button class="btn btn-ghost btn-xs" onclick="bkCapDropTag(' + i + ')">Remove</button></div>').join('');
+    const cats = (d.available_categories || []).map(c => {
+      const on = (d.categories || []).some(x => x.id === c.id);
+      return '<label style="display:block;font-size:13px"><input type="checkbox" data-cap-cat="' + escapeHtml(c.id) + '"'
+        + (on ? ' checked' : '') + '> ' + escapeHtml(c.name) + '</label>';
+    }).join('') || '<p style="font-size:12px;color:var(--text-secondary)">No tag categories yet — make one on the Tags screen (e.g. "Products"), then it appears here.</p>';
+    const lists = (d.available_lists || []).map(l => {
+      const on = (d.lists || []).some(x => x.id === l.id);
+      return '<label style="display:block;font-size:13px"><input type="checkbox" data-cap-list="' + escapeHtml(l.id) + '"'
+        + (on ? ' checked' : '') + '> ' + escapeHtml(l.name) + '</label>';
+    }).join('') || '<p style="font-size:12px;color:var(--text-secondary)">No lists yet.</p>';
+    const ph = (d.placeholders || []).map(x => '<code>' + escapeHtml(x.token) + '</code> = ' + escapeHtml(x.means)).join(' · ');
+    box.innerHTML =
+      '<h4 style="margin:0 0 4px">What a booking does here</h4>'
+      + '<p style="font-size:12px;color:var(--text-secondary);margin:0 0 10px">Applied when somebody books, on the held booking (a form fill is a real lead even if they never pay). '
+      + ph + '</p>'
+      + '<div style="margin-bottom:10px"><strong style="font-size:13px">Tags</strong>'
+      + '<div id="bkCapTags">' + tagRows + '</div>'
+      + '<button class="btn btn-ghost btn-xs" onclick="bkCapAddTag()">+ Add a tag</button></div>'
+      + '<div style="margin-bottom:10px"><strong style="font-size:13px">Tag categories</strong>'
+      + '<p style="font-size:12px;color:var(--text-secondary);margin:2px 0 4px">Everyone who books gets every tag in the categories you tick — so a new product tag joins future bookings without touching this screen.</p>'
+      + cats + '</div>'
+      + '<div style="margin-bottom:10px"><strong style="font-size:13px">Lists</strong>'
+      + '<p style="font-size:12px;color:var(--text-secondary);margin:2px 0 4px">The contact joins every list you tick as well as anything a dynamic rule matches.</p>'
+      + lists + '</div>'
+      + '<button class="btn btn-primary btn-sm" onclick="bkCaptureSave()">Save capture settings</button>';
+  } catch (e) {
+    box.innerHTML = '<p style="color:var(--text-secondary)">Could not load: ' + escapeHtml(e.message) + '</p>';
+  }
+};
+
+window.bkCapAddTag = function () {
+  const host = document.getElementById('bkCapTags');
+  if (!host) return;
+  const i = host.querySelectorAll('[data-cap-tag]').length;
+  const row = document.createElement('div');
+  row.className = 'bk-cap-row';
+  row.style.cssText = 'display:flex;gap:6px;margin-bottom:4px';
+  row.innerHTML = '<input class="form-input" data-cap-tag="' + i + '" placeholder="e.g. {product} lead" style="flex:1">'
+    + '<button class="btn btn-ghost btn-xs" onclick="this.parentNode.remove()">Remove</button>';
+  host.appendChild(row);
+  row.querySelector('input').focus();
+};
+
+window.bkCapDropTag = function (i) {
+  const el = document.querySelector('[data-cap-tag="' + i + '"]');
+  if (el && el.parentNode) el.parentNode.remove();
+};
+
+window.bkCaptureSave = async function () {
+  const box = document.getElementById('bkCaptureBox');
+  if (!box) return;
+  const calendarId = box.dataset.calendar;
+  const tags = [];
+  box.querySelectorAll('[data-cap-tag]').forEach(el => {
+    const v = (el.value || '').trim();
+    if (v) tags.push(v);
+  });
+  const categories = [];
+  box.querySelectorAll('[data-cap-cat]').forEach(el => { if (el.checked) categories.push(el.getAttribute('data-cap-cat')); });
+  const lists = [];
+  box.querySelectorAll('[data-cap-list]').forEach(el => { if (el.checked) lists.push(el.getAttribute('data-cap-list')); });
+  try {
+    await API.put('/booking/calendars/' + calendarId + '/capture', { tags: tags, categories: categories, lists: lists });
+    toast('Saved: ' + tags.length + ' tag(s), ' + categories.length + ' category(ies), ' + lists.length + ' list(s).', 'success');
+    bkCaptureOpen(calendarId);
+  } catch (e) {
+    toast('Could not save: ' + e.message, 'error');
+  }
+};
+
 // ===== ACCOUNT USAGE (GET /api/auth/me/usage) =====
 // Server-side counts for the tenant. The endpoint existed for months with no caller.
 async function loadUsage() {
@@ -14606,7 +14694,7 @@ function bkDetailPanel() {
     '<div class="bk-form" style="margin-top:10px">' +
       '<label>Calendar name<input id="bkCalName" value="' + escapeHtml(cal.name) + '"></label>' +
       '<label>Sponsor tag<input id="bkCalSponsorTag" value="' + escapeHtml(cal.sponsor_tag || '') + '" placeholder="Palm Bay - Sponsor">' +
-        '<span class="muted" style="font-weight:400">Applied to the CRM contact every booking creates. Must be a tag that already exists here. Blank means no tag.</span></label>' +
+        '<span class="muted" style="font-weight:400">One tag, for compatibility. For several tags, categories and lists use “Edit capture settings” below. Must be a tag that already exists here. Blank means no tag.</span></label>' +
       '<label>Web address<input id="bkCalSlug" value="' + escapeHtml(cal.slug) + '">' +
         '<span class="muted" style="font-weight:400">Letters, numbers and dashes. Changing it stops the OLD address working — links already published will 404.</span></label>' +
     '</div>' +
@@ -14621,6 +14709,15 @@ function bkDetailPanel() {
     '<span class="bk-flash" id="bkFlash"></span>' +
     bkEmbedPanel(cal.slug) + '</div>';
 
+  // WHAT A BOOKING DOES TO THE CRM — beside the name/address settings, because it is the other half of
+  // "what this calendar captures". The single Sponsor-tag field above stays visible (it still works and
+  // still shows), but this is where many tags, whole categories and lists live.
+  html += '<div class="card" style="margin-top:10px"><div class="card-body">'
+    + '<strong>Tags, categories and lists for every booking</strong>'
+    + '<p class="muted" style="margin:4px 0 8px;font-size:12px">A booking can apply several tags (the product, the city, a lead grade) and put the person on several lists at once.</p>'
+    + '<button class="btn btn-secondary btn-sm" onclick="bkCaptureOpen(\'' + cal.id + '\')">Edit capture settings</button>'
+    + '<div id="bkCaptureBox" style="display:none;margin-top:10px"></div>'
+    + '</div></div>';
   html += bkThemePanel(cal);
   html += bkRulesPanel(cal);
   html += bkRedirectPanel();

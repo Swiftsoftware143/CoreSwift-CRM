@@ -211,9 +211,12 @@
 //!        the auth router's GUARDED group (the caller's own row, read from the SESSION, with the
 //!        password re-verified in the handler) and its fleet-contract alias `POST
 //!        /api/v1/auth/close-account`, mounted once in `main.rs` with the SAME handler and the same
-//!        `auth_middleware` because this app's customer auth lives under `/api/auth/*` and no
-//!        /api/v1 auth tree exists. Neither joins an allowlist: both are measured anonymous
-//!        answering 401 "Authentication required", i.e. the boundary refused before the handler ran.
+//!        `auth_middleware` because this app's customer auth lived under `/api/auth/*` and no
+//!        /api/v1 auth tree existed then. (2026-11-26, David: that single alias was superseded by
+//!        mounting the WHOLE auth router at `/api/v1/auth`, so `close-account` now rides that
+//!        tree's guarded group and `main.rs` carries no standalone route for it.) Neither prefix
+//!        joins an allowlist: both are measured anonymous answering 401 "Authentication required",
+//!        i.e. the boundary refused before the handler ran.
 //!        The extractor now resolves 424 mounted `.route(..)` calls / 412 on /api** (424 = 412 /api
 //!        + the 12 root-level mounts), and those are what the census test pins. The last +8 are the
 //!        data-mapping surface (`/api/data-mapping/*`, migration 155).
@@ -253,11 +256,14 @@
 //!        t_e968e9ad: `/api/admin/provisioning-config` and
 //!        `/api/v1/internal/provision-free-account`) were measured the same way and each answered
 //!        401 anonymous; both are named in the lists below
-//!    44 deliberate anonymous entries  -> PUBLIC_ROUTES  (41 /api + 3 /inbound) — COUNTS ARRAY
+//!    50 deliberate anonymous entries  -> PUBLIC_ROUTES  (47 /api + 3 /inbound) — COUNTS ARRAY
 //!        ENTRIES: measured 27 (24 /api + 3 /inbound) before the confirm arm above was added,
 //!        i.e. one more than the 26 this line used to claim, and 30 after the hosted calendar
 //!        address added its two public arms (kanban t_8457bfef), and 31 after the per-calendar
-//!        path added `/api/public/calendar/site/:slug` (kanban t_d4ac5433)
+//!        path added `/api/public/calendar/site/:slug` (kanban t_d4ac5433), and 44 once the
+//!        receivers, portals and opt-out arms below were counted in full — plus 6 on 2026-11-26
+//!        for the fleet-standard `/api/v1/auth/*` prefix (the SAME six anonymous doors the
+//!        `/api/auth/*` tree already had, mounted a second time) = 50
 //!    17 service-to-service entries    -> INTERNAL_ROUTES (all /api, reached with the shared key)
 //!    14 issued-API-key entries        -> API_KEY_ROUTES  (/api/external/**, /api/data-mapping/events,
 //!        and the custom-object REST + MCP surface — the one class that also accepts a console JWT,
@@ -392,6 +398,22 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // (`POST /api/auth/email-change`) is deliberately NOT here: asking to move an address is an act on
     // the caller's own account and stays behind the session.
     "/api/auth/email-change/confirm",
+    // THE FLEET-STANDARD PREFIX — the same anonymous doors again (David, 2026-11-26). `main.rs`
+    // mounts the ONE auth router a second time at `/api/v1/auth`, so this app answers the path
+    // every sibling app serves. Only the arms that are anonymous on the `/api/auth` tree are
+    // repeated: signup, the credential, the refresh, the two recovery mails and the mailed
+    // address-change confirmation. `/api/auth/logout` is deliberately absent on BOTH prefixes even
+    // though the handler sits on the router's public group — it needs the caller's own token to
+    // blacklist it, and the boundary answers 401 to a stranger on either path. The GUARDED half
+    // (`/me`, `/invites`, `/invite`, `/team/*`, `/initial-password`, `/email-change`,
+    // `/close-account`, `/erase-data`) is private by default on both prefixes and joins no
+    // allowlist at either.
+    "/api/v1/auth/register",
+    "/api/v1/auth/login",
+    "/api/v1/auth/refresh",
+    "/api/v1/auth/forgot-password",
+    "/api/v1/auth/reset-password",
+    "/api/v1/auth/email-change/confirm",
     // --- public catalogues ---------------------------------------------------------------------
     // The signup wizard populates its provider and industry pickers from these before a session
     // exists. Both read platform-level rows with no tenant column (`provider_keys` mounts
@@ -849,6 +871,15 @@ mod tests {
     const NESTS: &[Nest] = &[
         Nest {
             prefix: "/api/auth",
+            src: include_str!("../auth/mod.rs"),
+            func: "router",
+        },
+        // The SAME auth router mounted a second time at the fleet-standard prefix (David,
+        // 2026-11-26). Two rows, ONE router: the census must count both mount points, because the
+        // credential boundary sees a request to either. A mount this table cannot see is a surface
+        // nobody reviews.
+        Nest {
+            prefix: "/api/v1/auth",
             src: include_str!("../auth/mod.rs"),
             func: "router",
         },
@@ -1549,6 +1580,12 @@ mod tests {
             "/api/auth/refresh",
             "/api/auth/forgot-password",
             "/api/auth/reset-password",
+            "/api/v1/auth/register",
+            "/api/v1/auth/login",
+            "/api/v1/auth/refresh",
+            "/api/v1/auth/forgot-password",
+            "/api/v1/auth/reset-password",
+            "/api/v1/auth/email-change/confirm",
             "/api/available-providers",
             "/api/industries/available",
             "/api/public/bookings/public/checkout",
@@ -1753,7 +1790,7 @@ mod tests {
     /// `/api/contacts/custom-fields/:id`, `/api/contacts/:id/fields` (the contact custom-field manager) and
     /// `/api/booking/bookings/:id/cancel` (the operator's cancel by booking id). The other four arrived from
     /// the booking sponsor work and other lanes before this census; the test's own walk is what counts them.
-    /// 577 mounted / 563 on /api** (2026-11-26, kanban t_d7474aee): `DELETE /api/admin/users/:id` — the
+    /// 578 mounted / 564 on /api** (2026-11-26, kanban t_d7474aee): `DELETE /api/admin/users/:id` — the
     /// admin delete-user door. One leaf, on `/api**`, so the 14 root-level mounts are unchanged.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
@@ -1761,14 +1798,14 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            577,
+            578,
             "mounted route count moved — update the census in the module docs.\
              The number to pin is the one THIS assertion reports as `left`: mounted_routes() walks the \
              router itself. scripts/route-census.py is a partial PARSER and a LOWER BOUND (it missed 23 \
              mounts on 2026-11-25); never pin its total."
         );
         assert_eq!(
-            api, 563,
+            api, 564,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.

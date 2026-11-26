@@ -1599,6 +1599,15 @@ pub async fn create_order(
     }
     let bundles = list_bundles(&mut tx, cal.id, true).await?;
     let q = price(&resolved, &bundles);
+    // WHAT THE BUYER ACTUALLY CHOSE — carried into the tag templates below ({product}). Collected here,
+    // before the booking loop consumes `resolved`, so one calendar with fifty positions does not need
+    // fifty tag rows.
+    let product_names = resolved
+        .iter()
+        .map(|i| i.resource.name.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
     let hold_until = Utc::now() + Duration::minutes(cal.hold_minutes as i64);
 
     // WHERE THE BOOKING CAME FROM (2026-11-25). Attribution is stored with the booking so a sponsor's
@@ -1743,13 +1752,25 @@ pub async fn create_order(
         }
     }
 
-    if let (Some(tag_name), Some(cid)) = (cal.sponsor_tag.as_deref(), contact_id) {
-        if let Err(e) =
-            crate::tags::apply_by_name(pool, cal.tenant_id, "contact", cid, tag_name, None).await
-        {
-            tracing::warn!(error = %e, tag = %tag_name,
-                "the booking stands but its sponsor tag could not be applied");
-        }
+    // MANY TAGS, MANY LISTS (David, 2026-11-26). One `sponsor_tag` could not describe a purchase that is
+    // several facts at once — the product bought, the city, "hot lead" — and it could not put the person
+    // on more than one list, which is the normal case: a nurture list AND a customer list are different
+    // lists for the same person.
+    if let Some(cid) = contact_id {
+        let city = answers
+            .as_object()
+            .and_then(|m| {
+                m.iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("city"))
+                    .and_then(|(_, v)| v.as_str().map(|s| s.trim().to_string()))
+            })
+            .filter(|v| !v.is_empty());
+        let ctx = crate::booking::capture::CaptureCtx {
+            calendar: cal.name.trim().to_string(),
+            product: product_names.clone(),
+            city,
+        };
+        crate::booking::capture::apply_all(pool, cal, cid, &ctx).await;
     }
 
     Ok(OrderWithBookings { order, bookings })

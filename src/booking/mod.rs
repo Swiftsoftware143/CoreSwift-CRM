@@ -10,6 +10,7 @@
 //! ```
 
 pub mod availability;
+pub mod capture;
 pub mod error;
 pub mod handlers;
 pub mod models;
@@ -75,6 +76,13 @@ pub fn admin_router(pool: PgPool) -> Router {
         // WHAT THE BUYER SEES, with the limits applied — the console renders this instead of
         // describing the settings, so console and public page cannot disagree.
         .route("/calendars/:id/buyer-preview", get(h::buyer_preview))
+        // WHAT A BOOKING DOES TO THE CRM (David, 2026-11-26): every tag it applies, and every list it
+        // puts the person on. Many of each - a purchase is the product, the city and "hot lead", and the
+        // person belongs on a nurture list and a customer list.
+        .route(
+            "/calendars/:id/capture",
+            get(h::get_capture).put(h::put_capture),
+        )
         // WHAT THE FORM ASKS, AND WHICH ANSWERS ARE MANDATORY (David, 2026-11-23).
         .route(
             "/calendars/:id/form-fields",
