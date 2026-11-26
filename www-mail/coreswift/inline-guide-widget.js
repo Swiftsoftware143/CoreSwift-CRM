@@ -3,7 +3,10 @@
  *
  * Usage:
  *   1. Include this script in your app's HTML: <script src="/inline-guide-widget.js"></script>
- *   2. Define window.appGuidePages as a map of pageKey → { title, desc, actions }
+ *   2. Define window.appGuidePages as a map of pageKey → { title, desc, actions, requires }
+ *      `requires` is a list of plain sentences naming what must exist before the page can work
+ *      ("a domain or subdomain with its DNS records"). It renders ABOVE the actions, in a warning tone,
+ *      because a feature that cannot work must say so before the user tries it.
  *      BEFORE this script loads, or in a preceding <script> block.
  *
  * Page key matching:
@@ -120,6 +123,9 @@
       '#ig-actions{list-style:none;padding:0;margin:0}' +
       '#ig-actions li{font-size:13px;color:#374151;padding:5px 0 5px 20px;position:relative}' +
       '#ig-actions li::before{content:"\u2192";position:absolute;left:2px;color:#4f46e5;font-weight:700}' +
+      '#ig-needs{list-style:none;padding:0;margin:0 0 12px}' +
+      '#ig-needs li{font-size:13px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:7px 9px;margin:0 0 6px;line-height:1.45}' +
+      '#ig-needs-title{font-size:12px;font-weight:600;color:#b45309;text-transform:uppercase;letter-spacing:.5px;margin:0 0 6px}' +
       '#ig-dismiss{display:block;margin-top:12px;padding:8px 14px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#6b7280;font-size:13px;cursor:pointer;text-align:center;width:100%}' +
       '#ig-dismiss:hover{background:#f9fafb}' +
       '</style>' +
@@ -128,12 +134,18 @@
         '<div id="ig-header"><h3 id="ig-title">Help</h3><button id="ig-close" aria-label="Close guide">\u2715</button></div>' +
         '<div id="ig-body">' +
           '<p id="ig-desc"></p>' +
+          '<p id="ig-needs-title" style="display:none">What this needs first</p>' +
+          '<ul id="ig-needs" style="display:none"></ul>' +
           '<p id="ig-actions-title" style="display:none">What you can do here</p>' +
           '<ul id="ig-actions"></ul>' +
           '<button id="ig-dismiss">Don\'t show this again</button>' +
         '</div>' +
       '</div>';
     document.body.appendChild(widget);
+    // MOUNTED, BUT NOT SHOWN, WITHOUT A SESSION. The console swaps its login form for the application without
+    // reloading, so hiding (rather than refusing to mount) is what lets the guide appear the moment somebody
+    // signs in — no reload, no second mount, one owner of the element.
+    widget.style.display = hasSession() ? '' : 'none';
 
     toggle = document.getElementById('ig-toggle');
     panel = document.getElementById('ig-panel');
@@ -170,6 +182,21 @@
     toggle.style.display = 'flex';
     document.getElementById('ig-title').textContent = entry.title || 'Guide';
     document.getElementById('ig-desc').textContent = entry.desc || '';
+
+    /* WHAT THIS FEATURE NEEDS FIRST. A page that cannot work until something is added says so HERE, in the
+       guide the user already has open, instead of leaving them to work it out from an empty screen. Plain
+       sentences naming the thing and where to add it; no links to hunt for. */
+    var needsEl = document.getElementById('ig-needs');
+    var needsTitle = document.getElementById('ig-needs-title');
+    if (entry.requires && entry.requires.length) {
+      needsTitle.style.display = 'block';
+      needsEl.style.display = 'block';
+      needsEl.innerHTML = entry.requires.map(function(r){ return '<li>' + esc(r) + '</li>'; }).join('');
+    } else {
+      needsTitle.style.display = 'none';
+      needsEl.style.display = 'none';
+      needsEl.innerHTML = '';
+    }
 
     var actionsEl = document.getElementById('ig-actions');
     var actionsTitle = document.getElementById('ig-actions-title');
@@ -221,4 +248,52 @@
   if (document.getElementById('app')) {
     observer.observe(document.getElementById('app'), { childList: true, subtree: true });
   }
+
+  // ── session gate: NEVER IN FRONT OF THE LOGIN (David, 2026-11-18) ─────────────────────────────
+  // Both the console and the admin panel serve their login form from the SAME page that later becomes
+  // the application, so a widget that mounts on load appears to a stranger who has not signed in —
+  // and the page it then explains is one they cannot see. There is one session key in both surfaces
+  // (`crm_token`), so the widget waits for it: it mounts when a session exists, and it removes itself
+  // if the session goes away (sign-out).
+  //
+  // 2026-11-19 (measured in Chromium on app.coreswiftcrm.com): these three helpers were inserted
+  // INSIDE the hashchange listener above, so they were out of scope everywhere else. `createWidget()`
+  // threw "hasSession is not defined" BEFORE it wired the toggle, and the timer threw
+  // "syncWithSession is not defined" — the guide "?" button did nothing on every CoreSwift page load
+  // and the console logged two ReferenceErrors plus a null-`style` TypeError. They belong at IIFE
+  // scope, where the timer and createWidget() can both reach them.
+  function hasSession() {
+    try { return !!localStorage.getItem('crm_token'); } catch (e) { return false; }
+  }
+
+  // Bring the widget in line with the session, whenever that changes: shown after a login, removed
+  // after a sign-out. Cheap, idempotent, and it cannot produce two widgets because it never creates one.
+  function syncWithSession() {
+    var widgetEl = document.getElementById('inline-guide-widget');
+    var toggleEl = document.getElementById('ig-toggle');
+    if (!hasSession()) {
+      // Signed out: take the whole widget out of the page. `widgetCreated` is reset so the NEXT
+      // sign-in on this same page (the console swaps its form for the app without a reload) builds
+      // a fresh, fully wired widget instead of leaving a stripped one behind.
+      if (widgetEl) widgetEl.remove();
+      if (widgetCreated) {
+        widgetCreated = false;
+        widget = toggle = panel = null;
+      }
+      return;
+    }
+    // Signed in: if the widget is missing (sign-in after a sign-out on the same page, or a host that
+    // wiped document.body), build it now. updateGuide() is the ONE builder; this only nudges it.
+    if (!widgetEl || !toggleEl) {
+      widgetCreated = false;
+      widget = toggle = panel = null;
+      updateGuide();
+      return;
+    }
+    widgetEl.style.display = '';
+  }
+
+  // One timer, one owner: a login shows the guide, a sign-out removes it.
+  setInterval(syncWithSession, 2000);
+  syncWithSession();
 })();

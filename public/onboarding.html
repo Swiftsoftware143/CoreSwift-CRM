@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Setting up CoreSwift — the order that works</title>
+<style>
+  :root{--ink:#111827;--muted:#6b7280;--line:#e5e7eb;--brand:#4f46e5;--warn:#b45309;--bg:#ffffff;--soft:#f9fafb}
+  @media (prefers-color-scheme: dark){:root{--ink:#e5e7eb;--muted:#9ca3af;--line:#374151;--bg:#0b1020;--soft:#111827}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:860px;margin:0 auto;padding:32px 20px 80px}
+  h1{font-size:30px;line-height:1.25;margin:0 0 8px}
+  .lede{color:var(--muted);margin:0 0 28px;font-size:17px}
+  h2{font-size:21px;margin:36px 0 10px;padding-top:18px;border-top:1px solid var(--line)}
+  h3{font-size:16px;margin:22px 0 6px}
+  p{margin:0 0 12px}
+  ol,ul{margin:0 0 14px;padding-left:22px}
+  li{margin:0 0 7px}
+  .step{background:var(--soft);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:0 0 14px}
+  .step .n{display:inline-block;background:var(--brand);color:#fff;border-radius:999px;font-size:12px;font-weight:700;padding:2px 9px;margin-right:8px;vertical-align:2px}
+  .needs{border-left:3px solid var(--warn);background:var(--soft);padding:10px 14px;border-radius:0 10px 10px 0;margin:0 0 14px;color:var(--ink)}
+  .needs strong{color:var(--warn)}
+  code{background:var(--soft);border:1px solid var(--line);border-radius:6px;padding:1px 5px;font-size:14px}
+  .why{color:var(--muted);font-size:14px}
+  a{color:var(--brand)}
+  .foot{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Setting up CoreSwift — the order that works</h1>
+<p class="lede">Every feature here is honest about what it needs: if something is missing, the screen says so and offers the control right there. This page is the same information in one place, in the order that avoids going back and forth.</p>
+
+<div class="needs"><strong>The one rule:</strong> a feature that cannot work will tell you <em>on its own screen</em>, in a sentence, with the fix beside it. If you ever see an empty screen and no explanation, that is a defect — report it rather than hunting for a setting.</div>
+
+<h2>1. The account, before anything else</h2>
+<div class="step">
+  <p><span class="n">1</span><strong>Sign in and name the account.</strong> The account is the company; workspaces are rooms inside it. Nothing else depends on this, but every screen shows it.</p>
+  <p><span class="n">2</span><strong>Invite one teammate.</strong> Not a formality: a workspace with a single admin cannot lose that admin (the delete route refuses the last one), and two people can test with each other.</p>
+  <p><span class="n">3</span><strong>Create an API key.</strong> One active key per account, minted at signup; you will need it only if you connect an agent or another SwiftSoftware app. Guard it like a password.</p>
+</div>
+
+<h2>2. The lists and tags everything else is built on</h2>
+<div class="step">
+  <p><span class="n">1</span><strong>Make the lists first.</strong> A list is a saved group of contacts — “Palm Bay Sponsors”, “Customers”, “Nurture”. Calendar capture, tickets, campaigns and automations all <em>point at</em> a list, so creating them first means you never have to leave a screen to create one mid-setup.</p>
+  <p><span class="n">2</span><strong>Make the tags, in categories.</strong> Categories are how a set of tags is applied at once (“Products”, “Services”). For a lead temperature, create a category and switch on <em>only one tag at a time</em>: assigning Hot then removes Warm, so a contact is never two temperatures.</p>
+  <p class="why">Why the order matters: a calendar that captures a sponsor needs a tag to apply and a list to join. If neither exists, the booking still happens — and writes nothing you can see.</p>
+</div>
+
+<h2>3. Mail: the inbox needs an address before it can hold anything</h2>
+<div class="needs"><strong>Requires:</strong> a domain or subdomain you control, plus the DNS records the screen gives you. Until that exists the shared inbox can neither receive a reply nor send one.</div>
+<div class="step">
+  <p><span class="n">1</span><strong>Add the domain</strong> on <em>Email Domains and Sending</em>. Copy each record it shows into your DNS provider — the two you cannot skip are the ownership record and DKIM, because without them mail is rejected or lands in spam.</p>
+  <p><span class="n">2</span><strong>Create the mailbox</strong> — <code>support@</code>, <code>billing@</code>, whichever the public should reach. Each mailbox is its own address in the shared inbox.</p>
+  <p><span class="n">3</span><strong>Decide what an inbound message does.</strong> Mail from a stranger creates a contact; attach the tags and the lists that contact should land on, per mailbox. Two public addresses usually need different lists, which is why the rule belongs to the mailbox and not to “email” as a whole.</p>
+  <p class="why">Test it: send one message from an address you control. A contact should appear, carrying the tags, and sitting on the lists.</p>
+</div>
+
+<h2>4. Tickets: a queue with no list has no funnel</h2>
+<div class="needs"><strong>Requires:</strong> a list for tickets to land on (create it here — the picker has “create a list” beside it), and inbound mail if customers should raise tickets by email.</div>
+<div class="step">
+  <p><span class="n">1</span><strong>Choose the list</strong> tickets land on. Every ticket that arrives puts its person on that list, so “who has an open issue” is a list you can mail, not a screen you must open.</p>
+  <p><span class="n">2</span><strong>Say what “closed” means.</strong> When a ticket is closed you can apply a tag, add the person to a list, take them off another, or send a message — configured once, applied every time.</p>
+  <p><span class="n">3</span><strong>Per channel if you need it.</strong> Email, the chat widget and a form are different channels; each can put a person on a different list, so the follow-up matches how they reached you.</p>
+</div>
+
+<h2>5. Calendars: what a booking writes to the CRM</h2>
+<div class="needs"><strong>Requires:</strong> a booking calendar with at least one position, opening hours, and — for capture — at least one tag, category or list selected. Otherwise the booking happens and writes nothing.</div>
+<div class="step">
+  <p><span class="n">1</span><strong>Create the calendar and its positions</strong>, with prices and sizes. Set opening hours, or no time will be offered.</p>
+  <p><span class="n">2</span><strong>Press “Edit capture settings”.</strong> Add the tags a booking should apply — they may contain <code>{product}</code>, <code>{city}</code> and <code>{calendar}</code>, filled from what the buyer chose — tick whole tag categories, and tick the lists the contact joins.</p>
+  <p><span class="n">3</span><strong>Attach the checkout</strong> if the booking takes money, and say whether payment is taken inside the page before or after booking.</p>
+  <p class="why">Test it: book from a phone with a real address. The Orders table shows a CRM column — “created”, or “none” with the reason. A test on a reserved address is deliberately not allowed to invent a customer, and it says so.</p>
+</div>
+
+<h2>6. Automations, last — because they act on what exists</h2>
+<div class="needs"><strong>Requires:</strong> one trigger and one action. A rule with only a trigger never does anything; a rule pointing at a list that was deleted does nothing quietly.</div>
+<div class="step">
+  <p><span class="n">1</span><strong>Start with one rule you will notice</strong> — “when a tag is applied, add them to this list” — and watch it fire before building ten.</p>
+  <p><span class="n">2</span><strong>Use the same vocabulary everywhere:</strong> a rule is a field, an operator and a value. If the engine cannot run a pair, it refuses at save time rather than returning nobody.</p>
+  <p><span class="n">3</span><strong>Every saved rule is a row you can correct.</strong> If you cannot see the rule on a screen, it is not saved.</p>
+</div>
+
+<h2>7. The things people get wrong</h2>
+<ul>
+  <li><strong>Creating the thing after the feature.</strong> Make lists and tags first; every other screen points at them.</li>
+  <li><strong>Testing with a test address.</strong> Reserved test addresses never create a customer. Test with an address you actually own.</li>
+  <li><strong>Assuming an empty screen is broken.</strong> It should explain itself. If it does not, that is the defect.</li>
+  <li><strong>Skipping DNS.</strong> A domain added but not verified sends nothing, and the screen says which record is missing — copy it exactly.</li>
+  <li><strong>Two tags from one “temperature” category.</strong> Switch the category to one-at-a-time and the newest wins, in the database, whoever assigned it.</li>
+</ul>
+
+<div class="foot">CoreSwift · SwiftSoftware. This page mirrors the inline guide: open the “?” on any screen to see the same requirements for the page you are on.</div>
+</div>
+</body>
+</html>

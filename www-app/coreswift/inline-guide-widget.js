@@ -3,7 +3,10 @@
  *
  * Usage:
  *   1. Include this script in your app's HTML: <script src="/inline-guide-widget.js"></script>
- *   2. Define window.appGuidePages as a map of pageKey → { title, desc, actions }
+ *   2. Define window.appGuidePages as a map of pageKey → { title, desc, actions, requires }
+ *      `requires` is a list of plain sentences naming what must exist before the page can work
+ *      ("a domain or subdomain with its DNS records"). It renders ABOVE the actions, in a warning tone,
+ *      because a feature that cannot work must say so before the user tries it.
  *      BEFORE this script loads, or in a preceding <script> block.
  *
  * Page key matching:
@@ -120,6 +123,9 @@
       '#ig-actions{list-style:none;padding:0;margin:0}' +
       '#ig-actions li{font-size:13px;color:#374151;padding:5px 0 5px 20px;position:relative}' +
       '#ig-actions li::before{content:"\u2192";position:absolute;left:2px;color:#4f46e5;font-weight:700}' +
+      '#ig-needs{list-style:none;padding:0;margin:0 0 12px}' +
+      '#ig-needs li{font-size:13px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:7px 9px;margin:0 0 6px;line-height:1.45}' +
+      '#ig-needs-title{font-size:12px;font-weight:600;color:#b45309;text-transform:uppercase;letter-spacing:.5px;margin:0 0 6px}' +
       '#ig-dismiss{display:block;margin-top:12px;padding:8px 14px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#6b7280;font-size:13px;cursor:pointer;text-align:center;width:100%}' +
       '#ig-dismiss:hover{background:#f9fafb}' +
       '</style>' +
@@ -128,6 +134,8 @@
         '<div id="ig-header"><h3 id="ig-title">Help</h3><button id="ig-close" aria-label="Close guide">\u2715</button></div>' +
         '<div id="ig-body">' +
           '<p id="ig-desc"></p>' +
+          '<p id="ig-needs-title" style="display:none">What this needs first</p>' +
+          '<ul id="ig-needs" style="display:none"></ul>' +
           '<p id="ig-actions-title" style="display:none">What you can do here</p>' +
           '<ul id="ig-actions"></ul>' +
           '<button id="ig-dismiss">Don\'t show this again</button>' +
@@ -174,6 +182,21 @@
     toggle.style.display = 'flex';
     document.getElementById('ig-title').textContent = entry.title || 'Guide';
     document.getElementById('ig-desc').textContent = entry.desc || '';
+
+    /* WHAT THIS FEATURE NEEDS FIRST. A page that cannot work until something is added says so HERE, in the
+       guide the user already has open, instead of leaving them to work it out from an empty screen. Plain
+       sentences naming the thing and where to add it; no links to hunt for. */
+    var needsEl = document.getElementById('ig-needs');
+    var needsTitle = document.getElementById('ig-needs-title');
+    if (entry.requires && entry.requires.length) {
+      needsTitle.style.display = 'block';
+      needsEl.style.display = 'block';
+      needsEl.innerHTML = entry.requires.map(function(r){ return '<li>' + esc(r) + '</li>'; }).join('');
+    } else {
+      needsTitle.style.display = 'none';
+      needsEl.style.display = 'none';
+      needsEl.innerHTML = '';
+    }
 
     var actionsEl = document.getElementById('ig-actions');
     var actionsTitle = document.getElementById('ig-actions-title');

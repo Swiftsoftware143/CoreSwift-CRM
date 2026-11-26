@@ -440,6 +440,16 @@ mislabels the message and stops a ticket from being opened for it.</p>
 
 <!-- guide-2026-11-21 -->
 
+<h2 id="setup-requirements-rule">A feature that cannot work must say so, on its screen</h2>
+<p>Every feature that depends on something existing &mdash; a domain, a list, a tag, a checkout &mdash; states the requirement on its own screen, shows whether it is met, and offers the control beside it: pick from what exists, or create the missing thing without leaving the page. A customer should never have to guess why nothing happened, and never have to visit three screens to make one work.</p>
+<p>The inline guide (the <strong>?</strong> on every screen) carries the same requirement list per page, under <em>What this needs first</em>. The user-facing setup order lives at <strong>/onboarding.html</strong> and is linked from the guide's "What each feature needs before it works" section.</p>
+<p>Two properties are deliberate and worth defending in review:</p>
+<ul>
+<li><strong>Refuse rather than half-succeed</strong> when the missing piece would make the result look like success anyway &mdash; mail that sends nothing, a ticket on no list. The screen names the missing piece instead of reporting a win.</li>
+<li><strong>A control that cannot change anything is not offered.</strong> If the setting behind a dropdown does not exist yet, the dropdown is not shipped first: the back half is built, then the control.</li>
+</ul>
+<p>Current gaps being closed under this rule: per-channel capture (email per mailbox, chat widget, ticket), a ticket-status trigger so closing a ticket can tag or re-list the person, and the requirement strips on the Inbox and Tickets screens.</p>
+
 <h2 id="booking-capture-admin">What a booking writes to the CRM, and the one-tag-at-a-time rule</h2>
 <p>Two settings decide what a booking does to a customer's CRM, and both are worth knowing when a customer asks why a contact carries the tags it does.</p>
 <h3>Capture settings on a calendar</h3>
