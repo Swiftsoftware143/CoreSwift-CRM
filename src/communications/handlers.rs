@@ -14,7 +14,9 @@ use uuid::Uuid;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
 pub struct OutboundMessage {
     pub id: Uuid,
-    pub tenant_id: Uuid,
+    /// NULLABLE, and one row holds NULL today: a system-wide message has no tenant. Decoded as Option so
+    /// one such row cannot fail an entire page with a 500 (the gate caught this: 1/246 rows).
+    pub tenant_id: Option<Uuid>,
     pub channel: String,
     pub to_address: String,
     pub subject: Option<String>,
@@ -176,7 +178,9 @@ pub async fn send(
     // Fire-and-forget delivery attempt via configured provider
     let db_clone = s.db.clone();
     let msg_id = msg.id;
-    let tid = msg.tenant_id;
+    // The message was just created for this tenant, so the value is known here even though the row type
+    // allows NULL (a system message has no tenant). Fall back to the request's tenant rather than unwrap.
+    let tid = msg.tenant_id.unwrap_or_else(|| Uuid::parse_str(&c.aid).unwrap_or(tid));
     let ch = r.channel.clone();
     let to = r.to.clone();
     let subj = r.subject.clone();
