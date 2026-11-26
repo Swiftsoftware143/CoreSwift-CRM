@@ -12,6 +12,11 @@ that is short by any amount turns the unreachable-screen guard OFF while looking
     python3 scripts/route-census.py            # census this repo (src/ next to this script)
     python3 scripts/route-census.py <repo-root>
 
+KNOWN CONCRETE MISS — fix against this route, not against a number: the operator's
+`/api/booking/bookings/:id/cancel` is mounted from `booking::admin_router`, which `main.rs` nests with a
+`.layer(from_fn(...))` chain, and that is the shape this walk skips. A count can be made to agree without
+seeing one more mount, so a fixer must be able to show this path in the output.
+
 It follows `.route(`, `.nest(`, `.nest_service(` and `.merge(`, and it follows a MERGED nest argument
 (`kb::router(s).merge(canned::router(s))` is three routers, not one). A call that builds a router is
 recognised by its name: `router` or `*_router`; anything else in a nest argument is a layer, not a gap.
