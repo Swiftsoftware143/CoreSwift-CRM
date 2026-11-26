@@ -669,12 +669,25 @@ pub async fn public_support_request(
 ) -> ApiResult<impl IntoResponse> {
     let email = crate::security::email_addr::normalize(&body.email)
         .map_err(|e| AppError::BadRequest(format!("{e} — we need an address we can reply to")))?;
-    let name = cap_chars(body.name.as_deref().unwrap_or(""), 120);
+    // A message pasted out of an email, a spreadsheet or another desk can carry an INVISIBLE NUL
+    // byte, which Postgres cannot store in a text column: THIS public door answered
+    // `500 {"code":500,"error":true,"message":"Database error"}` with nothing written and no field
+    // named (measured live 2026-11-26 on the deployed binary, against
+    // `POST /api/public/support-request` — the door behind the $1 Inbox reservation form and the
+    // public "contact us" path, so any visitor's paste could lose their request to a 500). The
+    // shared hygiene helper strips the NUL; the value's own line breaks survive, so a multi-line
+    // message still reads as the visitor typed it.
+    let name = cap_chars(
+        &crate::security::free_text::strip_nul(body.name.as_deref().unwrap_or("")),
+        120,
+    );
     let message = cap_chars(
-        body.body
-            .as_deref()
-            .or(body.message.as_deref())
-            .unwrap_or(""),
+        &crate::security::free_text::strip_nul(
+            body.body
+                .as_deref()
+                .or(body.message.as_deref())
+                .unwrap_or(""),
+        ),
         4000,
     );
     if message.is_empty() {
@@ -682,7 +695,7 @@ pub async fn public_support_request(
             "Write your message so the team knows what you need.".into(),
         ));
     }
-    let subject = cap_chars(&body.subject, 200);
+    let subject = cap_chars(&crate::security::free_text::strip_nul(&body.subject), 200);
     if subject.is_empty() {
         return Err(AppError::Validation(
             "Give your message a short subject so the team knows what it is about.".into(),
@@ -990,6 +1003,14 @@ pub async fn public_contact_form(
     let priority = body.priority.unwrap_or_else(|| "medium".to_string());
     let name = body.name.unwrap_or_else(|| "Website Visitor".to_string());
     let email = body.email.unwrap_or_default();
+    // An unauthenticated door: a message pasted out of a spreadsheet, an email or another desk can
+    // carry an INVISIBLE NUL byte, which Postgres cannot store — the INSERT then answered
+    // `500 {"code":500,"error":true,"message":"Database error"}` and the visitor's message was lost
+    // with no field named (the same class as `/api/public/support-request`, fixed the same day). Only
+    // the invisible byte goes; every character a person can see, and every line break, is kept.
+    let subject = crate::security::free_text::strip_nul(&body.subject);
+    let message = crate::security::free_text::strip_nul(&body.message);
+    let name = crate::security::free_text::strip_nul(&name);
 
     let ticket = sqlx::query_as::<_, super::models::Ticket>(
         r#"INSERT INTO tickets (tenant_id, subject, description, status, priority, source, contact_email, contact_name)
@@ -997,8 +1018,8 @@ pub async fn public_contact_form(
            RETURNING *"#
     )
     .bind(body.tenant_id)
-    .bind(&body.subject)
-    .bind(&body.message)
+    .bind(&subject)
+    .bind(&message)
     .bind(&priority)
     .bind(&email)
     .bind(&name)
@@ -1019,6 +1040,12 @@ pub async fn public_submit_ticket(
     let priority = body.priority.unwrap_or_else(|| "medium".to_string());
     let name = body.name.unwrap_or_else(|| "Website Visitor".to_string());
     let email = body.email.unwrap_or_default();
+    // The embedded widget's own submit arm — also unauthenticated, also a text column: the same
+    // invisible NUL byte 500'd it (`Database error`, nothing written). Stripped here; visible
+    // characters and line breaks are kept as the visitor typed them.
+    let subject = crate::security::free_text::strip_nul(&body.subject);
+    let message = crate::security::free_text::strip_nul(&body.message);
+    let name = crate::security::free_text::strip_nul(&name);
 
     let ticket = sqlx::query_as::<_, super::models::Ticket>(
         r#"INSERT INTO tickets (tenant_id, subject, description, status, priority, source, contact_email, contact_name)
@@ -1026,8 +1053,8 @@ pub async fn public_submit_ticket(
            RETURNING *"#
     )
     .bind(tenant_id)
-    .bind(&body.subject)
-    .bind(&body.message)
+    .bind(&subject)
+    .bind(&message)
     .bind(&priority)
     .bind(&email)
     .bind(&name)
