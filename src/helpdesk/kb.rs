@@ -196,10 +196,15 @@ pub async fn create(
     Json(body): Json<ArticleBody>,
 ) -> ApiResult<(StatusCode, Json<KbArticle>)> {
     let tid = tenant_of(&c)?;
-    let title = body.title.unwrap_or_default().trim().to_string();
-    if title.is_empty() {
-        return Err(AppError::BadRequest("An article needs a title.".into()));
-    }
+    // A pasted title or body can carry an INVISIBLE NUL byte, which Postgres cannot store: the
+    // save answered `500 {"code":500,...,"message":"Database error"}` with nothing written
+    // (measured live 2026-11-26 on /api/helpdesk/kb). Strip the NUL, refuse a blank title or
+    // another control character in the title BY NAME, and keep the body's own line breaks.
+    let title = crate::security::free_text::single_line(
+        &body.title.unwrap_or_default(),
+        "Article title",
+        200,
+    )?;
     let slug = body
         .slug
         .as_deref()
@@ -233,7 +238,7 @@ pub async fn create(
     .bind(tid)
     .bind(&title)
     .bind(&slug)
-    .bind(body.body_md.unwrap_or_default())
+    .bind(crate::security::free_text::nul_free(body.body_md).unwrap_or_default())
     .bind(&status)
     .bind(&visibility)
     .bind(body.locale.unwrap_or_else(|| "en".into()))
@@ -297,12 +302,13 @@ pub async fn update(
     )
     .bind(id)
     .bind(tid)
-    .bind(
-        body.title
-            .map(|t| t.trim().to_string())
-            .filter(|t| !t.is_empty()),
-    )
-    .bind(body.body_md)
+    // Same hygiene on the edit path: a NUL in a renamed title or edited body 500'd here too.
+    .bind(crate::security::free_text::optional_line(
+        body.title.as_deref(),
+        "Article title",
+        200,
+    )?)
+    .bind(crate::security::free_text::nul_free(body.body_md))
     .bind(body.status)
     .bind(body.visibility)
     .bind(body.locale)
@@ -451,10 +457,14 @@ pub async fn create_section(
     Json(body): Json<SectionBody>,
 ) -> ApiResult<(StatusCode, Json<KbSection>)> {
     let tid = tenant_of(&c)?;
-    let name = body.name.unwrap_or_default().trim().to_string();
-    if name.is_empty() {
-        return Err(AppError::BadRequest("A section needs a name.".into()));
-    }
+    // A pasted section name can carry an INVISIBLE NUL byte (measured live 2026-11-26: the
+    // section save answered `500 ... "Database error"`). Strip it, refuse a blank name or another
+    // control character BY NAME, and NUL-free the description without touching its line breaks.
+    let name = crate::security::free_text::single_line(
+        &body.name.unwrap_or_default(),
+        "Section name",
+        200,
+    )?;
     let slug = body
         .slug
         .as_deref()
@@ -469,7 +479,7 @@ pub async fn create_section(
     .bind(tid)
     .bind(&name)
     .bind(&slug)
-    .bind(body.description)
+    .bind(crate::security::free_text::nul_free(body.description))
     .bind(body.position)
     .fetch_one(&s.db)
     .await
@@ -500,12 +510,13 @@ pub async fn update_section(
     )
     .bind(id)
     .bind(tid)
-    .bind(
-        body.name
-            .map(|n| n.trim().to_string())
-            .filter(|n| !n.is_empty()),
-    )
-    .bind(body.description)
+    // Same hygiene on the section rename/description edit (a NUL 500'd here too).
+    .bind(crate::security::free_text::optional_line(
+        body.name.as_deref(),
+        "Section name",
+        200,
+    )?)
+    .bind(crate::security::free_text::nul_free(body.description))
     .bind(body.position)
     .fetch_optional(&s.db)
     .await?

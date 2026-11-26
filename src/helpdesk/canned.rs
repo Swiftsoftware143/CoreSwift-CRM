@@ -88,11 +88,19 @@ pub async fn create(
     owner: Option<Uuid>,
     body: CannedBody,
 ) -> Result<CannedReply, AppError> {
-    let title = body.title.unwrap_or_default().trim().to_string();
-    let text = body.body_md.unwrap_or_default().trim().to_string();
-    if title.is_empty() {
-        return Err(AppError::BadRequest("A saved answer needs a title.".into()));
-    }
+    // A title or answer pasted out of an email, a spreadsheet or another desk can carry an
+    // INVISIBLE NUL byte, which Postgres cannot store in a text column: the save answered
+    // `500 {"code":500,...,"message":"Database error"}` with nothing written (measured live
+    // 2026-11-26 on /api/helpdesk/canned). The shared hygiene helper strips the NUL, refuses a
+    // blank title and any OTHER control character in the title BY NAME, and leaves the answer
+    // body's own line breaks alone - only the invisible byte goes.
+    let title = crate::security::free_text::single_line(
+        &body.title.unwrap_or_default(),
+        "Saved answer title",
+        200,
+    )?;
+    let text = crate::security::free_text::strip_nul(&body.body_md.unwrap_or_default());
+    let text = text.trim().to_string();
     if text.is_empty() {
         return Err(AppError::BadRequest(
             "A saved answer needs some text.".into(),
@@ -147,14 +155,15 @@ pub async fn update(
     )
     .bind(id)
     .bind(tenant_id)
-    .bind(
-        body.title
-            .map(|t| t.trim().to_string())
-            .filter(|t| !t.is_empty()),
-    )
+    // Same hygiene on the edit path: a NUL in a renamed title or answer 500'd here too.
+    .bind(crate::security::free_text::optional_line(
+        body.title.as_deref(),
+        "Saved answer title",
+        200,
+    )?)
     .bind(
         body.body_md
-            .map(|t| t.trim().to_string())
+            .map(|t| crate::security::free_text::strip_nul(&t).trim().to_string())
             .filter(|t| !t.is_empty()),
     )
     .bind(shortcut)
