@@ -180,7 +180,9 @@ pub async fn send(
     let msg_id = msg.id;
     // The message was just created for this tenant, so the value is known here even though the row type
     // allows NULL (a system message has no tenant). Fall back to the request's tenant rather than unwrap.
-    let tid = msg.tenant_id.unwrap_or_else(|| Uuid::parse_str(&c.aid).unwrap_or(tid));
+    let tid = msg
+        .tenant_id
+        .unwrap_or_else(|| Uuid::parse_str(&c.aid).unwrap_or(tid));
     let ch = r.channel.clone();
     let to = r.to.clone();
     let subj = r.subject.clone();
