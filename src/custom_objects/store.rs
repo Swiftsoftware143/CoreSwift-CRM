@@ -216,7 +216,9 @@ pub async fn create_object(
     name: &str,
 ) -> Result<Value, AppError> {
     check_slug(slug)?;
-    let name = name.trim();
+    // A NUL pasted into the object's name is invisible and unstorable (`security::free_text`).
+    let stripped = crate::security::free_text::strip_nul(name);
+    let name = stripped.trim();
     if name.is_empty() {
         return Err(AppError::BadRequest("name is required".into()));
     }
@@ -604,7 +606,9 @@ pub async fn add_field(
             spec.key
         ))
     })?;
-    let label = spec.label.trim().to_string();
+    let label = crate::security::free_text::strip_nul(&spec.label)
+        .trim()
+        .to_string();
     if label.is_empty() {
         return Err(AppError::BadRequest(format!(
             "field '{}' needs a label",

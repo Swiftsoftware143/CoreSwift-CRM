@@ -30,6 +30,10 @@ pub async fn create_rule(
     if r.name.is_empty() || r.event_type.is_empty() {
         return Err(AppError::Validation("Name and event_type required".into()));
     }
+    // Free-text hygiene before the write (`security::free_text`): a NUL in either field reached the
+    // INSERT and answered a raw 500 that saved nothing.
+    let name = crate::security::free_text::single_line(&r.name, "Rule name", 200)?;
+    let event_type = crate::security::free_text::single_line(&r.event_type, "Event type", 80)?;
     let dir = r.direction.unwrap_or_else(|| "add".into());
     if dir != "add" && dir != "subtract" {
         return Err(AppError::Validation(
@@ -54,7 +58,7 @@ pub async fn create_rule(
     )
     .await?;
     Ok((StatusCode::CREATED, Json(json!(sqlx::query_as::<_,ScoreRule>("INSERT INTO score_rules(id,tenant_id,name,event_type,points,direction) VALUES($1,$2,$3,$4,$5,$6) RETURNING *")
-        .bind(Uuid::new_v4()).bind(t).bind(&r.name).bind(&r.event_type).bind(r.points).bind(&dir).fetch_one(&s.db).await?))))
+        .bind(Uuid::new_v4()).bind(t).bind(&name).bind(&event_type).bind(r.points).bind(&dir).fetch_one(&s.db).await?))))
 }
 
 pub async fn update_rule(
@@ -64,8 +68,12 @@ pub async fn update_rule(
     Json(r): Json<UpdateRuleRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| AppError::Unauthorized)?;
+    // Same free-text hygiene as the create door.
+    let name = crate::security::free_text::optional_line(r.name.as_deref(), "Rule name", 200)?;
+    let event_type =
+        crate::security::free_text::optional_line(r.event_type.as_deref(), "Event type", 80)?;
     Ok(Json(json!(sqlx::query_as::<_,ScoreRule>("UPDATE score_rules SET name=COALESCE($1,name), event_type=COALESCE($2,event_type), points=COALESCE($3,points), direction=COALESCE($4,direction), is_active=COALESCE($5,is_active), updated_at=NOW() WHERE id=$6 AND tenant_id=$7 RETURNING *")
-        .bind(&r.name).bind(&r.event_type).bind(r.points).bind(&r.direction).bind(r.is_active).bind(id).bind(t).fetch_optional(&s.db).await?.ok_or(AppError::NotFound(format!("Score rule {id} not found")))?)))
+        .bind(&name).bind(&event_type).bind(r.points).bind(&r.direction).bind(r.is_active).bind(id).bind(t).fetch_optional(&s.db).await?.ok_or(AppError::NotFound(format!("Score rule {id} not found")))?)))
 }
 
 pub async fn delete_rule(

@@ -83,6 +83,24 @@ pub fn optional_line(
     Ok(Some(value.to_string()))
 }
 
+/// The same scrub for a JSON value: every string — and every object KEY — at any depth loses its
+/// NULs. Postgres refuses a NUL inside a jsonb string too (`unsupported Unicode escape sequence`),
+/// which is the same lost save one layer over from the text column.
+pub fn strip_nul_json(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(s) => serde_json::Value::String(strip_nul(s)),
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(strip_nul_json).collect())
+        }
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.iter()
+                .map(|(k, v)| (strip_nul(k), strip_nul_json(v)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

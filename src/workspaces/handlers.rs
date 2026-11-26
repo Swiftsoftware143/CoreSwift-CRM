@@ -27,7 +27,11 @@ fn tenant(claims: &Claims) -> Result<Uuid, AppError> {
 }
 
 fn clean_name(raw: &str) -> Result<String, AppError> {
-    let n = raw.trim();
+    // A NUL pasted into a workspace name is invisible and unstorable: it reached the INSERT and the
+    // create/rename doors answered a raw 500 (same rule as every other console form,
+    // `security::free_text`). Strip it; every visible character survives.
+    let stripped = crate::security::free_text::strip_nul(raw);
+    let n = stripped.trim();
     if n.is_empty() {
         return Err(AppError::Validation("A workspace needs a name.".into()));
     }

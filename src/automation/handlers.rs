@@ -126,8 +126,15 @@ pub async fn create_rule(
     // ACTIVE rule, exactly as before this change, because the column's own default is true. The
     // console's "Save as draft" sends false explicitly; nothing in this endpoint can activate a
     // rule that was created as a draft, and nothing here queues an action.
+    // Free-text hygiene before the write (`security::free_text`, 2026-11-26): a NUL in the name or
+    // the description reached the INSERT, and one inside either JSON config reached the jsonb cast —
+    // both answered the same raw 500 and saved nothing.
+    let name = crate::security::free_text::single_line(&r.name, "Rule name", 200)?;
+    let description = crate::security::free_text::nul_free(r.description);
+    let trigger_config = crate::security::free_text::strip_nul_json(&r.trigger_config);
+    let action_config = crate::security::free_text::strip_nul_json(&r.action_config);
     let rule = sqlx::query_as::<_,AutomationRule>(concat!("INSERT INTO automation_rules(id,tenant_id,name,description,trigger_type,trigger_config,action_type,action_config,is_active) VALUES($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9,true)) RETURNING ", rule_columns!()))
-        .bind(Uuid::new_v4()).bind(t).bind(&r.name).bind(&r.description).bind(&r.trigger_type).bind(&r.trigger_config).bind(&r.action_type).bind(&r.action_config).bind(r.is_active).fetch_one(&s.db).await?;
+        .bind(Uuid::new_v4()).bind(t).bind(&name).bind(&description).bind(&r.trigger_type).bind(&trigger_config).bind(&r.action_type).bind(&action_config).bind(r.is_active).fetch_one(&s.db).await?;
     // Belt and braces (kanban t_b54589a3): a brand-new rule has no queue rows, so this is a no-op
     // today — but the invariant "an inactive rule has nothing waiting" is enforced at every door
     // that can produce an inactive rule, not just at Pause.
@@ -173,9 +180,20 @@ pub async fn update_rule(
     // PAUSE (kanban t_b54589a3): when the rule ends up inactive, every step it still has waiting is
     // cancelled in the SAME transaction as the flip — the console's "it will not fire" sentence is
     // only true if the queue agrees. Rows are kept as the ledger (`result.reason` says why).
+    // Same free-text hygiene as the create door, including both JSON configs.
+    let name = crate::security::free_text::optional_line(r.name.as_deref(), "Rule name", 200)?;
+    let description = crate::security::free_text::nul_free(r.description);
+    let trigger_config = r
+        .trigger_config
+        .as_ref()
+        .map(crate::security::free_text::strip_nul_json);
+    let action_config = r
+        .action_config
+        .as_ref()
+        .map(crate::security::free_text::strip_nul_json);
     let mut tx = s.db.begin().await?;
     let rule = sqlx::query_as::<_,AutomationRule>(concat!("UPDATE automation_rules SET name=COALESCE($1,name), description=COALESCE($2,description), trigger_type=COALESCE($3,trigger_type), trigger_config=COALESCE($4,trigger_config), action_type=COALESCE($5,action_type), action_config=COALESCE($6,action_config), is_active=COALESCE($7,is_active), updated_at=NOW() WHERE id=$8 AND tenant_id=$9 RETURNING ", rule_columns!()))
-        .bind(&r.name).bind(&r.description).bind(&r.trigger_type).bind(&r.trigger_config).bind(&r.action_type).bind(&r.action_config).bind(r.is_active).bind(id).bind(t).fetch_optional(&mut *tx).await?.ok_or(AppError::NotFound(format!("Rule {id} not found")))?;
+        .bind(&name).bind(&description).bind(&r.trigger_type).bind(&trigger_config).bind(&r.action_type).bind(&action_config).bind(r.is_active).bind(id).bind(t).fetch_optional(&mut *tx).await?.ok_or(AppError::NotFound(format!("Rule {id} not found")))?;
     let cancelled = if rule.is_active {
         0
     } else {
