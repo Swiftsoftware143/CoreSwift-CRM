@@ -1142,6 +1142,37 @@ async function adminSendReset(btn) {
   }
 }
 
+// DELETE MEANS DELETE (kanban t_d7474aee). The admin Users screen had no way to remove an account at
+// all: an operator could take someone out of a routing pool and the account row stayed for ever. This
+// deletes the row outright. The server's own answer decides what the operator is told — `deleted`
+// means the row is gone, and a `deactivated` answer carries the reason the record was kept — and the
+// list is then re-read from the server so the screen can never show a person who is gone.
+async function adminDeleteUser(btn) {
+  const id = (btn && btn.dataset && btn.dataset.id) || '';
+  const name = (btn && btn.dataset && btn.dataset.name) || 'this person';
+  const email = (btn && btn.dataset && btn.dataset.email) || '';
+  if (!id) { toast('That row has no id, so it cannot be deleted.', 'error'); return; }
+  const who = email ? (name + ' (' + email + ')') : name;
+  if (!confirm('Delete ' + who + ' permanently?\n\n' +
+      'The account is removed from the database. Their invoices, deals and message history stay, ' +
+      'and anything they owned is left unassigned. This cannot be undone.')) return;
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Deleting…';
+  try {
+    const r = await API.del('/admin/users/' + encodeURIComponent(id));
+    if (r && r.deleted) toast('Deleted ' + who, 'success');
+    else if (r && r.deactivated) toast('Deactivated — ' + (r.reason || 'the record is kept'), 'success');
+    else toast((r && r.message) || 'The account was deleted.', 'success');
+  } catch (e) {
+    toast('Delete failed: ' + planGateText(e), 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+  if (typeof window._usersReload === 'function') await window._usersReload();
+}
+
 // Email Templates carried the same inert Edit button. PUT /api/email-templates/{id} has existed all
 // along (name/subject/body/html_body; an absent field is left untouched), so this opens the template
 // as it is stored NOW (a fresh read, never a stale list row) and saves the fields an operator edits.
@@ -3104,7 +3135,10 @@ async function rrLoadMembers(teamId) {
       members.map(function (m) {
         return [fh(m.user_id), m.weight, m.max_concurrent_bookings,
           m.is_active ? '<span class="badge badge-success">yes</span>' : '<span class="badge badge-muted">no</span>',
-          '<button class="btn btn-ghost btn-xs" onclick="rrRemoveMember(\'' + teamId + '\',\'' + m.id + '\')">Remove</button>'];
+          // MEMBERSHIP, NOT DELETION (kanban t_d7474aee): this removes a person from THIS routing pool
+          // and their account is untouched, so the button says so. "Remove" beside a person's name read
+          // as removing the person.
+          '<button class="btn btn-ghost btn-xs" data-ops="rr-remove-from-pool" onclick="rrRemoveMember(\'' + teamId + '\',\'' + m.id + '\')">Remove from pool</button>'];
       }), 'No members on this team yet.');
   } catch (e) { el.innerHTML = rrErr('Team members', e, "rrLoadMembers('" + teamId + "')"); }
 }
@@ -4816,19 +4850,38 @@ const TAB_LOADERS = {
         const users = Array.isArray(uRes) ? uRes : (uRes.users || []);
         const total = (uRes && typeof uRes.count === 'number') ? uRes.count : users.length;
         let rows = [];
+        // The signed-in operator's own id: their row's Delete is disabled rather than offering an
+        // action the server will refuse (a self-delete is a lockout, never a cleanup).
+        const selfId = String((STATE.user && STATE.user.id) || '');
         if (Array.isArray(users)) {
-          rows = users.map(u => [
-            escapeHtml(u.name || '—'),
-            escapeHtml(u.email || '—') + (isProbeOwner(u.email)
-              ? ' <span class="badge badge-warning" title="a reserved or fleet-probe address — a probe, not a person">probe</span>'
-              : ''),
-            `<span class="badge ${u.role==='agency_admin'?'badge-primary':'badge-muted'}">${escapeHtml(roleLabel(u.role))}</span>` +
-              (u.tenant_name ? ` <span style="font-size:12px;color:var(--text-secondary)">${escapeHtml(u.tenant_name)}</span>` : ''),
-            escapeHtml(u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'),
-            (u.email && !isProbeOwner(u.email)
-              ? `<button class="btn btn-ghost btn-xs" data-ops="user-send-reset" data-email="${escapeHtmlAttr(u.email)}" onclick="adminSendReset(this)">Send reset</button>`
-              : '—')
-          ]);
+          rows = users.map(u => {
+            const isOwner = String(u.role || '').toLowerCase() === 'owner';
+            const isSelf = selfId && String(u.id) === selfId;
+            // DELETE MEANS DELETE (kanban t_d7474aee). This screen had no way to remove an account at
+            // all, so a person taken out of a routing pool stayed in the database for ever. The
+            // control is offered per row and the SERVER decides: self (400), a workspace owner (403)
+            // and the last admin (400) are refused with their own sentence, and the button is
+            // disabled up front where the refusal is already known, so an operator is told why
+            // instead of discovering it after a confirm.
+            const delBtn = isSelf
+              ? '<button class="btn btn-ghost btn-xs" disabled title="You cannot delete the account you are signed in as.">Delete</button>'
+              : isOwner
+                ? '<button class="btn btn-ghost btn-xs" disabled title="The workspace owner cannot be deleted — transfer ownership first.">Delete</button>'
+                : `<button class="btn btn-ghost btn-xs" data-ops="user-delete" data-id="${escapeHtmlAttr(u.id || '')}" data-name="${escapeHtmlAttr(u.name || '')}" data-email="${escapeHtmlAttr(u.email || '')}" onclick="adminDeleteUser(this)">Delete</button>`;
+            return [
+              escapeHtml(u.name || '—'),
+              escapeHtml(u.email || '—') + (isProbeOwner(u.email)
+                ? ' <span class="badge badge-warning" title="a reserved or fleet-probe address — a probe, not a person">probe</span>'
+                : ''),
+              `<span class="badge ${u.role==='agency_admin'?'badge-primary':'badge-muted'}">${escapeHtml(roleLabel(u.role))}</span>` +
+                (u.tenant_name ? ` <span style="font-size:12px;color:var(--text-secondary)">${escapeHtml(u.tenant_name)}</span>` : ''),
+              escapeHtml(u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'),
+              (u.email && !isProbeOwner(u.email)
+                ? `<button class="btn btn-ghost btn-xs" data-ops="user-send-reset" data-email="${escapeHtmlAttr(u.email)}" onclick="adminSendReset(this)">Send reset</button>`
+                : '—'),
+              delBtn
+            ];
+          });
         }
         if (!rows.length && st.q) {
           // A search that matched nobody is not "no data yet" — say what was searched.
@@ -4839,7 +4892,7 @@ const TAB_LOADERS = {
           </div></div></div>`;
         } else {
           usersTableEl.innerHTML = dataTable(
-            ['Name','Email','Role / workspace','Created',''], rows,
+            ['Name','Email','Role / workspace','Created','',''], rows,
             'No users yet.'
           );
         }
@@ -4869,6 +4922,9 @@ const TAB_LOADERS = {
     if (prevEl) prevEl.onclick = () => { if (st.page > 1) { st.page -= 1; loadUsers(); } };
     const nextEl = document.getElementById('usersNext');
     if (nextEl) nextEl.onclick = () => { st.page += 1; loadUsers(); };
+    // A delete must re-read the list from the server, never patch the row out locally: the API's
+    // answer is the only proof the row is gone (`adminDeleteUser` calls this).
+    window._usersReload = loadUsers;
     await loadUsers();
   },
 
