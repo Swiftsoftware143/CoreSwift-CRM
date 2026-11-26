@@ -2628,6 +2628,26 @@ function csIsTestIdentity(email) {
   if (domain === 'example.com' || domain === 'example.net' || domain === 'example.org') return true;
   return /\.(invalid|test|example|localhost)$/.test(domain);
 }
+  // Delete a person across tenants (platform admin only). One request, one answer: the API decides
+  // whether the row goes or the action is refused, and the sentence the operator reads is the API's.
+  window.csDeleteUser = async function (id, email) {
+    if (!id) return;
+    const who = email || 'this person';
+    if (!confirm('Delete ' + who + ' permanently?\n\n'
+      + 'This removes their login and their place in this account for good.\n'
+      + 'Their deals, notes and invoice history stay, and are no longer assigned to anyone.')) return;
+    try {
+      const r = await API.del('/admin/users/' + id);
+      if (r && r.deleted) toast('Deleted ' + who + '.', 'success');
+      else if (r && r.deactivated) toast('Deactivated — ' + (r.reason || 'history is kept.'), 'success');
+      else toast('The API did not report a deletion.', 'error');
+      if (TAB_LOADERS['users']) TAB_LOADERS['users']();
+    } catch (e) {
+      // 400/403/404 carry the reason (self, owner, last admin, unknown id). Show it as written.
+      toast(e.message || 'Could not delete.', 'error');
+    }
+  };
+
 const TAB_LOADERS = {
   // Same rule as every loader below: the renderer runs before its HTML is in the document, so the
   // audit load registers here and runs against an #auditContent that already exists.
@@ -3028,26 +3048,6 @@ const TAB_LOADERS = {
   },
 
   // === ROUND 7 ADMIN OPS LOADERS ===
-
-  // Delete a person across tenants (platform admin only). One request, one answer: the API decides
-  // whether the row goes or the action is refused, and the sentence the operator reads is the API's.
-  window.csDeleteUser = async function (id, email) {
-    if (!id) return;
-    const who = email || 'this person';
-    if (!confirm('Delete ' + who + ' permanently?\n\n'
-      + 'This removes their login and their place in this account for good.\n'
-      + 'Their deals, notes and invoice history stay, and are no longer assigned to anyone.')) return;
-    try {
-      const r = await API.del('/admin/users/' + id);
-      if (r && r.deleted) toast('Deleted ' + who + '.', 'success');
-      else if (r && r.deactivated) toast('Deactivated — ' + (r.reason || 'history is kept.'), 'success');
-      else toast('The API did not report a deletion.', 'error');
-      if (TAB_LOADERS['users']) TAB_LOADERS['users']();
-    } catch (e) {
-      // 400/403/404 carry the reason (self, owner, last admin, unknown id). Show it as written.
-      toast(e.message || 'Could not delete.', 'error');
-    }
-  };
 
   'portfolio': async () => {
     const el = document.getElementById('portfolioTable');
