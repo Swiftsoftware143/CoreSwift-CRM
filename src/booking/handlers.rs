@@ -21,8 +21,14 @@ use crate::errors::AppError;
 pub async fn create_calendar(
     State(pool): State<PgPool>,
     Extension(t): Extension<TenantId>,
-    Json(body): Json<NewCalendar>,
+    Json(mut body): Json<NewCalendar>,
 ) -> Result<(StatusCode, Json<Calendar>)> {
+    // Postgres cannot store a NUL byte in a text column, so one invisible character pasted into a
+    // calendar name answered `500 Database error` before anything was created (measured live
+    // 2026-11-26 on the running binary: `POST /api/bookings/calendars {"name":"B\u0000","slug":"p"}`).
+    // Same rule as every other write door: an invisible byte is DROPPED, never surfaced as a fault.
+    body.name = crate::security::free_text::strip_nul(&body.name);
+    body.slug = crate::security::free_text::strip_nul(&body.slug);
     let mut c = pool.acquire().await?;
     Ok((
         StatusCode::CREATED,
@@ -623,8 +629,11 @@ pub async fn create_resource(
     State(pool): State<PgPool>,
     Extension(t): Extension<TenantId>,
     Path(id): Path<Uuid>,
-    Json(body): Json<NewResource>,
+    Json(mut body): Json<NewResource>,
 ) -> Result<(StatusCode, Json<Resource>)> {
+    // A resource is a bookable item an OWNER names; a pasted NUL must not become a 500.
+    body.name = crate::security::free_text::strip_nul(&body.name);
+    body.description = crate::security::free_text::nul_free(body.description);
     let mut c = pool.acquire().await?;
     service::calendar_for_tenant(&mut c, id, t.0).await?;
     Ok((

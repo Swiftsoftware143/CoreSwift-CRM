@@ -241,11 +241,22 @@ pub async fn set_user_industry(
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
     let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    if req.industry_slug.is_empty() {
-        return Err(AppError::Validation(
-            "industry_slug is required".to_string(),
-        ));
-    }
+    // The very first statement below binds `industry_slug`, and Postgres refuses a NUL in a text
+    // column: one invisible character answered `500 Database error` before any gate ran (measured
+    // live 2026-11-26 on the running binary). A slug is a single-line key, so it goes through the
+    // shared hygiene helper — NUL stripped, blank refused, other control characters refused BY NAME.
+    let req = SetIndustryRequest {
+        industry_slug: crate::security::free_text::single_line(
+            &req.industry_slug,
+            "industry_slug",
+            80,
+        )?,
+        dashboard_name: crate::security::free_text::optional_line(
+            req.dashboard_name.as_deref(),
+            "dashboard_name",
+            200,
+        )?,
+    };
 
     // The ceiling is checked only when this activation would ADD an industry to the workspace.
     // Re-checking `user_id`-scoped (the old arm) missed the reactivation path: a row that exists with
