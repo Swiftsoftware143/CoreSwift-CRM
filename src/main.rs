@@ -1426,12 +1426,35 @@ fn migration_error_kind(e: &sqlx::migrate::MigrateError) -> String {
 }
 
 /// Health check endpoint — returns 200 when the service is running
-async fn health_check() -> impl IntoResponse {
+async fn health_check(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> impl IntoResponse {
     let mut body = serde_json::json!({
         "status": "ok",
         "service": "crm-swift",
         "version": env!("CARGO_PKG_VERSION")
     });
+    // STORED-AGGREGATE DRIFT, VISIBLE WITHOUT A HUMAN AUDIT (CEO, 2026-11-27). `lists.member_count`
+    // is a stored column, so a member row outliving its contact leaves an audience that says it is
+    // bigger than it is. Two numbers, fleet-wide: how many lists disagree with a live contact-joined
+    // count, and how many member rows point at no contact at all. Both should read 0; a non-zero is a
+    // report rather than a refusal, because a wrong count must never take the app down.
+    if let Ok((drift, orphans)) = sqlx::query_as::<_, (i64, i64)>(
+        r#"SELECT
+             (SELECT count(*) FROM lists l
+               WHERE l.member_count <> (SELECT count(*) FROM list_members m
+                                           JOIN contacts c ON c.id = m.contact_id
+                                                          AND c.tenant_id = m.tenant_id
+                                          WHERE m.list_id = l.id)),
+             (SELECT count(*) FROM list_members m
+               WHERE NOT EXISTS (SELECT 1 FROM contacts c WHERE c.id = m.contact_id))"#,
+    )
+    .fetch_one(&state.db)
+    .await
+    {
+        body["list_member_count_drift"] = serde_json::json!(drift);
+        body["list_member_orphans"] = serde_json::json!(orphans);
+    }
     // Present ONLY in the `MIGRATIONS_FATAL=0` case: the process is serving with migrations
     // UNAPPLIED, and a bare `status: "ok"` would hide exactly the condition this card is about.
     if let Some(error) = MIGRATION_FAILURE.get() {

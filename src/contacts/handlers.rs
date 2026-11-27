@@ -442,11 +442,33 @@ pub async fn delete(
     .bind(id)
     .execute(&mut *tx)
     .await?;
+    // RECOMPUTE THE STORED AUDIENCE SIZE IN THE SAME TRANSACTION (CEO, 2026-11-27). `lists.member_count`
+    // is a stored column, so removing a member without refreshing it leaves a list claiming an audience
+    // it no longer has - an audience outliving its members. The fix belongs at the WRITE path, not the
+    // read: a live count on read would hide the same defect in every other stored aggregate.
+    let touched_lists: Vec<(uuid::Uuid,)> = sqlx::query_as(
+        "SELECT DISTINCT list_id FROM list_members WHERE tenant_id = $1 AND contact_id = $2",
+    )
+    .bind(account_id)
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
     sqlx::query("DELETE FROM list_members WHERE tenant_id = $1 AND contact_id = $2")
         .bind(account_id)
         .bind(id)
         .execute(&mut *tx)
         .await?;
+    for (list_id,) in touched_lists {
+        sqlx::query(
+            "UPDATE lists SET member_count = (SELECT count(*) FROM list_members m
+                                                JOIN contacts c ON c.id = m.contact_id
+                                                              AND c.tenant_id = m.tenant_id
+                                               WHERE m.list_id = $1) WHERE id = $1",
+        )
+        .bind(list_id)
+        .execute(&mut *tx)
+        .await?;
+    }
 
     let result = sqlx::query("DELETE FROM contacts WHERE id = $1 AND tenant_id = $2")
         .bind(id)
