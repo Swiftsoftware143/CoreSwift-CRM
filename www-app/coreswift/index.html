@@ -1043,7 +1043,10 @@ function csSyncSessionCookie(token) {
 // /guide.html, /onboarding.html and /help.html are no longer public files: the web server closes them and the
 // app serves them at /api/docs/<name> to a caller holding a session. A link cannot carry the credential, so
 // this fetches the document with it and opens the bytes. Nothing is put in the URL.
-async 
+// (The `async ` token that stood here — one line, no name, no body, left by commit 038f9a8 when the
+// Broadcast tab was inserted — made the browser reject the WHOLE inline console script: MENU and
+// TAB_RENDERERS were never defined and the console rendered nothing but the login pane. Removed while
+// proving the Tags member count, kanban t_7a54cc6a. csOpenDoc itself is defined below, once.)
 // ===== BROADCAST: one message, once, to a list or a tag (David, 2026-11-26) =====
 // Not a campaign: a campaign is a sequence with delays and one-contact enrolment. This is "mail this
 // audience once, now". The audience is a list or a tag, previewed with real counts before anything is sent,
