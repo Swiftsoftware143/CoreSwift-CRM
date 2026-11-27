@@ -131,6 +131,7 @@ def main() -> int:
     for lid, name in ((l1, f"{TAG} Nurture"), (l2, f"{TAG} Customers")):
         sql(f"INSERT INTO lists (id, tenant_id, name, list_type) VALUES ('{lid}','{tid}','{name}','static')")
 
+    contact = ""
     try:
         st, body = call(base, "PUT", f"/api/booking/calendars/{cal}/capture", tok, {
             "tags": ["{product} hot", "{product}", "{city} booking"],
@@ -172,7 +173,10 @@ def main() -> int:
             tag_names = [t for t in sql(
                 f"SELECT t.name FROM tags t JOIN tag_assignments ct ON ct.tag_id=t.id "
                 f"WHERE ct.entity_id='{contact}' AND ct.entity_type='contact' ORDER BY t.name").splitlines() if t]
-        check("C2 four tags on the contact", bst in (200, 201) and contact != "" and len(tag_names) == 4,
+        # 4 capture tags (3 templates, one skipped for a missing city, plus 2 from the category)
+        # PLUS 'Warm' from the lead-temperature automation that fires on contact.created -- wired to
+        # booking-created contacts on 2026-11-26 (kanban t_d4396db5, measured 5 on the live binary).
+        check("C2 five tags on the contact", bst in (200, 201) and contact != "" and len(tag_names) == 5,
               f"booking HTTP {bst} | tags on contact = {len(tag_names)} → {tag_names} "
               f"(3 templates, one skipped for a missing city, plus 2 from the category)")
 
@@ -194,7 +198,7 @@ def main() -> int:
         members2 = one(f"SELECT COUNT(*) FROM list_members WHERE contact_id='{contact}' "
                        f"AND list_id IN ('{l1}','{l2}')") if contact else "0"
         tags2 = one(f"SELECT COUNT(*) FROM tag_assignments WHERE entity_id='{contact}'") if contact else "0"
-        check("C5 returning buyer adds nothing", members2 == "2" and tags2 == "4",
+        check("C5 returning buyer adds nothing", members2 == "2" and tags2 == "5",
               f"list rows = {members2} | contact_tags rows = {tags2}")
     finally:
         sql(f"DELETE FROM booking_orders WHERE calendar_id='{cal}'")
@@ -204,7 +208,17 @@ def main() -> int:
             f"(SELECT id FROM tags WHERE name LIKE '{TAG}%')")
         sql(f"DELETE FROM tags WHERE name LIKE '{TAG}%'")
         sql(f"DELETE FROM tag_categories WHERE id='{cat}'")
-        sql(f"DELETE FROM contacts WHERE email LIKE '{TAG}%'")
+        # The capture contact's address is `captureaudit<hex>@<own domain>` -- deliberately
+        # customer-shaped so the capture path can mint it -- so it is NOT TAG-prefixed. Deleting
+        # only `email LIKE '<TAG>%'` missed it on every run and left 3 contacts in ZaarHub
+        # (kanban t_3ce27efb). Delete by CAPTURED ID and by the exact address this run minted;
+        # never widen to a pattern that could reach a real contact.
+        if contact:
+            sql(f"DELETE FROM tag_assignments WHERE entity_type='contact' AND entity_id='{contact}'")
+            sql(f"DELETE FROM list_members WHERE contact_id='{contact}'")
+            sql(f"DELETE FROM contacts WHERE id='{contact}'")
+        sql(f"DELETE FROM contacts WHERE email='{contact_email}'")
+        sql(f"DELETE FROM outbound_messages WHERE to_address='{contact_email}'")
         sql(f"DELETE FROM booking_availability_rules WHERE resource_id NOT IN "
             f"(SELECT id FROM booking_resources WHERE name NOT LIKE '{TAG}%')")
         sql(f"DELETE FROM booking_resources WHERE name LIKE '{TAG}%'")
@@ -213,7 +227,7 @@ def main() -> int:
         sql(f"DELETE FROM tag_categories WHERE name LIKE '{TAG}%'")
 
     left = one(f"SELECT (SELECT COUNT(*) FROM booking_calendars WHERE name LIKE '{TAG}%')"
-               f" + (SELECT COUNT(*) FROM contacts WHERE email LIKE '{TAG}%')"
+               f" + (SELECT COUNT(*) FROM contacts WHERE email='{contact_email}' OR email LIKE '{TAG}%')"
                f" + (SELECT COUNT(*) FROM lists WHERE name LIKE '{TAG}%')"
                f" + (SELECT COUNT(*) FROM tags WHERE name LIKE '{TAG}%')")
     check("Z no probe rows left", left == "0", f"probe rows across four tables = {left}")
