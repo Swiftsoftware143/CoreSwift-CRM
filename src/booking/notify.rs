@@ -261,13 +261,7 @@ pub async fn on_confirmed(pool: &PgPool, order_id: Uuid) {
         }
     }
 
-    let team: Vec<String> = sqlx::query_scalar(
-        "SELECT email FROM booking_notify_emails WHERE calendar_id = $1 AND is_active",
-    )
-    .bind(ctx.calendar_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let team = office_recipients(pool, &ctx, order_id, "booking_team_heads_up").await;
 
     for address in team {
         if let Err(e) = crate::email::send_template_email(
@@ -285,6 +279,93 @@ pub async fn on_confirmed(pool: &PgPool, order_id: Uuid) {
     }
 
     apply_tags(pool, &ctx, "confirm").await;
+}
+
+/// The calendar's notification list — unless the booking was made by a probe identity.
+///
+/// The office alert is addressed to the OPERATOR (the calendar's notification list), never to the
+/// buyer, so recipient hygiene on the probe address does not cover it: a probe booking would mail
+/// the operator through this list while the buyer's own copy was correctly withheld. The row is
+/// still written and the slot still held — only the mail stops, and the reason is logged.
+async fn office_recipients(
+    pool: &PgPool,
+    ctx: &Context,
+    order_id: Uuid,
+    template: &str,
+) -> Vec<String> {
+    if let Some(kind) =
+        crate::security::probe_addr::synthetic_requester(&ctx.customer_email, &ctx.customer_name)
+    {
+        tracing::info!(
+            order = %order_id,
+            template,
+            kind,
+            "booking notify: synthetic requester — operator alert withheld"
+        );
+        return Vec::new();
+    }
+    sqlx::query_scalar(
+        "SELECT email FROM booking_notify_emails WHERE calendar_id = $1 AND is_active",
+    )
+    .bind(ctx.calendar_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+}
+
+/// A booking was made but is NOT confirmed: the slots are held while the money is arranged.
+///
+/// The public booking page tells the buyer "we have emailed you with the details" the moment the
+/// order is stored, so something has to be emailed — and the office has to know a slot is spoken
+/// for, or the hold runs out with nobody having chased the payment. Measured 2026-11-26: a $68
+/// pending booking wrote zero mail, so the buyer waited for a message that never came.
+///
+/// This is deliberately not a confirmation: nothing has been charged and the slots are only held.
+pub async fn on_held(pool: &PgPool, order_id: Uuid) {
+    let Some(ctx) = load(pool, order_id).await else {
+        tracing::warn!(order = %order_id, "booking notify: held order not found, nothing sent");
+        return;
+    };
+
+    let send = sqlx::query_scalar::<_, bool>(
+        "SELECT send_confirmation FROM booking_calendars WHERE id = $1",
+    )
+    .bind(ctx.calendar_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(true);
+
+    if send {
+        if let Err(e) = crate::email::send_template_email(
+            pool,
+            ctx.tenant_id,
+            &ctx.customer_email,
+            "booking_pending",
+            &vars(&ctx),
+        )
+        .await
+        {
+            tracing::warn!(order = %order_id, error = %e,
+                "booking notify: held-booking customer mail failed");
+        }
+    }
+
+    for address in office_recipients(pool, &ctx, order_id, "booking_team_pending").await {
+        if let Err(e) = crate::email::send_template_email(
+            pool,
+            ctx.tenant_id,
+            &address,
+            "booking_team_pending",
+            &vars(&ctx),
+        )
+        .await
+        {
+            tracing::warn!(order = %order_id, to = %address, error = %e,
+                "booking notify: held-booking office alert failed");
+        }
+    }
 }
 
 /// A booking was cancelled: run the cancel-stage tag rules (add "Cancelled", or take the confirmed

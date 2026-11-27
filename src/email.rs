@@ -402,7 +402,9 @@ fn get_default_subject(template_type: &str, app_name: &str) -> String {
     match template_type {
         "welcome" => format!("Welcome to {}!", app_name),
         "booking_confirmed" => "You're booked — here is what happens next".to_string(),
+        "booking_pending" => "Your slots are held — payment is the last step".to_string(),
         "booking_team_heads_up" => "New booking on your calendar".to_string(),
+        "booking_team_pending" => "A booking is waiting for payment".to_string(),
         "purchase_confirmed" => "Payment Received — Thank You!".to_string(),
         "password_reset" => "Password Reset Request".to_string(),
         "email_change" => "Confirm your new sign-in email".to_string(),
@@ -500,6 +502,76 @@ fn inline_bodies(
                 "{who} just booked {what}.\n\n{items}\n\nTotal: {total}\n\n\
                  You are receiving this because this address is on the calendar's notification list.\n\n\
                  - {app_name}"
+            );
+            (subject, body, String::new(), false)
+        }
+        // A BOOKING THAT IS HELD, NOT CONFIRMED (2026-11-27). The public booking page tells the buyer
+        // "we have emailed you with the details" the moment the order is stored — but a booking whose
+        // total is above zero waits for payment, so nothing used to be sent at all: measured
+        // 2026-11-26, a $68 pending order wrote zero mail, and the buyer was left waiting for a
+        // message that never came while the hold quietly ran out. This arm is what the page's
+        // sentence refers to, and it must not read like a confirmation: nothing is charged yet and
+        // the booking is only held.
+        "booking_pending" => {
+            let who = vars
+                .get("customer_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("there");
+            let what = vars
+                .get("calendar_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("booking");
+            let items = vars.get("items").and_then(|v| v.as_str()).unwrap_or("");
+            let total = vars.get("total").and_then(|v| v.as_str()).unwrap_or("");
+            let pay = vars
+                .get("payment_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let manage = vars
+                .get("manage_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let payment = if pay.is_empty() {
+                format!(
+                    "Our team will email you how to pay this amount — reply to this message if you \
+                     would rather pay another way.\n\nYour slots stay held for you. If you change \
+                     your mind, cancel them yourself here:\n    {manage}"
+                )
+            } else {
+                format!(
+                    "Pay here: {pay}\n\nYour booking is confirmed as soon as the payment lands. \
+                     If you change your mind, cancel it yourself here:\n    {manage}"
+                )
+            };
+            let subject = format!("Your slots are held — {what}");
+            let body = format!(
+                "Hi {who},\n\n                 Your slots are held for {what}. Nothing has been charged yet.\n\n                 WHAT YOU HAVE HELD\n{items}\n\nTotal: {total}\n\n                 PAYMENT\n{payment}\n\n- {app_name} Team"
+            );
+            (subject, body, String::new(), false)
+        }
+        "booking_team_pending" => {
+            let who = vars
+                .get("customer_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("A customer");
+            let what = vars
+                .get("calendar_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("a calendar");
+            let email = vars
+                .get("customer_email")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let items = vars.get("items").and_then(|v| v.as_str()).unwrap_or("");
+            let total = vars.get("total").and_then(|v| v.as_str()).unwrap_or("");
+            let subject = format!("Waiting for payment — {who} — {what}");
+            let body = format!(
+                "{who} ({email}) booked {what}, and the slots are HELD but not paid for.\n\n\
+                 {items}\n\nTotal: {total}\n\n                 Nothing has been charged. The customer \
+                 has been emailed that the slots are held; the booking confirms once the payment is \
+                 in, and the hold releases by itself if nobody pays.\n\n- {app_name}"
             );
             (subject, body, String::new(), false)
         }

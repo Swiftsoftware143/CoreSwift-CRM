@@ -1011,6 +1011,15 @@ pub async fn public_create_order(
             }
         }
     }
+    // A booking that WAITS for payment is still a booking the buyer was told "we have emailed you
+    // with the details" about, and the office has to know a slot is spoken for. Measured 2026-11-26:
+    // a $68 pending booking wrote zero mail, so the sponsor waited for a message that never came and
+    // nobody chased the payment before the hold ran out.
+    if created.order.status != "confirmed" {
+        let pool2 = pool.clone();
+        let oid = created.order.id;
+        tokio::spawn(async move { super::notify::on_held(&pool2, oid).await });
+    }
     Ok((StatusCode::CREATED, Json(created)))
 }
 
