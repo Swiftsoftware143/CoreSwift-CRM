@@ -549,13 +549,26 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/docs/:name", get(crate::docs_serve::get_doc))
         // One message, once, to a list or a tag (David, 2026-11-26). A broadcast only ENQUEUES; the worker
         // delivers, so every gate applies unchanged.
+        // These two carry `auth_middleware` THEMSELVES: the boundary outside this stack only refuses
+        // anonymous callers, it does not put the signed-in Claims on the request, so a route added here
+        // without it answers 500 "Missing request extension: Claims" (measured on the first deploy).
         .route(
             "/api/broadcasts/preview",
-            axum::routing::post(crate::broadcasts::preview),
+            axum::routing::post(crate::broadcasts::preview).layer(
+                axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::auth::middleware::auth_middleware,
+                ),
+            ),
         )
         .route(
             "/api/broadcasts",
-            axum::routing::post(crate::broadcasts::send),
+            axum::routing::post(crate::broadcasts::send).layer(
+                axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::auth::middleware::auth_middleware,
+                ),
+            ),
         )
         .nest("/api/contacts", contacts::router(state.clone()))
         // Visual field mapper (docs/coreswift-data-mapping-spec-2026-11-13.md). Its console routes
