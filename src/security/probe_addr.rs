@@ -152,6 +152,24 @@ pub const SYNTHETIC_REQUESTER_DOMAINS: &[&str] = &[
 /// Local parts a harness mints. `bounce+` is the shape a deliverability probe uses.
 pub const SYNTHETIC_LOCAL_PREFIXES: &[&str] = &["probe-", "canary-", "bounce+", "verify"];
 
+/// Local-part stems the fleet's own probes have ACTUALLY used on routable customer domains
+/// (measured 2026-11-26, kanban t_3ce27efb): `BCPROBE3A@coreswiftcrm.com`,
+/// `captureaudit<hex>@coreswiftcrm.com`, `ceo-rule-probe@zaarhub.com`,
+/// `probe+temperature-trigger@swiftimpactsolutions.com`.
+///
+/// Deliberately SEPARATE from [`SYNTHETIC_LOCAL_PREFIXES`]: that list is the CREATION gate
+/// (`synthetic_requester` refuses to mint a CRM contact from such an address), and the
+/// booking-capture harness must be able to mint the very contact it is testing. These stems only
+/// ATTRIBUTE a row as a test row ([`probe_contact_addr`], used by the spoke ingest label and the
+/// helpdesk junk arm). Matched case-insensitively because the local part is lowercased first.
+pub const TEST_ROW_LOCAL_PREFIXES: &[&str] = &[
+    "bcprobe",
+    "captureaudit",
+    "zzprobe",
+    "ceo-rule-probe",
+    "probe+",
+];
+
 /// The fleet's BRAND domain — the one domain in [`SYNTHETIC_REQUESTER_DOMAINS`] where the fleet's
 /// own humans hold real mailboxes. A probe identity on it is still machinery, but it has to be
 /// named by SHAPE (`realcustomer-<unix-ts>`), never by the domain alone (see
@@ -232,9 +250,12 @@ pub fn probe_contact_addr(addr: &str) -> bool {
     }
 
     // 1. A machine-minted local part names harness machinery on ANY domain — the fleet's own proof
-    //    scripts address real, registrable domains (`probe-x@maxxspace.com`).
+    //    scripts address real, registrable domains (`probe-x@maxxspace.com`), and the stems this
+    //    fleet actually used (`bcprobe`, `captureaudit`, `zzprobe`, `ceo-rule-probe`, `probe+`) are
+    //    listed separately so the CREATION gate keeps letting the capture harness mint its contact.
     if SYNTHETIC_LOCAL_PREFIXES
         .iter()
+        .chain(TEST_ROW_LOCAL_PREFIXES.iter())
         .any(|p| local.starts_with(p))
     {
         return true;
@@ -546,6 +567,25 @@ mod probe_contact_addr_tests {
         assert!(probe_contact_addr("someone@mail.swiftsoftware.dev"));
         // The rest of the alert class.
         assert!(probe_contact_addr("proof@test.com"));
+        // The stems the fleet's own probes used on ROUTABLE customer domains (2026-11-26).
+        assert!(probe_contact_addr("BCPROBE3A@CORESWIFTCRM.COM"));
+        assert!(probe_contact_addr("captureaudit0ae2c1@coreswiftcrm.com"));
+        assert!(probe_contact_addr("ceo-rule-probe@zaarhub.com"));
+        assert!(probe_contact_addr(
+            "probe+temperature-trigger@swiftimpactsolutions.com"
+        ));
+    }
+
+    #[test]
+    fn test_row_stems_do_not_gate_creation() {
+        // The widened attribution list must NOT leak into the CREATION gate: the booking-capture
+        // harness addresses its buyer this way precisely so the capture path can mint the contact
+        // it is testing. If this ever returns Some, that harness stops testing capture and starts
+        // testing the gate.
+        assert_eq!(
+            super::synthetic_requester("captureaudit0ae2c1@coreswiftcrm.com", "Dana Buyer"),
+            None
+        );
     }
 
     #[test]
@@ -559,6 +599,10 @@ mod probe_contact_addr_tests {
         // Label boundary: a domain that merely contains the brand name is a customer.
         assert!(!probe_contact_addr("someone@notswiftsoftware.com"));
         assert!(!probe_contact_addr("owner@notalbert-tire.com"));
+        // The widened stems must not turn an ordinary mailbox on a customer's own domain into a
+        // probe: only the stem AT THE START of the local part counts.
+        assert!(!probe_contact_addr("dana.buyer@coreswiftcrm.com"));
+        assert!(!probe_contact_addr("audit@zaarhub.com"));
     }
 
     #[test]
