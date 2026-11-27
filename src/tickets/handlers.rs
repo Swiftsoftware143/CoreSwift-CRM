@@ -863,10 +863,16 @@ pub async fn file_signup_plan_request(
     // Idempotent on (address, subject, still open) — the same dedupe the public form uses. A dropped
     // connection on the signup page is retried by real people, and a second ask for the same tier is
     // noise the operator has to work twice.
+    // A PLAN REQUEST IS IDENTIFIABLE BY DATA (kanban t_42872c18, migration 225). This row used to be
+    // written with `source = 'form'` — the value the public contact form writes — leaving the subject
+    // sentence as the only marker, so the operator's queue could find it only by matching prose and
+    // nothing recorded WHICH plan was asked for. `source = 'plan_request'` plus `plan_slug` is the
+    // same pair the signed-in door (POST /api/v1/plan-requests) writes, so both land in ONE queue.
     let filed: Option<Uuid> = sqlx::query_scalar(
         r#"INSERT INTO tickets
-               (tenant_id, subject, description, status, priority, source, contact_email, contact_name)
-           SELECT NULL, $1, $2, 'open', 'medium', 'form', $3, $4
+               (tenant_id, subject, description, status, priority, source, plan_slug,
+                contact_email, contact_name)
+           SELECT NULL, $1, $2, 'open', 'medium', 'plan_request', $5, $3, $4
             WHERE NOT EXISTS (
                 SELECT 1 FROM tickets
                  WHERE tenant_id IS NULL AND lower(contact_email) = lower($3)
@@ -881,6 +887,7 @@ pub async fn file_signup_plan_request(
     } else {
         Some(name.trim())
     })
+    .bind(&plan_slug)
     .fetch_optional(db)
     .await?;
 

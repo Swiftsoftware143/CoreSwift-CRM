@@ -1665,30 +1665,23 @@ async function requestPlanChange(idx, btn) {
   btn.disabled = true;
   btn.textContent = 'Sending…';
   try {
-    const res = await fetch(PLAN_REQUEST_INTAKE, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        subject: 'Upgrade request: ' + name + ' plan',
-        message: 'This account asked to move to the ' + name + ' plan ($' + price + '/month) from '
-          + 'Plans & Billing. It is on ' + (STATE.planName || 'no plan') + ' today.'
-          + (String(STATE.planName || '').toLowerCase() === 'inbox'
-            ? ' IMPORTANT: this upgrade must cancel the $1 Inbox subscription in the same step — the '
-              + 'workspace must never be billed $1 on top of the new plan.'
-            : '')
-          + ' Self-serve '
-          + 'checkout is not open on this install, so the switch has to be made by the CoreSwift team.'
-          + ' Account: ' + (user.company || user.account_name || '(unnamed)')
-          + ' [' + user.account_id + ']. Requester: ' + (user.email || '(no address)') + '.',
-        name: user.name || user.email || '',
-        // Required by this intake: the address the team replies to, and the one the queue shows.
-        email: user.email || ''
-      })
+    // THE SIGNED-IN DOOR (kanban t_42872c18). This button used to post to the ANONYMOUS public
+    // support intake, which wrote a tenantless ticket whose only marker was its subject prose — so
+    // the operator's cross-tenant plan queue could not show it as a plan request and nothing on the
+    // row recorded WHICH plan was picked. POST /api/v1/plan-requests files the ask against the
+    // CALLER'S workspace, with the plan's slug, after the server checks the slug against the
+    // catalogue; it answers {status:'filed'|'existing', id, plan_slug, notified} and the row is
+    // committed BEFORE the operator is mailed.
+    const onInbox = String(STATE.planName || '').toLowerCase() === 'inbox';
+    const d = await API.call('POST', '/v1/plan-requests', {
+      plan_slug: p.slug || '',
+      note: 'Asked from Plans & Billing while on ' + (STATE.planName || 'no plan') + ' today.'
+        + (onInbox
+          ? ' IMPORTANT: this upgrade must cancel the $1 Inbox subscription in the same step — the '
+            + 'workspace must never be billed $1 on top of the new plan.'
+          : '')
+        + ' Workspace: ' + (user.company || user.account_name || '(unnamed)') + '.'
     });
-    const d = await res.json().catch(function () { return {}; });
-    if (!res.ok) {
-      throw new Error((d && (d.message || d.error)) || ('HTTP ' + res.status));
-    }
     btn.textContent = '✓ Request sent';
     btn.disabled = true;
     const note = document.querySelector('[data-plan-request-note]');

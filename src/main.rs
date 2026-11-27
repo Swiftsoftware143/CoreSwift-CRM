@@ -66,6 +66,7 @@ pub mod native_apps;
 pub mod notifications;
 pub mod personal_api_keys;
 pub mod pipelines;
+pub mod plan_requests;
 pub mod plans;
 pub mod portfolio;
 pub mod private_email;
@@ -868,6 +869,18 @@ async fn main() -> anyhow::Result<()> {
                 )),
         )
         .nest("/api", tickets::router(state.clone()))
+        // PLAN / UPGRADE REQUESTS — one queue for the operator, one signed-in door for the customer
+        // (kanban t_42872c18). A plan ask is still a `tickets` row (source `plan_request`, the plan in
+        // `plan_slug`); these two mounts are the only new surface. Keep them OUT of the tickets
+        // FeatureGate: a Free workspace asking to buy a plan is exactly the caller that gate refuses.
+        .nest(
+            "/api/v1/plan-requests",
+            plan_requests::customer_router(state.clone()),
+        )
+        .nest(
+            "/api/v1/admin/plan-requests",
+            plan_requests::admin_router(state.clone()),
+        )
         .nest("/api/widgets", support_widgets::router(state.clone()))
         .nest("/api/private-email", private_email::router(state.clone()))
         .nest("/api/workspaces", workspaces::router(state.clone()))

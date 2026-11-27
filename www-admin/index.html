@@ -1438,6 +1438,11 @@ const ADMIN_MENU = [
   // complete Users screen below (TAB_RENDERERS['users'] + TAB_LOADERS['users'] -> GET
   // /api/admin/users) had NO navigation entry and could not be opened at all.
   { id:'users', icon:'👥', label:'Users' },
+  // Plan requests (kanban t_42872c18): one cross-tenant queue for every workspace asking for a
+  // plan — filed at signup or from the customer console. It is a `tickets` row with
+  // source='plan_request' and the plan in `plan_slug`, so it is NOT the Support Tickets tab:
+  // that list is the OPERATOR's own workspace only and could never show a customer's ask.
+  { id:'plan-requests', icon:'📥', label:'Plan Requests' },
   { id:'tenants', icon:'🗂️', label:'Workspaces' },
   { type:'group', icon:'💰', label:'Revenue', children:[
     { id:'billing', icon:'💳', label:'Billing & Plans' },
@@ -1761,7 +1766,7 @@ function renderTab(tabId) {
   // Platform-only screens: a tenant that reaches one by the keyboard shortcut, an old hash or a
   // stale session gets a named refusal instead of a request that can only answer 403. Same idiom
   // the FunnelSwift console adopted for its own operator-only Email Templates screen.
-  const PLATFORM_ONLY_TABS = ['email-templates', 'feedback'];
+  const PLATFORM_ONLY_TABS = ['email-templates', 'feedback', 'plan-requests'];
   if (PLATFORM_ONLY_TABS.indexOf(tabId) >= 0 && !isPlatformUser()) {
     container.innerHTML = placeholderPanel(getTabLabel(tabId),
       'This screen is for platform administrators. Your account administrator keeps the mail templates.', '🔒');
@@ -2211,6 +2216,97 @@ function mcpCopy(sel, btn) {
   } else if (fallback()) { done(); } else { toast('Could not copy', 'error'); }
 }
 
+// ── Plan requests (kanban t_42872c18) ─────────────────────────────────────────────────────────────
+// The fleet contract (/opt/swift/docs/plan-request-queue-contract-2026-11-27.md) is THREE states:
+// open -> contacted -> closed. CoreSwift stores its own words (open / pending / closed) and the
+// server reports the canonical one back as `queue_status`, so this screen never invents a fourth.
+const PLAN_REQUEST_STATES = [
+  { key: 'open', label: 'Open' },
+  { key: 'contacted', label: 'Contacted' },
+  { key: 'closed', label: 'Closed' }
+];
+
+function planRequestStateLabel(state) {
+  const hit = PLAN_REQUEST_STATES.filter(s => s.key === state)[0];
+  return hit ? hit.label : 'Open';
+}
+function planRequestBadgeClass(state) {
+  return state === 'closed' ? 'badge-success' : state === 'contacted' ? 'badge-warning' : 'badge-error';
+}
+
+async function loadPlanRequestsTab() {
+  const wrap = document.getElementById('planRequestsWrap');
+  if (!wrap) return;
+  wrap.innerHTML = '<div style="text-align:center;padding:32px;color:var(--text-muted)">Loading plan requests\u2026</div>';
+  try {
+    const resp = await API.get('/v1/admin/plan-requests');
+    const rows = Array.isArray(resp) ? resp : ((resp && (resp.items || resp.plan_requests)) || []);
+    const counts = { open: 0, contacted: 0, closed: 0 };
+    rows.forEach(function (r) {
+      const k = PLAN_REQUEST_STATES.some(function (s) { return s.key === r.queue_status; })
+        ? r.queue_status : 'open';
+      counts[k] += 1;
+    });
+    const summary = '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">' +
+      PLAN_REQUEST_STATES.map(function (s) {
+        return '<div style="flex:1;min-width:140px;background:var(--bg-card);border:1px solid var(--border);' +
+          'border-radius:10px;padding:12px 16px"><div style="font-size:12px;color:var(--text-muted);' +
+          'text-transform:uppercase;letter-spacing:.04em">' + s.label + '</div>' +
+          '<div style="font-size:22px;font-weight:700">' + counts[s.key] + '</div></div>';
+      }).join('') + '</div>';
+    if (!rows.length) {
+      wrap.innerHTML = summary + card('Requests',
+        '<p style="color:var(--text-secondary);margin:0">No plan requests yet. A workspace asking for a ' +
+        'plan from its console \u2014 or picking one at signup \u2014 lands here, with the plan it asked for.</p>');
+      return;
+    }
+    const body = rows.map(function (r) {
+      const state = PLAN_REQUEST_STATES.some(function (s) { return s.key === r.queue_status; })
+        ? r.queue_status : 'open';
+      const pressed = PLAN_REQUEST_STATES.filter(function (s) { return s.key === state; })[0];
+      const buttons = PLAN_REQUEST_STATES.map(function (s) {
+        if (s.key === state) {
+          return '<span class="badge badge-muted" title="This is the state the request is in">' +
+            escapeHtml(s.label) + '</span>';
+        }
+        return '<button class="btn btn-ghost btn-xs" data-ops="plan-request-' + s.key +
+          '" onclick="setPlanRequestState(\'' + escapeHtmlAttr(r.id) + '\',\'' + s.key +
+          '\',this)">Mark ' + escapeHtml(s.label) + '</button>';
+      }).join(' ');
+      return [
+        escapeHtml(r.tenant_name || 'Signup \u2014 no workspace yet'),
+        escapeHtml(r.requested_by || '\u2014'),
+        '<strong>' + escapeHtml(r.plan_name || r.plan_slug || '\u2014') + '</strong>' +
+          (r.plan_slug ? '<div style="font-size:11px;color:var(--text-muted)">' + escapeHtml(r.plan_slug) + '</div>' : ''),
+        '<span class="badge ' + planRequestBadgeClass(state) + '">' + escapeHtml(planRequestStateLabel(state)) + '</span>',
+        escapeHtml(r.created_at ? new Date(r.created_at).toLocaleString() : '\u2014'),
+        buttons
+      ];
+    });
+    wrap.innerHTML = summary + dataTable(
+      ['Workspace', 'Requested by', 'Plan', 'State', 'Filed', 'Set state'], body,
+      'No plan requests yet.');
+  } catch (e) {
+    wrap.innerHTML = card('Requests',
+      '<p style="color:var(--text-secondary);margin:0">The queue could not be read: ' +
+      escapeHtml(planGateText(e)) + '</p>');
+  }
+}
+
+// One press writes ONE of the three canonical states. The server translates to this app's own word
+// (contacted -> 'pending', closed -> 'closed') and answers the row back with both, so the reload
+// below shows what the database really holds, never what the button hoped.
+async function setPlanRequestState(id, state, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving\u2026'; }
+  try {
+    const row = await API.patch('/v1/admin/plan-requests/' + encodeURIComponent(id), { status: state });
+    toast('Plan request is now ' + planRequestStateLabel((row && row.queue_status) || state), 'success');
+  } catch (e) {
+    toast('Could not change it: ' + planGateText(e), 'error');
+  }
+  await loadPlanRequestsTab();
+}
+
 const TAB_RENDERERS = {
   'industries': () => {
     return pageHeader('Industry Dashboards',
@@ -2387,6 +2483,16 @@ const TAB_RENDERERS = {
     return pageHeader('Communications Log', 'Every message this account has sent, newest first',
       '<button class="btn btn-secondary btn-sm" onclick="loadCommLogTab()">\uD83D\uDD04 Reload</button>') +
     card('Sent Messages', '<div id="commLogContent"><div class="loading-wrap"><div class="spinner"></div> Loading the communications log...</div></div>');
+  },
+
+  // Plan requests — the cross-tenant operator queue (kanban t_42872c18). Everything on the screen
+  // comes from TAB_LOADERS['plan-requests'] -> GET /api/v1/admin/plan-requests; the three buttons
+  // write PATCH /api/v1/admin/plan-requests/:id with the CONTRACT's word (open/contacted/closed).
+  'plan-requests': () => {
+    return pageHeader('Plan Requests',
+      'Every workspace asking for a plan \u2014 filed at signup or from the customer console. Three states: Open, Contacted, Closed.',
+      '<button class="btn btn-secondary btn-sm" onclick="loadPlanRequestsTab()">\uD83D\uDD04 Reload</button>') +
+    '<div id="planRequestsWrap"><div class="loading-wrap"><div class="spinner"></div> Loading plan requests...</div></div>';
   },
 
   'tickets': () => {
@@ -4180,6 +4286,9 @@ function slaPlaque(t) {
 }
 
 const TAB_LOADERS = {
+  // Same reason as every loader here: the renderer runs BEFORE its HTML is in the document, so
+  // the load registers here and runs against a #planRequestsWrap that already exists.
+  'plan-requests': async () => { await loadPlanRequestsTab(); },
   // The renderer runs before its HTML is in the document, so the load registers here.
   'industries': async () => { await loadIndustriesTab(); },
   // Same rule as every loader below: the renderer runs before its HTML is in the document, so the
@@ -8206,6 +8315,7 @@ window.appGuidePages = {
   notifications: { title: 'Notifications', desc: 'Alerts for activity that needs your attention.', actions: ['Review and clear notifications'] },
   telnyx: { title: 'Telnyx SMS/Voice', desc: 'Your SMS and voice line for texting and calling contacts.', actions: ['Connect your Telnyx number', 'Text a contact from its record'] },
   'comm-log': { title: 'Communications Log', desc: 'A record of every email, SMS and call sent or received.', actions: ['Filter by contact or date'] },
+  'plan-requests': { title: 'Plan Requests', desc: 'Every workspace asking for a plan \u2014 filed at signup or from the customer console \u2014 in one cross-tenant queue with the plan it asked for. The three states are Open, Contacted and Closed; closing one changes only the request, never the workspace\u2019s plan.', actions: ['Press Contacted once a person has spoken to the customer', 'Seat the plan from Billing & Plans, then press Closed', 'A row without a workspace is a signup that asked before its account existed'] },
   tickets: { title: 'Support Tickets', desc: 'Inbound support requests and their status. Only mail a person wrote opens a ticket: DMARC/bounce reports, no-reply and marketing mail stay in the inbox and can be promoted by hand.', actions: ['Open a ticket and reply', 'Change its status'] },
   inbox: { title: 'Private Email', desc: 'The platform view of private email: every customer brings their own domain, and sending and receiving are TWO separate choices: Mailgun or any SMTP service (Amazon SES, SendGrid, Postmark, Google Workspace) for sending, Mailgun or SendGrid for receiving \u2014 so no customer mail passes through a CoreSwift domain. The two keys are the customer\u2019s: the API key sends (Mailgun \u2192 Settings \u2192 API Keys \u2192 Private API key) and the webhook signing key receives (Mailgun \u2192 Send \u2192 Domains \u2192 the domain \u2192 Webhook signing key); without the second the domain is send-only. Catch-all is sold by the plan and checked when mail arrives \u2014 Professional ($79) and upward here \u2014 so a downgraded workspace shows \u201coff \u2014 not on your plan\u201d while its switch is remembered. Seats: Free 1, Starter 3, Pro 5 (not on sale), Professional 15, Enterprise 20, Agency 100. Storage \u2014 never a clock \u2014 is the bound: 2 GB on Free up to 250 GB on Agency, with one email per rung at 50, 75 and 99 per cent per month. After 30 days from the first verified mailbox the address still receives and stops sending; nothing is deleted and a plan move restores sending on the next request.', actions: ['Read a customer\u2019s limits, overrides and catch-all state on Private Email Admin', 'A bounce on an unknown address is the plan, not the domain: check sells_catch_all and catch_all_domains_off_plan', 'A domain reading Needs attention means Mailgun refused the key \u2014 nothing else in the app is affected', 'Trial expiry is receive-only, not deletion \u2014 Upgrade CRM restores sending (the $1 Keep-inbox line is not on sale yet)'] },
   calendar: { title: 'Calendar', desc: 'Booking calendars for this workspace and the Google Calendar each one mirrors into. The card at the top is the public address every workspace gets automatically, with the name in front of the domain, the optional custom domain and its live verified / waiting-for-DNS state. An address another workspace already holds is refused by the database, and the system address keeps answering when a custom domain is added or removed. Each calendar is also its own page under the account address, and the owner can give one calendar its own subdomain (the account then becomes the first path segment); a name another workspace or calendar already holds is refused with a plain sentence plus a suggested free name.', actions: ['Read the public calendar address and its custom-domain state', 'Check a custom domain once its CNAME is in place', 'Open or create the booking calendars below'] },

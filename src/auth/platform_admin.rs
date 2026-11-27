@@ -64,6 +64,45 @@ pub async fn require_platform_admin(db: &PgPool, sub: &str) -> Result<(), AppErr
     Err(AppError::Forbidden)
 }
 
+/// The OPERATOR-SEAT rule for cross-tenant read surfaces that a VA must also work (kanban
+/// t_42872c18 — the plan-request queue).
+///
+/// A platform admin always qualifies. So does a plain `admin` ROLE **inside the workspace that
+/// holds a platform admin** — that is the seat the owner invites a VA into. The qualifier is what
+/// keeps this honest: `role = 'admin'` is also a CUSTOMER workspace role (`middleware::is_account_admin`
+/// treats `admin` as an account admin), so granting on the role string alone would hand a
+/// customer's own teammate every other tenant's plan requests. A tenant `admin` with no platform
+/// admin in their workspace is refused, exactly like an `owner`.
+///
+/// The role is taken from the DATABASE by [`is_platform_staff`], never from the token claim.
+pub fn grants_staff(flag: Option<bool>, role: &str, in_platform_workspace: bool) -> bool {
+    matches!(flag, Some(true)) || (role == "admin" && in_platform_workspace)
+}
+
+/// Resolve the operator-seat rule from the database for one subject. Fails closed: no row, an
+/// inactive user, a non-UUID subject, a NULL flag and a missing platform workspace are all a DENY.
+pub async fn is_platform_staff(db: &PgPool, sub: &str) -> Result<bool, AppError> {
+    let Ok(user_id) = Uuid::parse_str(sub) else {
+        return Ok(false);
+    };
+    let row: Option<(bool, String, bool)> = sqlx::query_as(
+        "SELECT COALESCE(u.is_platform_admin, false), u.role, \
+                EXISTS (SELECT 1 FROM users p \
+                         WHERE p.is_platform_admin AND p.is_active \
+                           AND p.tenant_id = u.tenant_id) \
+           FROM users u \
+          WHERE u.id = $1 AND u.is_active",
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| AppError::Internal(format!("platform-staff lookup failed: {e}")))?;
+    Ok(match row {
+        Some((flag, role, in_workspace)) => grants_staff(Some(flag), &role, in_workspace),
+        None => false,
+    })
+}
+
 /// Router-level guard: one choke point for a platform-only router.
 ///
 /// Must be layered so that it runs AFTER [`super::middleware::auth_middleware`], which is what
@@ -85,7 +124,7 @@ pub async fn require_platform_admin_middleware(
 
 #[cfg(test)]
 mod tests {
-    use super::grants;
+    use super::{grants, grants_staff};
 
     /// The gate must fail closed: no row, a NULL flag, or a false flag is never an operator.
     #[test]
@@ -93,5 +132,41 @@ mod tests {
         assert!(grants(Some(true)));
         assert!(!grants(Some(false)));
         assert!(!grants(None));
+    }
+
+    /// The VA seat is an `admin` in the platform workspace — NOT a customer workspace admin.
+    /// Measured risk this pins: `admin` is also a customer account role, so a role-only grant would
+    /// hand a tenant's own teammate every other tenant's plan requests.
+    #[test]
+    fn a_va_seat_is_an_admin_inside_the_platform_workspace_only() {
+        // platform admin, whatever the role
+        assert!(grants_staff(Some(true), "owner", false));
+        assert!(grants_staff(Some(true), "agency_admin", false));
+        // the VA: admin role in the operator's workspace, no platform flag
+        assert!(grants_staff(Some(false), "admin", true));
+        // a CUSTOMER workspace admin is not an operator
+        assert!(!grants_staff(Some(false), "admin", false));
+        // and none of the customer roles qualify, in or out of the platform workspace
+        for role in [
+            "owner",
+            "account_owner",
+            "agency_admin",
+            "member",
+            "client_admin",
+        ] {
+            assert!(
+                !grants_staff(Some(false), role, true),
+                "{role} must be refused"
+            );
+            assert!(
+                !grants_staff(Some(false), role, false),
+                "{role} must be refused"
+            );
+        }
+        // A NULL flag is never platform AUTHORITY, but it does not cancel the VA arm either: the
+        // seat is decided by role + workspace, and `users.is_platform_admin` is NOT NULL in the
+        // schema (the resolver COALESCEs anyway), so this only documents the split.
+        assert!(!grants_staff(None, "owner", true));
+        assert!(grants_staff(None, "admin", true));
     }
 }

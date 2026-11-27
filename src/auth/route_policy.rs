@@ -1210,6 +1210,19 @@ mod tests {
             src: include_str!("../tickets/mod.rs"),
             func: "router",
         },
+        // Plan / upgrade requests (kanban t_42872c18): the operator queue and the signed-in customer
+        // door. TWO mounts, one module — the census must see both, because the credential boundary
+        // sees a request to either. Both are private by default (on no allowlist).
+        Nest {
+            prefix: "/api/v1/plan-requests",
+            src: include_str!("../plan_requests/mod.rs"),
+            func: "customer_router",
+        },
+        Nest {
+            prefix: "/api/v1/admin/plan-requests",
+            src: include_str!("../plan_requests/mod.rs"),
+            func: "admin_router",
+        },
         Nest {
             prefix: "/api/widgets",
             src: include_str!("../support_widgets.rs"),
@@ -1816,20 +1829,24 @@ mod tests {
     /// is on `/api**`, so the 14 root-level mounts are unchanged. `/api/auth/*` was NOT removed:
     /// it is a permanent alias, and 22 files (the served login pages and the admin console among
     /// them) still call it.
+    /// 603 mounted / 589 on /api** (2026-11-27, kanban t_42872c18, the plan-request queue):
+    /// `GET`+`PATCH /api/v1/admin/plan-requests[/:id]` (the cross-tenant operator queue) and
+    /// `POST /api/v1/plan-requests` (the signed-in customer door) — three leaves, all on `/api**`,
+    /// so the 14 root-level mounts are unchanged.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
         let mounted = mounted_routes();
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            600,
+            603,
             "mounted route count moved — update the census in the module docs.\
              The number to pin is the one THIS assertion reports as `left`: mounted_routes() walks the \
              router itself. scripts/route-census.py is a partial PARSER and a LOWER BOUND (it missed 23 \
              mounts on 2026-11-25); never pin its total."
         );
         assert_eq!(
-            api, 586,
+            api, 589,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.
