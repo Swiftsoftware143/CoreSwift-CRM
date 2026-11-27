@@ -174,11 +174,11 @@ pub async fn provision_mailbox(
     // A mailbox created by a plan that does NOT sell sending (the Free plan, on a domain of their
     // own) starts the SAME trial as the free CoreSwift address — otherwise adding your own domain
     // would silently produce a mailbox with no sending rights at all and no clock to explain it.
-    .bind(req.creates_ticket)
     .bind(!trial::plan_sells_sending(&state.db, account_id).await?)
     .bind(window.0)
     .bind(window.1)
     .bind(trial::trial_days(&state.db, account_id).await?.to_string())
+    .bind(req.creates_ticket)
     .fetch_one(&state.db)
     .await
     .map_err(AppError::Database)?;
