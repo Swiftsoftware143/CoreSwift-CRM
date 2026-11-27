@@ -24,6 +24,7 @@ mod body_deadline;
 pub mod booking;
 pub mod bookings;
 pub mod branding;
+mod broadcasts;
 pub mod calendar_host;
 pub mod campaigns;
 pub mod checklists;
@@ -546,6 +547,16 @@ async fn main() -> anyhow::Result<()> {
         // The setup documents, behind the session (David, 2026-11-26). A static navigation cannot carry a
         // bearer, so the console asks for these with the credential it already holds.
         .route("/api/docs/:name", get(crate::docs_serve::get_doc))
+        // One message, once, to a list or a tag (David, 2026-11-26). A broadcast only ENQUEUES; the worker
+        // delivers, so every gate applies unchanged.
+        .route(
+            "/api/broadcasts/preview",
+            axum::routing::post(crate::broadcasts::preview),
+        )
+        .route(
+            "/api/broadcasts",
+            axum::routing::post(crate::broadcasts::send),
+        )
         .nest("/api/contacts", contacts::router(state.clone()))
         // Visual field mapper (docs/coreswift-data-mapping-spec-2026-11-13.md). Its console routes
         // carry the same session middleware as every other /api module; /events is key-authenticated.

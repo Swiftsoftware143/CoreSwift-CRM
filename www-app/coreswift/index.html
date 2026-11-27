@@ -1043,6 +1043,81 @@ function csSyncSessionCookie(token) {
 // /guide.html, /onboarding.html and /help.html are no longer public files: the web server closes them and the
 // app serves them at /api/docs/<name> to a caller holding a session. A link cannot carry the credential, so
 // this fetches the document with it and opens the bytes. Nothing is put in the URL.
+async 
+// ===== BROADCAST: one message, once, to a list or a tag (David, 2026-11-26) =====
+// Not a campaign: a campaign is a sequence with delays and one-contact enrolment. This is "mail this
+// audience once, now". The audience is a list or a tag, previewed with real counts before anything is sent,
+// and the answer says exactly who was left out and why (no address, opted out, duplicate address).
+window.bcLoad = async function () {
+  const el = document.getElementById('bcHost');
+  if (!el) return;
+  try {
+    const lists = famList(await API.get('/lists'), 'lists');
+    const tags = famList(await API.get('/tags'), 'tags');
+    el.innerHTML =
+      '<div class="form-group"><label>Who</label>' +
+        '<select id="bcKind" onchange="bcKindChanged()">' +
+          '<option value="list">A list</option><option value="tag">Everyone with a tag</option>' +
+        '</select></div>' +
+      '<div class="form-group" id="bcListWrap"><label>List</label><select id="bcList">' +
+        lists.map(function (l) { return '<option value="' + escapeHtml(l.id) + '">' + escapeHtml(l.name) + ' (' + (l.member_count || 0) + ')</option>'; }).join('') +
+      '</select></div>' +
+      '<div class="form-group" id="bcTagWrap" style="display:none"><label>Tag</label><select id="bcTag">' +
+        tags.map(function (t) { return '<option value="' + escapeHtml(t.id) + '">' + escapeHtml(t.name) + '</option>'; }).join('') +
+      '</select></div>' +
+      '<div class="form-group"><label>Subject</label><input id="bcSubject" type="text" placeholder="What the message is about"></div>' +
+      '<div class="form-group"><label>Message</label><textarea id="bcBody" rows="8" placeholder="Write it once. Every recipient gets their own copy."></textarea></div>' +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+        '<button class="btn btn-secondary btn-sm" onclick="bcPreview()">Who would get this?</button>' +
+        '<button class="btn btn-primary btn-sm" onclick="bcSend()">Send it now</button>' +
+        '<span id="bcResult" class="muted" style="font-size:13px"></span></div>' +
+      '<p class="muted" style="font-size:12px;margin-top:10px">A broadcast is queued for the mail pass, which applies your ' +
+        'footer, the one-click opt-out and the suppression list. Anyone who asked this account to stop mailing is ' +
+        'reported as skipped, never as sent.</p>';
+  } catch (e) { el.innerHTML = '<p class="muted">Could not load audiences: ' + escapeHtml(e.message) + '</p>'; }
+};
+
+window.bcKindChanged = function () {
+  const kind = (document.getElementById('bcKind') || {}).value;
+  const lw = document.getElementById('bcListWrap'), tw = document.getElementById('bcTagWrap');
+  if (lw) lw.style.display = kind === 'list' ? '' : 'none';
+  if (tw) tw.style.display = kind === 'tag' ? '' : 'none';
+};
+
+function bcAudience() {
+  const kind = (document.getElementById('bcKind') || {}).value;
+  if (kind === 'tag') return { tag_id: (document.getElementById('bcTag') || {}).value };
+  return { list_id: (document.getElementById('bcList') || {}).value };
+}
+
+window.bcPreview = async function () {
+  const out = document.getElementById('bcResult');
+  try {
+    const d = await API.post('/broadcasts/preview', Object.assign(bcAudience(), {
+      subject: (document.getElementById('bcSubject') || {}).value || 'preview',
+      body: (document.getElementById('bcBody') || {}).value || 'preview'
+    }));
+    out.textContent = 'Would send to ' + d.would_send + '. Left out: ' + d.no_address + ' with no address, '
+      + d.suppressed + ' opted out, ' + d.duplicate_addresses + ' duplicate address(es).';
+  } catch (e) { out.textContent = 'Could not check: ' + e.message; }
+};
+
+window.bcSend = async function () {
+  const out = document.getElementById('bcResult');
+  const subject = (document.getElementById('bcSubject') || {}).value || '';
+  const body = (document.getElementById('bcBody') || {}).value || '';
+  if (!subject.trim() || !body.trim()) { toast('Add a subject and a message first.', 'error'); return; }
+  const who = await API.post('/broadcasts/preview', Object.assign(bcAudience(), { subject: subject, body: body })).catch(function () { return null; });
+  if (!who) { toast('Could not check the audience.', 'error'); return; }
+  if (!confirm('Send this once to ' + who.would_send + ' ' + (who.would_send === 1 ? 'person' : 'people') + '?\n\n'
+    + who.no_address + ' have no address, ' + who.suppressed + ' have opted out — they will not be mailed.')) return;
+  try {
+    const r = await API.post('/broadcasts', Object.assign(bcAudience(), { subject: subject, body: body, send: true }));
+    out.textContent = 'Queued ' + r.queued + '. Left out: ' + r.no_address + ' no address, ' + r.suppressed + ' opted out.';
+    toast('Queued ' + r.queued + ' message(s).', 'success');
+  } catch (e) { out.textContent = 'Could not send: ' + e.message; toast('Could not send: ' + e.message, 'error'); }
+};
+
 async function csOpenDoc(name) {
   try {
     const res = await fetch('/api/docs/' + encodeURIComponent(name), {
@@ -1195,7 +1270,7 @@ const MENU = [
     { id:'companies', icon:'🏢', label:'Companies' }
   ]},
   { type:'group', icon:'📣', label:'Marketing', children:[
-    { id:'campaigns', icon:'📢', label:'Campaigns' },
+    { id:'campaigns', icon:'📢', label:'Campaigns' },    { id: 'broadcast', label: 'Broadcast' },
     { id:'lists', icon:'📋', label:'Lists' },
     { id:'analytics', icon:'📊', label:'Analytics' }
   ]},
@@ -13157,6 +13232,15 @@ TAB_LOADERS['pipelines'] = loadPipelinesTab;
 TAB_LOADERS['deals'] = function () { loadPipelinesTab(); dlLoadFields(); };
 TAB_LOADERS['notifications'] = function () { ntLoadRules(); };
 TAB_LOADERS['campaigns'] = loadCampaignsTab;
+
+// A BROADCAST is not a campaign: a campaign drips a sequence to people enrolled one at a time, a broadcast
+// mails one message once to a whole list or tag (David, 2026-11-26). It earns its own tab because the
+// audience rule is the point, and hiding it inside the campaign wizard is how it went missing.
+TAB_RENDERERS['broadcast'] = function () {
+  return pageHeader('Broadcast', 'One message, sent once, to a list or to everyone with a tag',
+    '<div class="card"><div class="card-body" id="bcHost"><div class="loading-wrap"><div class="spinner"></div> Loading audiences…</div></div></div>');
+};
+TAB_LOADERS['broadcast'] = function () { bcLoad(); };
 TAB_LOADERS['lists'] = loadListsTab;
 TAB_LOADERS['lead-scoring'] = function () { loadScoringTab(); scLoadWebhooks(); scBindOnce(); };
 TAB_LOADERS['analytics'] = loadAnalyticsTab;
