@@ -440,7 +440,7 @@ tr:hover td{background:var(--bg-hover)}
     <div class="sidebar-footer">
       <!-- The user guide, on THIS origin (fleet guide-path standard, kanban t_d767f3f8): the app
            surface serves /guide.html; the shell links it in the sidebar footer beside Collapse. -->
-      <a class="nav-item" id="user-guide-link" href="/guide.html" style="text-decoration:none">
+      <a class="nav-item" id="user-guide-link" href="#" onclick="csOpenDoc('guide');return false" style="text-decoration:none">
         <span class="nav-icon">📖</span>
         <span class="nav-text">User Guide</span>
       </a>
@@ -1036,6 +1036,25 @@ function csSyncSessionCookie(token) {
       document.cookie = 'cs_token=; path=/; max-age=0; Secure; SameSite=Lax';
     }
   } catch (e) { /* a blocked cookie must never break the console */ }
+}
+
+
+// ===== THE SETUP DOCUMENTS, OPENED WITH THE SESSION =====
+// /guide.html, /onboarding.html and /help.html are no longer public files: the web server closes them and the
+// app serves them at /api/docs/<name> to a caller holding a session. A link cannot carry the credential, so
+// this fetches the document with it and opens the bytes. Nothing is put in the URL.
+async function csOpenDoc(name) {
+  try {
+    const res = await fetch('/api/docs/' + encodeURIComponent(name), {
+      headers: { 'Authorization': 'Bearer ' + STATE.token }
+    });
+    if (res.status === 401) { toast('Sign in again to read the guide.', 'error'); return; }
+    if (!res.ok) { toast('Could not open that document (' + res.status + ').', 'error'); return; }
+    const html = await res.text();
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    window.open(url, '_blank', 'noopener');
+    setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+  } catch (e) { toast('Could not open that document: ' + e.message, 'error'); }
 }
 
 function logout(silent) {

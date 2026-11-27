@@ -38,6 +38,7 @@ pub mod dashboard;
 pub mod data_mapping;
 mod db;
 pub mod deals;
+mod docs_serve;
 pub mod domain_redirects;
 pub mod email;
 pub mod email_templates;
@@ -542,6 +543,9 @@ async fn main() -> anyhow::Result<()> {
         // The signed-in user's OWN record — name + password. The workspace Profile tab has always
         // called these two paths; until now neither was registered (both answered 405).
         .nest("/api/profile", profile::router(state.clone()))
+        // The setup documents, behind the session (David, 2026-11-26). A static navigation cannot carry a
+        // bearer, so the console asks for these with the credential it already holds.
+        .route("/api/docs/:name", get(crate::docs_serve::get_doc))
         .nest("/api/contacts", contacts::router(state.clone()))
         // Visual field mapper (docs/coreswift-data-mapping-spec-2026-11-13.md). Its console routes
         // carry the same session middleware as every other /api module; /events is key-authenticated.
