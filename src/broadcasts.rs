@@ -220,10 +220,14 @@ pub async fn send(
 
     let mut queued = 0i64;
     for (contact_id, email) in &res.recipients {
+        // 'queued' — NOT 'pending'. The delivery worker claims rows with `status = 'queued'` and nothing
+        // in this app ever reads 'pending' (measured t_ef792898: a broadcast wrote one 'pending' row that
+        // no job would ever pick up, so the whole feature queued mail it could never send; every other
+        // door — campaigns, communications, email, automation — inserts 'queued').
         sqlx::query(
             r#"INSERT INTO outbound_messages
                    (tenant_id, contact_id, channel, to_address, subject, body, status, is_html)
-               VALUES ($1, $2, 'email', $3, $4, $5, 'pending', false)"#,
+               VALUES ($1, $2, 'email', $3, $4, $5, 'queued', false)"#,
         )
         .bind(t)
         .bind(contact_id)
