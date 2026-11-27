@@ -46,9 +46,14 @@ pub async fn evaluate_dynamic_list(
         let set: Vec<Uuid> = match rule.field.as_str() {
             "tag" => {
                 let tn = rule.value.as_str().unwrap_or("");
+                // JOIN contacts: `tag_assignments.entity_id` is polymorphic with no FK to `contacts`, so a
+                // deleted contact's assignment survives. Without this join a rule-based list would try to
+                // add the dead id as a member — the INSERT then fails 23503 on list_members.contact_id and
+                // the list silently misses the real members (kanban t_7a54cc6a).
                 sqlx::query_scalar::<_, Uuid>(
                     "SELECT DISTINCT ta.entity_id FROM tag_assignments ta \
                        JOIN tags t ON t.id = ta.tag_id \
+                       JOIN contacts c ON c.id = ta.entity_id AND c.tenant_id = ta.tenant_id \
                       WHERE ta.tenant_id = $1 AND ta.entity_type = 'contact' AND t.name = $2",
                 )
                 .bind(list.tenant_id)

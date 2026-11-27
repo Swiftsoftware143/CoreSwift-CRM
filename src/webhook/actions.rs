@@ -1423,9 +1423,11 @@ pub async fn route_action(
                     .fetch_one(db)
                     .await
                     .map_err(|e| format!("DB error: {}", e))?;
-            // Contacts by tag
+            // Contacts by tag. The reverse join must be contact-scoped AND the contact must still exist:
+            // `tag_assignments.entity_id` is polymorphic with no FK, so a deleted contact's assignment
+            // would otherwise be reported here as a member (kanban t_7a54cc6a).
             let by_tag = sqlx::query_scalar::<_, serde_json::Value>(
-                &row_json!("SELECT t.id, t.name, COUNT(ta.entity_id) as count\n FROM tags t\n LEFT JOIN tag_assignments ta ON ta.tag_id = t.id AND ta.entity_type = 'contact'\n WHERE t.tenant_id = $1\n GROUP BY t.id, t.name ORDER BY count DESC")
+                &row_json!("SELECT t.id, t.name, COUNT(ta.entity_id) as count\n FROM tags t\n LEFT JOIN tag_assignments ta ON ta.tag_id = t.id AND ta.entity_type = 'contact'\n   AND EXISTS (SELECT 1 FROM contacts c WHERE c.id = ta.entity_id AND c.tenant_id = ta.tenant_id)\n WHERE t.tenant_id = $1\n GROUP BY t.id, t.name ORDER BY count DESC")
             )
             .bind(tenant_id)
             .fetch_all(db).await

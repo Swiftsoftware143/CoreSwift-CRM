@@ -144,11 +144,17 @@ pub async fn list_tags(
     .fetch_all(&s.db)
     .await?;
 
-    // Fetch contact counts via tag_assignments.
+    // Fetch contact counts via tag_assignments, COUNTING ONLY ASSIGNMENTS WHOSE CONTACT STILL EXISTS.
+    //
+    // `tag_assignments.entity_id` is polymorphic (entity_type + entity_id) and therefore has no FK to
+    // `contacts`, so deleting a contact left its assignment behind forever and this count reported the
+    // leftovers as members: on 2026-11-26 "Quote Request" showed 90 members where 1 contact existed
+    // (139 of 157 assignment rows pointed at a deleted contact — kanban t_7a54cc6a). The join is the
+    // truth: an assignment that resolves to no contact is not a member.
     // The three count queries below used to swallow their error into an empty map (0 next to every
     // tag) with no log line; they now log and still fall back, so the tab keeps rendering
     // (t_5d7f823e — same silent class as the decode swallows).
-    let contact_rows = sqlx::query("SELECT tag_id, COUNT(*)::int8 FROM tag_assignments WHERE tenant_id=$1 AND entity_type='contact' GROUP BY tag_id")
+    let contact_rows = sqlx::query("SELECT ta.tag_id, COUNT(*)::int8 FROM tag_assignments ta JOIN contacts c ON c.id=ta.entity_id AND c.tenant_id=ta.tenant_id WHERE ta.tenant_id=$1 AND ta.entity_type='contact' GROUP BY ta.tag_id")
         .bind(t).fetch_all(&s.db).await
         .map_err(|e| tracing::error!(tenant = %t, error = %e, "list_tags: contact-count query failed — contact counts render as 0"))
         .unwrap_or_default();

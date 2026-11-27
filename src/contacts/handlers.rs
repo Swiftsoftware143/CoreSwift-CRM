@@ -403,6 +403,16 @@ pub async fn update(
 }
 
 /// DELETE /api/contacts/{id} — Hard delete contact.
+///
+/// Deletes the contact AND its polymorphic children in ONE transaction.
+///
+/// `tag_assignments.entity_id` is polymorphic (`entity_type` + `entity_id`), so a FK to `contacts` is
+/// impossible on it — deleting a contact used to leave its tag assignments behind forever, and the tag
+/// screens then counted the leftovers as members (kanban t_7a54cc6a: 139 of 157 rows pointed at a
+/// deleted contact). `list_members.contact_id` *does* cascade, but it is removed here explicitly so
+/// every child that names a contact is retired by the same statement set that retires the contact.
+/// A `contacts_before_delete_cleanup` trigger (migration 224) does the same for any path that deletes a
+/// contact without going through this handler; the explicit deletes keep the intent visible here.
 pub async fn delete(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -411,6 +421,8 @@ pub async fn delete(
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
 
+    let mut tx = state.db.begin().await?;
+
     // WHICH contact went, read BEFORE the row does: once the row is gone there is nothing left to
     // name it in the trail, and "a contact was deleted" is worth much less than which one.
     let gone: Option<(String, String, Option<String>)> = sqlx::query_as(
@@ -418,18 +430,38 @@ pub async fn delete(
     )
     .bind(id)
     .bind(account_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&mut *tx)
     .await?;
+
+    // The contact's assignments and list memberships go in the same transaction as the contact, so a
+    // half-finished delete can never mint an orphan assignment (the class this card exists for).
+    sqlx::query(
+        "DELETE FROM tag_assignments WHERE tenant_id = $1 AND entity_type = 'contact' AND entity_id = $2",
+    )
+    .bind(account_id)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM list_members WHERE tenant_id = $1 AND contact_id = $2")
+        .bind(account_id)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
 
     let result = sqlx::query("DELETE FROM contacts WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(account_id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?;
 
     if result.rows_affected() == 0 {
+        // Roll back: without the contact row the child deletes were no-ops for a contact that was never
+        // this tenant's, and nothing should be committed for a delete that matched nothing.
+        tx.rollback().await?;
         return Err(AppError::NotFound(format!("Contact {} not found", id)));
     }
+
+    tx.commit().await?;
 
     if let Some((first, last, email)) = gone {
         let name = format!("{first} {last}").trim().to_string();

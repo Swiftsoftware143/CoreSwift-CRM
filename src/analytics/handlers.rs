@@ -39,9 +39,13 @@ pub async fn tag_usage(
     Extension(c): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
     let t = Uuid::parse_str(&c.aid).map_err(|_| crate::errors::AppError::Unauthorized)?;
+    // A tag's usage count must not include assignments whose contact was deleted: `entity_id` is
+    // polymorphic and unfk'd, so a leftover row would inflate this analytics number exactly like it
+    // used to inflate the Tags screen (kanban t_7a54cc6a). Non-contact assignments are still counted
+    // as-is — they cannot point at a deleted contact.
     Ok(Json(
         json!({"tags": sqlx::query_as::<_,(Uuid,String,String,i64)>(
-        "SELECT t.id,t.name,COALESCE(tc.name,'Uncategorized'),COUNT(ta.id) FROM tags t LEFT JOIN tag_categories tc ON tc.id=t.category_id LEFT JOIN tag_assignments ta ON ta.tag_id=t.id AND ta.tenant_id=t.tenant_id WHERE t.tenant_id=$1 AND t.is_active=true GROUP BY t.id,t.name,tc.name ORDER BY count DESC")
+        "SELECT t.id,t.name,COALESCE(tc.name,'Uncategorized'),COUNT(ta.id) FROM tags t LEFT JOIN tag_categories tc ON tc.id=t.category_id LEFT JOIN tag_assignments ta ON ta.tag_id=t.id AND ta.tenant_id=t.tenant_id AND (ta.entity_type<>'contact' OR EXISTS(SELECT 1 FROM contacts c WHERE c.id=ta.entity_id AND c.tenant_id=ta.tenant_id)) WHERE t.tenant_id=$1 AND t.is_active=true GROUP BY t.id,t.name,tc.name ORDER BY count DESC")
         .bind(t).fetch_all(&s.db).await?}),
     ))
 }
@@ -58,7 +62,10 @@ pub async fn contact_stats(
             .await
             .unwrap_or(0);
     let with_opps: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT contact_id) FROM opportunities WHERE tenant_id=$1 AND contact_id IS NOT NULL").bind(t).fetch_one(&s.db).await.unwrap_or(0);
-    let with_tags: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT entity_id) FROM tag_assignments WHERE tenant_id=$1 AND entity_type='contact'").bind(t).fetch_one(&s.db).await.unwrap_or(0);
+    // "contacts with tags" counts CONTACTS, so an assignment whose contact was deleted must not count:
+    // `entity_id` is polymorphic with no FK, so leftovers survived contact deletes and inflated this
+    // percentage (kanban t_7a54cc6a — 139 of 157 rows were such leftovers).
+    let with_tags: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT ta.entity_id) FROM tag_assignments ta JOIN contacts c ON c.id=ta.entity_id AND c.tenant_id=ta.tenant_id WHERE ta.tenant_id=$1 AND ta.entity_type='contact'").bind(t).fetch_one(&s.db).await.unwrap_or(0);
     let pct = if total > 0 {
         (with_tags as f64 / total as f64 * 100.0 * 100.0).round() / 100.0
     } else {
