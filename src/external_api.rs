@@ -95,7 +95,7 @@
 //! ```
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
@@ -597,6 +597,67 @@ pub(crate) async fn set_field_value(
 // ---------------- Handlers ----------------
 
 /// GET /api/external/lists — list the tenant's lists.
+/// GET /api/external/contacts — the READ arm for contacts on the issued-key surface.
+///
+/// Measured defect this closes (2026-11-27): with a valid, full-access key, GET /api/external/contacts
+/// answered 405 - contacts were WRITABLE by a key and not READABLE by one, so the Giraudy CEO could not
+/// verify a contact count in an account he controls, whatever key he held. `/lists` could be read and
+/// `/contacts` could not, which is the shape of an oversight, not a policy.
+pub async fn external_list_contacts(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> ApiResult<impl IntoResponse> {
+    let (tenant_id, _) = resolve_key(&s, &headers).await?;
+    let limit: i64 = q
+        .get("limit")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(100)
+        .clamp(1, 500);
+
+    let rows = sqlx::query(
+        "SELECT id, email, first_name, last_name, phone, company, city, state, source,
+                score, score_category, is_active, created_at
+           FROM contacts WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2",
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .fetch_all(&s.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    let contacts: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<Uuid,_>("id").to_string(),
+                "email": r.get::<Option<String>,_>("email"),
+                "first_name": r.get::<Option<String>,_>("first_name"),
+                "last_name": r.get::<Option<String>,_>("last_name"),
+                "phone": r.get::<Option<String>,_>("phone"),
+                "company": r.get::<Option<String>,_>("company"),
+                "city": r.get::<Option<String>,_>("city"),
+                "state": r.get::<Option<String>,_>("state"),
+                "source": r.get::<Option<String>,_>("source"),
+                "score": r.get::<Option<i32>,_>("score"),
+                "score_category": r.get::<Option<String>,_>("score_category"),
+                "is_active": r.get::<bool,_>("is_active"),
+                "created_at": r.get::<chrono::DateTime<chrono::Utc>,_>("created_at").to_rfc3339(),
+            })
+        })
+        .collect();
+
+    let total: i64 = sqlx::query_scalar("SELECT count(*) FROM contacts WHERE tenant_id = $1")
+        .bind(tenant_id)
+        .fetch_one(&s.db)
+        .await
+        .map_err(AppError::Database)?;
+
+    Ok(Json(
+        json!({ "contacts": contacts, "returned": contacts.len(), "total": total }),
+    ))
+}
+
 pub async fn external_list_lists(
     State(s): State<AppState>,
     headers: HeaderMap,
@@ -974,7 +1035,10 @@ pub fn router() -> axum::Router<AppState> {
     use axum::routing::{get, patch, post};
     axum::Router::new()
         .route("/lists", get(external_list_lists))
-        .route("/contacts", post(external_push_contact))
+        .route(
+            "/contacts",
+            get(external_list_contacts).post(external_push_contact),
+        )
         .route("/deals", post(external_upsert_deal))
         .route("/deals/:external_ref/stage", patch(external_deal_stage))
         .route("/deals/:external_ref/status", post(external_deal_status))

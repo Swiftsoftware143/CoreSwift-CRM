@@ -872,9 +872,14 @@ mod tests {
         ));
         assert!(!is_read_only_allowed("POST", "/api/data-mapping/events"));
 
-        // ── default deny: an unlisted GET is not a read just because it is a GET ─────────────
+        // ── default deny: a path the issued-key surface does not serve is not a read ──────────
         assert!(!is_read_only_allowed("GET", "/api/external/anything"));
-        assert!(!is_read_only_allowed("GET", "/api/data-mapping/events"));
+        // NOT default-denied any more: a GET to a path the key surface serves is a READ, whatever
+        // method the surface actually carries. The router answers 405 for a method it does not serve,
+        // so nothing is exposed - and refusing the read was the defect (measured: a read_only key on
+        // GET /api/external/contacts answered 403 "this key is read-only - use a workspace key to
+        // write"). "Read-only" may not mean "cannot read".
+        assert!(is_read_only_allowed("GET", "/api/data-mapping/events"));
     }
 
     /// One `nest(prefix, module::func(..))` in main.rs, with that module's source embedded at
@@ -1382,6 +1387,17 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    /// MAINTENANCE TOOL: dumps the authoritative mounted route set to /tmp/mounted-routes.txt so the
+    /// parity census (does every route have a screen and an MCP/API door?) can be measured against the
+    /// SAME list the pinned count uses, instead of a regex over source that sees a fraction of it.
+    #[test]
+    fn dump_mounted_routes() {
+        let mut out = mounted_routes();
+        out.sort();
+        out.dedup();
+        std::fs::write("/tmp/mounted-routes.txt", out.join("\n")).ok();
     }
 
     /// The whole mounted route set: main.rs's own mounts plus every nest target's.
