@@ -1371,6 +1371,10 @@ const ADMIN_MENU = [
   // CUSTOMER ACCOUNT. Measured 2026-11-21: no console offered them and neither console could create
   // an account at all, so an operator capability existed only for curl.
   { id:'operator-actions', icon:'🛠', label:'Operator Actions' },
+  // GET/PUT /api/admin/provisioning-config shipped with NO console caller (measured 2026-11-27): the
+  // two knobs that decide whether an agreed tag mints a free account — and which plan it lands on —
+  // were reachable only by curl. Two apps hand tags into this one, so the switch belongs on a screen.
+  { id:'provisioning', icon:'🔗', label:'Tag Provisioning' },
   { type:'group', icon:'💰', label:'Revenue', children:[
     { id:'billing', icon:'💳', label:'Billing & Plans' },
   ]},
@@ -10700,6 +10704,88 @@ async function opsRun(name) {
 }
 TAB_RENDERERS['operator-actions'] = opsShell;
 TAB_LOADERS['operator-actions'] = function () { opsLoad(); };
+
+// ── Tag provisioning ────────────────────────────────────────────────────────────────────────────────
+// The operator's half of the tag → free account contract. Two apps in the suite POST an agreed tag to
+// this app's /api/v1/internal/provision-free-account, and this app decides — from the two settings on
+// this screen — whether that handoff mints an account and which plan it lands on. The settings were
+// written by `admin_actions::provisioning_config` and their only editor was curl, so the person who
+// owns the decision had no control. Platform operators only: the route sits behind the ADMIN group,
+// which the sidebar renders solely for a platform sign-in, and every /api/admin/* path 403s for a
+// tenant owner.
+function provisioningShell() {
+  return pageHeader('Tag Provisioning',
+    'When another app in the suite applies one of the agreed tags to a contact, that tag can create a free account here and email the person their login. This screen is that switch, and the plan a new account starts on.') +
+    card('Tags that create accounts',
+      '<div id="provPanel"><p class="muted" style="margin:0">Loading…</p></div>');
+}
+TAB_RENDERERS['provisioning'] = provisioningShell;
+TAB_LOADERS['provisioning'] = function () { provisioningLoad(); };
+
+async function provisioningLoad() {
+  const el = document.getElementById('provPanel');
+  if (!el) return;
+  try {
+    const d = await API.get('/admin/provisioning-config');
+    const plans = (d && d.free_plans) || [];
+    const current = (d && d.entry_plan_slug) || '';
+    const opts = plans.map(function (p) {
+      const slug = String(p.slug || '');
+      return '<option value="' + escapeHtml(slug) + '"' + (slug === current ? ' selected' : '') + '>' +
+        escapeHtml(p.name || slug) + ' (' + escapeHtml(slug) + ')</option>';
+    }).join('');
+    const on = !!(d && d.enabled);
+    el.innerHTML =
+      '<label class="toggle" style="display:flex;gap:8px;align-items:center;margin:0 0 6px">' +
+        '<input type="checkbox" id="provEnabled"' + (on ? ' checked' : '') + '>' +
+        '<span>A matching tag creates a free account here and emails the login</span></label>' +
+      '<p class="muted" style="margin:0 0 16px;font-size:13px">Switched off, the tag still moves the contact between apps — it just makes no account here.</p>' +
+      '<label style="display:block;margin:0 0 16px"><span style="display:block;font-weight:600;margin-bottom:4px">Plan a new account starts on</span>' +
+        (opts
+          ? '<select id="provPlan" style="min-width:280px;padding:8px 10px">' + opts + '</select>'
+          : '<span class="muted">This app has no free plan, so no tag can mint an account here until one exists.</span>') +
+      '</label>' +
+      '<button class="btn btn-primary" onclick="provisioningSave()">Save</button>' +
+      '<p id="provNote" style="display:none;margin:12px 0 0;font-size:13px"></p>' +
+      '<p class="muted" style="margin:16px 0 0;font-size:12px">Handoffs arrive from ' +
+        escapeHtml((d && d.source_app) || 'another app') + ' at ' +
+        escapeHtml((d && d.endpoint) || 'this app\'s account door') +
+        '. A plan listed here must be free and active, or the door refuses the handoff.</p>' +
+      '<p class="muted" style="margin:6px 0 0;font-size:12px">Right now: ' +
+        (on ? '<b>on</b> — a matching tag creates an account on ' + escapeHtml(current || 'the free plan')
+            : '<b>off</b> — a matching tag creates no account') + '.</p>';
+  } catch (e) {
+    el.innerHTML = '<p style="color:var(--text-secondary);margin:0">' +
+      escapeHtml(readFailed('the tag provisioning settings')) + ' ' +
+      escapeHtml(e.message || String(e)) + '</p>';
+  }
+}
+
+async function provisioningSave() {
+  const en = document.getElementById('provEnabled');
+  const pl = document.getElementById('provPlan');
+  const note = document.getElementById('provNote');
+  const body = { enabled: !!(en && en.checked) };
+  if (pl && pl.value) body.entry_plan_slug = pl.value;
+  try {
+    const r = await API.put('/admin/provisioning-config', body);
+    if (note) {
+      note.style.display = 'block';
+      note.style.color = 'var(--success)';
+      note.textContent = (r && r.enabled)
+        ? 'Saved. A matching tag now creates a free account on ' + ((r.entry_plan_slug) || body.entry_plan_slug || 'the free plan') + ' and emails the login.'
+        : 'Saved. A matching tag now moves the contact between apps and creates no account here.';
+    }
+    toast('Saved', 'success');
+  } catch (e) {
+    if (note) {
+      note.style.display = 'block';
+      note.style.color = '#b91c1c';
+      note.textContent = 'Not saved: ' + (e.message || String(e));
+    }
+    toast('Not saved: ' + (e.message || e), 'error');
+  }
+}
 
 TAB_RENDERERS['deals'] = pipelinesShell;
 TAB_RENDERERS['campaigns'] = campaignsShell;
