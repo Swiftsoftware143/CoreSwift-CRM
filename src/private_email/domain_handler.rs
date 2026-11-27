@@ -461,6 +461,13 @@ pub async fn readiness(
             "reason": inbox_reason,
             "action": inbox_action,
             "domains_awaiting_key": awaiting_key,
+            // CAVEAT, stated where a reader will meet it (CEO, 2026-11-27): the Mailgun webhook signing
+            // key is PER ACCOUNT, not per domain. So identity_source "own_key" means THIS DOMAIN ROW has
+            // a usable key - it does NOT mean the domain is cryptographically isolated from the other
+            // domains on the same provider account. All of them post webhooks signed with one secret.
+            "identity_note": "own_key means this domain row holds a usable signing key. The provider's \
+    webhook signing key is per account, so a key on this domain is not isolation from the other domains \
+    on the same provider account."
         },
     ]);
 
