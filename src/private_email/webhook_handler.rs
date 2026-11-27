@@ -17,6 +17,129 @@ use super::send_handler::load_provider_config;
 use crate::errors::{ApiResult, AppError};
 use crate::AppState;
 
+/// One field out of a urlencoded body, without pulling a parser in for two names. Percent-decoding is
+/// applied because a token may legitimately carry escaped bytes; the value is used as an opaque key.
+fn form_field(body: &[u8], name: &str) -> Option<String> {
+    let text = String::from_utf8_lossy(body);
+    for pair in text.split('&') {
+        let (k, v) = pair.split_once('=')?;
+        if k == name {
+            return Some(percent_decode(v.trim()).trim().to_string());
+        }
+    }
+    None
+}
+
+/// Minimal %XX decode for form values (plus '+' as space). A malformed escape is left as written: a
+/// token that does not decode still identifies the delivery, and the ledger is a string comparison.
+fn percent_decode(v: &str) -> String {
+    let bytes = v.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+                match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                    Some(byte) => {
+                        out.push(byte);
+                        i += 3;
+                    }
+                    None => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+/// The freshness window for a signed inbound webhook, in seconds, from
+/// `INBOUND_WEBHOOK_MAX_SKEW_SECS` (default 300). Server clock only: a client-supplied timestamp is a
+/// value to CHECK, never a value to trust.
+fn replay_window_secs() -> i64 {
+    std::env::var("INBOUND_WEBHOOK_MAX_SKEW_SECS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(300)
+}
+
+/// Verdict on a provider timestamp against the server clock. Separated from the handler so the window
+/// can be proven by execution instead of by reading.
+fn timestamp_is_fresh(ts: i64, now: i64, window: i64) -> bool {
+    (now - ts).abs() <= window
+}
+
+/// REPLAY DEFENCE (CEO criteria, 2026-11-27). Runs BEFORE any contact, ticket, thread or event is
+/// written, so a refusal has zero side effects.
+///
+/// Mailgun signs only (timestamp + token). Measured live: a captured pair replayed to a different
+/// recipient answered 200 and stored a second message. Two guards close that:
+///   1. freshness on the server clock -> 401 (stale or unparseable),
+///   2. the token claimed in a durable ledger with a UNIQUE key, inserted before any side effect ->
+///      409 on a duplicate. The insert IS the lock: a concurrent second submit loses the race and
+///      writes nothing.
+async fn refuse_replay(
+    state: &AppState,
+    provider: &str,
+    timestamp: &str,
+    token: &str,
+) -> Result<(), AppError> {
+    if token.is_empty() {
+        // Not a signed delivery (there is no token to replay); the signature check upstream is the
+        // authority for those, and this guard has nothing to claim.
+        return Ok(());
+    }
+    let ts: i64 = timestamp.parse().map_err(|_| {
+        AppError::UnauthorizedReason(
+            "inbound webhook refused: the timestamp is not a number".into(),
+        )
+    })?;
+    let now = chrono::Utc::now().timestamp();
+    if !timestamp_is_fresh(ts, now, replay_window_secs()) {
+        return Err(AppError::UnauthorizedReason(
+            "inbound webhook refused: the delivery is stale (timestamp outside the accepted window)"
+                .into(),
+        ));
+    }
+    // Claim the token. ON CONFLICT DO NOTHING RETURNING yields NO row when the token was already
+    // spent, which is the replay case - and it happens with no side effect written.
+    let claimed: Option<(String,)> = sqlx::query_as(
+        "INSERT INTO inbound_webhook_tokens (token, provider) VALUES ($1, $2)
+         ON CONFLICT (token) DO NOTHING RETURNING token",
+    )
+    .bind(token)
+    .bind(provider)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(AppError::Database)?;
+    if claimed.is_none() {
+        return Err(AppError::Conflict(
+            "inbound webhook refused: this delivery has already been processed (replay)".into(),
+        ));
+    }
+    // The ledger must outlive the window by a wide margin (2x is the minimum the CEO set).
+    let keep = replay_window_secs() * 2;
+    let _ = sqlx::query(
+        "DELETE FROM inbound_webhook_tokens WHERE received_at < now() - ($1 || ' seconds')::interval",
+    )
+    .bind(keep.to_string())
+    .execute(&state.db)
+    .await;
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 pub struct MailgunInbound {
     #[serde(default)]
@@ -281,6 +404,14 @@ pub async fn inbound_webhook(
             }
         }
     };
+
+    // Replay defence runs here: the signature has been verified, and NOTHING has been written yet.
+    // The signed pair lives in the authenticated body (Mailgun covers timestamp + token, and both are
+    // fields in every payload shape this receiver accepts), so it is read from the SAME bytes the
+    // signature was verified over - never from a query string or a header a caller could vary.
+    let signed_ts = form_field(&delivery.auth_body, "timestamp").unwrap_or_default();
+    let signed_token = form_field(&delivery.auth_body, "token").unwrap_or_default();
+    refuse_replay(&state, "mailgun", &signed_ts, &signed_token).await?;
 
     let is_spam = delivery
         .mailgun
@@ -1510,5 +1641,47 @@ mod tests {
             parsed.mailgun.as_ref().map(|p| p.body_plain.as_str()),
             Some("hello there")
         );
+    }
+}
+
+#[cfg(test)]
+mod replay_guard_tests {
+    use super::{form_field, percent_decode, replay_window_secs, timestamp_is_fresh};
+
+    /// Criterion 3, the stale arm: a timestamp outside the window is refused. Server clock only.
+    #[test]
+    fn a_timestamp_outside_the_window_is_stale() {
+        let now = 1_800_000_000;
+        assert!(timestamp_is_fresh(now, now, 300));
+        assert!(timestamp_is_fresh(now - 299, now, 300));
+        assert!(!timestamp_is_fresh(now - 301, now, 300));
+        // A delivery from the future is equally refused: a skew check is not one-directional.
+        assert!(!timestamp_is_fresh(now + 301, now, 300));
+    }
+
+    /// The window is configurable, and a nonsense value cannot widen it to "always fresh".
+    #[test]
+    fn the_window_comes_from_the_environment_and_refuses_nonsense() {
+        assert_eq!(replay_window_secs(), 300);
+        std::env::set_var("INBOUND_WEBHOOK_MAX_SKEW_SECS", "120");
+        assert_eq!(replay_window_secs(), 120);
+        std::env::set_var("INBOUND_WEBHOOK_MAX_SKEW_SECS", "0");
+        assert_eq!(replay_window_secs(), 300, "zero must not mean no limit");
+        std::env::set_var("INBOUND_WEBHOOK_MAX_SKEW_SECS", "not-a-number");
+        assert_eq!(replay_window_secs(), 300);
+        std::env::remove_var("INBOUND_WEBHOOK_MAX_SKEW_SECS");
+    }
+
+    /// The signed pair is read from the bytes the signature covered, and percent-decoding survives.
+    #[test]
+    fn the_signed_pair_is_read_from_the_authenticated_body() {
+        let body = b"sender=a%40b.test&timestamp=1800000000&token=abc%2Fdef&signature=zz";
+        assert_eq!(form_field(body, "timestamp").as_deref(), Some("1800000000"));
+        assert_eq!(form_field(body, "token").as_deref(), Some("abc/def"));
+        assert_eq!(form_field(body, "signature").as_deref(), Some("zz"));
+        assert_eq!(form_field(body, "absent"), None);
+        assert_eq!(percent_decode("a+b%21"), "a b!");
+        // A malformed escape is left exactly as written rather than silently rewritten.
+        assert_eq!(percent_decode("100%zz"), "100%zz");
     }
 }
