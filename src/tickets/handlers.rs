@@ -592,11 +592,22 @@ pub async fn ticket_stats(
     .await?;
 
     let total = rows.iter().fold(0i64, |acc, r| acc + r.count.unwrap_or(0));
-    let open = rows
+    // "NEW" IS A STATUS AND IT HAD NO BUCKET (Giraudy CEO, 2026-11-27). Measured: one ticket with
+    // status "new" returned {total:1, open:0, pending:0, resolved:0, closed:0} - the total counted it and
+    // no bucket did, so every tile under-read and the sum could never equal the total. It is reported as
+    // its own bucket AND inside `open`, because "new" is work nobody has picked up yet; the rule the
+    // dashboard needs is total == sum of the parts, so the bucket is named rather than folded away.
+    let new_count = rows
+        .iter()
+        .find(|r| r.status == "new")
+        .and_then(|r| r.count)
+        .unwrap_or(0);
+    let open_only = rows
         .iter()
         .find(|r| r.status == "open")
         .and_then(|r| r.count)
         .unwrap_or(0);
+    let open = open_only + new_count;
     // `in_progress` is NOT a status this table allows (`tickets_status_check`: new, open, pending, on_hold,
     // solved, closed) - measured 2026-11-25, when setting a ticket to in_progress answered 500. The bucket
     // an operator means by "in progress" is `pending`, so report that, and keep the old key pointing at the
@@ -622,6 +633,7 @@ pub async fn ticket_stats(
     Ok(Json(json!({
         "total": total,
         "open": open,
+        "new": new_count,
         "pending": pending,
         "in_progress": in_progress,
         "resolved": resolved,
