@@ -224,6 +224,21 @@ pub struct ProvisionMailboxRequest {
     pub domain_id: Uuid,
     pub local_part: String,
     pub user_id: Option<Uuid>,
+    /// SHOULD MAIL HERE OPEN A SUPPORT TICKET? (David, 2026-11-27: "there should be a checkbox when
+    /// creating an inbox which will decide if the tickets that go to those emails create a ticket or
+    /// not - I want an affiliate inbox with all affiliates, no point in having a support ticket for
+    /// that"). The column already existed and the inbound webhook already honoured it, but nothing on
+    /// the CREATE arm ever set it: every new mailbox silently took the column default (false), so a
+    /// support@ created through the console produced no tickets. Now the caller says.
+    ///
+    /// Default TRUE: an inbox created without an opinion is the support kind, which is what an inbox
+    /// is for. The console shows a ticked checkbox rather than hiding the decision.
+    #[serde(default = "default_creates_ticket")]
+    pub creates_ticket: bool,
+}
+
+fn default_creates_ticket() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]

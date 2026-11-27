@@ -157,9 +157,9 @@ pub async fn provision_mailbox(
     let row = sqlx::query_as::<_, PrivateEmailBox>(
         r#"
         INSERT INTO private_email_boxes
-            (tenant_id, domain_id, user_id, local_part, email_address,
+            (tenant_id, domain_id, user_id, local_part, email_address, creates_ticket,
              access_mode, trial_started_at, trial_ends_at)
-        VALUES ($1, $2, $3, $4, $5,
+        VALUES ($1, $2, $3, $4, $5, $10,
                 CASE WHEN $6 THEN 'trial' ELSE 'paid' END,
                 CASE WHEN $6 THEN COALESCE($7::timestamptz, NOW()) END,
                 CASE WHEN $6 THEN COALESCE($8::timestamptz, NOW() + ($9 || ' days')::interval) END)
@@ -174,6 +174,7 @@ pub async fn provision_mailbox(
     // A mailbox created by a plan that does NOT sell sending (the Free plan, on a domain of their
     // own) starts the SAME trial as the free CoreSwift address — otherwise adding your own domain
     // would silently produce a mailbox with no sending rights at all and no clock to explain it.
+    .bind(req.creates_ticket)
     .bind(!trial::plan_sells_sending(&state.db, account_id).await?)
     .bind(window.0)
     .bind(window.1)

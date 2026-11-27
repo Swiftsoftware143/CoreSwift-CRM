@@ -13625,6 +13625,13 @@ function peOpenNewBox() {
     '<div class="form-group"><label>Address</label>' +
       '<input type="text" id="peNewBoxLocal" placeholder="info" autocomplete="off" oninput="peNewBoxPaint()">' +
       '<span class="form-hint">The part before the @. <span id="peNewBoxPreview"></span></span></div>' +
+    // THE TICKET SWITCH, on the create form where David asked for it. Ticked by default: an inbox is
+    // normally the support kind. Untick for an affiliates/receipts address where a ticket makes no sense.
+    '<div class="form-group"><label style="display:flex;gap:8px;align-items:flex-start">' +
+      '<input type="checkbox" id="pmCreatesTicket" checked style="margin-top:3px">' +
+      '<span><strong>Mail here opens a support ticket</strong>' +
+      '<br><span class="form-hint">Untick for an inbox nobody needs tickets from — an affiliates list, ' +
+      'a receipts address, a no-reply. Mail still arrives and still creates the contact.</span></span></label></div>' +
     '<p id="peNewBoxState" style="color:var(--text-secondary);margin:0">Checking whether this domain can take an inbox…</p>',
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
     '<button class="btn btn-primary" id="peNewBoxCreate" disabled>Create inbox</button>');
@@ -13637,7 +13644,13 @@ function peOpenNewBox() {
     if (!local) { toast('Enter the part before the @', 'error'); return; }
     b.disabled = true; b.textContent = 'Creating…';
     try {
-      await API.post('/private-email/boxes', { domain_id: dom, local_part: local });
+      // THE TICKET SWITCH (David, 2026-11-27): the column existed and the inbound webhook honoured it, but
+      // nothing set it on creation, so every console-made inbox silently produced NO tickets. Ticked by
+      // default because an inbox is normally the support kind; untick it for an affiliates or receipts
+      // inbox that should never open a ticket.
+      const ct = document.getElementById('pmCreatesTicket');
+      await API.post('/private-email/boxes', { domain_id: dom, local_part: local,
+        creates_ticket: !!(ct && ct.checked) });
       closeModal(); toast('Inbox created — open it from its row', 'success'); await loadInboxTab();
     } catch (e) {
       b.disabled = false; b.textContent = 'Create inbox';
