@@ -133,43 +133,45 @@ pub async fn get_profile(
 /// `name` is required and may not be blank (4xx). `username` and `company` are OPTIONAL: an absent
 /// key leaves the stored value untouched, an empty string CLEARS it (the console's Company field
 /// is clearable), so a rename never silently wipes the other two fields.
+///
+/// FREE-TEXT HYGIENE (the house rule on every CRM write door). An invisible NUL pasted out of a
+/// spreadsheet, a document or another CRM is STRIPPED, not refused: Postgres cannot store it in a
+/// text column, so one invisible byte used to fail the whole statement and answer
+/// `500 {"code":500,"error":true,"message":"Database error"}` with the entire profile save lost and
+/// no field named. Measured live 2026-11-27 on this app's running binary (probe identity,
+/// `x-swift-harness`, `credentials_emailed=false`): a clean `PUT /api/profile` answered 200 while
+/// the same call with U+0000 in `name`, in `username` and in `company` answered 500 for all three.
+/// A NAME is a single-line value, so any OTHER control character is refused BY NAME (a line break
+/// in a name is a paste accident), while `username`/`company` keep the clear-on-empty contract.
 pub async fn update_profile(
     State(s): State<AppState>,
     Extension(c): Extension<Claims>,
     Json(req): Json<UpdateProfileRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let id = subject(&c)?;
-    let name = req.name.as_deref().map(str::trim).unwrap_or("");
-    if name.is_empty() {
-        return Err(AppError::Validation(
-            "name is required and cannot be empty".to_string(),
-        ));
-    }
-    if name.chars().count() > MAX_NAME_LEN {
-        return Err(AppError::Validation(format!(
-            "name must be {} characters or fewer",
-            MAX_NAME_LEN
-        )));
-    }
+    let name = crate::security::free_text::single_line(
+        req.name.as_deref().unwrap_or(""),
+        "name",
+        MAX_NAME_LEN,
+    )?;
 
-    let username = req.username.as_deref().map(str::trim);
-    if let Some(u) = username {
-        if u.chars().count() > MAX_USERNAME_LEN {
-            return Err(AppError::Validation(format!(
-                "username must be {} characters or fewer",
-                MAX_USERNAME_LEN
-            )));
-        }
-    }
-    let company = req.company.as_deref().map(str::trim);
-    if let Some(co) = company {
-        if co.chars().count() > MAX_COMPANY_LEN {
-            return Err(AppError::Validation(format!(
-                "company must be {} characters or fewer",
-                MAX_COMPANY_LEN
-            )));
-        }
-    }
+    // Absent = leave untouched; present = write what the field says (blank clears it).
+    let (username_set, username_value) = match req.username.as_deref() {
+        None => (false, String::new()),
+        Some(raw) => (
+            true,
+            crate::security::free_text::optional_line(Some(raw), "username", MAX_USERNAME_LEN)?
+                .unwrap_or_default(),
+        ),
+    };
+    let (company_set, company_value) = match req.company.as_deref() {
+        None => (false, String::new()),
+        Some(raw) => (
+            true,
+            crate::security::free_text::optional_line(Some(raw), "company", MAX_COMPANY_LEN)?
+                .unwrap_or_default(),
+        ),
+    };
 
     let row = sqlx::query_as::<_, ProfileRow>(
         "UPDATE users SET \
@@ -181,11 +183,11 @@ pub async fn update_profile(
          RETURNING id, tenant_id, name, email, role, username, company, avatar_url",
     )
     .bind(id)
-    .bind(name)
-    .bind(username.is_some())
-    .bind(username.unwrap_or(""))
-    .bind(company.is_some())
-    .bind(company.unwrap_or(""))
+    .bind(&name)
+    .bind(username_set)
+    .bind(&username_value)
+    .bind(company_set)
+    .bind(&company_value)
     .fetch_optional(&s.db)
     .await?
     .ok_or(AppError::NotFound("Profile not found".to_string()))?;

@@ -137,12 +137,19 @@ pub async fn create(
     let sender_id: Option<Uuid> = Uuid::parse_str(&claims.sub).ok();
 
     // The free-form sender details live in `metadata` — the table has no columns for them.
-    let metadata = json!({
+    // SCRUBBED, not refused (the house rule in `security::free_text`): a NUL cannot be stored in a
+    // text column or inside a jsonb string, so one invisible byte used to lose the whole message.
+    // Measured live 2026-11-27 on this app's running binary (probe identity, `x-swift-harness`): the
+    // same POST with a clean `sender_name` answered 201, with U+0000 in `sender_name` — or in
+    // `body` — answered 500 `{"code":500,"error":true,"message":"Internal server error"}`.
+    let metadata = crate::security::free_text::strip_nul_json(&json!({
         "sender_name": payload.sender_name,
         "sender_email": payload.sender_email,
         "sender_phone": payload.sender_phone,
         "source": "manual",
-    });
+    }));
+    let subject = crate::security::free_text::nul_free(payload.subject.clone());
+    let body = crate::security::free_text::strip_nul(&payload.body);
 
     let message = sqlx::query_as::<_, Message>(
         r#"INSERT INTO cs_messages
@@ -154,8 +161,8 @@ pub async fn create(
     .bind(tenant_id)
     .bind(sender_id)
     .bind(payload.contact_id)
-    .bind(&payload.subject)
-    .bind(&payload.body)
+    .bind(&subject)
+    .bind(&body)
     .bind(&metadata)
     .fetch_one(&state.db)
     .await
@@ -297,13 +304,19 @@ pub async fn webhook_receive(
     };
 
     // The sender details have no columns on `cs_messages`; keep them in `metadata`.
-    let metadata: Value = json!({
+    // SCRUBBED for the same reason as the manual door: a NUL in the body, the subject or any metadata
+    // string fails the whole INSERT (`invalid byte sequence for encoding "UTF8": 0x00` /
+    // `unsupported Unicode escape sequence`), so one invisible byte from a peer app would silently
+    // drop a customer's inbound message.
+    let metadata: Value = crate::security::free_text::strip_nul_json(&json!({
         "sender_name": payload.sender_name,
         "sender_email": payload.sender_email,
         "sender_phone": payload.sender_phone,
         "source": source,
         "source_id": payload.source_id,
-    });
+    }));
+    let subject = crate::security::free_text::nul_free(payload.subject.clone());
+    let body = crate::security::free_text::strip_nul(&payload.body);
 
     // Insert the message. `recipient_id` is the contact on the other side of the thread
     // (FK -> contacts); an inbound webhook message has no tenant user as its sender.
@@ -316,8 +329,8 @@ pub async fn webhook_receive(
     )
     .bind(tenant_id)
     .bind(contact_id)
-    .bind(&payload.subject)
-    .bind(&payload.body)
+    .bind(&subject)
+    .bind(&body)
     .bind(&metadata)
     .fetch_one(&state.db)
     .await;
