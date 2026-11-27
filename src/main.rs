@@ -1439,6 +1439,28 @@ async fn health_check(
     // bigger than it is. Two numbers, fleet-wide: how many lists disagree with a live contact-joined
     // count, and how many member rows point at no contact at all. Both should read 0; a non-zero is a
     // report rather than a refusal, because a wrong count must never take the app down.
+    // PROVENANCE, so a deploy claim can be checked from outside (CEO, 2026-11-27): the short commit and
+    // the build time, read from the file the deploy staged into the image. Read ONCE per process - the
+    // answer cannot change while this binary runs, and a health probe must stay cheap.
+    {
+        static BUILD_INFO: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+        let (commit, built_at) = BUILD_INFO.get_or_init(|| {
+            let mut commit = "unknown".to_string();
+            let mut built_at = "unknown".to_string();
+            if let Ok(text) = std::fs::read_to_string("/app/BUILD_INFO") {
+                for line in text.lines() {
+                    if let Some(v) = line.strip_prefix("commit=") {
+                        commit = v.trim().to_string();
+                    } else if let Some(v) = line.strip_prefix("built_at=") {
+                        built_at = v.trim().to_string();
+                    }
+                }
+            }
+            (commit, built_at)
+        });
+        body["commit"] = serde_json::json!(commit);
+        body["built_at"] = serde_json::json!(built_at);
+    }
     if let Ok((drift, orphans)) = sqlx::query_as::<_, (i64, i64)>(
         r#"SELECT
              (SELECT count(*) FROM lists l
