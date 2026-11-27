@@ -46,6 +46,7 @@ fn validate_billing_cycle(cycle: &str) -> Result<(), AppError> {
 /// GET /api/billing/plans — List all active plans
 pub async fn list_plans(
     State(s): State<AppState>,
+    Extension(c): Extension<Claims>,
     Query(p): Query<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let (page, per_page) = validate_pagination(
@@ -62,20 +63,44 @@ pub async fn list_plans(
     // (kanban t_1fcaacb2, the same class the parent card fixed on missedcallrespondr). It is also
     // a paged read, so the missing tie-break let a row repeat or vanish across pages. Fleet rule
     // for a plan catalogue: cheapest-first — `sort_order` (operator pin) → price → name → id.
+    // THE OFF-SALE TIERS, FOR THE OPERATOR ONLY (2026-11-27). `Inbox` and `Pro` ship
+    // `is_active = false`, so the active-only read above never returns them — and nothing else in
+    // any console listed them, which left the `$1` Inbox plan visible to nobody and switchable only
+    // by SQL. `?include_inactive=1` answers the whole catalogue WITH each row's state, and it is
+    // gated on the real platform-admin flag: a member of the public, and an ordinary account
+    // owner, keep exactly the active-only list they had.
+    let wants_inactive = p
+        .get("include_inactive")
+        .and_then(|v| match v {
+            serde_json::Value::Bool(b) => Some(*b),
+            serde_json::Value::String(s) => Some(s == "1" || s.eq_ignore_ascii_case("true")),
+            serde_json::Value::Number(n) => Some(n.as_i64().unwrap_or(0) != 0),
+            _ => None,
+        })
+        .unwrap_or(false);
+    let include_inactive = wants_inactive
+        && crate::auth::platform_admin::require_platform_admin(&s.db, &c.sub)
+            .await
+            .is_ok();
+
     let plans = sqlx::query_as::<_, Plan>(
-        "SELECT * FROM plans WHERE is_active = true \
+        "SELECT * FROM plans WHERE ($3 OR is_active = true) \
          ORDER BY sort_order ASC NULLS LAST, price_monthly ASC NULLS LAST, name ASC, id ASC \
          LIMIT $1 OFFSET $2",
     )
     .bind(per_page)
     .bind(offset)
+    .bind(include_inactive)
     .fetch_all(&s.db)
     .await?;
 
     let total = count_or_zero(
-        sqlx::query_scalar::<_, Option<i64>>("SELECT COUNT(*) FROM plans WHERE is_active = true")
-            .fetch_one(&s.db)
-            .await?,
+        sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT COUNT(*) FROM plans WHERE ($1 OR is_active = true)",
+        )
+        .bind(include_inactive)
+        .fetch_one(&s.db)
+        .await?,
     );
 
     Ok(Json(
@@ -147,9 +172,13 @@ pub async fn create_plan(
         r.billing_interval.as_deref(),
         r.billing_interval_count,
     )?;
-    if c.role != "agency_admin" {
-        return Err(AppError::Forbidden);
-    }
+    // PLATFORM AUTHORITY, NOT A ROLE STRING (2026-11-27). This gate read `c.role != "agency_admin"`,
+    // and NO user on this app carries that role (every registration path writes `owner`), so the
+    // operator's own console got 403 on every plan write: the payment page for a plan, an off-sale
+    // tier's switch and a plan's deletion were all unreachable, measured live against the platform
+    // admin. The authority is the `users.is_platform_admin` column, resolved here exactly as every
+    // other admin surface resolves it.
+    crate::auth::platform_admin::require_platform_admin(&s.db, &c.sub).await?;
     if r.name.is_empty() || r.slug.is_empty() {
         return Err(AppError::Validation(
             "Name and slug are required".to_string(),
@@ -227,9 +256,13 @@ pub async fn update_plan(
     Path(id): Path<Uuid>,
     Json(r): Json<UpdatePlanRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    if c.role != "agency_admin" {
-        return Err(AppError::Forbidden);
-    }
+    // PLATFORM AUTHORITY, NOT A ROLE STRING (2026-11-27). This gate read `c.role != "agency_admin"`,
+    // and NO user on this app carries that role (every registration path writes `owner`), so the
+    // operator's own console got 403 on every plan write: the payment page for a plan, an off-sale
+    // tier's switch and a plan's deletion were all unreachable, measured live against the platform
+    // admin. The authority is the `users.is_platform_admin` column, resolved here exactly as every
+    // other admin surface resolves it.
+    crate::auth::platform_admin::require_platform_admin(&s.db, &c.sub).await?;
 
     let existing = sqlx::query_as::<_, Plan>("SELECT * FROM plans WHERE id = $1")
         .bind(id)
@@ -298,9 +331,13 @@ pub async fn delete_plan(
     Extension(c): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    if c.role != "agency_admin" {
-        return Err(AppError::Forbidden);
-    }
+    // PLATFORM AUTHORITY, NOT A ROLE STRING (2026-11-27). This gate read `c.role != "agency_admin"`,
+    // and NO user on this app carries that role (every registration path writes `owner`), so the
+    // operator's own console got 403 on every plan write: the payment page for a plan, an off-sale
+    // tier's switch and a plan's deletion were all unreachable, measured live against the platform
+    // admin. The authority is the `users.is_platform_admin` column, resolved here exactly as every
+    // other admin surface resolves it.
+    crate::auth::platform_admin::require_platform_admin(&s.db, &c.sub).await?;
 
     let r = sqlx::query("DELETE FROM plans WHERE id = $1")
         .bind(id)
