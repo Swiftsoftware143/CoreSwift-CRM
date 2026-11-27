@@ -440,6 +440,11 @@ mislabels the message and stops a ticket from being opened for it.</p>
 
 <!-- guide-2026-11-21 -->
 
+<h2 id="broadcast-vs-campaign">A broadcast is not a campaign</h2>
+<p>Worth knowing when a customer asks &ldquo;how do I email my whole list once?&rdquo;: <strong>campaigns</strong> are sequences &mdash; steps with <em>delay_days</em> and one-contact enrolment &mdash; and <strong>broadcasts</strong> are a single message sent once to a list or a tag. <em>POST /api/broadcasts/preview</em> resolves the audience; <em>POST /api/broadcasts</em> with <em>send: true</em> queues it. Both take <em>list_id</em> or <em>tag</em>/<em>tag_id</em> plus <em>subject</em> and <em>body</em>.</p>
+<p>A broadcast only ENQUEUES <em>outbound_messages</em>: the ordinary mail pass delivers, so the per-account suppression list, the universal footer, the one-click opt-out headers, the platform mail pause and each workspace's own transport all apply unchanged. That is deliberate &mdash; a second sender would have to re-earn every one of those and would drift.</p>
+<p>The answer reports per reason and must never be collapsed into one number: would-send, no-address (counted, not dropped), opted-out (named, never &ldquo;sent&rdquo;), and duplicate addresses (one inbox, mailed once). A broadcast that counts an opted-out person as sent is a lie the operator acts on.</p>
+
 <h2 id="setup-requirements-rule">A feature that cannot work must say so, on its screen</h2>
 <p>Every feature that depends on something existing &mdash; a domain, a list, a tag, a checkout &mdash; states the requirement on its own screen, shows whether it is met, and offers the control beside it: pick from what exists, or create the missing thing without leaving the page. A customer should never have to guess why nothing happened, and never have to visit three screens to make one work.</p>
 <p>The inline guide (the <strong>?</strong> on every screen) carries the same requirement list per page, under <em>What this needs first</em>. The user-facing setup order lives at <strong>/onboarding.html</strong> and is linked from the guide's "What each feature needs before it works" section.</p>
