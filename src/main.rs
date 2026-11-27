@@ -1443,8 +1443,11 @@ async fn health_check(
     // the build time, read from the file the deploy staged into the image. Read ONCE per process - the
     // answer cannot change while this binary runs, and a health probe must stay cheap.
     {
-        static BUILD_INFO: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
-        let (commit, built_at) = BUILD_INFO.get_or_init(|| {
+        // Read on EVERY request, not once per process (CEO, 2026-11-27): a cached value would keep
+        // reporting the commit of the process that started first, which is exactly what a rollback to an
+        // older image must NOT look like. The file lives inside the running image, so reading it now is
+        // reading the image that is actually serving.
+        let (commit, built_at): (String, String) = {
             let mut commit = "unknown".to_string();
             let mut built_at = "unknown".to_string();
             if let Ok(text) = std::fs::read_to_string("/app/BUILD_INFO") {
@@ -1457,7 +1460,7 @@ async fn health_check(
                 }
             }
             (commit, built_at)
-        });
+        };
         body["commit"] = serde_json::json!(commit);
         body["built_at"] = serde_json::json!(built_at);
     }
