@@ -607,7 +607,10 @@ pub async fn ticket_stats(
         .find(|r| r.status == "open")
         .and_then(|r| r.count)
         .unwrap_or(0);
-    let open = open_only + new_count;
+    // NOT folded into open: the CEO's rule is that total == the sum of the buckets, and counting "new" in
+    // both places broke exactly that (measured: sum 4 vs total 3). "new" is its own bucket; the convenience
+    // number an operator wants is reported separately as `open_including_new`.
+    let open = open_only;
     // `in_progress` is NOT a status this table allows (`tickets_status_check`: new, open, pending, on_hold,
     // solved, closed) - measured 2026-11-25, when setting a ticket to in_progress answered 500. The bucket
     // an operator means by "in progress" is `pending`, so report that, and keep the old key pointing at the
@@ -634,6 +637,7 @@ pub async fn ticket_stats(
         "total": total,
         "open": open,
         "new": new_count,
+        "open_including_new": open_only + new_count,
         "pending": pending,
         "in_progress": in_progress,
         "resolved": resolved,
