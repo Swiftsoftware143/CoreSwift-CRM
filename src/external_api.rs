@@ -30,6 +30,7 @@
 //!     POST /api/external/contacts  → 201 { id, source_app, list_assigned, tags_applied, auto_created_fields }
 //!
 //! ## DEAL WRITER (David, 2026-11-20 — kanban t_2df68850)
+//!     GET   /api/external/deals                            → { deals, returned, total } (key-scoped)
 //!     POST  /api/external/deals                            → 201 created / 200 updated
 //!     PATCH /api/external/deals/:external_ref/stage        → { stage_id | stage: "<name>" }
 //!     POST  /api/external/deals/:external_ref/status       → { status: open|won|lost, lost_reason? }
@@ -658,6 +659,86 @@ pub async fn external_list_contacts(
     ))
 }
 
+/// GET /api/external/deals — the READ arm for deals on the issued-key surface.
+///
+/// The same gap the contacts read arm closed, one object over: a deal was WRITABLE by a key
+/// (`POST /api/external/deals`, stage and status moves) and not READABLE by one, so a satellite
+/// that created a deal could never see what became of it — its stage, its value, whether it was
+/// won. A caller that can write but cannot read has to re-derive state it already owns, and the
+/// fleet's own parity census could not measure deal coverage as a result.
+///
+/// Scoped by the key's workspace (`resolve_key`), newest change first, `limit` capped at 500 so a
+/// key can never pull an unbounded table. `total` is the workspace's own count, so a caller can
+/// tell a page from the whole thing.
+pub async fn external_list_deals(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> ApiResult<impl IntoResponse> {
+    let (tenant_id, _) = resolve_key(&s, &headers).await?;
+    let limit: i64 = q
+        .get("limit")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(100)
+        .clamp(1, 500);
+
+    let rows = sqlx::query(
+        "SELECT o.id, o.external_ref, o.name, o.value::float8 AS value, o.currency,
+                o.probability, o.is_won, o.is_lost, o.lost_reason, o.expected_close_date,
+                o.source, o.contact_id, o.owner_id, o.created_at, o.updated_at,
+                st.name AS stage_name, p.name AS pipeline_name
+           FROM opportunities o
+           JOIN pipeline_stages st ON st.id = o.stage_id
+           JOIN pipelines p ON p.id = o.pipeline_id
+          WHERE o.tenant_id = $1
+          ORDER BY o.updated_at DESC
+          LIMIT $2",
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .fetch_all(&s.db)
+    .await
+    .map_err(AppError::Database)?;
+
+    let deals: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<Uuid,_>("id").to_string(),
+                "external_ref": r.get::<Option<String>,_>("external_ref"),
+                "name": r.get::<String,_>("name"),
+                "value": r.get::<Option<f64>,_>("value"),
+                "currency": r.get::<Option<String>,_>("currency"),
+                "probability": r.get::<Option<i32>,_>("probability"),
+                "stage": r.get::<String,_>("stage_name"),
+                "pipeline": r.get::<String,_>("pipeline_name"),
+                "status": if r.get::<bool,_>("is_won") { "won" }
+                          else if r.get::<bool,_>("is_lost") { "lost" }
+                          else { "open" },
+                "lost_reason": r.get::<Option<String>,_>("lost_reason"),
+                "expected_close_date": r
+                    .get::<Option<chrono::NaiveDate>,_>("expected_close_date")
+                    .map(|d| d.to_string()),
+                "source": r.get::<Option<String>,_>("source"),
+                "contact_id": r.get::<Option<Uuid>,_>("contact_id").map(|v| v.to_string()),
+                "owner_id": r.get::<Option<Uuid>,_>("owner_id").map(|v| v.to_string()),
+                "created_at": r.get::<chrono::DateTime<chrono::Utc>,_>("created_at").to_rfc3339(),
+                "updated_at": r.get::<chrono::DateTime<chrono::Utc>,_>("updated_at").to_rfc3339(),
+            })
+        })
+        .collect();
+
+    let total: i64 = sqlx::query_scalar("SELECT count(*) FROM opportunities WHERE tenant_id = $1")
+        .bind(tenant_id)
+        .fetch_one(&s.db)
+        .await
+        .map_err(AppError::Database)?;
+
+    Ok(Json(
+        json!({ "deals": deals, "returned": deals.len(), "total": total }),
+    ))
+}
+
 pub async fn external_list_lists(
     State(s): State<AppState>,
     headers: HeaderMap,
@@ -1039,7 +1120,10 @@ pub fn router() -> axum::Router<AppState> {
             "/contacts",
             get(external_list_contacts).post(external_push_contact),
         )
-        .route("/deals", post(external_upsert_deal))
+        .route(
+            "/deals",
+            get(external_list_deals).post(external_upsert_deal),
+        )
         .route("/deals/:external_ref/stage", patch(external_deal_stage))
         .route("/deals/:external_ref/status", post(external_deal_status))
 }
