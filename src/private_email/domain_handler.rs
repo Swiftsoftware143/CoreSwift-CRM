@@ -334,16 +334,6 @@ pub async fn readiness(
             None => stored_wrong_shape.push(r.domain.clone()),
         }
     }
-    let inbound_ready = keyed_and_usable || (platform_token && main.is_some());
-    // WHICH credential carries inbound — named, so a green lane cannot look identical whether the
-    // account's own key is in use or the platform token is standing in for a key that was never set.
-    let inbound_identity_source = if keyed_and_usable {
-        "own_key"
-    } else if platform_token && main.is_some() {
-        "platform"
-    } else {
-        "none"
-    };
     let awaiting_key: Vec<String> = rows
         .iter()
         .filter(|r| r.verified && is_mailgun(r) && !r.has_key)
@@ -351,8 +341,14 @@ pub async fn readiness(
         .collect();
 
     let automation_domain = main.as_ref().map(|d| format!("mg.{d}"));
-    let system_ready = main.is_some();
-    let automation_ready = automation_domain.is_some();
+    // ONE decision, from the pure helper below and proved by its unit tests: each lane's `ready`, the
+    // credential that carries inbound, and the lanes blocked right now cannot drift apart.
+    let state = lane_state(main.is_some(), keyed_and_usable, platform_token);
+    let system_ready = state.system_ready;
+    let automation_ready = state.automation_ready;
+    let inbound_ready = state.inbound_ready;
+    let inbound_identity_source = state.inbound_identity_source;
+    let blocked_now = state.blocked_now;
 
     let setup_hint =
         "Open Email Domains, add your domain, add the records it shows, press Re-check, \
@@ -443,20 +439,6 @@ pub async fn readiness(
         },
     ]);
 
-    // The measurement a reader can trust: which lanes are NOT ready at this instant, derived from the
-    // very booleans that decide each lane's `ready`. This is an active-fault list, not a capability
-    // list, so it cannot contradict a lane the way a constant `blocking` beside `any_blocking` did.
-    let mut blocked_now: Vec<&str> = Vec::new();
-    if !system_ready {
-        blocked_now.push("system");
-    }
-    if !automation_ready {
-        blocked_now.push("automation");
-    }
-    if !inbound_ready {
-        blocked_now.push("inbox");
-    }
-
     Ok(Json(json!({
         "lanes": lanes,
         "main_domain": main,
@@ -465,6 +447,87 @@ pub async fn readiness(
         "any_blocking": !blocked_now.is_empty(),
         "domain_count": rows.len(),
     })))
+}
+
+/// The mail-lane decision in one place, pure so it can be tested.
+///
+/// `ready` and `blocked_now` MUST come from the same booleans — the defect this replaces was a static
+/// `blocking` constant rendered beside a computed `any_blocking`, so a capability read as an active
+/// fault. `identity_source` names the credential that actually carries inbound: `own_key` (the domain's
+/// own 32-character signing key), `platform` (the shared platform webhook token standing in for a key
+/// that was never set) or `none`. Automation's readiness is the same question as system's: it is built
+/// from the account's own verified domain, so no separate domain can make it ready.
+struct LaneState {
+    system_ready: bool,
+    automation_ready: bool,
+    inbound_ready: bool,
+    inbound_identity_source: &'static str,
+    blocked_now: Vec<&'static str>,
+}
+
+fn lane_state(main_present: bool, keyed_and_usable: bool, platform_token: bool) -> LaneState {
+    let inbound_ready = keyed_and_usable || (platform_token && main_present);
+    let inbound_identity_source = if keyed_and_usable {
+        "own_key"
+    } else if platform_token && main_present {
+        "platform"
+    } else {
+        "none"
+    };
+    let mut blocked_now: Vec<&'static str> = Vec::new();
+    if !main_present {
+        blocked_now.push("system");
+    }
+    if !main_present {
+        blocked_now.push("automation");
+    }
+    if !inbound_ready {
+        blocked_now.push("inbox");
+    }
+    LaneState {
+        system_ready: main_present,
+        automation_ready: main_present,
+        inbound_ready,
+        inbound_identity_source,
+        blocked_now,
+    }
+}
+
+#[cfg(test)]
+mod readiness_lane_tests {
+    use super::lane_state;
+
+    #[test]
+    fn a_workspace_with_no_domain_blocks_and_names_every_lane() {
+        let s = lane_state(false, false, false);
+        assert!(!s.system_ready && !s.automation_ready && !s.inbound_ready);
+        assert_eq!(s.inbound_identity_source, "none");
+        assert_eq!(s.blocked_now, vec!["system", "automation", "inbox"]);
+    }
+
+    #[test]
+    fn a_domain_without_its_own_key_is_ready_and_names_the_platform() {
+        let s = lane_state(true, false, true);
+        assert!(s.inbound_ready);
+        assert_eq!(s.inbound_identity_source, "platform");
+        assert!(s.blocked_now.is_empty());
+    }
+
+    #[test]
+    fn a_domain_with_its_own_key_is_carried_by_that_key() {
+        let s = lane_state(true, true, false);
+        assert!(s.inbound_ready);
+        assert_eq!(s.inbound_identity_source, "own_key");
+        assert!(s.blocked_now.is_empty());
+    }
+
+    #[test]
+    fn a_platform_token_cannot_carry_a_lane_without_a_domain() {
+        let s = lane_state(false, false, true);
+        assert!(!s.inbound_ready);
+        assert_eq!(s.inbound_identity_source, "none");
+        assert!(s.blocked_now.contains(&"inbox"));
+    }
 }
 
 pub async fn list_domains(
