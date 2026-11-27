@@ -229,6 +229,31 @@ pub async fn add_domain(
     let label = req.label.clone().unwrap_or_else(|| req.domain.clone());
     let choices = DomainChoices::resolve(&req)?;
 
+    // A DOMAIN ARMED TO RECEIVE MUST CARRY THE CREDENTIAL THAT AUTHENTICATES A DELIVERY (2026-11-27).
+    // `receiving_provider` DEFAULTS to Mailgun for a Mailgun-sending domain, and the Mailgun door
+    // treated the signing key as optional — so a register call that omitted it stored a row with
+    // `inbound_mode = 'webhook'` and `inbound_provider = 'mailgun'` and no key at all. The receiver
+    // fails closed, so every delivery to that domain was refused with "no signing key is configured",
+    // and the workspace believed it had an inbox that silently dropped mail. Measured live that
+    // morning: seven domains registered through the account-key door were ALL in exactly that state,
+    // and one delivery had already been refused. The SMTP door already refused this combination; the
+    // rule lives here now so both doors answer one sentence. A domain that only SENDS says so with
+    // `receiving_provider = "none"` (and can arm receiving later, with its key, from the domain row).
+    let has_webhook_key = req
+        .webhook_signing_key
+        .as_deref()
+        .map(|k| !k.trim().is_empty())
+        .unwrap_or(false);
+    if choices.receiving == "mailgun" && !has_webhook_key {
+        return Err(AppError::BadRequest(
+            "Receiving through Mailgun needs its webhook signing key (Mailgun → Settings → API \
+             keys → HTTP webhook signing key). Without it every delivery is refused, so this \
+             domain is not stored until it is supplied. Choose \"nowhere\" for a domain that only \
+             sends, and add receiving later with its key."
+                .into(),
+        ));
+    }
+
     match choices.sending.as_str() {
         "smtp" => add_smtp_domain(&state, account_id, &req, &label, &choices).await,
         _ => add_mailgun_domain(&state, account_id, &req, &label, &choices).await,
@@ -2188,15 +2213,8 @@ async fn add_smtp_domain(
             choices.receiving
         )));
     }
-    if choices.receiving == "mailgun" && wanted_webhook_key.is_none() {
-        return Err(AppError::BadRequest(
-            "Receiving through Mailgun needs its webhook signing key (Mailgun → Settings → API \
-             keys → HTTP webhook signing key). Without it every delivery is refused, so this \
-             domain is not stored until it is supplied."
-                .into(),
-        ));
-    }
-
+    // The "receiving through Mailgun needs its signing key" rule is enforced ONCE, in `add_domain`,
+    // before either door is chosen — so the two doors cannot drift apart again.
     let smtp_host = req
         .smtp_host
         .as_deref()
