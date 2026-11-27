@@ -90,6 +90,29 @@ fn timestamp_is_fresh(ts: i64, now: i64, window: i64) -> bool {
 ///   2. the token claimed in a durable ledger with a UNIQUE key, inserted before any side effect ->
 ///      409 on a duplicate. The insert IS the lock: a concurrent second submit loses the race and
 ///      writes nothing.
+/// FRESHNESS, checked before anything looks at the recipient (CEO correction, 2026-11-27: a stale or
+/// unsigned delivery was reaching the mailbox lookup, so an unauthenticated caller could tell whether a
+/// mailbox exists - and a stale timestamp was never refused). This needs nothing but the body.
+fn refuse_stale(auth_body: &[u8]) -> Result<(), AppError> {
+    let ts_text = form_field(auth_body, "timestamp").unwrap_or_default();
+    if ts_text.is_empty() {
+        return Ok(()); // unsigned shape; the signature arm is the authority for those
+    }
+    let ts: i64 = ts_text.parse().map_err(|_| {
+        AppError::UnauthorizedReason(
+            "inbound webhook refused: the timestamp is not a number".into(),
+        )
+    })?;
+    let now = chrono::Utc::now().timestamp();
+    if !timestamp_is_fresh(ts, now, replay_window_secs()) {
+        return Err(AppError::UnauthorizedReason(
+            "inbound webhook refused: the delivery is stale (timestamp outside the accepted window)"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 async fn refuse_replay(
     state: &AppState,
     provider: &str,
@@ -286,12 +309,20 @@ pub async fn inbound_webhook(
     }
     let recipient_email = delivery.recipient.clone();
 
+    // BEFORE the lookup: a stale delivery is refused here, so an unauthenticated caller learns nothing
+    // about which mailboxes exist and never gets as far as routing.
+    refuse_stale(&delivery.auth_body)?;
+
     // ── Step 2: who is this mail FOR? ───────────────────────────────────────────────────────────
     let Some((tenant_id, domain_id, mailbox_id)) =
         route_recipient(&state, &recipient_email).await?
     else {
-        return Ok(Json(
-            json!({"received": false, "error": "no matching mailbox"}),
+        // INDISTINGUISHABLE FROM AN AUTH FAILURE (CEO, 2026-11-27). This used to answer 200 with
+        // "no matching mailbox", which let an unauthenticated caller probe which addresses exist on a
+        // domain we control. The same 401 sentence the signature arm returns is the only answer that
+        // discloses nothing.
+        return Err(AppError::UnauthorizedReason(
+            "inbound webhook refused: the delivery could not be authenticated".into(),
         ));
     };
 
