@@ -714,9 +714,15 @@ pub fn is_read_only_allowed(method: &str, path: &str) -> bool {
     }
     let trimmed = path.trim_end_matches('/');
     let path = if trimmed.is_empty() { "/" } else { trimmed };
+    // A READ-ONLY KEY MAY READ ANYTHING THE KEY SURFACE SERVES (David, 2026-11-27). It used to be
+    // limited to a narrow allowlist, and the result was incoherent: GET /api/external/contacts answered
+    // 403 "this key is read-only — use a workspace key to write" — a credential named read-only refusing
+    // to read. The allowlist is kept as the explicit arm, and any other path the key surface serves is
+    // readable too; a WRITE is still refused, which is the only thing "read-only" should mean.
     READ_ONLY_KEY_ROUTES
         .iter()
         .any(|(m, t)| *m == "GET" && matches_template(t, path))
+        || is_api_key_route(path)
 }
 
 /// Is `path` (a concrete request path) one of the committed public templates?
