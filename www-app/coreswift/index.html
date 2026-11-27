@@ -1273,7 +1273,11 @@ const MENU = [
     { id:'companies', icon:'🏢', label:'Companies' }
   ]},
   { type:'group', icon:'📣', label:'Marketing', children:[
-    { id:'campaigns', icon:'📢', label:'Campaigns' },    { id: 'broadcast', label: 'Broadcast' },
+    { id:'campaigns', icon:'📢', label:'Campaigns' },
+    // The entry MUST carry an icon: the sidebar paints `<span class="nav-icon">${it.icon}</span>`
+    // for every entry, so a child without one rendered the literal word `undefined` beside
+    // "Broadcast" on every customer's console (measured live 2026-11-27).
+    { id:'broadcast', icon:'📨', label:'Broadcast' },
     { id:'lists', icon:'📋', label:'Lists' },
     { id:'analytics', icon:'📊', label:'Analytics' }
   ]},
