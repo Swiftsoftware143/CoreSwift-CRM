@@ -4360,7 +4360,14 @@ async function mcpLoadKey() {
   try {
     const d = await API.get('/personal-api-keys');
     const keys = (d && d.keys) || [];
-    const active = keys.filter(k => k.is_active);
+    // THE STRONGEST KEY COMES FIRST (David, 2026-11-27). An account with several keys is a menu nobody
+    // asked for: an operator picks the first row it finds and then wonders why a write was refused. The
+    // list is ordered by CAPABILITY - full workspace, then read+write-no-delete, then read-only - and the
+    // strongest is labelled in the row so "which one do I use" answers itself.
+    const rank = { workspace: 0, read_write_no_delete: 1, read_only: 2 };
+    const active = keys.filter(k => k.is_active)
+      .slice()
+      .sort((a, b) => (rank[a.role] === undefined ? 9 : rank[a.role]) - (rank[b.role] === undefined ? 9 : rank[b.role]));
     if (!active.length) {
       el.innerHTML = '<p style="margin:0">No API key yet — an MCP client needs one to read this account. ' +
         '<button class="btn btn-primary btn-sm" onclick="icCreateKey()">+ Create API key</button></p>';
