@@ -1056,6 +1056,15 @@ pub async fn manage_cancel(
     Path(token): Path<String>,
 ) -> Result<Json<Value>> {
     let res = service::manage_cancel(&pool, &token).await?;
+    // THE CUSTOMER'S OWN CANCELLATION RUNS THE CANCEL RULES TOO (David, 2026-11-27). Both console cancel
+    // paths spawn `on_cancelled`, which is what applies the calendar's cancel-stage tag rules (the
+    // "appt canceled" tag). This path called `service::manage_cancel` and stopped there, so a customer who
+    // cancelled from their own manage link got an order with the right status and NO tag — the tag was
+    // evidence of a console cancellation only, which is exactly backwards: the customer cancelling is the
+    // event the tag exists to record.
+    let pool2 = pool.clone();
+    let oid = res.order.id;
+    tokio::spawn(async move { super::notify::on_cancelled(&pool2, oid).await });
     Ok(Json(
         json!({ "ok": true, "order": res.order, "bookings": res.bookings }),
     ))
