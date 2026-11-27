@@ -248,8 +248,19 @@ pub async fn add_domain(
 ///   * automation leaves from `mg.<that domain>` and cannot exist without it;
 ///   * inbound needs a verified domain AND a readable signing key, because the receiver fails closed.
 ///
-/// `blocking` is the difference between a warning and a wall: system mail still goes out on the shared
-/// platform identity, so it warns; automation and inbound have no fallback at all, so they block.
+/// `can_block` is a property of the LANE, not a measurement: system mail still goes out on the shared
+/// platform identity, so it only warns; automation and inbound have no fallback at all, so a missing
+/// piece stops them. `blocked_now` is the measurement — the lanes that are NOT ready at this instant —
+/// and only `blocked_now` may be read as an active fault. Before this, the lane field was called
+/// `blocking` and was a constant, so a reader saw `true` beside `any_blocking: false` and had no way
+/// to tell a capability from a fault.
+///
+/// `identity_source` names the credential that actually carries a lane, so a green lane cannot hide a
+/// missing credential: `own_domain` (the account's own verified sending domain), `own_key` (the
+/// domain's own 32-character webhook signing key), `platform` (the shared platform credential) or
+/// `none`. Inbound carried by `platform` is genuinely receiving, but not with the customer's own key,
+/// so it says `platform` and its `reason`/`action` name the key that is still unset instead of
+/// reporting "Nothing to do.".
 pub async fn readiness(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -324,6 +335,15 @@ pub async fn readiness(
         }
     }
     let inbound_ready = keyed_and_usable || (platform_token && main.is_some());
+    // WHICH credential carries inbound — named, so a green lane cannot look identical whether the
+    // account's own key is in use or the platform token is standing in for a key that was never set.
+    let inbound_identity_source = if keyed_and_usable {
+        "own_key"
+    } else if platform_token && main.is_some() {
+        "platform"
+    } else {
+        "none"
+    };
     let awaiting_key: Vec<String> = rows
         .iter()
         .filter(|r| r.verified && is_mailgun(r) && !r.has_key)
@@ -331,65 +351,118 @@ pub async fn readiness(
         .collect();
 
     let automation_domain = main.as_ref().map(|d| format!("mg.{d}"));
+    let system_ready = main.is_some();
+    let automation_ready = automation_domain.is_some();
 
     let setup_hint =
         "Open Email Domains, add your domain, add the records it shows, press Re-check, \
                       then Set key with your provider's HTTP webhook signing key.";
 
+    // The inbox lane's words. Two ready-adjacent states are honest: NOT ready (nothing can
+    // authenticate a delivery) and ready-on-the-platform-credential (deliveries authenticate, but not
+    // with this workspace's own key). The second used to render as reason:null + "Nothing to do.",
+    // which told the operator the lane was finished while its own key was still unset.
+    let (inbox_reason, inbox_action): (serde_json::Value, String) = if !inbound_ready {
+        let reason = if !stored_wrong_shape.is_empty() {
+            format!(
+                "Receiving is refused for {}: the stored signing key is not the 32-character webhook key, so no delivery can be authenticated. Remove the key (receiving then works on the platform credential) or paste the correct one.",
+                stored_wrong_shape.join(", ")
+            )
+        } else if awaiting_key.is_empty() {
+            "No verified domain yet, so nothing can arrive.".to_string()
+        } else {
+            format!(
+                "Mail sent to {} is refused on arrival: the inbound signing key is not set, and the receiver fails closed rather than accept a delivery it cannot authenticate.",
+                awaiting_key.join(", ")
+            )
+        };
+        (json!(reason), setup_hint.to_string())
+    } else if inbound_identity_source == "platform" {
+        let named = if awaiting_key.is_empty() {
+            main.clone().unwrap_or_default()
+        } else {
+            awaiting_key.join(", ")
+        };
+        let reason = if !stored_wrong_shape.is_empty() {
+            format!(
+                "Receiving works on the platform credential: the signing key stored for {} is not the 32-character webhook key, so it cannot authenticate a delivery and the platform token carries this lane instead.",
+                stored_wrong_shape.join(", ")
+            )
+        } else {
+            format!(
+                "Receiving works on the platform credential, not on this workspace's own key: no signing key of its own is set for {named}, so deliveries are authenticated by the platform webhook token."
+            )
+        };
+        let action = if !stored_wrong_shape.is_empty() {
+            "Paste the correct 32-character webhook signing key for that domain (or remove the unusable one), so receiving stops depending on the platform credential.".to_string()
+        } else {
+            format!(
+                "Optional: press Set key on that domain and paste its own webhook signing key, so receiving stops depending on the platform credential."
+            )
+        };
+        (json!(reason), action)
+    } else {
+        (serde_json::Value::Null, "Nothing to do.".to_string())
+    };
+
     let lanes = json!([
         {
             "lane": "system",
             "title": "Ordinary mail (receipts, invitations, password resets, replies)",
-            "ready": main.is_some(),
-            "blocking": false,
+            "ready": system_ready,
+            "can_block": false,
+            "identity_source": if system_ready { "own_domain" } else { "platform" },
             "identity": main.as_ref().map(|d| format!("noreply@{d}")),
-            "reason": if main.is_some() { serde_json::Value::Null } else { json!(
+            "reason": if system_ready { serde_json::Value::Null } else { json!(
                 "No verified domain yet, so these messages leave on the shared platform identity — your customer sees our name, not yours, and your reputation is not what is being built."
             ) },
-            "action": if main.is_some() { "Nothing to do." } else { "Add and verify your own domain to send receipts under your own name." },
+            "action": if system_ready { "Nothing to do." } else { "Add and verify your own domain to send receipts under your own name." },
         },
         {
             "lane": "automation",
             "title": "Automation mail (rules, sequences, campaigns)",
-            "ready": automation_domain.is_some(),
-            "blocking": true,
+            "ready": automation_ready,
+            "can_block": true,
+            "identity_source": if automation_ready { "own_domain" } else { "none" },
             "identity": automation_domain,
-            "reason": if automation_domain.is_some() { serde_json::Value::Null } else { json!(
+            "reason": if automation_ready { serde_json::Value::Null } else { json!(
                 "An automation has no sending identity without a verified domain: there is no base domain to build the automation subdomain from, so every automation email is refused before it leaves."
             ) },
-            "action": if automation_domain.is_some() { "Nothing to do." } else { setup_hint },
+            "action": if automation_ready { "Nothing to do." } else { setup_hint },
         },
         {
             "lane": "inbox",
             "title": "Inbound mail (the shared inbox, replying as support@)",
             "ready": inbound_ready,
-            "blocking": true,
+            "can_block": true,
+            "identity_source": inbound_identity_source,
             "identity": main.as_ref().map(|d| format!("anything@{d}")),
-            "reason": if inbound_ready { serde_json::Value::Null } else { json!(
-                if !stored_wrong_shape.is_empty() {
-                    format!(
-                        "Receiving is refused for {}: the stored signing key is not the 32-character webhook key, so no delivery can be authenticated. Remove the key (receiving then works on the platform credential) or paste the correct one.",
-                        stored_wrong_shape.join(", ")
-                    )
-                } else if awaiting_key.is_empty() {
-                    "No verified domain yet, so nothing can arrive.".to_string()
-                } else {
-                    format!(
-                        "Mail sent to {} is refused on arrival: the inbound signing key is not set, and the receiver fails closed rather than accept a delivery it cannot authenticate.",
-                        awaiting_key.join(", ")
-                    )
-                }
-            ) },
-            "action": if inbound_ready { "Nothing to do." } else { setup_hint },
+            "reason": inbox_reason,
+            "action": inbox_action,
             "domains_awaiting_key": awaiting_key,
         },
     ]);
+
+    // The measurement a reader can trust: which lanes are NOT ready at this instant, derived from the
+    // very booleans that decide each lane's `ready`. This is an active-fault list, not a capability
+    // list, so it cannot contradict a lane the way a constant `blocking` beside `any_blocking` did.
+    let mut blocked_now: Vec<&str> = Vec::new();
+    if !system_ready {
+        blocked_now.push("system");
+    }
+    if !automation_ready {
+        blocked_now.push("automation");
+    }
+    if !inbound_ready {
+        blocked_now.push("inbox");
+    }
 
     Ok(Json(json!({
         "lanes": lanes,
         "main_domain": main,
         "automation_domain": automation_domain,
-        "any_blocking": !inbound_ready || main.is_none(),
+        "blocked_now": blocked_now,
+        "any_blocking": !blocked_now.is_empty(),
         "domain_count": rows.len(),
     })))
 }
