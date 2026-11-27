@@ -98,9 +98,7 @@ use axum::{
 };
 use std::time::Duration;
 use tokio::signal;
-use tower_http::{
-    compression::CompressionLayer, cors::CorsLayer, services::ServeDir, trace::TraceLayer,
-};
+use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::EnvFilter;
 
 /// Application state shared across all handlers
@@ -501,8 +499,18 @@ async fn main() -> anyhow::Result<()> {
             "/api/avatars/:user_id",
             get(crate::profile::handlers::serve_avatar),
         )
-        // Serve SPA at root
-        .nest_service("/", ServeDir::new("public"))
+        // THE SPA SHELL COMES FROM NGINX, NOT FROM HERE (kanban t_ef708cc5). Until 2026-11-26 a
+        // `.nest_service("/", ServeDir::new("public"))` stood at this point and served NOTHING: the
+        // image carries no `public/` directory (the Dockerfile copies the binary, migrations and the
+        // example env only), so every GET it saw was a 404 — and non-GETs were worse. ServeDir answers
+        // GET/HEAD only, so an unrouted `POST /anything` was answered 405 Method Not Allowed, which
+        // reads as "this path exists, you used the wrong verb". That misread cost two investigations.
+        // With the catch-all gone, an unrouted path falls to axum's default and answers 404 for EVERY
+        // method, exactly as `GET` always did; a 405 now only comes from a route that really is
+        // registered, which is the signal it is supposed to be.
+        // Do NOT re-add a catch-all here. The shell belongs to the vhost that serves it
+        // (`/opt/swift/nginx/sites/coreswift.conf`), whose `location /` answers the branded 404 for a
+        // path no route claims instead of handing back the shell.
         // Auth routes (public group + auth-middleware-guarded /invite & /me/usage)
         .nest("/api/auth", auth::router(state.clone()))
         // THE FLEET-STANDARD AUTH TREE (David, 2026-11-26). The other five apps answer
