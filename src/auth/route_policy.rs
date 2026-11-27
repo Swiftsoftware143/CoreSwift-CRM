@@ -644,6 +644,18 @@ pub const API_KEY_ROUTES: &[&str] = &[
     // The data-mapping intake: a sibling app reports one event with the account's issued key. The
     // tenant comes from the key, never from the payload, so a caller cannot name another tenant.
     "/api/data-mapping/events",
+    // REGISTERING A MAIL DOMAIN WITH A KEY (Giraudy CEO, 2026-11-27). The whole point of an account key is
+    // to let the owner's own tooling run the account, and setting up mail is exactly that - but every
+    // `/api/private-email/**` route was session-only, so the CEO's admin MCP key and the population key both
+    // got 403 "this route needs a console session" and the last step of the mail setup could not be done by
+    // the credential the fleet is meant to use. A key that may WRITE may register/verify a domain; a
+    // `read_only` key is still refused by `refused_for_role`, which is the ONE place that decision is made.
+    // The list/records arms are included because registering a domain is not one call: you add it, you read
+    // the records to publish, then you ask for verification.
+    "/api/private-email/domains",
+    "/api/private-email/domains/:id",
+    "/api/private-email/domains/:id/verify",
+    "/api/private-email/domains/:id/records",
     // CUSTOM OBJECTS (migration 204) — the owned no-code backend. These are the ONE class of route
     // in this app that answers BOTH credential classes: `/api/external/**` is key-only, but an agent
     // (MCP) and an application (REST) must read the same rows, so the boundary here asks only for a
