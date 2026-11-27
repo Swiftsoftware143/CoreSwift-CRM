@@ -398,7 +398,7 @@ pub async fn readiness(
             )
         };
         (json!(reason), setup_hint.to_string())
-    } else if inbound_identity_source == "platform" {
+    } else if inbound_identity_source.starts_with("platform") {
         let named = if awaiting_key.is_empty() {
             main.clone().unwrap_or_default()
         } else {
@@ -491,11 +491,18 @@ struct LaneState {
 }
 
 fn lane_state(main_present: bool, keyed_and_usable: bool, platform_token: bool) -> LaneState {
-    let inbound_ready = keyed_and_usable || (platform_token && main_present);
+    // RED, NOT GREEN, ON THE PLATFORM FALLBACK (CEO ruling, 2026-11-27). Readiness used to be
+    // `keyed_and_usable || (platform_token && main_present)`, so a domain awaiting its OWN signing key
+    // reported ready:true with identity_source "platform" — a green lane whose mail authenticates with
+    // somebody else's credential. For govcon correspondence that is a compliance failure, not a warning.
+    // A lane is ready only when a key of its own can authenticate the delivery; the platform fallback
+    // is still reported, but as the reason it is NOT ready.
+    let inbound_ready = keyed_and_usable;
     let inbound_identity_source = if keyed_and_usable {
         "own_key"
     } else if platform_token && main_present {
-        "platform"
+        // Kept so the UI can say what WOULD carry mail - but it no longer makes the lane ready.
+        "platform_fallback_not_ready"
     } else {
         "none"
     };
@@ -531,11 +538,15 @@ mod readiness_lane_tests {
     }
 
     #[test]
-    fn a_domain_without_its_own_key_is_ready_and_names_the_platform() {
+    fn a_domain_without_its_own_key_is_RED_and_names_the_platform_fallback() {
+        // The previous name of this test was `..._is_ready_and_names_the_platform`, and it asserted the
+        // exact behaviour the CEO measured as a false green: a domain awaiting its own signing key read
+        // ready:true. Readiness is now RED, the fallback is named as the reason, and the lane lands in
+        // blocked_now so any_blocking agrees with it.
         let s = lane_state(true, false, true);
-        assert!(s.inbound_ready);
-        assert_eq!(s.inbound_identity_source, "platform");
-        assert!(s.blocked_now.is_empty());
+        assert!(!s.inbound_ready);
+        assert_eq!(s.inbound_identity_source, "platform_fallback_not_ready");
+        assert!(s.blocked_now.contains(&"inbox"));
     }
 
     #[test]
