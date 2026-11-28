@@ -931,8 +931,14 @@ fn tenant_of(c: &Claims) -> Option<Uuid> {
     c.aid.parse().ok()
 }
 
-async fn overview(State(state): State<AppState>, Extension(c): Extension<Claims>) -> Response {
-    let Some(tenant_id) = tenant_of(&c) else {
+async fn overview(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    claims: Option<Extension<Claims>>,
+) -> Response {
+    let Some(tenant_id) =
+        account_from(&state, &headers, claims.as_ref().map(|Extension(c)| c)).await
+    else {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": "no tenant" })),
@@ -977,6 +983,26 @@ struct ManualSuppression {
     reason: Option<String>,
 }
 
+/// The account this request acts on, from EITHER door (David, 2026-11-27): a console session carries
+/// `Claims`, and a full-access issued key is resolved to the same account. Before this, the reads below
+/// were session-only, so an outside verifier holding a full key was refused - he could confirm a route
+/// was MOUNTED and never read what it said.
+async fn account_from(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+    claims: Option<&Claims>,
+) -> Option<Uuid> {
+    if let Some(c) = claims {
+        if let Some(t) = tenant_of(c) {
+            return Some(t);
+        }
+    }
+    crate::external_api::resolve_key(state, headers)
+        .await
+        .ok()
+        .map(|(tenant_id, _)| tenant_id)
+}
+
 /// `d***@gmail.com` — enough to recognise an entry, not enough to harvest the suppression list.
 /// Deliberately lossy in ONE direction: there is no unmask route, and the CSV arm below refuses.
 fn mask_address(address: &str) -> String {
@@ -991,9 +1017,12 @@ fn mask_address(address: &str) -> String {
 
 async fn list_suppressions(
     State(state): State<AppState>,
-    Extension(c): Extension<Claims>,
+    headers: axum::http::HeaderMap,
+    claims: Option<Extension<Claims>>,
 ) -> Response {
-    let Some(tenant_id) = tenant_of(&c) else {
+    let Some(tenant_id) =
+        account_from(&state, &headers, claims.as_ref().map(|Extension(c)| c)).await
+    else {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": "no tenant" })),
