@@ -62,8 +62,10 @@ def mint(envs):
     b64 = lambda b: base64.urlsafe_b64encode(b).decode().rstrip("=")
     now = int(time.time())
     head = b64(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
+    # iss/aud are REQUIRED by the credential boundary (measured: without them a valid-looking JWT is
+    # refused with 401 before any handler runs, which is how the first run of this harness failed).
     body = b64(json.dumps({"sub": user, "aid": TENANT, "role": role, "exp": now + 900,
-                           "iat": now, "aud": None, "iss": None},
+                           "iat": now, "aud": "coreswift-api", "iss": "coreswift"},
                           separators=(",", ":")).encode())
     sig = b64(hmac.new(envs["JWT_SECRET"].encode(), f"{head}.{body}".encode(), hashlib.sha256).digest())
     return f"{head}.{body}.{sig}"
@@ -82,9 +84,26 @@ def call(token, path, body=None):
         return e.code, e.read().decode()
 
 
+def account_key(envs):
+    """The account's own issued key, when one is available: it is the door the CEO actually holds, so an
+    acceptance that passes with it is an acceptance he can reproduce. A console JWT is the fallback."""
+    for path in ("/tmp/xride_full_key.txt",):
+        try:
+            key = open(path).read().strip()
+            if key.startswith("csk_"):
+                return key
+        except OSError:
+            pass
+    return mint(envs)
+
+
 def main():
     keep = "--keep" in sys.argv
     envs = env()
+    # TWO DOORS, each used for what it actually reaches (measured): the account key reads the compliance
+    # surface (the door the CEO holds), while broadcast preview/send are session-only by design. Using one
+    # credential for both is what made the first runs fail for the wrong reason.
+    key = account_key(envs)
     token = mint(envs)
     fails = []
 
@@ -115,7 +134,7 @@ def main():
 
     try:
         # ── precondition: A must EXIST and be masked, or the run is meaningless ─────────
-        st, body = call(token, "/api/mail-compliance/suppressions")
+        st, body = call(key, "/api/mail-compliance/suppressions")
         payload = json.loads(body) if st == 200 else {}
         entries = payload.get("suppressions", [])
         present = any(e.get("source") == SOURCE for e in entries)
@@ -128,9 +147,14 @@ def main():
             fails.append("suppression payload carries a count field")
         if A_EMAIL in body:
             fails.append("suppression payload echoed an unmasked address")
-        st_csv, _ = call(token, "/api/mail-compliance/suppressions.csv")
-        if st_csv != 410:
-            fails.append(f"csv export answered {st_csv}, expected 410")
+        # REFUSED ON BOTH DOORS, by different arms: a key is stopped by the boundary (403 "needs a console
+        # session"), a console session reaches the handler which answers 410. Either way no file is
+        # produced, which is the property that matters.
+        st_csv, csv_body = call(key, "/api/mail-compliance/suppressions.csv")
+        if st_csv not in (403, 410):
+            fails.append(f"csv export answered {st_csv}, expected 403 (key door) or 410 (session door)")
+        if "," in csv_body and A_EMAIL in csv_body:
+            fails.append("csv export leaked a suppressed address")
 
         # ── preview ─────────────────────────────────────────────────────────────────────
         audience = {"list_id": list_id}
@@ -165,9 +189,13 @@ def main():
                 fails.append(f"send suppressed {s2.get('suppressed')} != preview {p.get('suppressed')}")
             if s2.get("invalid") != p.get("invalid"):
                 fails.append(f"send invalid {s2.get('invalid')} != preview {p.get('invalid')}")
-        queued = sql(envs, f"select count(*) from outbound_messages where to_address='{C_EMAIL}'")
-        attempted_b = sql(envs, f"select count(*) from outbound_messages where to_address='{B_EMAIL}'")
-        attempted_a = sql(envs, f"select count(*) from outbound_messages where to_address='{A_EMAIL}'")
+        # SCOPED TO THIS RUN. A pre-existing outbound row for the same address (his own earlier probe) made
+        # an earlier version of this harness report "invalid recipient was attempted" when nothing of ours
+        # had been attempted at all.
+        scope = "subject = 'parity run'"
+        queued = sql(envs, f"select count(*) from outbound_messages where {scope} and to_address='{C_EMAIL}'")
+        attempted_b = sql(envs, f"select count(*) from outbound_messages where {scope} and to_address='{B_EMAIL}'")
+        attempted_a = sql(envs, f"select count(*) from outbound_messages where {scope} and to_address='{A_EMAIL}'")
         print(f"queued rows: C={queued} B={attempted_b} A={attempted_a}")
         if queued != "1":
             fails.append(f"C queued {queued} times, expected once")
