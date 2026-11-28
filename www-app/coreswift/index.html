@@ -708,7 +708,8 @@ async function loadFeatureMatrix() {
       'An <strong>unset</strong> box means the plan does not mention that feature, which the server treats as ' +
       '<em>allowed</em> (so existing tenants are never silently stripped). Unticking writes an explicit ' +
       '<code>false</code> and is what actually denies the request with HTTP 402. Changes save immediately.</p>';
-    wrap.innerHTML = h + fpPaymentSection(plans);
+    wrap.innerHTML = h + fpPaymentSection(plans) + fpPayInstructionsSection();
+    fpLoadPayInstructions();
     wrap.querySelectorAll('[data-pay-save]').forEach(function (b) {
       b.addEventListener('click', function () { fpSavePayLink(b.getAttribute('data-pay-save')); });
     });
@@ -760,6 +761,72 @@ function fpPaymentSection(plans) {
   });
   h += '</div><p id="fpPayMsg" style="font-size:13px;margin-top:10px"></p></div>';
   return h;
+}
+
+// How customers pay you — the operator's own money instructions (2026-11-27) ─────────────────
+// GET|PUT /api/admin/billing-settings has been live since the fleet-parity work, and on this
+// install it is the ONLY way a buyer can be told how to send money: there is no card till, and
+// measured 2026-11-27 every hosted payment page was cleared (readiness: can_sell=false, 4 of 4
+// paid plans reason=no_link). No control on this console reached the route — a backend the
+// operator could not use. The words saved here are published on the anonymous price list and in
+// the customer's plan ladder under "How to pay for a paid plan".
+function fpPayInstructionsSection() {
+  return '<div style="margin-top:26px;max-width:980px">' +
+    '<h3 style="margin:0 0 6px">How customers pay you</h3>' +
+    '<p style="color:var(--text-secondary);margin:0 0 14px;font-size:13px">' +
+    'While a plan has no payment page, these are the only payment instructions a buyer sees: they ' +
+    'are published on your public price list and shown in the customer’s plan ladder under ' +
+    '<strong>How to pay for a paid plan</strong>. Put your real details here (bank transfer, Zelle, ' +
+    'cheque, an invoice address); you switch the workspace onto the plan once the money lands.</p>' +
+    '<textarea id="fpPayInstr" rows="4" style="width:100%;padding:10px;border:1px solid var(--border,#333);' +
+    'border-radius:6px;background:transparent;color:inherit;font-family:inherit;box-sizing:border-box" ' +
+    'placeholder="e.g. Pay by Zelle to billing@yourcompany.com and reply to this request with the reference."></textarea>' +
+    '<div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap">' +
+    '<button class="btn btn-primary btn-sm" id="fpPayInstrSave">Save instructions</button>' +
+    '<span id="fpPayInstrState" style="font-size:12px;color:var(--text-secondary)">Loading…</span></div>' +
+    '</div>';
+}
+
+function fpLoadPayInstructions() {
+  const box = document.getElementById('fpPayInstr');
+  const st = document.getElementById('fpPayInstrState');
+  const btn = document.getElementById('fpPayInstrSave');
+  if (!box || !btn) return;
+  API.get('/admin/billing-settings').then(function (d) {
+    box.value = (d && d.payment_instructions) || '';
+    if (st) {
+      st.textContent = d && d.payment_instructions_set
+        ? ('Saved. Buyers read these words. Up to ' + (d.max_length || '') + ' characters.')
+        : 'Nothing is shown to a buyer until this is filled in.';
+    }
+  }).catch(function (e) {
+    if (st) {
+      st.style.color = '#dc2626';
+      st.textContent = 'Could not load: ' + (e && e.message ? e.message : e);
+    }
+  });
+  btn.addEventListener('click', async function () {
+    btn.disabled = true;
+    if (st) { st.style.color = 'var(--text-secondary)'; st.textContent = 'Saving…'; }
+    try {
+      const d = await API.put('/admin/billing-settings', { payment_instructions: box.value });
+      const saved = (d && d.payment_instructions) || '';
+      box.value = saved;
+      if (st) {
+        st.style.color = '#16a34a';
+        st.textContent = saved
+          ? 'Saved. Buyers now read these instructions on their plan ladder.'
+          : 'Cleared. Buyers see no payment instructions.';
+      }
+    } catch (e) {
+      if (st) {
+        st.style.color = '#dc2626';
+        st.textContent = 'Could not save: ' + (e && e.message ? e.message : e);
+      }
+    } finally {
+      btn.disabled = false;
+    }
+  });
 }
 
 async function fpSavePayLink(planId) {
