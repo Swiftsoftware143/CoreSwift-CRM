@@ -57,7 +57,39 @@ struct Resolved {
     recipients: Vec<(Uuid, String)>,
     no_address: i64,
     suppressed: Vec<(String, String)>,
+    /// Addresses that are present but NOT mail-able (CEO, 2026-11-27: "preview counts the literal string
+    /// not-an-email as would_send"). Presence was never the test; validity is.
+    invalid: Vec<String>,
     duplicates: i64,
+}
+
+/// Is this address actually mail-able? Presence in an `email` column was the old test, and it let the
+/// literal string "not-an-email" through as `would_send`. Deliberately conservative and syntax-only -
+/// deliverability is the provider's verdict, not ours - but it refuses the shapes that can only bounce:
+/// no `@`, more than one, an empty local part, a domain with no dot, spaces, leading/trailing dots.
+fn is_mailable_address(email: &str) -> bool {
+    let e = email.trim();
+    if e.is_empty() || e.len() > 254 || e.contains(char::is_whitespace) {
+        return false;
+    }
+    let mut parts = e.split('@');
+    let (Some(local), Some(domain), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    if local.is_empty() || local.len() > 64 || local.starts_with('.') || local.ends_with('.') {
+        return false;
+    }
+    if domain.len() < 3
+        || !domain.contains('.')
+        || domain.starts_with('.')
+        || domain.ends_with('.')
+        || domain.contains("..")
+    {
+        return false;
+    }
+    domain
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
 }
 
 fn tenant_of(c: &Claims) -> Result<Uuid, AppError> {
@@ -72,6 +104,30 @@ async fn resolve(s: &AppState, t: Uuid, a: &Audience) -> Result<Resolved, AppErr
         return Err(AppError::BadRequest(
             "choose who this goes to: a list, or a tag".into(),
         ));
+    }
+
+    // A nil uuid is not an audience: it used to resolve to nobody and answer 200 with would_send 0,
+    // which reads as "your audience is empty" when the caller actually sent a bad id.
+    if a.list_id == Some(Uuid::nil()) {
+        return Err(AppError::NotFound(
+            "that list is not on this account".into(),
+        ));
+    }
+    if a.tag_id == Some(Uuid::nil()) {
+        return Err(AppError::NotFound("that tag is not on this account".into()));
+    }
+    if let Some(list_id) = a.list_id {
+        let exists: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM lists WHERE id = $1 AND tenant_id = $2")
+                .bind(list_id)
+                .bind(t)
+                .fetch_optional(&s.db)
+                .await?;
+        if exists.is_none() {
+            return Err(AppError::NotFound(
+                "that list is not on this account".into(),
+            ));
+        }
     }
 
     let tag_id: Option<Uuid> = match (a.tag_id, a.tag.as_deref()) {
@@ -152,6 +208,15 @@ async fn resolve(s: &AppState, t: Uuid, a: &Audience) -> Result<Resolved, AppErr
     // the operator needs to see, not a bare count.
     let mut recipients = Vec::with_capacity(unique.len());
     let mut suppressed = Vec::new();
+    let mut invalid = Vec::new();
+    unique.retain(|(_, email)| {
+        if is_mailable_address(email) {
+            true
+        } else {
+            invalid.push(email.clone());
+            false
+        }
+    });
     for (id, email) in unique {
         // THE CLASS MATTERS: a broadcast is a campaign, and only the stoppable classes are refused. A
         // transaction receipt is not blocked by a marketing opt-out, and this must not pretend otherwise.
@@ -165,6 +230,7 @@ async fn resolve(s: &AppState, t: Uuid, a: &Audience) -> Result<Resolved, AppErr
         recipients,
         no_address,
         suppressed,
+        invalid,
         duplicates,
     })
 }
@@ -177,14 +243,25 @@ pub async fn preview(
 ) -> ApiResult<Json<Value>> {
     let t = tenant_of(&c)?;
     let res = resolve(&s, t, &r.audience).await?;
+    // A GREEN ZERO WITH NO REASON IS THE DEFECT THIS CLOSES. When nothing can be mailed the caller gets
+    // the sentence that says why, not a bare 0 they have to interpret.
+    let empty_reason = if res.recipients.is_empty() {
+        json!("nobody in this audience can be mailed")
+    } else {
+        Value::Null
+    };
     Ok(Json(json!({
         "would_send": res.recipients.len(),
         "no_address": res.no_address,
         "suppressed": res.suppressed.len(),
         "suppressed_examples": res.suppressed.iter().take(5)
             .map(|(e, why)| json!({"email": e, "reason": why})).collect::<Vec<_>>(),
+        // Same bucket the send path refuses, counted the same way, so preview and send cannot disagree.
+        "invalid": res.invalid.len(),
+        "invalid_examples": res.invalid.iter().take(5).collect::<Vec<_>>(),
         "duplicate_addresses": res.duplicates,
         "sample": res.recipients.iter().take(5).map(|(_, e)| e.clone()).collect::<Vec<_>>(),
+        "audience_empty_reason": empty_reason,
     })))
 }
 
@@ -246,9 +323,39 @@ pub async fn send(
         "suppressed": res.suppressed.len(),
         "suppressed_examples": res.suppressed.iter().take(5)
             .map(|(e, why)| json!({"email": e, "reason": why})).collect::<Vec<_>>(),
+        "invalid": res.invalid.len(),
+        "invalid_examples": res.invalid.iter().take(5).collect::<Vec<_>>(),
         "duplicate_addresses": res.duplicates,
         // Stated, because the queue is not the inbox: the worker delivers these, applying the suppression
         // list, the footer, the unsubscribe headers and the platform mail pause.
         "note": "queued for delivery; the send pass applies the footer, the opt-out headers and the mail pause",
     })))
+}
+
+#[cfg(test)]
+mod address_validity_tests {
+    use super::is_mailable_address;
+
+    /// The CEO's finding, pinned: a present-but-unmailable string must never be `would_send`.
+    #[test]
+    fn a_literal_string_is_not_an_address() {
+        assert!(!is_mailable_address("not-an-email"));
+        assert!(!is_mailable_address("dana.whitfield"));
+        assert!(!is_mailable_address("@example.com"));
+        assert!(!is_mailable_address("dana@"));
+        assert!(!is_mailable_address("dana@localhost"));
+        assert!(!is_mailable_address("dana@@example.com"));
+        assert!(!is_mailable_address("dana whitfield@example.com"));
+        assert!(!is_mailable_address(".dana@example.com"));
+        assert!(!is_mailable_address("dana@example..com"));
+        assert!(!is_mailable_address(""));
+    }
+
+    #[test]
+    fn ordinary_addresses_stay_mailable() {
+        assert!(is_mailable_address("dana.whitfield@gmail.com"));
+        assert!(is_mailable_address("x@y.test"));
+        assert!(is_mailable_address("probe+tag@example.invalid"));
+        assert!(is_mailable_address("  padded@example.com  "));
+    }
 }
