@@ -636,8 +636,11 @@ async function loadFeatureMatrix() {
 // four of them, and until this panel existed NO screen in any console showed the
 // value or offered a way to set it — so a dead or mistyped link was invisible and
 // untouchable while the customer's only plan action was "Request this plan".
-// Reads the same GET /billing/plans the customer modal reads; saves with
-// PATCH /billing/plans/{id}, which this console's own operator (agency_admin) may call.
+// Reads `GET /billing/plans?include_inactive=1` so the OFF-SALE tiers are listed here too
+// (measured 2026-11-27: `inbox` and `pro` are `is_active = false`, so the active-only read never
+// returned them and no screen in any console listed them). Saves with PATCH
+// /billing/plans/{id}, gated on the platform-admin flag — the role-string gate it used to carry
+// refused the platform admin with 403, so this panel's Save never once worked.
 let FP_PLANS = [];
 // A hosted payment page a buyer can actually be SENT to. A URL-syntax test alone is not enough:
 // the fleet's probe/reserved hosts (`*.invalid`, `*.test`, `*.example`, localhost, test.com, x.com)
@@ -662,7 +665,7 @@ async function loadPlanPaymentLinks() {
   const wrap = document.getElementById('fpPay');
   if (!wrap) return;
   try {
-    FP_PLANS = famList(await API.get('/billing/plans'), 'plans');
+    FP_PLANS = famList(await API.get('/billing/plans?include_inactive=1'), 'plans');
   } catch (e) {
     wrap.innerHTML = '<div style="padding:12px;color:var(--danger,#f66)">Could not load the plan list: ' +
       escapeHtml(e.message) + '</div>';
@@ -685,6 +688,17 @@ async function loadPlanPaymentLinks() {
       '<td><input class="input" data-pay="' + escapeHtml(String(p.id)) + '" value="' + escapeHtml(link) +
         '" placeholder="https://your-provider-payment-page" style="min-width:320px"></td>' +
       '<td><button class="btn btn-primary btn-sm" data-save="' + escapeHtml(String(p.id)) + '">Save</button></td>' +
+      // IS THIS TIER ON SALE? (2026-11-27) A plan with `is_active = false` is invisible to every
+      // buyer and refused by every plan writer. Nothing in any console could show or change that, so
+      // the $1 Inbox plan could only be switched on by a SQL statement. The switch writes the same
+      // PATCH the link box above uses.
+      '<td>' + (p.is_active === false
+        ? '<span class="badge" style="background:#fef3c7;color:#92400e">not on sale</span>'
+          + '<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Buyers cannot see or buy this tier.</div>'
+          + '<button class="btn btn-primary btn-sm" style="margin-top:6px" data-sale="' + escapeHtml(String(p.id)) + '" data-sale-on="1">Put on sale</button>'
+        : '<span class="badge badge-success">on sale</span>'
+          + '<button class="btn btn-sm" style="margin-top:6px" data-sale="' + escapeHtml(String(p.id)) + '" data-sale-on="0">Take off sale</button>') +
+      '</td>' +
       '</tr>';
   }).join('');
   // AT A GLANCE, CAN I SELL ANYTHING? (2026-11-17) Every row below carries its own verdict, but
@@ -710,10 +724,13 @@ async function loadPlanPaymentLinks() {
   wrap.innerHTML = paySummary + '<div class="card"><div class="card-header"><h3 style="margin:0;font-size:16px">Plan payment links</h3></div>' +
     '<div class="card-body">' +
     '<p style="font-size:13px;color:var(--text-muted);margin:0 0 12px">A hosted payment page for a plan — an NMI or EPD hosted page, a PayPal button, a Stripe Payment Link, anything that takes the money. A plan carrying one can be sold while this installation holds no payment key: the buyer pays on that page and the workspace is switched on here once the money lands. Leave a plan empty to keep it request-only. Create the page in your provider&#39;s own dashboard and paste its https://&hellip; address here — every provider&#39;s page is accepted, and pressing the link in the app now files the buyer&#39;s plan request so the payment and the switch meet. The server opens EVERY paid plan&#39;s page: the badge under each link says whether the page answered, because a saved link that answers a dead page is worse than an empty box. Every plan has to open before buyers count as able to pay.</p>' +
-    '<div class="table-wrap"><table class="table"><thead><tr><th>Plan</th><th>Link</th><th>Payment page</th><th></th></tr></thead><tbody>' +
-    (rows || '<tr><td colspan="4">No plans found</td></tr>') + '</tbody></table></div></div></div>';
+    '<div class="table-wrap"><table class="table"><thead><tr><th>Plan</th><th>Link</th><th>Payment page</th><th></th><th>On sale</th></tr></thead><tbody>' +
+    (rows || '<tr><td colspan="5">No plans found</td></tr>') + '</tbody></table></div></div></div>';
   wrap.querySelectorAll('[data-save]').forEach(b => {
     b.addEventListener('click', () => savePlanPaymentLink(b.getAttribute('data-save'), b));
+  });
+  wrap.querySelectorAll('[data-sale]').forEach(b => {
+    b.addEventListener('click', () => setPlanSale(b.getAttribute('data-sale'), b.getAttribute('data-sale-on') === '1', b));
   });
   // `set` only says a value exists. The verdict under it is the server's real probe (the same read
   // the Dashboard card uses), so a pasted link that answers 404 is visible HERE, on the plan it
@@ -764,6 +781,25 @@ async function loadPlanPaymentLinks() {
         '</div></div>';
     }
   } catch (_) { /* platform-admin only; a tenant just sees no verdict */ }
+}
+
+// PUT A TIER ON SALE (or take it off). The customer's modal lists ACTIVE plans only, so this is
+// the one switch that decides whether a tier can be seen or bought at all — the $1 Inbox plan ships
+// `is_active = false` and used to be reachable from no screen at all.
+async function setPlanSale(id, on, btn) {
+  if (!id || !btn || btn.disabled) return;
+  const plan = FP_PLANS.find(p => String(p.id) === String(id)) || {};
+  const name = String(plan.name || plan.slug || 'this plan');
+  if (!on && !confirm('Take "' + name + '" off sale? Buyers will stop seeing it and every plan writer will refuse it until it is put back on.')) return;
+  btn.disabled = true;
+  try {
+    await API.patch('/billing/plans/' + encodeURIComponent(id), { is_active: !!on });
+    toast(on ? name + ' is on sale — buyers can see and choose it' : name + ' is off sale — buyers cannot see or buy it', 'success');
+    await loadPlanPaymentLinks();
+  } catch (e) {
+    btn.disabled = false;
+    toast('Could not change the sale state: ' + e.message, 'error');
+  }
 }
 
 async function savePlanPaymentLink(id, btn) {
