@@ -25,6 +25,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 RUN groupadd -r crm-swift && useradd -r -g crm-swift crm-swift
 WORKDIR /app
 COPY crm-swift /app/crm-swift
+# Provenance written by bin/deploy-app.sh at stage time, so the RUNNING image can name
+# the commit it was built from (CEO, 2026-11-27). Absent file -> "unknown", never a guess.
+COPY BUILD_INFO* /app/
 COPY migrations /app/migrations
 COPY .env.example /app/.env.example
 RUN chmod +x /app/crm-swift && chown -R crm-swift:crm-swift /app
