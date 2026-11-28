@@ -633,6 +633,12 @@ pub const INTERNAL_ROUTES: &[&str] = &[
 /// The boundary therefore only requires that a non-empty bearer be presented — the decision stays
 /// where the credential lives, which is exactly the "never widen a caller's reach" rule.
 pub const API_KEY_ROUTES: &[&str] = &[
+    // VERIFICATION SURFACE (David, 2026-11-27): the Giraudy CEO holds a FULL-access key on this account
+    // and could not read a response body to verify a report - the capability existed, the key surface
+    // did not reach it. These two reads are what an outside verifier needs to check mail compliance;
+    // both are GET, tenant-scoped by the key, and neither counts or exports anything.
+    "/api/mail-compliance/suppressions",
+    "/api/mail-compliance/overview",
     "/api/external/lists",
     "/api/external/contacts",
     // The DEAL WRITER (kanban t_2df68850): an outside system creates/updates a deal by its
