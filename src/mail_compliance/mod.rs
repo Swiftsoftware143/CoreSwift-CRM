@@ -1711,12 +1711,12 @@ fn csv_response(name: &str, body: String) -> Response {
 }
 
 pub fn router(state: AppState) -> Router<AppState> {
-    Router::new()
-        .route("/overview", get(overview))
-        .route(
-            "/suppressions",
-            get(list_suppressions).post(add_suppression),
-        )
+    // SPLIT BY DOOR (David, 2026-11-27): the session layer below refuses anything that is not a console
+    // JWT. That is right for every WRITE here, and wrong for the two READ arms an outside verifier
+    // needs - a full-access issued key was refused with "Authentication required" even though the path
+    // sits on the key surface, because this layer answered before the handler could resolve it.
+    let session_only: Router<AppState> = Router::new()
+        .route("/suppressions", post(add_suppression))
         .route("/suppressions/:id", delete(remove_suppression))
         .route("/suppressions.csv", get(suppressions_csv))
         .route("/addresses.csv", get(addresses_csv))
@@ -1734,7 +1734,13 @@ pub fn router(state: AppState) -> Router<AppState> {
             state.clone(),
             crate::auth::middleware::auth_middleware,
         ))
-        .with_state(state)
+        .with_state(state.clone());
+
+    let key_or_session: Router<AppState> = Router::new()
+        .route("/suppressions", get(list_suppressions))
+        .route("/overview", get(overview));
+
+    session_only.merge(key_or_session).with_state(state)
 }
 
 /// Merged at the ROOT of the app: these paths are their own namespace, and the opt-out arms are

@@ -1867,14 +1867,14 @@ mod tests {
         let api = mounted.iter().filter(|p| p.starts_with("/api")).count();
         assert_eq!(
             mounted.len(),
-            603,
+            604,
             "mounted route count moved — update the census in the module docs.\
              The number to pin is the one THIS assertion reports as `left`: mounted_routes() walks the \
              router itself. scripts/route-census.py is a partial PARSER and a LOWER BOUND (it missed 23 \
              mounts on 2026-11-25); never pin its total."
         );
         assert_eq!(
-            api, 589,
+            api, 590,
             "the /api mount count moved — re-read the census in the module docs"
         );
         // ...and the 14 root-level mounts are the served surfaces plus the inbound receivers.
