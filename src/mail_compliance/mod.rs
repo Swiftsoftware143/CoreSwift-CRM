@@ -977,6 +977,18 @@ struct ManualSuppression {
     reason: Option<String>,
 }
 
+/// `d***@gmail.com` — enough to recognise an entry, not enough to harvest the suppression list.
+/// Deliberately lossy in ONE direction: there is no unmask route, and the CSV arm below refuses.
+fn mask_address(address: &str) -> String {
+    match address.split_once('@') {
+        Some((local, domain)) if !local.is_empty() => {
+            let head: String = local.chars().take(1).collect();
+            format!("{head}***@{domain}")
+        }
+        _ => "***".to_string(),
+    }
+}
+
 async fn list_suppressions(
     State(state): State<AppState>,
     Extension(c): Extension<Claims>,
@@ -1010,8 +1022,15 @@ async fn list_suppressions(
         .into_iter()
         .map(|(id, address, mail_class, reason, source, created_at)| {
             json!({
-                "id": id, "address": address, "mail_class": mail_class, "reason": reason,
-                "source": source, "created_at": created_at
+                "id": id,
+                // MASKED (CEO constraint, 2026-11-27: "no export of suppressed addresses"). An
+                // operator needs to recognise an entry, not to harvest the list; the full address is
+                // never returned here and is never bulk-exportable.
+                "address": mask_address(&address),
+                "mail_class": mail_class,
+                "reason": reason,
+                "source": source,
+                "created_at": created_at
             })
         })
         .collect();
@@ -1146,7 +1165,27 @@ async fn addresses_csv(State(state): State<AppState>, Extension(c): Extension<Cl
 }
 
 /// The suppression list as a CSV, for a customer's own records.
+/// REFUSED (CEO constraint, 2026-11-27: "no export of suppressed addresses"). A suppression list is a
+/// record of people who asked not to be mailed; a file that leaves the building with all of their
+/// addresses in it is a liability with no operational use - the read path lists entries masked, with
+/// reason, source and timestamp, which is what an operator actually needs.
 async fn suppressions_csv(
+    State(state): State<AppState>,
+    Extension(c): Extension<Claims>,
+) -> Response {
+    let _ = (&state, &c);
+    (
+        StatusCode::GONE,
+        Json(json!({
+            "error": "suppressed addresses are not exportable",
+            "detail": "the suppression list is readable at /api/mail-compliance/suppressions with each address masked; there is no bulk export by design"
+        })),
+    )
+        .into_response()
+}
+
+#[allow(dead_code)]
+async fn suppressions_csv_withdrawn(
     State(state): State<AppState>,
     Extension(c): Extension<Claims>,
 ) -> Response {
@@ -1684,4 +1723,19 @@ pub fn public_router(state: AppState) -> Router<AppState> {
             post(webhook::mailgun_events),
         )
         .with_state(state)
+}
+
+#[cfg(test)]
+mod suppression_mask_tests {
+    use super::mask_address;
+
+    /// The read path must let an operator RECOGNISE an entry without letting them harvest the list, so
+    /// the mask keeps the domain and one character of the local part and nothing else.
+    #[test]
+    fn a_suppressed_address_is_masked_not_echoed() {
+        assert_eq!(mask_address("dana.whitfield@gmail.com"), "d***@gmail.com");
+        assert_eq!(mask_address("x@y.test"), "x***@y.test");
+        assert_eq!(mask_address("not-an-address"), "***");
+        assert_eq!(mask_address("@leading.at"), "***");
+    }
 }
